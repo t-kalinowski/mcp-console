@@ -250,7 +250,7 @@ mod tests {
         let config = dir.path().join("config.toml");
         upsert_codex_mcp_server(
             &config,
-            "mcp-console",
+            "console",
             "/usr/local/bin/mcp-console",
             &["--backend".to_string(), "python".to_string()],
         )
@@ -258,10 +258,10 @@ mod tests {
         let text = fs::read_to_string(config).expect("read config");
         let doc = text.parse::<DocumentMut>().expect("parse generated config");
         assert_eq!(
-            doc["mcp_servers"]["mcp-console"]["command"].as_str(),
+            doc["mcp_servers"]["console"]["command"].as_str(),
             Some("/usr/local/bin/mcp-console")
         );
-        let args = doc["mcp_servers"]["mcp-console"]["args"]
+        let args = doc["mcp_servers"]["console"]["args"]
             .as_array()
             .expect("args array");
         assert_eq!(args.len(), 2);

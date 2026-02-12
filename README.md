@@ -72,7 +72,7 @@ mcp-console install
 For manual Codex config, the entry looks like:
 
 ```toml
-[mcp_servers.mcp-console]
+[mcp_servers.console]
 command = "mcp-console"
 ```
 

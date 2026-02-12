@@ -197,7 +197,7 @@ fn parse_install_args(
     mut targets: Vec<install::InstallTarget>,
     allow_positional_targets: bool,
 ) -> Result<install::InstallOptions, Box<dyn std::error::Error>> {
-    let mut server_name = "mcp-console".to_string();
+    let mut server_name = "console".to_string();
     let mut command = None;
     let mut args = Vec::new();
 
