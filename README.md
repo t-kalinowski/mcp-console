@@ -13,7 +13,7 @@ Instead of treating each tool call as isolated, `mcp-console` enables a continuo
 
 ## Safe by default
 
-Like a shell, R and Python are powerful. Without guardrails, an LLM can do real damage on the host (both accidental and prompt-induced). To reduce this risk, `mcp-console` runs the backend process in a sandboxed environment. By default, network is disabled and writes are limited to the current working directory. Sandbox policy is enforced with OS primitives at the process level, not command-specific runtime rules.
+Like a shell, R and Python are powerful. Without guardrails, an LLM can do real damage on the host (both accidental and prompt-induced). To reduce this risk, `mcp-console` runs the backend process in a sandboxed environment. By default, network is disabled and writes are limited to the current working directory. Sandbox policy is enforced with OS primitives at the process level, not command-specific runtime rules. `mcp-console` also enforces memory bounds on the child process tree and automatically kills the child if it exceeds those limits; this is an additional guardrail.
 
 ## Token efficient
 
