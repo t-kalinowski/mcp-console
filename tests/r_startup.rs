@@ -1,8 +1,11 @@
 mod common;
 
+#[cfg(unix)]
 use common::TestResult;
+#[cfg(unix)]
 use rmcp::model::RawContent;
 
+#[cfg(unix)]
 fn result_text(result: &rmcp::model::CallToolResult) -> String {
     result
         .content

@@ -2,7 +2,9 @@ use std::collections::{HashMap, VecDeque};
 use std::ffi::{CStr, CString};
 use std::hash::{Hash, Hasher};
 use std::os::raw::{c_char, c_int, c_uchar};
-use std::path::{Path, PathBuf};
+use std::path::Path;
+#[cfg(target_family = "unix")]
+use std::path::PathBuf;
 use std::sync::{Arc, Condvar, Mutex, OnceLock, mpsc};
 use std::thread;
 
@@ -457,7 +459,7 @@ fn setup_r(args: &[String]) -> Result<(), String> {
         let mut c_args_len = c_args.len() as c_int;
         R_common_command_line(
             &mut c_args_len,
-            c_args.as_mut_ptr() as *mut *mut c_char,
+            c_args.as_mut_ptr(),
             params,
         );
 

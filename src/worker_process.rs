@@ -1,5 +1,6 @@
 #[cfg(target_family = "unix")]
 use std::collections::{HashMap, HashSet};
+#[cfg(target_family = "unix")]
 use std::fs::File;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -16,9 +17,11 @@ use crate::backend::Backend;
 use crate::input_protocol::format_input_frame_header;
 #[cfg(target_family = "unix")]
 use crate::ipc::{IPC_READ_FD_ENV, IPC_WRITE_FD_ENV};
+#[cfg(target_family = "unix")]
+use crate::ipc::{IpcHandlers, IpcPlotImage};
 use crate::ipc::{
-    IpcEchoEvent, IpcHandle, IpcHandlers, IpcPlotImage, IpcServer, IpcWaitError,
-    ServerIpcConnection, ServerToWorkerIpcMessage, WorkerToServerIpcMessage,
+    IpcEchoEvent, IpcHandle, IpcServer, IpcWaitError, ServerIpcConnection,
+    ServerToWorkerIpcMessage, WorkerToServerIpcMessage,
 };
 use crate::output_capture::{
     OUTPUT_RING_CAPACITY_BYTES, OutputBuffer, OutputEventKind, OutputRange, OutputTimeline,
@@ -2266,10 +2269,14 @@ struct SpawnedWorker {
 }
 
 impl WorkerProcess {
+    #[cfg(target_family = "unix")]
     const PYTHON_PROGRAM: &'static str = "python3";
+    #[cfg(target_family = "unix")]
     const PYTHON_PROGRAM_FALLBACK: &'static str = "python";
+    #[cfg(target_family = "unix")]
     const PYTHON_STARTUP_SNIPPET: &'static str = include_str!("../python/driver.py");
 
+    #[cfg(target_family = "unix")]
     fn resolve_python_program() -> PathBuf {
         // Prefer a local `.venv` (common with uv and other tooling) so the Python backend runs in
         // the project environment without requiring any explicit configuration.
@@ -2352,6 +2359,9 @@ impl WorkerProcess {
         output_timeline: OutputTimeline,
         guardrail: GuardrailShared,
     ) -> Result<Self, WorkerError> {
+        #[cfg(not(target_family = "unix"))]
+        let _ = &guardrail;
+
         let mut ipc_server = IpcServer::bind().map_err(WorkerError::Io)?;
         let SpawnedWorker {
             child,
@@ -2372,15 +2382,23 @@ impl WorkerProcess {
         };
 
         let ipc = IpcHandle::new();
-        let image_timeline = output_timeline.clone();
-        let handlers = IpcHandlers {
-            on_plot_image: Some(Arc::new(move |image: IpcPlotImage| {
-                image_timeline.append_image(image.id, image.mime_type, image.data, image.is_new);
-            })),
-        };
-        ipc_server
-            .connect(ipc.clone(), handlers)
-            .map_err(WorkerError::Io)?;
+        #[cfg(target_family = "unix")]
+        {
+            let image_timeline = output_timeline.clone();
+            let handlers = IpcHandlers {
+                on_plot_image: Some(Arc::new(move |image: IpcPlotImage| {
+                    image_timeline.append_image(
+                        image.id,
+                        image.mime_type,
+                        image.data,
+                        image.is_new,
+                    );
+                })),
+            };
+            ipc_server
+                .connect(ipc.clone(), handlers)
+                .map_err(WorkerError::Io)?;
+        }
 
         #[cfg(target_family = "unix")]
         let (guardrail_stop, guardrail_thread, guardrail_thread_handle) =
@@ -2410,6 +2428,9 @@ impl WorkerProcess {
         output_timeline: OutputTimeline,
         ipc_server: &mut IpcServer,
     ) -> Result<SpawnedWorker, WorkerError> {
+        #[cfg(not(target_family = "unix"))]
+        let _ = ipc_server;
+
         let prepared =
             prepare_worker_command(exe_path, vec![WORKER_MODE_ARG.to_string()], sandbox_state)
                 .map_err(|err| WorkerError::Sandbox(err.to_string()))?;
@@ -2421,7 +2442,7 @@ impl WorkerProcess {
 
         let mut command = Command::new(&prepared.program);
         if let Some(arg0) = &prepared.arg0 {
-            command.arg0(arg0);
+            set_command_arg0(&mut command, arg0);
         }
         command.args(&prepared.args);
         command.envs(prepared.env.iter());
@@ -2485,6 +2506,7 @@ impl WorkerProcess {
         })
     }
 
+    #[cfg(target_family = "unix")]
     fn python_command_args() -> Vec<String> {
         vec![
             "-i".to_string(),
@@ -2505,9 +2527,9 @@ impl WorkerProcess {
             let _ = sandbox_state;
             let _ = output_timeline;
             let _ = ipc_server;
-            return Err(WorkerError::Protocol(
+            Err(WorkerError::Protocol(
                 "python backend requires a unix-style pty".to_string(),
-            ));
+            ))
         }
         #[cfg(target_family = "unix")]
         {
@@ -2523,7 +2545,7 @@ impl WorkerProcess {
 
             let mut command = Command::new(&prepared.program);
             if let Some(arg0) = &prepared.arg0 {
-                command.arg0(arg0);
+                set_command_arg0(&mut command, arg0);
             }
             command.args(&prepared.args);
             command.envs(prepared.env.iter());
@@ -2651,7 +2673,7 @@ impl WorkerProcess {
         }
         #[cfg(not(target_family = "unix"))]
         {
-            self.child.start_kill()?;
+            self.child.kill()?;
             Ok(())
         }
     }
@@ -2663,7 +2685,7 @@ impl WorkerProcess {
         }
         #[cfg(not(target_family = "unix"))]
         {
-            self.child.start_kill()?;
+            self.child.kill()?;
             Ok(())
         }
     }
@@ -2780,9 +2802,9 @@ impl WorkerProcess {
         }
 
         if self.child.try_wait()?.is_none() {
-            let sig_ok = self.send_sigterm().is_ok();
+            let _sig_ok = self.send_sigterm().is_ok();
             #[cfg(target_family = "unix")]
-            if !sig_ok {
+            if !_sig_ok {
                 self.kill_process_tree_scan(libc::SIGTERM);
             }
             let term_deadline = std::cmp::min(
@@ -2795,9 +2817,9 @@ impl WorkerProcess {
                     break;
                 }
                 if std::time::Instant::now() >= term_deadline {
-                    let sig_ok = self.send_sigkill().is_ok();
+                    let _sig_ok = self.send_sigkill().is_ok();
                     #[cfg(target_family = "unix")]
-                    if !sig_ok {
+                    if !_sig_ok {
                         self.kill_process_tree_scan(libc::SIGKILL);
                     }
                     let _ = self.child.wait();
@@ -2813,9 +2835,9 @@ impl WorkerProcess {
     }
 
     fn kill(mut self) -> Result<(), WorkerError> {
-        let sig_ok = self.send_sigkill().is_ok();
+        let _sig_ok = self.send_sigkill().is_ok();
         #[cfg(target_family = "unix")]
-        if !sig_ok {
+        if !_sig_ok {
             self.kill_process_tree_scan(libc::SIGKILL);
         }
         let _ = self.child.wait();
@@ -3143,6 +3165,14 @@ fn shutdown_term_delay(timeout: Duration) -> Duration {
     let by_remaining = timeout.saturating_sub(Duration::from_secs(10));
     by_fraction.min(by_remaining)
 }
+
+#[cfg(target_family = "unix")]
+fn set_command_arg0(command: &mut Command, arg0: &str) {
+    command.arg0(arg0);
+}
+
+#[cfg(not(target_family = "unix"))]
+fn set_command_arg0(_command: &mut Command, _arg0: &str) {}
 
 fn format_exit_status_message(status: &std::process::ExitStatus) -> String {
     #[cfg(target_family = "unix")]

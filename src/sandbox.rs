@@ -106,6 +106,7 @@ pub struct WritableRoot {
 }
 
 impl SandboxPolicy {
+    #[cfg_attr(target_os = "windows", allow(dead_code))]
     pub fn has_full_disk_write_access(&self) -> bool {
         match self {
             SandboxPolicy::DangerFullAccess => true,
@@ -198,6 +199,7 @@ impl SandboxPolicy {
     }
 }
 
+#[cfg_attr(target_os = "windows", allow(dead_code))]
 fn ensure_absolute(path: PathBuf) -> Option<PathBuf> {
     if path.is_absolute() { Some(path) } else { None }
 }
@@ -210,6 +212,7 @@ fn env_var_truthy(key: &str) -> bool {
     })
 }
 
+#[cfg_attr(target_os = "windows", allow(dead_code))]
 fn temp_roots_from_system(exclude_tmpdir_env_var: bool, exclude_slash_tmp: bool) -> Vec<PathBuf> {
     let mut roots = Vec::new();
 

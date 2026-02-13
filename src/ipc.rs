@@ -1,4 +1,7 @@
+#![cfg_attr(not(target_family = "unix"), allow(dead_code))]
+
 use std::collections::VecDeque;
+#[cfg(target_family = "unix")]
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, Read, Write};
 #[cfg(target_family = "unix")]
