@@ -1,19 +1,52 @@
-#![cfg_attr(not(target_family = "unix"), allow(dead_code))]
+#![cfg_attr(
+    not(any(target_family = "unix", target_family = "windows")),
+    allow(dead_code)
+)]
 
 use std::collections::VecDeque;
-#[cfg(target_family = "unix")]
+#[cfg(target_family = "windows")]
+use std::ffi::c_void;
+#[cfg(any(target_family = "unix", target_family = "windows"))]
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, Read, Write};
 #[cfg(target_family = "unix")]
 use std::os::unix::io::{AsRawFd, FromRawFd, IntoRawFd, RawFd};
+#[cfg(target_family = "windows")]
+use std::os::windows::ffi::OsStrExt;
+#[cfg(target_family = "windows")]
+use std::os::windows::io::{AsRawHandle, FromRawHandle};
+#[cfg(target_family = "windows")]
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
+#[cfg(target_family = "windows")]
+use windows_sys::Win32::Foundation::{
+    ERROR_FILE_NOT_FOUND, ERROR_PIPE_BUSY, ERROR_PIPE_CONNECTED, INVALID_HANDLE_VALUE,
+};
+#[cfg(target_family = "windows")]
+use windows_sys::Win32::Security::{
+    InitializeSecurityDescriptor, SECURITY_ATTRIBUTES, SECURITY_DESCRIPTOR,
+    SetSecurityDescriptorDacl,
+};
+#[cfg(target_family = "windows")]
+use windows_sys::Win32::Storage::FileSystem::{
+    CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_GENERIC_READ, FILE_GENERIC_WRITE, OPEN_EXISTING,
+    PIPE_ACCESS_DUPLEX,
+};
+#[cfg(target_family = "windows")]
+use windows_sys::Win32::System::Pipes::{
+    ConnectNamedPipe, CreateNamedPipeW, PIPE_READMODE_BYTE, PIPE_TYPE_BYTE, PIPE_WAIT,
+};
 
+#[cfg(target_family = "unix")]
 pub const IPC_READ_FD_ENV: &str = "MCP_CONSOLE_IPC_READ_FD";
+#[cfg(target_family = "unix")]
 pub const IPC_WRITE_FD_ENV: &str = "MCP_CONSOLE_IPC_WRITE_FD";
+#[cfg(target_family = "windows")]
+pub const IPC_PIPE_NAME_ENV: &str = "MCP_CONSOLE_IPC_PIPE_NAME";
 const MAX_PROMPT_HISTORY: usize = 16;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -492,6 +525,10 @@ pub struct IpcServer {
     server_write: Option<std::io::PipeWriter>,
     #[cfg(target_family = "unix")]
     child_fds: Option<IpcChildFds>,
+    #[cfg(target_family = "windows")]
+    pipe_name: Option<String>,
+    #[cfg(target_family = "windows")]
+    server_pipe: Option<File>,
 }
 
 #[cfg(target_family = "unix")]
@@ -514,14 +551,20 @@ impl IpcServer {
                 }),
             })
         }
-        #[cfg(not(target_family = "unix"))]
+        #[cfg(target_family = "windows")]
         {
-            // Windows does not support passing anonymous pipe handles to a child
-            // process using stable stdlib APIs. We avoid fallbacks (like TCP)
-            // because network is typically disabled in the sandbox.
+            let pipe_name = next_pipe_name();
+            let server_pipe = create_named_pipe_server(&pipe_name)?;
+            Ok(Self {
+                pipe_name: Some(pipe_name),
+                server_pipe: Some(server_pipe),
+            })
+        }
+        #[cfg(not(any(target_family = "unix", target_family = "windows")))]
+        {
             Err(io::Error::new(
                 io::ErrorKind::Unsupported,
-                "IPC sideband requires Unix-style pipe handle inheritance; not supported on Windows",
+                "IPC sideband is unsupported on this platform",
             ))
         }
     }
@@ -549,6 +592,30 @@ impl IpcServer {
     #[cfg(target_family = "unix")]
     pub fn take_child_fds(&mut self) -> Option<IpcChildFds> {
         self.child_fds.take()
+    }
+
+    #[cfg(target_family = "windows")]
+    pub fn connect(self, handle: IpcHandle, handlers: IpcHandlers) -> io::Result<()> {
+        let Some(server_pipe) = self.server_pipe else {
+            return Err(io::Error::other("missing ipc named pipe handle"));
+        };
+        connect_named_pipe(&server_pipe)?;
+        let reader = server_pipe.try_clone()?;
+        let conn = ServerIpcConnection::new(
+            IpcTransport {
+                reader: Box::new(reader),
+                writer: Box::new(server_pipe),
+            },
+            handlers,
+        )?;
+        handle.set(conn);
+        crate::diagnostics::startup_log("ipc: connected");
+        Ok(())
+    }
+
+    #[cfg(target_family = "windows")]
+    pub fn take_pipe_name(&mut self) -> Option<String> {
+        self.pipe_name.take()
     }
 }
 
@@ -591,6 +658,108 @@ fn create_pipe_pair() -> io::Result<(std::io::PipeReader, std::io::PipeWriter, R
     Ok((server_read, server_write, child_read_fd, child_write_fd))
 }
 
+#[cfg(target_family = "windows")]
+static PIPE_COUNTER: AtomicU64 = AtomicU64::new(1);
+
+#[cfg(target_family = "windows")]
+fn next_pipe_name() -> String {
+    let nonce = PIPE_COUNTER.fetch_add(1, Ordering::Relaxed);
+    format!(r"\\.\pipe\mcp-console-ipc-{}-{nonce}", std::process::id())
+}
+
+#[cfg(target_family = "windows")]
+fn to_wide_nul(value: &str) -> Vec<u16> {
+    let mut wide: Vec<u16> = std::ffi::OsStr::new(value).encode_wide().collect();
+    wide.push(0);
+    wide
+}
+
+#[cfg(target_family = "windows")]
+fn create_named_pipe_server(pipe_name: &str) -> io::Result<File> {
+    let wide = to_wide_nul(pipe_name);
+    let mut security_descriptor: SECURITY_DESCRIPTOR = unsafe { std::mem::zeroed() };
+    let init_ok = unsafe {
+        InitializeSecurityDescriptor(&mut security_descriptor as *mut _ as *mut c_void, 1)
+    };
+    if init_ok == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    // Use a null DACL so the restricted worker token created by the Windows sandbox runner can
+    // connect to this private, randomly named pipe endpoint.
+    let dacl_ok = unsafe {
+        SetSecurityDescriptorDacl(
+            &mut security_descriptor as *mut _ as *mut c_void,
+            1,
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+    if dacl_ok == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let security_attributes = SECURITY_ATTRIBUTES {
+        nLength: std::mem::size_of::<SECURITY_ATTRIBUTES>() as u32,
+        lpSecurityDescriptor: &mut security_descriptor as *mut _ as *mut c_void,
+        bInheritHandle: 0,
+    };
+    let handle = unsafe {
+        CreateNamedPipeW(
+            wide.as_ptr(),
+            PIPE_ACCESS_DUPLEX,
+            PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
+            1,
+            64 * 1024,
+            64 * 1024,
+            0,
+            &security_attributes,
+        )
+    };
+    if handle == INVALID_HANDLE_VALUE {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(unsafe { File::from_raw_handle(handle as _) })
+}
+
+#[cfg(target_family = "windows")]
+fn connect_named_pipe(server_pipe: &File) -> io::Result<()> {
+    let ok = unsafe { ConnectNamedPipe(server_pipe.as_raw_handle() as _, std::ptr::null_mut()) };
+    if ok == 0 {
+        let err = io::Error::last_os_error();
+        if err.raw_os_error() != Some(ERROR_PIPE_CONNECTED as i32) {
+            return Err(err);
+        }
+    }
+    Ok(())
+}
+
+#[cfg(target_family = "windows")]
+fn open_named_pipe_client(pipe_name: &str) -> io::Result<File> {
+    let wide = to_wide_nul(pipe_name);
+    let handle = unsafe {
+        CreateFileW(
+            wide.as_ptr(),
+            FILE_GENERIC_READ | FILE_GENERIC_WRITE,
+            0,
+            std::ptr::null_mut(),
+            OPEN_EXISTING,
+            FILE_ATTRIBUTE_NORMAL,
+            std::ptr::null_mut(),
+        )
+    };
+    if handle == INVALID_HANDLE_VALUE {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(unsafe { File::from_raw_handle(handle as _) })
+}
+
+#[cfg(target_family = "windows")]
+fn should_retry_pipe_open(err: &io::Error) -> bool {
+    matches!(
+        err.raw_os_error(),
+        Some(code) if code == ERROR_FILE_NOT_FOUND as i32 || code == ERROR_PIPE_BUSY as i32
+    )
+}
+
 pub fn connect_from_env(_timeout: Duration) -> io::Result<WorkerIpcConnection> {
     #[cfg(target_family = "unix")]
     {
@@ -613,11 +782,38 @@ pub fn connect_from_env(_timeout: Duration) -> io::Result<WorkerIpcConnection> {
             writer: Box::new(writer),
         })
     }
-    #[cfg(not(target_family = "unix"))]
+    #[cfg(target_family = "windows")]
+    {
+        let timeout = _timeout;
+        let pipe_name = std::env::var(IPC_PIPE_NAME_ENV)
+            .map_err(|_| io::Error::new(io::ErrorKind::NotFound, "IPC pipe name missing"))?;
+        let deadline = Instant::now() + timeout;
+        loop {
+            match open_named_pipe_client(&pipe_name) {
+                Ok(stream) => {
+                    let reader = stream.try_clone()?;
+                    return WorkerIpcConnection::new(IpcTransport {
+                        reader: Box::new(reader),
+                        writer: Box::new(stream),
+                    });
+                }
+                Err(err) => {
+                    if !should_retry_pipe_open(&err)
+                        || timeout.is_zero()
+                        || Instant::now() >= deadline
+                    {
+                        return Err(err);
+                    }
+                    thread::sleep(Duration::from_millis(10));
+                }
+            }
+        }
+    }
+    #[cfg(not(any(target_family = "unix", target_family = "windows")))]
     {
         Err(io::Error::new(
             io::ErrorKind::Unsupported,
-            "IPC sideband requires Unix-style pipe handle inheritance; not supported on Windows",
+            "IPC sideband is unsupported on this platform",
         ))
     }
 }

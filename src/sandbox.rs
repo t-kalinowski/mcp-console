@@ -437,6 +437,7 @@ impl Default for SandboxState {
     }
 }
 
+#[cfg_attr(target_os = "windows", allow(dead_code))]
 pub struct PreparedCommand {
     pub program: PathBuf,
     pub args: Vec<String>,

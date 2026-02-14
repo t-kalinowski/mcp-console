@@ -5,8 +5,6 @@ mod common;
 use common::{McpTestSession, TestResult};
 use rmcp::model::{CallToolResult, RawContent};
 use serde_json::json;
-#[cfg(any(target_os = "macos", target_os = "linux"))]
-use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 const SANDBOX_STATE_METHOD: &str = "codex/sandbox-state/update";
@@ -126,25 +124,24 @@ async fn sandbox_state_update_applies_full_access_policy() -> TestResult<()> {
     if std::env::var_os("CODEX_SANDBOX").is_some() {
         return Ok(());
     }
-    let target = std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .map(|home| home.join("mcp-console-sandbox-state-update.txt"));
-    if let Some(path) = &target {
-        let _ = std::fs::remove_file(path);
-    }
+    let target = std::env::temp_dir().join("mcp-console-sandbox-state-update.txt");
+    let _ = std::fs::remove_file(&target);
     let mut session = common::spawn_server().await?;
     session
         .send_custom_request(SANDBOX_STATE_METHOD, sandbox_full_access_params())
         .await?;
+    let target_literal = serde_json::to_string(&target.to_string_lossy().to_string())
+        .map_err(|err| format!("failed to encode target path: {err}"))?;
     let code = r#"
-target <- file.path(Sys.getenv("HOME"), "mcp-console-sandbox-state-update.txt")
+target <- __TARGET__
 tryCatch({
   writeLines("allowed", target)
   cat("WRITE_OK\n")
 }, error = function(e) {
   message("WRITE_ERROR:", conditionMessage(e))
 })
-"#;
+"#
+    .replace("__TARGET__", &target_literal);
     let result = session.write_stdin_raw_with(code, Some(10.0)).await?;
     let text = collect_text(&result);
     assert!(
@@ -155,9 +152,7 @@ tryCatch({
         !text.contains("WRITE_ERROR:"),
         "full access unexpectedly blocked write: {text}"
     );
-    if let Some(path) = &target {
-        let _ = std::fs::remove_file(path);
-    }
+    let _ = std::fs::remove_file(&target);
     session.cancel().await?;
     Ok(())
 }

@@ -15,13 +15,15 @@ use std::time::Duration;
 
 use crate::backend::Backend;
 use crate::input_protocol::format_input_frame_header;
+#[cfg(target_family = "windows")]
+use crate::ipc::IPC_PIPE_NAME_ENV;
 #[cfg(target_family = "unix")]
 use crate::ipc::{IPC_READ_FD_ENV, IPC_WRITE_FD_ENV};
 use crate::ipc::{
     IpcEchoEvent, IpcHandle, IpcServer, IpcWaitError, ServerIpcConnection,
     ServerToWorkerIpcMessage, WorkerToServerIpcMessage,
 };
-#[cfg(target_family = "unix")]
+#[cfg(any(target_family = "unix", target_family = "windows"))]
 use crate::ipc::{IpcHandlers, IpcPlotImage};
 use crate::output_capture::{
     OUTPUT_RING_CAPACITY_BYTES, OutputBuffer, OutputEventKind, OutputRange, OutputTimeline,
@@ -2382,7 +2384,7 @@ impl WorkerProcess {
         };
 
         let ipc = IpcHandle::new();
-        #[cfg(target_family = "unix")]
+        #[cfg(any(target_family = "unix", target_family = "windows"))]
         {
             let image_timeline = output_timeline.clone();
             let handlers = IpcHandlers {
@@ -2428,9 +2430,6 @@ impl WorkerProcess {
         output_timeline: OutputTimeline,
         ipc_server: &mut IpcServer,
     ) -> Result<SpawnedWorker, WorkerError> {
-        #[cfg(not(target_family = "unix"))]
-        let _ = ipc_server;
-
         let prepared =
             prepare_worker_command(exe_path, vec![WORKER_MODE_ARG.to_string()], sandbox_state)
                 .map_err(|err| WorkerError::Sandbox(err.to_string()))?;
@@ -2454,6 +2453,14 @@ impl WorkerProcess {
         {
             command.env(IPC_READ_FD_ENV, client_fds.read_fd.to_string());
             command.env(IPC_WRITE_FD_ENV, client_fds.write_fd.to_string());
+        }
+        #[cfg(target_family = "windows")]
+        let pipe_name = ipc_server.take_pipe_name().ok_or_else(|| {
+            WorkerError::Protocol("IPC pipe setup failed; missing pipe name".to_string())
+        })?;
+        #[cfg(target_family = "windows")]
+        {
+            command.env(IPC_PIPE_NAME_ENV, pipe_name);
         }
         apply_debug_startup_env(&mut command, session_tmpdir.as_ref());
         #[cfg(target_family = "unix")]

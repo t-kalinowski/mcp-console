@@ -151,9 +151,13 @@ fn resolve_home_dir_from_env(
 
     let homedrive = homedrive.filter(|value| !value.is_empty())?;
     let homepath = homepath.filter(|value| !value.is_empty())?;
-    let mut path = PathBuf::from(homedrive);
-    path.push(homepath);
-    Some(path)
+    let needs_separator = !matches!(homepath.to_str(), Some(value) if value.starts_with('\\') || value.starts_with('/'));
+    let mut combined = homedrive;
+    if needs_separator {
+        combined.push("\\");
+    }
+    combined.push(homepath);
+    Some(PathBuf::from(combined))
 }
 
 fn resolve_claude_config_path(root: &Path) -> PathBuf {

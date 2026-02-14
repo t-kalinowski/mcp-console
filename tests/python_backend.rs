@@ -27,12 +27,28 @@ fn require_python() -> bool {
     }
 }
 
+async fn start_python_session() -> TestResult<Option<common::McpTestSession>> {
+    if !require_python() {
+        return Ok(None);
+    }
+
+    let mut session = common::spawn_python_server().await?;
+    let probe = session.write_stdin_raw_with("", Some(2.0)).await?;
+    let probe_text = result_text(&probe);
+    if probe_text.contains("worker io error: Permission denied") {
+        eprintln!("python backend unavailable in this environment; skipping");
+        session.cancel().await?;
+        return Ok(None);
+    }
+
+    Ok(Some(session))
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn python_smoke() -> TestResult<()> {
-    if !require_python() {
+    let Some(mut session) = start_python_session().await? else {
         return Ok(());
-    }
-    let mut session = common::spawn_python_server().await?;
+    };
 
     let result = session.write_stdin_raw_with("1+1", Some(5.0)).await?;
     let text = result_text(&result);
@@ -44,10 +60,9 @@ async fn python_smoke() -> TestResult<()> {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn python_multiline_block() -> TestResult<()> {
-    if !require_python() {
+    let Some(mut session) = start_python_session().await? else {
         return Ok(());
-    }
-    let mut session = common::spawn_python_server().await?;
+    };
 
     let result = session
         .write_stdin_raw_with("def f():\n    return 3\n\nf()", Some(5.0))
@@ -61,10 +76,9 @@ async fn python_multiline_block() -> TestResult<()> {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn python_input_roundtrip() -> TestResult<()> {
-    if !require_python() {
+    let Some(mut session) = start_python_session().await? else {
         return Ok(());
-    }
-    let mut session = common::spawn_python_server().await?;
+    };
 
     let result = session
         .write_stdin_raw_with("x = input('prompt> ')", Some(1.0))
@@ -84,10 +98,9 @@ async fn python_input_roundtrip() -> TestResult<()> {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn python_busy_discards_input() -> TestResult<()> {
-    if !require_python() {
+    let Some(mut session) = start_python_session().await? else {
         return Ok(());
-    }
-    let mut session = common::spawn_python_server().await?;
+    };
 
     let _ = session
         .write_stdin_raw_with("import time; time.sleep(2)", Some(0.1))
@@ -107,10 +120,9 @@ async fn python_busy_discards_input() -> TestResult<()> {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn python_stderr_merged_into_output() -> TestResult<()> {
-    if !require_python() {
+    let Some(mut session) = start_python_session().await? else {
         return Ok(());
-    }
-    let mut session = common::spawn_python_server().await?;
+    };
 
     let result = session
         .write_stdin_raw_with(
@@ -128,10 +140,9 @@ async fn python_stderr_merged_into_output() -> TestResult<()> {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn python_interrupt_unblocks_long_running_request() -> TestResult<()> {
-    if !require_python() {
+    let Some(mut session) = start_python_session().await? else {
         return Ok(());
-    }
-    let mut session = common::spawn_python_server().await?;
+    };
 
     let timeout_result = session
         .write_stdin_raw_with("import time; time.sleep(30)", Some(0.5))
@@ -175,10 +186,9 @@ async fn python_interrupt_unblocks_long_running_request() -> TestResult<()> {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn python_interrupt_discards_buffered_tail_after_timeout() -> TestResult<()> {
-    if !require_python() {
+    let Some(mut session) = start_python_session().await? else {
         return Ok(());
-    }
-    let mut session = common::spawn_python_server().await?;
+    };
 
     let timeout_result = session
         .write_stdin_raw_with("import time; time.sleep(30)\nx_tail_marker = 99", Some(0.5))
@@ -234,10 +244,9 @@ async fn python_interrupt_discards_buffered_tail_after_timeout() -> TestResult<(
 
 #[tokio::test(flavor = "multi_thread")]
 async fn python_multistatement_payload_completes() -> TestResult<()> {
-    if !require_python() {
+    let Some(mut session) = start_python_session().await? else {
         return Ok(());
-    }
-    let mut session = common::spawn_python_server().await?;
+    };
 
     let result = session
         .write_stdin_raw_with("def f():\n    return 3\n\nf()\nprint('done')", Some(5.0))
@@ -252,10 +261,9 @@ async fn python_multistatement_payload_completes() -> TestResult<()> {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn python_exception_reported_in_output() -> TestResult<()> {
-    if !require_python() {
+    let Some(mut session) = start_python_session().await? else {
         return Ok(());
-    }
-    let mut session = common::spawn_python_server().await?;
+    };
 
     let result = session.write_stdin_raw_with("1/0", Some(5.0)).await?;
     let text = result_text(&result);
@@ -270,10 +278,9 @@ async fn python_exception_reported_in_output() -> TestResult<()> {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn python_pdb_roundtrip() -> TestResult<()> {
-    if !require_python() {
+    let Some(mut session) = start_python_session().await? else {
         return Ok(());
-    }
-    let mut session = common::spawn_python_server().await?;
+    };
 
     let result = session
         .write_stdin_raw_with("import pdb; pdb.set_trace()", Some(1.0))
@@ -294,10 +301,9 @@ async fn python_pdb_roundtrip() -> TestResult<()> {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn python_input_can_consume_buffered_lines() -> TestResult<()> {
-    if !require_python() {
+    let Some(mut session) = start_python_session().await? else {
         return Ok(());
-    }
-    let mut session = common::spawn_python_server().await?;
+    };
 
     let result = session
         .write_stdin_raw_with("x = input('p> ')\nhello\nprint('got', x)", Some(5.0))

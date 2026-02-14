@@ -5,11 +5,12 @@ The channel is a JSON-lines stream (one JSON object per line) carried over an IP
 
 ## Transport
 
-- Availability: Unix only. On non-Unix platforms (including Windows), sideband IPC is not
-  supported by the current implementation.
-- Worker inherits two file descriptors via environment variables:
-  - `MCP_CONSOLE_IPC_READ_FD`
-  - `MCP_CONSOLE_IPC_WRITE_FD`
+- Availability:
+  - Unix: worker inherits two file descriptors via environment variables:
+    - `MCP_CONSOLE_IPC_READ_FD`
+    - `MCP_CONSOLE_IPC_WRITE_FD`
+  - Windows: worker connects to a server-created named pipe via
+    `MCP_CONSOLE_IPC_PIPE_NAME`.
 - Messages are serialized as UTF-8 JSON, one message per line.
 
 ## Direction: server -> worker
