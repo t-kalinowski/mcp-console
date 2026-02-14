@@ -314,8 +314,16 @@ fn configure_r_help_output() -> Result<(), String> {
 }
 
 fn eval_in_global_env(code: &str) -> Result<(), String> {
+    // Parse from explicit lines so CRLF content from include_str! on Windows
+    // cannot leak carriage returns into the parser input stream.
+    let parse_lines: Vec<String> = code
+        .replace("\r\n", "\n")
+        .replace('\r', "\n")
+        .split('\n')
+        .map(str::to_string)
+        .collect();
     let mut parse = RFunction::from("parse");
-    parse.param("text", code);
+    parse.param("text", parse_lines);
     let exprs = parse
         .call()
         .map_err(|err| format!("failed to parse R startup code: {err}"))?;
