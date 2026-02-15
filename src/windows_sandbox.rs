@@ -163,8 +163,10 @@ fn compute_allow_deny_paths(
                 deny.insert(git_entry);
             }
         };
-
-        add_writable_root(command_cwd.to_path_buf());
+        // Do not ACL-mutate the command cwd by default on Windows. Applying
+        // allow ACLs to large workspace roots can take tens of seconds and
+        // effectively deadlock worker startup.
+        let _ = command_cwd;
         for root in writable_roots {
             add_writable_root(root.clone());
         }
@@ -1071,7 +1073,7 @@ mod tests {
         let paths = compute_allow_deny_paths(&policy, &command_cwd, &command_cwd, &HashMap::new());
 
         assert!(
-            paths
+            !paths
                 .allow
                 .contains(&canonicalize_or_identity(&command_cwd))
         );
@@ -1093,7 +1095,7 @@ mod tests {
         let paths = compute_allow_deny_paths(&policy, &command_cwd, &command_cwd, &env_map);
 
         assert!(
-            paths
+            !paths
                 .allow
                 .contains(&canonicalize_or_identity(&command_cwd))
         );
@@ -1105,17 +1107,19 @@ mod tests {
     fn compute_allow_paths_denies_git_dir_inside_writable_root() {
         let tmp = tempdir().expect("tempdir");
         let command_cwd = tmp.path().join("workspace");
-        let git_dir = command_cwd.join(".git");
+        let extra_root = tmp.path().join("extra");
+        let git_dir = extra_root.join(".git");
         std::fs::create_dir_all(&git_dir).expect("git dir");
 
-        let policy = workspace_policy(Vec::new(), false, true);
+        let policy = workspace_policy(vec![extra_root.clone()], false, true);
         let paths = compute_allow_deny_paths(&policy, &command_cwd, &command_cwd, &HashMap::new());
 
         assert!(
-            paths
+            !paths
                 .allow
                 .contains(&canonicalize_or_identity(&command_cwd))
         );
+        assert!(paths.allow.contains(&canonicalize_or_identity(&extra_root)));
         assert!(paths.deny.contains(&canonicalize_or_identity(&git_dir)));
     }
 
@@ -1123,18 +1127,20 @@ mod tests {
     fn compute_allow_paths_denies_git_file_inside_writable_root() {
         let tmp = tempdir().expect("tempdir");
         let command_cwd = tmp.path().join("workspace");
-        let git_file = command_cwd.join(".git");
-        std::fs::create_dir_all(&command_cwd).expect("workspace dir");
+        let extra_root = tmp.path().join("extra");
+        let git_file = extra_root.join(".git");
+        std::fs::create_dir_all(&extra_root).expect("extra dir");
         std::fs::write(&git_file, "gitdir: .git/worktrees/example").expect("git file");
 
-        let policy = workspace_policy(Vec::new(), false, true);
+        let policy = workspace_policy(vec![extra_root.clone()], false, true);
         let paths = compute_allow_deny_paths(&policy, &command_cwd, &command_cwd, &HashMap::new());
 
         assert!(
-            paths
+            !paths
                 .allow
                 .contains(&canonicalize_or_identity(&command_cwd))
         );
+        assert!(paths.allow.contains(&canonicalize_or_identity(&extra_root)));
         assert!(paths.deny.contains(&canonicalize_or_identity(&git_file)));
     }
 
@@ -1142,17 +1148,20 @@ mod tests {
     fn compute_allow_paths_skips_git_dir_when_missing() {
         let tmp = tempdir().expect("tempdir");
         let command_cwd = tmp.path().join("workspace");
+        let extra_root = tmp.path().join("extra");
         std::fs::create_dir_all(&command_cwd).expect("workspace dir");
+        std::fs::create_dir_all(&extra_root).expect("extra dir");
 
-        let policy = workspace_policy(Vec::new(), false, true);
+        let policy = workspace_policy(vec![extra_root.clone()], false, true);
         let paths = compute_allow_deny_paths(&policy, &command_cwd, &command_cwd, &HashMap::new());
 
         assert_eq!(paths.allow.len(), 1);
         assert!(
-            paths
+            !paths
                 .allow
                 .contains(&canonicalize_or_identity(&command_cwd))
         );
+        assert!(paths.allow.contains(&canonicalize_or_identity(&extra_root)));
         assert!(paths.deny.is_empty());
     }
 }
