@@ -88,6 +88,9 @@ struct ServerIpcInbox {
     last_prompt: Option<String>,
     prompt_history: VecDeque<String>,
     echo_events: VecDeque<IpcEchoEvent>,
+    readline_result_count: u64,
+    readline_unmatched_starts: usize,
+    readline_unmatched_since: Option<Instant>,
     session_end: bool,
     disconnected: bool,
 }
@@ -190,6 +193,11 @@ impl ServerIpcConnection {
                     match message {
                         WorkerToServerIpcMessage::ReadlineStart { prompt } => {
                             let mut guard = reader_inbox.lock().unwrap();
+                            guard.readline_unmatched_starts =
+                                guard.readline_unmatched_starts.saturating_add(1);
+                            if guard.readline_unmatched_starts == 1 {
+                                guard.readline_unmatched_since = Some(Instant::now());
+                            }
                             if guard
                                 .prompt_history
                                 .back()
@@ -205,6 +213,14 @@ impl ServerIpcConnection {
                         }
                         WorkerToServerIpcMessage::ReadlineResult { prompt, line } => {
                             let mut guard = reader_inbox.lock().unwrap();
+                            guard.readline_result_count =
+                                guard.readline_result_count.saturating_add(1);
+                            if guard.readline_unmatched_starts > 0 {
+                                guard.readline_unmatched_starts -= 1;
+                                if guard.readline_unmatched_starts == 0 {
+                                    guard.readline_unmatched_since = None;
+                                }
+                            }
                             guard.echo_events.push_back(IpcEchoEvent { prompt, line });
                             reader_cvar.notify_all();
                         }
@@ -272,6 +288,25 @@ impl ServerIpcConnection {
     pub fn clear_echo_events(&self) {
         let mut guard = self.inbox.lock().unwrap();
         guard.echo_events.clear();
+    }
+
+    pub fn clear_readline_tracking(&self) {
+        let mut guard = self.inbox.lock().unwrap();
+        guard.readline_result_count = 0;
+        guard.readline_unmatched_starts = 0;
+        guard.readline_unmatched_since = None;
+        guard.last_prompt = None;
+    }
+
+    pub fn waiting_for_next_input(&self, min_wait: Duration) -> bool {
+        let guard = self.inbox.lock().unwrap();
+        if guard.readline_result_count == 0 || guard.readline_unmatched_starts == 0 {
+            return false;
+        }
+        let Some(since) = guard.readline_unmatched_since else {
+            return false;
+        };
+        since.elapsed() >= min_wait
     }
 
     pub fn clear_request_end_events(&self) {

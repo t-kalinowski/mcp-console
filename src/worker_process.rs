@@ -98,12 +98,15 @@ impl RBackendDriver {
 
 fn driver_on_input_start(text: &str, ipc: &ServerIpcConnection) {
     ipc.clear_request_end_events();
+    ipc.clear_readline_tracking();
     ipc.clear_prompt_history();
     ipc.clear_echo_events();
     let _ = ipc.send(ServerToWorkerIpcMessage::StdinWrite {
         text: text.to_string(),
     });
 }
+
+const REQUEST_END_FALLBACK_WAIT: Duration = Duration::from_millis(20);
 
 fn driver_wait_for_completion(
     timeout: Duration,
@@ -131,7 +134,18 @@ fn driver_wait_for_completion(
                     session_end_seen: false,
                 });
             }
-            Err(IpcWaitError::Timeout) => continue,
+            Err(IpcWaitError::Timeout) => {
+                if ipc.waiting_for_next_input(REQUEST_END_FALLBACK_WAIT) {
+                    let (prompt, prompt_variants, echo_events) = collect_completion_metadata(&ipc);
+                    return Ok(CompletionInfo {
+                        prompt,
+                        prompt_variants: Some(prompt_variants),
+                        echo_events,
+                        session_end_seen: false,
+                    });
+                }
+                continue;
+            }
             Err(IpcWaitError::SessionEnd) => {
                 return Ok(CompletionInfo {
                     prompt: None,

@@ -25,8 +25,8 @@ use libr::{
 };
 #[cfg(target_family = "windows")]
 use libr::{
-    R_DefParamsEx, R_SetParams, R_common_command_line, Rboolean_FALSE, Rstart, UImode_RGui,
-    cmdlineoptions, get_R_HOME, getRUser, readconsolecfg,
+    R_DefParamsEx, R_SetParams, R_common_command_line, Rboolean_FALSE, Rboolean_TRUE, Rstart,
+    UImode_RGui, UserBreak, cmdlineoptions, get_R_HOME, getRUser, readconsolecfg,
 };
 #[cfg(target_family = "windows")]
 use std::mem::MaybeUninit;
@@ -150,6 +150,26 @@ pub(crate) fn clear_pending_input() -> bool {
     let had_pending = !guard.input_queue.is_empty();
     guard.input_queue.clear();
     had_pending
+}
+
+pub(crate) fn request_interrupt() -> bool {
+    let Some(state) = SESSION_STATE.get() else {
+        return false;
+    };
+    let should_interrupt = {
+        let guard = state.inner.lock().unwrap();
+        guard.active_request.is_some() || !guard.input_queue.is_empty()
+    };
+    if !should_interrupt {
+        return false;
+    }
+
+    #[cfg(target_family = "windows")]
+    unsafe {
+        libr::set(UserBreak, Rboolean_TRUE);
+    }
+
+    true
 }
 
 fn run_session_on_current_thread(
@@ -600,7 +620,29 @@ pub extern "C-unwind" fn r_show_message(buf: *const c_char) {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C-unwind" fn r_busy(_which: c_int) {}
+pub extern "C-unwind" fn r_busy(which: c_int) {
+    #[cfg(target_family = "windows")]
+    {
+        if which != 0 {
+            return;
+        }
+        let Some(state) = SESSION_STATE.get() else {
+            return;
+        };
+        let mut guard = state.inner.lock().unwrap();
+        if !guard.input_queue.is_empty() {
+            return;
+        }
+        let active = guard.active_request.take();
+        drop(guard);
+        complete_active_request(state, active, false);
+    }
+
+    #[cfg(not(target_family = "windows"))]
+    {
+        let _ = which;
+    }
+}
 
 #[unsafe(no_mangle)]
 pub extern "C-unwind" fn r_suicide(buf: *const c_char) {
