@@ -1,13 +1,10 @@
 mod common;
 
-#[cfg(unix)]
 use common::TestResult;
-#[cfg(unix)]
 use rmcp::model::{CallToolResult, RawContent};
 #[cfg(unix)]
 use tokio::time::{Duration, Instant, sleep};
 
-#[cfg(unix)]
 fn result_text(result: &CallToolResult) -> String {
     result
         .content
@@ -20,10 +17,25 @@ fn result_text(result: &CallToolResult) -> String {
         .join("")
 }
 
+async fn spawn_interrupt_session() -> TestResult<common::McpTestSession> {
+    #[cfg(target_os = "windows")]
+    {
+        return common::spawn_server_with_args(vec![
+            "--sandbox-state".to_string(),
+            "danger-full-access".to_string(),
+        ])
+        .await;
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        common::spawn_server().await
+    }
+}
+
 #[cfg(unix)]
 #[tokio::test(flavor = "multi_thread")]
 async fn interrupt_unblocks_long_running_request() -> TestResult<()> {
-    let mut session = common::spawn_server().await?;
+    let mut session = spawn_interrupt_session().await?;
 
     let timeout_result = session
         .write_stdin_raw_with("Sys.sleep(30)", Some(0.5))
@@ -85,7 +97,7 @@ async fn interrupt_unblocks_long_running_request() -> TestResult<()> {
 #[cfg(unix)]
 #[tokio::test(flavor = "multi_thread")]
 async fn write_stdin_ctrl_c_prefix_interrupts_then_runs_remaining_input() -> TestResult<()> {
-    let mut session = common::spawn_server().await?;
+    let mut session = spawn_interrupt_session().await?;
 
     let timeout_result = session
         .write_stdin_raw_with("Sys.sleep(30)", Some(0.5))
@@ -116,10 +128,9 @@ async fn write_stdin_ctrl_c_prefix_interrupts_then_runs_remaining_input() -> Tes
     Ok(())
 }
 
-#[cfg(unix)]
 #[tokio::test(flavor = "multi_thread")]
 async fn write_stdin_ctrl_d_prefix_restarts_then_runs_remaining_input() -> TestResult<()> {
-    let mut session = common::spawn_server().await?;
+    let mut session = spawn_interrupt_session().await?;
 
     let _ = session.write_stdin_raw_with("x <- 1", Some(5.0)).await?;
 

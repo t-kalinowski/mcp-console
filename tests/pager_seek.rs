@@ -1,5 +1,3 @@
-#![cfg(unix)]
-
 mod common;
 
 use common::TestResult;

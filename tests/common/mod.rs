@@ -823,17 +823,10 @@ pub async fn spawn_python_server() -> TestResult<McpTestSession> {
 }
 
 pub fn python_available() -> bool {
-    if !cfg!(unix) {
-        return false;
-    }
     python_program().is_some()
 }
 
 pub fn python_program() -> Option<&'static str> {
-    if !cfg!(unix) {
-        return None;
-    }
-
     let ok = |program: &str| -> bool {
         std::process::Command::new(program)
             .args(["-c", "import sys; sys.exit(0)"])
@@ -845,11 +838,11 @@ pub fn python_program() -> Option<&'static str> {
             .unwrap_or(false)
     };
 
-    if ok("python3") {
-        return Some("python3");
-    }
     if ok("python") {
         return Some("python");
+    }
+    if ok("python3") {
+        return Some("python3");
     }
     None
 }

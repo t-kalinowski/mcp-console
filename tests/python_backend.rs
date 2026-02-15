@@ -1,5 +1,3 @@
-#![cfg(unix)]
-
 mod common;
 
 use common::TestResult;
@@ -35,7 +33,9 @@ async fn start_python_session() -> TestResult<Option<common::McpTestSession>> {
     let mut session = common::spawn_python_server().await?;
     let probe = session.write_stdin_raw_with("", Some(2.0)).await?;
     let probe_text = result_text(&probe);
-    if probe_text.contains("worker io error: Permission denied") {
+    if probe_text.contains("worker io error: Permission denied")
+        || probe_text.contains("python backend requires a unix-style pty")
+    {
         eprintln!("python backend unavailable in this environment; skipping");
         session.cancel().await?;
         return Ok(None);
