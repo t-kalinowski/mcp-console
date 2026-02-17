@@ -306,7 +306,7 @@ mod tests {
             Some(OsString::from("/tmp/home")),
             Some(OsString::from("/tmp/userprofile")),
             Some(OsString::from("C:")),
-            Some(OsString::from(r"\Users\kalin")),
+            Some(OsString::from(r"\Users\example_user")),
         );
         assert_eq!(resolved, Some(PathBuf::from("/tmp/home")));
     }
@@ -315,11 +315,11 @@ mod tests {
     fn resolve_home_dir_falls_back_to_userprofile() {
         let resolved = resolve_home_dir_from_env(
             None,
-            Some(OsString::from(r"C:\Users\kalin")),
+            Some(OsString::from(r"C:\Users\example_user")),
             Some(OsString::from("C:")),
             Some(OsString::from(r"\Users\other")),
         );
-        assert_eq!(resolved, Some(PathBuf::from(r"C:\Users\kalin")));
+        assert_eq!(resolved, Some(PathBuf::from(r"C:\Users\example_user")));
     }
 
     #[test]
@@ -328,10 +328,10 @@ mod tests {
             None,
             None,
             Some(OsString::from("C:")),
-            Some(OsString::from(r"\Users\kalin")),
+            Some(OsString::from(r"\Users\example_user")),
         )
         .expect("home dir");
-        assert_eq!(resolved, PathBuf::from(r"C:\Users\kalin"));
+        assert_eq!(resolved, PathBuf::from(r"C:\Users\example_user"));
     }
 
     #[test]
