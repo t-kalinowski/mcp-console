@@ -930,10 +930,10 @@ fn create_named_pipe_server(
 
 #[cfg(target_family = "windows")]
 fn connect_named_pipe(server_pipe: &File, timeout: Duration) -> io::Result<()> {
-    let pipe = server_pipe.try_clone()?;
+    let pipe = server_pipe.as_raw_handle() as usize;
     let (tx, rx) = mpsc::sync_channel(1);
     let connector = thread::spawn(move || {
-        let ok = unsafe { ConnectNamedPipe(pipe.as_raw_handle() as _, std::ptr::null_mut()) };
+        let ok = unsafe { ConnectNamedPipe(pipe as *mut c_void, std::ptr::null_mut()) };
         let result = if ok != 0 {
             Ok(())
         } else {
@@ -947,16 +947,33 @@ fn connect_named_pipe(server_pipe: &File, timeout: Duration) -> io::Result<()> {
         let _ = tx.send(result);
     });
 
+    wait_for_named_pipe_connect_result(rx, connector, timeout, || unsafe {
+        let _ = CancelIoEx(pipe as *mut c_void, std::ptr::null_mut());
+    })
+}
+
+#[cfg(target_family = "windows")]
+fn wait_for_named_pipe_connect_result(
+    rx: mpsc::Receiver<io::Result<()>>,
+    connector: thread::JoinHandle<()>,
+    timeout: Duration,
+    on_timeout: impl FnOnce(),
+) -> io::Result<()> {
+    const CONNECTOR_JOIN_GRACE: Duration = Duration::from_millis(200);
+
     match rx.recv_timeout(timeout) {
         Ok(result) => {
             let _ = connector.join();
             result
         }
         Err(mpsc::RecvTimeoutError::Timeout) => {
-            unsafe {
-                let _ = CancelIoEx(server_pipe.as_raw_handle() as _, std::ptr::null_mut());
+            on_timeout();
+            if !join_connector_with_grace(connector, CONNECTOR_JOIN_GRACE) {
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "timed out waiting for IPC named pipe client connection; connector thread did not stop after cancellation",
+                ));
             }
-            let _ = connector.join();
             Err(io::Error::new(
                 io::ErrorKind::TimedOut,
                 "timed out waiting for IPC named pipe client connection",
@@ -969,6 +986,19 @@ fn connect_named_pipe(server_pipe: &File, timeout: Duration) -> io::Result<()> {
             ))
         }
     }
+}
+
+#[cfg(target_family = "windows")]
+fn join_connector_with_grace(connector: thread::JoinHandle<()>, max_wait: Duration) -> bool {
+    let start = Instant::now();
+    while !connector.is_finished() {
+        if start.elapsed() >= max_wait {
+            return false;
+        }
+        thread::sleep(Duration::from_millis(5));
+    }
+    let _ = connector.join();
+    true
 }
 
 #[cfg(target_family = "windows")]
@@ -1224,4 +1254,36 @@ fn take_backend_info(guard: &mut ServerIpcInbox) -> Option<WorkerToServerIpcMess
         .iter()
         .position(|msg| matches!(msg, WorkerToServerIpcMessage::BackendInfo { .. }))?;
     guard.queue.remove(idx)
+}
+
+#[cfg(all(test, target_family = "windows"))]
+mod tests {
+    use super::wait_for_named_pipe_connect_result;
+    use std::io;
+    use std::sync::mpsc;
+    use std::thread;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn named_pipe_timeout_does_not_wait_for_slow_connector_join() {
+        let (_tx, rx) = mpsc::sync_channel::<io::Result<()>>(1);
+        let (cancel_tx, cancel_rx) = mpsc::sync_channel::<()>(1);
+        let connector = thread::spawn(move || {
+            let _ = cancel_rx.recv();
+            thread::sleep(Duration::from_secs(2));
+        });
+
+        let start = Instant::now();
+        let result =
+            wait_for_named_pipe_connect_result(rx, connector, Duration::from_millis(10), || {
+                let _ = cancel_tx.send(());
+            });
+
+        assert!(matches!(result, Err(err) if err.kind() == io::ErrorKind::TimedOut));
+        assert!(
+            start.elapsed() < Duration::from_millis(500),
+            "timeout path blocked too long: {:?}",
+            start.elapsed()
+        );
+    }
 }

@@ -3249,15 +3249,13 @@ fn shutdown_term_delay(timeout: Duration) -> Duration {
 #[cfg(target_family = "windows")]
 fn handle_windows_ipc_connect_result(
     connect_result: Result<(), std::io::Error>,
-    child: &mut Child,
+    _child: &mut Child,
 ) -> Result<(), WorkerError> {
     match connect_result {
         Ok(()) => Ok(()),
-        Err(err) => {
-            let _ = child.kill();
-            let _ = child.wait();
-            Err(WorkerError::Io(err))
-        }
+        // The child here is the sandbox wrapper process. Do not hard-kill it on
+        // connect failure; it may still need to unwind ACL changes before exit.
+        Err(err) => Err(WorkerError::Io(err)),
     }
 }
 
@@ -3406,7 +3404,7 @@ mod tests {
 
     #[cfg(target_family = "windows")]
     #[test]
-    fn windows_ipc_connect_error_kills_child() {
+    fn windows_ipc_connect_error_does_not_force_kill_child() {
         let mut child = Command::new("powershell.exe")
             .args(["-NoProfile", "-Command", "Start-Sleep -Seconds 30"])
             .spawn()
@@ -3420,9 +3418,12 @@ mod tests {
 
         let status = child.try_wait().expect("query child status");
         assert!(
-            status.is_some(),
-            "child should be terminated on connect error"
+            status.is_none(),
+            "connect-error handler should not hard-kill child wrapper"
         );
+
+        let _ = child.kill();
+        let _ = child.wait();
     }
 
     #[cfg(target_family = "windows")]
