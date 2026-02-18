@@ -609,6 +609,8 @@ fn write_stderr_bytes(bytes: &[u8]) {
 const UTF8_IN_MARKER: &[u8; 3] = b"\x02\xFF\xFE";
 #[cfg(target_family = "windows")]
 const UTF8_OUT_MARKER: &[u8; 3] = b"\x03\xFF\xFE";
+#[cfg(target_family = "windows")]
+static WINDOWS_CONSOLE_DECODE_STATE: OnceLock<Mutex<WindowsConsoleDecodeState>> = OnceLock::new();
 
 #[cfg(target_family = "windows")]
 fn find_marker(bytes: &[u8], marker: &[u8; 3]) -> Option<usize> {
@@ -670,47 +672,118 @@ fn decode_windows_embedded_segment(bytes: &[u8]) -> String {
 }
 
 #[cfg(target_family = "windows")]
-fn decode_console_bytes(bytes: &[u8]) -> Vec<u8> {
+#[derive(Default)]
+struct WindowsConsoleDecodeState {
+    marker_tail: Vec<u8>,
+    utf8_segment: Vec<u8>,
+    in_utf8_segment: bool,
+}
+
+#[cfg(target_family = "windows")]
+fn trailing_marker_prefix_len(bytes: &[u8], markers: &[&[u8; 3]]) -> usize {
+    let mut keep = 0usize;
+    for marker in markers {
+        for prefix_len in (1..marker.len()).rev() {
+            if bytes.ends_with(&marker[..prefix_len]) {
+                keep = keep.max(prefix_len);
+                break;
+            }
+        }
+    }
+    keep
+}
+
+#[cfg(target_family = "windows")]
+fn decode_console_bytes_with_state(state: &mut WindowsConsoleDecodeState, bytes: &[u8]) -> Vec<u8> {
     if bytes.is_empty() {
         return Vec::new();
     }
 
+    let mut input = Vec::with_capacity(state.marker_tail.len() + bytes.len());
+    input.extend_from_slice(&state.marker_tail);
+    state.marker_tail.clear();
+    input.extend_from_slice(bytes);
+
     let mut out = String::new();
     let mut cursor = 0usize;
 
-    while cursor < bytes.len() {
-        if bytes[cursor..].starts_with(UTF8_IN_MARKER) {
-            cursor += UTF8_IN_MARKER.len();
-            if let Some(end_rel) = find_marker(&bytes[cursor..], UTF8_OUT_MARKER) {
-                let end = cursor + end_rel;
-                out.push_str(&decode_windows_embedded_segment(&bytes[cursor..end]));
-                cursor = end + UTF8_OUT_MARKER.len();
-            } else {
-                out.push_str(&decode_windows_embedded_segment(&bytes[cursor..]));
-                break;
+    while cursor < input.len() {
+        let remaining = &input[cursor..];
+        if !state.in_utf8_segment {
+            if remaining.starts_with(UTF8_IN_MARKER) {
+                state.in_utf8_segment = true;
+                cursor += UTF8_IN_MARKER.len();
+                continue;
             }
+            if remaining.starts_with(UTF8_OUT_MARKER) {
+                cursor += UTF8_OUT_MARKER.len();
+                continue;
+            }
+
+            let next_in = find_marker(remaining, UTF8_IN_MARKER);
+            let next_out = find_marker(remaining, UTF8_OUT_MARKER);
+            let next = match (next_in, next_out) {
+                (Some(a), Some(b)) => Some(a.min(b)),
+                (Some(a), None) => Some(a),
+                (None, Some(b)) => Some(b),
+                (None, None) => None,
+            };
+            if let Some(next) = next {
+                if next > 0 {
+                    out.push_str(&decode_windows_code_page_bytes(&remaining[..next]));
+                    cursor += next;
+                }
+                continue;
+            }
+
+            let keep = trailing_marker_prefix_len(remaining, &[UTF8_IN_MARKER, UTF8_OUT_MARKER]);
+            let split = remaining.len().saturating_sub(keep);
+            if split > 0 {
+                out.push_str(&decode_windows_code_page_bytes(&remaining[..split]));
+            }
+            if keep > 0 {
+                state.marker_tail.extend_from_slice(&remaining[split..]);
+            }
+            break;
+        }
+
+        if let Some(end_rel) = find_marker(remaining, UTF8_OUT_MARKER) {
+            let end = cursor + end_rel;
+            state.utf8_segment.extend_from_slice(&input[cursor..end]);
+            out.push_str(&decode_windows_embedded_segment(&state.utf8_segment));
+            state.utf8_segment.clear();
+            state.in_utf8_segment = false;
+            cursor = end + UTF8_OUT_MARKER.len();
             continue;
         }
 
-        if bytes[cursor..].starts_with(UTF8_OUT_MARKER) {
-            cursor += UTF8_OUT_MARKER.len();
-            continue;
+        let keep = trailing_marker_prefix_len(remaining, &[UTF8_OUT_MARKER]);
+        let split = remaining.len().saturating_sub(keep);
+        if split > 0 {
+            state.utf8_segment.extend_from_slice(&remaining[..split]);
         }
-
-        let next_in = find_marker(&bytes[cursor..], UTF8_IN_MARKER).map(|idx| cursor + idx);
-        let next_out = find_marker(&bytes[cursor..], UTF8_OUT_MARKER).map(|idx| cursor + idx);
-        let next = match (next_in, next_out) {
-            (Some(a), Some(b)) => a.min(b),
-            (Some(a), None) => a,
-            (None, Some(b)) => b,
-            (None, None) => bytes.len(),
-        };
-
-        out.push_str(&decode_windows_code_page_bytes(&bytes[cursor..next]));
-        cursor = next;
+        if keep > 0 {
+            state.marker_tail.extend_from_slice(&remaining[split..]);
+        }
+        break;
     }
 
     out.into_bytes()
+}
+
+#[cfg(target_family = "windows")]
+fn decode_console_bytes(bytes: &[u8]) -> Vec<u8> {
+    let state = WINDOWS_CONSOLE_DECODE_STATE.get_or_init(|| Mutex::new(Default::default()));
+    let mut guard = state.lock().unwrap();
+    decode_console_bytes_with_state(&mut guard, bytes)
+}
+
+#[cfg(all(test, target_family = "windows"))]
+fn reset_console_decode_state_for_tests() {
+    if let Some(state) = WINDOWS_CONSOLE_DECODE_STATE.get() {
+        let mut guard = state.lock().unwrap();
+        *guard = WindowsConsoleDecodeState::default();
+    }
 }
 
 #[cfg(not(target_family = "windows"))]
@@ -979,10 +1052,22 @@ fn get_user_home() -> String {
 
 #[cfg(all(test, target_family = "windows"))]
 mod tests {
-    use super::{UTF8_IN_MARKER, UTF8_OUT_MARKER, decode_console_bytes};
+    use std::sync::{Mutex, OnceLock};
+
+    use super::{
+        UTF8_IN_MARKER, UTF8_OUT_MARKER, decode_console_bytes, reset_console_decode_state_for_tests,
+    };
+
+    fn test_mutex() -> &'static Mutex<()> {
+        static TEST_MUTEX: OnceLock<Mutex<()>> = OnceLock::new();
+        TEST_MUTEX.get_or_init(|| Mutex::new(()))
+    }
 
     #[test]
     fn decode_console_bytes_strips_embedded_utf8_markers() {
+        let _guard = test_mutex().lock().expect("test mutex");
+        reset_console_decode_state_for_tests();
+
         let mut bytes = Vec::new();
         bytes.extend_from_slice(b"[1] \"");
         bytes.extend_from_slice(UTF8_IN_MARKER);
@@ -998,6 +1083,9 @@ mod tests {
 
     #[test]
     fn decode_console_bytes_preserves_embedded_utf8_text() {
+        let _guard = test_mutex().lock().expect("test mutex");
+        reset_console_decode_state_for_tests();
+
         let mut bytes = Vec::new();
         bytes.extend_from_slice(b"R Help on ");
         bytes.extend_from_slice(UTF8_IN_MARKER);
@@ -1010,5 +1098,23 @@ mod tests {
         let text = String::from_utf8(decoded).expect("decoder must produce UTF-8");
 
         assert_eq!(text, format!("R Help on {quoted}\n"));
+    }
+
+    #[test]
+    fn decode_console_bytes_handles_markers_split_across_callbacks() {
+        let _guard = test_mutex().lock().expect("test mutex");
+        reset_console_decode_state_for_tests();
+
+        let chunk1 = b"[1] \"\x02\xff";
+        let chunk2 = b"\xfeafter interrupt\x03\xff";
+        let chunk3 = b"\xfe\"\n";
+
+        let out1 = decode_console_bytes(chunk1);
+        let out2 = decode_console_bytes(chunk2);
+        let out3 = decode_console_bytes(chunk3);
+
+        let merged = [out1, out2, out3].concat();
+        let text = String::from_utf8(merged).expect("decoder must produce UTF-8");
+        assert_eq!(text, "[1] \"after interrupt\"\n");
     }
 }

@@ -253,33 +253,33 @@ pub fn run_sandboxed_command(
         let null_device_ace_applied = allow_null_device(psid_capability);
 
         let mut acl_guards: Vec<(PathBuf, *mut c_void)> = Vec::new();
-        if matches!(policy, SandboxPolicy::WorkspaceWrite { .. }) {
-            let paths = compute_allow_deny_paths(
-                policy,
-                sandbox_policy_cwd,
-                sandbox_policy_cwd,
-                session_temp_dir.as_deref(),
-                &env_map,
-            );
-            for path in &paths.allow {
-                match add_allow_ace(path, psid_capability) {
-                    Ok(true) => acl_guards.push((path.clone(), psid_capability)),
-                    Ok(false) => {}
-                    Err(err) => {
-                        cleanup_capability_acl_state(
-                            &acl_guards,
-                            psid_capability,
-                            null_device_ace_applied,
-                        );
-                        CloseHandle(restricted_token);
-                        LocalFree(psid_capability as HLOCAL);
-                        return Err(format!(
-                            "failed to apply writable ACL to '{}': {err}",
-                            path.display()
-                        ));
-                    }
+        let paths = compute_allow_deny_paths(
+            policy,
+            sandbox_policy_cwd,
+            sandbox_policy_cwd,
+            session_temp_dir.as_deref(),
+            &env_map,
+        );
+        for path in &paths.allow {
+            match add_allow_ace(path, psid_capability) {
+                Ok(true) => acl_guards.push((path.clone(), psid_capability)),
+                Ok(false) => {}
+                Err(err) => {
+                    cleanup_capability_acl_state(
+                        &acl_guards,
+                        psid_capability,
+                        null_device_ace_applied,
+                    );
+                    CloseHandle(restricted_token);
+                    LocalFree(psid_capability as HLOCAL);
+                    return Err(format!(
+                        "failed to apply writable ACL to '{}': {err}",
+                        path.display()
+                    ));
                 }
             }
+        }
+        if matches!(policy, SandboxPolicy::WorkspaceWrite { .. }) {
             for path in &paths.deny {
                 match add_deny_write_ace(path, psid_capability) {
                     Ok(true) => acl_guards.push((path.clone(), psid_capability)),
@@ -1269,6 +1269,35 @@ mod tests {
                 .allow
                 .contains(&canonicalize_or_identity(&session_temp_dir))
         );
+    }
+
+    #[test]
+    fn compute_allow_paths_for_read_only_includes_only_session_temp_dir() {
+        let tmp = tempdir().expect("tempdir");
+        let command_cwd = tmp.path().join("workspace");
+        let temp_dir = tmp.path().join("temp");
+        let session_temp_dir = tmp.path().join("session-temp");
+        std::fs::create_dir_all(&command_cwd).expect("workspace dir");
+        std::fs::create_dir_all(&temp_dir).expect("temp dir");
+        std::fs::create_dir_all(&session_temp_dir).expect("session temp dir");
+
+        let mut env_map = HashMap::new();
+        env_map.insert("TEMP".to_string(), temp_dir.to_string_lossy().to_string());
+        let paths = compute_allow_deny_paths(
+            &SandboxPolicy::ReadOnly,
+            &command_cwd,
+            &command_cwd,
+            Some(&session_temp_dir),
+            &env_map,
+        );
+
+        assert_eq!(paths.allow.len(), 1);
+        assert!(
+            paths
+                .allow
+                .contains(&canonicalize_or_identity(&session_temp_dir))
+        );
+        assert!(paths.deny.is_empty());
     }
 
     #[test]
