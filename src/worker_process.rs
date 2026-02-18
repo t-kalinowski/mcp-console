@@ -3249,13 +3249,35 @@ fn shutdown_term_delay(timeout: Duration) -> Duration {
 #[cfg(target_family = "windows")]
 fn handle_windows_ipc_connect_result(
     connect_result: Result<(), std::io::Error>,
-    _child: &mut Child,
+    child: &mut Child,
 ) -> Result<(), WorkerError> {
     match connect_result {
         Ok(()) => Ok(()),
-        // The child here is the sandbox wrapper process. Do not hard-kill it on
-        // connect failure; it may still need to unwind ACL changes before exit.
-        Err(err) => Err(WorkerError::Io(err)),
+        // The child here is the sandbox wrapper process. Give it a short grace
+        // period to unwind ACL changes before forcing termination/reap.
+        Err(err) => {
+            const WRAPPER_EXIT_GRACE: Duration = Duration::from_secs(2);
+            let deadline = std::time::Instant::now() + WRAPPER_EXIT_GRACE;
+            loop {
+                match child.try_wait() {
+                    Ok(Some(_)) => break,
+                    Ok(None) => {
+                        if std::time::Instant::now() >= deadline {
+                            let _ = child.kill();
+                            let _ = child.wait();
+                            break;
+                        }
+                        thread::sleep(Duration::from_millis(20));
+                    }
+                    Err(_) => {
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        break;
+                    }
+                }
+            }
+            Err(WorkerError::Io(err))
+        }
     }
 }
 
@@ -3404,7 +3426,7 @@ mod tests {
 
     #[cfg(target_family = "windows")]
     #[test]
-    fn windows_ipc_connect_error_does_not_force_kill_child() {
+    fn windows_ipc_connect_error_reaps_wrapper_process() {
         let mut child = Command::new("powershell.exe")
             .args(["-NoProfile", "-Command", "Start-Sleep -Seconds 30"])
             .spawn()
@@ -3416,14 +3438,19 @@ mod tests {
         );
         assert!(matches!(result, Err(WorkerError::Io(_))));
 
-        let status = child.try_wait().expect("query child status");
-        assert!(
-            status.is_none(),
-            "connect-error handler should not hard-kill child wrapper"
-        );
-
-        let _ = child.kill();
-        let _ = child.wait();
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        loop {
+            let status = child.try_wait().expect("query child status");
+            if status.is_some() {
+                break;
+            }
+            if std::time::Instant::now() >= deadline {
+                let _ = child.kill();
+                let _ = child.wait();
+                panic!("connect-error handler should reap child wrapper");
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
     }
 
     #[cfg(target_family = "windows")]

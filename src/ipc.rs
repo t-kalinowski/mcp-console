@@ -740,6 +740,10 @@ fn create_pipe_pair() -> io::Result<(std::io::PipeReader, std::io::PipeWriter, R
 
 #[cfg(target_family = "windows")]
 static PIPE_COUNTER: AtomicU64 = AtomicU64::new(1);
+#[cfg(target_family = "windows")]
+const IPC_CONNECT_TIMEOUT_MESSAGE: &str = "timed out waiting for IPC named pipe client connection";
+#[cfg(target_family = "windows")]
+const IPC_CONNECT_TIMEOUT_CONNECTOR_STUCK_MESSAGE: &str = "timed out waiting for IPC named pipe client connection; connector thread did not stop after cancellation";
 
 #[cfg(target_family = "windows")]
 fn random_pipe_suffix() -> io::Result<String> {
@@ -971,12 +975,12 @@ fn wait_for_named_pipe_connect_result(
             if !join_connector_with_grace(connector, CONNECTOR_JOIN_GRACE) {
                 return Err(io::Error::new(
                     io::ErrorKind::TimedOut,
-                    "timed out waiting for IPC named pipe client connection; connector thread did not stop after cancellation",
+                    IPC_CONNECT_TIMEOUT_CONNECTOR_STUCK_MESSAGE,
                 ));
             }
             Err(io::Error::new(
                 io::ErrorKind::TimedOut,
-                "timed out waiting for IPC named pipe client connection",
+                IPC_CONNECT_TIMEOUT_MESSAGE,
             ))
         }
         Err(mpsc::RecvTimeoutError::Disconnected) => {
@@ -1007,10 +1011,27 @@ fn connect_named_pipe_with_process_retry(
     child: &mut std::process::Child,
     max_wait: Duration,
 ) -> io::Result<()> {
+    connect_named_pipe_with_process_retry_impl(
+        |timeout| connect_named_pipe(server_pipe, timeout),
+        || child.try_wait().map(|status| status.is_some()),
+        max_wait,
+    )
+}
+
+#[cfg(target_family = "windows")]
+fn connect_named_pipe_with_process_retry_impl<ConnectAttempt, ChildExited>(
+    mut connect_attempt: ConnectAttempt,
+    mut child_exited: ChildExited,
+    max_wait: Duration,
+) -> io::Result<()>
+where
+    ConnectAttempt: FnMut(Duration) -> io::Result<()>,
+    ChildExited: FnMut() -> io::Result<bool>,
+{
     const CONNECT_ATTEMPT_TIMEOUT: Duration = Duration::from_millis(500);
     let deadline = Instant::now() + max_wait;
     loop {
-        if child.try_wait()?.is_some() {
+        if child_exited()? {
             return Err(io::Error::new(
                 io::ErrorKind::BrokenPipe,
                 "worker exited before IPC named pipe connection",
@@ -1020,16 +1041,24 @@ fn connect_named_pipe_with_process_retry(
         if now >= deadline {
             return Err(io::Error::new(
                 io::ErrorKind::TimedOut,
-                "timed out waiting for IPC named pipe client connection",
+                IPC_CONNECT_TIMEOUT_MESSAGE,
             ));
         }
         let timeout = CONNECT_ATTEMPT_TIMEOUT.min(deadline.saturating_duration_since(now));
-        match connect_named_pipe(server_pipe, timeout) {
+        match connect_attempt(timeout) {
             Ok(()) => return Ok(()),
-            Err(err) if err.kind() == io::ErrorKind::TimedOut => continue,
+            Err(err) if is_retryable_connect_timeout(&err) => continue,
             Err(err) => return Err(err),
         }
     }
+}
+
+#[cfg(target_family = "windows")]
+fn is_retryable_connect_timeout(err: &io::Error) -> bool {
+    err.kind() == io::ErrorKind::TimedOut
+        && !err
+            .to_string()
+            .contains(IPC_CONNECT_TIMEOUT_CONNECTOR_STUCK_MESSAGE)
 }
 
 #[cfg(target_family = "windows")]
@@ -1258,8 +1287,9 @@ fn take_backend_info(guard: &mut ServerIpcInbox) -> Option<WorkerToServerIpcMess
 
 #[cfg(all(test, target_family = "windows"))]
 mod tests {
-    use super::wait_for_named_pipe_connect_result;
+    use super::{connect_named_pipe_with_process_retry_impl, wait_for_named_pipe_connect_result};
     use std::io;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::mpsc;
     use std::thread;
     use std::time::{Duration, Instant};
@@ -1284,6 +1314,29 @@ mod tests {
             start.elapsed() < Duration::from_millis(500),
             "timeout path blocked too long: {:?}",
             start.elapsed()
+        );
+    }
+
+    #[test]
+    fn connect_retry_stops_after_uncancelled_timeout_error() {
+        let attempts = AtomicUsize::new(0);
+        let result = connect_named_pipe_with_process_retry_impl(
+            |_| {
+                attempts.fetch_add(1, Ordering::Relaxed);
+                Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "timed out waiting for IPC named pipe client connection; connector thread did not stop after cancellation",
+                ))
+            },
+            || Ok(false),
+            Duration::from_millis(10),
+        );
+
+        assert!(matches!(result, Err(err) if err.kind() == io::ErrorKind::TimedOut));
+        assert_eq!(
+            attempts.load(Ordering::Relaxed),
+            1,
+            "uncancelled timeout should abort retries to avoid stacking connector threads",
         );
     }
 }
