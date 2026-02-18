@@ -163,10 +163,7 @@ fn compute_allow_deny_paths(
                 deny.insert(git_entry);
             }
         };
-        // Do not ACL-mutate the command cwd by default on Windows. Applying
-        // allow ACLs to large workspace roots can take tens of seconds and
-        // effectively deadlock worker startup.
-        let _ = command_cwd;
+        add_writable_root(command_cwd.to_path_buf());
         for root in writable_roots {
             add_writable_root(root.clone());
         }
@@ -256,20 +253,48 @@ pub fn run_sandboxed_command(
             }
         };
 
-        allow_null_device(psid_capability);
+        let null_device_ace_applied = allow_null_device(psid_capability);
 
         let mut acl_guards: Vec<(PathBuf, *mut c_void)> = Vec::new();
         if matches!(policy, SandboxPolicy::WorkspaceWrite { .. }) {
             let paths =
                 compute_allow_deny_paths(policy, sandbox_policy_cwd, sandbox_policy_cwd, &env_map);
             for path in &paths.allow {
-                if let Ok(true) = add_allow_ace(path, psid_capability) {
-                    acl_guards.push((path.clone(), psid_capability));
+                match add_allow_ace(path, psid_capability) {
+                    Ok(true) => acl_guards.push((path.clone(), psid_capability)),
+                    Ok(false) => {}
+                    Err(err) => {
+                        cleanup_capability_acl_state(
+                            &acl_guards,
+                            psid_capability,
+                            null_device_ace_applied,
+                        );
+                        CloseHandle(restricted_token);
+                        LocalFree(psid_capability as HLOCAL);
+                        return Err(format!(
+                            "failed to apply writable ACL to '{}': {err}",
+                            path.display()
+                        ));
+                    }
                 }
             }
             for path in &paths.deny {
-                if let Ok(true) = add_deny_write_ace(path, psid_capability) {
-                    acl_guards.push((path.clone(), psid_capability));
+                match add_deny_write_ace(path, psid_capability) {
+                    Ok(true) => acl_guards.push((path.clone(), psid_capability)),
+                    Ok(false) => {}
+                    Err(err) => {
+                        cleanup_capability_acl_state(
+                            &acl_guards,
+                            psid_capability,
+                            null_device_ace_applied,
+                        );
+                        CloseHandle(restricted_token);
+                        LocalFree(psid_capability as HLOCAL);
+                        return Err(format!(
+                            "failed to apply deny ACL to '{}': {err}",
+                            path.display()
+                        ));
+                    }
                 }
             }
         }
@@ -279,9 +304,7 @@ pub fn run_sandboxed_command(
         let (proc_info, _startup_info) = match spawn_result {
             Ok(value) => value,
             Err(err) => {
-                for (path, sid) in &acl_guards {
-                    revoke_ace(path, *sid);
-                }
+                cleanup_capability_acl_state(&acl_guards, psid_capability, null_device_ace_applied);
                 CloseHandle(restricted_token);
                 LocalFree(psid_capability as HLOCAL);
                 return Err(err);
@@ -298,9 +321,7 @@ pub fn run_sandboxed_command(
             if let Some(job) = job_handle {
                 CloseHandle(job);
             }
-            for (path, sid) in &acl_guards {
-                revoke_ace(path, *sid);
-            }
+            cleanup_capability_acl_state(&acl_guards, psid_capability, null_device_ace_applied);
             CloseHandle(proc_info.hThread);
             CloseHandle(proc_info.hProcess);
             CloseHandle(restricted_token);
@@ -316,9 +337,7 @@ pub fn run_sandboxed_command(
             if let Some(job) = job_handle {
                 CloseHandle(job);
             }
-            for (path, sid) in &acl_guards {
-                revoke_ace(path, *sid);
-            }
+            cleanup_capability_acl_state(&acl_guards, psid_capability, null_device_ace_applied);
             CloseHandle(proc_info.hThread);
             CloseHandle(proc_info.hProcess);
             CloseHandle(restricted_token);
@@ -332,15 +351,26 @@ pub fn run_sandboxed_command(
         if let Some(job) = job_handle {
             CloseHandle(job);
         }
-        for (path, sid) in &acl_guards {
-            revoke_ace(path, *sid);
-        }
+        cleanup_capability_acl_state(&acl_guards, psid_capability, null_device_ace_applied);
         CloseHandle(proc_info.hThread);
         CloseHandle(proc_info.hProcess);
         CloseHandle(restricted_token);
         LocalFree(psid_capability as HLOCAL);
 
         Ok(exit_code as i32)
+    }
+}
+
+unsafe fn cleanup_capability_acl_state(
+    acl_guards: &[(PathBuf, *mut c_void)],
+    capability_sid: *mut c_void,
+    null_device_ace_applied: bool,
+) {
+    for (path, sid) in acl_guards {
+        revoke_ace(path, *sid);
+    }
+    if null_device_ace_applied {
+        revoke_null_device_ace(capability_sid);
     }
 }
 
@@ -733,7 +763,7 @@ unsafe fn revoke_ace(path: &Path, sid: *mut c_void) {
     }
 }
 
-unsafe fn allow_null_device(sid: *mut c_void) {
+unsafe fn allow_null_device(sid: *mut c_void) -> bool {
     let nul_path = to_wide(r"\\.\NUL");
     let mut security_descriptor: *mut c_void = std::ptr::null_mut();
     let mut dacl: *mut ACL = std::ptr::null_mut();
@@ -748,7 +778,7 @@ unsafe fn allow_null_device(sid: *mut c_void) {
         &mut security_descriptor,
     );
     if code != ERROR_SUCCESS {
-        return;
+        return false;
     }
 
     let trustee = TRUSTEE_W {
@@ -761,6 +791,65 @@ unsafe fn allow_null_device(sid: *mut c_void) {
     let mut explicit: EXPLICIT_ACCESS_W = std::mem::zeroed();
     explicit.grfAccessPermissions = FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE;
     explicit.grfAccessMode = GRANT_ACCESS;
+    explicit.grfInheritance = 0;
+    explicit.Trustee = trustee;
+
+    let mut new_dacl: *mut ACL = std::ptr::null_mut();
+    let set_acl_code = SetEntriesInAclW(1, &explicit, dacl, &mut new_dacl);
+    let set_security_code = if set_acl_code == ERROR_SUCCESS {
+        SetNamedSecurityInfoW(
+            nul_path.as_ptr() as *mut u16,
+            SE_FILE_OBJECT,
+            DACL_SECURITY_INFORMATION,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            new_dacl,
+            std::ptr::null_mut(),
+        )
+    } else {
+        set_acl_code
+    };
+    if !new_dacl.is_null() {
+        LocalFree(new_dacl as HLOCAL);
+    }
+    if !security_descriptor.is_null() {
+        LocalFree(security_descriptor as HLOCAL);
+    }
+
+    set_security_code == ERROR_SUCCESS
+}
+
+unsafe fn revoke_null_device_ace(sid: *mut c_void) {
+    let nul_path = to_wide(r"\\.\NUL");
+    let mut security_descriptor: *mut c_void = std::ptr::null_mut();
+    let mut dacl: *mut ACL = std::ptr::null_mut();
+    let code = GetNamedSecurityInfoW(
+        nul_path.as_ptr(),
+        SE_FILE_OBJECT,
+        DACL_SECURITY_INFORMATION,
+        std::ptr::null_mut(),
+        std::ptr::null_mut(),
+        &mut dacl,
+        std::ptr::null_mut(),
+        &mut security_descriptor,
+    );
+    if code != ERROR_SUCCESS {
+        if !security_descriptor.is_null() {
+            LocalFree(security_descriptor as HLOCAL);
+        }
+        return;
+    }
+
+    let trustee = TRUSTEE_W {
+        pMultipleTrustee: std::ptr::null_mut(),
+        MultipleTrusteeOperation: 0,
+        TrusteeForm: TRUSTEE_IS_SID,
+        TrusteeType: TRUSTEE_IS_UNKNOWN,
+        ptstrName: sid as *mut u16,
+    };
+    let mut explicit: EXPLICIT_ACCESS_W = std::mem::zeroed();
+    explicit.grfAccessPermissions = 0;
+    explicit.grfAccessMode = REVOKE_ACCESS;
     explicit.grfInheritance = 0;
     explicit.Trustee = trustee;
 
@@ -780,7 +869,6 @@ unsafe fn allow_null_device(sid: *mut c_void) {
             LocalFree(new_dacl as HLOCAL);
         }
     }
-
     if !security_descriptor.is_null() {
         LocalFree(security_descriptor as HLOCAL);
     }
@@ -1073,7 +1161,7 @@ mod tests {
         let paths = compute_allow_deny_paths(&policy, &command_cwd, &command_cwd, &HashMap::new());
 
         assert!(
-            !paths
+            paths
                 .allow
                 .contains(&canonicalize_or_identity(&command_cwd))
         );
@@ -1095,7 +1183,7 @@ mod tests {
         let paths = compute_allow_deny_paths(&policy, &command_cwd, &command_cwd, &env_map);
 
         assert!(
-            !paths
+            paths
                 .allow
                 .contains(&canonicalize_or_identity(&command_cwd))
         );
@@ -1109,13 +1197,14 @@ mod tests {
         let command_cwd = tmp.path().join("workspace");
         let extra_root = tmp.path().join("extra");
         let git_dir = extra_root.join(".git");
+        std::fs::create_dir_all(&command_cwd).expect("workspace dir");
         std::fs::create_dir_all(&git_dir).expect("git dir");
 
         let policy = workspace_policy(vec![extra_root.clone()], false, true);
         let paths = compute_allow_deny_paths(&policy, &command_cwd, &command_cwd, &HashMap::new());
 
         assert!(
-            !paths
+            paths
                 .allow
                 .contains(&canonicalize_or_identity(&command_cwd))
         );
@@ -1129,6 +1218,7 @@ mod tests {
         let command_cwd = tmp.path().join("workspace");
         let extra_root = tmp.path().join("extra");
         let git_file = extra_root.join(".git");
+        std::fs::create_dir_all(&command_cwd).expect("workspace dir");
         std::fs::create_dir_all(&extra_root).expect("extra dir");
         std::fs::write(&git_file, "gitdir: .git/worktrees/example").expect("git file");
 
@@ -1136,7 +1226,7 @@ mod tests {
         let paths = compute_allow_deny_paths(&policy, &command_cwd, &command_cwd, &HashMap::new());
 
         assert!(
-            !paths
+            paths
                 .allow
                 .contains(&canonicalize_or_identity(&command_cwd))
         );
@@ -1155,13 +1245,32 @@ mod tests {
         let policy = workspace_policy(vec![extra_root.clone()], false, true);
         let paths = compute_allow_deny_paths(&policy, &command_cwd, &command_cwd, &HashMap::new());
 
-        assert_eq!(paths.allow.len(), 1);
+        assert_eq!(paths.allow.len(), 2);
         assert!(
-            !paths
+            paths
                 .allow
                 .contains(&canonicalize_or_identity(&command_cwd))
         );
         assert!(paths.allow.contains(&canonicalize_or_identity(&extra_root)));
         assert!(paths.deny.is_empty());
+    }
+
+    #[test]
+    fn compute_allow_paths_includes_command_cwd_and_denies_its_git_dir() {
+        let tmp = tempdir().expect("tempdir");
+        let command_cwd = tmp.path().join("workspace");
+        let git_dir = command_cwd.join(".git");
+        std::fs::create_dir_all(&git_dir).expect("git dir");
+
+        let policy = workspace_policy(Vec::new(), false, true);
+        let paths = compute_allow_deny_paths(&policy, &command_cwd, &command_cwd, &HashMap::new());
+
+        assert_eq!(paths.allow.len(), 1);
+        assert!(
+            paths
+                .allow
+                .contains(&canonicalize_or_identity(&command_cwd))
+        );
+        assert!(paths.deny.contains(&canonicalize_or_identity(&git_dir)));
     }
 }
