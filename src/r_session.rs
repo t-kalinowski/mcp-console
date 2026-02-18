@@ -30,6 +30,8 @@ use libr::{
 };
 #[cfg(target_family = "windows")]
 use std::mem::MaybeUninit;
+#[cfg(target_family = "windows")]
+use windows_sys::Win32::Globalization::{GetACP, MultiByteToWideChar};
 
 const MCP_CONSOLE_R_SCRIPT: &str = include_str!("../r/mcp_console.R");
 
@@ -518,6 +520,10 @@ fn setup_r(args: &[String]) -> Result<(), String> {
         (*params).Busy = Some(r_busy);
         (*params).Suicide = Some(r_suicide);
         (*params).CallBack = Some(r_callback);
+        // Windows R embeds UTF-8 spans in console output using UTF8in/UTF8out markers.
+        // Explicitly enable this (required when using Rstart version 0) so output
+        // encoding is deterministic and can be decoded reliably.
+        (*params).EmitEmbeddedUTF8 = Rboolean_TRUE;
 
         (*params).rhome = r_home;
         (*params).home = user_home;
@@ -599,6 +605,119 @@ fn write_stderr_bytes(bytes: &[u8]) {
     crate::output_stream::write_stderr_bytes(bytes);
 }
 
+#[cfg(target_family = "windows")]
+const UTF8_IN_MARKER: &[u8; 3] = b"\x02\xFF\xFE";
+#[cfg(target_family = "windows")]
+const UTF8_OUT_MARKER: &[u8; 3] = b"\x03\xFF\xFE";
+
+#[cfg(target_family = "windows")]
+fn find_marker(bytes: &[u8], marker: &[u8; 3]) -> Option<usize> {
+    bytes
+        .windows(marker.len())
+        .position(|window| window == marker)
+}
+
+#[cfg(target_family = "windows")]
+fn decode_windows_code_page_bytes(bytes: &[u8]) -> String {
+    if bytes.is_empty() {
+        return String::new();
+    }
+    if bytes.len() > i32::MAX as usize {
+        return String::from_utf8_lossy(bytes).into_owned();
+    }
+
+    let code_page = unsafe { GetACP() };
+
+    let input_len = bytes.len() as i32;
+    let wide_len = unsafe {
+        MultiByteToWideChar(
+            code_page,
+            0,
+            bytes.as_ptr(),
+            input_len,
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+    if wide_len <= 0 {
+        return String::from_utf8_lossy(bytes).into_owned();
+    }
+
+    let mut wide = vec![0u16; wide_len as usize];
+    let written = unsafe {
+        MultiByteToWideChar(
+            code_page,
+            0,
+            bytes.as_ptr(),
+            input_len,
+            wide.as_mut_ptr(),
+            wide_len,
+        )
+    };
+    if written <= 0 {
+        return String::from_utf8_lossy(bytes).into_owned();
+    }
+
+    String::from_utf16_lossy(&wide[..written as usize])
+}
+
+#[cfg(target_family = "windows")]
+fn decode_windows_embedded_segment(bytes: &[u8]) -> String {
+    match std::str::from_utf8(bytes) {
+        Ok(text) => text.to_string(),
+        Err(_) => decode_windows_code_page_bytes(bytes),
+    }
+}
+
+#[cfg(target_family = "windows")]
+fn decode_console_bytes(bytes: &[u8]) -> Vec<u8> {
+    if bytes.is_empty() {
+        return Vec::new();
+    }
+
+    let mut out = String::new();
+    let mut cursor = 0usize;
+
+    while cursor < bytes.len() {
+        if bytes[cursor..].starts_with(UTF8_IN_MARKER) {
+            cursor += UTF8_IN_MARKER.len();
+            if let Some(end_rel) = find_marker(&bytes[cursor..], UTF8_OUT_MARKER) {
+                let end = cursor + end_rel;
+                out.push_str(&decode_windows_embedded_segment(&bytes[cursor..end]));
+                cursor = end + UTF8_OUT_MARKER.len();
+            } else {
+                out.push_str(&decode_windows_embedded_segment(&bytes[cursor..]));
+                break;
+            }
+            continue;
+        }
+
+        if bytes[cursor..].starts_with(UTF8_OUT_MARKER) {
+            cursor += UTF8_OUT_MARKER.len();
+            continue;
+        }
+
+        let next_in = find_marker(&bytes[cursor..], UTF8_IN_MARKER).map(|idx| cursor + idx);
+        let next_out = find_marker(&bytes[cursor..], UTF8_OUT_MARKER).map(|idx| cursor + idx);
+        let next = match (next_in, next_out) {
+            (Some(a), Some(b)) => a.min(b),
+            (Some(a), None) => a,
+            (None, Some(b)) => b,
+            (None, None) => bytes.len(),
+        };
+
+        out.push_str(&decode_windows_code_page_bytes(&bytes[cursor..next]));
+        cursor = next;
+    }
+
+    out.into_bytes()
+}
+
+#[cfg(not(target_family = "windows"))]
+fn decode_console_bytes(bytes: &[u8]) -> Vec<u8> {
+    bytes.to_vec()
+}
+
 fn complete_active_request(
     state: &Arc<SessionState>,
     active: Option<ActiveRequest>,
@@ -619,10 +738,11 @@ pub extern "C-unwind" fn r_write_console(buf: *const c_char, buflen: c_int, otyp
         return;
     }
     let bytes = unsafe { std::slice::from_raw_parts(buf as *const u8, buflen as usize) };
+    let bytes = decode_console_bytes(bytes);
     if otype == 0 {
-        write_stdout_bytes(bytes);
+        write_stdout_bytes(&bytes);
     } else {
-        write_stderr_bytes(bytes);
+        write_stderr_bytes(&bytes);
     }
 }
 
@@ -855,4 +975,40 @@ fn get_user_home() -> String {
     unsafe { CStr::from_ptr(r_path) }
         .to_string_lossy()
         .to_string()
+}
+
+#[cfg(all(test, target_family = "windows"))]
+mod tests {
+    use super::{UTF8_IN_MARKER, UTF8_OUT_MARKER, decode_console_bytes};
+
+    #[test]
+    fn decode_console_bytes_strips_embedded_utf8_markers() {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(b"[1] \"");
+        bytes.extend_from_slice(UTF8_IN_MARKER);
+        bytes.extend_from_slice(b"after interrupt");
+        bytes.extend_from_slice(UTF8_OUT_MARKER);
+        bytes.extend_from_slice(b"\"\n");
+
+        let decoded = decode_console_bytes(&bytes);
+        let text = String::from_utf8(decoded).expect("decoder must produce UTF-8");
+
+        assert_eq!(text, "[1] \"after interrupt\"\n");
+    }
+
+    #[test]
+    fn decode_console_bytes_preserves_embedded_utf8_text() {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(b"R Help on ");
+        bytes.extend_from_slice(UTF8_IN_MARKER);
+        let quoted = format!("{}mean{}", '\u{2018}', '\u{2019}');
+        bytes.extend_from_slice(quoted.as_bytes());
+        bytes.extend_from_slice(UTF8_OUT_MARKER);
+        bytes.extend_from_slice(b"\n");
+
+        let decoded = decode_console_bytes(&bytes);
+        let text = String::from_utf8(decoded).expect("decoder must produce UTF-8");
+
+        assert_eq!(text, format!("R Help on {quoted}\n"));
+    }
 }
