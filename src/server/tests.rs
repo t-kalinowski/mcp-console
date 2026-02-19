@@ -122,7 +122,7 @@ fn repl_tool_descriptions_are_backend_specific() {
 }
 
 #[test]
-fn repl_tool_descriptions_include_non_codex_affordances() {
+fn repl_tool_descriptions_include_language_specific_affordances() {
     let r = super::repl_tool_description_for_backend(crate::backend::Backend::R);
     let python = super::repl_tool_description_for_backend(crate::backend::Backend::Python);
 

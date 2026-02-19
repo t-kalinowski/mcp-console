@@ -1,83 +1,170 @@
-# Future Work: Optional REPL Description Extras and Skill Draft
+# Future Work: REPL Description Extras (Recovered High-Signal Draft)
 
-## Current direction (kept)
+## Intent
 
-The default MCP tool descriptions should stay concise and Codex-aligned:
-- clear purpose
-- strict argument schema
-- short operational constraints
+Keep the default `repl` and `repl_reset` tool descriptions short and schema-focused.
 
-This repo now includes backend-specialized `repl` descriptions (`R` and `Python`) with only high-value affordances that Codex does not assume by default (pager, images, help, debugger).
+Preserve the richer high-signal operational guidance from the old long-form tool description in an optional layer (skill or backend-specific extras) so we can bring it back without bloating default tool metadata.
 
-## Problem
+## Scope of this draft
 
-Even with backend specialization, there is additional knowledge that can improve agent performance but is too long for default tool descriptions:
-- workflow philosophy (iterate quickly, inspect, fail fast)
-- high-signal debugging recipes
-- backend-specific gotchas and anti-patterns
-- deep pager/search/navigation tactics
+This draft is the recovery set for high-signal content removed during the `write_stdin` -> `repl` surface cleanup.
 
-## Proposal
+It should be treated as source material for:
+- backend-specific optional description extras
+- a dedicated REPL skill
+- dynamic runtime selection of extras by active backend
 
-Add an opt-in "description extras" layer that can be surfaced separately from the default tool description.
+## Recovered shared guidance
 
-Candidate delivery options:
-- a dedicated skill document referenced by higher-level instructions
-- a configurable "extended description" toggle
-- backend-specific supplemental docs loaded only when needed
+### Operating model
 
-Design goals:
-- keep default tool descriptions short
-- keep extras explicit and structured
-- make extras backend-aware and runtime-selected
+- Use the REPL for short inspect-run loops when direct execution is faster than reasoning.
+- Reuse session state when it helps iteration speed, but do not rely on persistence for correctness.
+- Prefer explicit reset when state is stale, inconsistent, or too large.
+- Avoid speculative fallback chains; fail fast and inspect actual runtime state.
 
-## Draft Knowledge Set (candidate skill content)
+### Memory hygiene
 
-### Shared REPL operating model
+- Long-lived sessions can retain large objects and hold significant memory while idle.
+- Reset aggressively after large one-off explorations.
+- Treat idle memory hoarding as a bug in workflow, not a normal steady state.
 
-- Prefer short execution/inspection loops over speculative reasoning.
-- Persist state intentionally; reset when large state is no longer useful.
-- Use non-blocking calls and polling patterns when a request is expected to run long.
-- Treat errors as signal; do not silently fallback to unrelated flows.
+### Polling and long-running execution
 
-### Shared pager playbook
+- Use short non-blocking/near-non-blocking calls to launch long work, then poll.
+- Treat timeout return as partial progress, not cancellation.
+- While work is active, reject/discard concurrent non-empty input and poll until completion.
+- After completion, resume normal interactive flow.
 
-- When pager is active, backend input is blocked.
-- Use empty input for next page.
-- Use `:q` to exit pager.
-- Use `:/pattern` and `:n` for forward-only search.
-- Use `:a` for all remaining output when full context is needed.
+## Recovered R-specific guidance
 
-### Shared image playbook
+### Primary use cases
 
-- Expect plot/image content as first-class outputs.
-- Re-run plot commands after state changes to verify deltas.
-- Keep image generation deterministic when possible (fixed seeds, fixed dimensions).
+- Quick computation and grounded inspection.
+- Package behavior verification.
+- Small code-path validation.
+- Intermediate value checks before broader refactors.
 
-### R-specific draft
+### In-band docs/manual discovery
 
-- Primary docs/help paths: `?topic`, `help()`, `help.search()`, `vignette()`, `RShowDoc()`.
-- Debugging: `browser()`, `debug()`, `debugonce()`, `trace()`, and call-stack inspection.
-- Data-workflow pattern: inspect with `str()`, verify assumptions, then transform.
-- Plot controls: `options(console.plot.width, console.plot.height, console.plot.units, console.plot.dpi)`.
-- Prefer explicit preconditions with `stopifnot()` in public APIs.
+- `?topic`, `help(...)`
+- `help(package = "pkg")`, `help.search(...)`, `library(help = "pkg")`, `package?pkg`
+- `vignette(package = "pkg")`, `vignette("topic", package = "pkg")`
+- `RShowDoc("R-exts")`
+- `getAnywhere(name)`
 
-### Python-specific draft
+### Development loop
 
-- Primary docs/help paths: `help()`, `dir()`, `pydoc.help`.
-- Debugging: `breakpoint()`, `pdb.set_trace()`, step/inspect/continue loops.
-- Inspection-first workflow for dynamic objects before refactoring logic.
-- Plot workflow for matplotlib and related libraries with explicit redraw checks.
-- Prefer small explicit assertions over broad fallback trees.
+- After package edits, run `devtools::load_all()` before interactive verification.
+- Keep repeated setup in scripts and `source("file.R")` for reproducible loops.
 
-### Reset/interrupt patterns
+### Debugging playbook
 
-- Use interrupt (`\u0003`) for best-effort cancellation of active execution.
-- Use reset (`repl_reset` or `\u0004` prefix behavior where applicable) when state is inconsistent or too large.
-- After reset, rerun only the minimal setup needed for the next objective.
+- Use `browser()`, `debug()`, `debugonce()`, `trace()` to inspect execution points.
+- In debugger frames, inspect with `ls.str()` and `sys.calls()`.
+- Use browser-driven development:
+  - start with a minimal stub and `browser()`
+  - trigger real call sites
+  - inspect inputs (`str(...)`)
+  - implement one expression at a time while observing intermediate state
 
-## Open implementation questions
+### Complex transformation workflow
 
-- Where should extras be configured (CLI flag, env var, config file, or per-client profile)?
-- Should extras be attached to `repl` tool description directly or injected as separate instructions?
-- How should backend-specific extras evolve as new backends are added (for example Julia)?
+- For data wrangling and string-heavy logic (`grep`, `sub`, `gsub`, regex unpacking), avoid guessing.
+- Step through concrete examples interactively.
+- Validate assumptions before generalizing transformations.
+
+### Contracts and preconditions
+
+- State assumptions at function entry.
+- Prefer small `stopifnot()` contracts in public APIs.
+
+## Recovered Python-specific guidance
+
+### In-band docs and inspection
+
+- `help()`, `dir()`, `pydoc.help`
+- Inspect concrete object state/types before structural changes.
+
+### Debugging playbook
+
+- Use `breakpoint()` and `pdb.set_trace()`.
+- Run step/inspect/continue loops on real failing paths.
+
+### Contracts and preconditions
+
+- Prefer typed interfaces plus small explicit assertions.
+- Avoid broad defensive fallback trees when a concrete error can clarify intent.
+
+## Recovered pager guidance
+
+### Pager semantics
+
+- Pager activates when output exceeds page budget.
+- While pager is active, backend input is blocked.
+- Empty input advances one page.
+- Non-empty pager commands must be `:`-prefixed.
+- Backend prompt is suppressed during pager mode and restored after exit.
+- Pager output de-duplicates already shown content within a pager session.
+
+### Pager commands
+
+- next page: empty input
+- quit: `:q`
+- search: `:/pattern`
+- next match: `:n`
+- emit all remaining: `:a`
+- help: `:help`
+
+## Recovered image guidance
+
+- Plot/image output is first-class content in tool responses.
+- Re-run plot commands after state edits to verify deltas.
+- Prefer deterministic plotting where possible (fixed seeds, explicit dimensions).
+
+### R plot controls
+
+- `options(console.plot.width = ..., console.plot.height = ...)`
+- `options(console.plot.units = "in" | "cm" | "mm" | "px")`
+- `options(console.plot.dpi = ...)`
+
+## Recovered sandbox guidance
+
+- If shell execution is policy-blocked, try equivalent commands through the REPL backend when supported.
+- Common workflows where this matters include test runs, package build/check loops, and rendering workflows.
+
+## Recovered reset/interrupt/session guidance
+
+### Control prefixes
+
+- `\u0003` (Ctrl-C): best-effort interrupt, then run remaining input in current session.
+- `\u0004` (Ctrl-D): reset session, then run remaining input in fresh session.
+- Optional separator newline after control prefix is accepted.
+
+### Reset tool semantics
+
+- `repl_reset` is explicit state reset.
+- Prefer `repl_reset` when the intent is session lifecycle control rather than payload execution.
+
+### Session exit and crashes
+
+- EOF or runtime exit leads to worker respawn for the next request.
+- Mid-request worker exit/crash should return captured output and a terminal error line.
+
+## Intentionally omitted from recovery
+
+- Legacy workspace-save prompt behavior details are intentionally excluded because they are no longer current or relevant to the cleaned surface.
+
+## Delivery plan
+
+1. Keep default backend tool descriptions short.
+2. Add optional extras selected by backend at runtime.
+3. Add a dedicated skill that includes these full recipes and debugging patterns.
+4. Add a small mechanism to attach extras only when requested by the client/profile.
+
+## Open questions
+
+- Config path: CLI flag vs env var vs config file vs client profile.
+- Attachment model: append to tool doc vs separate instruction channel.
+- Backend growth: how to add parallel extras for future backends (for example Julia) without duplicating shared guidance.
