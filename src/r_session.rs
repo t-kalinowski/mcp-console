@@ -610,7 +610,7 @@ const UTF8_IN_MARKER: &[u8; 3] = b"\x02\xFF\xFE";
 #[cfg(target_family = "windows")]
 const UTF8_OUT_MARKER: &[u8; 3] = b"\x03\xFF\xFE";
 #[cfg(target_family = "windows")]
-static WINDOWS_CONSOLE_DECODE_STATE: OnceLock<Mutex<WindowsConsoleDecodeState>> = OnceLock::new();
+static WINDOWS_CONSOLE_DECODE_STATE: OnceLock<Mutex<WindowsConsoleDecodeStates>> = OnceLock::new();
 
 #[cfg(target_family = "windows")]
 fn find_marker(bytes: &[u8], marker: &[u8; 3]) -> Option<usize> {
@@ -677,6 +677,13 @@ struct WindowsConsoleDecodeState {
     marker_tail: Vec<u8>,
     utf8_segment: Vec<u8>,
     in_utf8_segment: bool,
+}
+
+#[cfg(target_family = "windows")]
+#[derive(Default)]
+struct WindowsConsoleDecodeStates {
+    stdout: WindowsConsoleDecodeState,
+    stderr: WindowsConsoleDecodeState,
 }
 
 #[cfg(target_family = "windows")]
@@ -772,17 +779,21 @@ fn decode_console_bytes_with_state(state: &mut WindowsConsoleDecodeState, bytes:
 }
 
 #[cfg(target_family = "windows")]
-fn decode_console_bytes(bytes: &[u8]) -> Vec<u8> {
+fn decode_console_bytes_for_channel(otype: c_int, bytes: &[u8]) -> Vec<u8> {
     let state = WINDOWS_CONSOLE_DECODE_STATE.get_or_init(|| Mutex::new(Default::default()));
     let mut guard = state.lock().unwrap();
-    decode_console_bytes_with_state(&mut guard, bytes)
+    if otype == 0 {
+        decode_console_bytes_with_state(&mut guard.stdout, bytes)
+    } else {
+        decode_console_bytes_with_state(&mut guard.stderr, bytes)
+    }
 }
 
 #[cfg(all(test, target_family = "windows"))]
 fn reset_console_decode_state_for_tests() {
     if let Some(state) = WINDOWS_CONSOLE_DECODE_STATE.get() {
         let mut guard = state.lock().unwrap();
-        *guard = WindowsConsoleDecodeState::default();
+        *guard = WindowsConsoleDecodeStates::default();
     }
 }
 
@@ -811,7 +822,7 @@ pub extern "C-unwind" fn r_write_console(buf: *const c_char, buflen: c_int, otyp
         return;
     }
     let bytes = unsafe { std::slice::from_raw_parts(buf as *const u8, buflen as usize) };
-    let bytes = decode_console_bytes(bytes);
+    let bytes = decode_console_bytes_for_channel(otype, bytes);
     if otype == 0 {
         write_stdout_bytes(&bytes);
     } else {
@@ -1055,7 +1066,8 @@ mod tests {
     use std::sync::{Mutex, OnceLock};
 
     use super::{
-        UTF8_IN_MARKER, UTF8_OUT_MARKER, decode_console_bytes, reset_console_decode_state_for_tests,
+        UTF8_IN_MARKER, UTF8_OUT_MARKER, decode_console_bytes_for_channel,
+        reset_console_decode_state_for_tests,
     };
 
     fn test_mutex() -> &'static Mutex<()> {
@@ -1075,7 +1087,7 @@ mod tests {
         bytes.extend_from_slice(UTF8_OUT_MARKER);
         bytes.extend_from_slice(b"\"\n");
 
-        let decoded = decode_console_bytes(&bytes);
+        let decoded = decode_console_bytes_for_channel(0, &bytes);
         let text = String::from_utf8(decoded).expect("decoder must produce UTF-8");
 
         assert_eq!(text, "[1] \"after interrupt\"\n");
@@ -1094,7 +1106,7 @@ mod tests {
         bytes.extend_from_slice(UTF8_OUT_MARKER);
         bytes.extend_from_slice(b"\n");
 
-        let decoded = decode_console_bytes(&bytes);
+        let decoded = decode_console_bytes_for_channel(0, &bytes);
         let text = String::from_utf8(decoded).expect("decoder must produce UTF-8");
 
         assert_eq!(text, format!("R Help on {quoted}\n"));
@@ -1109,12 +1121,31 @@ mod tests {
         let chunk2 = b"\xfeafter interrupt\x03\xff";
         let chunk3 = b"\xfe\"\n";
 
-        let out1 = decode_console_bytes(chunk1);
-        let out2 = decode_console_bytes(chunk2);
-        let out3 = decode_console_bytes(chunk3);
+        let out1 = decode_console_bytes_for_channel(0, chunk1);
+        let out2 = decode_console_bytes_for_channel(0, chunk2);
+        let out3 = decode_console_bytes_for_channel(0, chunk3);
 
         let merged = [out1, out2, out3].concat();
         let text = String::from_utf8(merged).expect("decoder must produce UTF-8");
         assert_eq!(text, "[1] \"after interrupt\"\n");
+    }
+
+    #[test]
+    fn decode_console_bytes_does_not_mix_stdout_stderr_marker_state() {
+        let _guard = test_mutex().lock().expect("test mutex");
+        reset_console_decode_state_for_tests();
+
+        let out1 = decode_console_bytes_for_channel(0, b"\x02\xff\xfecaf");
+        let out2 = decode_console_bytes_for_channel(1, b"ERR\n");
+        let out3 = decode_console_bytes_for_channel(0, b"\x03\xff\xfe");
+
+        assert!(
+            out1.is_empty(),
+            "stdout partial UTF-8 segment should be buffered"
+        );
+        let stderr = String::from_utf8(out2).expect("stderr output should remain UTF-8");
+        assert_eq!(stderr, "ERR\n");
+        let stdout_tail = String::from_utf8(out3).expect("stdout output should remain UTF-8");
+        assert_eq!(stdout_tail, "caf");
     }
 }
