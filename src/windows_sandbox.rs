@@ -123,6 +123,21 @@ fn apply_no_network_to_env(env_map: &mut HashMap<String, String>) {
     upsert_env_case_insensitive(env_map, "PIP_NO_INDEX", "1");
 }
 
+fn env_get_case_insensitive<'a>(
+    env_map: &'a HashMap<String, String>,
+    key: &str,
+) -> Option<&'a str> {
+    env_map.get(key).map(String::as_str).or_else(|| {
+        env_map.iter().find_map(|(candidate, value)| {
+            if candidate.eq_ignore_ascii_case(key) {
+                Some(value.as_str())
+            } else {
+                None
+            }
+        })
+    })
+}
+
 fn canonicalize_or_identity(path: &Path) -> PathBuf {
     std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }
@@ -176,7 +191,7 @@ fn compute_allow_deny_paths(
 
     if include_tmp_env_vars {
         for key in ["TEMP", "TMP"] {
-            if let Some(value) = env_map.get(key) {
+            if let Some(value) = env_get_case_insensitive(env_map, key) {
                 let path = PathBuf::from(value);
                 if path.exists() {
                     allow.insert(canonicalize_or_identity(&path));
@@ -193,6 +208,12 @@ fn compute_allow_deny_paths(
     AllowDenyPaths { allow, deny }
 }
 
+unsafe fn convert_string_sid_to_sid(value: &str) -> Option<*mut c_void> {
+    let mut sid: *mut c_void = std::ptr::null_mut();
+    let ok = ConvertStringSidToSidW(to_wide(value).as_ptr(), &mut sid);
+    if ok != 0 { Some(sid) } else { None }
+}
+
 fn make_random_cap_sid_string() -> String {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -204,12 +225,6 @@ fn make_random_cap_sid_string() -> String {
     let c = ((nanos >> 64) as u32).wrapping_add(pid.rotate_left(13));
     let d = ((nanos >> 96) as u32).wrapping_add(pid.rotate_left(19));
     format!("S-1-5-21-{a}-{b}-{c}-{d}")
-}
-
-unsafe fn convert_string_sid_to_sid(value: &str) -> Option<*mut c_void> {
-    let mut sid: *mut c_void = std::ptr::null_mut();
-    let ok = ConvertStringSidToSidW(to_wide(value).as_ptr(), &mut sid);
-    if ok != 0 { Some(sid) } else { None }
 }
 
 fn validate_windows_policy(policy: &SandboxPolicy) -> Result<(), String> {
@@ -242,7 +257,8 @@ pub fn run_sandboxed_command(
         if should_apply_network_block(policy) {
             apply_no_network_to_env(&mut env_map);
         }
-        let session_temp_dir = env_map.get(R_SESSION_TMPDIR_ENV).map(PathBuf::from);
+        let session_temp_dir =
+            env_get_case_insensitive(&env_map, R_SESSION_TMPDIR_ENV).map(PathBuf::from);
 
         let cap_sid = make_random_cap_sid_string();
         let psid_capability = convert_string_sid_to_sid(&cap_sid)
@@ -1232,6 +1248,20 @@ mod tests {
     }
 
     #[test]
+    fn env_get_case_insensitive_matches_mixed_case_keys() {
+        let mut env_map = HashMap::new();
+        env_map.insert("Temp".to_string(), r"C:\Temp\session".to_string());
+        assert_eq!(
+            env_get_case_insensitive(&env_map, "TEMP"),
+            Some(r"C:\Temp\session")
+        );
+        assert_eq!(
+            env_get_case_insensitive(&env_map, "temp"),
+            Some(r"C:\Temp\session")
+        );
+    }
+
+    #[test]
     fn rejects_danger_full_access_policy() {
         let err = validate_windows_policy(&SandboxPolicy::DangerFullAccess)
             .expect_err("danger-full-access should be rejected");
@@ -1266,6 +1296,35 @@ mod tests {
         );
         assert!(paths.allow.contains(&canonicalize_or_identity(&extra_root)));
         assert!(paths.deny.is_empty());
+    }
+
+    #[test]
+    fn compute_allow_paths_reads_temp_env_case_insensitively() {
+        let tmp = tempdir().expect("tempdir");
+        let command_cwd = tmp.path().join("workspace");
+        let mixed_case_temp = tmp.path().join("mixed-temp");
+        std::fs::create_dir_all(&command_cwd).expect("workspace dir");
+        std::fs::create_dir_all(&mixed_case_temp).expect("mixed temp dir");
+
+        let policy = workspace_policy(Vec::new(), false, false);
+        let mut env_map = HashMap::new();
+        env_map.insert(
+            "Temp".to_string(),
+            mixed_case_temp.to_string_lossy().to_string(),
+        );
+        let paths = compute_allow_deny_paths(&policy, &command_cwd, &command_cwd, None, &env_map);
+
+        assert!(
+            paths
+                .allow
+                .contains(&canonicalize_or_identity(&command_cwd))
+        );
+        assert!(
+            paths
+                .allow
+                .contains(&canonicalize_or_identity(&mixed_case_temp)),
+            "expected allow list to include Temp env path"
+        );
     }
 
     #[test]
