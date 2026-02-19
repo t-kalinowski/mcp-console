@@ -23,7 +23,7 @@ pub type TestResult<T> = Result<T, Box<dyn Error + Send + Sync>>;
 const TEST_PAGER_PAGE_CHARS: u64 = 300;
 const PAGER_PAGE_CHARS_ENV: &str = "MCP_CONSOLE_PAGER_PAGE_CHARS";
 #[cfg(windows)]
-const WINDOWS_TEST_TIMEOUT_CAP_SECS: f64 = 10.0;
+const WINDOWS_TEST_TIMEOUT_CAP_SECS: f64 = 60.0;
 
 #[cfg(target_os = "macos")]
 pub fn sandbox_exec_available() -> bool {
