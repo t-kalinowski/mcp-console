@@ -798,7 +798,7 @@ fn reset_console_decode_state_for_tests() {
 }
 
 #[cfg(not(target_family = "windows"))]
-fn decode_console_bytes(bytes: &[u8]) -> Vec<u8> {
+fn decode_console_bytes_for_channel(_otype: c_int, bytes: &[u8]) -> Vec<u8> {
     bytes.to_vec()
 }
 
@@ -1147,5 +1147,22 @@ mod tests {
         assert_eq!(stderr, "ERR\n");
         let stdout_tail = String::from_utf8(out3).expect("stdout output should remain UTF-8");
         assert_eq!(stdout_tail, "caf");
+    }
+}
+
+#[cfg(all(test, not(target_family = "windows")))]
+mod non_windows_tests {
+    use super::decode_console_bytes_for_channel;
+
+    #[test]
+    fn decode_console_bytes_passthrough_on_non_windows_stdout() {
+        let input = b"plain output\n";
+        assert_eq!(decode_console_bytes_for_channel(0, input), input);
+    }
+
+    #[test]
+    fn decode_console_bytes_passthrough_on_non_windows_stderr() {
+        let input = b"error output\n";
+        assert_eq!(decode_console_bytes_for_channel(1, input), input);
     }
 }
