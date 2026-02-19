@@ -344,6 +344,7 @@ mod tests {
         assert!(resolved.is_none());
     }
 
+    #[cfg(target_os = "windows")]
     #[test]
     fn resolve_home_dir_uses_absolute_homepath_without_prefixing_homedrive() {
         let resolved = resolve_home_dir_from_env(
@@ -354,5 +355,18 @@ mod tests {
         )
         .expect("home dir");
         assert_eq!(resolved, PathBuf::from(r"C:\Users\example_user"));
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn resolve_home_dir_treats_windows_style_homepath_as_relative_on_non_windows() {
+        let resolved = resolve_home_dir_from_env(
+            None,
+            None,
+            Some(OsString::from("D:")),
+            Some(OsString::from(r"C:\Users\example_user")),
+        )
+        .expect("home dir");
+        assert_eq!(resolved, PathBuf::from(r"D:\C:\Users\example_user"));
     }
 }

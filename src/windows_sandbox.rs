@@ -173,6 +173,14 @@ fn compute_allow_deny_paths(
             if git_entry.exists() {
                 deny.insert(git_entry);
             }
+            let codex_entry = canonical.join(".codex");
+            if codex_entry.is_dir() {
+                deny.insert(codex_entry);
+            }
+            let agents_entry = canonical.join(".agents");
+            if agents_entry.is_dir() {
+                deny.insert(agents_entry);
+            }
         };
         add_writable_root(command_cwd.to_path_buf());
         for root in writable_roots {
@@ -1434,6 +1442,35 @@ mod tests {
         );
         assert!(paths.allow.contains(&canonicalize_or_identity(&extra_root)));
         assert!(paths.deny.contains(&canonicalize_or_identity(&git_dir)));
+    }
+
+    #[test]
+    fn compute_allow_paths_denies_codex_and_agents_dirs_inside_writable_root() {
+        let tmp = tempdir().expect("tempdir");
+        let command_cwd = tmp.path().join("workspace");
+        let codex_dir = command_cwd.join(".codex");
+        let agents_dir = command_cwd.join(".agents");
+        std::fs::create_dir_all(&codex_dir).expect("codex dir");
+        std::fs::create_dir_all(&agents_dir).expect("agents dir");
+
+        let policy = workspace_policy(Vec::new(), false, true);
+        let paths =
+            compute_allow_deny_paths(&policy, &command_cwd, &command_cwd, None, &HashMap::new());
+
+        assert_eq!(paths.allow.len(), 1);
+        assert!(
+            paths
+                .allow
+                .contains(&canonicalize_or_identity(&command_cwd))
+        );
+        assert!(
+            paths.deny.contains(&canonicalize_or_identity(&codex_dir)),
+            "expected deny list to include .codex"
+        );
+        assert!(
+            paths.deny.contains(&canonicalize_or_identity(&agents_dir)),
+            "expected deny list to include .agents"
+        );
     }
 
     #[test]
