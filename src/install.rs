@@ -67,10 +67,10 @@ pub fn run(options: InstallOptions) -> Result<(), Box<dyn std::error::Error>> {
     let codex_effective_args = build_server_args(&options.args, &additional_writable_roots);
     if install_codex
         && !additional_writable_roots.is_empty()
-        && !codex_effective_args.injected_sandbox_state
+        && !codex_effective_args.injected_sandbox_args
     {
         println!(
-            "Skipped auto-injecting --sandbox-state because install args already include sandbox state."
+            "Skipped auto-injecting sandbox args because install args already include sandbox configuration."
         );
     }
 
@@ -215,12 +215,19 @@ fn resolve_claude_config_path(root: &Path) -> PathBuf {
 #[derive(Debug, Clone)]
 struct EffectiveArgs {
     args: Vec<String>,
-    injected_sandbox_state: bool,
+    injected_sandbox_args: bool,
 }
 
-fn has_sandbox_state_arg(args: &[String]) -> bool {
-    args.iter()
-        .any(|arg| arg == "--sandbox-state" || arg.starts_with("--sandbox-state="))
+fn has_sandbox_config_arg(args: &[String]) -> bool {
+    args.iter().any(|arg| {
+        matches!(
+            arg.as_str(),
+            "--sandbox-state" | "--sandbox-mode" | "--sandbox-network-access" | "--writable-root"
+        ) || arg.starts_with("--sandbox-state=")
+            || arg.starts_with("--sandbox-mode=")
+            || arg.starts_with("--sandbox-network-access=")
+            || arg.starts_with("--writable-root=")
+    })
 }
 
 fn install_time_r_writable_roots() -> Vec<PathBuf> {
@@ -232,31 +239,22 @@ fn install_time_r_writable_roots() -> Vec<PathBuf> {
 
 fn build_server_args(base_args: &[String], additional_writable_roots: &[PathBuf]) -> EffectiveArgs {
     let mut args = base_args.to_vec();
-    let mut injected_sandbox_state = false;
-    if !additional_writable_roots.is_empty() && !has_sandbox_state_arg(base_args) {
-        args.push("--sandbox-state".to_string());
-        args.push(workspace_write_sandbox_state(additional_writable_roots));
-        injected_sandbox_state = true;
+    let mut injected_sandbox_args = false;
+    if !additional_writable_roots.is_empty() && !has_sandbox_config_arg(base_args) {
+        args.push("--sandbox-mode".to_string());
+        args.push("workspace-write".to_string());
+        args.push("--sandbox-network-access".to_string());
+        args.push("restricted".to_string());
+        for root in additional_writable_roots {
+            args.push("--writable-root".to_string());
+            args.push(root.to_string_lossy().to_string());
+        }
+        injected_sandbox_args = true;
     }
     EffectiveArgs {
         args,
-        injected_sandbox_state,
+        injected_sandbox_args,
     }
-}
-
-fn workspace_write_sandbox_state(additional_writable_roots: &[PathBuf]) -> String {
-    let writable_roots = additional_writable_roots
-        .iter()
-        .map(|path| path.to_string_lossy().to_string())
-        .collect::<Vec<_>>();
-    serde_json::json!({
-        "sandboxPolicy": {
-            "type": "workspace-write",
-            "network_access": false,
-            "writable_roots": writable_roots,
-        },
-    })
-    .to_string()
 }
 
 fn probe_r_writable_roots() -> Vec<PathBuf> {
@@ -466,48 +464,48 @@ mod tests {
     }
 
     #[test]
-    fn build_server_args_injects_sandbox_state_for_discovered_roots() {
+    fn build_server_args_injects_sandbox_args_for_discovered_roots() {
         let roots = vec![PathBuf::from("/tmp/example-r-root")];
         let effective = build_server_args(&["--backend".to_string(), "r".to_string()], &roots);
-        assert!(effective.injected_sandbox_state);
+        assert!(effective.injected_sandbox_args);
         assert!(
-            effective.args.iter().any(|arg| arg == "--sandbox-state"),
-            "expected --sandbox-state to be injected"
+            effective.args.iter().any(|arg| arg == "--sandbox-mode"),
+            "expected --sandbox-mode to be injected"
         );
         assert!(
             effective
                 .args
-                .iter()
-                .any(|arg| arg.contains("/tmp/example-r-root")),
-            "expected injected sandbox state to include discovered root"
+                .windows(2)
+                .any(|pair| pair[0] == "--writable-root" && pair[1] == "/tmp/example-r-root"),
+            "expected injected writable root"
         );
     }
 
     #[test]
-    fn build_server_args_does_not_override_existing_sandbox_state() {
+    fn build_server_args_does_not_override_existing_sandbox_config() {
         let roots = vec![PathBuf::from("/tmp/example-r-root")];
         let effective = build_server_args(
             &[
-                "--sandbox-state".to_string(),
-                "read-only".to_string(),
+                "--sandbox-mode".to_string(),
+                "workspace-write".to_string(),
                 "--backend".to_string(),
                 "r".to_string(),
             ],
             &roots,
         );
-        assert!(!effective.injected_sandbox_state);
+        assert!(!effective.injected_sandbox_args);
         let count = effective
             .args
             .iter()
-            .filter(|arg| arg.as_str() == "--sandbox-state")
+            .filter(|arg| arg.as_str() == "--sandbox-mode")
             .count();
-        assert_eq!(count, 1, "expected existing sandbox-state to be preserved");
+        assert_eq!(count, 1, "expected existing sandbox args to be preserved");
     }
 
     #[test]
     fn build_server_args_skips_injection_without_discovered_roots() {
         let effective = build_server_args(&["--backend".to_string(), "r".to_string()], &[]);
-        assert!(!effective.injected_sandbox_state);
+        assert!(!effective.injected_sandbox_args);
         assert_eq!(
             effective.args,
             vec!["--backend".to_string(), "r".to_string()]

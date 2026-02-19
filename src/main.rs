@@ -20,6 +20,8 @@ mod worker;
 mod worker_process;
 mod worker_protocol;
 
+use std::path::PathBuf;
+
 use crate::backend::{Backend, backend_from_env};
 use crate::sandbox::{INITIAL_SANDBOX_STATE_ENV, SandboxPolicy, SandboxStateUpdate};
 
@@ -32,6 +34,34 @@ struct CliOptions {
     sandbox_state: Option<String>,
     debug_repl: bool,
     backend: Backend,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SandboxModeArg {
+    ReadOnly,
+    WorkspaceWrite,
+    DangerFullAccess,
+}
+
+impl SandboxModeArg {
+    fn parse(value: &str) -> Result<Self, String> {
+        match value {
+            "read-only" => Ok(Self::ReadOnly),
+            "workspace-write" => Ok(Self::WorkspaceWrite),
+            "danger-full-access" => Ok(Self::DangerFullAccess),
+            _ => Err(format!(
+                "invalid sandbox mode: {value} (expected read-only|workspace-write|danger-full-access)"
+            )),
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+struct SandboxCliArgs {
+    sandbox_state: Option<String>,
+    mode: Option<SandboxModeArg>,
+    network_access: Option<bool>,
+    writable_roots: Vec<PathBuf>,
 }
 
 #[tokio::main(flavor = "multi_thread")]
@@ -116,7 +146,7 @@ fn parse_cli_args() -> Result<CliCommand, Box<dyn std::error::Error>> {
         }
     }
 
-    let mut sandbox_state = None;
+    let mut sandbox_args = SandboxCliArgs::default();
     let mut debug_repl = false;
     let mut backend = backend_from_env()?;
     while let Some(arg) = parser.next() {
@@ -127,14 +157,55 @@ fn parse_cli_args() -> Result<CliCommand, Box<dyn std::error::Error>> {
             }
             "--sandbox-state" => {
                 let value = parser.next_value("--sandbox-state")?;
-                sandbox_state = Some(sandbox_state_arg(value)?);
+                sandbox_args.sandbox_state = Some(sandbox_state_arg(value)?);
             }
             _ if arg.starts_with("--sandbox-state=") => {
                 let value = arg.split_once('=').map(|(_, value)| value).unwrap_or("");
                 if value.is_empty() {
                     return Err("missing value for --sandbox-state".into());
                 }
-                sandbox_state = Some(sandbox_state_arg(value.to_string())?);
+                sandbox_args.sandbox_state = Some(sandbox_state_arg(value.to_string())?);
+            }
+            "--sandbox-mode" => {
+                let value = parser.next_value("--sandbox-mode")?;
+                sandbox_args.mode =
+                    Some(SandboxModeArg::parse(&value).map_err(|err| err.to_string())?);
+            }
+            _ if arg.starts_with("--sandbox-mode=") => {
+                let value = arg.split_once('=').map(|(_, value)| value).unwrap_or("");
+                if value.is_empty() {
+                    return Err("missing value for --sandbox-mode".into());
+                }
+                sandbox_args.mode =
+                    Some(SandboxModeArg::parse(value).map_err(|err| err.to_string())?);
+            }
+            "--sandbox-network-access" => {
+                let value = parser.next_value("--sandbox-network-access")?;
+                sandbox_args.network_access =
+                    Some(parse_sandbox_network_access(&value).map_err(|err| err.to_string())?);
+            }
+            _ if arg.starts_with("--sandbox-network-access=") => {
+                let value = arg.split_once('=').map(|(_, value)| value).unwrap_or("");
+                if value.is_empty() {
+                    return Err("missing value for --sandbox-network-access".into());
+                }
+                sandbox_args.network_access =
+                    Some(parse_sandbox_network_access(value).map_err(|err| err.to_string())?);
+            }
+            "--writable-root" => {
+                let value = parser.next_value("--writable-root")?;
+                sandbox_args
+                    .writable_roots
+                    .push(parse_writable_root(&value)?);
+            }
+            _ if arg.starts_with("--writable-root=") => {
+                let value = arg.split_once('=').map(|(_, value)| value).unwrap_or("");
+                if value.is_empty() {
+                    return Err("missing value for --writable-root".into());
+                }
+                sandbox_args
+                    .writable_roots
+                    .push(parse_writable_root(value)?);
             }
             "--backend" => {
                 let value = parser.next_value("--backend")?;
@@ -155,6 +226,8 @@ fn parse_cli_args() -> Result<CliCommand, Box<dyn std::error::Error>> {
             }
         }
     }
+
+    let sandbox_state = sandbox_state_from_cli_args(sandbox_args)?;
 
     Ok(CliCommand::RunServer(CliOptions {
         sandbox_state,
@@ -294,17 +367,102 @@ fn sandbox_state_arg(raw: String) -> Result<String, Box<dyn std::error::Error>> 
     Ok(payload)
 }
 
+fn parse_sandbox_network_access(raw: &str) -> Result<bool, String> {
+    match raw {
+        "enabled" => Ok(true),
+        "restricted" => Ok(false),
+        _ => Err(format!(
+            "invalid --sandbox-network-access value: {raw} (expected enabled|restricted)"
+        )),
+    }
+}
+
+fn parse_writable_root(raw: &str) -> Result<PathBuf, Box<dyn std::error::Error>> {
+    let path = PathBuf::from(raw);
+    if !path.is_absolute() {
+        return Err(
+            format!("invalid --writable-root value: {raw} (expected absolute path)").into(),
+        );
+    }
+    Ok(path)
+}
+
+fn sandbox_state_from_cli_args(
+    args: SandboxCliArgs,
+) -> Result<Option<String>, Box<dyn std::error::Error>> {
+    if args.sandbox_state.is_some()
+        && (args.mode.is_some() || args.network_access.is_some() || !args.writable_roots.is_empty())
+    {
+        return Err(
+            "cannot combine --sandbox-state with --sandbox-mode/--sandbox-network-access/--writable-root"
+                .into(),
+        );
+    }
+    if let Some(state) = args.sandbox_state {
+        return Ok(Some(state));
+    }
+    if args.mode.is_none() && args.network_access.is_none() && args.writable_roots.is_empty() {
+        return Ok(None);
+    }
+
+    let mode = args.mode.unwrap_or(SandboxModeArg::WorkspaceWrite);
+    let policy = match mode {
+        SandboxModeArg::ReadOnly => {
+            if args.network_access.is_some() {
+                return Err(
+                    "--sandbox-network-access is only valid with --sandbox-mode workspace-write"
+                        .into(),
+                );
+            }
+            if !args.writable_roots.is_empty() {
+                return Err(
+                    "--writable-root is only valid with --sandbox-mode workspace-write".into(),
+                );
+            }
+            SandboxPolicy::ReadOnly
+        }
+        SandboxModeArg::DangerFullAccess => {
+            if args.network_access.is_some() {
+                return Err(
+                    "--sandbox-network-access is only valid with --sandbox-mode workspace-write"
+                        .into(),
+                );
+            }
+            if !args.writable_roots.is_empty() {
+                return Err(
+                    "--writable-root is only valid with --sandbox-mode workspace-write".into(),
+                );
+            }
+            SandboxPolicy::DangerFullAccess
+        }
+        SandboxModeArg::WorkspaceWrite => SandboxPolicy::WorkspaceWrite {
+            writable_roots: args.writable_roots,
+            network_access: args.network_access.unwrap_or(false),
+            exclude_tmpdir_env_var: false,
+            exclude_slash_tmp: false,
+        },
+    };
+
+    let update = SandboxStateUpdate {
+        sandbox_policy: policy,
+        sandbox_cwd: None,
+        codex_linux_sandbox_exe: None,
+    };
+    Ok(Some(serde_json::to_string(&update)?))
+}
+
 fn print_usage() {
     println!(
         "Usage:\n\
-mcp-console [--debug-repl] [--backend <r|python>] [--sandbox-state <json|mode>]\n\
+mcp-console [--debug-repl] [--backend <r|python>] [--sandbox-mode <mode>] [--sandbox-network-access <restricted|enabled>] [--writable-root <abs-path>]...\n\
 mcp-console install [codex] [claude] [--server-name <name>] [--command <path>] [--arg <value>]...\n\
 mcp-console install-codex [--server-name <name>] [--command <path>] [--arg <value>]...\n\
 mcp-console install-claude [--server-name <name>] [--command <path>] [--arg <value>]...\n\n\
 --debug-repl: run an interactive debug REPL over stdio\n\
 --backend: choose REPL backend (default: r; env MCP_CONSOLE_BACKEND)\n\
---sandbox-state: JSON-encoded SandboxStateUpdate or one of\n\
-                read-only | workspace-write | danger-full-access\n\
+--sandbox-mode: read-only | workspace-write | danger-full-access (default: workspace-write when sandbox flags are provided)\n\
+--sandbox-network-access: restricted | enabled (workspace-write only; default: restricted)\n\
+--writable-root: additional absolute writable path (repeatable; workspace-write only)\n\
 install: update MCP config for existing agent homes only (does not create ~/.codex or ~/.claude)"
     );
 }
@@ -320,4 +478,71 @@ If no target is specified for `install`, all existing agent homes are used:\n\
 - claude: ~/.claude\n\
 Missing homes are not created."
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_sandbox_network_access_accepts_expected_values() {
+        assert_eq!(parse_sandbox_network_access("enabled"), Ok(true));
+        assert_eq!(parse_sandbox_network_access("restricted"), Ok(false));
+    }
+
+    #[test]
+    fn sandbox_state_from_cli_args_workspace_write_defaults_restricted() {
+        let state = sandbox_state_from_cli_args(SandboxCliArgs {
+            mode: Some(SandboxModeArg::WorkspaceWrite),
+            network_access: None,
+            writable_roots: vec![PathBuf::from("/tmp/one"), PathBuf::from("/tmp/two")],
+            ..Default::default()
+        })
+        .expect("sandbox state")
+        .expect("sandbox payload");
+
+        let parsed: SandboxStateUpdate = serde_json::from_str(&state).expect("parse payload");
+        match parsed.sandbox_policy {
+            SandboxPolicy::WorkspaceWrite {
+                writable_roots,
+                network_access,
+                ..
+            } => {
+                assert_eq!(
+                    writable_roots,
+                    vec![PathBuf::from("/tmp/one"), PathBuf::from("/tmp/two")]
+                );
+                assert!(!network_access);
+            }
+            other => panic!("expected workspace-write policy, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn sandbox_state_from_cli_args_rejects_mixed_legacy_and_new_flags() {
+        let err = sandbox_state_from_cli_args(SandboxCliArgs {
+            sandbox_state: Some("read-only".to_string()),
+            mode: Some(SandboxModeArg::ReadOnly),
+            ..Default::default()
+        })
+        .expect_err("expected conflict");
+        assert!(
+            err.to_string().contains("cannot combine --sandbox-state"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn sandbox_state_from_cli_args_rejects_writable_roots_without_workspace_write() {
+        let err = sandbox_state_from_cli_args(SandboxCliArgs {
+            mode: Some(SandboxModeArg::ReadOnly),
+            writable_roots: vec![PathBuf::from("/tmp/one")],
+            ..Default::default()
+        })
+        .expect_err("expected root rejection");
+        assert!(
+            err.to_string().contains("--writable-root is only valid"),
+            "unexpected error: {err}"
+        );
+    }
 }
