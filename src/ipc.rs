@@ -1089,6 +1089,21 @@ fn should_retry_pipe_open(err: &io::Error) -> bool {
     )
 }
 
+#[cfg(target_family = "windows")]
+fn take_pipe_pair_if_ready<Reader, Writer>(
+    reader: &mut Option<Reader>,
+    writer: &mut Option<Writer>,
+) -> Option<(Reader, Writer)> {
+    if reader.is_some() && writer.is_some() {
+        Some((
+            reader.take().expect("reader should be present"),
+            writer.take().expect("writer should be present"),
+        ))
+    } else {
+        None
+    }
+}
+
 pub fn connect_from_env(_timeout: Duration) -> io::Result<WorkerIpcConnection> {
     #[cfg(target_family = "unix")]
     {
@@ -1146,7 +1161,7 @@ pub fn connect_from_env(_timeout: Duration) -> io::Result<WorkerIpcConnection> {
                 }
             }
 
-            if let (Some(reader), Some(writer)) = (reader.take(), writer.take()) {
+            if let Some((reader, writer)) = take_pipe_pair_if_ready(&mut reader, &mut writer) {
                 return WorkerIpcConnection::new(IpcTransport {
                     reader: Box::new(reader),
                     writer: Box::new(writer),
@@ -1287,7 +1302,10 @@ fn take_backend_info(guard: &mut ServerIpcInbox) -> Option<WorkerToServerIpcMess
 
 #[cfg(all(test, target_family = "windows"))]
 mod tests {
-    use super::{connect_named_pipe_with_process_retry_impl, wait_for_named_pipe_connect_result};
+    use super::{
+        connect_named_pipe_with_process_retry_impl, take_pipe_pair_if_ready,
+        wait_for_named_pipe_connect_result,
+    };
     use std::io;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::mpsc;
@@ -1338,5 +1356,39 @@ mod tests {
             1,
             "uncancelled timeout should abort retries to avoid stacking connector threads",
         );
+    }
+
+    #[test]
+    fn take_pipe_pair_if_ready_keeps_reader_until_writer_is_ready() {
+        let mut reader = Some("reader".to_string());
+        let mut writer: Option<String> = None;
+
+        let pair = take_pipe_pair_if_ready(&mut reader, &mut writer);
+        assert!(pair.is_none());
+        assert_eq!(reader.as_deref(), Some("reader"));
+        assert!(writer.is_none());
+    }
+
+    #[test]
+    fn take_pipe_pair_if_ready_keeps_writer_until_reader_is_ready() {
+        let mut reader: Option<String> = None;
+        let mut writer = Some("writer".to_string());
+
+        let pair = take_pipe_pair_if_ready(&mut reader, &mut writer);
+        assert!(pair.is_none());
+        assert!(reader.is_none());
+        assert_eq!(writer.as_deref(), Some("writer"));
+    }
+
+    #[test]
+    fn take_pipe_pair_if_ready_returns_pair_when_both_present() {
+        let mut reader = Some("reader".to_string());
+        let mut writer = Some("writer".to_string());
+
+        let pair = take_pipe_pair_if_ready(&mut reader, &mut writer).expect("pair");
+        assert_eq!(pair.0, "reader");
+        assert_eq!(pair.1, "writer");
+        assert!(reader.is_none());
+        assert!(writer.is_none());
     }
 }
