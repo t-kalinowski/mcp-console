@@ -23,7 +23,7 @@ response:
     },
     {
       "type": "text",
-      "text": "<<console status: busy, write_stdin timeout reached; elapsed_ms=500>>"
+      "text": "<<console status: busy, write_stdin timeout reached; elapsed_ms=N>>"
     }
   ]
 }

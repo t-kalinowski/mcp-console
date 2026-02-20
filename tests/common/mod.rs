@@ -607,7 +607,7 @@ fn normalize_snapshot_text(text: &str) -> String {
     if text.starts_with("\n[mcp-console] session ended") {
         return text.trim_start_matches('\n').to_string();
     }
-    let text = normalize_pager_elision(text);
+    let text = normalize_busy_timeout_elapsed_ms(&normalize_pager_elision(text));
     if !text.contains("stderr:") {
         return text;
     }
@@ -650,6 +650,28 @@ fn normalize_snapshot_text(text: &str) -> String {
     for line in stdout_lines.into_iter().chain(stderr_lines.into_iter()) {
         out.push_str(&line);
     }
+    out
+}
+
+fn normalize_busy_timeout_elapsed_ms(text: &str) -> String {
+    let marker = "elapsed_ms=";
+    let mut out = String::with_capacity(text.len());
+    let mut idx = 0;
+    while let Some(pos) = text[idx..].find(marker) {
+        let abs = idx + pos;
+        out.push_str(&text[idx..abs]);
+        out.push_str(marker);
+        let mut end = abs + marker.len();
+        let bytes = text.as_bytes();
+        while end < bytes.len() && bytes[end].is_ascii_digit() {
+            end += 1;
+        }
+        if end > abs + marker.len() {
+            out.push('N');
+        }
+        idx = end;
+    }
+    out.push_str(&text[idx..]);
     out
 }
 

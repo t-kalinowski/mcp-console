@@ -6,7 +6,7 @@ expression: snapshot.render_transcript()
 1) repl timeout_ms=500
 >>> cat("start\n"); flush.console(); Sys.sleep(1); cat("end\n")
 <<< start
-<<< <<console status: busy, write_stdin timeout reached; elapsed_ms=500>>
+<<< <<console status: busy, write_stdin timeout reached; elapsed_ms=N>>
 
 2) repl timeout_ms=2000
 >>> 
