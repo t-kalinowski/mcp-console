@@ -25,6 +25,7 @@ jobs:
         with:
           toolchain: stable
           components: clippy, rustfmt
+          rustflags: ""
 
       - name: Install nightly rustfmt
         run: rustup toolchain install nightly --profile minimal --component rustfmt
