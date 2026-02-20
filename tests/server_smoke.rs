@@ -3,10 +3,12 @@ mod common;
 #[cfg(not(windows))]
 use common::McpSnapshot;
 use common::TestResult;
+#[cfg(windows)]
 use rmcp::model::RawContent;
 #[cfg(windows)]
 use tokio::time::{Duration, Instant, sleep};
 
+#[cfg(windows)]
 fn result_text(result: &rmcp::model::CallToolResult) -> String {
     result
         .content

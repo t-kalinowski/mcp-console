@@ -2433,7 +2433,7 @@ impl WorkerProcess {
 
         let mut ipc_server = IpcServer::bind().map_err(WorkerError::Io)?;
         let SpawnedWorker {
-            mut child,
+            child,
             stdin_tx,
             session_tmpdir,
             #[cfg(target_os = "macos")]
@@ -2449,6 +2449,8 @@ impl WorkerProcess {
                 Self::spawn_python_worker(sandbox_state, output_timeline.clone(), &mut ipc_server)?
             }
         };
+        #[allow(unused_mut)]
+        let mut child = child;
 
         let ipc = IpcHandle::new();
         #[cfg(any(target_family = "unix", target_family = "windows"))]

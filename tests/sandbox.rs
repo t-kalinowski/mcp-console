@@ -163,7 +163,13 @@ fn bwrap_loopback_unavailable(text: &str) -> bool {
 #[cfg(target_os = "linux")]
 fn bwrap_worker_unavailable(text: &str) -> bool {
     bwrap_loopback_unavailable(text)
+        || text.contains("worker exited with signal")
+        || text.contains("worker exited with status")
+        || text.contains("failed to start R session")
         || text.contains("worker protocol error: ipc disconnected while waiting for backend info")
+        || text.contains(
+            "worker protocol error: ipc disconnected while waiting for request completion",
+        )
 }
 
 #[cfg(any(target_os = "macos", target_os = "linux"))]

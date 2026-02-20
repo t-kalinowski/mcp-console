@@ -28,6 +28,7 @@ async fn r_respects_rprofile_and_renviron_on_startup() -> TestResult<()> {
     )?;
 
     let home = home_dir.path().to_string_lossy().to_string();
+    #[cfg_attr(not(windows), allow(unused_mut))]
     let mut env_vars = vec![
         ("HOME".to_string(), home.clone()),
         ("R_USER".to_string(), home.clone()),

@@ -352,10 +352,10 @@ trust_level = "trusted"
         }
         let mut lines = collapsed;
 
-        if let Some(first_nonempty) = lines.iter().position(|line| !line.trim().is_empty()) {
-            if first_nonempty > 0 {
-                lines.drain(0..first_nonempty);
-            }
+        if let Some(first_nonempty) = lines.iter().position(|line| !line.trim().is_empty())
+            && first_nonempty > 0
+        {
+            lines.drain(0..first_nonempty);
         }
 
         while matches!(lines.last(), Some(line) if line.trim().is_empty()) {

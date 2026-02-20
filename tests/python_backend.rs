@@ -25,6 +25,13 @@ fn require_python() -> bool {
     }
 }
 
+fn is_busy_response(text: &str) -> bool {
+    text.contains("<<console status: busy")
+        || text.contains("worker is busy")
+        || text.contains("request already running")
+        || text.contains("input discarded while worker busy")
+}
+
 async fn start_python_session() -> TestResult<Option<common::McpTestSession>> {
     if !require_python() {
         return Ok(None);
@@ -80,16 +87,32 @@ async fn python_input_roundtrip() -> TestResult<()> {
         return Ok(());
     };
 
-    let result = session
-        .write_stdin_raw_with("x = input('prompt> ')", Some(1.0))
-        .await?;
-    let text = result_text(&result);
+    let mut text = result_text(
+        &session
+            .write_stdin_raw_with("x = input('prompt> ')", Some(1.0))
+            .await?,
+    );
+    if is_busy_response(&text) {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while Instant::now() < deadline && is_busy_response(&text) && !text.contains("prompt>") {
+            sleep(Duration::from_millis(50)).await;
+            text = result_text(&session.write_stdin_raw_with("", Some(1.0)).await?);
+        }
+    }
     assert!(text.contains("prompt>"), "expected prompt, got: {text:?}");
 
-    let result = session
-        .write_stdin_raw_with("hello\nprint(x)", Some(5.0))
-        .await?;
-    let text = result_text(&result);
+    let mut text = result_text(
+        &session
+            .write_stdin_raw_with("hello\nprint(x)", Some(5.0))
+            .await?,
+    );
+    if is_busy_response(&text) {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while Instant::now() < deadline && is_busy_response(&text) && !text.contains("hello") {
+            sleep(Duration::from_millis(50)).await;
+            text = result_text(&session.write_stdin_raw_with("", Some(1.0)).await?);
+        }
+    }
     assert!(text.contains("hello"), "expected echo, got: {text:?}");
 
     session.cancel().await?;
