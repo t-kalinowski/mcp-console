@@ -32,7 +32,7 @@ async fn repl_tool_accepts_input_and_timeout_ms() -> TestResult<()> {
 
     let result = session
         .call_tool_raw(
-            "repl",
+            session.repl_tool_name(),
             json!({
                 "input": "1+1\n",
                 "timeout_ms": 10_000
@@ -57,7 +57,7 @@ async fn repl_reset_clears_state() -> TestResult<()> {
 
     let set_var = session
         .call_tool_raw(
-            "repl",
+            session.repl_tool_name(),
             json!({
                 "input": "x <- 1\n",
                 "timeout_ms": 10_000
@@ -75,7 +75,7 @@ async fn repl_reset_clears_state() -> TestResult<()> {
 
     let after_reset = session
         .call_tool_raw(
-            "repl",
+            session.repl_tool_name(),
             json!({
                 "input": "print(exists(\"x\"))\n",
                 "timeout_ms": 10_000
