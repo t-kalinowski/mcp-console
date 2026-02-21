@@ -64,6 +64,10 @@ Optional `bwrap` stage:
 - `MCP_CONSOLE_LINUX_BWRAP_NO_PROC=1` skips `/proc` mounting.
 - if `bwrap` is requested but unavailable, worker startup fails fast.
 
-## Windows status
+## Windows behavior (experimental)
 
-Windows support exists but is still experimental.
+- R backend is supported with the same policy surface (`read-only`, `workspace-write`, `danger-full-access`).
+- Python backend is currently unavailable on Windows (it requires a Unix PTY).
+- `read-only` and `workspace-write` are enforced by the Windows sandbox runner.
+- `danger-full-access` and `external-sandbox` run without built-in sandbox enforcement.
+- Some Windows environments may not support the restricted-token setup required by sandboxed modes.

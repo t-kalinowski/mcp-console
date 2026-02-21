@@ -2,11 +2,8 @@
 
 ## Summary
 
-Not implemented: `mcp-repl` does not currently support
-`--config /path/to/mcp-repl.toml`.
-
-Potential future feature: add `--config` support to keep sandbox policy in a
-dedicated file instead of long CLI arg lists.
+Potential future feature: support `mcp-repl --config /path/to/mcp-repl.toml`
+to keep sandbox policy in a dedicated file instead of long CLI arg lists.
 
 ## Motivation
 
