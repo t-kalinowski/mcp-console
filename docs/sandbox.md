@@ -30,9 +30,11 @@ For `workspace-write`, writable roots include:
 
 - configured `writable_roots` (absolute paths only),
 - current working directory,
-- R `cache`/`data`/`config` roots configured in client policy (for Codex configs installed via `mcp-repl install-codex`, this is auto-populated at install time via a one-time `R` probe),
+- R cache roots configured in client policy (for Codex configs installed via `mcp-repl install-codex`, this cache root is auto-populated at install time via a one-time `R` probe),
 - temp roots (`/tmp`, `TMPDIR` when absolute), and
 - the per-session temp directory.
+
+If you also need R data/config roots, add them explicitly with repeatable `--writable-root` entries.
 
 Within writable roots, these subpaths are forced read-only when present:
 
@@ -64,4 +66,4 @@ Optional `bwrap` stage:
 
 ## Windows status
 
-Current worker/sideband flow is Unix-focused; Windows is not currently supported.
+Windows support exists but is still experimental.

@@ -41,7 +41,7 @@ Avoid tasks where a one-shot static answer is likely to do fine (purely conceptu
 
 Treat each eval as a standalone Markdown file. The body is the prompt. The front matter declares inputs and expected outputs.
 
-This repo now includes a starter task catalog under `eval/tasks/` that follows this pattern.
+If you add a starter task catalog (for example under `eval/tasks/`), keep it in this format.
 
 Example schema (illustrative; adjust to your eventual framework):
 
@@ -88,7 +88,7 @@ Constraints:
 
 Each proposal below is designed so that (a) inspection beats guessing and (b) persistence reduces repeated setup cost.
 
-For concrete task stubs you can evolve into runnable evals, see `eval/tasks/`.
+If you build concrete task stubs, place them in a directory like `eval/tasks/`.
 
 ### 1) “Messy CSV EDA + plot” (types + visualization)
 
