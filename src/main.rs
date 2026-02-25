@@ -34,10 +34,17 @@ enum CliCommand {
 }
 
 struct CliOptions {
-    sandbox_state: Option<String>,
+    sandbox_state_env: InitialSandboxStateEnv,
     debug_repl: bool,
     backend: Backend,
     debug_events_dir: Option<PathBuf>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum InitialSandboxStateEnv {
+    Keep,
+    Clear,
+    Set(String),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -93,11 +100,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     match parse_cli_args()? {
         CliCommand::RunServer(options) => {
-            if let Some(state) = options.sandbox_state {
-                // `std::env::set_var` is `unsafe` in Rust 2024 because mutating process-global
-                // environment variables can violate assumptions in other threads / libraries.
-                unsafe {
-                    std::env::set_var(INITIAL_SANDBOX_STATE_ENV, state);
+            match options.sandbox_state_env {
+                InitialSandboxStateEnv::Keep => {}
+                InitialSandboxStateEnv::Clear => {
+                    // `std::env::remove_var` is `unsafe` in Rust 2024 because mutating process-global
+                    // environment variables can violate assumptions in other threads / libraries.
+                    unsafe {
+                        std::env::remove_var(INITIAL_SANDBOX_STATE_ENV);
+                    }
+                }
+                InitialSandboxStateEnv::Set(state) => {
+                    // `std::env::set_var` is `unsafe` in Rust 2024 because mutating process-global
+                    // environment variables can violate assumptions in other threads / libraries.
+                    unsafe {
+                        std::env::set_var(INITIAL_SANDBOX_STATE_ENV, state);
+                    }
                 }
             }
             event_log::initialize(
@@ -136,9 +153,7 @@ fn ignore_sigpipe() {
 
 fn parse_cli_args() -> Result<CliCommand, Box<dyn std::error::Error>> {
     let mut parser = ArgParser::new();
-    if let Some(arg) = parser.peek()
-        && arg == "install"
-    {
+    if parser.peek() == Some("install") {
         parser.next();
         return Ok(CliCommand::Install(parse_install_args(
             &mut parser,
@@ -232,10 +247,10 @@ fn parse_cli_args() -> Result<CliCommand, Box<dyn std::error::Error>> {
         }
     }
 
-    let sandbox_state = sandbox_state_from_cli_args(sandbox_args)?;
+    let sandbox_state_env = sandbox_state_from_cli_args(sandbox_args)?;
 
     Ok(CliCommand::RunServer(CliOptions {
-        sandbox_state,
+        sandbox_state_env,
         debug_repl,
         backend: backend.unwrap_or(Backend::R),
         debug_events_dir,
@@ -394,15 +409,23 @@ fn parse_install_interpreters_value(
     raw: &str,
     interpreters: &mut Vec<install::InstallInterpreter>,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let mut parsed_any = false;
     for part in raw.split(',') {
         let trimmed = part.trim();
         if trimmed.is_empty() {
             return Err("empty --interpreter value (expected r|python)".into());
         }
+        parsed_any = true;
         interpreters.push(
             install::InstallInterpreter::parse(trimmed)
                 .map_err(|err| -> Box<dyn std::error::Error> { err.into() })?,
         );
+    }
+    if !parsed_any {
+        return Err(format!(
+            "invalid --interpreter value: {raw} (expected comma-separated list containing r and/or python)"
+        )
+        .into());
     }
     Ok(())
 }
@@ -411,15 +434,23 @@ fn parse_install_targets_value(
     raw: &str,
     targets: &mut Vec<install::InstallTarget>,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let mut parsed_any = false;
     for part in raw.split(',') {
         let trimmed = part.trim();
         if trimmed.is_empty() {
             return Err("empty --client value (expected codex|claude)".into());
         }
+        parsed_any = true;
         targets.push(
             install::InstallTarget::parse(trimmed)
                 .map_err(|err| -> Box<dyn std::error::Error> { err.into() })?,
         );
+    }
+    if !parsed_any {
+        return Err(format!(
+            "invalid --client value: {raw} (expected comma-separated list containing codex and/or claude)"
+        )
+        .into());
     }
     Ok(())
 }
@@ -483,7 +514,7 @@ fn parse_writable_root(raw: &str) -> Result<PathBuf, Box<dyn std::error::Error>>
 
 fn sandbox_state_from_cli_args(
     args: SandboxCliArgs,
-) -> Result<Option<String>, Box<dyn std::error::Error>> {
+) -> Result<InitialSandboxStateEnv, Box<dyn std::error::Error>> {
     if args.sandbox_state.is_some()
         && (args.mode.is_some() || args.network_access.is_some() || !args.writable_roots.is_empty())
     {
@@ -494,12 +525,12 @@ fn sandbox_state_from_cli_args(
     }
     if let Some(state) = args.sandbox_state {
         if state == SANDBOX_STATE_INHERIT {
-            return Ok(None);
+            return Ok(InitialSandboxStateEnv::Clear);
         }
-        return Ok(Some(state));
+        return Ok(InitialSandboxStateEnv::Set(state));
     }
     if args.mode.is_none() && args.network_access.is_none() && args.writable_roots.is_empty() {
-        return Ok(None);
+        return Ok(InitialSandboxStateEnv::Keep);
     }
 
     let mode = args.mode.unwrap_or(SandboxModeArg::WorkspaceWrite);
@@ -545,7 +576,7 @@ fn sandbox_state_from_cli_args(
         sandbox_cwd: None,
         codex_linux_sandbox_exe: None,
     };
-    Ok(Some(serde_json::to_string(&update)?))
+    Ok(InitialSandboxStateEnv::Set(serde_json::to_string(&update)?))
 }
 
 fn print_usage() {
@@ -714,12 +745,6 @@ mod tests {
     }
 
     #[test]
-    fn sandbox_state_arg_accepts_inherit() {
-        let parsed = sandbox_state_arg("inherit".to_string()).expect("sandbox state");
-        assert_eq!(parsed, "inherit");
-    }
-
-    #[test]
     fn sandbox_state_from_cli_args_workspace_write_defaults_restricted() {
         let state = sandbox_state_from_cli_args(SandboxCliArgs {
             mode: Some(SandboxModeArg::WorkspaceWrite),
@@ -727,8 +752,10 @@ mod tests {
             writable_roots: vec![PathBuf::from("/tmp/one"), PathBuf::from("/tmp/two")],
             ..Default::default()
         })
-        .expect("sandbox state")
-        .expect("sandbox payload");
+        .expect("sandbox state");
+        let InitialSandboxStateEnv::Set(state) = state else {
+            panic!("expected sandbox payload from workspace-write args");
+        };
 
         let parsed: SandboxStateUpdate = serde_json::from_str(&state).expect("parse payload");
         match parsed.sandbox_policy {
@@ -748,13 +775,19 @@ mod tests {
     }
 
     #[test]
-    fn sandbox_state_from_cli_args_inherit_returns_none() {
+    fn sandbox_state_from_cli_args_inherit_clears_existing_env() {
         let parsed = sandbox_state_from_cli_args(SandboxCliArgs {
             sandbox_state: Some("inherit".to_string()),
             ..Default::default()
         })
         .expect("sandbox state");
-        assert!(parsed.is_none());
+        assert!(matches!(parsed, InitialSandboxStateEnv::Clear));
+    }
+
+    #[test]
+    fn sandbox_state_from_cli_args_without_sandbox_flags_keeps_existing_env() {
+        let parsed = sandbox_state_from_cli_args(SandboxCliArgs::default()).expect("sandbox state");
+        assert!(matches!(parsed, InitialSandboxStateEnv::Keep));
     }
 
     #[test]

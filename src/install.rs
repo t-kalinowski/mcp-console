@@ -392,16 +392,15 @@ fn upsert_codex_mcp_server(
             .leaf_decor_mut()
             .set_prefix(CODEX_TOOL_TIMEOUT_COMMENT);
     }
+    let args_prefix = if contains_sandbox_state_value(args, "inherit") {
+        CODEX_SANDBOX_INHERIT_COMMENT
+    } else {
+        ""
+    };
     if let Some(server_table) = doc["mcp_servers"][server_name].as_table_mut()
         && let Some(mut args_key) = server_table.key_mut("args")
     {
-        if contains_sandbox_state_value(args, "inherit") {
-            args_key
-                .leaf_decor_mut()
-                .set_prefix(CODEX_SANDBOX_INHERIT_COMMENT);
-        } else {
-            args_key.leaf_decor_mut().set_prefix("");
-        }
+        args_key.leaf_decor_mut().set_prefix(args_prefix);
     }
 
     atomic_write(config_path, &doc.to_string())?;
@@ -785,7 +784,7 @@ name="demo"
     }
 
     #[test]
-    fn upsert_codex_mcp_server_clears_stale_inherit_comment() {
+    fn upsert_codex_mcp_server_clears_inherit_comment_when_not_using_inherit() {
         let dir = tempfile::tempdir().expect("tempdir");
         let config = dir.path().join("config.toml");
         upsert_codex_mcp_server(
@@ -794,19 +793,19 @@ name="demo"
             "/path/to/mcp-repl",
             &["--sandbox-state".to_string(), "inherit".to_string()],
         )
-        .expect("upsert codex");
+        .expect("upsert codex inherit");
         upsert_codex_mcp_server(
             &config,
             "repl",
             "/path/to/mcp-repl",
             &["--sandbox-state".to_string(), "workspace-write".to_string()],
         )
-        .expect("upsert codex");
+        .expect("upsert codex workspace-write");
 
         let text = fs::read_to_string(config).expect("read config");
         assert!(
             !text.contains("--sandbox-state inherit: use sandbox policy updates sent by Codex"),
-            "did not expect stale inherit comment in codex config"
+            "inherit-only comment should be removed when inherit is no longer configured"
         );
     }
 
