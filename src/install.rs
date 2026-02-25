@@ -3,7 +3,6 @@ use std::env;
 use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 
 use serde_json::{Map as JsonMap, Value as JsonValue};
 use toml_edit::{Array, DocumentMut, Item, Table, value};
@@ -48,47 +47,12 @@ pub struct InstallOptions {
 pub fn run(options: InstallOptions) -> Result<(), Box<dyn std::error::Error>> {
     let command = options.command.unwrap_or_else(default_command);
     let targets = resolve_target_roots(&options.targets)?;
-    let install_codex = targets
-        .iter()
-        .any(|(target, _)| matches!(target, InstallTarget::Codex));
-    let additional_writable_roots = if install_codex {
-        install_time_r_writable_roots()
-    } else {
-        Vec::new()
-    };
-    if install_codex {
-        if additional_writable_roots.is_empty() {
-            println!(
-                "No additional R writable roots discovered at install time (outside workspace/cwd)."
-            );
-        } else {
-            println!("Discovered additional R writable roots (outside workspace/cwd):");
-            for root in &additional_writable_roots {
-                println!("- {}", root.display());
-            }
-        }
-    }
-    let codex_effective_args = build_server_args(&options.args, &additional_writable_roots);
-    if install_codex
-        && !additional_writable_roots.is_empty()
-        && !codex_effective_args.injected_sandbox_args
-    {
-        println!(
-            "Skipped auto-injecting sandbox args because install args already include sandbox configuration."
-        );
-    }
 
     for (target, root) in targets {
         match target {
             InstallTarget::Codex => {
                 let path = root.join("config.toml");
-                upsert_codex_mcp_server(
-                    &path,
-                    &options.server_name,
-                    &command,
-                    &codex_effective_args.args,
-                    &additional_writable_roots,
-                )?;
+                upsert_codex_mcp_server(&path, &options.server_name, &command, &options.args)?;
                 println!("Updated codex MCP config: {}", path.display());
             }
             InstallTarget::Claude => {
@@ -216,113 +180,11 @@ fn resolve_claude_config_path(root: &Path) -> PathBuf {
     settings
 }
 
-#[derive(Debug, Clone)]
-struct EffectiveArgs {
-    args: Vec<String>,
-    injected_sandbox_args: bool,
-}
-
-fn has_sandbox_config_arg(args: &[String]) -> bool {
-    args.iter().any(|arg| {
-        matches!(
-            arg.as_str(),
-            "--sandbox-state" | "--sandbox-mode" | "--sandbox-network-access" | "--writable-root"
-        ) || arg.starts_with("--sandbox-state=")
-            || arg.starts_with("--sandbox-mode=")
-            || arg.starts_with("--sandbox-network-access=")
-            || arg.starts_with("--writable-root=")
-    })
-}
-
-fn install_time_r_writable_roots() -> Vec<PathBuf> {
-    let mut roots = probe_r_writable_roots();
-    roots.sort();
-    roots.dedup();
-    roots
-}
-
-fn build_server_args(base_args: &[String], additional_writable_roots: &[PathBuf]) -> EffectiveArgs {
-    let mut args = base_args.to_vec();
-    let mut injected_sandbox_args = false;
-    if !additional_writable_roots.is_empty() && !has_sandbox_config_arg(base_args) {
-        args.push("--sandbox-mode".to_string());
-        args.push("workspace-write".to_string());
-        args.push("--sandbox-network-access".to_string());
-        args.push("restricted".to_string());
-        for root in additional_writable_roots {
-            args.push("--writable-root".to_string());
-            args.push(root.to_string_lossy().to_string());
-        }
-        injected_sandbox_args = true;
-    }
-    EffectiveArgs {
-        args,
-        injected_sandbox_args,
-    }
-}
-
-fn probe_r_writable_roots() -> Vec<PathBuf> {
-    let output = Command::new("R")
-        .stdin(Stdio::null())
-        .arg("-s")
-        .arg("-e")
-        .arg(
-            r#"cat(
-sep = "",
-"MCP_CONSOLE_INSTALL_R_CACHE_ROOT=", tools::R_user_dir("", which = "cache"), "\n"
-)"#,
-        )
-        .output();
-    let Ok(output) = output else {
-        return Vec::new();
-    };
-    if !output.status.success() {
-        return Vec::new();
-    }
-    let Ok(stdout) = String::from_utf8(output.stdout) else {
-        return Vec::new();
-    };
-    parse_r_writable_roots_probe_output(&stdout)
-}
-
-fn parse_r_writable_roots_probe_output(stdout: &str) -> Vec<PathBuf> {
-    let mut roots = Vec::new();
-    for line in stdout.lines() {
-        let Some((key, value)) = line.trim_start().split_once('=') else {
-            continue;
-        };
-        if !matches!(key, "MCP_CONSOLE_INSTALL_R_CACHE_ROOT") {
-            continue;
-        }
-        let value = value.trim();
-        if value.is_empty() {
-            continue;
-        }
-        if is_absolute_probe_path(value) {
-            roots.push(PathBuf::from(value));
-        }
-    }
-    roots
-}
-
-fn is_absolute_probe_path(raw_path: &str) -> bool {
-    let bytes = raw_path.as_bytes();
-    let is_drive_absolute = bytes.len() >= 3
-        && bytes[0].is_ascii_alphabetic()
-        && bytes[1] == b':'
-        && matches!(bytes[2], b'\\' | b'/');
-    raw_path.starts_with('/')
-        || raw_path.starts_with(r"\\")
-        || is_drive_absolute
-        || Path::new(raw_path).is_absolute()
-}
-
 fn upsert_codex_mcp_server(
     config_path: &Path,
     server_name: &str,
     command: &str,
     args: &[String],
-    additional_writable_roots: &[PathBuf],
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut doc = if config_path.is_file() {
         let raw = fs::read_to_string(config_path)?;
@@ -349,39 +211,16 @@ fn upsert_codex_mcp_server(
     }
     format_toml_array_multiline(&mut toml_args);
     doc["mcp_servers"][server_name]["args"] = Item::Value(toml_args.into());
-    if let Some(server_table) = doc["mcp_servers"][server_name].as_table_mut() {
-        if let Some(mut timeout_key) = server_table.key_mut("tool_timeout_sec") {
-            timeout_key
-                .leaf_decor_mut()
-                .set_prefix(CODEX_TOOL_TIMEOUT_COMMENT);
-        }
-        if let Some(mut args_key) = server_table.key_mut("args") {
-            args_key
-                .leaf_decor_mut()
-                .set_prefix(codex_r_writable_roots_comment(additional_writable_roots));
-        }
+    if let Some(server_table) = doc["mcp_servers"][server_name].as_table_mut()
+        && let Some(mut timeout_key) = server_table.key_mut("tool_timeout_sec")
+    {
+        timeout_key
+            .leaf_decor_mut()
+            .set_prefix(CODEX_TOOL_TIMEOUT_COMMENT);
     }
 
     atomic_write(config_path, &doc.to_string())?;
     Ok(())
-}
-
-fn codex_r_writable_roots_comment(additional_writable_roots: &[PathBuf]) -> String {
-    let mut lines = vec![
-        "".to_string(),
-        "# additional roots the REPL can write to (outside cwd):".to_string(),
-        "# discovered at install time using R:".to_string(),
-        "# tools::R_user_dir(\"\", which = \"cache\")".to_string(),
-    ];
-    if additional_writable_roots.is_empty() {
-        lines.push("# - none discovered".to_string());
-    } else {
-        for root in additional_writable_roots {
-            lines.push(format!("# - {}", root.display()));
-        }
-    }
-    lines.push("# Re-run `mcp-repl install-codex` to refresh this list.".to_string());
-    lines.join("\n") + "\n"
 }
 
 fn format_toml_array_multiline(array: &mut Array) {
@@ -510,7 +349,6 @@ mod tests {
             "console",
             "/usr/local/bin/mcp-console",
             &["--backend".to_string(), "python".to_string()],
-            &[PathBuf::from("/tmp/cache-root")],
         )
         .expect("upsert codex");
         let text = fs::read_to_string(config).expect("read config");
@@ -541,14 +379,6 @@ mod tests {
             text.contains("mcp-repl handles the primary timeout"),
             "expected generated timeout rationale comment in config"
         );
-        assert!(
-            text.contains("additional roots the REPL can write to"),
-            "expected generated writable-roots annotation comment in config"
-        );
-        assert!(
-            text.contains("# - /tmp/cache-root"),
-            "expected writable-roots comment to include discovered cache root"
-        );
     }
 
     #[test]
@@ -573,7 +403,6 @@ repl = { command = "/usr/local/bin/old-mcp-repl", args = ["--backend", "r"] }
                 "--sandbox-network-access".to_string(),
                 "restricted".to_string(),
             ],
-            &[],
         )
         .expect("upsert codex");
 
@@ -617,7 +446,6 @@ name="demo"
             "repl",
             "/usr/local/bin/mcp-repl",
             &["--backend".to_string(), "r".to_string()],
-            &[],
         )
         .expect("upsert codex");
 
@@ -650,7 +478,6 @@ name="demo"
             "repl",
             "/usr/local/bin/mcp-repl",
             &["--backend".to_string(), "r".to_string()],
-            &[],
         )
         .expect("upsert codex");
 
@@ -667,68 +494,6 @@ name="demo"
                 .len(),
             2
         );
-    }
-
-    #[test]
-    fn build_server_args_injects_sandbox_args_for_discovered_roots() {
-        let roots = vec![PathBuf::from("/tmp/example-r-root")];
-        let effective = build_server_args(&["--backend".to_string(), "r".to_string()], &roots);
-        assert!(effective.injected_sandbox_args);
-        assert!(
-            effective.args.iter().any(|arg| arg == "--sandbox-mode"),
-            "expected --sandbox-mode to be injected"
-        );
-        assert!(
-            effective
-                .args
-                .windows(2)
-                .any(|pair| pair[0] == "--writable-root" && pair[1] == "/tmp/example-r-root"),
-            "expected injected writable root"
-        );
-    }
-
-    #[test]
-    fn build_server_args_does_not_override_existing_sandbox_config() {
-        let roots = vec![PathBuf::from("/tmp/example-r-root")];
-        let effective = build_server_args(
-            &[
-                "--sandbox-mode".to_string(),
-                "workspace-write".to_string(),
-                "--backend".to_string(),
-                "r".to_string(),
-            ],
-            &roots,
-        );
-        assert!(!effective.injected_sandbox_args);
-        let count = effective
-            .args
-            .iter()
-            .filter(|arg| arg.as_str() == "--sandbox-mode")
-            .count();
-        assert_eq!(count, 1, "expected existing sandbox args to be preserved");
-    }
-
-    #[test]
-    fn build_server_args_skips_injection_without_discovered_roots() {
-        let effective = build_server_args(&["--backend".to_string(), "r".to_string()], &[]);
-        assert!(!effective.injected_sandbox_args);
-        assert_eq!(
-            effective.args,
-            vec!["--backend".to_string(), "r".to_string()]
-        );
-    }
-
-    #[test]
-    fn parse_r_writable_roots_probe_output_keeps_absolute_values() {
-        let parsed = parse_r_writable_roots_probe_output(
-            "noise\nMCP_CONSOLE_INSTALL_R_CACHE_ROOT=relative/path\nMCP_CONSOLE_INSTALL_R_CACHE_ROOT=/tmp/cache-root\nMCP_CONSOLE_INSTALL_R_DATA_ROOT=/tmp/data-root\nMCP_CONSOLE_INSTALL_R_CONFIG_ROOT=/tmp/config-root\n",
-        );
-        assert_eq!(parsed, vec![PathBuf::from("/tmp/cache-root")]);
-    }
-
-    #[test]
-    fn is_absolute_probe_path_accepts_posix_paths() {
-        assert!(is_absolute_probe_path("/tmp/cache-root"));
     }
 
     #[test]

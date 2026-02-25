@@ -81,26 +81,16 @@ mcp-repl install-claude
 mcp-repl install
 ```
 
-`install-codex` also runs a one-time `R` probe and can annotate
-`~/.codex/config.toml` with additional writable roots (outside `cwd`) for R tooling.
+`install-codex` writes only the MCP command and args. Sandbox policy is inherited from Codex.
 
-Example `R` REPL Codex config (paths vary by OS/user). This minimal example keeps only
-the R cache path writable:
+Example `R` REPL Codex config (paths vary by OS/user):
 
 ```toml
 [mcp_servers.r_repl]
 command = "/Users/alice/.cargo/bin/mcp-repl"
 # mcp-repl handles the primary timeout; this higher Codex timeout is only an outer guard.
 tool_timeout_sec = 1800
-# additional roots the REPL can write to (outside cwd):
-# discovered at install time using R:
-# tools::R_user_dir("", which = "cache")
-# Re-run `mcp-repl install-codex` to refresh this list.
-args = [
-  "--sandbox-mode", "workspace-write",
-  "--sandbox-network-access", "restricted",
-  "--writable-root", "/Users/alice/Library/Caches/org.R-project.R/R",
-]
+args = []
 ```
 
 Example `Python` REPL Codex config:
@@ -110,10 +100,11 @@ Example `Python` REPL Codex config:
 command = "/Users/alice/.cargo/bin/mcp-repl"
 args = [
   "--interpreter", "python",
-  "--sandbox-mode", "workspace-write",
-  "--sandbox-network-access", "restricted",
 ]
 ```
+
+For Claude, pass explicit sandbox flags in `args` because Claude does not propagate sandbox state
+to MCP servers.
 
 ### 3) Pick backend (optional)
 
