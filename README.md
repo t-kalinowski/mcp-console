@@ -2,7 +2,7 @@
 
 `mcp-repl` is an MCP server that exposes a long-lived interactive REPL runtime over stdio.
 
-It currently supports R and Python interpreters.
+It is backend-agnostic in design. The default interpreter is R, with an opt-in Python interpreter (`--interpreter python`).
 
 Session state persists across calls, so agents can iterate in place, inspect intermediate values, debug, and read docs in-band.
 
@@ -147,7 +147,7 @@ to limit which interpreters are installed.
 
 - Default interpreter: R
 - CLI: `mcp-repl --interpreter r|python`
-- Environment: `MCP_REPL_INTERPRETER=r|python`
+- Environment: `MCP_REPL_INTERPRETER=r|python` (compatibility alias: `MCP_REPL_BACKEND`)
 
 ## Runtime discovery
 
@@ -155,7 +155,9 @@ to limit which interpreters are installed.
 
 `mcp-repl` chooses interpreter in this order:
 - `--interpreter <r|python>` (if provided)
+- compatibility CLI alias: `--backend <r|python>`
 - `MCP_REPL_INTERPRETER`
+- compatibility env alias: `MCP_REPL_BACKEND`
 - default: `r`
 
 ### R interpreter: which R installation is used
