@@ -14,6 +14,38 @@ const CODEX_SANDBOX_INHERIT_COMMENT: &str = "\n# --sandbox-state inherit: use sa
 const CLAUDE_SANDBOX_STATE_COMMENT_FIELD: &str = "_comment_sandbox_state";
 const CLAUDE_SANDBOX_STATE_COMMENT: &str =
     "sandbox-state values: read-only | workspace-write | danger-full-access";
+pub const DEFAULT_R_SERVER_NAME: &str = "r_repl";
+pub const DEFAULT_PYTHON_SERVER_NAME: &str = "python_repl";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InstallInterpreter {
+    R,
+    Python,
+}
+
+impl InstallInterpreter {
+    pub fn parse(raw: &str) -> Result<Self, String> {
+        match raw.trim().to_lowercase().as_str() {
+            "r" => Ok(Self::R),
+            "python" => Ok(Self::Python),
+            _ => Err(format!("invalid interpreter: {raw} (expected r|python)")),
+        }
+    }
+
+    fn cli_value(self) -> &'static str {
+        match self {
+            Self::R => "r",
+            Self::Python => "python",
+        }
+    }
+
+    fn default_server_name(self) -> &'static str {
+        match self {
+            Self::R => DEFAULT_R_SERVER_NAME,
+            Self::Python => DEFAULT_PYTHON_SERVER_NAME,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum InstallTarget {
@@ -43,27 +75,62 @@ impl InstallTarget {
 #[derive(Debug, Clone)]
 pub struct InstallOptions {
     pub targets: Vec<InstallTarget>,
+    pub interpreters: Vec<InstallInterpreter>,
     pub server_name: String,
+    pub server_name_explicit: bool,
     pub command: Option<String>,
     pub args: Vec<String>,
 }
 
 pub fn run(options: InstallOptions) -> Result<(), Box<dyn std::error::Error>> {
+    if has_interpreter_config_arg(&options.args) {
+        return Err(
+            "install does not accept interpreter selection via --arg; use --interpreter r|python instead"
+                .into(),
+        );
+    }
     let command = options.command.unwrap_or_else(default_command);
     let targets = resolve_target_roots(&options.targets)?;
     let codex_args = codex_install_args(&options.args);
     let claude_args = claude_install_args(&options.args);
+    let interpreters = effective_interpreters(&options.interpreters);
+    let mut server_specs = Vec::new();
+    let mut used_server_names = std::collections::BTreeSet::new();
+    for (idx, interpreter) in interpreters.iter().enumerate() {
+        let server_name = if idx == 0 {
+            if options.server_name_explicit {
+                options.server_name.clone()
+            } else {
+                interpreter.default_server_name().to_string()
+            }
+        } else {
+            interpreter.default_server_name().to_string()
+        };
+        if !used_server_names.insert(server_name.clone()) {
+            return Err(format!(
+                "duplicate server name generated for install: {server_name} (check --server-name and --interpreter values)"
+            )
+            .into());
+        }
+        server_specs.push((server_name, *interpreter));
+    }
 
     for (target, root) in targets {
         match target {
             InstallTarget::Codex => {
                 let path = root.join("config.toml");
-                upsert_codex_mcp_server(&path, &options.server_name, &command, &codex_args)?;
+                for (server_name, interpreter) in &server_specs {
+                    let server_args = with_interpreter_arg(&codex_args, *interpreter);
+                    upsert_codex_mcp_server(&path, server_name, &command, &server_args)?;
+                }
                 println!("Updated codex MCP config: {}", path.display());
             }
             InstallTarget::Claude => {
                 let path = resolve_claude_config_path(&root);
-                upsert_claude_mcp_server(&path, &options.server_name, &command, &claude_args)?;
+                for (server_name, interpreter) in &server_specs {
+                    let server_args = with_interpreter_arg(&claude_args, *interpreter);
+                    upsert_claude_mcp_server(&path, server_name, &command, &server_args)?;
+                }
                 println!("Updated claude MCP config: {}", path.display());
             }
         }
@@ -196,6 +263,60 @@ fn has_sandbox_config_arg(args: &[String]) -> bool {
             || arg.starts_with("--sandbox-network-access=")
             || arg.starts_with("--writable-root=")
     })
+}
+
+fn has_interpreter_config_arg(args: &[String]) -> bool {
+    args.iter().any(|arg| {
+        matches!(arg.as_str(), "--interpreter" | "--backend")
+            || arg.starts_with("--interpreter=")
+            || arg.starts_with("--backend=")
+    })
+}
+
+fn has_interpreter_value(args: &[String], target: &str) -> bool {
+    let mut iter = args.iter();
+    while let Some(arg) = iter.next() {
+        if arg == "--interpreter" || arg == "--backend" {
+            if iter.next().is_some_and(|value| value == target) {
+                return true;
+            }
+            continue;
+        }
+        if let Some(value) = arg.strip_prefix("--interpreter=")
+            && value == target
+        {
+            return true;
+        }
+        if let Some(value) = arg.strip_prefix("--backend=")
+            && value == target
+        {
+            return true;
+        }
+    }
+    false
+}
+
+fn with_interpreter_arg(base_args: &[String], interpreter: InstallInterpreter) -> Vec<String> {
+    if has_interpreter_value(base_args, interpreter.cli_value()) {
+        return base_args.to_vec();
+    }
+    let mut args = base_args.to_vec();
+    args.push("--interpreter".to_string());
+    args.push(interpreter.cli_value().to_string());
+    args
+}
+
+fn effective_interpreters(configured: &[InstallInterpreter]) -> Vec<InstallInterpreter> {
+    if configured.is_empty() {
+        return vec![InstallInterpreter::R, InstallInterpreter::Python];
+    }
+    let mut out = Vec::new();
+    for interpreter in configured {
+        if !out.contains(interpreter) {
+            out.push(*interpreter);
+        }
+    }
+    out
 }
 
 fn codex_install_args(base_args: &[String]) -> Vec<String> {
@@ -620,6 +741,71 @@ name="demo"
         ];
         assert_eq!(codex_install_args(&base), base);
         assert_eq!(claude_install_args(&base), base);
+    }
+
+    #[test]
+    fn with_interpreter_arg_adds_python_interpreter_when_missing() {
+        let args = with_interpreter_arg(
+            &["--sandbox-state".to_string(), "workspace-write".to_string()],
+            InstallInterpreter::Python,
+        );
+        assert_eq!(
+            args,
+            vec![
+                "--sandbox-state".to_string(),
+                "workspace-write".to_string(),
+                "--interpreter".to_string(),
+                "python".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn with_interpreter_arg_preserves_existing_python_interpreter() {
+        let args = with_interpreter_arg(
+            &[
+                "--sandbox-state".to_string(),
+                "workspace-write".to_string(),
+                "--interpreter".to_string(),
+                "python".to_string(),
+            ],
+            InstallInterpreter::Python,
+        );
+        assert_eq!(
+            args,
+            vec![
+                "--sandbox-state".to_string(),
+                "workspace-write".to_string(),
+                "--interpreter".to_string(),
+                "python".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn run_rejects_interpreter_via_arg() {
+        let err = run(InstallOptions {
+            targets: vec![InstallTarget::Codex],
+            interpreters: vec![InstallInterpreter::R],
+            server_name: DEFAULT_R_SERVER_NAME.to_string(),
+            server_name_explicit: false,
+            command: Some("/usr/local/bin/mcp-repl".to_string()),
+            args: vec!["--interpreter".to_string(), "python".to_string()],
+        })
+        .expect_err("expected rejection");
+        assert!(
+            err.to_string()
+                .contains("install does not accept interpreter selection via --arg"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn effective_interpreters_defaults_to_full_grid() {
+        assert_eq!(
+            effective_interpreters(&[]),
+            vec![InstallInterpreter::R, InstallInterpreter::Python]
+        );
     }
 
     #[test]

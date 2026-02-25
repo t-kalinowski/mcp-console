@@ -289,9 +289,11 @@ fn parse_install_args(
     mut targets: Vec<install::InstallTarget>,
     allow_positional_targets: bool,
 ) -> Result<install::InstallOptions, Box<dyn std::error::Error>> {
-    let mut server_name = "r_repl".to_string();
+    let mut server_name = install::DEFAULT_R_SERVER_NAME.to_string();
+    let mut server_name_explicit = false;
     let mut command = None;
     let mut args = Vec::new();
+    let mut interpreters: Vec<install::InstallInterpreter> = Vec::new();
 
     while let Some(arg) = parser.next() {
         match arg.as_str() {
@@ -299,8 +301,31 @@ fn parse_install_args(
                 print_install_usage();
                 std::process::exit(0);
             }
+            "--interpreter" => {
+                let value = parser.next_value("--interpreter")?;
+                parse_install_interpreters_value(&value, &mut interpreters)?;
+            }
+            _ if arg.starts_with("--interpreter=") => {
+                let value = arg.split_once('=').map(|(_, value)| value).unwrap_or("");
+                if value.is_empty() {
+                    return Err("missing value for --interpreter".into());
+                }
+                parse_install_interpreters_value(value, &mut interpreters)?;
+            }
+            "--client" => {
+                let value = parser.next_value("--client")?;
+                parse_install_targets_value(&value, &mut targets)?;
+            }
+            _ if arg.starts_with("--client=") => {
+                let value = arg.split_once('=').map(|(_, value)| value).unwrap_or("");
+                if value.is_empty() {
+                    return Err("missing value for --client".into());
+                }
+                parse_install_targets_value(value, &mut targets)?;
+            }
             "--server-name" => {
                 server_name = parser.next_value("--server-name")?;
+                server_name_explicit = true;
             }
             _ if arg.starts_with("--server-name=") => {
                 let value = arg.split_once('=').map(|(_, value)| value).unwrap_or("");
@@ -308,6 +333,7 @@ fn parse_install_args(
                     return Err("missing value for --server-name".into());
                 }
                 server_name = value.to_string();
+                server_name_explicit = true;
             }
             "--command" => {
                 command = Some(parser.next_value("--command")?);
@@ -346,10 +372,46 @@ fn parse_install_args(
 
     Ok(install::InstallOptions {
         targets,
+        interpreters,
         server_name,
+        server_name_explicit,
         command,
         args,
     })
+}
+
+fn parse_install_interpreters_value(
+    raw: &str,
+    interpreters: &mut Vec<install::InstallInterpreter>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    for part in raw.split(',') {
+        let trimmed = part.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        interpreters.push(
+            install::InstallInterpreter::parse(trimmed)
+                .map_err(|err| -> Box<dyn std::error::Error> { err.into() })?,
+        );
+    }
+    Ok(())
+}
+
+fn parse_install_targets_value(
+    raw: &str,
+    targets: &mut Vec<install::InstallTarget>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    for part in raw.split(',') {
+        let trimmed = part.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        targets.push(
+            install::InstallTarget::parse(trimmed)
+                .map_err(|err| -> Box<dyn std::error::Error> { err.into() })?,
+        );
+    }
+    Ok(())
 }
 
 fn sandbox_state_arg(raw: String) -> Result<String, Box<dyn std::error::Error>> {
@@ -480,9 +542,9 @@ fn print_usage() {
     println!(
         "Usage:\n\
 mcp-repl [--debug-repl] [--interpreter <r|python>] [--sandbox-mode <mode>] [--sandbox-network-access <restricted|enabled>] [--writable-root <abs-path>]...\n\
-mcp-repl install [codex] [claude] [--server-name <name>] [--command <path>] [--arg <value>]...\n\
-mcp-repl install-codex [--server-name <name>] [--command <path>] [--arg <value>]...\n\
-mcp-repl install-claude [--server-name <name>] [--command <path>] [--arg <value>]...\n\n\
+mcp-repl install [codex] [claude] [--client <codex|claude>]... [--interpreter <r|python>[,r|python]...]... [--server-name <name>] [--command <path>] [--arg <value>]...\n\
+mcp-repl install-codex [--interpreter <r|python>[,r|python]...]... [--server-name <name>] [--command <path>] [--arg <value>]...\n\
+mcp-repl install-claude [--interpreter <r|python>[,r|python]...]... [--server-name <name>] [--command <path>] [--arg <value>]...\n\n\
 --debug-repl: run an interactive debug REPL over stdio\n\
 --interpreter: choose REPL interpreter (default: r; env MCP_REPL_INTERPRETER, compatibility env MCP_REPL_BACKEND)\n\
 --backend: compatibility alias for --interpreter\n\
@@ -490,20 +552,22 @@ mcp-repl install-claude [--server-name <name>] [--command <path>] [--arg <value>
 --sandbox-mode: read-only | workspace-write | danger-full-access (default: workspace-write when sandbox flags are provided)\n\
 --sandbox-network-access: restricted | enabled (workspace-write only; default: restricted)\n\
 --writable-root: additional absolute writable path (repeatable; workspace-write only)\n\
-install: update MCP config for existing agent homes only (does not create ~/.codex or ~/.claude)"
+install: update MCP config for existing agent homes only (does not create ~/.codex or ~/.claude)\n\
+install defaults to the full interpreter grid for each selected client (currently r_repl + python_repl)"
     );
 }
 
 fn print_install_usage() {
     println!(
         "Usage:\n\
-mcp-repl install [codex] [claude] [--server-name <name>] [--command <path>] [--arg <value>]...\n\
-mcp-repl install-codex [--server-name <name>] [--command <path>] [--arg <value>]...\n\
-mcp-repl install-claude [--server-name <name>] [--command <path>] [--arg <value>]...\n\n\
+mcp-repl install [codex] [claude] [--client <codex|claude>]... [--interpreter <r|python>[,r|python]...]... [--server-name <name>] [--command <path>] [--arg <value>]...\n\
+mcp-repl install-codex [--interpreter <r|python>[,r|python]...]... [--server-name <name>] [--command <path>] [--arg <value>]...\n\
+mcp-repl install-claude [--interpreter <r|python>[,r|python]...]... [--server-name <name>] [--command <path>] [--arg <value>]...\n\n\
 If no target is specified for `install`, all existing agent homes are used:\n\
 - codex: $CODEX_HOME or ~/.codex\n\
 - claude: ~/.claude\n\
-Missing homes are not created."
+Missing homes are not created.\n\
+If no --interpreter is specified, install uses the full interpreter grid for each selected client."
     );
 }
 
@@ -558,7 +622,62 @@ mod tests {
             index: 0,
         };
         let parsed = parse_install_args(&mut parser, Vec::new(), true).expect("parse install args");
-        assert_eq!(parsed.server_name, "r_repl");
+        assert_eq!(parsed.server_name, install::DEFAULT_R_SERVER_NAME);
+        assert!(!parsed.server_name_explicit);
+        assert!(parsed.interpreters.is_empty());
+    }
+
+    #[test]
+    fn parse_install_args_accepts_repeatable_interpreters() {
+        let mut parser = ArgParser {
+            args: vec![
+                "--interpreter".to_string(),
+                "r".to_string(),
+                "--interpreter".to_string(),
+                "python".to_string(),
+            ],
+            index: 0,
+        };
+        let parsed = parse_install_args(&mut parser, Vec::new(), true).expect("parse install args");
+        assert_eq!(
+            parsed.interpreters,
+            vec![
+                install::InstallInterpreter::R,
+                install::InstallInterpreter::Python
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_install_args_accepts_comma_separated_interpreters() {
+        let mut parser = ArgParser {
+            args: vec!["--interpreter=python,r".to_string()],
+            index: 0,
+        };
+        let parsed = parse_install_args(&mut parser, Vec::new(), true).expect("parse install args");
+        assert_eq!(
+            parsed.interpreters,
+            vec![
+                install::InstallInterpreter::Python,
+                install::InstallInterpreter::R
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_install_args_accepts_client_flag() {
+        let mut parser = ArgParser {
+            args: vec!["--client".to_string(), "codex,claude".to_string()],
+            index: 0,
+        };
+        let parsed = parse_install_args(&mut parser, Vec::new(), true).expect("parse install args");
+        assert_eq!(
+            parsed.targets,
+            vec![
+                install::InstallTarget::Codex,
+                install::InstallTarget::Claude
+            ]
+        );
     }
 
     #[test]

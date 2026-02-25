@@ -69,13 +69,16 @@ Point your MCP client at the binary (either via `PATH` or by using an explicit p
 You can auto-install into existing agent config files:
 
 ```sh
-# update existing ~/.codex/config.toml
-mcp-repl install-codex
-
 # update existing ~/.claude/settings.json (or ~/.claude/config.json)
 # Note: there may be some rough edges with Claude.
 # This has been primarily developed and tested with Codex.
 mcp-repl install-claude
+
+# default install writes the full interpreter grid (currently r_repl + python_repl)
+mcp-repl install-codex
+
+# install only one interpreter
+mcp-repl install-codex --interpreter r
 
 # install to all existing agent homes (does not create ~/.codex or ~/.claude)
 mcp-repl install
@@ -123,6 +126,13 @@ propagate sandbox state updates to MCP servers:
   }
 }
 ```
+
+By default install creates one entry per supported interpreter:
+- `r_repl`
+- `python_repl`
+
+Use `--interpreter r`, `--interpreter python`, or comma-separated/repeatable forms
+to limit which interpreters are installed.
 
 ### 3) Pick backend (optional)
 
