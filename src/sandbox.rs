@@ -511,14 +511,9 @@ pub fn prepare_worker_command(
         MANAGED_DENIED_DOMAINS_ENV_KEY.to_string(),
         state.managed_network_policy.denied_domains.join(","),
     );
-    env.insert(
-        MANAGED_NETWORK_ENV_KEY.to_string(),
-        if state.managed_network_policy.has_domain_restrictions() {
-            "1".to_string()
-        } else {
-            "0".to_string()
-        },
-    );
+    if state.managed_network_policy.has_domain_restrictions() {
+        env.insert(MANAGED_NETWORK_ENV_KEY.to_string(), "1".to_string());
+    }
 
     prepare_session_temp_dir(&state.session_temp_dir)?;
     {
@@ -2364,8 +2359,8 @@ mod tests {
                 .env
                 .get(MANAGED_NETWORK_ENV_KEY)
                 .map(String::as_str),
-            Some("0"),
-            "managed network marker must be explicitly disabled when no domain restrictions exist"
+            None,
+            "managed network marker must not override inherited env when no domain restrictions exist"
         );
     }
 
