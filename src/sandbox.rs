@@ -12,6 +12,8 @@ use std::process;
 #[cfg(target_os = "macos")]
 use url::Url;
 
+#[cfg(target_os = "linux")]
+use crate::linux_proxy_routing::{activate_proxy_routes_in_netns, prepare_host_proxy_route_spec};
 use serde::{Deserialize, Serialize};
 use tempfile::Builder;
 
@@ -625,11 +627,14 @@ pub fn prepare_worker_command(
         }
         let policy = sanitize_linux_sandbox_policy(&policy);
         let command = build_command_vec(program, &args);
+        let allow_network_for_proxy = policy.has_full_network_access()
+            && state.managed_network_policy.has_domain_restrictions();
         let sandbox_args = create_linux_sandbox_command_args(
             command,
             &policy,
             &policy_cwd,
             state.use_linux_sandbox_bwrap,
+            allow_network_for_proxy,
             env_var_truthy(LINUX_BWRAP_NO_PROC_ENV),
         );
         let sandbox_program = state
@@ -685,6 +690,7 @@ fn create_linux_sandbox_command_args(
     sandbox_policy: &SandboxPolicy,
     sandbox_policy_cwd: &Path,
     use_bwrap_sandbox: bool,
+    allow_network_for_proxy: bool,
     no_proc: bool,
 ) -> Vec<String> {
     let sandbox_policy_cwd = sandbox_policy_cwd.to_string_lossy().to_string();
@@ -699,6 +705,9 @@ fn create_linux_sandbox_command_args(
     ];
     if use_bwrap_sandbox {
         linux_cmd.push("--use-bwrap-sandbox".to_string());
+    }
+    if allow_network_for_proxy {
+        linux_cmd.push("--allow-network-for-proxy".to_string());
     }
     if no_proc {
         linux_cmd.push("--no-proc".to_string());
@@ -1124,6 +1133,8 @@ struct LinuxSandboxArgs {
     command: Vec<std::ffi::OsString>,
     use_bwrap_sandbox: bool,
     apply_seccomp_then_exec: bool,
+    allow_network_for_proxy: bool,
+    proxy_route_spec: Option<String>,
     no_proc: bool,
 }
 
@@ -1131,9 +1142,19 @@ struct LinuxSandboxArgs {
 fn linux_sandbox_main_impl() -> Result<(), String> {
     let args = linux_sandbox_parse_args()?;
     if args.apply_seccomp_then_exec {
+        if args.allow_network_for_proxy {
+            let spec = args
+                .proxy_route_spec
+                .as_deref()
+                .ok_or_else(|| "managed proxy mode requires --proxy-route-spec".to_string())?;
+            activate_proxy_routes_in_netns(spec)
+                .map_err(|err| format!("failed to activate Linux proxy routing bridge: {err}"))?;
+        }
         linux_apply_sandbox_policy_to_current_thread(
             &args.sandbox_policy,
             &args.sandbox_policy_cwd,
+            args.allow_network_for_proxy,
+            args.allow_network_for_proxy,
         )?;
         linux_execvp(args.command)?;
         return Ok(());
@@ -1142,7 +1163,12 @@ fn linux_sandbox_main_impl() -> Result<(), String> {
         linux_exec_bwrap_sandbox(args)?;
         return Ok(());
     }
-    linux_apply_sandbox_policy_to_current_thread(&args.sandbox_policy, &args.sandbox_policy_cwd)?;
+    linux_apply_sandbox_policy_to_current_thread(
+        &args.sandbox_policy,
+        &args.sandbox_policy_cwd,
+        args.allow_network_for_proxy,
+        false,
+    )?;
     linux_execvp(args.command)?;
     Ok(())
 }
@@ -1154,6 +1180,8 @@ fn linux_sandbox_parse_args() -> Result<LinuxSandboxArgs, String> {
     let mut command: Vec<std::ffi::OsString> = Vec::new();
     let mut use_bwrap_sandbox = false;
     let mut apply_seccomp_then_exec = false;
+    let mut allow_network_for_proxy = false;
+    let mut proxy_route_spec: Option<String> = None;
     let mut no_proc = false;
 
     let mut args = std::env::args_os().skip(1).peekable();
@@ -1164,6 +1192,20 @@ fn linux_sandbox_parse_args() -> Result<LinuxSandboxArgs, String> {
         }
         if arg == "--apply-seccomp-then-exec" {
             apply_seccomp_then_exec = true;
+            continue;
+        }
+        if arg == "--allow-network-for-proxy" {
+            allow_network_for_proxy = true;
+            continue;
+        }
+        if arg == "--proxy-route-spec" {
+            let value = args
+                .next()
+                .ok_or_else(|| "missing value for --proxy-route-spec".to_string())?;
+            let value = value
+                .into_string()
+                .map_err(|_| "--proxy-route-spec must be valid UTF-8".to_string())?;
+            proxy_route_spec = Some(value);
             continue;
         }
         if arg == "--no-proc" {
@@ -1210,6 +1252,8 @@ fn linux_sandbox_parse_args() -> Result<LinuxSandboxArgs, String> {
         command,
         use_bwrap_sandbox,
         apply_seccomp_then_exec,
+        allow_network_for_proxy,
+        proxy_route_spec,
         no_proc,
     })
 }
@@ -1232,7 +1276,10 @@ fn linux_find_bwrap_program() -> Option<PathBuf> {
 }
 
 #[cfg(target_os = "linux")]
-fn linux_build_inner_seccomp_command(args: &LinuxSandboxArgs) -> Result<Vec<String>, String> {
+fn linux_build_inner_seccomp_command(
+    args: &LinuxSandboxArgs,
+    proxy_route_spec: Option<String>,
+) -> Result<Vec<String>, String> {
     let current_exe = std::env::current_exe().map_err(|err| err.to_string())?;
     let policy = sanitize_linux_sandbox_policy(&args.sandbox_policy);
     let policy_json = serde_json::to_string(&policy).map_err(|err| err.to_string())?;
@@ -1243,8 +1290,15 @@ fn linux_build_inner_seccomp_command(args: &LinuxSandboxArgs) -> Result<Vec<Stri
         "--sandbox-policy".to_string(),
         policy_json,
         "--apply-seccomp-then-exec".to_string(),
-        "--".to_string(),
     ];
+    if args.allow_network_for_proxy {
+        inner.push("--allow-network-for-proxy".to_string());
+    }
+    if let Some(proxy_route_spec) = proxy_route_spec {
+        inner.push("--proxy-route-spec".to_string());
+        inner.push(proxy_route_spec);
+    }
+    inner.push("--".to_string());
     inner.extend(
         args.command
             .iter()
@@ -1257,17 +1311,27 @@ fn linux_build_inner_seccomp_command(args: &LinuxSandboxArgs) -> Result<Vec<Stri
 fn linux_exec_bwrap_sandbox(args: LinuxSandboxArgs) -> Result<(), String> {
     let bwrap_program = linux_find_bwrap_program()
         .ok_or_else(|| "bwrap executable not found (tried /usr/bin/bwrap and PATH)".to_string())?;
-    let inner = linux_build_inner_seccomp_command(&args)?;
+    let proxy_route_spec = if args.allow_network_for_proxy {
+        Some(
+            prepare_host_proxy_route_spec()
+                .map_err(|err| format!("failed to prepare Linux proxy routing bridge: {err}"))?,
+        )
+    } else {
+        None
+    };
+    let inner = linux_build_inner_seccomp_command(&args, proxy_route_spec)?;
     let mount_proc = !args.no_proc
         && linux_bwrap_supports_proc_mount(
             bwrap_program.as_path(),
             &args.sandbox_policy,
             &args.sandbox_policy_cwd,
+            args.allow_network_for_proxy,
         );
     let bwrap_args = create_linux_bwrap_command_args(
         inner,
         &args.sandbox_policy,
         &args.sandbox_policy_cwd,
+        args.allow_network_for_proxy,
         mount_proc,
     )?;
     let mut full_command = Vec::with_capacity(1 + bwrap_args.len());
@@ -1282,6 +1346,7 @@ fn linux_bwrap_supports_proc_mount(
     bwrap_program: &Path,
     sandbox_policy: &SandboxPolicy,
     sandbox_policy_cwd: &Path,
+    allow_network_for_proxy: bool,
 ) -> bool {
     let true_path = if Path::new("/usr/bin/true").is_file() {
         "/usr/bin/true"
@@ -1294,6 +1359,7 @@ fn linux_bwrap_supports_proc_mount(
         vec![true_path.to_string()],
         sandbox_policy,
         sandbox_policy_cwd,
+        allow_network_for_proxy,
         true,
     ) {
         Ok(args) => args,
@@ -1321,6 +1387,7 @@ fn create_linux_bwrap_command_args(
     command: Vec<String>,
     sandbox_policy: &SandboxPolicy,
     sandbox_policy_cwd: &Path,
+    allow_network_for_proxy: bool,
     mount_proc: bool,
 ) -> Result<Vec<String>, String> {
     let sandbox_policy = sanitize_linux_sandbox_policy(sandbox_policy);
@@ -1332,7 +1399,7 @@ fn create_linux_bwrap_command_args(
         "--new-session".to_string(),
         "--unshare-pid".to_string(),
     ];
-    if !sandbox_policy.has_full_network_access() {
+    if allow_network_for_proxy || !sandbox_policy.has_full_network_access() {
         bwrap_args.push("--unshare-net".to_string());
     }
     if mount_proc {
@@ -1483,13 +1550,21 @@ fn is_proc_mount_failure(stderr: &str) -> bool {
 fn linux_apply_sandbox_policy_to_current_thread(
     sandbox_policy: &SandboxPolicy,
     cwd: &Path,
+    allow_network_for_proxy: bool,
+    proxy_routed_network: bool,
 ) -> Result<(), String> {
-    if !sandbox_policy.has_full_disk_write_access() || !sandbox_policy.has_full_network_access() {
+    let network_seccomp_mode = linux_network_seccomp_mode(
+        sandbox_policy,
+        allow_network_for_proxy,
+        proxy_routed_network,
+    );
+
+    if !sandbox_policy.has_full_disk_write_access() || network_seccomp_mode.is_some() {
         linux_set_no_new_privs()?;
     }
 
-    if !sandbox_policy.has_full_network_access() {
-        linux_install_network_seccomp_filter_on_current_thread()?;
+    if let Some(mode) = network_seccomp_mode {
+        linux_install_network_seccomp_filter_on_current_thread(mode)?;
     }
 
     if !sandbox_policy.has_full_disk_write_access() {
@@ -1498,6 +1573,36 @@ fn linux_apply_sandbox_policy_to_current_thread(
     }
 
     Ok(())
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LinuxNetworkSeccompMode {
+    Restricted,
+    ProxyRouted,
+}
+
+#[cfg(target_os = "linux")]
+fn linux_should_install_network_seccomp(
+    sandbox_policy: &SandboxPolicy,
+    allow_network_for_proxy: bool,
+) -> bool {
+    !sandbox_policy.has_full_network_access() || allow_network_for_proxy
+}
+
+#[cfg(target_os = "linux")]
+fn linux_network_seccomp_mode(
+    sandbox_policy: &SandboxPolicy,
+    allow_network_for_proxy: bool,
+    proxy_routed_network: bool,
+) -> Option<LinuxNetworkSeccompMode> {
+    if !linux_should_install_network_seccomp(sandbox_policy, allow_network_for_proxy) {
+        None
+    } else if proxy_routed_network {
+        Some(LinuxNetworkSeccompMode::ProxyRouted)
+    } else {
+        Some(LinuxNetworkSeccompMode::Restricted)
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -1575,7 +1680,9 @@ fn linux_install_filesystem_landlock_rules_on_current_thread(
 }
 
 #[cfg(target_os = "linux")]
-fn linux_install_network_seccomp_filter_on_current_thread() -> Result<(), String> {
+fn linux_install_network_seccomp_filter_on_current_thread(
+    mode: LinuxNetworkSeccompMode,
+) -> Result<(), String> {
     use seccompiler::{
         BpfProgram, SeccompAction, SeccompCmpArgLen, SeccompCmpOp, SeccompCondition, SeccompFilter,
         SeccompRule, TargetArch, apply_filter,
@@ -1587,37 +1694,74 @@ fn linux_install_network_seccomp_filter_on_current_thread() -> Result<(), String
         rules.insert(nr, vec![]);
     };
 
-    deny_syscall(libc::SYS_connect);
-    deny_syscall(libc::SYS_accept);
-    deny_syscall(libc::SYS_accept4);
-    deny_syscall(libc::SYS_bind);
-    deny_syscall(libc::SYS_listen);
-    deny_syscall(libc::SYS_getpeername);
-    deny_syscall(libc::SYS_getsockname);
-    deny_syscall(libc::SYS_shutdown);
-    deny_syscall(libc::SYS_sendto);
-    deny_syscall(libc::SYS_sendmmsg);
-    deny_syscall(libc::SYS_recvmmsg);
-    deny_syscall(libc::SYS_getsockopt);
-    deny_syscall(libc::SYS_setsockopt);
     deny_syscall(libc::SYS_ptrace);
     deny_syscall(libc::SYS_io_uring_setup);
     deny_syscall(libc::SYS_io_uring_enter);
     deny_syscall(libc::SYS_io_uring_register);
 
-    let unix_only_rule = SeccompRule::new(vec![
-        SeccompCondition::new(
-            0,
-            SeccompCmpArgLen::Dword,
-            SeccompCmpOp::Ne,
-            libc::AF_UNIX as u64,
-        )
-        .map_err(|err| err.to_string())?,
-    ])
-    .map_err(|err| err.to_string())?;
+    match mode {
+        LinuxNetworkSeccompMode::Restricted => {
+            deny_syscall(libc::SYS_connect);
+            deny_syscall(libc::SYS_accept);
+            deny_syscall(libc::SYS_accept4);
+            deny_syscall(libc::SYS_bind);
+            deny_syscall(libc::SYS_listen);
+            deny_syscall(libc::SYS_getpeername);
+            deny_syscall(libc::SYS_getsockname);
+            deny_syscall(libc::SYS_shutdown);
+            deny_syscall(libc::SYS_sendto);
+            deny_syscall(libc::SYS_sendmmsg);
+            deny_syscall(libc::SYS_recvmmsg);
+            deny_syscall(libc::SYS_getsockopt);
+            deny_syscall(libc::SYS_setsockopt);
 
-    rules.insert(libc::SYS_socket, vec![unix_only_rule.clone()]);
-    rules.insert(libc::SYS_socketpair, vec![unix_only_rule]);
+            let unix_only_rule = SeccompRule::new(vec![
+                SeccompCondition::new(
+                    0,
+                    SeccompCmpArgLen::Dword,
+                    SeccompCmpOp::Ne,
+                    libc::AF_UNIX as u64,
+                )
+                .map_err(|err| err.to_string())?,
+            ])
+            .map_err(|err| err.to_string())?;
+
+            rules.insert(libc::SYS_socket, vec![unix_only_rule.clone()]);
+            rules.insert(libc::SYS_socketpair, vec![unix_only_rule]);
+        }
+        LinuxNetworkSeccompMode::ProxyRouted => {
+            let deny_non_ip_socket = SeccompRule::new(vec![
+                SeccompCondition::new(
+                    0,
+                    SeccompCmpArgLen::Dword,
+                    SeccompCmpOp::Ne,
+                    libc::AF_INET as u64,
+                )
+                .map_err(|err| err.to_string())?,
+                SeccompCondition::new(
+                    0,
+                    SeccompCmpArgLen::Dword,
+                    SeccompCmpOp::Ne,
+                    libc::AF_INET6 as u64,
+                )
+                .map_err(|err| err.to_string())?,
+            ])
+            .map_err(|err| err.to_string())?;
+            let deny_unix_socketpair = SeccompRule::new(vec![
+                SeccompCondition::new(
+                    0,
+                    SeccompCmpArgLen::Dword,
+                    SeccompCmpOp::Eq,
+                    libc::AF_UNIX as u64,
+                )
+                .map_err(|err| err.to_string())?,
+            ])
+            .map_err(|err| err.to_string())?;
+
+            rules.insert(libc::SYS_socket, vec![deny_non_ip_socket]);
+            rules.insert(libc::SYS_socketpair, vec![deny_unix_socketpair]);
+        }
+    }
 
     let arch = if cfg!(target_arch = "x86_64") {
         TargetArch::x86_64
@@ -2407,6 +2551,26 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[test]
+    fn linux_sandbox_command_args_include_proxy_flag_when_requested() {
+        let policy = SandboxPolicy::WorkspaceWrite {
+            writable_roots: Vec::new(),
+            network_access: true,
+            exclude_tmpdir_env_var: false,
+            exclude_slash_tmp: false,
+        };
+        let args = create_linux_sandbox_command_args(
+            vec!["/bin/true".to_string()],
+            &policy,
+            Path::new("/tmp"),
+            true,
+            true,
+            false,
+        );
+        assert!(args.contains(&"--allow-network-for-proxy".to_string()));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
     fn sandbox_state_defaults_with_environment_respects_linux_bwrap_env() {
         let previous_env = std::env::var_os(LINUX_BWRAP_ENABLED_ENV);
         unsafe {
@@ -2425,5 +2589,18 @@ mod tests {
             defaults.use_linux_sandbox_bwrap,
             "Linux bwrap env should be applied at defaults layer"
         );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_network_seccomp_mode_proxy_routed_for_managed_network() {
+        let policy = SandboxPolicy::WorkspaceWrite {
+            writable_roots: Vec::new(),
+            network_access: true,
+            exclude_tmpdir_env_var: false,
+            exclude_slash_tmp: false,
+        };
+        let mode = linux_network_seccomp_mode(&policy, true, true);
+        assert_eq!(mode, Some(LinuxNetworkSeccompMode::ProxyRouted));
     }
 }

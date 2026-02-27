@@ -6,6 +6,8 @@ mod html_to_markdown;
 mod input_protocol;
 mod install;
 mod ipc;
+#[cfg(target_os = "linux")]
+mod linux_proxy_routing;
 mod output_capture;
 mod output_stream;
 mod pager;
