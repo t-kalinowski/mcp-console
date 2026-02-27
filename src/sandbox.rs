@@ -80,6 +80,7 @@ pub struct ManagedNetworkPolicy {
     pub allowed_domains: Vec<String>,
     pub denied_domains: Vec<String>,
     pub allow_local_binding: bool,
+    pub allow_local_binding_overridden: bool,
 }
 
 impl ManagedNetworkPolicy {
@@ -363,6 +364,7 @@ pub struct SandboxState {
     pub sandbox_cwd: PathBuf,
     pub codex_linux_sandbox_exe: Option<PathBuf>,
     pub use_linux_sandbox_bwrap: bool,
+    pub use_linux_sandbox_bwrap_overridden: bool,
     pub managed_network_policy: ManagedNetworkPolicy,
     pub session_temp_dir: PathBuf,
 }
@@ -446,6 +448,7 @@ impl SandboxState {
         }
         if let Some(use_bwrap) = update.use_linux_sandbox_bwrap {
             next.use_linux_sandbox_bwrap = use_bwrap;
+            next.use_linux_sandbox_bwrap_overridden = true;
         }
         let changed = next != *self;
         *self = next;
@@ -468,6 +471,7 @@ impl Default for SandboxState {
             sandbox_cwd,
             codex_linux_sandbox_exe,
             use_linux_sandbox_bwrap: false,
+            use_linux_sandbox_bwrap_overridden: false,
             managed_network_policy: ManagedNetworkPolicy::default(),
             session_temp_dir,
         }
@@ -496,8 +500,17 @@ pub fn prepare_worker_command(
             "1".to_string(),
         );
     }
-    if state.managed_network_policy.allow_local_binding {
-        env.insert(ALLOW_LOCAL_BINDING_ENV_KEY.to_string(), "1".to_string());
+    if state.managed_network_policy.allow_local_binding_overridden
+        || state.managed_network_policy.allow_local_binding
+    {
+        env.insert(
+            ALLOW_LOCAL_BINDING_ENV_KEY.to_string(),
+            if state.managed_network_policy.allow_local_binding {
+                "1".to_string()
+            } else {
+                "0".to_string()
+            },
+        );
     }
     if state.managed_network_policy.allowed_domains.is_empty() {
         env.remove(MANAGED_ALLOWED_DOMAINS_ENV_KEY);
@@ -624,11 +637,16 @@ pub fn prepare_worker_command(
         }
         let policy = sanitize_linux_sandbox_policy(&policy);
         let command = build_command_vec(program, &args);
+        let use_bwrap_sandbox = if state.use_linux_sandbox_bwrap_overridden {
+            state.use_linux_sandbox_bwrap
+        } else {
+            state.use_linux_sandbox_bwrap || env_var_truthy(LINUX_BWRAP_ENABLED_ENV)
+        };
         let sandbox_args = create_linux_sandbox_command_args(
             command,
             &policy,
             &policy_cwd,
-            state.use_linux_sandbox_bwrap || env_var_truthy(LINUX_BWRAP_ENABLED_ENV),
+            use_bwrap_sandbox,
             env_var_truthy(LINUX_BWRAP_NO_PROC_ENV),
         );
         let sandbox_program = state
@@ -2299,6 +2317,63 @@ mod tests {
         assert!(
             !prepared.env.contains_key(ALLOW_LOCAL_BINDING_ENV_KEY),
             "ALLOW_LOCAL_BINDING should be omitted when not explicitly enabled"
+        );
+    }
+
+    #[test]
+    fn prepare_worker_command_sets_allow_local_binding_zero_when_explicitly_disabled() {
+        let mut state = SandboxState::default();
+        state.sandbox_policy = SandboxPolicy::DangerFullAccess;
+        state.managed_network_policy.allow_local_binding = false;
+        state.managed_network_policy.allow_local_binding_overridden = true;
+
+        let prepared =
+            prepare_worker_command(Path::new("/bin/echo"), vec!["ok".to_string()], &state)
+                .expect("prepare_worker_command should succeed");
+        assert_eq!(
+            prepared
+                .env
+                .get(ALLOW_LOCAL_BINDING_ENV_KEY)
+                .map(String::as_str),
+            Some("0"),
+            "explicit false override should disable local binding even when inherited env enables it"
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn prepare_worker_command_bwrap_env_does_not_override_explicit_false() {
+        let previous = std::env::var_os(LINUX_BWRAP_ENABLED_ENV);
+        unsafe {
+            std::env::set_var(LINUX_BWRAP_ENABLED_ENV, "1");
+        }
+
+        let mut state = SandboxState::default();
+        state.sandbox_policy = SandboxPolicy::WorkspaceWrite {
+            writable_roots: Vec::new(),
+            network_access: false,
+            exclude_tmpdir_env_var: false,
+            exclude_slash_tmp: false,
+        };
+        state.use_linux_sandbox_bwrap = false;
+        state.use_linux_sandbox_bwrap_overridden = true;
+
+        let prepared =
+            prepare_worker_command(Path::new("/bin/echo"), vec!["ok".to_string()], &state)
+                .expect("prepare_worker_command should succeed");
+
+        match previous {
+            Some(value) => unsafe {
+                std::env::set_var(LINUX_BWRAP_ENABLED_ENV, value);
+            },
+            None => unsafe {
+                std::env::remove_var(LINUX_BWRAP_ENABLED_ENV);
+            },
+        }
+
+        assert!(
+            !prepared.args.contains(&"--use-bwrap-sandbox".to_string()),
+            "explicit false override should disable bwrap even when env enables it"
         );
     }
 }

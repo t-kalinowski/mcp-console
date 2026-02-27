@@ -222,12 +222,14 @@ fn apply_mode(
             state.sandbox_cwd = inherited.sandbox_cwd.clone();
             state.codex_linux_sandbox_exe = inherited.codex_linux_sandbox_exe.clone();
             state.use_linux_sandbox_bwrap = inherited.use_linux_sandbox_bwrap;
+            state.use_linux_sandbox_bwrap_overridden = inherited.use_linux_sandbox_bwrap_overridden;
         }
         SandboxModeArg::ReadOnly => {
             state.sandbox_policy = SandboxPolicy::ReadOnly;
             state.sandbox_cwd = defaults.sandbox_cwd.clone();
             state.codex_linux_sandbox_exe = defaults.codex_linux_sandbox_exe.clone();
             state.use_linux_sandbox_bwrap = defaults.use_linux_sandbox_bwrap;
+            state.use_linux_sandbox_bwrap_overridden = defaults.use_linux_sandbox_bwrap_overridden;
         }
         SandboxModeArg::WorkspaceWrite => {
             state.sandbox_policy = SandboxPolicy::WorkspaceWrite {
@@ -239,12 +241,14 @@ fn apply_mode(
             state.sandbox_cwd = defaults.sandbox_cwd.clone();
             state.codex_linux_sandbox_exe = defaults.codex_linux_sandbox_exe.clone();
             state.use_linux_sandbox_bwrap = defaults.use_linux_sandbox_bwrap;
+            state.use_linux_sandbox_bwrap_overridden = defaults.use_linux_sandbox_bwrap_overridden;
         }
         SandboxModeArg::DangerFullAccess => {
             state.sandbox_policy = SandboxPolicy::DangerFullAccess;
             state.sandbox_cwd = defaults.sandbox_cwd.clone();
             state.codex_linux_sandbox_exe = defaults.codex_linux_sandbox_exe.clone();
             state.use_linux_sandbox_bwrap = defaults.use_linux_sandbox_bwrap;
+            state.use_linux_sandbox_bwrap_overridden = defaults.use_linux_sandbox_bwrap_overridden;
         }
     }
     Ok(())
@@ -323,10 +327,12 @@ fn apply_config_op(
         }
         SandboxConfigOperation::SetAllowLocalBinding(value) => {
             state.managed_network_policy.allow_local_binding = *value;
+            state.managed_network_policy.allow_local_binding_overridden = true;
             Ok(())
         }
         SandboxConfigOperation::SetUseLinuxSandboxBwrap(value) => {
             state.use_linux_sandbox_bwrap = *value;
+            state.use_linux_sandbox_bwrap_overridden = true;
             Ok(())
         }
     }
