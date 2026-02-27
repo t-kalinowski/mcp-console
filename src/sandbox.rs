@@ -496,14 +496,9 @@ pub fn prepare_worker_command(
             "1".to_string(),
         );
     }
-    env.insert(
-        ALLOW_LOCAL_BINDING_ENV_KEY.to_string(),
-        if state.managed_network_policy.allow_local_binding {
-            "1".to_string()
-        } else {
-            "0".to_string()
-        },
-    );
+    if state.managed_network_policy.allow_local_binding {
+        env.insert(ALLOW_LOCAL_BINDING_ENV_KEY.to_string(), "1".to_string());
+    }
     if state.managed_network_policy.allowed_domains.is_empty() {
         env.remove(MANAGED_ALLOWED_DOMAINS_ENV_KEY);
     } else {
@@ -2171,6 +2166,7 @@ mod tests {
     use super::*;
     #[cfg(target_os = "macos")]
     use std::collections::HashMap;
+    use std::path::Path;
     use std::path::PathBuf;
 
     #[test]
@@ -2289,5 +2285,20 @@ mod tests {
             "bwrap: Can't mount proc on /newroot/proc: Invalid argument"
         ));
         assert!(!is_proc_mount_failure("bwrap: unrelated failure"));
+    }
+
+    #[test]
+    fn prepare_worker_command_does_not_override_allow_local_binding_when_disabled() {
+        let mut state = SandboxState::default();
+        state.sandbox_policy = SandboxPolicy::DangerFullAccess;
+        state.managed_network_policy.allow_local_binding = false;
+
+        let prepared =
+            prepare_worker_command(Path::new("/bin/echo"), vec!["ok".to_string()], &state)
+                .expect("prepare_worker_command should succeed");
+        assert!(
+            !prepared.env.contains_key(ALLOW_LOCAL_BINDING_ENV_KEY),
+            "ALLOW_LOCAL_BINDING should be omitted when not explicitly enabled"
+        );
     }
 }
