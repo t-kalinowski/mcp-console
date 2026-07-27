@@ -40,7 +40,7 @@ mcp-console watch [SESSION]
 mcp-console send [SESSION] (--r CODE | --python CODE | --sql CODE | --stdin TEXT)
 mcp-console transcript [SESSION]
 mcp-console api
-mcp-console version
+mcp-console --version
 ```
 
 Internal implementation mode:
