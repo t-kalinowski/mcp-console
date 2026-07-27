@@ -4,6 +4,9 @@ MCP Console is a persistent, sandboxed computational workbench for AI agents.
 A console session hosts R, Python, and SQL in one process: R is the host runtime, Python is embedded through reticulate, and SQL is backed by a persistent DuckDB connection.
 The agent can load data once, move among the three front ends, inspect and transform live state, and continue across tool calls.
 
+Supporting Python-only and Python-with-SQL sessions is a future direction.
+The R-hosted architecture and the rest of this design remain the current direction.
+
 The product is a **console**, not a shell wrapper, a conventional line-oriented REPL, or a notebook kernel.
 Normal work is submitted as complete R, Python, or SQL cells.
 Real line-oriented input appears only when the running program requests it, including `readline()`, `input()`, `browser()`, and debuggers.
