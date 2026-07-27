@@ -1,7 +1,7 @@
 # MCP Console Interface
 
-**Status:** Draft v0.3  
-**Date:** 2026-07-26  
+**Status:** Draft v0.3 \
+**Date:** 2026-07-26 \
 **Scope:** Agent-facing MCP tools and observable behavior
 
 ## 1. Interface summary
@@ -13,7 +13,8 @@ console
 console_session
 ```
 
-`console` handles the frequent path: evaluate one R, Python, or SQL cell; supply interactive stdin; or wait for a running evaluation. `console_session` handles infrequent environment preparation and lifecycle operations.
+`console` handles the frequent path: evaluate one R, Python, or SQL cell; supply interactive stdin; or wait for a running evaluation.
+`console_session` handles infrequent environment preparation and lifecycle operations.
 
 The interface is optimized for frequent use and global enablement:
 
@@ -79,14 +80,16 @@ The interface is optimized for frequent use and global enablement:
 }
 ```
 
-The registered description deliberately communicates breadth, persistence, interoperability, help and debugging, the cell/stdin/poll distinction, and bounded-output behavior. It omits implementation details such as Ark, Jupyter, reticulate, DBI, worker IPC, stack frames, and the internal event journal.
+The registered description deliberately communicates breadth, persistence, interoperability, help and debugging, the cell/stdin/poll distinction, and bounded-output behavior.
+It omits implementation details such as Ark, Jupyter, reticulate, DBI, worker IPC, stack frames, and the internal event journal.
 
-The schema intentionally avoids a large `oneOf`. The server performs semantic mode validation and returns a short tool error for invalid combinations.
+The schema intentionally avoids a large `oneOf`.
+The server performs semantic mode validation and returns a short tool error for invalid combinations.
 
 ### 2.2 Modes
 
 | Present mode fields | Operation |
-|---|---|
+| --- | --- |
 | exactly one of `r`, `python`, `sql` | Evaluate one complete cell |
 | `stdin` only | Append exact text to the active evaluation's stdin stream |
 | none of `r`, `python`, `sql`, `stdin` | Wait for or poll the session |
@@ -107,15 +110,15 @@ Additional rules:
 ### 2.3 Common calls
 
 ```json
-{"python":"import json\nlogs = json.load(open('logs.json'))"}
+{ "python": "import json\nlogs = json.load(open('logs.json'))" }
 ```
 
 ```json
-{"r":"df <- tibble::as_tibble(py$logs)"}
+{ "r": "df <- tibble::as_tibble(py$logs)" }
 ```
 
 ```json
-{"sql":"select level, count(*) as n from df group by level order by n desc"}
+{ "sql": "select level, count(*) as n from df group by level order by n desc" }
 ```
 
 ```json
@@ -125,15 +128,15 @@ Additional rules:
 A non-default session is explicit only when needed:
 
 ```json
-{"python":"fit_model()","session":"model-fit"}
+{ "python": "fit_model()", "session": "model-fit" }
 ```
 
 A label is optional editorial metadata for the generated transcript:
 
 ```json
 {
-  "sql":"select level, count(*) as n from df group by level",
-  "label":"Count records by level"
+  "sql": "select level, count(*) as n from df group by level",
+  "label": "Count records by level"
 }
 ```
 
@@ -152,24 +155,33 @@ An `r`, `python`, or `sql` value is one complete top-level submission.
 - Python executes statements in persistent `__main__` state and displays the final expression through Python's display hook.
 - SQL returns compact statement summaries or a bounded table preview.
 
-The public abstraction is a cell-oriented console, not a notebook document. Submissions are chronological execution messages and are not editable cells owned by the tool.
+The public abstraction is a cell-oriented console, not a notebook document.
+Submissions are chronological execution messages and are not editable cells owned by the tool.
 
 ### 3.1 Execution identity and call stacks
 
-Submitted source remains the source identity for diagnostics, tracebacks, and transcripts. Internal dispatch code must not replace it with a large generated wrapper expression.
+Submitted source remains the source identity for diagnostics, tracebacks, and transcripts.
+Internal dispatch code must not replace it with a large generated wrapper expression.
 
-R cells are parsed and evaluated at a native top-level boundary. A user call such as:
+R cells are parsed and evaluated at a native top-level boundary.
+A user call such as:
 
 ```r
 f <- function() sys.calls()
 f()
 ```
 
-must not contain an MCP Console R closure merely because the cell arrived through MCP. Native top-level error and interrupt contexts may exist internally, but the visible R call stack should begin with user calls.
+must not contain an MCP Console R closure merely because the cell arrived through MCP.
+Native top-level error and interrupt contexts may exist internally, but the visible R call stack should begin with user calls.
 
-Python cells use a synthetic filename such as `<mcp-console:python:e0017>` and preserve Python-native traceback locations. The initial implementation may cross a minimal reticulate/R bridge. If Python calls back into R, that real bridge may appear in R introspection; the server does not falsify it.
+Python cells use a synthetic filename such as `<mcp-console:python:e0017>` and preserve Python-native traceback locations.
+The initial implementation may cross a minimal reticulate/R bridge.
+If Python calls back into R, that real bridge may appear in R introspection; the server does not falsify it.
 
-SQL cells use a synthetic evaluation identity and DuckDB diagnostics. The initial R/DBI implementation may place a small console SQL bridge and DBI/backend calls on the R stack while SQL is active. This is observable only when execution re-enters R or is inspected during that call. Source is stored out of band and bridge calls use a short evaluation ID rather than embedding the complete SQL string.
+SQL cells use a synthetic evaluation identity and DuckDB diagnostics.
+The initial R/DBI implementation may place a small console SQL bridge and DBI/backend calls on the R stack while SQL is active.
+This is observable only when execution re-enters R or is inspected during that call.
+Source is stored out of band and bridge calls use a short evaluation ID rather than embedding the complete SQL string.
 
 ## 4. Interactive input and debuggers
 
@@ -185,20 +197,26 @@ Browse[2]>
 The next call appends exact text to the active input stream:
 
 ```json
-{"stdin":"where\n"}
+{ "stdin": "where\n" }
 ```
 
 A call may provide several lines when the interaction permits batching:
 
 ```json
-{"stdin":"n\nn\nc\n"}
+{ "stdin": "n\nn\nc\n" }
 ```
 
-Newlines are significant and the server never adds one. Send `"\n"` to submit a blank line. Partial lines are permitted. Any unconsumed buffered text is discarded when the evaluation ends so it cannot leak into a later cell.
+Newlines are significant and the server never adds one.
+Send `"\n"` to submit a blank line.
+Partial lines are permitted.
+Any unconsumed buffered text is discarded when the evaluation ends so it cannot leak into a later cell.
 
-`stdin` is not a new code cell. The active runtime decides whether the line is a debugger command, an expression accepted by the debugger, or ordinary program input. The original evaluation identity remains active until it completes, errors, is interrupted, or the worker stops.
+`stdin` is not a new code cell.
+The active runtime decides whether the line is a debugger command, an expression accepted by the debugger, or ordinary program input.
+The original evaluation identity remains active until it completes, errors, is interrupted, or the worker stops.
 
-The implementation must distinguish cell source from interactive input structurally. It must not preload a cell as generic console lines that a nested `readline()` or `input()` could accidentally consume.
+The implementation must distinguish cell source from interactive input structurally.
+It must not preload a cell as generic console lines that a nested `readline()` or `input()` could accidentally consume.
 
 ## 5. Waiting and polling
 
@@ -209,7 +227,8 @@ The initiating code call waits until one of these occurs:
 - the worker stops;
 - `wait_ms` expires.
 
-`wait_ms` limits the MCP wait only. It is not an execution timeout and does not interrupt the runtime.
+`wait_ms` limits the MCP wait only.
+It is not an execution timeout and does not interrupt the runtime.
 
 If the wait expires, the result contains any new bounded output and ends with:
 
@@ -223,7 +242,8 @@ A call with no mode field waits for the selected session:
 {}
 ```
 
-It returns when new output appears, input is requested, the evaluation completes, the worker stops, or its own `wait_ms` expires. `wait_ms: 0` is a nonblocking drain.
+It returns when new output appears, input is requested, the evaluation completes, the worker stops, or its own `wait_ms` expires.
+`wait_ms: 0` is a nonblocking drain.
 
 An idle session returns:
 
@@ -241,7 +261,8 @@ MCP request cancellation is distinct from wait expiry:
 
 ## 6. Session environments and requirements
 
-R and Python requirements configure the logical session rather than an individual evaluation. They are managed through `console_session`, are additive in v1, and survive runtime restarts.
+R and Python requirements configure the logical session rather than an individual evaluation.
+They are managed through `console_session`, are additive in v1, and survive runtime restarts.
 
 - Python entries are PEP 508 requirement strings.
 - R entries use the resolver grammar configured by the implementation.
@@ -249,10 +270,13 @@ R and Python requirements configure the logical session rather than an individua
 - Repeating an already-satisfied requirement is idempotent.
 - `prepare` attempts to add requirements without replacing the active runtime.
 - If additions cannot be activated safely in the current runtime, `prepare` leaves the session unchanged and reports that a restart is required.
-- `restart` may include requirements; they are resolved before the current runtime is discarded. Resolution failure leaves the current runtime intact.
-- Removing packages, downgrading versions, replacing the complete manifest, changing interpreter versions, or changing historical cutoffs is outside the additive v1 interface. Close the session and create a new one when necessary.
+- `restart` may include requirements; they are resolved before the current runtime is discarded.
+  Resolution failure leaves the current runtime intact.
+- Removing packages, downgrading versions, replacing the complete manifest, changing interpreter versions, or changing historical cutoffs is outside the additive v1 interface.
+  Close the session and create a new one when necessary.
 
-The resolver may run outside the arbitrary-code worker and populate immutable caches. That implementation detail must preserve atomic public behavior.
+The resolver may run outside the arbitrary-code worker and populate immutable caches.
+That implementation detail must preserve atomic public behavior.
 
 ## 7. Tool: `console_session`
 
@@ -304,7 +328,9 @@ The resolver may run outside the arbitrary-code worker and populate immutable ca
 }
 ```
 
-`requirements` is valid only for `prepare` and `restart`. `prepare` requires at least one nonempty requirements array. `list`, `status`, `interrupt`, and `close` reject it.
+`requirements` is valid only for `prepare` and `restart`.
+`prepare` requires at least one nonempty requirements array.
+`list`, `status`, `interrupt`, and `close` reject it.
 
 ### 7.2 Actions
 
@@ -323,25 +349,37 @@ requirements: R[dplyr, arrow] Python[polars>=1]
 transcript: .mcp-console/sessions/default/transcript.qmd
 ```
 
-`prepare` resolves and adds requirements to the logical session. It preserves the current runtime and in-memory state. If safe live activation is impossible, it reports that `restart` is required and leaves both the manifest and runtime unchanged.
+`prepare` resolves and adds requirements to the logical session.
+It preserves the current runtime and in-memory state.
+If safe live activation is impossible, it reports that `restart` is required and leaves both the manifest and runtime unchanged.
 
 ```json
-{"action":"prepare","requirements":{"python":["polars>=1"]}}
+{ "action": "prepare", "requirements": { "python": ["polars>=1"] } }
 ```
 
-`interrupt` requests a cooperative interrupt through a control path that is not queued behind the evaluation. It preserves the worker and runtime state when recovery succeeds. It never silently escalates to restart.
+`interrupt` requests a cooperative interrupt through a control path that is not queued behind the evaluation.
+It preserves the worker and runtime state when recovery succeeds.
+It never silently escalates to restart.
 
-`restart` first resolves any supplied additions, then replaces the runtime and increments the generation. Requirements, workspace files, transcript, and logical session configuration remain. All in-memory R objects, Python objects, imports, loaded packages, DuckDB catalog state, debugger state, and active process state are lost. If requirement resolution fails, the old runtime remains intact.
+`restart` first resolves any supplied additions, then replaces the runtime and increments the generation.
+Requirements, workspace files, transcript, and logical session configuration remain.
+All in-memory R objects, Python objects, imports, loaded packages, DuckDB catalog state, debugger state, and active process state are lost.
+If requirement resolution fails, the old runtime remains intact.
 
 ```json
-{"action":"restart"}
+{ "action": "restart" }
 ```
 
 ```json
-{"action":"restart","requirements":{"r":["arrow"],"python":["pyarrow"]}}
+{
+  "action": "restart",
+  "requirements": { "r": ["arrow"], "python": ["pyarrow"] }
+}
 ```
 
-`close` terminates the worker and ends the logical session configuration. A later cell using the same name creates a new logical session without inheriting the old requirement manifest. Retained workspace files and transcripts follow explicit retention policy; closing a session must not silently delete unrelated user files.
+`close` terminates the worker and ends the logical session configuration.
+A later cell using the same name creates a new logical session without inheriting the old requirement manifest.
+Retained workspace files and transcripts follow explicit retention policy; closing a session must not silently delete unrelated user files.
 
 ## 8. Session state model
 
@@ -372,7 +410,8 @@ stopped
   └─ close ─> absent
 ```
 
-Visible prompt strings are output. They are never used to infer these states.
+Visible prompt strings are output.
+They are never used to infer these states.
 
 ## 9. Text result contract
 
@@ -416,7 +455,8 @@ Return the prompt and preceding bounded output followed by:
 
 ### 9.5 Language outcomes and tool errors
 
-R errors, Python exceptions, and SQL errors are normal evaluation outcomes. The tool successfully delivered the cell and collected the runtime response, so they normally use `isError: false`.
+R errors, Python exceptions, and SQL errors are normal evaluation outcomes.
+The tool successfully delivered the cell and collected the runtime response, so they normally use `isError: false`.
 
 Use `isError: true` for failures to use or operate the tool, including:
 
@@ -430,7 +470,8 @@ Use `isError: true` for failures to use or operate the tool, including:
 
 ## 10. Oversized output
 
-A single global response budget applies after all text and markers are assembled. The implementation should distinguish three output classes.
+A single global response budget applies after all text and markers are assembled.
+The implementation should distinguish three output classes.
 
 ### 10.1 Explicit stdout and stderr
 
@@ -442,7 +483,8 @@ All explicit stream output is appended to a per-evaluation file, for example:
 
 Each MCP reply considers only bytes produced since the previous sealed reply for that evaluation.
 
-If the new delta fits, return it. If it exceeds the budget:
+If the new delta fits, return it.
+If it exceeds the budget:
 
 1. return a bounded useful excerpt, normally preserving both the beginning and the most recent tail;
 2. state how much was omitted;
@@ -464,9 +506,12 @@ Loading partition 99...
 [running]
 ```
 
-A later poll reports only output created after that reply. It does not force the agent to page through an old truncated backlog. The complete prior output remains available through ordinary host file-reading and search tools.
+A later poll reports only output created after that reply.
+It does not force the agent to page through an old truncated backlog.
+The complete prior output remains available through ordinary host file-reading and search tools.
 
-When an evaluation completes, unread omitted bytes are not injected into later unrelated evaluations. The file path is the continuation mechanism for clients with workspace file tools; v1 does not add a second output-reading protocol.
+When an evaluation completes, unread omitted bytes are not injected into later unrelated evaluations.
+The file path is the continuation mechanism for clients with workspace file tools; v1 does not add a second output-reading protocol.
 
 ### 10.2 Large returned values
 
@@ -490,11 +535,13 @@ Known large values should be summarized before full textual materialization:
 
 The underlying value remains in runtime state for another expression, query, summary, sample, or explicit export.
 
-For an unknown class with an arbitrary user-defined print method, capture its output like any other stream and apply the spool-and-truncate policy. Do not claim a structural preview that the runtime cannot safely produce.
+For an unknown class with an arbitrary user-defined print method, capture its output like any other stream and apply the spool-and-truncate policy.
+Do not claim a structural preview that the runtime cannot safely produce.
 
 ### 10.3 Plots and binary artifacts
 
-Plots and binary outputs are written to the session artifact directory. The text response reports a relative path:
+Plots and binary outputs are written to the session artifact directory.
+The text response reports a relative path:
 
 ```text
 Plot saved: .mcp-console/sessions/default/artifacts/e0021-plot-1.png
@@ -504,7 +551,8 @@ Viewing the file is delegated to the host agent's ordinary file or image capabil
 
 ### 10.4 Initial default budgets
 
-Exact values are configurable. Suggested starting defaults:
+Exact values are configurable.
+Suggested starting defaults:
 
 ```text
 inline text per reply:  12 KiB
@@ -534,13 +582,17 @@ The transcript is generated at stable boundaries and contains:
 - input prompts and supplied interactive lines when safe to record;
 - restart, stop, and generation boundaries.
 
-The document is marked non-executing. It is a chronological execution record, not a promise of reproducibility and not a polished notebook. Agents create refined `.qmd`, `.R`, `.py`, or `.ipynb` files separately.
+The document is marked non-executing.
+It is a chronological execution record, not a promise of reproducibility and not a polished notebook.
+Agents create refined `.qmd`, `.R`, `.py`, or `.ipynb` files separately.
 
-A granular event journal may back transcript recovery. It is internal implementation state, is not advertised as the normal agent artifact, and need not share the QMD format's compatibility guarantees.
+A granular event journal may back transcript recovery.
+It is internal implementation state, is not advertised as the normal agent artifact, and need not share the QMD format's compatibility guarantees.
 
 ## 12. SQL behavior
 
-The SQL frontend uses one persistent DuckDB connection per worker generation. The initial implementation uses the DuckDB R package and DBI; that bridge is not exposed as another agent-facing language.
+The SQL frontend uses one persistent DuckDB connection per worker generation.
+The initial implementation uses the DuckDB R package and DBI; that bridge is not exposed as another agent-facing language.
 
 - DuckDB catalog tables and views persist until restart or worker loss.
 - Live R data frames may be visible through DuckDB's R environment scanning.
@@ -548,15 +600,17 @@ The SQL frontend uses one persistent DuckDB connection per worker generation. Th
 - Runtime helpers can explicitly register stable R, Python, or Arrow-backed relations under SQL names.
 - Python objects may initially cross reticulate/R for conversion or Arrow registration.
 - Result-producing statements fetch only enough data to build the bounded preview; they are not automatically collected or spooled in full as text.
-- DuckDB CLI dot commands are not SQL and are not supported by the `sql` field. Use SQL-native commands such as `SHOW TABLES`, `DESCRIBE`, and `SUMMARIZE`.
+- DuckDB CLI dot commands are not SQL and are not supported by the `sql` field.
+  Use SQL-native commands such as `SHOW TABLES`, `DESCRIBE`, and `SUMMARIZE`.
 - The DuckDB CLI is a behavioral reference for useful previews and discovery, not an embedded subprocess.
 
-The interface does not promise that every object transfer is zero-copy. Conversions and registration lifetimes must be explicit when they matter.
+The interface does not promise that every object transfer is zero-copy.
+Conversions and registration lifetimes must be explicit when they matter.
 
 ## 13. Complete interaction example
 
 ```json
-{"python":"import json\nlogs = json.load(open('logs.json'))"}
+{ "python": "import json\nlogs = json.load(open('logs.json'))" }
 ```
 
 ```text
@@ -564,7 +618,7 @@ The interface does not promise that every object transfer is zero-copy. Conversi
 ```
 
 ```json
-{"action":"prepare","requirements":{"r":["tibble","dplyr"]}}
+{ "action": "prepare", "requirements": { "r": ["tibble", "dplyr"] } }
 ```
 
 ```text
@@ -573,8 +627,8 @@ Prepared: tibble, dplyr
 
 ```json
 {
-  "r":"df <- tibble::as_tibble(py$logs)\ndplyr::glimpse(df)",
-  "label":"Convert logs to a tibble"
+  "r": "df <- tibble::as_tibble(py$logs)\ndplyr::glimpse(df)",
+  "label": "Convert logs to a tibble"
 }
 ```
 
@@ -588,8 +642,8 @@ $ level     <chr> ...
 
 ```json
 {
-  "sql":"select level, count(*) as n from df group by level order by n desc",
-  "label":"Count records by level"
+  "sql": "select level, count(*) as n from df group by level order by n desc",
+  "label": "Count records by level"
 }
 ```
 
@@ -601,7 +655,7 @@ ERROR   560
 ```
 
 ```json
-{"r":"browser()"}
+{ "r": "browser()" }
 ```
 
 ```text
@@ -611,7 +665,7 @@ Browse[1]>
 ```
 
 ```json
-{"stdin":"where\n"}
+{ "stdin": "where\n" }
 ```
 
 ```text
@@ -621,7 +675,7 @@ Browse[1]>
 ```
 
 ```json
-{"stdin":"c\n"}
+{ "stdin": "c\n" }
 ```
 
 ```text

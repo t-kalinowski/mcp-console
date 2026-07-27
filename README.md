@@ -1,47 +1,54 @@
 # MCP Console
 
-MCP Console is a persistent, sandboxed computational workbench for AI agents. One console session hosts R, Python, and SQL in a single process, allowing an agent to load data once and use whichever language is best for each step.
+MCP Console is a persistent, sandboxed computational workbench for AI agents.
+One console session hosts R, Python, and SQL in a single process, allowing an agent to load data once and use whichever language is best for each step.
 
-> **Status:** design-stage repository. The interface and architecture are drafts intended to scaffold implementation.
+> **Status:** design-stage repository.
+> The interface and architecture are drafts intended to scaffold implementation.
 
 ## Proposed experience
 
 The common interaction is deliberately small:
 
 ```json
-{"python":"import json\nlogs = json.load(open('logs.json'))"}
+{ "python": "import json\nlogs = json.load(open('logs.json'))" }
 ```
 
 ```json
-{"r":"df <- tibble::as_tibble(py$logs)"}
+{ "r": "df <- tibble::as_tibble(py$logs)" }
 ```
 
 ```json
-{"sql":"select level, count(*) as n from df group by level"}
+{ "sql": "select level, count(*) as n from df group by level" }
 ```
 
 ```json
 {}
 ```
 
-The first three calls evaluate complete cells in a persistent shared session. The empty call waits for new output or completion of a long-running evaluation.
+The first three calls evaluate complete cells in a persistent shared session.
+The empty call waits for new output or completion of a long-running evaluation.
 
 When running code requests real console input, the same tool supplies `stdin`:
 
 ```json
-{"stdin":"where\n"}
+{ "stdin": "where\n" }
 ```
 
-The `stdin` value is exact stream text: it may contain one or more lines, and the server does not add a newline. This supports R `readline()` and `browser()`, Python `input()` and debuggers, and similar interactive modes without making normal code submission line-oriented.
+The `stdin` value is exact stream text: it may contain one or more lines, and the server does not add a newline.
+This supports R `readline()` and `browser()`, Python `input()` and debuggers, and similar interactive modes without making normal code submission line-oriented.
 
 Package requirements are configured less frequently at the session level and persist across runtime restarts:
 
 ```json
-{"action":"prepare","requirements":{"r":["dplyr"],"python":["polars>=1"]}}
+{
+  "action": "prepare",
+  "requirements": { "r": ["dplyr"], "python": ["polars>=1"] }
+}
 ```
 
 ```json
-{"action":"restart"}
+{ "action": "restart" }
 ```
 
 `restart` replaces the R/Python/SQL runtime and loses in-memory state while retaining declared requirements, workspace files, and the transcript.
@@ -59,15 +66,22 @@ Rust MCP supervisor
               └── persistent DuckDB connection
 ```
 
-R is the host runtime. Python is embedded through reticulate. SQL is initially executed through the DuckDB R package and DBI, giving SQL direct access to live R data frames and persistent DuckDB catalog state.
+R is the host runtime.
+Python is embedded through reticulate.
+SQL is initially executed through the DuckDB R package and DBI, giving SQL direct access to live R data frames and persistent DuckDB catalog state.
 
-The worker uses a small private protocol specialized for cell evaluation, output, interactive input, and control. It does not run Ark as a kernel and does not use the Jupyter wire protocol. The implementation should reuse the lower-level R integration work in `harp`/`libr` and the current `mcp-repl` runtime where practical.
+The worker uses a small private protocol specialized for cell evaluation, output, interactive input, and control.
+It does not run Ark as a kernel and does not use the Jupyter wire protocol.
+The implementation should reuse the lower-level R integration work in `harp`/`libr` and the current `mcp-repl` runtime where practical.
 
 ## Output and durable context
 
-MCP results are text-only and strictly bounded. Large values receive structural previews, while complete explicitly printed output is retained in session files. Every session maintains a generated `transcript.qmd` containing submitted code, bounded output, errors, labels, and artifact paths.
+MCP results are text-only and strictly bounded.
+Large values receive structural previews, while complete explicitly printed output is retained in session files.
+Every session maintains a generated `transcript.qmd` containing submitted code, bounded output, errors, labels, and artifact paths.
 
-The Quarto transcript is a chronological execution record, not a polished notebook. An agent can use ordinary file tools to turn selected work into a refined `.qmd`, `.R`, `.py`, or `.ipynb` artifact.
+The Quarto transcript is a chronological execution record, not a polished notebook.
+An agent can use ordinary file tools to turn selected work into a refined `.qmd`, `.R`, `.py`, or `.ipynb` artifact.
 
 ## Documents
 

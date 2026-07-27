@@ -1,9 +1,11 @@
 # Registered MCP Tool Descriptions
 
-**Status:** Draft v0.1  
+**Status:** Draft v0.1 \
 **Date:** 2026-07-26
 
-This document contains the exact descriptions intended to be registered with the MCP server. Keep these synchronized with [`MCP_INTERFACE.md`](MCP_INTERFACE.md) and the implementation. These strings are part of the agent-facing interface and should change only when the added context materially improves tool selection or correct use.
+This document contains the exact descriptions intended to be registered with the MCP server.
+Keep these synchronized with [`MCP_INTERFACE.md`](MCP_INTERFACE.md) and the implementation.
+These strings are part of the agent-facing interface and should change only when the added context materially improves tool selection or correct use.
 
 ## `console`
 
@@ -39,4 +41,5 @@ Property descriptions:
 
 Descriptions should communicate facts that affect whether or how an agent calls the tools: breadth, persistence, interoperability, help and debugger support, cell/stdin/poll semantics, bounded outputs, environment persistence, and destructive lifecycle boundaries.
 
-Do not include internal facts that do not change agent behavior: Ark, Jupyter, `harp`, `libr`, reticulate, DBI, worker IPC, stack-frame implementation, the internal JSONL journal, or exact output limits. DuckDB is named because it defines the SQL dialect and discovery commands.
+Do not include internal facts that do not change agent behavior: Ark, Jupyter, `harp`, `libr`, reticulate, DBI, worker IPC, stack-frame implementation, the internal JSONL journal, or exact output limits.
+DuckDB is named because it defines the SQL dialect and discovery commands.
