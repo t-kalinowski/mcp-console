@@ -88,34 +88,24 @@ Create a focused source of truth only when a subsystem needs more detail:
 
 Update this map when ownership changes.
 
-- `src/main.rs`, `src/cli.rs`, `src/config.rs` — process modes, CLI, and
-  validated configuration.
-- `src/mcp/` — tool schemas, public validation, and bounded MCP
-  responses; no interpreter mechanics.
-- `src/session/` — names, generations, lazy creation, state transitions,
-  waiters, and lifecycle.
+- `src/main.rs`, `src/cli.rs`, `src/config.rs` — process modes, CLI, and validated configuration.
+- `src/mcp/` — tool schemas, public validation, and bounded MCP responses; no interpreter mechanics.
+- `src/session/` — names, generations, lazy creation, state transitions, waiters, and lifecycle.
   It rejects new code while a session is running or waiting for input.
-- `src/worker/` — worker launch, supervision, private protocol, and
-  control.
+- `src/worker/` — worker launch, supervision, private protocol, and control.
   Evaluation may block normal commands; interrupt and termination use an independent high-priority path.
-- `src/runtime/` — shared submission IDs, input requests, display
-  values, and outcomes.
+- `src/runtime/` — shared submission IDs, input requests, display values, and outcomes.
   - `r/` — R discovery, startup, callbacks, evaluation, conditions, visible values, graphics, and interrupt recovery.
     All direct R API calls stay on the owning thread; `harp` and `libr` details stay here.
   - `python/` — reticulate initialization, cell execution, exceptions, display, input/debugger bridge, and R/Python access.
   - `sql/` — persistent DuckDB/DBI connection, execution, bounded fetching, previews, R-environment scanning, and explicit registration.
-- `src/environment/` — additive manifests, resolution, immutable caches,
-  activation, and provenance.
-- `src/output/` — managed and raw streams, per-evaluation spools, reply
-  cursors, previews, and response budgets.
+- `src/environment/` — additive manifests, resolution, immutable caches, activation, and provenance.
+- `src/output/` — managed and raw streams, per-evaluation spools, reply cursors, previews, and response budgets.
 - `src/transcript/` — internal journal and generated Quarto projection.
   The QMD must be rebuildable and must not be edited in place.
-- `src/sandbox/` — worker filesystem, network, subprocess, resource, and
-  host-policy enforcement.
-- `tests/` — real-binary MCP integration tests organized by public
-  behavior.
-- `fixtures/` — deterministic data, fake workers, and normalized
-  expected output.
+- `src/sandbox/` — worker filesystem, network, subprocess, resource, and host-policy enforcement.
+- `tests/` — real-binary MCP integration tests organized by public behavior.
+- `fixtures/` — deterministic data, fake workers, and normalized expected output.
 - `scripts/` — local CI and session-inspection workflows.
 
 ## Change rules
