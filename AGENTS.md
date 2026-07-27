@@ -6,14 +6,20 @@ The documents under `design-sketches/` describe intended behavior, not implement
 ## Current state
 
 MCP Console is an initial Rust binary package.
-The only implemented command is:
+The implemented commands are:
 
 ```text
 mcp-console --version
+mcp-console sandbox [--] COMMAND [ARG]...
 ```
 
-It prints the package name and version.
-The MCP server, session model, language runtimes, sidecar API, viewer, sandbox, environment management, output retention, and transcript generation do not exist yet.
+The version command prints the package name and version.
+On macOS, the sandbox command launches a subprocess under `sandbox-exec` with host filesystem reads allowed, regular-file writes limited to a dedicated per-launch temporary directory, runtime device and IPC exceptions, and network access denied.
+This initial launcher waits only for the direct command.
+Background descendants are unsupported: they may outlive the launcher, which attempts to remove their dedicated temporary directory on a best-effort basis when it returns.
+Descendant supervision is intentionally deferred because it must account for process groups, session-detached children, signal forwarding, and PID reuse together.
+The sandbox command is unsupported on Linux and Windows.
+The MCP server, session model, language runtimes, sidecar API, viewer, environment management, output retention, and transcript generation do not exist yet.
 
 ## Product direction
 
@@ -32,11 +38,14 @@ See `design-sketches/README.md` for the product overview and `design-sketches/do
 
 - `Cargo.toml` — Rust package metadata.
 - `src/main.rs` — current binary entry point.
+- `src/sandbox.rs` — platform dispatch for the sandbox process launcher.
+- `src/sandbox/` — platform implementation and macOS Seatbelt policy.
 - `tests/cli.rs` — public binary acceptance tests.
 - `scripts/check` — local formatting, Clippy, and test checks.
 - `.github/workflows/ci.yaml` — formatting, Clippy, and test checks.
 - `design-sketches/` — tentative product and architecture documents.
 - `README.md` — current user-facing project status.
+- `LICENSE` — project license.
 
 Add modules only when implemented public behavior needs them.
 Begin as one Cargo package and split crates only when a real boundary emerges.
@@ -51,6 +60,8 @@ Begin as one Cargo package and split crates only when a real boundary emerges.
 - Add a public acceptance or regression test first and confirm that it fails before implementing behavior.
 - Test through public interfaces.
   Do not add tests for private helpers.
+- Format embedded R, Python, SQL, and shell test programs as multiline raw strings.
+  Use escape sequences such as `\n` only when the program needs that character as data, not to lay out its source.
 - Keep complete code cells separate from interactive `stdin`.
 - Keep the MCP adapter independent of interpreter implementation details.
 - Treat all runtime execution as shell-class capability and place safety at the worker-process boundary.
