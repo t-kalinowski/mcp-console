@@ -25,10 +25,10 @@ MCP Console is effectively shell-class capability. Safety is enforced around the
 
 - Product and binary name: `mcp-console`.
 - Frequent MCP tool: `console`.
-- Low-frequency lifecycle tool: `console_session`.
+- Low-frequency environment and lifecycle tool: `console_session`.
 - Language is selected by the present object key: `r`, `python`, or `sql`.
 - Top-level submissions are complete cells, not line-by-line parser input.
-- `stdin` is accepted only for an already-active input consumer.
+- `stdin` is accepted only for an already-active input consumer. It is exact stream text, may contain multiple lines, and receives no implicit newline.
 - A named session runs at most one top-level evaluation at a time.
 - Sessions are created lazily by the first code submission.
 - Independent or parallel work uses separately named sessions.
@@ -36,8 +36,8 @@ MCP Console is effectively shell-class capability. Safety is enforced around the
 - Oversized explicit output is retained in session files; each response contains only a bounded current excerpt.
 - Large values and SQL relations are previewed structurally before full textual materialization.
 - The agent-facing durable record is `transcript.qmd`; a granular JSONL journal is internal implementation state.
-- Requirements are additive and may be declared atomically with the code that first needs them.
-- Interrupt, reset, close, and worker crash are distinct observable events. Never silently replace a crashed worker.
+- Requirements are additive logical-session configuration managed by `console_session`. They survive runtime restarts and are not accepted on ordinary `console` calls.
+- Interrupt, restart, close, and worker crash are distinct observable events. `restart` loses in-memory R, Python, SQL, debugger, and process state while retaining requirements, workspace files, and transcript. Never silently replace a crashed worker.
 
 See [`VISION.md`](VISION.md) for the fuller rationale and [`docs/MCP_INTERFACE.md`](docs/MCP_INTERFACE.md) for normative public behavior.
 
@@ -76,6 +76,7 @@ The exact tree may evolve. Update this map whenever ownership moves.
 - `VISION.md` — product purpose, goals, non-goals, and success criteria.
 - `AGENTS.md` — durable agent context, settled decisions, repository map, and working rules.
 - `docs/MCP_INTERFACE.md` — normative agent-facing schema and observable behavior.
+- `docs/TOOL_DESCRIPTIONS.md` — exact registered tool and property descriptions.
 - `docs/ARCHITECTURE.md` — implementation architecture and staged plan.
 
 Create focused documents only when a subsystem has enough detail to justify a separate source of truth:
@@ -151,7 +152,7 @@ Create focused documents only when a subsystem has enough detail to justify a se
 ## First implementation priorities
 
 1. MCP server skeleton, tool validation, session state machine, and deterministic fake worker.
-2. One persistent R worker using `harp`/`libr`, direct top-level cell evaluation, structured input events, interrupt, reset, and crash reporting.
+2. One persistent R worker using `harp`/`libr`, direct top-level cell evaluation, structured input events, interrupt, restart, and crash reporting.
 3. Bounded output spools, reply cursors, value previews, and generated `transcript.qmd`.
 4. Reticulate Python cell execution and interactive input.
 5. Persistent DuckDB through R/DBI, bounded SQL results, R environment scanning, and explicit registration.

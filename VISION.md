@@ -46,9 +46,9 @@ Each session maintains a generated `transcript.qmd` containing submitted code, l
 
 The transcript is a chronological execution record, not a polished or necessarily reproducible notebook. Refined `.qmd`, `.R`, `.py`, or `.ipynb` artifacts are created separately. A granular event journal may support recovery internally, but it is not the default agent-facing artifact.
 
-### 9. Dependencies without a separate preparation ceremony
+### 9. Persistent, explicit session environments
 
-A code submission may declare additive R or Python requirements in the same call. Environment preparation and execution are one logical operation: either the requirements become available and the cell runs, or the cell does not run.
+R and Python requirements are relatively infrequent session configuration, not modifiers on ordinary code cells. The agent prepares additive requirements through the session-control tool. Requirements survive runtime restarts, while R objects, Python objects, loaded imports, debugger state, and the in-memory DuckDB catalog do not. Environment changes must be explicit and must never silently destroy live state.
 
 ### 10. Explicit and predictable interoperability
 
@@ -56,7 +56,7 @@ Language selection is encoded by the input key: `r`, `python`, or `sql`. The ser
 
 ### 11. Honest lifecycle and failure behavior
 
-A session runs at most one top-level evaluation at a time. Interrupt attempts to preserve state. Reset deliberately starts a new generation and loses in-memory state. A crashed worker remains stopped until explicitly reset or closed; the server never silently replaces it and implies that state survived.
+A session runs at most one top-level evaluation at a time. Interrupt attempts to preserve state. Restart deliberately starts a new runtime generation and loses in-memory state while retaining session requirements, workspace files, and transcript. A crashed worker remains stopped until explicitly restarted or closed; the server never silently replaces it and implies that state survived.
 
 ### 12. Process-level safety
 
@@ -70,11 +70,11 @@ New capabilities should usually appear as ordinary language code, runtime helper
 
 - Product and binary: `mcp-console`.
 - Frequent tool: `console`.
-- Low-frequency lifecycle tool: `console_session`.
+- Low-frequency environment and lifecycle tool: `console_session`.
 - Session: one sandboxed worker process containing R, reticulate Python, and DuckDB.
 - Submission: one complete R, Python, or SQL cell.
 - Evaluation: execution of one submission.
-- `stdin`: input to an already-running interactive consumer, not another code submission.
+- `stdin`: exact stream text for an already-running interactive consumer, not another code submission; it may contain multiple lines and receives no implicit newline.
 - Durable record: generated `transcript.qmd` plus retained output and artifact files.
 - Refined notebook, report, or script: a separate user artifact.
 
@@ -89,6 +89,7 @@ The initial design does not aim to provide:
 - automatic language inference;
 - a variable or package inventory on every turn;
 - automatic package installation after observing an import error;
+- per-cell package requirements;
 - arbitrary package removal or environment downgrades in a live session;
 - automatic registration of every Python object as a SQL table;
 - textual pagination through an entire large table;

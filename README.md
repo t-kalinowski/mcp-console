@@ -29,10 +29,22 @@ The first three calls evaluate complete cells in a persistent shared session. Th
 When running code requests real console input, the same tool supplies `stdin`:
 
 ```json
-{"stdin":"where"}
+{"stdin":"where\n"}
 ```
 
-This supports R `readline()` and `browser()`, Python `input()` and debuggers, and similar interactive modes without making normal code submission line-oriented.
+The `stdin` value is exact stream text: it may contain one or more lines, and the server does not add a newline. This supports R `readline()` and `browser()`, Python `input()` and debuggers, and similar interactive modes without making normal code submission line-oriented.
+
+Package requirements are configured less frequently at the session level and persist across runtime restarts:
+
+```json
+{"action":"prepare","requirements":{"r":["dplyr"],"python":["polars>=1"]}}
+```
+
+```json
+{"action":"restart"}
+```
+
+`restart` replaces the R/Python/SQL runtime and loses in-memory state while retaining declared requirements, workspace files, and the transcript.
 
 ## Runtime model
 
@@ -61,6 +73,7 @@ The Quarto transcript is a chronological execution record, not a polished notebo
 
 - [`VISION.md`](VISION.md) — product purpose, design goals, non-goals, and success criteria.
 - [`docs/MCP_INTERFACE.md`](docs/MCP_INTERFACE.md) — proposed MCP tools and normative observable behavior.
+- [`docs/TOOL_DESCRIPTIONS.md`](docs/TOOL_DESCRIPTIONS.md) — exact descriptions registered for the two MCP tools.
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — process model, runtime internals, output and transcript design, testing strategy, and implementation plan.
 - [`AGENTS.md`](AGENTS.md) — durable project context, key decisions, repository sitemap, and rules for coding agents.
 
@@ -69,13 +82,15 @@ The Quarto transcript is a chronological execution record, not a polished notebo
 - Product name: **MCP Console**.
 - Public abstraction: a persistent console session, not a notebook or a conventional line-oriented REPL.
 - Top-level input: complete R, Python, or SQL cells.
-- Interactive input: explicit `stdin` only when the active runtime requests it.
-- Public surface: `console` plus a low-frequency `console_session` control tool.
+- Interactive input: exact, optionally multiline `stdin` text only when the active runtime requests it.
+- Public surface: `console` plus a low-frequency `console_session` environment and lifecycle tool.
 - Language selection: the object key is `r`, `python`, or `sql`.
 - Runtime substrate: custom worker on `harp`/`libr`; no Ark process and no internal Jupyter protocol.
 - R evaluation: native top-level evaluation; top-level cells are not transported through `ReadConsole`.
 - SQL engine: embedded DuckDB through R/DBI initially; the DuckDB CLI is a behavioral reference only.
 - Output: bounded MCP text plus ordinary workspace files.
+- Environment: additive session requirements configured by `console_session`; they survive runtime restarts.
+- Lifecycle: `restart` replaces in-memory runtime state while retaining requirements, workspace files, and transcript.
 - Durable record: generated Quarto transcript; granular JSONL journal remains internal.
 - Isolation: one sandboxed worker process per named session.
 
