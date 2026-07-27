@@ -1,0 +1,11 @@
+[package]
+name = "mcp-console"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+description = "Persistent R, Python, and SQL sessions for MCP clients"
+repository = "https://github.com/t-kalinowski/mcp-console"
+license = "MIT"
+publish = false
+
+[dependencies]
