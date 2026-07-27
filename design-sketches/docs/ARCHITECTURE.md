@@ -1,8 +1,8 @@
 # MCP Console Architecture
 
 **Status:** Draft implementation scaffold v0.3 \
-**Date:** 2026-07-26 \
-**Companion documents:** [`../VISION.md`](../VISION.md), [`MCP_INTERFACE.md`](MCP_INTERFACE.md), [`TOOL_DESCRIPTIONS.md`](TOOL_DESCRIPTIONS.md)
+**Date:** 2026-07-27 \
+**Companion documents:** [`../VISION.md`](../VISION.md), [`MCP_INTERFACE.md`](MCP_INTERFACE.md), [`SIDECAR_API.md`](SIDECAR_API.md), [`RUNTIME_BACKEND.md`](RUNTIME_BACKEND.md)
 
 ## 1. Purpose
 
@@ -17,16 +17,22 @@ The architecture must support:
 - precise state, interrupt, and failure behavior;
 - bounded model-facing output with complete retained streams;
 - a generated Quarto transcript;
+- process-scoped human observation and typed large-object inspection;
 - process-level isolation around arbitrary code.
 
 ## 2. Architectural summary
 
-MCP Console is one Rust binary with two process modes:
+MCP Console ships one user-facing Rust binary and launches one sandboxed worker process per session.
+The worker implementation remains behind the runtime backend decision:
 
 ```text
-mcp-console                 MCP supervisor/server
-mcp-console --worker ...    one sandboxed session worker
+mcp-console                         MCP supervisor/server
+mcp-console __worker --native ...  purpose-built worker candidate
+ark or an Ark-linked worker mode   Ark-backed candidate
 ```
+
+The final package may bundle an internal companion executable or compile an Ark mode into the same distribution.
+This must not add another user-facing installation or configuration step.
 
 The supervisor owns MCP, named sessions, package preparation, worker lifecycle, output budgets, session files, and transcript projection.
 It never loads R, Python, DuckDB, or arbitrary user native libraries.
@@ -58,104 +64,126 @@ Rust supervisor
                 └── embedded R + Python + DuckDB
 ```
 
-The supervisor and worker use a small private protocol specialized for evaluation, output, interactive input, and control.
-They do not communicate through Jupyter.
+The supervisor consumes a normalized runtime service specialized for evaluation, output, interactive input, inspection, and control.
+A purpose-built backend may implement that service with a small private protocol.
+An Ark-backed backend may translate Jupyter messages and Ark comms inside its adapter.
+Backend transport must not leak into MCP, session, transcript, or local sidecar behavior.
 
 ## 3. Core invariants
 
 1. Arbitrary user code runs only in a sandboxed worker.
 2. One logical session maps to one worker process and one active generation.
 3. R, Python, and SQL for a session inhabit the same worker process.
-4. The worker main thread owns all direct calls into R.
+4. One backend-owned thread owns all direct calls into R.
 5. A worker executes at most one top-level evaluation at a time.
 6. Complete cells and interactive stdin are different internal command types.
-   `ProvideInput` carries exact arbitrary text, including zero, one, or many newlines; the runtime adds nothing.
 7. Complete cells are never transported through `ReadConsole`.
-   Buffered stdin is scoped to one evaluation and discarded at its terminal state.
-8. Native R cells do not acquire a console-owned interpreted R frame.
+8. R cells do not acquire a console-owned interpreted R frame.
 9. Runtime state comes from structured events, never prompt-string matching.
 10. Interrupt and termination control cannot wait behind the evaluation command queue.
 11. Every MCP response is bounded.
 12. Full explicit stream output remains outside model context.
 13. Known large values are previewed before full textual materialization.
-14. Restart and crash create explicit state-loss boundaries; logical-session requirements survive restart.
+14. Restart and crash create explicit state-loss boundaries.
 15. The QMD transcript is generated from a more authoritative internal record.
-16. Ark and Jupyter are references or optional future adapters, not worker runtime dependencies.
-17. The public MCP schema grows only when language code, runtime helpers, or files cannot express the workflow.
+16. Runtime transport is encapsulated.
+    Ark/Jupyter or a native `harp`/`libr` worker may implement the same service, but backend-specific types never cross the adapter boundary.
+17. Live-object inspection is typed, bounded, revisioned, and distinct from arbitrary evaluation.
+18. The public MCP schema grows only when language code, runtime helpers, or files cannot express the workflow.
 
-## 4. Runtime foundation: custom worker, not Ark
+## 4. Runtime backend decision gate
 
-### 4.1 Decision
+### 4.1 Status
 
-Do not run the full Ark kernel as the MCP Console worker.
-Build a purpose-specific native R worker using `libr` and `harp`, preferably by refactoring and extending the existing `posit-dev/mcp-repl` runtime or extracting reusable lower-level runtime machinery from Ark.
+The product and service contracts are defined, but the worker substrate is intentionally open until a focused implementation spike is complete.
+The two serious candidates are:
 
-Ark remains an important implementation reference and possible source of reusable code.
+1. an **Ark-backed worker**, with the supervisor acting as a Jupyter client and translating Ark's execution, stdin, control, display, and custom comm messages into MCP Console's normalized runtime events;
+2. a **purpose-built native worker**, derived from `mcp-repl` and built on `harp`/`libr`, with a smaller private protocol designed directly around MCP Console's multi-language semantics.
 
-### 4.2 What Ark would provide
+A third outcome—extracting a reusable lower-level runtime shared by Ark and MCP Console—is preferred when practical, but it cannot be assumed before the spike.
 
-Ark already solves difficult native-R frontend concerns:
+The comparison and acceptance matrix live in [`RUNTIME_BACKEND.md`](RUNTIME_BACKEND.md).
+Do not encode either backend as a repository-wide invariant before that decision is recorded.
 
-- R discovery and startup;
-- ownership of R's main thread;
-- native frontend callbacks;
-- structured cell execution;
-- stdout, stderr, conditions, errors, and plots;
-- interactive input;
-- interruption and shutdown;
-- source references;
-- integrated debugger machinery;
-- platform-specific R behavior.
+### 4.2 Stable runtime service
 
-These are substantial and should not be casually reimplemented without comparing Ark's behavior and tests.
-
-### 4.3 Why the full Ark process is not the chosen boundary
-
-Ark's public runtime boundary is an R Jupyter kernel.
-MCP Console would still need to add or translate:
-
-- first-class R, Python, and SQL cell types;
-- compact MCP-specific wait and polling semantics;
-- text-only bounded output and sidecar files;
-- named sessions and dependency manifests;
-- generated QMD transcripts;
-- sandbox propagation;
-- MCP lifecycle operations.
-
-Running Ark would also bring Jupyter connection management and IDE-oriented LSP, DAP, comm, and frontend machinery that the initial product does not consume directly.
-Python and SQL cells would still appear to Ark as hidden R wrapper evaluations unless Ark itself were extended.
-
-The chosen boundary therefore favors a smaller runtime whose central request type is already multi-language:
+The session manager depends on behavior, not transport:
 
 ```rust
-enum Language {
-    R,
-    Python,
-    Sql,
-}
-
-struct EvaluateCell {
-    id: EvaluationId,
-    language: Language,
-    source: String,
-    label: Option<String>,
+trait RuntimeBackend {
+    fn capabilities(&self) -> RuntimeCapabilities;
+    fn evaluate(&mut self, request: EvaluateCell) -> EvaluationHandle;
+    fn provide_input(&mut self, request: ProvideInput) -> Result<()>;
+    fn interrupt(&mut self, evaluation: Option<EvaluationId>) -> Result<()>;
+    fn inspect(&mut self, request: InspectionRequest) -> InspectionHandle;
+    fn restart(&mut self, environment: ResolvedEnvironment) -> Result<()>;
+    fn shutdown(&mut self, reason: ShutdownReason) -> Result<()>;
 }
 ```
 
-### 4.4 Dependency strategy for `harp` and `libr`
+The concrete interface may be asynchronous and message-driven, but it must normalize:
 
-`harp` and `libr` are low-level building blocks, not a stable complete console API.
-Isolate them behind `runtime/r/ffi` and pin the exact compatible revision.
-Do not let their types spread through session, MCP, output, or transcript modules.
+- readiness, busy, idle, input-required, stopped, and crash states;
+- R, Python, and SQL cell execution;
+- stdout, stderr, display values, plots, help, and artifacts;
+- interactive input and debugger commands;
+- interrupt and shutdown control;
+- object inventory, opaque references, bounded slices, profiles, and invalidation;
+- evaluation and inspection attribution.
 
-Before implementation expands, choose one of these paths explicitly:
+MCP tools and sidecar clients never send or receive Jupyter messages, Ark comm payloads, `harp` objects, or raw worker protocol frames.
 
-1. depend on pinned Ark crates;
-2. extract a supported shared native-R runtime crate;
-3. vendor a narrowly scoped compatible subset;
-4. continue from `mcp-repl` while regularly comparing behavior with Ark.
+### 4.3 What Ark may buy
 
-Record the choice and upgrade policy in an ADR once the first R worker spike is complete.
+Ark already contains substantial behavior relevant to this product:
+
+- robust R discovery, startup, event processing, and platform handling;
+- structured complete-cell execution with busy/idle and parent-message identity;
+- stdin and separate control channels;
+- stdout, errors, plots, help, Variables, debugger, and other IDE integrations;
+- retained object references and a mature Data Explorer backend/comm for bounded row, column, filter, sort, and profile requests;
+- potential compatibility with existing Positron or Canvas frontend code.
+
+These capabilities are especially relevant now that human inspection is a defining product feature rather than an optional viewer enhancement.
+
+### 4.4 Costs and constraints of Ark
+
+Ark remains an R Jupyter kernel, not a polyglot MCP Console runtime.
+An Ark-backed implementation must still provide:
+
+- first-class R, Python, and SQL submission identity;
+- minimal and truthful Python/SQL bridge frames and source locations;
+- compact MCP wait and polling semantics;
+- bounded text output and managed sidecars;
+- named sessions, requirement manifests, sandbox policy, and QMD transcripts;
+- a process-scoped local API that proxies or translates Ark comms rather than exposing them directly;
+- an upgrade strategy that avoids an unmaintainable fork.
+
+It also brings Jupyter connection management, ZeroMQ, comm lifecycle, and IDE-oriented components.
+Those costs are acceptable only if reused behavior—especially Data Explorer and R frontend correctness—substantially exceeds the integration burden.
+
+### 4.5 Costs and constraints of a native worker
+
+A purpose-built worker gives MCP Console a small multi-language request model and direct control over sandboxing, output, transcript boundaries, and sidecar semantics.
+It avoids translating through an R-kernel abstraction.
+
+It also makes this project responsible for difficult native-R behavior that Ark already implements: startup, event processing, input, interrupts, plots, help, source references, debugging, platform differences, object references, and a capable large-data inspection backend.
+Basic row slicing is not an adequate substitute for the mature Data Explorer behavior users may expect.
+
+### 4.6 Decision rule
+
+Select Ark when the spike shows that:
+
+- complete-cell, stdin, debugger, interrupt, and stack semantics satisfy the public contract;
+- Python and SQL can be made first-class without invasive Ark changes or confusing diagnostics;
+- an independent sidecar can reuse the Data Explorer and plot/help machinery through a stable adapter;
+- packaging, startup, sandboxing, and version compatibility are acceptable;
+- required changes can be upstreamed or maintained without a long-lived fork.
+
+Select the native worker when Ark fails those tests and a narrower live/snapshot inspection backend can meet the product requirements with materially less complexity.
+
+Regardless of the outcome, record the decision as an ADR and retain the backend-neutral service boundary.
 
 ## 5. Repository layout
 
@@ -171,7 +199,8 @@ Split crates only when reuse, dependency isolation, or build performance makes t
 ├── AGENTS.md
 ├── docs/
 │   ├── MCP_INTERFACE.md
-│   ├── TOOL_DESCRIPTIONS.md
+│   ├── SIDECAR_API.md
+│   ├── RUNTIME_BACKEND.md
 │   └── ARCHITECTURE.md
 ├── src/
 │   ├── main.rs
@@ -200,10 +229,13 @@ Split crates only when reuse, dependency isolation, or build performance makes t
 │   │   └── control.rs
 │   ├── runtime/
 │   │   ├── mod.rs
+│   │   ├── backend.rs
+│   │   ├── capabilities.rs
 │   │   ├── cell.rs
 │   │   ├── input.rs
 │   │   ├── display.rs
-│   │   ├── r/
+│   │   ├── inspection.rs
+│   │   ├── native/
 │   │   │   ├── mod.rs
 │   │   │   ├── ffi.rs
 │   │   │   ├── startup.rs
@@ -211,6 +243,12 @@ Split crates only when reuse, dependency isolation, or build performance makes t
 │   │   │   ├── console.rs
 │   │   │   ├── interrupt.rs
 │   │   │   └── graphics.rs
+│   │   ├── ark/
+│   │   │   ├── mod.rs
+│   │   │   ├── kernel.rs
+│   │   │   ├── messages.rs
+│   │   │   ├── comms.rs
+│   │   │   └── translate.rs
 │   │   ├── python/
 │   │   │   ├── mod.rs
 │   │   │   ├── bridge.rs
@@ -262,38 +300,9 @@ Split crates only when reuse, dependency isolation, or build performance makes t
 Embedded R, Python, and SQL helper source belongs next to the Rust adapter that owns its behavior.
 It is implementation code and must be tested and versioned like Rust code.
 
-## 6. Logical session and runtime generation
+## 6. Process model
 
-The implementation must distinguish persistent logical-session configuration from ephemeral runtime state.
-
-```text
-Logical session
-  name
-  additive R/Python requirements
-  workspace and retention policy
-  transcript and internal journal
-
-Runtime generation
-  worker process
-  R objects and loaded packages
-  Python objects, imports, and debugger state
-  in-memory DuckDB catalog
-  active evaluation and buffered stdin
-```
-
-`prepare` changes only the logical-session requirement manifest when additions can be activated without replacing the runtime.
-If safe activation is impossible, it leaves both runtime and manifest unchanged and reports that restart is required.
-
-`restart` may atomically add requirements and replace the runtime.
-Resolve requested additions before terminating the old worker.
-Requirements, workspace files, transcript, and logical session identity survive; all runtime-generation state is lost.
-
-`close` ends the logical session.
-Reusing the same name later creates a new session without inheriting the previous manifest, although retained files may still exist according to policy.
-
-## 7. Process model
-
-### 7.1 Supervisor
+### 6.1 Supervisor
 
 The supervisor is the long-lived MCP server and trusted control plane.
 
@@ -302,7 +311,7 @@ Responsibilities:
 - speak MCP over stdio initially;
 - expose and validate the two public tools;
 - manage logical session names, states, and generations;
-- prepare and persist additive logical-session package requirements;
+- prepare additive package requirements;
 - launch workers under explicit sandbox policy;
 - own command, sideband, control, stdout, and stderr channels;
 - enforce wait, polling, cancellation, and output-budget behavior;
@@ -312,30 +321,30 @@ Responsibilities:
 
 The supervisor must never load user packages or native extensions.
 
-### 7.2 Worker
+### 6.2 Worker backend
 
-The worker is the arbitrary-code boundary.
+The selected worker backend is the arbitrary-code boundary.
+It may be a purpose-built embedded-R process or an Ark kernel process, but it must present the same normalized service to the supervisor.
 
 Responsibilities:
 
-- initialize embedded R on its main thread;
-- install R frontend callbacks;
-- create a persistent R user environment and private console environment;
-- dispatch complete cells to the R, Python, or SQL adapter;
-- initialize reticulate and DuckDB lazily;
-- route runtime input to the active evaluation;
-- emit structured state, output, display, artifact, and completion events;
-- cooperate with interrupt and shutdown;
-- keep private bootstrap handles inaccessible to ordinary user code where practical.
+- initialize and own R on the correct thread;
+- create a persistent R user environment and embed reticulate Python and DuckDB;
+- dispatch complete R, Python, and SQL cells;
+- route genuine interactive input to the active evaluation;
+- emit structured state, output, display, plot, help, object, inspection, and completion events;
+- cooperate with interrupt, restart, shutdown, and sandbox policy;
+- retain private runtime and object-reference handles without exposing them to ordinary user code or sidecar clients.
 
-The worker reports runtime facts.
-It does not decide MCP wording, response budgets, transcript prose, or file-retention policy.
+The backend reports runtime facts and capabilities.
+It does not decide MCP wording, response budgets, transcript prose, local API authorization, or file-retention policy.
 
-### 7.3 Session generations
+### 6.3 Session generations
 
-A logical session can outlive a worker incarnation.
+A logical session can exist without a worker after successful environment preparation and can outlive multiple worker incarnations.
 
 ```text
+analysis / prepared       no worker yet
 default / generation 1
 default / generation 2   after restart
 ```
@@ -344,49 +353,46 @@ In-memory R, Python, SQL, debugger, and native-library state never crosses a gen
 Declared requirements and workspace files may persist.
 Evaluation IDs must remain unambiguous across generations.
 
-## 8. Worker threading and event loop
+## 7. Worker threading and event loop
 
-R must be initialized and called from one owning worker thread, normally the worker main thread.
+R must be initialized and called from one owning thread.
+The exact loop is backend-specific:
 
-A practical design is:
+- the native backend may run an MCP Console dispatch loop around embedded R, with helper threads for IPC and high-priority control;
+- the Ark backend uses Ark's R execution thread and Jupyter/kernel event machinery, with the adapter correlating messages to normalized requests and events.
 
-```text
-worker main thread
-  owns R
-  waits for accepted commands
-  dispatches cells synchronously
-  services R event processing as required
+Both backends must preserve these properties:
 
-IPC reader/helper thread
-  receives supervisor commands
-  places evaluation and stdin messages on synchronized queues
+- one active top-level evaluation per session;
+- complete cells are distinct from interactive input;
+- typed inspection is serialized onto the R-owning thread unless a capability explicitly provides a safe alternative;
+- interrupt and forced termination do not wait behind ordinary evaluation traffic;
+- sidecar subscribers and output consumers cannot block runtime progress.
 
-control helper / OS signal path
-  can request interrupt or termination while main thread is executing
-```
+Do not make the session manager depend on whether the backend's idle loop is a custom command loop or Ark's kernel loop.
 
-The main thread is not R's terminal REPL loop.
-It is an MCP Console dispatch loop around an embedded R runtime.
-R's frontend callbacks remain installed for output, real console input, messages, busy state, and shutdown behavior.
+## 8. Runtime adapter protocol
 
-## 9. Private worker protocol
+The supervisor–backend boundary is private, versioned, and stricter than the MCP schema.
+A native backend may use JSON Lines over dedicated pipes, with large binary data in files or a separate binary path.
+An Ark backend may use Jupyter channels and custom comms internally, but its adapter must translate them into the same normalized commands and events described here.
 
-The supervisor–worker protocol is private, versioned, framed, and stricter than the MCP schema.
-JSON Lines over dedicated pipes is sufficient for v1; large binary data belongs in files or a separate binary path.
-
-### 9.1 Logical channels
+### 8.1 Logical channels
 
 ```text
-command:       supervisor -> worker
-sideband:      worker -> supervisor
-control:       supervisor -> worker or OS runtime interrupt
-raw stdout:    worker and descendants -> supervisor
-raw stderr:    worker and descendants -> supervisor
+evaluation:    supervisor -> backend
+events:        backend -> supervisor
+inspection:    supervisor <-> backend
+stdin:         supervisor -> active input request
+control:       supervisor -> backend or OS runtime interrupt
+raw stdout:    worker and descendants -> supervisor when applicable
+raw stderr:    worker and descendants -> supervisor when applicable
 ```
 
+These are semantic channels, not necessarily separate file descriptors.
 The control path must remain usable while the R-owning thread is blocked in evaluation.
 
-### 9.2 Representative commands
+### 8.2 Representative commands
 
 ```rust
 enum WorkerCommand {
@@ -416,7 +422,7 @@ enum WorkerCommand {
 
 Evaluation source and interactive input never share a generic input queue.
 
-### 9.3 Representative events
+### 8.3 Representative events
 
 ```rust
 enum WorkerEvent {
@@ -442,7 +448,7 @@ enum WorkerEvent {
 
 `DisplayValue` is a bounded or structured description, not an arbitrary serialized language object.
 
-### 9.4 Completion rules
+### 8.4 Completion rules
 
 An evaluation is complete only after `EvaluationFinished` or worker termination.
 A quiet pipe, a familiar prompt, or a short settling delay is never sufficient evidence.
@@ -451,9 +457,9 @@ An `InputRequested` event suspends the initiating MCP wait but does not finish t
 
 Move exact message schemas and ordering constraints into `docs/WORKER_PROTOCOL.md` once implementation begins.
 
-## 10. Runtime dispatch and stack semantics
+## 9. Runtime dispatch and stack semantics
 
-The worker dispatches each accepted cell by language:
+The selected backend dispatches each accepted cell by language, directly or through an adapter extension:
 
 ```rust
 match cell.language {
@@ -467,35 +473,37 @@ There is no universal interpreted R call such as `.mcp_console_eval(id)` around 
 
 The stack contract is intentionally asymmetric:
 
-| Input | Initial implementation | Console-owned interpreted R frame |
+| Input | Required semantic boundary | Console-owned interpreted R frame |
 | --- | --- | ---: |
-| R | native parse/evaluate loop | no |
-| Python | one private R-to-reticulate bridge | yes, initially |
-| SQL | one private R-to-DBI/DuckDB bridge | yes, initially |
+| R | native top-level R cell behavior | no |
+| Python | private reticulate cell boundary | minimal and truthful if present |
+| SQL | private DBI/DuckDB boundary | minimal and truthful if present |
 | stdin | resume active input consumer | no new top-level frame |
 
 This asymmetry follows the actual implementation boundaries and should be documented rather than concealed.
 
-## 11. R runtime
+## 10. R runtime semantics
 
-### 11.1 Initialization
+### 10.1 Initialization
 
-Initialize R once per worker generation using the same class of native frontend APIs used by Ark and `mcp-repl`.
+Initialize R once per worker generation.
+A native backend uses the same class of frontend APIs used by Ark and `mcp-repl`; an Ark backend delegates startup to Ark and proves equivalent externally observable behavior.
 
-The worker should:
+The backend should:
 
 - discover and configure `R_HOME` and library paths;
 - initialize R as interactive but disable automatic workspace restore/save;
 - honor or deliberately configure startup files and repositories;
 - install `WriteConsoleEx`, `ReadConsole`, message, busy, callback, and shutdown hooks as appropriate per platform;
-- initialize `harp` routines and any graphics/help integration;
+- initialize graphics, help, object-inspection, and debugger integration required by its declared capabilities;
 - create a persistent user environment;
 - create a private environment for console-owned state and bridge functions;
 - process platform event hooks required by embedded R.
 
-Cross-platform startup behavior is a major reason to build from `mcp-repl` and compare with Ark rather than beginning from raw `libR` examples.
+Cross-platform startup behavior and mature IDE sidebands are major reasons to evaluate Ark rather than beginning from raw `libR` examples.
+A native backend should still build from `mcp-repl`/Ark patterns rather than re-derive them casually.
 
-### 11.2 Complete-cell evaluation
+### 10.2 Complete-cell evaluation
 
 R source is not sent through `ReadConsole` as terminal lines.
 
@@ -517,7 +525,7 @@ Do not make `source()`, `withAutoprint()`, or `eval(str2expression(...))` the fu
 They can add interpreted helper frames and make source, visibility, and error behavior harder to control.
 The target is a native frontend evaluator equivalent in spirit to what a real console does.
 
-### 11.3 R call-stack contract
+### 10.3 R call-stack contract
 
 Because Rust invokes parsed expressions directly at a native boundary, ordinary R stack introspection should not contain a console-owned interpreted frame.
 
@@ -534,7 +542,7 @@ Native error-catching functions and C/Rust frames are not represented by `sys.ca
 
 This contract requires direct integration tests because subtle evaluation helpers can change stack and traceback behavior.
 
-### 11.4 `ReadConsole` and interactive input
+### 10.4 `ReadConsole` and interactive input
 
 `ReadConsole` is reserved for genuine runtime input:
 
@@ -553,9 +561,9 @@ When called during an active evaluation, the callback:
 
 It must not draw from a queue containing future source lines from the submitted cell.
 
-## 12. Python runtime through reticulate
+## 11. Python runtime through reticulate
 
-### 12.1 Initialization and persistent state
+### 11.1 Initialization and persistent state
 
 Python is initialized lazily after applicable requirements have been declared.
 Reticulate owns one interpreter and persistent Python `__main__` module inside R.
@@ -564,7 +572,7 @@ R code accesses Python objects through reticulate's `py` object.
 Python accesses R through reticulate's `r` object.
 Do not create another global namespace protocol unless a concrete interoperability gap requires it.
 
-### 12.2 Cell evaluator
+### 11.2 Cell evaluator
 
 Do not use `py_eval()` for general cells; it accepts expressions, not assignments and statements.
 Do not use a generic line-fed `repl_python(input = ...)` loop as the fundamental cell transport, because nested `input()` or debugger reads must not consume remaining source lines.
@@ -582,7 +590,7 @@ Install a small Python cell executor that:
 A common implementation is to parse the cell with Python's `ast` module, execute all but a final `Expr`, then evaluate and display that final expression.
 The exact helper belongs in `runtime/python/cell.py` and must be exercised through the public MCP interface.
 
-### 12.3 R bridge and stack behavior
+### 11.3 R bridge and stack behavior
 
 Reticulate's supported entry points are R APIs.
 A practical v1 can call one private R helper, for example conceptually:
@@ -601,7 +609,7 @@ This is truthful and acceptable.
 Curated diagnostics may collapse known internal frames for readability, but raw R introspection must not be falsified.
 A later supported native reticulate entry point could remove the console-owned R helper without changing the MCP interface.
 
-### 12.4 Python stdin and debuggers
+### 11.4 Python stdin and debuggers
 
 Install a Python `sys.stdin` or `builtins.input` bridge that uses the same `InputRequested`/`ProvideInput` state machine as R.
 It should support at least ordinary `input()` and line-oriented debugger commands.
@@ -609,9 +617,9 @@ It should support at least ordinary `input()` and line-oriented debugger command
 Do not assume that R's `ReadConsole` automatically provides correct Python stdin semantics.
 Verify `input()`, `pdb`, nested R callbacks, interruption, and EOF behavior in an implementation spike.
 
-## 13. SQL runtime through DuckDB and DBI
+## 12. SQL runtime through DuckDB and DBI
 
-### 13.1 Initial ownership
+### 12.1 Initial ownership
 
 The initial SQL implementation uses the DuckDB R package and DBI in the same worker process.
 It does not launch the DuckDB CLI and does not implement a new SQL engine.
@@ -631,7 +639,7 @@ DBI::dbConnect(
 Pin exact supported DuckDB arguments and versions in code and tests.
 Direct DuckDB storage, extension, and secret paths into session-controlled locations rather than ambient user state.
 
-### 13.2 SQL bridge and R stack
+### 12.2 SQL bridge and R stack
 
 A practical v1 calls one private R helper, conceptually:
 
@@ -653,7 +661,7 @@ This is an explicit cost of using the R/DBI integration and should be covered by
 
 Do not place the entire SQL source literal in the helper call, where it could make `sys.calls()` and diagnostics unwieldy.
 
-### 13.3 Why use the R connection first
+### 12.3 Why use the R connection first
 
 The R integration provides the shortest path to useful shared state:
 
@@ -666,7 +674,7 @@ The R integration provides the shortest path to useful shared state:
 The adapter must deliberately arrange the evaluation environment used for environment scanning and test name precedence, rebinding, and object lifetime.
 Do not rely on accidental internal call frames.
 
-### 13.4 Query execution and bounded fetching
+### 12.4 Query execution and bounded fetching
 
 The SQL adapter owns:
 
@@ -684,7 +692,7 @@ Never call `dbGetQuery()` on arbitrary agent SQL when it can collect an unbounde
 
 If backend-specific statement metadata is required, isolate all unstable DuckDB-R access behind one adapter and pin a compatibility test.
 
-### 13.5 Relation visibility
+### 12.5 Relation visibility
 
 V1 rules:
 
@@ -698,7 +706,7 @@ V1 rules:
 
 Document and test precedence between catalog relations, explicit registrations, and scanned R variables.
 
-### 13.6 DuckDB CLI relationship
+### 12.6 DuckDB CLI relationship
 
 The CLI is a behavioral reference only.
 Borrow ideas such as:
@@ -710,7 +718,7 @@ Borrow ideas such as:
 
 Do not expose dot commands, terminal modes, line-oriented continuation, shell escapes, mutable output redirection, or the CLI executable as the SQL transport.
 
-### 13.7 Possible future native DuckDB ownership
+### 12.7 Possible future native DuckDB ownership
 
 Rust could later own DuckDB directly through its C or Rust API.
 That would remove SQL's R bridge and improve access to progress, interruption, data chunks, and result metadata.
@@ -718,7 +726,7 @@ That would remove SQL's R bridge and improve access to progress, interruption, d
 It would also lose automatic R environment scanning and require an explicit Arrow or table-function bridge with careful R object lifetime management.
 Adopt native ownership only after measurements show that the R/DBI boundary is the limiting factor.
 
-## 14. Runtime helper API
+## 13. Runtime helper API
 
 Prefer in-language helpers over more MCP tools.
 Possible R helpers include:
@@ -736,7 +744,7 @@ console_artifact_path(name)
 Python can call them through reticulate's `r` object.
 These helpers are a runtime API and should eventually receive focused documentation and compatibility tests.
 
-## 15. Dependency architecture
+## 14. Dependency architecture
 
 Each logical session owns an additive manifest:
 
@@ -750,31 +758,31 @@ struct EnvironmentManifest {
 The supervisor or a separate restricted resolver prepares requirements before code starts.
 Package download access must not require granting general network access to the arbitrary-code worker.
 
-### 15.1 Python
+### 14.1 Python
 
 Use reticulate's managed environment and `py_require()` semantics where practical.
 Requirements must be finalized before first Python initialization whenever they constrain interpreter choice.
 After initialization, v1 permits additive requirements only.
 
-### 15.2 R
+### 14.2 R
 
 Use a configured R resolver and library cache with equivalent additive behavior.
 The exact package-reference grammar belongs in a later `docs/DEPENDENCIES.md`.
 
-### 15.3 Atomic public behavior
+### 14.3 Atomic public behavior
 
-For a call containing requirements and code:
+For a `prepare` or `restart` session action containing requirements:
 
-1. merge the requirements;
-2. resolve and activate the environment;
-3. launch or update the worker as permitted;
-4. execute the cell only after preparation succeeds.
+1. merge the requested additions with the current manifest;
+2. resolve and prepare the candidate environment outside the arbitrary-code worker;
+3. validate whether an existing runtime can activate it without replacement;
+4. commit the manifest and activation, or begin the requested restart, only after resolution succeeds.
 
-If preparation fails, no part of the cell runs.
+If preparation fails, the existing runtime and requirement manifest remain unchanged.
 
-## 16. Output architecture
+## 15. Output architecture
 
-### 16.1 Sources
+### 15.1 Sources
 
 Output can arrive through:
 
@@ -787,7 +795,7 @@ Output can arrive through:
 Managed hooks provide evaluation attribution.
 Raw pipes are the fallback for native libraries and descendants that bypass language hooks.
 
-### 16.2 Per-evaluation spool
+### 15.2 Per-evaluation spool
 
 Each evaluation owns an append-only output spool.
 Preserve complete explicit stream output when practical, including output omitted from MCP replies.
@@ -798,7 +806,7 @@ A response snapshots output from the cursor to the current end, applies a global
 The cursor advances past omitted bytes.
 Future polls return new activity rather than requiring textual pagination through an old flood.
 
-### 16.3 Ordering
+### 15.3 Ordering
 
 Managed events and raw file-descriptor output can race.
 Define one visible output timeline with monotonic sequence numbers assigned at ingestion.
@@ -806,7 +814,7 @@ Do not claim impossible byte-perfect ordering across independent OS streams.
 
 If a PTY merges stdout and stderr, preserve the merged truth rather than inventing stream identity.
 
-### 16.4 Structural previews
+### 15.4 Structural previews
 
 Recognized values should become a runtime-neutral `DisplayValue` before final rendering:
 
@@ -827,21 +835,21 @@ The supervisor then applies the final response-byte budget.
 Unknown classes may invoke arbitrary print methods.
 Capture that output to the spool and truncate it normally rather than pretending it is safely previewable.
 
-### 16.5 SQL previews
+### 15.5 SQL previews
 
 Fetch only `preview_rows + 1` or enough record batches to determine that additional rows exist.
 Do not count an entire arbitrary relation solely to print an exact total.
 Report exact dimensions only when cheaply available from metadata or a deliberate count.
 
-### 16.6 Plots and artifacts
+### 15.6 Plots and artifacts
 
 Save plots and binary artifacts beneath the session directory and emit relative paths.
 The MCP response remains text-only.
 The transcript links to the same files.
 
-## 17. Session records and transcript
+## 16. Session records and transcript
 
-### 17.1 Directory layout
+### 16.1 Directory layout
 
 ```text
 .mcp-console/sessions/default/
@@ -858,7 +866,7 @@ The transcript links to the same files.
 
 Use sanitized or encoded path components rather than trusting a logical session name as a path.
 
-### 17.2 Internal journal
+### 16.2 Internal journal
 
 The internal journal is the authoritative durable event record for reconstruction and diagnostics.
 JSONL is a reasonable v1 format because it is append-friendly and can discard a partial final line after a crash.
@@ -881,7 +889,7 @@ generation_started
 This file is not the normal agent-facing artifact and need not expose Rust's internal serialization directly.
 Give it an explicit private schema version.
 
-### 17.3 Generated QMD
+### 16.3 Generated QMD
 
 `transcript.qmd` is the compact human- and agent-facing projection.
 Update it at stable boundaries: completion, error, interruption, input request, worker stop, and generation change.
@@ -895,17 +903,18 @@ Refer to full output sidecars when excerpts are insufficient.
 Do not let agents edit the live generated transcript in place.
 Refined notebooks, reports, and scripts are separate files created from the transcript and runtime artifacts.
 
-## 18. Session manager and concurrency
+## 17. Session manager and concurrency
 
 The supervisor owns the state machine:
 
 ```text
-absent -> preparing -> starting -> idle -> running
+absent -> preparing -> prepared
+absent/prepared -> starting -> idle -> running
                                       running -> input_required -> running
                                       running -> idle
                                       running -> stopped
                                       stopped -> starting   on restart
-                                      stopped -> absent     on close
+prepared/stopped -> absent            on close
 ```
 
 One session accepts one active evaluation.
@@ -916,9 +925,9 @@ The simplest v1 policy is one active consumer/waiter per session; if multiple wa
 
 Do not automatically evict local stdio sessions in v1 unless measured resource pressure requires it.
 
-## 19. Interrupt, restart, and failure
+## 18. Interrupt, restart, and failure
 
-### 19.1 Interrupt
+### 18.1 Interrupt
 
 Interrupt is cooperative and runtime-aware.
 It must bypass the ordinary evaluation queue.
@@ -932,18 +941,18 @@ The implementation may combine:
 After interruption, the worker reports whether it recovered to idle.
 Do not silently restart if cooperative recovery fails.
 
-### 19.2 Restart
+### 18.2 Restart
 
 Restart terminates the worker, increments the generation, and starts a fresh worker with the retained dependency manifest and workspace policy.
 It destroys all in-memory state.
 
-### 19.3 Crash
+### 18.3 Crash
 
 A segfault, abort, OOM kill, or unrecoverable embedded-runtime failure marks the session stopped.
 Preserve the transcript and output produced before death.
 Do not restart automatically and imply state continuity.
 
-## 20. Sandbox and security
+## 19. Sandbox and security
 
 MCP Console provides shell-class capability.
 Enforce policy around the entire worker process:
@@ -963,7 +972,7 @@ Where Codex provides per-call sandbox metadata, the supervisor may derive worker
 Missing or malformed inherited policy must fail closed.
 Platform details belong in a future `docs/SANDBOX.md`.
 
-## 21. MCP implementation
+## 20. MCP implementation
 
 Use the official Rust MCP SDK (`rmcp`) unless a concrete gap appears.
 Keep it behind a thin adapter:
@@ -983,7 +992,7 @@ worker/ and runtime/
 
 The public MCP protocol supports richer content, but v1 deliberately uses plain text plus workspace files because that is the most predictable contract for the target client.
 
-## 22. Error model
+## 21. Error model
 
 ### Tool errors (`isError: true`)
 
@@ -1009,9 +1018,9 @@ The session returns to idle only if the runtime reports successful recovery.
 Worker process death produces a stopped session and an infrastructure diagnostic.
 It is never formatted as an ordinary language error.
 
-## 23. Testing strategy
+## 22. Testing strategy
 
-### 23.1 Public integration tests
+### 22.1 Public integration tests
 
 Build the binary, launch it as an MCP stdio server, and test real tool calls.
 Required scenarios include:
@@ -1033,7 +1042,7 @@ Required scenarios include:
 - QMD transcript recovery;
 - sandbox restrictions.
 
-### 23.2 Stack-semantics tests
+### 22.2 Stack-semantics tests
 
 Explicitly test:
 
@@ -1043,7 +1052,7 @@ Explicitly test:
 - SQL-to-R callbacks, where possible, show the documented DBI boundary;
 - source text is not duplicated into internal stack calls.
 
-### 23.3 Fake-worker tests
+### 22.3 Fake-worker tests
 
 Use a deterministic fake worker for races and malformed sequences:
 
@@ -1056,42 +1065,57 @@ Use a deterministic fake worker for races and malformed sequences:
 - cancellation races;
 - partial internal journal records.
 
-### 23.4 Snapshot discipline
+### 22.4 Snapshot discipline
 
 Avoid snapshots tied to terminal width, ANSI color, absolute temporary paths, package download progress, nondeterministic ordering, or exact internal traceback frames across runtime patch versions.
 
-## 24. Implementation sequence
+## 23. Implementation sequence
 
-### Milestone 0: contract and fake worker
+### Milestone 0: contract and fake backend
 
-- implement `rmcp` stdio server;
+- implement the `rmcp` stdio server;
 - expose the two draft schemas;
-- implement validation and session state types;
-- build a fake worker and end-to-end harness.
+- implement validation, session state, normalized runtime capabilities, and events;
+- build a deterministic fake backend and end-to-end harness;
+- keep MCP, output, transcript, and local API code independent of Ark/Jupyter and `harp`/`libr` types.
 
-Exit: all public states and lifecycle actions work without real R.
+Exit: all public states, lifecycle actions, and basic sidecar events work without real R.
 
-### Milestone 1: native R worker
+### Milestone 1: runtime backend spike and decision
 
-- base startup on `mcp-repl`/Ark low-level patterns;
-- initialize R on the worker main thread;
-- evaluate complete R cells directly;
-- capture output and interactive `ReadConsole` requests;
-- implement poll, interrupt, restart, and crash reporting;
-- validate R stack semantics.
+Implement the smallest viable Ark and native paths needed to compare:
 
-Exit: persistent R, visible values, `readline()`, `browser()`, oversized output, and restart work through MCP.
+- complete R cell execution, visible values, source references, and `sys.calls()`;
+- `readline()`, `browser()`, `recover()`, interrupt, and restart behavior;
+- plot and help publication;
+- Python and SQL dispatch with correct source and error attribution;
+- object inventory and an independent viewer fetching bounded rows/columns from a large live data frame;
+- busy-runtime behavior and snapshot materialization;
+- packaging, startup, sandbox, dependency, and version-maintenance costs.
 
-### Milestone 2: output and transcript
+Record the result in an ADR and remove the losing backend from the critical path unless it remains useful as a test adapter.
+
+Exit: one backend is selected with evidence against the criteria in `RUNTIME_BACKEND.md`.
+
+### Milestone 2: selected persistent R worker
+
+- complete the selected backend's lifecycle and capability adapter;
+- implement structured cell, input, inspection, interrupt, restart, and crash reporting;
+- validate R stack and source semantics across supported platforms;
+- establish pinned compatibility tests for Ark/comm or `harp`/`libr` dependencies.
+
+Exit: persistent R, visible values, `readline()`, `browser()`, large live-table viewport access, oversized output, and restart work through public interfaces.
+
+### Milestone 3: output and transcript
 
 - add output spools and reply cursors;
 - add structural previews;
 - add internal journal and generated QMD;
-- add plot/artifact files.
+- add plot/artifact files and full-resolution viewer delivery.
 
 Exit: no tested reply exceeds its configured budget and the QMD reconstructs useful session history.
 
-### Milestone 3: reticulate Python
+### Milestone 4: reticulate Python
 
 - prepare Python requirements before initialization;
 - install persistent Python cell and stdin bridges;
@@ -1100,7 +1124,7 @@ Exit: no tested reply exceeds its configured budget and the QMD reconstructs use
 
 Exit: alternating R and Python cells share state in one worker.
 
-### Milestone 4: DuckDB SQL
+### Milestone 5: DuckDB SQL
 
 - initialize persistent DuckDB through R/DBI;
 - add private SQL bridge and bounded result fetching;
@@ -1110,44 +1134,60 @@ Exit: alternating R and Python cells share state in one worker.
 
 Exit: data loaded in Python can be converted or registered, queried in SQL, and consumed from R or Python.
 
-### Milestone 5: environment manager
+### Milestone 6: sidecar viewer and data explorer
+
+- implement protected process discovery and the process-scoped local service;
+- add snapshots plus bounded resumable event subscriptions;
+- implement object handles, live table views, immutable snapshots, plots, and viewer capability negotiation;
+- keep arbitrary external code on the attributed primary evaluation path.
+
+Exit: a human can observe the agent, inspect a large live table by viewport, view plots at full resolution, and continue browsing a snapshot while the agent computes.
+
+### Milestone 7: environment manager
 
 - add additive R/Python manifests;
 - add resolution caches and provenance;
 - separate resolver network policy from worker policy.
 
-Exit: requirements and code form one atomic public operation.
+Exit: session requirements are explicit, persistent across restart, and applied atomically.
 
-### Milestone 6: sandbox and platform hardening
+### Milestone 8: sandbox and platform hardening
 
 - implement macOS, Linux, and Windows policies;
 - inherit host policy where supported;
 - add resource quotas and escape tests;
-- harden private IPC and session paths.
+- harden private IPC, Jupyter endpoints when used, local API, and session paths.
 
 Exit: supported-platform security and resource tests pass in CI.
 
-## 25. Required implementation spikes
+## 24. Required implementation spikes
 
-1. **R dispatch loop:** prove direct complete-cell evaluation while retaining correct event processing, visible values, interrupts, and `ReadConsole` behavior on all target platforms.
-2. **Ark/mcp-repl reuse:** choose pinned crates, extraction, or vendoring and document upgrade responsibility.
-3. **R stack semantics:** validate `sys.calls()`, traceback, source references, errors, and `browser()` under native evaluation.
-4. **Python cell evaluator:** compare a custom AST helper with reticulate internals; verify final-expression display without line-queue ambiguity.
-5. **Python stdin:** verify `input()`, `pdb`, EOF, interrupt, and callbacks into R.
-6. **DuckDB environment scan:** verify the exact R environment used, name precedence, rebinding, and registration lifetimes.
-7. **DuckDB bounded fetch:** compare bounded DBI, Arrow, and record-batch paths and confirm interruption behavior.
-8. **Output ordering:** define the merge contract for managed events and raw process streams.
-9. **Transcript recovery:** choose incremental QMD updates versus deterministic rebuild on startup.
-10. **Cancellation:** define exact mapping between MCP cancellation, initiating calls, later poll waiters, and runtime interrupts.
+1. **Ark-backed end-to-end path:** launch Ark, correlate execute/busy/idle/stdin/control, and translate its outputs into normalized events.
+2. **Independent Ark Data Explorer client:** from a separate process, retain and browse a large R data frame by bounded row/column requests; determine which comm/backend APIs are reusable and stable.
+3. **Native backend comparison:** implement the same minimum cell, stdin, plot/help, interrupt, and live-table operations on `mcp-repl`/`harp`/`libr` far enough to compare complexity and behavior.
+4. **Polyglot dispatch:** verify Python and SQL cells under both candidates, including tracebacks, source names, input, interruption, and R stack boundaries.
+5. **R semantics:** validate `sys.calls()`, traceback, source references, errors, visible values, `browser()`, and `recover()` under the selected path.
+6. **Busy inspection:** characterize Ark comm and native inspection behavior while R is running, waiting for input, or stopped; do not assume Jupyter channels imply concurrent R execution.
+7. **Live versus snapshot views:** measure viewport latency, materialization cost, staleness, invalidation, and memory for representative large frames and Arrow/DuckDB sources.
+8. **Packaging and maintenance:** measure startup time, binary/wheel size, process count, sandbox requirements, version skew, and whether changes require an Ark fork.
+9. **Python cell evaluator:** compare a custom AST helper with reticulate internals; verify final-expression display without line-queue ambiguity.
+10. **Python stdin:** verify `input()`, `pdb`, EOF, interrupt, and callbacks into R.
+11. **DuckDB environment scan:** verify the exact R environment used, name precedence, rebinding, and registration lifetimes.
+12. **DuckDB bounded fetch:** compare bounded DBI, Arrow, and record-batch paths and confirm interruption behavior.
+13. **Output ordering:** define the merge contract for managed events and raw process streams.
+14. **Transcript recovery:** choose incremental QMD updates versus deterministic rebuild on startup.
+15. **Cancellation:** define exact mapping between MCP cancellation, initiating calls, later poll waiters, and runtime interrupts.
 
-Record resolved spikes as short ADRs and update this document rather than leaving contradictory alternatives in place.
+Resolve spikes 1–8 before treating the backend substrate as settled.
+Record the decision as a short ADR and update `AGENTS.md`, `README.md`, and this document rather than leaving contradictory alternatives in place.
 
-## 26. External references
+## 25. External references
 
 - MCP tools specification: <https://modelcontextprotocol.io/specification/2025-11-25/server/tools>
 - Official Rust MCP SDK: <https://github.com/modelcontextprotocol/rust-sdk>
 - `mcp-repl`: <https://github.com/posit-dev/mcp-repl>
 - Ark: <https://github.com/posit-dev/ark>
+- Runtime backend decision: [`RUNTIME_BACKEND.md`](RUNTIME_BACKEND.md)
 - Reticulate: <https://rstudio.github.io/reticulate/>
 - `py_run_string()`: <https://rstudio.github.io/reticulate/reference/py_run.html>
 - `repl_python()`: <https://rstudio.github.io/reticulate/reference/repl_python.html>

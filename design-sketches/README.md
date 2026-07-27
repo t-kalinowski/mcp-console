@@ -6,7 +6,22 @@ One console session hosts R, Python, and SQL in a single process, allowing an ag
 > **Status:** design-stage repository.
 > The interface and architecture are drafts intended to scaffold implementation.
 
-## Proposed experience
+## Installation and registration
+
+The intended MCP server command is:
+
+```bash
+uvx mcp-console
+```
+
+The PyPI package will contain platform wheels with the standalone Rust binary and a minimal Python launcher.
+A persistent installation can use `uv tool install mcp-console`.
+
+`mcp-console` with no arguments starts the MCP stdio server.
+Additional commands diagnose the runtime, register supported MCP clients, and attach human-facing viewers to an already-running server.
+See [`docs/CLI.md`](docs/CLI.md).
+
+## Proposed agent experience
 
 The common interaction is deliberately small:
 
@@ -29,16 +44,16 @@ The common interaction is deliberately small:
 The first three calls evaluate complete cells in a persistent shared session.
 The empty call waits for new output or completion of a long-running evaluation.
 
-When running code requests real console input, the same tool supplies `stdin`:
+When running code requests real console input, the same tool supplies exact `stdin` bytes:
 
 ```json
-{ "stdin": "where\n" }
+{ "stdin": "where\nn\nc\n" }
 ```
 
-The `stdin` value is exact stream text: it may contain one or more lines, and the server does not add a newline.
-This supports R `readline()` and `browser()`, Python `input()` and debuggers, and similar interactive modes without making normal code submission line-oriented.
+The text may contain one or more lines, and the server does not add a newline.
+This supports R `readline()` and `browser()`, Python `input()` and debuggers, and similar interactive modes without making ordinary code submission line-oriented.
 
-Package requirements are configured less frequently at the session level and persist across runtime restarts:
+Package requirements are configured less frequently at the logical-session level and persist across runtime restarts:
 
 ```json
 {
@@ -47,11 +62,45 @@ Package requirements are configured less frequently at the session level and per
 }
 ```
 
+`prepare` may create a configured logical session without starting its worker.
+A later code cell starts the runtime with those requirements.
+Once a runtime exists, this replaces it while retaining requirements, workspace files, and the transcript:
+
 ```json
 { "action": "restart" }
 ```
 
-`restart` replaces the R/Python/SQL runtime and loses in-memory state while retaining declared requirements, workspace files, and the transcript.
+## Human visibility without a daemon
+
+The MCP stdio process also owns a local, process-scoped API for human viewers and third-party sidecars.
+It starts and stops with the MCP server; it never detaches, viewers do not keep it alive, and sessions do not survive the owning server process.
+
+Representative commands are:
+
+```bash
+mcp-console list
+mcp-console view default
+mcp-console watch default
+mcp-console send default --r 'summary(df)'
+```
+
+A viewer can follow evaluations and bounded live output, read the Quarto transcript, display plots at their original resolution, inspect supported objects, and browse large tables without placing their contents in model context.
+A live view retrieves only the visible rows and columns from a retained runtime object; a snapshot view materializes a point-in-time relation that remains browsable while the agent continues computing.
+Ephemeral filters and sorts can be converted back to R, Python, or SQL source without executing them invisibly.
+The event stream is resumable and slow viewers cannot block evaluation.
+
+The sidecar API separates three operation classes:
+
+- **Observe:** read supervisor-owned state, transcript, outputs, and artifacts without entering the runtime.
+- **Inspect:** issue bounded typed operations such as listing objects, opening a live table view, or materializing a snapshot.
+  The caller supplies no arbitrary R or Python source.
+- **Control:** submit code, stdin, or lifecycle changes.
+  Arbitrary external code is attributed, enters the transcript, and is reported to the agent; there is no invisible “read-only code” channel.
+
+R and embedded Python are owned by one runtime thread, so live-object requests are normally accepted only while the session is idle.
+Live views avoid eagerly materializing very large objects and can reflect explicit revisions of the current binding.
+Snapshot views use immutable Arrow, Parquet, or DuckDB-backed data so sorting, filtering, profiling, and paging can continue outside the live runtime while the agent computes.
+See [`docs/SIDECAR_API.md`](docs/SIDECAR_API.md).
 
 ## Runtime model
 
@@ -59,6 +108,8 @@ Each named session is a sandboxed worker process:
 
 ```text
 Rust MCP supervisor
+  ├── MCP stdio adapter
+  ├── process-scoped local viewer API
   └── session worker
         └── embedded R
               ├── persistent R environment
@@ -70,50 +121,64 @@ R is the host runtime.
 Python is embedded through reticulate.
 SQL is initially executed through the DuckDB R package and DBI, giving SQL direct access to live R data frames and persistent DuckDB catalog state.
 
-The worker uses a small private protocol specialized for cell evaluation, output, interactive input, and control.
-It does not run Ark as a kernel and does not use the Jupyter wire protocol.
-The implementation should reuse the lower-level R integration work in `harp`/`libr` and the current `mcp-repl` runtime where practical.
+The supervisor exposes one backend-neutral runtime service for cell evaluation, output, interactive input, structured inspection, and control.
+The initial implementation must compare an Ark-backed worker with a purpose-built worker based on `harp`/`libr` and the current `mcp-repl` runtime.
+Ark may be worth its Jupyter machinery if its mature Data Explorer, plots, help, debugger, and runtime behavior can be reused without an invasive fork.
+The public MCP and local sidecar contracts must not depend on which backend is selected.
+See [`docs/RUNTIME_BACKEND.md`](docs/RUNTIME_BACKEND.md).
 
 ## Output and durable context
 
 MCP results are text-only and strictly bounded.
 Large values receive structural previews, while complete explicitly printed output is retained in session files.
-Every session maintains a generated `transcript.qmd` containing submitted code, bounded output, errors, labels, and artifact paths.
+Every session maintains a generated `transcript.qmd` containing submitted code, bounded output, errors, labels, origins, and artifact paths.
 
 The Quarto transcript is a chronological execution record, not a polished notebook.
 An agent can use ordinary file tools to turn selected work into a refined `.qmd`, `.R`, `.py`, or `.ipynb` artifact.
+
+The human-facing event stream carries bounded metadata and offsets, not unbounded tables or output.
+Complete text, plots, live table batches, and snapshots are fetched separately by managed IDs.
 
 ## Documents
 
 - [`VISION.md`](VISION.md) — product purpose, design goals, non-goals, and success criteria.
 - [`docs/MCP_INTERFACE.md`](docs/MCP_INTERFACE.md) — proposed MCP tools and normative observable behavior.
 - [`docs/TOOL_DESCRIPTIONS.md`](docs/TOOL_DESCRIPTIONS.md) — exact descriptions registered for the two MCP tools.
-- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — process model, runtime internals, output and transcript design, testing strategy, and implementation plan.
+- [`docs/CLI.md`](docs/CLI.md) — standalone binary, installation, diagnostics, viewer, watch, and sidecar-control commands.
+- [`docs/SIDECAR_API.md`](docs/SIDECAR_API.md) — process-scoped local API, event subscriptions, inspection boundary, data explorer, plots, and external evaluation semantics.
+- [`docs/RUNTIME_BACKEND.md`](docs/RUNTIME_BACKEND.md) — open Ark-versus-native worker decision, trade-offs, required spike, and decision criteria.
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — process model, runtime internals, output, viewer architecture, testing strategy, and implementation plan.
 - [`AGENTS.md`](AGENTS.md) — durable project context, key decisions, repository sitemap, and rules for coding agents.
 
 ## Core decisions
 
 - Product name: **MCP Console**.
-- Public abstraction: a persistent console session, not a notebook or a conventional line-oriented REPL.
+- Public abstraction: a persistent console session, not a notebook or conventional line-oriented REPL.
 - Top-level input: complete R, Python, or SQL cells.
 - Interactive input: exact, optionally multiline `stdin` text only when the active runtime requests it.
-- Public surface: `console` plus a low-frequency `console_session` environment and lifecycle tool.
+- MCP surface: `console` plus a low-frequency `console_session` environment and lifecycle tool.
 - Language selection: the object key is `r`, `python`, or `sql`.
-- Runtime substrate: custom worker on `harp`/`libr`; no Ark process and no internal Jupyter protocol.
+- Runtime substrate: open implementation decision.
+  Evaluate an Ark-backed worker against a purpose-built `harp`/`libr` worker before committing; hide either behind the same runtime service.
 - R evaluation: native top-level evaluation; top-level cells are not transported through `ReadConsole`.
 - SQL engine: embedded DuckDB through R/DBI initially; the DuckDB CLI is a behavioral reference only.
-- Output: bounded MCP text plus ordinary workspace files.
+- Output: bounded MCP text plus managed workspace files.
 - Environment: additive session requirements configured by `console_session`; they survive runtime restarts.
 - Lifecycle: `restart` replaces in-memory runtime state while retaining requirements, workspace files, and transcript.
 - Durable record: generated Quarto transcript; granular JSONL journal remains internal.
+- Human visibility: a process-scoped local API with snapshot plus resumable event-stream semantics; no detached daemon.
+- Sideband boundary: typed bounded inspection is distinct from arbitrary external evaluation.
+- Data explorer: typed live views for bounded viewport access plus immutable snapshots for concurrent and repeatable exploration.
 - Isolation: one sandboxed worker process per named session.
 
-## Upstream foundations
+## Design influences
 
 The design builds on:
 
 - [posit-dev/mcp-repl](https://github.com/posit-dev/mcp-repl) for persistent worker, sandbox, output, and native R frontend patterns;
-- [posit-dev/ark](https://github.com/posit-dev/ark), especially `harp` and `libr`, for lower-level R integration and as a reference for native R frontend behavior;
+- [posit-dev/ark](https://github.com/posit-dev/ark) for native R execution, Jupyter lifecycle, plots, help, debugging, Variables, and the Data Explorer comm/backend; `harp` and `libr` remain candidate lower-level building blocks for a custom worker;
 - [reticulate](https://rstudio.github.io/reticulate/) for embedded Python and R/Python object interchange;
 - [DuckDB](https://duckdb.org/docs/current/clients/r) and [DBI](https://dbi.r-dbi.org/) for embedded SQL;
-- [Quarto](https://quarto.org/) for the readable session transcript.
+- [Quarto](https://quarto.org/) for the readable session transcript;
+- [kata](https://github.com/kenn-io/kata) for the pattern of one local service API shared by agent and human clients, protected runtime discovery, and resumable bounded event subscriptions;
+- [Positron's Data Explorer](https://positron.posit.co/data-explorer.html) and [Plots pane](https://positron.posit.co/plots-pane.html) for human-facing ephemeral data exploration and full-scale plot inspection.

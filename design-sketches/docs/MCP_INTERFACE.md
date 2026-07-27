@@ -1,7 +1,7 @@
 # MCP Console Interface
 
 **Status:** Draft v0.3 \
-**Date:** 2026-07-26 \
+**Date:** 2026-07-27 \
 **Scope:** Agent-facing MCP tools and observable behavior
 
 ## 1. Interface summary
@@ -14,7 +14,7 @@ console_session
 ```
 
 `console` handles the frequent path: evaluate one R, Python, or SQL cell; supply interactive stdin; or wait for a running evaluation.
-`console_session` handles infrequent environment preparation and lifecycle operations.
+`console_session` handles infrequent environment and lifecycle operations.
 
 The interface is optimized for frequent use and global enablement:
 
@@ -28,31 +28,31 @@ The interface is optimized for frequent use and global enablement:
 
 ## 2. Tool: `console`
 
-### 2.1 Registered description and schema
+### 2.1 Draft schema
 
 ```json
 {
   "name": "console",
-  "description": "Persistent R, Python, and DuckDB SQL workbench. Use it whenever exact computation or direct inspection would improve accuracy—from arithmetic, string counting, parsing, and file or binary-data inspection to data wrangling, exploratory analysis, visualization, statistics, simulation, and model training or tuning. State persists across calls; R and Python exchange objects, and SQL queries live or registered tabular data. Language-native help, introspection, interactive input, and debuggers work. Send exactly one complete `r`, `python`, or `sql` cell; after `[input]`, send `stdin`; send no cell or `stdin` to wait/poll. Large values are previewed; oversized stdout/stderr, plots, artifacts, and the Quarto transcript are saved in the workspace.",
+  "description": "Persistent R, Python, and DuckDB SQL workbench. Use it whenever exact computation or direct inspection would improve accuracy—from arithmetic, string counting, parsing, and file or binary-data inspection to data wrangling, exploratory analysis, visualization, statistics, simulation, and model training or tuning. State persists across calls; R and Python exchange objects, and SQL queries live or registered tabular data. Language-native help, introspection, interactive input, and debuggers work. Send exactly one complete r, python, or sql cell; after [input], send stdin; send no cell or stdin to wait/poll. Large values are previewed; oversized stdout/stderr, plots, artifacts, and the Quarto transcript are saved in the workspace.",
   "inputSchema": {
     "type": "object",
     "additionalProperties": false,
     "properties": {
       "r": {
         "type": "string",
-        "description": "Complete multiline R cell in persistent state. Python objects are available through `py`; R help, `browser()`, and `recover()` work."
+        "description": "Complete multiline R cell in persistent state. Python objects are available through py; R help, browser(), and recover() work."
       },
       "python": {
         "type": "string",
-        "description": "Complete multiline Python cell in persistent state. R objects are available through `r`; `help()`, `breakpoint()`, and `pdb` work."
+        "description": "Complete multiline Python cell in persistent state. R objects are available through r; help(), breakpoint(), and pdb work."
       },
       "sql": {
         "type": "string",
-        "description": "Complete DuckDB SQL cell in the persistent catalog. Query live or registered tabular data; use `SHOW TABLES`, `DESCRIBE`, `SUMMARIZE`, and `EXPLAIN` for discovery. CLI dot commands are not supported."
+        "description": "Complete DuckDB SQL cell in the persistent catalog. Query live or registered tabular data; use SHOW TABLES, DESCRIBE, SUMMARIZE, and EXPLAIN for discovery. CLI dot commands are not supported."
       },
       "stdin": {
         "type": "string",
-        "description": "Raw text appended to stdin of the active evaluation after `[input]`. It may contain one or more lines; newlines are significant and are not added automatically. Unconsumed text is discarded when the evaluation ends."
+        "description": "Raw text appended to stdin of the active evaluation after [input]. It may contain one or more lines; newlines are significant and are not added automatically. Unconsumed text is discarded when the evaluation ends."
       },
       "session": {
         "type": "string",
@@ -60,7 +60,7 @@ The interface is optimized for frequent use and global enablement:
         "minLength": 1,
         "maxLength": 64,
         "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$",
-        "description": "Persistent named session; defaults to `default`. Use another name for independent or concurrent state. A missing session is created only by a code cell."
+        "description": "Persistent named session; defaults to default. Use another name for independent or concurrent state. A missing session is created only by a code cell."
       },
       "label": {
         "type": "string",
@@ -80,9 +80,6 @@ The interface is optimized for frequent use and global enablement:
 }
 ```
 
-The registered description deliberately communicates breadth, persistence, interoperability, help and debugging, the cell/stdin/poll distinction, and bounded-output behavior.
-It omits implementation details such as Ark, Jupyter, reticulate, DBI, worker IPC, stack frames, and the internal event journal.
-
 The schema intentionally avoids a large `oneOf`.
 The server performs semantic mode validation and returns a short tool error for invalid combinations.
 
@@ -91,7 +88,7 @@ The server performs semantic mode validation and returns a short tool error for 
 | Present mode fields | Operation |
 | --- | --- |
 | exactly one of `r`, `python`, `sql` | Evaluate one complete cell |
-| `stdin` only | Append exact text to the active evaluation's stdin stream |
+| `stdin` only | Append exact text to the active input stream |
 | none of `r`, `python`, `sql`, `stdin` | Wait for or poll the session |
 | any other combination | Tool error |
 
@@ -100,12 +97,12 @@ The server performs semantic mode validation and returns a short tool error for 
 Additional rules:
 
 - `label` is accepted only with a code cell.
-- A missing session is created only by a code cell.
-- Polling, `stdin`, and session-control calls never create a missing session.
+- Within `console`, a missing session is created only by a code cell.
+  The `console_session` `prepare` action may also create it.
+- Polling and `stdin` never create a missing session.
 - New code is accepted only while the session is idle.
 - A session runs one top-level evaluation at a time; code sent while it is busy is rejected rather than queued.
 - `stdin` is accepted only while that session has an unsatisfied input request.
-- Any unread buffered stdin is scoped to the active evaluation and discarded when it completes, errors, is interrupted, or the worker stops.
 
 ### 2.3 Common calls
 
@@ -197,23 +194,16 @@ Browse[2]>
 The next call appends exact text to the active input stream:
 
 ```json
-{ "stdin": "where\n" }
+{ "stdin": "where\nn\nc\n" }
 ```
 
-A call may provide several lines when the interaction permits batching:
-
-```json
-{ "stdin": "n\nn\nc\n" }
-```
-
-Newlines are significant and the server never adds one.
-Send `"\n"` to submit a blank line.
-Partial lines are permitted.
-Any unconsumed buffered text is discarded when the evaluation ends so it cannot leak into a later cell.
+The text may contain one or more complete or partial lines.
+Newlines are significant and are not added automatically; send `"\n"` to submit a blank line.
+Any unread buffered text is scoped to the active evaluation and discarded when it completes, errors, is interrupted, or the worker stops.
 
 `stdin` is not a new code cell.
-The active runtime decides whether the line is a debugger command, an expression accepted by the debugger, or ordinary program input.
-The original evaluation identity remains active until it completes, errors, is interrupted, or the worker stops.
+The active runtime decides whether the bytes are debugger commands, expressions accepted by the debugger, or ordinary program input.
+The original evaluation identity remains active until the evaluation ends.
 
 The implementation must distinguish cell source from interactive input structurally.
 It must not preload a cell as generic console lines that a nested `readline()` or `input()` could accidentally consume.
@@ -259,33 +249,38 @@ MCP request cancellation is distinct from wait expiry:
 - cancelling a later poll cancels only that waiter;
 - `wait_ms` expiry never cancels the evaluation.
 
-## 6. Session environments and requirements
+## 6. Session requirements
 
-R and Python requirements configure the logical session rather than an individual evaluation.
-They are managed through `console_session`, are additive in v1, and survive runtime restarts.
+Requirements are additive logical-session configuration managed by `console_session`, not modifiers on ordinary code cells.
 
 - Python entries are PEP 508 requirement strings.
 - R entries use the resolver grammar configured by the implementation.
 - Requirements make packages available; they do not import or attach them.
+- Requirements persist across runtime restarts.
 - Repeating an already-satisfied requirement is idempotent.
-- `prepare` attempts to add requirements without replacing the active runtime.
-- If additions cannot be activated safely in the current runtime, `prepare` leaves the session unchanged and reports that a restart is required.
-- `restart` may include requirements; they are resolved before the current runtime is discarded.
-  Resolution failure leaves the current runtime intact.
-- Removing packages, downgrading versions, replacing the complete manifest, changing interpreter versions, or changing historical cutoffs is outside the additive v1 interface.
-  Close the session and create a new one when necessary.
+- Removing packages, downgrading versions, changing interpreter versions, or replacing the complete manifest is outside the v1 tool interface.
+  Close and recreate the session when necessary.
+
+`prepare` resolves and adds requirements without replacing an existing runtime.
+It creates the logical session if needed but may leave it in `prepared` state without a worker.
+If safe activation in an existing runtime is impossible, it reports that a restart is required and leaves the current runtime and manifest unchanged.
+
+`restart` may include additive requirements.
+Resolution occurs before the old runtime is terminated.
+If resolution fails, the current runtime remains intact.
+After successful resolution, restart creates a new runtime generation with the retained merged manifest.
 
 The resolver may run outside the arbitrary-code worker and populate immutable caches.
-That implementation detail must preserve atomic public behavior.
+Package download access does not imply general network access for user code.
 
 ## 7. Tool: `console_session`
 
-### 7.1 Registered description and schema
+### 7.1 Draft schema
 
 ```json
 {
   "name": "console_session",
-  "description": "Prepare, inspect, or control persistent console sessions; normal evaluation and polling use `console`. Requirements are additive session configuration and survive runtime restarts. `prepare` adds requirements without replacing a running runtime; if that is not possible, it reports that a restart is required. `restart` replaces the runtime and loses in-memory R, Python, and SQL state while retaining requirements, workspace files, and the transcript. `close` ends the logical session.",
+  "description": "Prepare, inspect, or control persistent console sessions; normal evaluation and polling use console. Requirements are additive session configuration and survive runtime restarts. prepare creates the session if needed and adds requirements without replacing an existing runtime; if activation requires replacement, it reports that a restart is required. restart starts a fresh runtime generation; any existing in-memory R, Python, and SQL state is lost, while requirements, workspace files, and the transcript are retained. close ends the logical session.",
   "inputSchema": {
     "type": "object",
     "additionalProperties": false,
@@ -294,7 +289,7 @@ That implementation detail must preserve atomic public behavior.
       "action": {
         "type": "string",
         "enum": ["list", "status", "prepare", "interrupt", "restart", "close"],
-        "description": "Session operation: `list`, `status`, `prepare`, `interrupt`, `restart`, or `close`."
+        "description": "Session operation: list, status, prepare, interrupt, restart, or close."
       },
       "session": {
         "type": "string",
@@ -302,12 +297,12 @@ That implementation detail must preserve atomic public behavior.
         "minLength": 1,
         "maxLength": 64,
         "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$",
-        "description": "Target session; defaults to `default`."
+        "description": "Target session; defaults to default."
       },
       "requirements": {
         "type": "object",
         "additionalProperties": false,
-        "description": "Additive package requirements, valid with `prepare` or `restart`.",
+        "description": "Additive package requirements, valid with prepare or restart.",
         "properties": {
           "r": {
             "type": "array",
@@ -328,57 +323,56 @@ That implementation detail must preserve atomic public behavior.
 }
 ```
 
-`requirements` is valid only for `prepare` and `restart`.
-`prepare` requires at least one nonempty requirements array.
-`list`, `status`, `interrupt`, and `close` reject it.
+### 7.2 Validation
 
-### 7.2 Actions
+- `requirements` is valid only with `prepare` or `restart`.
+- `list` is global and should omit `session`; other actions target one session.
+- `prepare` requires at least one nonempty R or Python requirement.
+- `restart` may omit requirements and retain the existing manifest.
+- `interrupt` requires an active worker.
+  `restart` and `close` require an existing logical session.
+
+### 7.3 Actions
 
 `list` returns one compact line per existing session:
 
 ```text
 default    idle
+analysis   prepared
 model-fit  running  python  18s
 ```
 
-`status` returns only facts useful for deciding the next action, including persistent requirements when present:
+`status` returns only facts useful for deciding the next action:
 
 ```text
 default  generation=1  input_required  r
-requirements: R[dplyr, arrow] Python[polars>=1]
+requirements: r=2 python=1
 transcript: .mcp-console/sessions/default/transcript.qmd
 ```
 
-`prepare` resolves and adds requirements to the logical session.
-It preserves the current runtime and in-memory state.
-If safe live activation is impossible, it reports that `restart` is required and leaves both the manifest and runtime unchanged.
+`prepare` resolves and adds requirements.
+For a missing session it creates a configured logical session without starting a worker.
+The first code cell starts the runtime.
+For an existing session it never replaces the runtime implicitly.
+If activation requires replacement, it returns `restart required` and makes no change.
 
 ```json
-{ "action": "prepare", "requirements": { "python": ["polars>=1"] } }
+{
+  "action": "prepare",
+  "requirements": { "r": ["tibble", "dplyr"], "python": ["polars>=1"] }
+}
 ```
 
 `interrupt` requests a cooperative interrupt through a control path that is not queued behind the evaluation.
 It preserves the worker and runtime state when recovery succeeds.
 It never silently escalates to restart.
 
-`restart` first resolves any supplied additions, then replaces the runtime and increments the generation.
-Requirements, workspace files, transcript, and logical session configuration remain.
-All in-memory R objects, Python objects, imports, loaded packages, DuckDB catalog state, debugger state, and active process state are lost.
-If requirement resolution fails, the old runtime remains intact.
+`restart` resolves any supplied additive requirements before changing runtime state, then increments the session generation and starts a fresh runtime with the retained merged manifest and workspace policy.
+If a worker exists, it is terminated and all in-memory R, Python, SQL, debugger, and process state is lost.
+On a prepared session with no worker, restart simply starts the first generation.
+The transcript records the generation boundary.
 
-```json
-{ "action": "restart" }
-```
-
-```json
-{
-  "action": "restart",
-  "requirements": { "r": ["arrow"], "python": ["pyarrow"] }
-}
-```
-
-`close` terminates the worker and ends the logical session configuration.
-A later cell using the same name creates a new logical session without inheriting the old requirement manifest.
+`close` terminates the worker and removes the logical session and its requirement manifest.
 Retained workspace files and transcripts follow explicit retention policy; closing a session must not silently delete unrelated user files.
 
 ## 8. Session state model
@@ -387,6 +381,7 @@ Externally meaningful states are:
 
 ```text
 preparing
+prepared
 starting
 idle
 running
@@ -398,7 +393,12 @@ A missing session is absent, not another state.
 
 ```text
 absent
-  └─ code cell ─> preparing? ─> starting ─> idle ─> running
+  ├─ code cell ─> preparing? ─> starting ─> idle ─> running
+  └─ prepare ───> preparing ──> prepared
+
+prepared
+  ├─ code cell ─> starting ─> running
+  └─ close ─────> absent
 
 running
   ├─ success/error/interrupt ─> idle
@@ -406,7 +406,7 @@ running
   └─ crash/exit/kill ─────────> stopped
 
 stopped
-  ├─ restart ─> starting
+  ├─ restart ─> preparing? ─> starting
   └─ close ─> absent
 ```
 
@@ -580,7 +580,7 @@ The transcript is generated at stable boundaries and contains:
 - bounded stdout, stderr, result, and error excerpts;
 - paths to complete output and artifacts;
 - input prompts and supplied interactive lines when safe to record;
-- restart, stop, and generation boundaries.
+- restart, stop, and crash boundaries.
 
 The document is marked non-executing.
 It is a chronological execution record, not a promise of reproducibility and not a polished notebook.
@@ -610,19 +610,22 @@ Conversions and registration lifetimes must be explicit when they matter.
 ## 13. Complete interaction example
 
 ```json
+{
+  "action": "prepare",
+  "requirements": { "r": ["tibble", "dplyr"] }
+}
+```
+
+```text
+[prepared]
+```
+
+```json
 { "python": "import json\nlogs = json.load(open('logs.json'))" }
 ```
 
 ```text
 [done]
-```
-
-```json
-{ "action": "prepare", "requirements": { "r": ["tibble", "dplyr"] } }
-```
-
-```text
-Prepared: tibble, dplyr
 ```
 
 ```json
@@ -696,7 +699,7 @@ Browse[1]>
 - DuckDB CLI dot commands;
 - automatic scanning of every Python global as a SQL relation;
 - silent worker restart;
-- Jupyter-kernel or Ark-specific operations;
+- public Jupyter-kernel or Ark-specific operations;
 - MCP task augmentation.
 
 Reconsider an omitted feature only when a concrete client or workflow cannot be served by the two-tool, text-and-files model.

@@ -1,7 +1,7 @@
 # Registered MCP Tool Descriptions
 
-**Status:** Draft v0.1 \
-**Date:** 2026-07-26
+**Status:** Draft v0.2 \
+**Date:** 2026-07-27
 
 This document contains the exact descriptions intended to be registered with the MCP server.
 Keep these synchronized with [`MCP_INTERFACE.md`](MCP_INTERFACE.md) and the implementation.
@@ -26,7 +26,7 @@ Property descriptions:
 ## `console_session`
 
 ```text
-Prepare, inspect, or control persistent console sessions; normal evaluation and polling use console. Requirements are additive session configuration and survive runtime restarts. prepare adds requirements without replacing a running runtime; if that is not possible, it reports that a restart is required. restart replaces the runtime and loses in-memory R, Python, and SQL state while retaining requirements, workspace files, and the transcript. close ends the logical session.
+Prepare, inspect, or control persistent console sessions; normal evaluation and polling use console. Requirements are additive session configuration and survive runtime restarts. prepare creates the session if needed and adds requirements without replacing an existing runtime; if activation requires replacement, it reports that a restart is required. restart starts a fresh runtime generation; any existing in-memory R, Python, and SQL state is lost, while requirements, workspace files, and the transcript are retained. close ends the logical session.
 ```
 
 Property descriptions:
