@@ -1,13 +1,12 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::ffi::OsString;
 use std::fs::{self, DirBuilder};
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::os::unix::fs::DirBuilderExt;
 use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, ExitStatus};
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
-use std::thread::{self, JoinHandle};
+use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const SANDBOX_EXEC: &str = "/usr/bin/sandbox-exec";
@@ -15,17 +14,13 @@ const POLICY: &str = include_str!("read_only_policy.sbpl");
 const PROCESS_EXIT_TIMEOUT: Duration = Duration::from_secs(5);
 const PROCESS_POLL_INTERVAL: Duration = Duration::from_millis(10);
 const TERMINATION_GRACE_PERIOD: Duration = Duration::from_secs(2);
-const TRACKER_STOP_IDENT: libc::uintptr_t = 1;
 const TRACKER_EVENT_CAPACITY: usize = 32;
 const FORWARDED_SIGNALS: [libc::c_int; 4] =
     [libc::SIGHUP, libc::SIGINT, libc::SIGQUIT, libc::SIGTERM];
 
-static SANDBOX_ROOT_PID: AtomicI32 = AtomicI32::new(0);
-static TERMINATION_REQUESTED: AtomicBool = AtomicBool::new(false);
-
 pub(super) fn run(command: &[OsString]) -> Result<ExitCode, String> {
     let mut temp_directory = TemporaryDirectory::new()?;
-    let mut signal_forwarder = SignalForwarder::install()?;
+    let signal_relay = SignalRelay::install()?;
     let mut foreground_terminal = ForegroundTerminal::detect();
 
     let mut sandbox_command = Command::new(SANDBOX_EXEC);
@@ -39,31 +34,22 @@ pub(super) fn run(command: &[OsString]) -> Result<ExitCode, String> {
         .arg("--")
         .args(command)
         .env("TMPDIR", temp_directory.path());
-    signal_forwarder.restore_child_actions(&mut sandbox_command, foreground_terminal.descriptor());
+    signal_relay.configure_child(&mut sandbox_command, foreground_terminal.descriptor());
 
     let mut child = sandbox_command
         .spawn()
         .map_err(|error| format!("failed to launch `{SANDBOX_EXEC}`: {error}"))?;
-    signal_forwarder.set_root(child.id() as libc::pid_t);
 
-    let tracker = match DescendantTracker::start(child.id() as libc::pid_t) {
+    let mut tracker = match DescendantTracker::start(child.id() as libc::pid_t) {
         Ok(tracker) => tracker,
         Err(error) => {
             let _ = kill_root(&mut child);
-            signal_forwarder.clear_root();
             temp_directory.preserve();
             return Err(error);
         }
     };
-    if let Err(error) = signal_forwarder.restore_original_mask() {
-        let _ = kill_root(&mut child);
-        signal_forwarder.clear_root();
-        let _ = tracker.terminate();
-        temp_directory.preserve();
-        return Err(error);
-    }
 
-    let status_result = wait_for_root(&mut child, &mut signal_forwarder, &tracker);
+    let status_result = wait_for_root(&mut child, &signal_relay, &mut tracker);
     let terminal_result = foreground_terminal.restore();
     let status = match status_result {
         Ok(status) => status,
@@ -162,13 +148,12 @@ fn set_foreground_process_group(
     Ok(())
 }
 
-struct SignalForwarder {
-    previous_actions: Vec<(libc::c_int, libc::sigaction)>,
+struct SignalRelay {
+    wait_set: libc::sigset_t,
     previous_mask: libc::sigset_t,
-    signals_blocked: bool,
 }
 
-impl SignalForwarder {
+impl SignalRelay {
     fn install() -> Result<Self, String> {
         let signal_set = forwarded_signal_set();
         let mut previous_mask: libc::sigset_t = unsafe { std::mem::zeroed() };
@@ -180,50 +165,24 @@ impl SignalForwarder {
                 std::io::Error::from_raw_os_error(mask_result)
             ));
         }
-        TERMINATION_REQUESTED.store(false, Ordering::SeqCst);
 
-        let mut previous_actions = Vec::with_capacity(FORWARDED_SIGNALS.len());
-        let mut action: libc::sigaction = unsafe { std::mem::zeroed() };
-        action.sa_sigaction = forward_signal as *const () as libc::sighandler_t;
-        action.sa_flags = libc::SA_RESTART;
-        unsafe { libc::sigemptyset(&mut action.sa_mask) };
-
+        // Preserve signals that the caller already blocked. They remain pending
+        // instead of being consumed and relayed by this one-shot launcher.
+        let mut wait_set: libc::sigset_t = unsafe { std::mem::zeroed() };
+        unsafe { libc::sigemptyset(&mut wait_set) };
         for signal in FORWARDED_SIGNALS {
-            let mut previous: libc::sigaction = unsafe { std::mem::zeroed() };
-            if unsafe { libc::sigaction(signal, &action, &mut previous) } != 0 {
-                let error = std::io::Error::last_os_error();
-                for (installed_signal, installed_previous) in previous_actions.iter().rev() {
-                    let _ = unsafe {
-                        libc::sigaction(*installed_signal, installed_previous, std::ptr::null_mut())
-                    };
-                }
-                let _ = unsafe {
-                    libc::pthread_sigmask(libc::SIG_SETMASK, &previous_mask, std::ptr::null_mut())
-                };
-                return Err(format!(
-                    "failed to install sandbox signal forwarding for signal {signal}: {error}"
-                ));
+            if unsafe { libc::sigismember(&previous_mask, signal) } == 0 {
+                unsafe { libc::sigaddset(&mut wait_set, signal) };
             }
-            previous_actions.push((signal, previous));
         }
 
         Ok(Self {
-            previous_actions,
+            wait_set,
             previous_mask,
-            signals_blocked: true,
         })
     }
 
-    fn restore_child_actions(
-        &self,
-        command: &mut Command,
-        terminal_descriptor: Option<libc::c_int>,
-    ) {
-        let previous_actions: Vec<_> = self
-            .previous_actions
-            .iter()
-            .map(|(signal, action)| (*signal, unsafe { std::ptr::read(action) }))
-            .collect();
+    fn configure_child(&self, command: &mut Command, terminal_descriptor: Option<libc::c_int>) {
         let previous_mask = unsafe { std::ptr::read(&self.previous_mask) };
 
         unsafe {
@@ -240,11 +199,6 @@ impl SignalForwarder {
                 if let Some(descriptor) = terminal_descriptor {
                     set_foreground_process_group(descriptor, libc::getpid())?;
                 }
-                for (signal, action) in &previous_actions {
-                    if libc::sigaction(*signal, action, std::ptr::null_mut()) != 0 {
-                        return Err(std::io::Error::last_os_error());
-                    }
-                }
                 let mask_result =
                     libc::pthread_sigmask(libc::SIG_SETMASK, &previous_mask, std::ptr::null_mut());
                 if mask_result != 0 {
@@ -255,59 +209,43 @@ impl SignalForwarder {
         }
     }
 
-    fn set_root(&self, pid: libc::pid_t) {
-        SANDBOX_ROOT_PID.store(pid, Ordering::SeqCst);
-    }
+    fn relay_pending(&self, process_group: libc::pid_t) -> Result<bool, String> {
+        let mut termination_requested = false;
+        loop {
+            let mut pending: libc::sigset_t = unsafe { std::mem::zeroed() };
+            if unsafe { libc::sigpending(&mut pending) } != 0 {
+                return Err(format!(
+                    "failed to inspect pending launcher signals: {}",
+                    std::io::Error::last_os_error()
+                ));
+            }
+            if !FORWARDED_SIGNALS.iter().any(|signal| {
+                (unsafe { libc::sigismember(&self.wait_set, *signal) } == 1)
+                    && (unsafe { libc::sigismember(&pending, *signal) } == 1)
+            }) {
+                return Ok(termination_requested);
+            }
 
-    fn clear_root(&self) {
-        SANDBOX_ROOT_PID.store(0, Ordering::SeqCst);
-    }
+            let mut signal = 0;
+            let wait_result = unsafe { libc::sigwait(&self.wait_set, &mut signal) };
+            if wait_result != 0 {
+                return Err(format!(
+                    "failed to consume a pending launcher signal: {}",
+                    std::io::Error::from_raw_os_error(wait_result)
+                ));
+            }
+            termination_requested |= signal != libc::SIGINT;
 
-    fn block_forwarded_signals(&mut self) -> Result<(), String> {
-        if self.signals_blocked {
-            return Ok(());
+            let result = unsafe { libc::kill(-process_group, signal) };
+            if result != 0 {
+                let error = std::io::Error::last_os_error();
+                if error.raw_os_error() != Some(libc::ESRCH) {
+                    return Err(format!(
+                        "failed to relay signal {signal} to the sandbox process group: {error}"
+                    ));
+                }
+            }
         }
-
-        let signal_set = forwarded_signal_set();
-        let result =
-            unsafe { libc::pthread_sigmask(libc::SIG_BLOCK, &signal_set, std::ptr::null_mut()) };
-        if result != 0 {
-            return Err(format!(
-                "failed to block sandbox-forwarded signals: {}",
-                std::io::Error::from_raw_os_error(result)
-            ));
-        }
-        self.signals_blocked = true;
-        Ok(())
-    }
-
-    fn restore_original_mask(&mut self) -> Result<(), String> {
-        if !self.signals_blocked {
-            return Ok(());
-        }
-
-        let result = unsafe {
-            libc::pthread_sigmask(libc::SIG_SETMASK, &self.previous_mask, std::ptr::null_mut())
-        };
-        if result != 0 {
-            return Err(format!(
-                "failed to restore the launcher signal mask: {}",
-                std::io::Error::from_raw_os_error(result)
-            ));
-        }
-        self.signals_blocked = false;
-        Ok(())
-    }
-}
-
-impl Drop for SignalForwarder {
-    fn drop(&mut self) {
-        self.clear_root();
-        let _ = self.block_forwarded_signals();
-        for (signal, previous) in self.previous_actions.iter().rev() {
-            let _ = unsafe { libc::sigaction(*signal, previous, std::ptr::null_mut()) };
-        }
-        let _ = self.restore_original_mask();
     }
 }
 
@@ -322,55 +260,38 @@ fn forwarded_signal_set() -> libc::sigset_t {
 
 fn wait_for_root(
     child: &mut std::process::Child,
-    signal_forwarder: &mut SignalForwarder,
-    tracker: &DescendantTracker,
+    signal_relay: &SignalRelay,
+    tracker: &mut DescendantTracker,
 ) -> Result<ExitStatus, String> {
     let mut termination_deadline = None;
     loop {
-        if let Err(error) = signal_forwarder.block_forwarded_signals() {
+        if let Err(error) = tracker.drain_events() {
             let _ = kill_root(child);
-            signal_forwarder.clear_root();
             return Err(error);
         }
-        match child.try_wait() {
-            Ok(Some(status)) => {
-                signal_forwarder.clear_root();
-                signal_forwarder.restore_original_mask()?;
-                return Ok(status);
-            }
-            Ok(None) => {
-                if tracker.is_finished() {
-                    let termination_result = kill_root(child);
-                    signal_forwarder.clear_root();
-                    let mask_result = signal_forwarder.restore_original_mask();
-                    termination_result?;
-                    mask_result?;
-                    return Err(
-                        "sandbox process tracker stopped before the command exited".to_string()
-                    );
-                }
 
+        match child.try_wait() {
+            Ok(Some(status)) => return Ok(status),
+            Ok(None) => {
                 let now = Instant::now();
-                if TERMINATION_REQUESTED.load(Ordering::SeqCst) {
+                let process_group = child.id() as libc::pid_t;
+                let termination_requested = match signal_relay.relay_pending(process_group) {
+                    Ok(termination_requested) => termination_requested,
+                    Err(error) => {
+                        let _ = kill_root(child);
+                        return Err(error);
+                    }
+                };
+                if termination_requested {
                     termination_deadline.get_or_insert_with(|| now + TERMINATION_GRACE_PERIOD);
                 }
                 if termination_deadline.is_some_and(|deadline| now >= deadline) {
-                    let status = kill_root(child)?;
-                    signal_forwarder.clear_root();
-                    signal_forwarder.restore_original_mask()?;
-                    return Ok(status);
-                }
-                if let Err(error) = signal_forwarder.restore_original_mask() {
-                    let _ = kill_root(child);
-                    signal_forwarder.clear_root();
-                    return Err(error);
+                    return kill_root(child);
                 }
                 thread::sleep(PROCESS_POLL_INTERVAL);
             }
             Err(error) => {
                 let _ = kill_root(child);
-                signal_forwarder.clear_root();
-                let _ = signal_forwarder.restore_original_mask();
                 return Err(format!("failed to wait for `{SANDBOX_EXEC}`: {error}"));
             }
         }
@@ -401,21 +322,6 @@ fn kill_root(child: &mut std::process::Child) -> Result<ExitStatus, String> {
         .map_err(|error| format!("failed to wait for terminated `{SANDBOX_EXEC}`: {error}"))
 }
 
-extern "C" fn forward_signal(signal: libc::c_int) {
-    let saved_errno = unsafe { *libc::__error() };
-    if signal != libc::SIGINT {
-        TERMINATION_REQUESTED.store(true, Ordering::SeqCst);
-    }
-
-    let root_pid = SANDBOX_ROOT_PID.load(Ordering::Relaxed);
-    if root_pid > 0 {
-        // kill(2) is async-signal-safe. The supervisor remains alive to finish
-        // tracking and terminating descendants after the root handles the signal.
-        let _ = unsafe { libc::kill(-root_pid, signal) };
-    }
-    unsafe { *libc::__error() = saved_errno };
-}
-
 #[derive(Clone, Copy, Eq, Hash, PartialEq)]
 struct ProcessIdentity {
     pid: libc::pid_t,
@@ -424,25 +330,20 @@ struct ProcessIdentity {
 }
 
 struct DescendantTracker {
-    kqueue: libc::c_int,
-    stop_requested: Arc<AtomicBool>,
-    handle: JoinHandle<Result<(), String>>,
+    kqueue: OwnedFd,
+    state: TrackerState,
 }
 
 impl DescendantTracker {
     fn start(root_pid: libc::pid_t) -> Result<Self, String> {
-        let kqueue = unsafe { libc::kqueue() };
-        if kqueue < 0 {
+        let kqueue_descriptor = unsafe { libc::kqueue() };
+        if kqueue_descriptor < 0 {
             return Err(format!(
                 "failed to create the sandbox process tracker: {}",
                 std::io::Error::last_os_error()
             ));
         }
-
-        if let Err(error) = register_stop_event(kqueue) {
-            let _ = unsafe { libc::close(kqueue) };
-            return Err(error);
-        }
+        let kqueue = unsafe { OwnedFd::from_raw_fd(kqueue_descriptor) };
 
         // Darwin provides neither child subreapers nor PID namespaces, and its
         // kqueue NOTE_TRACK facility is unsupported. A descendant that becomes
@@ -450,115 +351,46 @@ impl DescendantTracker {
         // be paired with a libproc snapshot, is therefore an intentional boundary
         // of the initial launcher. Once observed, descendants that call setsid(),
         // such as processx children, remain tracked by their PID and start time.
-        let root = match process_identity(root_pid) {
-            Ok(root) => root,
-            Err(error) => {
-                let _ = unsafe { libc::close(kqueue) };
-                return Err(error);
-            }
-        };
+        let root = process_identity(root_pid)?;
         let mut state = TrackerState {
             root,
             active: HashMap::new(),
         };
-        if let Err(error) = add_process_tree(kqueue, root_pid, None, &mut state) {
-            let _ = unsafe { libc::close(kqueue) };
-            return Err(error);
-        }
+        add_process_tree(kqueue.as_raw_fd(), root_pid, None, &mut state)?;
 
-        let stop_requested = Arc::new(AtomicBool::new(false));
-        let tracker_stop_requested = Arc::clone(&stop_requested);
-        let handle = match thread::Builder::new()
-            .name("mcp-console-process-tracker".to_string())
-            .spawn(move || track_descendants(kqueue, state, tracker_stop_requested))
-        {
-            Ok(handle) => handle,
-            Err(error) => {
-                let _ = unsafe { libc::close(kqueue) };
-                return Err(format!(
-                    "failed to start the sandbox process tracker: {error}"
-                ));
-            }
-        };
-
-        Ok(Self {
-            kqueue,
-            stop_requested,
-            handle,
-        })
+        Ok(Self { kqueue, state })
     }
 
-    fn is_finished(&self) -> bool {
-        self.handle.is_finished()
-    }
-
-    fn terminate(self) -> Result<(), String> {
-        self.stop_requested.store(true, Ordering::Release);
-        // The user event normally wakes kevent immediately. The shared flag and
-        // bounded idle timeout remain the fallback if the wake-up syscall fails.
-        let _ = trigger_stop_event(self.kqueue);
-        let tracker_result = self
-            .handle
-            .join()
-            .map_err(|_| "sandbox process tracker panicked".to_string())
-            .and_then(|result| result);
-        let _ = unsafe { libc::close(self.kqueue) };
-
-        tracker_result
-    }
-}
-
-struct TrackerState {
-    root: Option<ProcessIdentity>,
-    active: HashMap<libc::pid_t, ProcessIdentity>,
-}
-
-fn track_descendants(
-    kqueue: libc::c_int,
-    mut state: TrackerState,
-    stop_requested: Arc<AtomicBool>,
-) -> Result<(), String> {
-    let mut events: [libc::kevent; TRACKER_EVENT_CAPACITY] =
-        unsafe { std::mem::MaybeUninit::zeroed().assume_init() };
-    let mut deadline = None;
-
-    loop {
-        if stop_requested.load(Ordering::Acquire) {
-            deadline.get_or_insert_with(|| Instant::now() + PROCESS_EXIT_TIMEOUT);
-        }
-        let timeout_duration = if deadline.is_some() {
-            PROCESS_POLL_INTERVAL
-        } else {
-            Duration::from_secs(1)
-        };
+    fn drain_events(&mut self) -> Result<(), String> {
+        let mut events: [libc::kevent; TRACKER_EVENT_CAPACITY] =
+            unsafe { std::mem::MaybeUninit::zeroed().assume_init() };
         let timeout = libc::timespec {
-            tv_sec: timeout_duration.as_secs() as libc::time_t,
-            tv_nsec: timeout_duration.subsec_nanos() as libc::c_long,
+            tv_sec: 0,
+            tv_nsec: 0,
         };
-        let event_count = unsafe {
-            libc::kevent(
-                kqueue,
-                std::ptr::null(),
-                0,
-                events.as_mut_ptr(),
-                events.len() as libc::c_int,
-                &timeout,
-            )
-        };
-        if event_count < 0 {
-            let error = std::io::Error::last_os_error();
-            if error.kind() == std::io::ErrorKind::Interrupted {
-                continue;
+
+        let event_count = loop {
+            let result = unsafe {
+                libc::kevent(
+                    self.kqueue.as_raw_fd(),
+                    std::ptr::null(),
+                    0,
+                    events.as_mut_ptr(),
+                    events.len() as libc::c_int,
+                    &timeout,
+                )
+            };
+            if result < 0 {
+                let error = std::io::Error::last_os_error();
+                if error.kind() == std::io::ErrorKind::Interrupted {
+                    continue;
+                }
+                return Err(format!("sandbox process tracker failed: {error}"));
             }
-            return Err(format!("sandbox process tracker failed: {error}"));
-        }
+            break result;
+        };
 
         for event in events.iter().take(event_count as usize) {
-            if event.filter == libc::EVFILT_USER && event.ident == TRACKER_STOP_IDENT {
-                deadline.get_or_insert_with(|| Instant::now() + PROCESS_EXIT_TIMEOUT);
-                continue;
-            }
-
             if event.filter != libc::EVFILT_PROC {
                 continue;
             }
@@ -567,7 +399,7 @@ fn track_descendants(
             let event_data = event.data;
             if event.flags & libc::EV_ERROR != 0 {
                 if event_data == libc::ESRCH as libc::intptr_t {
-                    state.active.remove(&pid);
+                    self.state.active.remove(&pid);
                     continue;
                 }
                 return Err(format!(
@@ -577,45 +409,52 @@ fn track_descendants(
             }
 
             if event.fflags & libc::NOTE_FORK != 0 {
-                add_children(kqueue, pid, &mut state)?;
+                add_children(self.kqueue.as_raw_fd(), pid, &mut self.state)?;
             }
             if event.fflags & libc::NOTE_EXIT != 0 {
-                state.active.remove(&pid);
+                self.state.active.remove(&pid);
             }
         }
+        Ok(())
+    }
 
-        if stop_requested.load(Ordering::Acquire) {
-            deadline.get_or_insert_with(|| Instant::now() + PROCESS_EXIT_TIMEOUT);
-        }
-        let Some(deadline) = deadline else {
-            continue;
-        };
+    fn terminate(mut self) -> Result<(), String> {
+        let deadline = Instant::now() + PROCESS_EXIT_TIMEOUT;
+        loop {
+            self.drain_events()?;
 
-        // Re-snapshot before each signal pass to narrow the teardown fork window.
-        // A child that becomes orphaned before observation remains outside the
-        // documented initial supervision boundary.
-        discover_active_children(kqueue, &mut state)?;
-        if let Some(root) = state.root {
-            if state.active.get(&root.pid) == Some(&root) {
-                state.active.remove(&root.pid);
+            // Re-snapshot before each signal pass to narrow the teardown fork
+            // window. A child that becomes orphaned before observation remains
+            // outside the documented supervision boundary.
+            discover_active_children(self.kqueue.as_raw_fd(), &mut self.state)?;
+            if let Some(root) = self.state.root {
+                if self.state.active.get(&root.pid) == Some(&root) {
+                    self.state.active.remove(&root.pid);
+                }
             }
-        }
-        remove_stale_processes(&mut state.active)?;
+            remove_stale_processes(&mut self.state.active)?;
 
-        // The root command has exited, so its background work has no remaining
-        // lifetime to preserve. SIGKILL keeps teardown bounded and deterministic.
-        for identity in state.active.values().copied() {
-            signal_process(identity, libc::SIGKILL)?;
-        }
-        remove_stale_processes(&mut state.active)?;
+            // The root command has exited, so its background work has no
+            // remaining lifetime to preserve.
+            for identity in self.state.active.values().copied() {
+                signal_process(identity, libc::SIGKILL)?;
+            }
+            remove_stale_processes(&mut self.state.active)?;
 
-        if state.active.is_empty() {
-            return Ok(());
-        }
-        if Instant::now() >= deadline {
-            return Err("timed out waiting for sandbox descendants to exit".to_string());
+            if self.state.active.is_empty() {
+                return Ok(());
+            }
+            if Instant::now() >= deadline {
+                return Err("timed out waiting for sandbox descendants to exit".to_string());
+            }
+            thread::sleep(PROCESS_POLL_INTERVAL);
         }
     }
+}
+
+struct TrackerState {
+    root: Option<ProcessIdentity>,
+    active: HashMap<libc::pid_t, ProcessIdentity>,
 }
 
 fn remove_stale_processes(
@@ -628,45 +467,6 @@ fn remove_stale_processes(
         }
     }
     Ok(())
-}
-
-fn register_stop_event(kqueue: libc::c_int) -> Result<(), String> {
-    let event = libc::kevent {
-        ident: TRACKER_STOP_IDENT,
-        filter: libc::EVFILT_USER,
-        flags: libc::EV_ADD | libc::EV_CLEAR,
-        fflags: 0,
-        data: 0,
-        udata: std::ptr::null_mut(),
-    };
-    submit_event(kqueue, &event, "register the process tracker stop event")
-}
-
-fn trigger_stop_event(kqueue: libc::c_int) -> Result<(), String> {
-    let event = libc::kevent {
-        ident: TRACKER_STOP_IDENT,
-        filter: libc::EVFILT_USER,
-        flags: 0,
-        fflags: libc::NOTE_TRIGGER,
-        data: 0,
-        udata: std::ptr::null_mut(),
-    };
-    submit_event(kqueue, &event, "stop the sandbox process tracker")
-}
-
-fn submit_event(kqueue: libc::c_int, event: &libc::kevent, action: &str) -> Result<(), String> {
-    loop {
-        let result =
-            unsafe { libc::kevent(kqueue, event, 1, std::ptr::null_mut(), 0, std::ptr::null()) };
-        if result >= 0 {
-            return Ok(());
-        }
-
-        let error = std::io::Error::last_os_error();
-        if error.kind() != std::io::ErrorKind::Interrupted {
-            return Err(format!("failed to {action}: {error}"));
-        }
-    }
 }
 
 fn add_process_tree(
