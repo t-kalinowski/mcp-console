@@ -9,17 +9,21 @@ MCP Console is an initial Rust binary package.
 The implemented commands are:
 
 ```text
+mcp-console
+mcp-console serve
 mcp-console --version
 mcp-console sandbox [--] COMMAND [ARG]...
 ```
 
+The default command and `serve` run an MCP server over stdio.
+The server registers only a `console` tool, which accepts any JSON object and echoes it as JSON text.
 The version command prints the package name and version.
 On macOS, the sandbox command launches a subprocess under `sandbox-exec` with host filesystem reads allowed, regular-file writes limited to a dedicated per-launch temporary directory, runtime device and IPC exceptions, and network access denied.
 This initial launcher waits only for the direct command.
 Background descendants are unsupported: they may outlive the launcher, which attempts to remove their dedicated temporary directory on a best-effort basis when it returns.
 Descendant supervision is intentionally deferred because it must account for process groups, session-detached children, signal forwarding, and PID reuse together.
 The sandbox command is unsupported on Linux and Windows.
-The MCP server, session model, language runtimes, sidecar API, viewer, environment management, output retention, and transcript generation do not exist yet.
+The session model, language runtimes, sidecar API, viewer, environment management, output retention, and transcript generation do not exist yet.
 
 ## Product direction
 
@@ -38,6 +42,7 @@ See `design-sketches/README.md` for the product overview and `design-sketches/do
 
 - `Cargo.toml` — Rust package metadata.
 - `src/main.rs` — current binary entry point.
+- `src/server.rs` — MCP stdio server and echoing `console` tool.
 - `src/sandbox.rs` — platform dispatch for the sandbox process launcher.
 - `src/sandbox/` — platform implementation and macOS Seatbelt policy.
 - `tests/cli.rs` — public binary acceptance tests.
