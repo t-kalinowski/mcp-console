@@ -14,16 +14,21 @@ const SANDBOX_EXEC: &str = "/usr/bin/sandbox-exec";
 const POLICY: &str = include_str!("read_only_policy.sbpl");
 const PROCESS_EXIT_TIMEOUT: Duration = Duration::from_secs(5);
 const PROCESS_POLL_INTERVAL: Duration = Duration::from_millis(10);
+const TERMINATION_GRACE_PERIOD: Duration = Duration::from_secs(2);
 const TRACKER_STOP_IDENT: libc::uintptr_t = 1;
 const TRACKER_EVENT_CAPACITY: usize = 32;
 const FORWARDED_SIGNALS: [libc::c_int; 4] =
     [libc::SIGHUP, libc::SIGINT, libc::SIGQUIT, libc::SIGTERM];
 
 static SANDBOX_ROOT_PID: AtomicI32 = AtomicI32::new(0);
+static SIGNAL_WINDOW_ACTIVE: AtomicBool = AtomicBool::new(false);
+static TERMINATION_REQUESTED: AtomicBool = AtomicBool::new(false);
+static FORCE_EXIT_REQUESTED: AtomicBool = AtomicBool::new(false);
 
 pub(super) fn run(command: &[OsString]) -> Result<ExitCode, String> {
     let mut temp_directory = TemporaryDirectory::new()?;
     let mut signal_forwarder = SignalForwarder::install()?;
+    let mut foreground_terminal = ForegroundTerminal::detect();
 
     let mut sandbox_command = Command::new(SANDBOX_EXEC);
     sandbox_command
@@ -36,11 +41,8 @@ pub(super) fn run(command: &[OsString]) -> Result<ExitCode, String> {
         .arg("--")
         .args(command)
         .env("TMPDIR", temp_directory.path());
-    signal_forwarder.restore_child_actions(&mut sandbox_command);
+    signal_forwarder.restore_child_actions(&mut sandbox_command, foreground_terminal.descriptor());
 
-    // Keep the command in the launcher's process group. Creating a new group
-    // without transferring terminal foreground ownership would stop inherited
-    // terminal reads with SIGTTIN; the process tracker handles descendants.
     let mut child = sandbox_command
         .spawn()
         .map_err(|error| format!("failed to launch `{SANDBOX_EXEC}`: {error}"))?;
@@ -49,23 +51,23 @@ pub(super) fn run(command: &[OsString]) -> Result<ExitCode, String> {
     let tracker = match DescendantTracker::start(child.id() as libc::pid_t) {
         Ok(tracker) => tracker,
         Err(error) => {
-            let _ = child.kill();
-            let _ = child.wait();
+            let _ = kill_root(&mut child);
             signal_forwarder.clear_root();
             temp_directory.preserve();
             return Err(error);
         }
     };
     if let Err(error) = signal_forwarder.restore_original_mask() {
-        let _ = child.kill();
-        let _ = child.wait();
+        let _ = kill_root(&mut child);
         signal_forwarder.clear_root();
         let _ = tracker.terminate();
         temp_directory.preserve();
         return Err(error);
     }
 
-    let status = match wait_for_root(&mut child, &mut signal_forwarder) {
+    let status_result = wait_for_root(&mut child, &mut signal_forwarder);
+    let terminal_result = foreground_terminal.restore();
+    let status = match status_result {
         Ok(status) => status,
         Err(error) => {
             let _ = tracker.terminate();
@@ -81,7 +83,79 @@ pub(super) fn run(command: &[OsString]) -> Result<ExitCode, String> {
         return Err(error);
     }
 
+    terminal_result?;
     Ok(exit_code(status))
+}
+
+struct ForegroundTerminal {
+    descriptor: Option<libc::c_int>,
+    launcher_process_group: libc::pid_t,
+}
+
+impl ForegroundTerminal {
+    fn detect() -> Self {
+        let launcher_process_group = unsafe { libc::getpgrp() };
+        let descriptor = [libc::STDIN_FILENO, libc::STDOUT_FILENO, libc::STDERR_FILENO]
+            .into_iter()
+            .find(|descriptor| unsafe { libc::tcgetpgrp(*descriptor) } == launcher_process_group);
+
+        Self {
+            descriptor,
+            launcher_process_group,
+        }
+    }
+
+    fn descriptor(&self) -> Option<libc::c_int> {
+        self.descriptor
+    }
+
+    fn restore(&mut self) -> Result<(), String> {
+        let Some(descriptor) = self.descriptor else {
+            return Ok(());
+        };
+
+        set_foreground_process_group(descriptor, self.launcher_process_group).map_err(|error| {
+            format!("failed to restore the launcher as the foreground process group: {error}")
+        })?;
+        self.descriptor = None;
+        Ok(())
+    }
+}
+
+impl Drop for ForegroundTerminal {
+    fn drop(&mut self) {
+        let _ = self.restore();
+    }
+}
+
+fn set_foreground_process_group(
+    descriptor: libc::c_int,
+    process_group: libc::pid_t,
+) -> std::io::Result<()> {
+    let mut signal_set: libc::sigset_t = unsafe { std::mem::zeroed() };
+    let mut previous_mask: libc::sigset_t = unsafe { std::mem::zeroed() };
+    unsafe {
+        libc::sigemptyset(&mut signal_set);
+        libc::sigaddset(&mut signal_set, libc::SIGTTOU);
+    }
+    let mask_result =
+        unsafe { libc::pthread_sigmask(libc::SIG_BLOCK, &signal_set, &mut previous_mask) };
+    if mask_result != 0 {
+        return Err(std::io::Error::from_raw_os_error(mask_result));
+    }
+
+    let terminal_result = unsafe { libc::tcsetpgrp(descriptor, process_group) };
+    let terminal_error = std::io::Error::last_os_error();
+    let mask_result =
+        unsafe { libc::pthread_sigmask(libc::SIG_SETMASK, &previous_mask, std::ptr::null_mut()) };
+
+    if terminal_result != 0 {
+        return Err(terminal_error);
+    }
+    if mask_result != 0 {
+        return Err(std::io::Error::from_raw_os_error(mask_result));
+    }
+    Ok(())
 }
 
 struct SignalForwarder {
@@ -102,6 +176,9 @@ impl SignalForwarder {
                 std::io::Error::from_raw_os_error(mask_result)
             ));
         }
+        SIGNAL_WINDOW_ACTIVE.store(false, Ordering::SeqCst);
+        TERMINATION_REQUESTED.store(false, Ordering::SeqCst);
+        FORCE_EXIT_REQUESTED.store(false, Ordering::SeqCst);
 
         let mut previous_actions = Vec::with_capacity(FORWARDED_SIGNALS.len());
         let mut action: libc::sigaction = unsafe { std::mem::zeroed() };
@@ -135,7 +212,11 @@ impl SignalForwarder {
         })
     }
 
-    fn restore_child_actions(&self, command: &mut Command) {
+    fn restore_child_actions(
+        &self,
+        command: &mut Command,
+        terminal_descriptor: Option<libc::c_int>,
+    ) {
         let previous_actions: Vec<_> = self
             .previous_actions
             .iter()
@@ -145,6 +226,18 @@ impl SignalForwarder {
 
         unsafe {
             command.pre_exec(move || {
+                // Give the command a dedicated process group. If this launcher
+                // owns a terminal, hand foreground control to that group before
+                // exec so terminal signals reach it directly and exactly once.
+                // Stopped/continued job-control state is intentionally not
+                // proxied; supporting Ctrl-Z requires a separate wait state
+                // machine that restores and later reassigns the terminal.
+                if libc::setpgid(0, 0) != 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                if let Some(descriptor) = terminal_descriptor {
+                    set_foreground_process_group(descriptor, libc::getpid())?;
+                }
                 for (signal, action) in &previous_actions {
                     if libc::sigaction(*signal, action, std::ptr::null_mut()) != 0 {
                         return Err(std::io::Error::last_os_error());
@@ -229,10 +322,11 @@ fn wait_for_root(
     child: &mut std::process::Child,
     signal_forwarder: &mut SignalForwarder,
 ) -> Result<ExitStatus, String> {
+    let mut termination_deadline = None;
+    let mut repeat_deadline = None;
     loop {
         if let Err(error) = signal_forwarder.block_forwarded_signals() {
-            let _ = child.kill();
-            let _ = child.wait();
+            let _ = kill_root(child);
             signal_forwarder.clear_root();
             return Err(error);
         }
@@ -243,17 +337,33 @@ fn wait_for_root(
                 return Ok(status);
             }
             Ok(None) => {
+                let now = Instant::now();
+                if repeat_deadline.is_some_and(|deadline| now >= deadline) {
+                    SIGNAL_WINDOW_ACTIVE.store(false, Ordering::SeqCst);
+                    repeat_deadline = None;
+                } else if repeat_deadline.is_none() && SIGNAL_WINDOW_ACTIVE.load(Ordering::SeqCst) {
+                    repeat_deadline = Some(now + TERMINATION_GRACE_PERIOD);
+                }
+                if TERMINATION_REQUESTED.load(Ordering::SeqCst) {
+                    termination_deadline.get_or_insert_with(|| now + TERMINATION_GRACE_PERIOD);
+                }
+                let force_exit = FORCE_EXIT_REQUESTED.load(Ordering::SeqCst)
+                    || termination_deadline.is_some_and(|deadline| now >= deadline);
+                if force_exit {
+                    let status = kill_root(child)?;
+                    signal_forwarder.clear_root();
+                    signal_forwarder.restore_original_mask()?;
+                    return Ok(status);
+                }
                 if let Err(error) = signal_forwarder.restore_original_mask() {
-                    let _ = child.kill();
-                    let _ = child.wait();
+                    let _ = kill_root(child);
                     signal_forwarder.clear_root();
                     return Err(error);
                 }
                 thread::sleep(PROCESS_POLL_INTERVAL);
             }
             Err(error) => {
-                let _ = child.kill();
-                let _ = child.wait();
+                let _ = kill_root(child);
                 signal_forwarder.clear_root();
                 let _ = signal_forwarder.restore_original_mask();
                 return Err(format!("failed to wait for `{SANDBOX_EXEC}`: {error}"));
@@ -262,13 +372,47 @@ fn wait_for_root(
     }
 }
 
+fn kill_root(child: &mut std::process::Child) -> Result<ExitStatus, String> {
+    let result = unsafe { libc::kill(-(child.id() as libc::pid_t), libc::SIGKILL) };
+    if result != 0 {
+        let kill_error = std::io::Error::last_os_error();
+        match child.try_wait() {
+            Ok(Some(status)) => return Ok(status),
+            Ok(None) => {
+                return Err(format!(
+                    "failed to terminate the `{SANDBOX_EXEC}` process group: {kill_error}"
+                ));
+            }
+            Err(wait_error) => {
+                return Err(format!(
+                    "failed to terminate the `{SANDBOX_EXEC}` process group: \
+                     {kill_error}; additionally failed to read its status: {wait_error}"
+                ));
+            }
+        }
+    }
+    child
+        .wait()
+        .map_err(|error| format!("failed to wait for terminated `{SANDBOX_EXEC}`: {error}"))
+}
+
 extern "C" fn forward_signal(signal: libc::c_int) {
     let saved_errno = unsafe { *libc::__error() };
+    let repeated = SIGNAL_WINDOW_ACTIVE.swap(true, Ordering::SeqCst);
+    if repeated {
+        // A second request is the escape hatch for an interactive command that
+        // handled the first SIGINT without exiting.
+        FORCE_EXIT_REQUESTED.store(true, Ordering::SeqCst);
+    }
+    if signal != libc::SIGINT {
+        TERMINATION_REQUESTED.store(true, Ordering::SeqCst);
+    }
+
     let root_pid = SANDBOX_ROOT_PID.load(Ordering::Relaxed);
-    if root_pid > 0 {
+    if root_pid > 0 && !repeated {
         // kill(2) is async-signal-safe. The supervisor remains alive to finish
         // tracking and terminating descendants after the root handles the signal.
-        let _ = unsafe { libc::kill(root_pid, signal) };
+        let _ = unsafe { libc::kill(-root_pid, signal) };
     }
     unsafe { *libc::__error() = saved_errno };
 }

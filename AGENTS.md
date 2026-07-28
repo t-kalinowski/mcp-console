@@ -19,8 +19,13 @@ The default command and `serve` run an MCP server over stdio.
 The server registers only a `console` tool, which accepts any JSON object and echoes it as JSON text.
 The version command prints the package name and version.
 On macOS, the sandbox command launches a subprocess under `sandbox-exec` with host filesystem reads allowed, regular-file writes limited to a dedicated per-launch temporary directory, runtime device and IPC exceptions, and network access denied.
+When it owns a terminal, the launcher runs the command in a dedicated foreground process group so terminal-generated signals are delivered once.
+It relays `SIGHUP`, `SIGINT`, `SIGQUIT`, and `SIGTERM` sent directly to the launcher.
+Launcher-directed `SIGHUP`, `SIGQUIT`, and `SIGTERM` escalate to `SIGKILL` after two seconds; `SIGINT` remains an interactive interrupt.
+A terminal-generated signal handled by the command is not visible to the launcher and does not start the escalation timeout.
 Before returning, it terminates descendants observed by the macOS process tracker, including `processx` children that create another session.
 A descendant that orphans itself before macOS exposes it to the tracker is outside this initial supervision boundary.
+The launcher does not proxy stopped and continued job-control states: `Ctrl-Z` and use as one stage of an interactive terminal pipeline are unsupported.
 The sandbox command is unsupported on Linux and Windows.
 The session model, language runtimes, sidecar API, viewer, environment management, output retention, and transcript generation do not exist yet.
 
