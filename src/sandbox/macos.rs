@@ -6,13 +6,11 @@ use std::os::unix::fs::DirBuilderExt;
 use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, ExitStatus};
-use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const SANDBOX_EXEC: &str = "/usr/bin/sandbox-exec";
 const POLICY: &str = include_str!("read_only_policy.sbpl");
 const PROCESS_EXIT_TIMEOUT: Duration = Duration::from_secs(5);
-const PROCESS_POLL_INTERVAL: Duration = Duration::from_millis(10);
 const TRACKER_EVENT_CAPACITY: usize = 32;
 const FORWARDED_SIGNALS: [libc::c_int; 4] =
     [libc::SIGHUP, libc::SIGINT, libc::SIGQUIT, libc::SIGTERM];
@@ -39,7 +37,7 @@ pub(super) fn run(command: &[OsString]) -> Result<ExitCode, String> {
         .spawn()
         .map_err(|error| format!("failed to launch `{SANDBOX_EXEC}`: {error}"))?;
 
-    let mut tracker = match DescendantTracker::start(child.id() as libc::pid_t) {
+    let mut tracker = match DescendantTracker::start(child.id() as libc::pid_t, &signal_relay) {
         Ok(tracker) => tracker,
         Err(error) => {
             let _ = kill_root(&mut child);
@@ -210,6 +208,12 @@ impl SignalRelay {
         }
     }
 
+    fn relayed_signals(&self) -> impl Iterator<Item = libc::c_int> + '_ {
+        FORWARDED_SIGNALS
+            .into_iter()
+            .filter(|signal| unsafe { libc::sigismember(&self.wait_set, *signal) } == 1)
+    }
+
     fn relay_pending(&self, process_group: libc::pid_t) -> Result<(), String> {
         loop {
             let mut pending: libc::sigset_t = unsafe { std::mem::zeroed() };
@@ -262,11 +266,6 @@ fn wait_for_root(
     tracker: &mut DescendantTracker,
 ) -> Result<ExitStatus, String> {
     loop {
-        if let Err(error) = tracker.drain_events() {
-            let _ = kill_root(child);
-            return Err(error);
-        }
-
         match child.try_wait() {
             Ok(Some(status)) => return Ok(status),
             Ok(None) => {
@@ -275,7 +274,10 @@ fn wait_for_root(
                     let _ = kill_root(child);
                     return Err(error);
                 }
-                thread::sleep(PROCESS_POLL_INTERVAL);
+                if let Err(error) = tracker.wait_for_events(None) {
+                    let _ = kill_root(child);
+                    return Err(error);
+                }
             }
             Err(error) => {
                 let _ = kill_root(child);
@@ -321,8 +323,13 @@ struct DescendantTracker {
     state: TrackerState,
 }
 
+enum EventWait {
+    Events,
+    TimedOut,
+}
+
 impl DescendantTracker {
-    fn start(root_pid: libc::pid_t) -> Result<Self, String> {
+    fn start(root_pid: libc::pid_t, signal_relay: &SignalRelay) -> Result<Self, String> {
         let kqueue_descriptor = unsafe { libc::kqueue() };
         if kqueue_descriptor < 0 {
             return Err(format!(
@@ -344,55 +351,62 @@ impl DescendantTracker {
             active: HashMap::new(),
         };
         add_process_tree(kqueue.as_raw_fd(), root_pid, None, &mut state)?;
+        watch_signals(kqueue.as_raw_fd(), signal_relay)?;
 
         Ok(Self { kqueue, state })
     }
 
-    fn drain_events(&mut self) -> Result<(), String> {
+    fn wait_for_events(&mut self, timeout: Option<Duration>) -> Result<EventWait, String> {
         let mut events: [libc::kevent; TRACKER_EVENT_CAPACITY] =
             unsafe { std::mem::MaybeUninit::zeroed().assume_init() };
-        let timeout = libc::timespec {
-            tv_sec: 0,
-            tv_nsec: 0,
-        };
+        let timeout = timeout.map(|duration| libc::timespec {
+            tv_sec: duration.as_secs() as libc::time_t,
+            tv_nsec: duration.subsec_nanos() as libc::c_long,
+        });
+        let timeout = timeout
+            .as_ref()
+            .map_or(std::ptr::null(), |timeout| timeout as *const _);
 
-        let event_count = loop {
-            let result = unsafe {
-                libc::kevent(
-                    self.kqueue.as_raw_fd(),
-                    std::ptr::null(),
-                    0,
-                    events.as_mut_ptr(),
-                    events.len() as libc::c_int,
-                    &timeout,
-                )
-            };
-            if result < 0 {
-                let error = std::io::Error::last_os_error();
-                if error.kind() == std::io::ErrorKind::Interrupted {
-                    continue;
-                }
-                return Err(format!("sandbox process tracker failed: {error}"));
-            }
-            break result;
+        let event_count = unsafe {
+            libc::kevent(
+                self.kqueue.as_raw_fd(),
+                std::ptr::null(),
+                0,
+                events.as_mut_ptr(),
+                events.len() as libc::c_int,
+                timeout,
+            )
         };
+        if event_count < 0 {
+            let error = std::io::Error::last_os_error();
+            if error.kind() == std::io::ErrorKind::Interrupted {
+                return Ok(EventWait::Events);
+            }
+            return Err(format!("sandbox process tracker failed: {error}"));
+        }
+        if event_count == 0 {
+            return Ok(EventWait::TimedOut);
+        }
 
         for event in events.iter().take(event_count as usize) {
-            if event.filter != libc::EVFILT_PROC {
-                continue;
-            }
-
             let pid = event.ident as libc::pid_t;
             let event_data = event.data;
             if event.flags & libc::EV_ERROR != 0 {
-                if event_data == libc::ESRCH as libc::intptr_t {
+                if event.filter == libc::EVFILT_PROC && event_data == libc::ESRCH as libc::intptr_t
+                {
                     self.state.active.remove(&pid);
                     continue;
                 }
                 return Err(format!(
-                    "sandbox process tracker received error {} for process {pid}",
-                    event_data
+                    "sandbox process tracker received event error {event_data}"
                 ));
+            }
+
+            // Signal filters only wake the loop. SignalRelay inspects and
+            // consumes pending signals so inherited masks and ignored signal
+            // dispositions retain their normal behavior.
+            if event.filter != libc::EVFILT_PROC {
+                continue;
             }
 
             if event.fflags & libc::NOTE_FORK != 0 {
@@ -402,13 +416,15 @@ impl DescendantTracker {
                 self.state.active.remove(&pid);
             }
         }
-        Ok(())
+        Ok(EventWait::Events)
     }
 
     fn terminate(mut self) -> Result<(), String> {
         let deadline = Instant::now() + PROCESS_EXIT_TIMEOUT;
         loop {
-            self.drain_events()?;
+            // The root may have exited before wait_for_root() blocked. Consume
+            // any queued fork event before removing the root from the snapshot.
+            self.wait_for_events(Some(Duration::ZERO))?;
 
             // Re-snapshot before each signal pass to narrow the teardown fork
             // window. A child that becomes orphaned before observation remains
@@ -431,10 +447,15 @@ impl DescendantTracker {
             if self.state.active.is_empty() {
                 return Ok(());
             }
-            if Instant::now() >= deadline {
+
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if matches!(self.wait_for_events(Some(remaining))?, EventWait::TimedOut) {
+                remove_stale_processes(&mut self.state.active)?;
+                if self.state.active.is_empty() {
+                    return Ok(());
+                }
                 return Err("timed out waiting for sandbox descendants to exit".to_string());
             }
-            thread::sleep(PROCESS_POLL_INTERVAL);
         }
     }
 }
@@ -541,12 +562,51 @@ enum WatchProcessError {
     Other(std::io::Error),
 }
 
+fn watch_signals(kqueue: libc::c_int, signal_relay: &SignalRelay) -> Result<(), String> {
+    let events: Vec<_> = signal_relay
+        .relayed_signals()
+        .map(|signal| libc::kevent {
+            ident: signal as libc::uintptr_t,
+            filter: libc::EVFILT_SIGNAL,
+            flags: libc::EV_ADD | libc::EV_CLEAR,
+            fflags: 0,
+            data: 0,
+            udata: std::ptr::null_mut(),
+        })
+        .collect();
+
+    if events.is_empty() {
+        return Ok(());
+    }
+
+    loop {
+        let result = unsafe {
+            libc::kevent(
+                kqueue,
+                events.as_ptr(),
+                events.len() as libc::c_int,
+                std::ptr::null_mut(),
+                0,
+                std::ptr::null(),
+            )
+        };
+        if result >= 0 {
+            return Ok(());
+        }
+
+        let error = std::io::Error::last_os_error();
+        if error.kind() != std::io::ErrorKind::Interrupted {
+            return Err(format!("failed to watch sandbox launcher signals: {error}"));
+        }
+    }
+}
+
 fn watch_process(kqueue: libc::c_int, pid: libc::pid_t) -> Result<(), WatchProcessError> {
     let event = libc::kevent {
         ident: pid as libc::uintptr_t,
         filter: libc::EVFILT_PROC,
         flags: libc::EV_ADD | libc::EV_CLEAR,
-        fflags: libc::NOTE_FORK | libc::NOTE_EXEC | libc::NOTE_EXIT,
+        fflags: libc::NOTE_FORK | libc::NOTE_EXIT,
         data: 0,
         udata: std::ptr::null_mut(),
     };
@@ -646,6 +706,9 @@ fn process_info(pid: libc::pid_t) -> Result<Option<ProcessInfo>, String> {
         };
         if size as usize == expected_size {
             let info = unsafe { info.assume_init() };
+            if info.pbi_status == libc::SZOMB {
+                return Ok(None);
+            }
             return Ok(Some(ProcessInfo {
                 identity: ProcessIdentity {
                     pid,
