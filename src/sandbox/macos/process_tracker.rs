@@ -8,6 +8,8 @@ use std::time::{Duration, Instant};
 
 const PROCESS_EXIT_TIMEOUT: Duration = Duration::from_secs(5);
 const TRACKER_EVENT_CAPACITY: usize = 32;
+#[allow(deprecated)]
+const PROCESS_REAP_EVENT: u32 = libc::NOTE_REAP;
 
 pub(super) struct DescendantTracker {
     kqueue: OwnedFd,
@@ -16,6 +18,7 @@ pub(super) struct DescendantTracker {
 
 pub(super) enum EventWait {
     Events,
+    RootExited,
     TimedOut,
 }
 
@@ -82,6 +85,7 @@ impl DescendantTracker {
             return Ok(EventWait::TimedOut);
         }
 
+        let mut root_exited = false;
         for event in events.iter().take(event_count as usize) {
             let pid = event.ident as libc::pid_t;
             let event_data = event.data;
@@ -89,6 +93,7 @@ impl DescendantTracker {
                 if event.filter == libc::EVFILT_PROC && event_data == libc::ESRCH as libc::intptr_t
                 {
                     self.state.active.remove(&pid);
+                    root_exited |= self.state.root.is_some_and(|root| root.pid == pid);
                     continue;
                 }
                 return Err(format!(
@@ -103,14 +108,21 @@ impl DescendantTracker {
                 continue;
             }
 
+            root_exited |= event.fflags & libc::NOTE_EXIT != 0
+                && self.state.root.is_some_and(|root| root.pid == pid);
+            if event.fflags & PROCESS_REAP_EVENT != 0 {
+                self.state.active.remove(&pid);
+                continue;
+            }
             if event.fflags & libc::NOTE_FORK != 0 {
                 add_children(self.kqueue.as_raw_fd(), pid, &mut self.state)?;
             }
-            if event.fflags & libc::NOTE_EXIT != 0 {
-                self.state.active.remove(&pid);
-            }
         }
-        Ok(EventWait::Events)
+        Ok(if root_exited {
+            EventWait::RootExited
+        } else {
+            EventWait::Events
+        })
     }
 
     pub(super) fn terminate(mut self) -> Result<(), String> {
@@ -300,7 +312,12 @@ fn watch_process(kqueue: libc::c_int, pid: libc::pid_t) -> Result<(), WatchProce
         ident: pid as libc::uintptr_t,
         filter: libc::EVFILT_PROC,
         flags: libc::EV_ADD | libc::EV_CLEAR,
-        fflags: libc::NOTE_FORK | libc::NOTE_EXIT,
+        // NOTE_REAP is deprecated for ordinary exit observation, but NOTE_EXIT
+        // fires while the PID may still exist as a zombie. Requesting both
+        // keeps the watch installed until the process is reaped. XNU posts the
+        // event immediately before removing the PID from its process table, so
+        // a theoretical scheduling window remains; no later event is available.
+        fflags: libc::NOTE_FORK | libc::NOTE_EXIT | PROCESS_REAP_EVENT,
         data: 0,
         udata: std::ptr::null_mut(),
     };

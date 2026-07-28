@@ -8,6 +8,7 @@ pub(super) struct ProcessIdentity {
 pub(super) struct ProcessInfo {
     pub(super) identity: ProcessIdentity,
     pub(super) parent_pid: libc::pid_t,
+    is_zombie: bool,
 }
 
 pub(super) fn list_child_pids(parent: libc::pid_t) -> Result<Vec<libc::pid_t>, String> {
@@ -75,9 +76,6 @@ pub(super) fn process_info(pid: libc::pid_t) -> Result<Option<ProcessInfo>, Stri
         };
         if size as usize == expected_size {
             let info = unsafe { info.assume_init() };
-            if info.pbi_status == libc::SZOMB {
-                return Ok(None);
-            }
             return Ok(Some(ProcessInfo {
                 identity: ProcessIdentity {
                     pid,
@@ -85,6 +83,10 @@ pub(super) fn process_info(pid: libc::pid_t) -> Result<Option<ProcessInfo>, Stri
                     started_microseconds: info.pbi_start_tvusec,
                 },
                 parent_pid: info.pbi_ppid as libc::pid_t,
+                // A zombie cannot execute, but its PID remains present until
+                // its parent reaps it. Keep that identity available so the
+                // tracker can wait for NOTE_REAP before returning.
+                is_zombie: info.pbi_status == libc::SZOMB,
             }));
         }
 
@@ -116,7 +118,10 @@ pub(super) fn signal_process(
     identity: ProcessIdentity,
     signal: libc::c_int,
 ) -> Result<bool, String> {
-    if process_identity(identity.pid)? != Some(identity) {
+    let Some(info) = process_info(identity.pid)? else {
+        return Ok(false);
+    };
+    if info.identity != identity || info.is_zombie {
         return Ok(false);
     }
 

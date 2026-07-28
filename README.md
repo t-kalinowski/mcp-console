@@ -27,7 +27,7 @@ The policy also permits the device and IPC operations needed for supported R and
 When the launcher owns a terminal, it gives the sandbox command a dedicated foreground process group so terminal-generated signals are delivered once.
 `SIGHUP`, `SIGINT`, `SIGQUIT`, and `SIGTERM` sent directly to the launcher are relayed to that group unless the signal was already blocked or ignored when the launcher started.
 The launcher imposes no signal timeout, so a command that handles or ignores a signal may continue running.
-Before returning, the launcher terminates descendants observed by the macOS process tracker, including `processx` children that create another session.
+Before returning, the launcher terminates descendants observed by the macOS process tracker, including `processx` children that create another session, and waits up to five seconds for them to be reaped.
 A process-observation error terminates the root process group, reports an error, and preserves its temporary directory instead of assuming that a process exited.
 Detached descendants may remain when supervision itself fails because their identities can no longer be verified safely.
 A descendant that orphans itself before macOS exposes it to the tracker is outside this initial supervision boundary.

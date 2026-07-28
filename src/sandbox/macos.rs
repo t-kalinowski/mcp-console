@@ -3,7 +3,7 @@ mod process;
 mod process_tracker;
 
 use self::job_control::{ForegroundTerminal, SignalRelay};
-use self::process_tracker::DescendantTracker;
+use self::process_tracker::{DescendantTracker, EventWait};
 use std::ffi::OsString;
 use std::fs::{self, DirBuilder};
 use std::os::unix::fs::DirBuilderExt;
@@ -82,9 +82,19 @@ fn wait_for_root(
                     let _ = kill_root(child);
                     return Err(error);
                 }
-                if let Err(error) = tracker.wait_for_events(None) {
-                    let _ = kill_root(child);
-                    return Err(error);
+                match tracker.wait_for_events(None) {
+                    Ok(EventWait::RootExited) => {
+                        // Reaping the direct child produces its NOTE_REAP event;
+                        // waiting on kqueue again here would deadlock.
+                        return child.wait().map_err(|error| {
+                            format!("failed to wait for `{SANDBOX_EXEC}`: {error}")
+                        });
+                    }
+                    Ok(EventWait::Events | EventWait::TimedOut) => {}
+                    Err(error) => {
+                        let _ = kill_root(child);
+                        return Err(error);
+                    }
                 }
             }
             Err(error) => {

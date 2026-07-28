@@ -22,7 +22,7 @@ On macOS, the sandbox command launches a subprocess under `sandbox-exec` with ho
 When it owns a terminal, the launcher runs the command in a dedicated foreground process group so terminal-generated signals are delivered once.
 It relays `SIGHUP`, `SIGINT`, `SIGQUIT`, and `SIGTERM` sent directly to the launcher unless the signal was already blocked or ignored when the launcher started.
 It imposes no signal timeout, so a command that handles or ignores a signal may continue running.
-Before returning, it terminates descendants observed by the macOS process tracker, including `processx` children that create another session.
+Before returning, it terminates descendants observed by the macOS process tracker, including `processx` children that create another session, and waits up to five seconds for them to be reaped.
 A process-observation error terminates the root process group, reports an error, and preserves its temporary directory instead of treating the process as exited.
 Detached descendants may remain when supervision itself fails because their identities can no longer be verified safely.
 A descendant that orphans itself before macOS exposes it to the tracker is outside this initial supervision boundary.
