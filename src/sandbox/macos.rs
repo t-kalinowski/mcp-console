@@ -13,7 +13,6 @@ const SANDBOX_EXEC: &str = "/usr/bin/sandbox-exec";
 const POLICY: &str = include_str!("read_only_policy.sbpl");
 const PROCESS_EXIT_TIMEOUT: Duration = Duration::from_secs(5);
 const PROCESS_POLL_INTERVAL: Duration = Duration::from_millis(10);
-const TERMINATION_GRACE_PERIOD: Duration = Duration::from_secs(2);
 const TRACKER_EVENT_CAPACITY: usize = 32;
 const FORWARDED_SIGNALS: [libc::c_int; 4] =
     [libc::SIGHUP, libc::SIGINT, libc::SIGQUIT, libc::SIGTERM];
@@ -166,8 +165,10 @@ impl SignalRelay {
             ));
         }
 
-        // Preserve signals that the caller already blocked. They remain pending
-        // instead of being consumed and relayed by this one-shot launcher.
+        // Preserve inherited masks and ignored dispositions. Previously blocked
+        // signals remain pending, while Darwin discards ignored signals. This
+        // one-shot launcher keeps its new mask until it exits; the child restores
+        // the inherited mask before exec.
         let mut wait_set: libc::sigset_t = unsafe { std::mem::zeroed() };
         unsafe { libc::sigemptyset(&mut wait_set) };
         for signal in FORWARDED_SIGNALS {
@@ -209,8 +210,7 @@ impl SignalRelay {
         }
     }
 
-    fn relay_pending(&self, process_group: libc::pid_t) -> Result<bool, String> {
-        let mut termination_requested = false;
+    fn relay_pending(&self, process_group: libc::pid_t) -> Result<(), String> {
         loop {
             let mut pending: libc::sigset_t = unsafe { std::mem::zeroed() };
             if unsafe { libc::sigpending(&mut pending) } != 0 {
@@ -223,7 +223,7 @@ impl SignalRelay {
                 (unsafe { libc::sigismember(&self.wait_set, *signal) } == 1)
                     && (unsafe { libc::sigismember(&pending, *signal) } == 1)
             }) {
-                return Ok(termination_requested);
+                return Ok(());
             }
 
             let mut signal = 0;
@@ -234,8 +234,6 @@ impl SignalRelay {
                     std::io::Error::from_raw_os_error(wait_result)
                 ));
             }
-            termination_requested |= signal != libc::SIGINT;
-
             let result = unsafe { libc::kill(-process_group, signal) };
             if result != 0 {
                 let error = std::io::Error::last_os_error();
@@ -263,7 +261,6 @@ fn wait_for_root(
     signal_relay: &SignalRelay,
     tracker: &mut DescendantTracker,
 ) -> Result<ExitStatus, String> {
-    let mut termination_deadline = None;
     loop {
         if let Err(error) = tracker.drain_events() {
             let _ = kill_root(child);
@@ -273,20 +270,10 @@ fn wait_for_root(
         match child.try_wait() {
             Ok(Some(status)) => return Ok(status),
             Ok(None) => {
-                let now = Instant::now();
                 let process_group = child.id() as libc::pid_t;
-                let termination_requested = match signal_relay.relay_pending(process_group) {
-                    Ok(termination_requested) => termination_requested,
-                    Err(error) => {
-                        let _ = kill_root(child);
-                        return Err(error);
-                    }
-                };
-                if termination_requested {
-                    termination_deadline.get_or_insert_with(|| now + TERMINATION_GRACE_PERIOD);
-                }
-                if termination_deadline.is_some_and(|deadline| now >= deadline) {
-                    return kill_root(child);
+                if let Err(error) = signal_relay.relay_pending(process_group) {
+                    let _ = kill_root(child);
+                    return Err(error);
                 }
                 thread::sleep(PROCESS_POLL_INTERVAL);
             }

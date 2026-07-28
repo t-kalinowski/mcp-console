@@ -8,12 +8,10 @@ use std::net::TcpListener;
 #[cfg(target_os = "macos")]
 use std::os::unix::fs::PermissionsExt;
 #[cfg(target_os = "macos")]
-use std::os::unix::process::CommandExt;
-#[cfg(target_os = "macos")]
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 #[cfg(target_os = "macos")]
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde_json::{Value, json};
 
@@ -43,23 +41,6 @@ impl TestDirectory {
 impl Drop for TestDirectory {
     fn drop(&mut self) {
         fs::remove_dir_all(&self.0).expect("test directory should be removed");
-    }
-}
-
-#[cfg(target_os = "macos")]
-fn wait_for_exit(
-    child: &mut std::process::Child,
-    timeout: Duration,
-) -> Option<std::process::ExitStatus> {
-    let deadline = Instant::now() + timeout;
-    loop {
-        if let Some(status) = child.try_wait().expect("child status should be readable") {
-            return Some(status);
-        }
-        if Instant::now() >= deadline {
-            return None;
-        }
-        std::thread::sleep(Duration::from_millis(10));
     }
 }
 
@@ -890,139 +871,6 @@ raise SystemExit(23)
         Some(23),
         "terminal fixture failed: {}",
         String::from_utf8_lossy(&output.stderr)
-    );
-}
-
-#[cfg(target_os = "macos")]
-#[test]
-fn sandbox_keeps_interrupt_interactive_and_preserves_termination_status() {
-    let script = r#"
-import signal
-import time
-
-interrupted = False
-
-def handle_interrupt(_signal, _frame):
-    global interrupted
-    interrupted = True
-
-def handle_termination(_signal, _frame):
-    raise SystemExit(42)
-
-signal.signal(signal.SIGINT, handle_interrupt)
-signal.signal(signal.SIGTERM, handle_termination)
-print("ready", flush=True)
-deadline = time.monotonic() + 1
-while not interrupted and time.monotonic() < deadline:
-    time.sleep(0.01)
-if not interrupted:
-    raise SystemExit("SIGINT was not delivered")
-print("interrupted", flush=True)
-time.sleep(2.25)
-print("continued", flush=True)
-time.sleep(1)
-"#;
-    let mut launcher = Command::new(env!("CARGO_BIN_EXE_mcp-console"))
-        .args(["sandbox", "--", "python", "-c", script])
-        .stdout(Stdio::piped())
-        .spawn()
-        .expect("mcp-console sandbox should start");
-    let mut stdout = BufReader::new(
-        launcher
-            .stdout
-            .take()
-            .expect("sandbox stdout should be piped"),
-    );
-    let mut line = String::new();
-    stdout
-        .read_line(&mut line)
-        .expect("sandbox should report readiness");
-    assert_eq!(line, "ready\n");
-
-    let started = Instant::now();
-    let signal_result = unsafe { libc::kill(launcher.id() as libc::pid_t, libc::SIGINT) };
-    assert_eq!(signal_result, 0, "sandbox launcher should receive SIGINT");
-    line.clear();
-    stdout
-        .read_line(&mut line)
-        .expect("sandbox should report the interrupt");
-    assert_eq!(line, "interrupted\n");
-    line.clear();
-    stdout
-        .read_line(&mut line)
-        .expect("sandbox should report continued execution");
-    assert_eq!(line, "continued\n");
-    assert!(started.elapsed() >= Duration::from_secs(2));
-    let signal_result = unsafe { libc::kill(launcher.id() as libc::pid_t, libc::SIGTERM) };
-    assert_eq!(signal_result, 0, "sandbox launcher should receive SIGTERM");
-    let status = launcher.wait().expect("mcp-console sandbox should exit");
-
-    assert_eq!(status.code(), Some(42));
-}
-
-#[cfg(target_os = "macos")]
-#[test]
-fn sandbox_escalates_termination_when_the_root_does_not_exit() {
-    let script = r#"
-import signal
-import subprocess
-import time
-
-signal.signal(signal.SIGTERM, signal.SIG_IGN)
-child = subprocess.Popen(["/bin/sleep", "60"], start_new_session=True)
-print(child.pid, flush=True)
-while True:
-    time.sleep(1)
-"#;
-    let mut launcher = Command::new(env!("CARGO_BIN_EXE_mcp-console"));
-    launcher
-        .process_group(0)
-        .args(["sandbox", "--", "python", "-c", script])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    let mut launcher = launcher.spawn().expect("mcp-console sandbox should start");
-
-    let mut stdout = BufReader::new(
-        launcher
-            .stdout
-            .take()
-            .expect("sandbox stdout should be piped"),
-    );
-    let mut pid = String::new();
-    stdout
-        .read_line(&mut pid)
-        .expect("sandbox should report its descendant PID");
-    let pid = pid
-        .trim()
-        .parse::<libc::pid_t>()
-        .expect("sandbox should report a descendant PID");
-
-    let started = Instant::now();
-    let signal_result = unsafe { libc::kill(launcher.id() as libc::pid_t, libc::SIGTERM) };
-    assert_eq!(signal_result, 0, "sandbox launcher should receive SIGTERM");
-
-    let status = match wait_for_exit(&mut launcher, Duration::from_secs(4)) {
-        Some(status) => status,
-        None => {
-            let _ = unsafe { libc::kill(-(launcher.id() as libc::pid_t), libc::SIGKILL) };
-            let _ = launcher.wait();
-            let _ = unsafe { libc::kill(pid, libc::SIGKILL) };
-            panic!("sandbox launcher did not escalate SIGTERM");
-        }
-    };
-    let descendant_is_alive = unsafe { libc::kill(pid, 0) } == 0;
-    if descendant_is_alive {
-        let _ = unsafe { libc::kill(pid, libc::SIGKILL) };
-    }
-
-    assert_eq!(status.code(), Some(128 + libc::SIGKILL));
-    assert!(
-        started.elapsed() < Duration::from_secs(4),
-        "sandbox termination should remain bounded"
-    );
-    assert!(
-        !descendant_is_alive,
-        "sandbox descendant {pid} survived forced termination"
     );
 }
 

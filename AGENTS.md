@@ -20,9 +20,8 @@ The server registers only a `console` tool, which accepts any JSON object and ec
 The version command prints the package name and version.
 On macOS, the sandbox command launches a subprocess under `sandbox-exec` with host filesystem reads allowed, regular-file writes limited to a dedicated per-launch temporary directory, runtime device and IPC exceptions, and network access denied.
 When it owns a terminal, the launcher runs the command in a dedicated foreground process group so terminal-generated signals are delivered once.
-It relays `SIGHUP`, `SIGINT`, `SIGQUIT`, and `SIGTERM` sent directly to the launcher.
-Launcher-directed `SIGHUP`, `SIGQUIT`, and `SIGTERM` escalate to `SIGKILL` after two seconds; `SIGINT` remains an interactive interrupt.
-A terminal-generated signal handled by the command is not visible to the launcher and does not start the escalation timeout.
+It relays `SIGHUP`, `SIGINT`, `SIGQUIT`, and `SIGTERM` sent directly to the launcher unless the signal was already blocked or ignored when the launcher started.
+It imposes no signal timeout, so a command that handles or ignores a signal may continue running.
 Before returning, it terminates descendants observed by the macOS process tracker, including `processx` children that create another session.
 A process-observation error terminates the root process group, reports an error, and preserves its temporary directory instead of treating the process as exited.
 Detached descendants may remain when supervision itself fails because their identities can no longer be verified safely.
