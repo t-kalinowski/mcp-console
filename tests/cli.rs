@@ -2,6 +2,8 @@
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
 #[cfg(target_os = "macos")]
+use std::io::Read;
+#[cfg(target_os = "macos")]
 use std::net::TcpListener;
 #[cfg(target_os = "macos")]
 use std::os::unix::fs::PermissionsExt;
@@ -578,6 +580,105 @@ raise SystemExit(23)
     }
 
     assert_eq!(status.code(), Some(23));
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn sandbox_terminates_processx_descendants_before_returning() {
+    let script = r#"
+p <- processx::process$new("/bin/sleep", "2", cleanup = FALSE)
+writeLines(as.character(p$get_pid()))
+quit(save = "no", status = 23, runLast = FALSE)
+"#;
+    let output = Command::new(env!("CARGO_BIN_EXE_mcp-console"))
+        .args(["sandbox", "--", "Rscript", "-e", script])
+        .output()
+        .expect("mcp-console sandbox should run");
+
+    assert_eq!(
+        output.status.code(),
+        Some(23),
+        "sandboxed R failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let pid = String::from_utf8(output.stdout)
+        .expect("descendant PID should be UTF-8")
+        .trim()
+        .parse::<u32>()
+        .expect("sandbox should report a descendant PID")
+        .to_string();
+    let descendant_is_alive = Command::new("/bin/kill")
+        .args(["-0", &pid])
+        .output()
+        .expect("kill should inspect the descendant")
+        .status
+        .success();
+
+    assert!(
+        !descendant_is_alive,
+        "sandbox descendant {pid} survived the launcher"
+    );
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn sandbox_terminates_processx_descendants_when_interrupted() {
+    let script = r#"
+p <- processx::process$new("/bin/sleep", "2", cleanup = FALSE)
+writeLines(as.character(p$get_pid()))
+flush.console()
+Sys.sleep(60)
+"#;
+    let mut launcher = Command::new(env!("CARGO_BIN_EXE_mcp-console"))
+        .args(["sandbox", "--", "Rscript", "-e", script])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("mcp-console sandbox should start");
+
+    let mut stdout = BufReader::new(
+        launcher
+            .stdout
+            .take()
+            .expect("sandbox stdout should be piped"),
+    );
+    let mut pid = String::new();
+    stdout
+        .read_line(&mut pid)
+        .expect("sandbox should report its descendant PID");
+    let pid = pid
+        .trim()
+        .parse::<u32>()
+        .expect("sandbox should report a descendant PID")
+        .to_string();
+
+    let signal_result = unsafe { libc::kill(launcher.id() as libc::pid_t, libc::SIGINT) };
+    assert_eq!(signal_result, 0, "sandbox launcher should receive SIGINT");
+
+    let status = launcher.wait().expect("mcp-console sandbox should exit");
+    let mut stderr = String::new();
+    launcher
+        .stderr
+        .take()
+        .expect("sandbox stderr should be piped")
+        .read_to_string(&mut stderr)
+        .expect("sandbox stderr should be readable");
+    let descendant_is_alive = Command::new("/bin/kill")
+        .args(["-0", &pid])
+        .output()
+        .expect("kill should inspect the descendant")
+        .status
+        .success();
+
+    assert!(
+        status.code().is_some(),
+        "the launcher should survive SIGINT and finish cleanup"
+    );
+    assert!(!status.success(), "sandboxed R should be interrupted");
+    assert!(
+        !descendant_is_alive,
+        "sandbox descendant {pid} survived SIGINT; stderr: {stderr}"
+    );
 }
 
 #[cfg(not(target_os = "macos"))]

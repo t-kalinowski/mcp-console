@@ -24,9 +24,8 @@ It does not execute code or retain state yet.
 On macOS, `sandbox` launches the command under `/usr/bin/sandbox-exec`.
 The command can read the host filesystem, can write regular files only in a dedicated temporary directory, and cannot access the network.
 The policy also permits the device and IPC operations needed for supported R and Python workflows, including sandbox-created PTYs and Python multiprocessing semaphores.
-This initial launcher waits only for the direct command.
-Background descendants are unsupported: they may outlive the launcher, which attempts to remove their dedicated temporary directory on a best-effort basis when it returns.
-Descendant supervision is intentionally deferred because it must account for process groups, session-detached children, signal forwarding, and PID reuse together.
+Before returning, the launcher terminates descendants observed by the macOS process tracker, including `processx` children that create another session.
+A descendant that orphans itself before macOS exposes it to the tracker is outside this initial supervision boundary.
 Linux and Windows are not supported yet.
 
 The proposed product and architecture remain under [`design-sketches/`](design-sketches/README.md).
