@@ -65,14 +65,14 @@ pub(super) fn run(command: &[OsString]) -> Result<ExitCode, String> {
         return Err(error);
     }
 
-    let status_result = wait_for_root(&mut child, &mut signal_forwarder);
+    let status_result = wait_for_root(&mut child, &mut signal_forwarder, &tracker);
     let terminal_result = foreground_terminal.restore();
     let status = match status_result {
         Ok(status) => status,
         Err(error) => {
-            let _ = tracker.terminate();
+            let tracker_error = tracker.terminate().err();
             temp_directory.preserve();
-            return Err(error);
+            return Err(tracker_error.unwrap_or(error));
         }
     };
 
@@ -321,6 +321,7 @@ fn forwarded_signal_set() -> libc::sigset_t {
 fn wait_for_root(
     child: &mut std::process::Child,
     signal_forwarder: &mut SignalForwarder,
+    tracker: &DescendantTracker,
 ) -> Result<ExitStatus, String> {
     let mut termination_deadline = None;
     let mut repeat_deadline = None;
@@ -337,6 +338,17 @@ fn wait_for_root(
                 return Ok(status);
             }
             Ok(None) => {
+                if tracker.is_finished() {
+                    let termination_result = kill_root(child);
+                    signal_forwarder.clear_root();
+                    let mask_result = signal_forwarder.restore_original_mask();
+                    termination_result?;
+                    mask_result?;
+                    return Err(
+                        "sandbox process tracker stopped before the command exited".to_string()
+                    );
+                }
+
                 let now = Instant::now();
                 if repeat_deadline.is_some_and(|deadline| now >= deadline) {
                     SIGNAL_WINDOW_ACTIVE.store(false, Ordering::SeqCst);
@@ -451,8 +463,15 @@ impl DescendantTracker {
         // be paired with a libproc snapshot, is therefore an intentional boundary
         // of the initial launcher. Once observed, descendants that call setsid(),
         // such as processx children, remain tracked by their PID and start time.
+        let root = match process_identity(root_pid) {
+            Ok(root) => root,
+            Err(error) => {
+                let _ = unsafe { libc::close(kqueue) };
+                return Err(error);
+            }
+        };
         let mut state = TrackerState {
-            root: process_identity(root_pid),
+            root,
             active: HashMap::new(),
         };
         if let Err(error) = add_process_tree(kqueue, root_pid, None, &mut state) {
@@ -480,6 +499,10 @@ impl DescendantTracker {
             stop_requested,
             handle,
         })
+    }
+
+    fn is_finished(&self) -> bool {
+        self.handle.is_finished()
     }
 
     fn terminate(self) -> Result<(), String> {
@@ -590,18 +613,14 @@ fn track_descendants(
                 state.active.remove(&root.pid);
             }
         }
-        state
-            .active
-            .retain(|_, identity| process_identity(identity.pid) == Some(*identity));
+        remove_stale_processes(&mut state.active)?;
 
         // The root command has exited, so its background work has no remaining
         // lifetime to preserve. SIGKILL keeps teardown bounded and deterministic.
         for identity in state.active.values().copied() {
             signal_process(identity, libc::SIGKILL)?;
         }
-        state
-            .active
-            .retain(|_, identity| process_identity(identity.pid) == Some(*identity));
+        remove_stale_processes(&mut state.active)?;
 
         if state.active.is_empty() {
             return Ok(());
@@ -610,6 +629,18 @@ fn track_descendants(
             return Err("timed out waiting for sandbox descendants to exit".to_string());
         }
     }
+}
+
+fn remove_stale_processes(
+    active: &mut HashMap<libc::pid_t, ProcessIdentity>,
+) -> Result<(), String> {
+    let identities: Vec<_> = active.values().copied().collect();
+    for identity in identities {
+        if process_identity(identity.pid)? != Some(identity) {
+            active.remove(&identity.pid);
+        }
+    }
+    Ok(())
 }
 
 fn register_stop_event(kqueue: libc::c_int) -> Result<(), String> {
@@ -662,14 +693,14 @@ fn add_process_tree(
     let mut visited = HashSet::new();
 
     while let Some((pid, expected_parent)) = queue.pop_front() {
-        let Some(info) = process_info(pid) else {
+        let Some(info) = process_info(pid)? else {
             continue;
         };
         if let Some(parent) = expected_parent {
             // proc_listchildpids() returns numeric PIDs. Confirm both the
             // parent relationship and parent start time before adopting one,
             // so PID reuse cannot turn an unrelated process into a target.
-            if info.parent_pid != parent.pid || process_identity(parent.pid) != Some(parent) {
+            if info.parent_pid != parent.pid || process_identity(parent.pid)? != Some(parent) {
                 continue;
             }
         }
@@ -690,7 +721,7 @@ fn add_process_tree(
 
             // Confirm the watch still names the process whose start time was
             // recorded; PID reuse must not turn an old descendant into a new target.
-            if process_identity(pid) != Some(identity) {
+            if process_identity(pid)? != Some(identity) {
                 remove_process_watch(kqueue, pid);
                 continue;
             }
@@ -724,7 +755,7 @@ fn add_children(
 fn discover_active_children(kqueue: libc::c_int, state: &mut TrackerState) -> Result<(), String> {
     let parents: Vec<_> = state.active.values().copied().collect();
     for parent in parents {
-        if process_identity(parent.pid) == Some(parent) {
+        if process_identity(parent.pid)? == Some(parent) {
             add_children(kqueue, parent.pid, state)?;
         }
     }
@@ -775,6 +806,9 @@ fn list_child_pids(parent: libc::pid_t) -> Result<Vec<libc::pid_t>, String> {
     let mut capacity = 16;
     loop {
         let mut children = vec![0; capacity];
+        // libproc reports syscall failures as zero, so errno must be cleared
+        // before the call to distinguish an empty result from an error.
+        unsafe { *libc::__error() = 0 };
         let count = unsafe {
             libc::proc_listchildpids(
                 parent,
@@ -783,15 +817,22 @@ fn list_child_pids(parent: libc::pid_t) -> Result<Vec<libc::pid_t>, String> {
             )
         };
         if count == 0 {
-            return Ok(Vec::new());
-        }
-        if count < 0 {
-            let error = std::io::Error::last_os_error();
-            if error.raw_os_error() == Some(libc::ESRCH) {
+            let error_code = unsafe { *libc::__error() };
+            if error_code == 0 {
                 return Ok(Vec::new());
+            }
+            let error = std::io::Error::from_raw_os_error(error_code);
+            if error.kind() == std::io::ErrorKind::Interrupted {
+                continue;
             }
             return Err(format!(
                 "failed to list children of sandbox process {parent}: {error}"
+            ));
+        }
+        if count < 0 {
+            return Err(format!(
+                "failed to list children of sandbox process {parent}: \
+                 proc_listchildpids returned {count}"
             ));
         }
 
@@ -809,42 +850,64 @@ struct ProcessInfo {
     parent_pid: libc::pid_t,
 }
 
-fn process_info(pid: libc::pid_t) -> Option<ProcessInfo> {
+fn process_info(pid: libc::pid_t) -> Result<Option<ProcessInfo>, String> {
     if pid <= 0 {
-        return None;
+        return Err(format!("invalid sandbox process PID {pid}"));
     }
 
-    let mut info = std::mem::MaybeUninit::<libc::proc_bsdinfo>::zeroed();
-    let size = unsafe {
-        libc::proc_pidinfo(
-            pid,
-            libc::PROC_PIDTBSDINFO,
-            0,
-            info.as_mut_ptr().cast(),
-            std::mem::size_of::<libc::proc_bsdinfo>() as libc::c_int,
-        )
-    };
-    if size as usize != std::mem::size_of::<libc::proc_bsdinfo>() {
-        return None;
-    }
+    let expected_size = std::mem::size_of::<libc::proc_bsdinfo>();
+    loop {
+        let mut info = std::mem::MaybeUninit::<libc::proc_bsdinfo>::zeroed();
+        // Like proc_listchildpids(), proc_pidinfo() maps syscall failures to
+        // zero and leaves the reason in errno.
+        unsafe { *libc::__error() = 0 };
+        let size = unsafe {
+            libc::proc_pidinfo(
+                pid,
+                libc::PROC_PIDTBSDINFO,
+                0,
+                info.as_mut_ptr().cast(),
+                expected_size as libc::c_int,
+            )
+        };
+        if size as usize == expected_size {
+            let info = unsafe { info.assume_init() };
+            return Ok(Some(ProcessInfo {
+                identity: ProcessIdentity {
+                    pid,
+                    started_seconds: info.pbi_start_tvsec,
+                    started_microseconds: info.pbi_start_tvusec,
+                },
+                parent_pid: info.pbi_ppid as libc::pid_t,
+            }));
+        }
 
-    let info = unsafe { info.assume_init() };
-    Some(ProcessInfo {
-        identity: ProcessIdentity {
-            pid,
-            started_seconds: info.pbi_start_tvsec,
-            started_microseconds: info.pbi_start_tvusec,
-        },
-        parent_pid: info.pbi_ppid as libc::pid_t,
-    })
+        let error_code = unsafe { *libc::__error() };
+        if size == 0 && error_code == libc::ESRCH {
+            return Ok(None);
+        }
+        if size == 0 && error_code == libc::EINTR {
+            continue;
+        }
+        if size == 0 && error_code != 0 {
+            return Err(format!(
+                "failed to inspect sandbox process {pid}: {}",
+                std::io::Error::from_raw_os_error(error_code)
+            ));
+        }
+        return Err(format!(
+            "failed to inspect sandbox process {pid}: \
+             proc_pidinfo returned {size} bytes, expected {expected_size}"
+        ));
+    }
 }
 
-fn process_identity(pid: libc::pid_t) -> Option<ProcessIdentity> {
-    process_info(pid).map(|info| info.identity)
+fn process_identity(pid: libc::pid_t) -> Result<Option<ProcessIdentity>, String> {
+    Ok(process_info(pid)?.map(|info| info.identity))
 }
 
 fn signal_process(identity: ProcessIdentity, signal: libc::c_int) -> Result<bool, String> {
-    if process_identity(identity.pid) != Some(identity) {
+    if process_identity(identity.pid)? != Some(identity) {
         return Ok(false);
     }
 

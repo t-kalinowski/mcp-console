@@ -605,8 +605,22 @@ raise SystemExit(23)
 #[test]
 fn sandbox_terminates_processx_descendants_before_returning() {
     let script = r#"
-p <- processx::process$new("/bin/sleep", "2", cleanup = FALSE)
+child_script <- '
+p <- processx::process$new("/bin/sleep", "60", cleanup = FALSE)
 writeLines(as.character(p$get_pid()))
+flush.console()
+Sys.sleep(60)
+'
+child <- processx::process$new(
+    "Rscript",
+    c("-e", child_script),
+    stdout = "|",
+    cleanup = FALSE
+)
+stopifnot(child$poll_io(5000)[["output"]] == "ready")
+grandchild_pid <- child$read_output_lines()
+stopifnot(length(grandchild_pid) == 1)
+writeLines(c(as.character(child$get_pid()), grandchild_pid))
 quit(save = "no", status = 23, runLast = FALSE)
 "#;
     let output = Command::new(env!("CARGO_BIN_EXE_mcp-console"))
@@ -614,28 +628,40 @@ quit(save = "no", status = 23, runLast = FALSE)
         .output()
         .expect("mcp-console sandbox should run");
 
+    let stdout = String::from_utf8(output.stdout);
+    let reported_pids: Vec<libc::pid_t> = stdout
+        .as_deref()
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|pid| pid.parse().ok())
+        .collect();
+    let survivors: Vec<_> = reported_pids
+        .iter()
+        .copied()
+        .filter(|pid| unsafe { libc::kill(*pid, 0) } == 0)
+        .collect();
+    for pid in &survivors {
+        let _ = unsafe { libc::kill(*pid, libc::SIGKILL) };
+    }
+
     assert_eq!(
         output.status.code(),
         Some(23),
         "sandboxed R failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let pid = String::from_utf8(output.stdout)
-        .expect("descendant PID should be UTF-8")
-        .trim()
-        .parse::<u32>()
-        .expect("sandbox should report a descendant PID")
-        .to_string();
-    let descendant_is_alive = Command::new("/bin/kill")
-        .args(["-0", &pid])
-        .output()
-        .expect("kill should inspect the descendant")
-        .status
-        .success();
-
+    let pids: Vec<libc::pid_t> = stdout
+        .expect("descendant PIDs should be UTF-8")
+        .lines()
+        .map(|pid| {
+            pid.parse()
+                .expect("sandbox should report numeric descendant PIDs")
+        })
+        .collect();
+    assert_eq!(pids.len(), 2, "sandbox should report two descendant PIDs");
     assert!(
-        !descendant_is_alive,
-        "sandbox descendant {pid} survived the launcher"
+        survivors.is_empty(),
+        "sandbox descendants {survivors:?} survived the launcher"
     );
 }
 

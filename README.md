@@ -29,6 +29,8 @@ Signals sent directly to the launcher are relayed to that group.
 Launcher-directed `SIGHUP`, `SIGQUIT`, and `SIGTERM` allow two seconds for the command to exit before `SIGKILL`; `SIGINT` remains an interactive interrupt that the command may handle and continue from.
 A terminal-generated signal handled by the command is not visible to the launcher and therefore does not start this timeout.
 Before returning, the launcher terminates descendants observed by the macOS process tracker, including `processx` children that create another session.
+A process-observation error terminates the root process group, reports an error, and preserves its temporary directory instead of assuming that a process exited.
+Detached descendants may remain when supervision itself fails because their identities can no longer be verified safely.
 A descendant that orphans itself before macOS exposes it to the tracker is outside this initial supervision boundary.
 Stopped and continued job-control states are not proxied: `Ctrl-Z` is unsupported, and the launcher is intended to supervise a single foreground command rather than act as one stage of an interactive terminal pipeline.
 Linux and Windows are not supported yet.
