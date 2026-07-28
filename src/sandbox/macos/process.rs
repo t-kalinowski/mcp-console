@@ -8,7 +8,7 @@ pub(super) struct ProcessIdentity {
 pub(super) struct ProcessInfo {
     pub(super) identity: ProcessIdentity,
     pub(super) parent_pid: libc::pid_t,
-    is_zombie: bool,
+    pub(super) is_zombie: bool,
 }
 
 pub(super) fn list_child_pids(parent: libc::pid_t) -> Result<Vec<libc::pid_t>, String> {
@@ -69,7 +69,8 @@ pub(super) fn process_info(pid: libc::pid_t) -> Result<Option<ProcessInfo>, Stri
             libc::proc_pidinfo(
                 pid,
                 libc::PROC_PIDTBSDINFO,
-                0,
+                // A nonzero argument includes the zombie list for BSD info.
+                1,
                 info.as_mut_ptr().cast(),
                 expected_size as libc::c_int,
             )

@@ -7,6 +7,7 @@ use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::time::{Duration, Instant};
 
 const PROCESS_EXIT_TIMEOUT: Duration = Duration::from_secs(5);
+const PROCESS_REAP_CHECK_INTERVAL: Duration = Duration::from_millis(10);
 const TRACKER_EVENT_CAPACITY: usize = 32;
 #[allow(deprecated)]
 const PROCESS_REAP_EVENT: u32 = libc::NOTE_REAP;
@@ -111,7 +112,15 @@ impl DescendantTracker {
             root_exited |= event.fflags & libc::NOTE_EXIT != 0
                 && self.state.root.is_some_and(|root| root.pid == pid);
             if event.fflags & PROCESS_REAP_EVENT != 0 {
-                self.state.active.remove(&pid);
+                // XNU posts NOTE_REAP before removing the PID from its process
+                // table. Drop the identity now only when removal has completed.
+                // Any coalesced fork is already outside the observation window:
+                // its children were reparented before this process was reaped.
+                if let Some(identity) = self.state.active.get(&pid).copied() {
+                    if process_identity(pid)? != Some(identity) {
+                        self.state.active.remove(&pid);
+                    }
+                }
                 continue;
             }
             if event.fflags & libc::NOTE_FORK != 0 {
@@ -154,13 +163,16 @@ impl DescendantTracker {
                 return Ok(());
             }
 
+            if Instant::now() >= deadline {
+                return Err("timed out waiting for sandbox descendants to be reaped".to_string());
+            }
             let remaining = deadline.saturating_duration_since(Instant::now());
-            if matches!(self.wait_for_events(Some(remaining))?, EventWait::TimedOut) {
+            let wait = remaining.min(PROCESS_REAP_CHECK_INTERVAL);
+            if matches!(self.wait_for_events(Some(wait))?, EventWait::TimedOut) {
                 remove_stale_processes(&mut self.state.active)?;
                 if self.state.active.is_empty() {
                     return Ok(());
                 }
-                return Err("timed out waiting for sandbox descendants to exit".to_string());
             }
         }
     }
@@ -210,6 +222,13 @@ fn add_process_tree(
             continue;
         }
 
+        if info.is_zombie {
+            // macOS cannot attach a reliable process watch after exit, but the
+            // bounded teardown scan can still wait for this verified identity.
+            state.active.insert(pid, identity);
+            continue;
+        }
+
         if state.active.get(&pid) != Some(&identity) {
             state.active.remove(&pid);
             match watch_process(kqueue, pid) {
@@ -256,7 +275,10 @@ fn add_children(
 fn discover_active_children(kqueue: libc::c_int, state: &mut TrackerState) -> Result<(), String> {
     let parents: Vec<_> = state.active.values().copied().collect();
     for parent in parents {
-        if process_identity(parent.pid)? == Some(parent) {
+        let Some(info) = process_info(parent.pid)? else {
+            continue;
+        };
+        if info.identity == parent && !info.is_zombie {
             add_children(kqueue, parent.pid, state)?;
         }
     }
@@ -315,8 +337,8 @@ fn watch_process(kqueue: libc::c_int, pid: libc::pid_t) -> Result<(), WatchProce
         // NOTE_REAP is deprecated for ordinary exit observation, but NOTE_EXIT
         // fires while the PID may still exist as a zombie. Requesting both
         // keeps the watch installed until the process is reaped. XNU posts the
-        // event immediately before removing the PID from its process table, so
-        // a theoretical scheduling window remains; no later event is available.
+        // event before removing the PID from its process table, so teardown also
+        // verifies that the recorded process identity has disappeared.
         fflags: libc::NOTE_FORK | libc::NOTE_EXIT | PROCESS_REAP_EVENT,
         data: 0,
         udata: std::ptr::null_mut(),
