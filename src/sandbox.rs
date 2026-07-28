@@ -2,12 +2,14 @@ use std::ffi::{OsStr, OsString};
 use std::process::ExitCode;
 
 #[cfg(target_os = "macos")]
-#[path = "sandbox/macos.rs"]
-mod platform;
+mod macos;
+#[cfg(target_os = "macos")]
+use self::macos as platform;
 
 #[cfg(not(target_os = "macos"))]
-#[path = "sandbox/unsupported.rs"]
-mod platform;
+mod unsupported;
+#[cfg(not(target_os = "macos"))]
+use self::unsupported as platform;
 
 pub fn run(command: &[OsString]) -> Result<ExitCode, String> {
     let command = match command {

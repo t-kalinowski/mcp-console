@@ -49,15 +49,22 @@ See `design-sketches/README.md` for the product overview and `design-sketches/do
 - `src/main.rs` — current binary entry point.
 - `src/server.rs` — MCP stdio server and echoing `console` tool.
 - `src/sandbox.rs` — platform dispatch for the sandbox process launcher.
-- `src/sandbox/` — platform implementation and macOS Seatbelt policy.
-- `tests/cli.rs` — public binary acceptance tests.
+- `src/sandbox/macos.rs` — macOS sandbox-launch orchestration.
+- `src/sandbox/macos/` — macOS job-control and process-tracking internals.
+- `src/sandbox/read_only_policy.sbpl` — macOS Seatbelt policy.
+- `src/sandbox/unsupported.rs` — unsupported-platform implementation.
+- `tests/cli.rs` — command-line interface acceptance tests.
+- `tests/sandbox_runtime.rs` — sandbox runtime compatibility tests.
+- `tests/sandbox_policy.rs` — sandbox access-policy tests.
+- `tests/sandbox_supervision.rs` — sandbox descendant-supervision tests.
+- `tests/sandbox_terminal.rs` — sandbox terminal-behavior tests.
 - `scripts/check` — local formatting, Clippy, and test checks.
 - `.github/workflows/ci.yaml` — formatting, Clippy, and test checks.
 - `design-sketches/` — tentative product and architecture documents.
 - `README.md` — current user-facing project status.
 - `LICENSE` — project license.
 
-Add modules only when implemented public behavior needs them.
+Add modules when they establish a clear responsibility boundary in implemented behavior.
 Begin as one Cargo package and split crates only when a real boundary emerges.
 
 ## Working rules
@@ -65,11 +72,14 @@ Begin as one Cargo package and split crates only when a real boundary emerges.
 - Keep PRs narrow and easy to review.
   Most PRs should stay under 200 lines of diff, counting additions and deletions.
   A larger PR is acceptable when splitting it would prevent each part from compiling, running, or being reviewed on its own.
+- Treat 400 lines as a prompt to split a file.
+  Split earlier when it contains responsibilities that can be named independently; keep a cohesive implementation together when a split would make its control flow harder to follow.
 - Each PR should implement and test one observable behavior.
   Update design documents in the same PR only when they describe that behavior.
 - Add a public acceptance or regression test first and confirm that it fails before implementing behavior.
-- Test through public interfaces.
-  Do not add tests for private helpers.
+- Keep source-local tests small and explanatory.
+  They should read as executable documentation of how a module is intended to work.
+  Put unit, regression, and acceptance tests in `tests/`, exercise public APIs, and do not test private helpers.
 - Format embedded R, Python, SQL, and shell test programs as multiline raw strings.
   Use escape sequences such as `\n` only when the program needs that character as data, not to lay out its source.
 - Keep complete code cells separate from interactive `stdin`.
