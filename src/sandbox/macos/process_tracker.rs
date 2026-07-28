@@ -116,10 +116,10 @@ impl DescendantTracker {
                 // table. Drop the identity now only when removal has completed.
                 // Any coalesced fork is already outside the observation window:
                 // its children were reparented before this process was reaped.
-                if let Some(identity) = self.state.active.get(&pid).copied() {
-                    if process_identity(pid)? != Some(identity) {
-                        self.state.active.remove(&pid);
-                    }
+                if let Some(identity) = self.state.active.get(&pid).copied()
+                    && process_identity(pid)? != Some(identity)
+                {
+                    self.state.active.remove(&pid);
                 }
                 continue;
             }
@@ -145,10 +145,10 @@ impl DescendantTracker {
             // window. A child that becomes orphaned before observation remains
             // outside the documented supervision boundary.
             discover_active_children(self.kqueue.as_raw_fd(), &mut self.state)?;
-            if let Some(root) = self.state.root {
-                if self.state.active.get(&root.pid) == Some(&root) {
-                    self.state.active.remove(&root.pid);
-                }
+            if let Some(root) = self.state.root
+                && self.state.active.get(&root.pid) == Some(&root)
+            {
+                self.state.active.remove(&root.pid);
             }
             remove_stale_processes(&mut self.state.active)?;
 

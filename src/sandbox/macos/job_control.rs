@@ -37,14 +37,14 @@ impl ForegroundTerminal {
             return Ok(());
         };
 
-        if let Err(error) = set_foreground_process_group(descriptor, self.launcher_process_group) {
-            if error.raw_os_error() != Some(libc::ENOTTY) {
-                return Err(format!(
-                    "failed to restore the launcher as the foreground process group: {error}"
-                ));
-            }
-            // A revoked or hung-up controlling terminal no longer has foreground
-            // ownership to restore. Preserve the command's actual exit status.
+        // A revoked or hung-up controlling terminal no longer has foreground
+        // ownership to restore. Preserve the command's actual exit status.
+        if let Err(error) = set_foreground_process_group(descriptor, self.launcher_process_group)
+            && error.raw_os_error() != Some(libc::ENOTTY)
+        {
+            return Err(format!(
+                "failed to restore the launcher as the foreground process group: {error}"
+            ));
         }
         self.descriptor = None;
         Ok(())
