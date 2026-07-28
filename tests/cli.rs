@@ -739,6 +739,7 @@ import sys
 import termios
 
 master, slave = pty.openpty()
+sandbox_group = None
 
 def attach_controlling_terminal():
     os.setsid()
@@ -756,12 +757,19 @@ process = subprocess.Popen(
 os.close(slave)
 try:
     assert process.stdout.readline() == "ready\n"
+    sandbox_group = os.tcgetpgrp(master)
     os.write(master, b"sandbox input\n")
     assert process.stdout.readline() == "sandbox input\n"
     os.write(master, b"\x03")
     stdout, stderr = process.communicate(timeout=5)
 except BaseException:
-    os.killpg(process.pid, signal.SIGKILL)
+    for process_group in (sandbox_group, process.pid):
+        if process_group is None:
+            continue
+        try:
+            os.killpg(process_group, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
     process.wait()
     raise
 finally:
@@ -802,6 +810,154 @@ print(interrupts)
         String::from_utf8_lossy(&output.stderr)
     );
     assert_eq!(output.stdout, b"1\n");
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn sandbox_preserves_status_after_its_controlling_terminal_closes() {
+    let host_script = r#"
+import ctypes
+import fcntl
+import os
+import pty
+import signal
+import subprocess
+import sys
+import termios
+
+master, slave = pty.openpty()
+slave_name = os.ttyname(slave)
+sandbox_group = None
+
+def attach_controlling_terminal():
+    os.setsid()
+    fcntl.ioctl(slave, termios.TIOCSCTTY, 0)
+    os.tcsetpgrp(slave, os.getpid())
+
+process = subprocess.Popen(
+    [sys.argv[1], "sandbox", "--", "python", "-c", sys.argv[2]],
+    stdin=slave,
+    stdout=subprocess.PIPE,
+    stderr=subprocess.PIPE,
+    text=True,
+    preexec_fn=attach_controlling_terminal,
+)
+os.close(slave)
+try:
+    assert process.stdout.readline() == "ready\n"
+    sandbox_group = os.tcgetpgrp(master)
+    libc = ctypes.CDLL(None, use_errno=True)
+    assert libc.revoke(slave_name.encode()) == 0
+    os.close(master)
+    master = None
+    stdout, stderr = process.communicate(timeout=5)
+except BaseException:
+    for process_group in (sandbox_group, process.pid):
+        if process_group is None:
+            continue
+        try:
+            os.killpg(process_group, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+    process.wait()
+    raise
+finally:
+    if master is not None:
+        os.close(master)
+
+sys.stdout.write(stdout)
+sys.stderr.write(stderr)
+raise SystemExit(process.returncode)
+"#;
+    let sandboxed_script = r#"
+import signal
+import time
+
+signal.signal(signal.SIGHUP, signal.SIG_IGN)
+print("ready", flush=True)
+time.sleep(0.1)
+raise SystemExit(23)
+"#;
+    let output = Command::new("python")
+        .args(["-c", host_script])
+        .arg(env!("CARGO_BIN_EXE_mcp-console"))
+        .arg(sandboxed_script)
+        .output()
+        .expect("terminal fixture should run");
+
+    assert_eq!(
+        output.status.code(),
+        Some(23),
+        "terminal fixture failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn sandbox_keeps_interrupt_interactive_and_preserves_termination_status() {
+    let script = r#"
+import signal
+import time
+
+interrupted = False
+
+def handle_interrupt(_signal, _frame):
+    global interrupted
+    interrupted = True
+
+def handle_termination(_signal, _frame):
+    raise SystemExit(42)
+
+signal.signal(signal.SIGINT, handle_interrupt)
+signal.signal(signal.SIGTERM, handle_termination)
+print("ready", flush=True)
+deadline = time.monotonic() + 1
+while not interrupted and time.monotonic() < deadline:
+    time.sleep(0.01)
+if not interrupted:
+    raise SystemExit("SIGINT was not delivered")
+print("interrupted", flush=True)
+time.sleep(2.25)
+print("continued", flush=True)
+time.sleep(1)
+"#;
+    let mut launcher = Command::new(env!("CARGO_BIN_EXE_mcp-console"))
+        .args(["sandbox", "--", "python", "-c", script])
+        .stdout(Stdio::piped())
+        .spawn()
+        .expect("mcp-console sandbox should start");
+    let mut stdout = BufReader::new(
+        launcher
+            .stdout
+            .take()
+            .expect("sandbox stdout should be piped"),
+    );
+    let mut line = String::new();
+    stdout
+        .read_line(&mut line)
+        .expect("sandbox should report readiness");
+    assert_eq!(line, "ready\n");
+
+    let started = Instant::now();
+    let signal_result = unsafe { libc::kill(launcher.id() as libc::pid_t, libc::SIGINT) };
+    assert_eq!(signal_result, 0, "sandbox launcher should receive SIGINT");
+    line.clear();
+    stdout
+        .read_line(&mut line)
+        .expect("sandbox should report the interrupt");
+    assert_eq!(line, "interrupted\n");
+    line.clear();
+    stdout
+        .read_line(&mut line)
+        .expect("sandbox should report continued execution");
+    assert_eq!(line, "continued\n");
+    assert!(started.elapsed() >= Duration::from_secs(2));
+    let signal_result = unsafe { libc::kill(launcher.id() as libc::pid_t, libc::SIGTERM) };
+    assert_eq!(signal_result, 0, "sandbox launcher should receive SIGTERM");
+    let status = launcher.wait().expect("mcp-console sandbox should exit");
+
+    assert_eq!(status.code(), Some(42));
 }
 
 #[cfg(target_os = "macos")]

@@ -21,9 +21,7 @@ const FORWARDED_SIGNALS: [libc::c_int; 4] =
     [libc::SIGHUP, libc::SIGINT, libc::SIGQUIT, libc::SIGTERM];
 
 static SANDBOX_ROOT_PID: AtomicI32 = AtomicI32::new(0);
-static SIGNAL_WINDOW_ACTIVE: AtomicBool = AtomicBool::new(false);
 static TERMINATION_REQUESTED: AtomicBool = AtomicBool::new(false);
-static FORCE_EXIT_REQUESTED: AtomicBool = AtomicBool::new(false);
 
 pub(super) fn run(command: &[OsString]) -> Result<ExitCode, String> {
     let mut temp_directory = TemporaryDirectory::new()?;
@@ -114,9 +112,15 @@ impl ForegroundTerminal {
             return Ok(());
         };
 
-        set_foreground_process_group(descriptor, self.launcher_process_group).map_err(|error| {
-            format!("failed to restore the launcher as the foreground process group: {error}")
-        })?;
+        if let Err(error) = set_foreground_process_group(descriptor, self.launcher_process_group) {
+            if error.raw_os_error() != Some(libc::ENOTTY) {
+                return Err(format!(
+                    "failed to restore the launcher as the foreground process group: {error}"
+                ));
+            }
+            // A revoked or hung-up controlling terminal no longer has foreground
+            // ownership to restore. Preserve the command's actual exit status.
+        }
         self.descriptor = None;
         Ok(())
     }
@@ -176,9 +180,7 @@ impl SignalForwarder {
                 std::io::Error::from_raw_os_error(mask_result)
             ));
         }
-        SIGNAL_WINDOW_ACTIVE.store(false, Ordering::SeqCst);
         TERMINATION_REQUESTED.store(false, Ordering::SeqCst);
-        FORCE_EXIT_REQUESTED.store(false, Ordering::SeqCst);
 
         let mut previous_actions = Vec::with_capacity(FORWARDED_SIGNALS.len());
         let mut action: libc::sigaction = unsafe { std::mem::zeroed() };
@@ -324,7 +326,6 @@ fn wait_for_root(
     tracker: &DescendantTracker,
 ) -> Result<ExitStatus, String> {
     let mut termination_deadline = None;
-    let mut repeat_deadline = None;
     loop {
         if let Err(error) = signal_forwarder.block_forwarded_signals() {
             let _ = kill_root(child);
@@ -350,18 +351,10 @@ fn wait_for_root(
                 }
 
                 let now = Instant::now();
-                if repeat_deadline.is_some_and(|deadline| now >= deadline) {
-                    SIGNAL_WINDOW_ACTIVE.store(false, Ordering::SeqCst);
-                    repeat_deadline = None;
-                } else if repeat_deadline.is_none() && SIGNAL_WINDOW_ACTIVE.load(Ordering::SeqCst) {
-                    repeat_deadline = Some(now + TERMINATION_GRACE_PERIOD);
-                }
                 if TERMINATION_REQUESTED.load(Ordering::SeqCst) {
                     termination_deadline.get_or_insert_with(|| now + TERMINATION_GRACE_PERIOD);
                 }
-                let force_exit = FORCE_EXIT_REQUESTED.load(Ordering::SeqCst)
-                    || termination_deadline.is_some_and(|deadline| now >= deadline);
-                if force_exit {
+                if termination_deadline.is_some_and(|deadline| now >= deadline) {
                     let status = kill_root(child)?;
                     signal_forwarder.clear_root();
                     signal_forwarder.restore_original_mask()?;
@@ -410,18 +403,12 @@ fn kill_root(child: &mut std::process::Child) -> Result<ExitStatus, String> {
 
 extern "C" fn forward_signal(signal: libc::c_int) {
     let saved_errno = unsafe { *libc::__error() };
-    let repeated = SIGNAL_WINDOW_ACTIVE.swap(true, Ordering::SeqCst);
-    if repeated {
-        // A second request is the escape hatch for an interactive command that
-        // handled the first SIGINT without exiting.
-        FORCE_EXIT_REQUESTED.store(true, Ordering::SeqCst);
-    }
     if signal != libc::SIGINT {
         TERMINATION_REQUESTED.store(true, Ordering::SeqCst);
     }
 
     let root_pid = SANDBOX_ROOT_PID.load(Ordering::Relaxed);
-    if root_pid > 0 && !repeated {
+    if root_pid > 0 {
         // kill(2) is async-signal-safe. The supervisor remains alive to finish
         // tracking and terminating descendants after the root handles the signal.
         let _ = unsafe { libc::kill(-root_pid, signal) };

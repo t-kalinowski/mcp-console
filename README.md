@@ -25,7 +25,7 @@ On macOS, `sandbox` launches the command under `/usr/bin/sandbox-exec`.
 The command can read the host filesystem, can write regular files only in a dedicated temporary directory, and cannot access the network.
 The policy also permits the device and IPC operations needed for supported R and Python workflows, including sandbox-created PTYs and Python multiprocessing semaphores.
 When the launcher owns a terminal, it gives the sandbox command a dedicated foreground process group so terminal-generated signals are delivered once.
-Signals sent directly to the launcher are relayed to that group.
+`SIGHUP`, `SIGINT`, `SIGQUIT`, and `SIGTERM` sent directly to the launcher are relayed to that group.
 Launcher-directed `SIGHUP`, `SIGQUIT`, and `SIGTERM` allow two seconds for the command to exit before `SIGKILL`; `SIGINT` remains an interactive interrupt that the command may handle and continue from.
 A terminal-generated signal handled by the command is not visible to the launcher and therefore does not start this timeout.
 Before returning, the launcher terminates descendants observed by the macOS process tracker, including `processx` children that create another session.
