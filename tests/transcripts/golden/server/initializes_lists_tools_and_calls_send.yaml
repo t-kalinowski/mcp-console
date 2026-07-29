@@ -26,7 +26,7 @@ input:
 output:
   result:
     tools:
-      - name: console
+      - name: send
         description: Echo the supplied arguments.
         inputSchema:
           $schema: https://json-schema.org/draft/2020-12/schema
@@ -37,7 +37,7 @@ id: 3
 input:
   method: tools/call
   params:
-    name: console
+    name: send
     arguments:
       python: print('hello')
       wait_ms: 0

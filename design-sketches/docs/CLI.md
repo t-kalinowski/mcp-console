@@ -8,12 +8,20 @@
 
 `mcp-console` is one standalone Rust binary.
 CLI operations require explicit subcommands.
-The `serve` subcommand runs the MCP stdio server, so the registration command is:
+The `serve` subcommand runs the MCP stdio server.
+The default client registration name is `console`, and the default packaged server command is:
 
 ```bash
 uvx mcp-console serve
 ```
 
+With an installed binary, the Codex registration command is:
+
+```bash
+codex mcp add console -- mcp-console serve
+```
+
+Under Codex's current naming convention, the tools are `mcp__console.send` and `mcp__console.session`.
 The binary also exposes diagnostics, installation helpers, and commands that attach to an already-running MCP Console process.
 These commands do not start a persistent daemon.
 A running MCP client owns the server process and its session workers; attached viewers and CLI clients disappear or disconnect when that server exits.
@@ -142,7 +150,7 @@ uvx mcp-console serve
 Useful options:
 
 ```text
---name NAME                Registration name; default mcp-console.
+--name NAME                Registration name; default console.
 --scope user|project       Client configuration scope.
 --workspace inherit|PATH   Workspace behavior for the server.
 --version VERSION          Register an exact package version.
@@ -198,7 +206,7 @@ mcp-console session restart [SESSION] [--r REQUIREMENT]... [--python REQUIREMENT
 mcp-console session close [SESSION]
 ```
 
-These commands mirror `console_session` behavior through the local control API.
+These commands mirror the MCP `session` tool's behavior through the local control API.
 
 Requirements are additive logical-session configuration and persist across runtime restarts.
 `restart` loses in-memory R, Python, DuckDB, debugger, import, and loaded-package state while retaining requirements, workspace files, and transcript history.

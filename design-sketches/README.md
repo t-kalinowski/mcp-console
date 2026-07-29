@@ -1,6 +1,6 @@
 # MCP Console
 
-MCP Console is a persistent, sandboxed computational workbench for AI agents.
+MCP Console is a persistent, sandboxed R, Python, and DuckDB SQL console for AI agents.
 One console session hosts R, Python, and SQL in a single process, allowing an agent to load data once and use whichever language is best for each step.
 
 > **Status:** design-stage repository.
@@ -16,6 +16,14 @@ uvx mcp-console serve
 
 The PyPI package will contain platform wheels with the standalone Rust binary and a minimal Python launcher.
 A persistent installation can use `uv tool install mcp-console`.
+The MCP initialization identity remains `mcp-console`, while the intended default client registration name is `console`.
+For an installed binary, Codex registration is:
+
+```bash
+codex mcp add console -- mcp-console serve
+```
+
+Under Codex's current naming convention, the tools are `mcp__console.send` and `mcp__console.session`.
 
 `mcp-console` requires a subcommand.
 `mcp-console serve` starts the MCP stdio server.
@@ -44,6 +52,7 @@ The common interaction is deliberately small:
 
 The first three calls evaluate complete cells in a persistent shared session.
 The empty call waits for new output or completion of a long-running evaluation.
+Used this way, the console acts as a computational workbench: the agent keeps live state in one place and reaches for R, Python, or SQL as needed.
 
 When running code requests real console input, the same tool supplies exact `stdin` bytes:
 
@@ -157,14 +166,14 @@ Complete text, plots, live table batches, and snapshots are fetched separately b
 - Public abstraction: a persistent console session, not a notebook or conventional line-oriented REPL.
 - Top-level input: complete R, Python, or SQL cells.
 - Interactive input: exact, optionally multiline `stdin` text only when the active runtime requests it.
-- MCP surface: `console` plus a low-frequency `console_session` environment and lifecycle tool.
+- MCP surface: `send` plus a low-frequency `session` environment and lifecycle tool.
 - Language selection: the object key is `r`, `python`, or `sql`.
 - Runtime substrate: open implementation decision.
   Evaluate an Ark-backed worker against a purpose-built `harp`/`libr` worker before committing; hide either behind the same runtime service.
 - R evaluation: native top-level evaluation; top-level cells are not transported through `ReadConsole`.
 - SQL engine: embedded DuckDB through R/DBI initially; the DuckDB CLI is a behavioral reference only.
 - Output: bounded MCP text plus managed workspace files.
-- Environment: additive session requirements configured by `console_session`; they survive runtime restarts.
+- Environment: additive session requirements configured by `session`; they survive runtime restarts.
 - Lifecycle: `restart` replaces in-memory runtime state while retaining requirements, workspace files, and transcript.
 - Durable record: generated Quarto transcript; granular JSONL journal remains internal.
 - Human visibility: a process-scoped local API with snapshot plus resumable event-stream semantics; no detached daemon.

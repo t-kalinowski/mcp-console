@@ -211,8 +211,8 @@ Split crates only when reuse, dependency isolation, or build performance makes t
 │   │   ├── mod.rs
 │   │   ├── server.rs
 │   │   ├── tools.rs
-│   │   ├── console.rs
-│   │   └── console_session.rs
+│   │   ├── send.rs
+│   │   └── session.rs
 │   ├── session/
 │   │   ├── mod.rs
 │   │   ├── id.rs

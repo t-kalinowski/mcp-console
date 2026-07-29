@@ -1,6 +1,6 @@
 # MCP Console Vision
 
-MCP Console is a persistent, sandboxed computational workbench for AI agents.
+MCP Console is a persistent, sandboxed R, Python, and DuckDB SQL console for AI agents.
 A console session hosts R, Python, and SQL in one process: R is the host runtime, Python is embedded through reticulate, and SQL is backed by a persistent DuckDB connection.
 The agent can load data once, move among the three front ends, inspect and transform live state, and continue across tool calls.
 
@@ -22,6 +22,7 @@ Separate language tools preserve some state but make interchange explicit and fi
 A notebook preserves cells and outputs, but it is primarily a document abstraction and carries kernel, MIME, editing, and execution-order conventions that are unnecessary for a high-frequency agent tool.
 
 MCP Console should make exploratory data work feel like a conversation with one live computational environment.
+Used this way, the console acts as a computational workbench for exploratory data work.
 The agent should choose the most useful language for each step without repeatedly reconstructing state or flooding its context with runtime details.
 A human should be able to observe and inspect the work at full fidelity without turning every plot, table, or progress update into LLM tokens.
 
@@ -143,8 +144,11 @@ Every new public MCP field or tool has a permanent model-context cost.
 ## Product model
 
 - Product and binary: `mcp-console`.
-- Frequent MCP tool: `console`.
-- Low-frequency environment and lifecycle tool: `console_session`.
+- MCP initialization identity: `mcp-console`.
+- Default client registration name: `console`.
+- Frequent MCP tool: `send`.
+- Low-frequency environment and lifecycle tool: `session`.
+- Codex tool names: `mcp__console.send` and `mcp__console.session`.
 - Session: one sandboxed worker process containing R, reticulate Python, and DuckDB.
 - Submission: one complete R, Python, or SQL cell.
 - Evaluation: execution of one submission.
