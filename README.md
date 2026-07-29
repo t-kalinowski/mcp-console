@@ -12,12 +12,15 @@ The following commands are implemented:
 
 ```bash
 mcp-console serve
+mcp-console --help
+mcp-console help [COMMAND]
 mcp-console --version
 mcp-console sandbox -- COMMAND [ARG]...
 ```
 
 `mcp-console` requires a subcommand.
 `mcp-console serve` runs a minimal MCP server over stdio.
+Run `mcp-console --help` or `mcp-console COMMAND --help` for command-line help.
 The server registers one `console` tool that accepts a JSON object and returns that object as JSON text.
 It does not execute code or retain state yet.
 

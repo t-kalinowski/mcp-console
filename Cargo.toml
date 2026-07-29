@@ -9,5 +9,6 @@ license = "MIT"
 publish = false
 
 [dependencies]
+clap = { version = "4.5", features = ["derive"] }
 rmcp = { version = "2.2.0", default-features = false, features = ["macros", "server", "transport-io"] }
 tokio = { version = "1", features = ["macros", "rt"] }

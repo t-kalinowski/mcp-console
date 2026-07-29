@@ -59,13 +59,42 @@ fn requires_a_subcommand() {
     let output = Command::new(env!("CARGO_BIN_EXE_mcp-console"))
         .output()
         .expect("mcp-console should run");
+    let help = Command::new(env!("CARGO_BIN_EXE_mcp-console"))
+        .arg("--help")
+        .output()
+        .expect("mcp-console should run");
 
     assert_eq!(output.status.code(), Some(2));
     assert!(output.stdout.is_empty());
+    assert_eq!(output.stderr, help.stdout);
+}
+
+#[test]
+fn help_describes_the_user_facing_commands() {
+    let output = Command::new(env!("CARGO_BIN_EXE_mcp-console"))
+        .arg("--help")
+        .output()
+        .expect("mcp-console should run");
+
+    assert!(output.status.success());
     assert_eq!(
-        String::from_utf8(output.stderr).expect("stderr should be UTF-8"),
-        "usage: mcp-console serve\n       mcp-console --version\n       mcp-console sandbox [--] COMMAND [ARG]...\n"
+        String::from_utf8(output.stdout).expect("stdout should be UTF-8"),
+        concat!(
+            "Persistent R, Python, and SQL sessions for MCP clients\n\n",
+            "Usage: mcp-console <COMMAND>\n\n",
+            "Commands:\n",
+            "  serve    Run the MCP server over standard input and output\n",
+            "  sandbox  Run a command with the MCP Console sandbox policy\n",
+            "  help     Print this message or the help of the given subcommand(s)\n\n",
+            "Options:\n",
+            "  -h, --help     Print help\n",
+            "  -V, --version  Print version\n\n",
+            "Examples:\n",
+            "  mcp-console serve\n",
+            "  mcp-console sandbox -- python -c 'print(\"hello\")'\n",
+        )
     );
+    assert!(output.stderr.is_empty());
 }
 
 #[test]
@@ -77,9 +106,12 @@ fn sandbox_requires_a_command() {
 
     assert_eq!(output.status.code(), Some(2));
     assert!(output.stdout.is_empty());
-    assert_eq!(
-        String::from_utf8(output.stderr).expect("stderr should be UTF-8"),
-        "usage: mcp-console sandbox [--] COMMAND [ARG]...\n"
+    let stderr = String::from_utf8(output.stderr).expect("stderr should be UTF-8");
+    assert!(stderr.contains("the following required arguments were not provided:\n  <COMMAND>..."));
+    assert!(stderr.contains("Usage: mcp-console sandbox <COMMAND>..."));
+    assert!(
+        stderr.contains("For more information, try '--help'."),
+        "{stderr}"
     );
 }
 
@@ -94,7 +126,6 @@ print("|".join(sys.argv[1:]))
     let output = Command::new(env!("CARGO_BIN_EXE_mcp-console"))
         .args([
             "sandbox",
-            "--",
             "python",
             "-c",
             script,
