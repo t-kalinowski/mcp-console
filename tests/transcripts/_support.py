@@ -104,9 +104,6 @@ class McpClient:
             arguments=arguments,
         )
 
-    def console(self, **arguments: Any) -> None:
-        self.call_tool("console", **arguments)
-
     def finish(self) -> Transcript:
         self.stdin.close()
         with ThreadPoolExecutor(max_workers=2) as executor:

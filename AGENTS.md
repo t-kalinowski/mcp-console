@@ -19,7 +19,7 @@ mcp-console sandbox [--] COMMAND [ARG]...
 The binary requires a subcommand.
 The `serve` command runs an MCP server over stdio.
 Clap provides command help, version output, argument parsing, and usage errors.
-The server registers only a `console` tool, which accepts any JSON object and echoes it as JSON text.
+The server registers only a `send` tool, which accepts any JSON object and echoes it as JSON text.
 The version command prints the package name and version.
 On macOS, the sandbox command launches a subprocess under `sandbox-exec` with host filesystem reads allowed, regular-file writes limited to a dedicated per-launch temporary directory, runtime device and IPC exceptions, and network access denied.
 This initial launcher waits only for the direct command.
@@ -30,12 +30,15 @@ The session model, language runtimes, sidecar API, viewer, environment managemen
 
 ## Product direction
 
-MCP Console is intended to become a persistent, sandboxed R, Python, and DuckDB SQL workbench exposed through MCP.
+MCP Console is intended to become a persistent, sandboxed R, Python, and DuckDB SQL console exposed through MCP.
 The planned public MCP surface has two tools:
 
-- `console` evaluates complete R, Python, or SQL cells, supplies interactive input to an active evaluation, and polls for output.
-- `console_session` manages session requirements and lifecycle operations.
+- `send` evaluates complete R, Python, or SQL cells, supplies interactive input to an active evaluation, and polls for output.
+- `session` manages session requirements and lifecycle operations.
 
+The MCP initialization identity remains `mcp-console`.
+The intended default client registration name is `console`, for example `codex mcp add console -- mcp-console serve`.
+Under Codex's current naming convention, the tools are `mcp__console.send` and `mcp__console.session`.
 The initial runtime design uses R as the host, embeds Python through reticulate, and runs SQL through the DuckDB R package and DBI.
 The worker backend remains an open design decision.
 
@@ -46,7 +49,7 @@ See `design-sketches/README.md` for the product overview and `design-sketches/do
 - `Cargo.toml` — Rust package metadata.
 - `src/main.rs` — current binary entry point.
 - `src/cli.rs` — clap command definitions and user-facing help.
-- `src/server.rs` — MCP stdio server and echoing `console` tool.
+- `src/server.rs` — MCP stdio server and echoing `send` tool.
 - `src/sandbox.rs` — platform dispatch for the sandbox process launcher.
 - `src/sandbox/` — platform implementation and macOS Seatbelt policy.
 - `tests/cli.rs` — public binary acceptance tests.

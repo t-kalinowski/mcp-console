@@ -21,8 +21,16 @@ mcp-console sandbox -- COMMAND [ARG]...
 `mcp-console` requires a subcommand.
 `mcp-console serve` runs a minimal MCP server over stdio.
 Run `mcp-console --help` or `mcp-console COMMAND --help` for command-line help.
-The server registers one `console` tool that accepts a JSON object and returns that object as JSON text.
+The server registers one `send` tool that accepts a JSON object and returns that object as JSON text.
 It does not execute code or retain state yet.
+Its MCP initialization identity remains `mcp-console`.
+The intended default client registration name is `console`:
+
+```bash
+codex mcp add console -- mcp-console serve
+```
+
+Under Codex's current naming convention, the implemented tool is `mcp__console.send`; the planned environment and lifecycle tool will be `mcp__console.session`.
 
 On macOS, `sandbox` launches the command under `/usr/bin/sandbox-exec`.
 The command can read the host filesystem, can write regular files only in a dedicated temporary directory, and cannot access the network.

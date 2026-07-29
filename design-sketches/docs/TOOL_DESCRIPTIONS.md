@@ -7,10 +7,10 @@ This document contains the exact descriptions intended to be registered with the
 Keep these synchronized with [`MCP_INTERFACE.md`](MCP_INTERFACE.md) and the implementation.
 These strings are part of the agent-facing interface and should change only when the added context materially improves tool selection or correct use.
 
-## `console`
+## `send`
 
 ```text
-Persistent R, Python, and DuckDB SQL workbench. Use it whenever exact computation or direct inspection would improve accuracy—from arithmetic, string counting, parsing, and file or binary-data inspection to data wrangling, exploratory analysis, visualization, statistics, simulation, and model training or tuning. State persists across calls; R and Python exchange objects, and SQL queries live or registered tabular data. Language-native help, introspection, interactive input, and debuggers work. Send exactly one complete `r`, `python`, or `sql` cell; after `[input]`, send `stdin`; send no cell or `stdin` to wait/poll. Large values are previewed; oversized stdout/stderr, plots, artifacts, and the Quarto transcript are saved in the workspace.
+Persistent R, Python, and DuckDB SQL console. Use it whenever exact computation or direct inspection would improve accuracy—from arithmetic, string counting, parsing, and file or binary-data inspection to data wrangling, exploratory analysis, visualization, statistics, simulation, and model training or tuning. State persists across calls; R and Python exchange objects, and SQL queries live or registered tabular data. Language-native help, introspection, interactive input, and debuggers work. Send exactly one complete `r`, `python`, or `sql` cell; after `[input]`, send `stdin`; send no cell or `stdin` to wait/poll. Large values are previewed; oversized stdout/stderr, plots, artifacts, and the Quarto transcript are saved in the workspace.
 ```
 
 Property descriptions:
@@ -23,10 +23,10 @@ Property descriptions:
 - `label`: `Optional short heading for this cell in the Quarto transcript; it has no effect on execution.`
 - `wait_ms`: `Maximum time this call waits for output or a state change. It never limits or cancels the computation.`
 
-## `console_session`
+## `session`
 
 ```text
-Prepare, inspect, or control persistent console sessions; normal evaluation and polling use console. Requirements are additive session configuration and survive runtime restarts. prepare creates the session if needed and adds requirements without replacing an existing runtime; if activation requires replacement, it reports that a restart is required. restart starts a fresh runtime generation; any existing in-memory R, Python, and SQL state is lost, while requirements, workspace files, and the transcript are retained. close ends the logical session.
+Prepare, inspect, or control persistent console sessions; normal evaluation and polling use send. Requirements are additive session configuration and survive runtime restarts. prepare creates the session if needed and adds requirements without replacing an existing runtime; if activation requires replacement, it reports that a restart is required. restart starts a fresh runtime generation; any existing in-memory R, Python, and SQL state is lost, while requirements, workspace files, and the transcript are retained. close ends the logical session.
 ```
 
 Property descriptions:

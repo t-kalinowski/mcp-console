@@ -16,10 +16,10 @@ Run commands from the repository root:
 ```bash
 scripts/test
 scripts/test server
-scripts/test server::initializes_lists_tools_and_calls_console
+scripts/test server::initializes_lists_tools_and_calls_send
 scripts/test help
 scripts/test --list
-scripts/test --update server::initializes_lists_tools_and_calls_console
+scripts/test --update server::initializes_lists_tools_and_calls_send
 ```
 
 With no selectors, `scripts/test` runs every suite and case.

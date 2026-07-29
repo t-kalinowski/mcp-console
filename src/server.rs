@@ -11,7 +11,7 @@ struct ConsoleServer;
 #[tool_router]
 impl ConsoleServer {
     #[tool(description = "Echo the supplied arguments.")]
-    fn console(&self, Parameters(arguments): Parameters<JsonObject>) -> String {
+    fn send(&self, Parameters(arguments): Parameters<JsonObject>) -> String {
         Value::Object(arguments).to_string()
     }
 }

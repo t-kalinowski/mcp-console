@@ -6,7 +6,7 @@ It should be sufficient to understand the product direction, locate the relevant
 
 ## Product intent
 
-MCP Console is a persistent, sandboxed data-science workbench exposed through MCP.
+MCP Console is a persistent, sandboxed R, Python, and DuckDB SQL console exposed through MCP.
 A named session contains one R process, one Python interpreter embedded through reticulate, and one persistent DuckDB connection.
 The agent can alternate among R, Python, and SQL while retaining objects, imports, package state, database state, debugger state, and files.
 
@@ -39,10 +39,14 @@ Safety is enforced around the worker process and its descendants, not by filteri
 ## Settled product decisions
 
 - Product and binary name: `mcp-console`.
+- MCP initialization identity: `mcp-console`.
 - CLI operations require explicit subcommands.
-  The MCP stdio server command is `mcp-console serve`, and the intended registration command is `uvx mcp-console serve`.
-- Frequent MCP tool: `console`.
-- Low-frequency environment and lifecycle tool: `console_session`.
+  The MCP stdio server command is `mcp-console serve`, and the default packaged server command is `uvx mcp-console serve`.
+- Default client registration name: `console`.
+  With an installed binary, the Codex registration command is `codex mcp add console -- mcp-console serve`.
+- Frequent MCP tool: `send`.
+- Low-frequency environment and lifecycle tool: `session`.
+  Under Codex's current naming convention, the tools are `mcp__console.send` and `mcp__console.session`.
 - Language is selected by the present object key: `r`, `python`, or `sql`.
 - Top-level submissions are complete cells, not line-by-line parser input.
 - `stdin` is accepted only for an already-active input consumer.
@@ -54,8 +58,8 @@ Safety is enforced around the worker process and its descendants, not by filteri
 - Oversized explicit output is retained in bounded session spools; each response contains only a bounded current excerpt.
 - Large values and SQL relations are previewed structurally before full textual materialization.
 - The agent-facing durable record is `transcript.qmd`; a granular JSONL journal is internal implementation state.
-- Requirements are additive logical-session configuration managed by `console_session`.
-  They survive runtime restarts and are not accepted on ordinary `console` calls.
+- Requirements are additive logical-session configuration managed by `session`.
+  They survive runtime restarts and are not accepted on ordinary `send` calls.
 - Interrupt, restart, close, and worker crash are distinct observable events.
   `restart` loses in-memory R, Python, SQL, debugger, and process state while retaining requirements, workspace files, and transcript.
   Never silently replace a crashed worker.
@@ -181,7 +185,7 @@ Create focused documents only when a subsystem has enough detail to justify a se
 - `src/config.rs` — validated server, output, runtime, retention, local API, and sandbox configuration.
 
 - `src/mcp/` — thin MCP transport and tool adapter.
-  - Defines `console` and `console_session` schemas.
+  - Defines `send` and `session` schemas.
   - Validates public arguments.
   - Converts service results to bounded MCP text.
   - Contains no interpreter mechanics.

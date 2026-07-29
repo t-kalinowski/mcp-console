@@ -9,12 +9,14 @@
 MCP Console exposes two text-returning tools:
 
 ```text
-console
-console_session
+send
+session
 ```
 
-`console` handles the frequent path: evaluate one R, Python, or SQL cell; supply interactive stdin; or wait for a running evaluation.
-`console_session` handles infrequent environment and lifecycle operations.
+`send` handles the frequent path: evaluate one R, Python, or SQL cell; supply interactive stdin; or wait for a running evaluation.
+`session` handles infrequent environment and lifecycle operations.
+The MCP initialization identity is `mcp-console`, and the intended default client registration name is `console`.
+Under Codex's current naming convention, the tools are `mcp__console.send` and `mcp__console.session`.
 
 The interface is optimized for frequent use and global enablement:
 
@@ -26,14 +28,14 @@ The interface is optimized for frequent use and global enablement:
 - larger output and artifacts are ordinary workspace files;
 - v1 does not require structured MCP output, resources, or inline images.
 
-## 2. Tool: `console`
+## 2. Tool: `send`
 
 ### 2.1 Draft schema
 
 ```json
 {
-  "name": "console",
-  "description": "Persistent R, Python, and DuckDB SQL workbench. Use it whenever exact computation or direct inspection would improve accuracy—from arithmetic, string counting, parsing, and file or binary-data inspection to data wrangling, exploratory analysis, visualization, statistics, simulation, and model training or tuning. State persists across calls; R and Python exchange objects, and SQL queries live or registered tabular data. Language-native help, introspection, interactive input, and debuggers work. Send exactly one complete r, python, or sql cell; after [input], send stdin; send no cell or stdin to wait/poll. Large values are previewed; oversized stdout/stderr, plots, artifacts, and the Quarto transcript are saved in the workspace.",
+  "name": "send",
+  "description": "Persistent R, Python, and DuckDB SQL console. Use it whenever exact computation or direct inspection would improve accuracy—from arithmetic, string counting, parsing, and file or binary-data inspection to data wrangling, exploratory analysis, visualization, statistics, simulation, and model training or tuning. State persists across calls; R and Python exchange objects, and SQL queries live or registered tabular data. Language-native help, introspection, interactive input, and debuggers work. Send exactly one complete r, python, or sql cell; after [input], send stdin; send no cell or stdin to wait/poll. Large values are previewed; oversized stdout/stderr, plots, artifacts, and the Quarto transcript are saved in the workspace.",
   "inputSchema": {
     "type": "object",
     "additionalProperties": false,
@@ -97,8 +99,8 @@ The server performs semantic mode validation and returns a short tool error for 
 Additional rules:
 
 - `label` is accepted only with a code cell.
-- Within `console`, a missing session is created only by a code cell.
-  The `console_session` `prepare` action may also create it.
+- Within `send`, a missing session is created only by a code cell.
+  The `session` `prepare` action may also create it.
 - Polling and `stdin` never create a missing session.
 - New code is accepted only while the session is idle.
 - A session runs one top-level evaluation at a time; code sent while it is busy is rejected rather than queued.
@@ -251,7 +253,7 @@ MCP request cancellation is distinct from wait expiry:
 
 ## 6. Session requirements
 
-Requirements are additive logical-session configuration managed by `console_session`, not modifiers on ordinary code cells.
+Requirements are additive logical-session configuration managed by `session`, not modifiers on ordinary code cells.
 
 - Python entries are PEP 508 requirement strings.
 - R entries use the resolver grammar configured by the implementation.
@@ -273,14 +275,14 @@ After successful resolution, restart creates a new runtime generation with the r
 The resolver may run outside the arbitrary-code worker and populate immutable caches.
 Package download access does not imply general network access for user code.
 
-## 7. Tool: `console_session`
+## 7. Tool: `session`
 
 ### 7.1 Draft schema
 
 ```json
 {
-  "name": "console_session",
-  "description": "Prepare, inspect, or control persistent console sessions; normal evaluation and polling use console. Requirements are additive session configuration and survive runtime restarts. prepare creates the session if needed and adds requirements without replacing an existing runtime; if activation requires replacement, it reports that a restart is required. restart starts a fresh runtime generation; any existing in-memory R, Python, and SQL state is lost, while requirements, workspace files, and the transcript are retained. close ends the logical session.",
+  "name": "session",
+  "description": "Prepare, inspect, or control persistent console sessions; normal evaluation and polling use send. Requirements are additive session configuration and survive runtime restarts. prepare creates the session if needed and adds requirements without replacing an existing runtime; if activation requires replacement, it reports that a restart is required. restart starts a fresh runtime generation; any existing in-memory R, Python, and SQL state is lost, while requirements, workspace files, and the transcript are retained. close ends the logical session.",
   "inputSchema": {
     "type": "object",
     "additionalProperties": false,
