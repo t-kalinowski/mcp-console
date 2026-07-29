@@ -1,13 +1,10 @@
 #!/usr/bin/env -S uv run --script
 
-import re
+import os
 import subprocess
 from pathlib import Path
 
 from _support import Transcript, run_this_suite
-
-
-ANSI_ESCAPE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 
 
 def record(binary: Path, *arguments: str) -> dict[str, object]:
@@ -16,15 +13,16 @@ def record(binary: Path, *arguments: str) -> dict[str, object]:
         capture_output=True,
         text=True,
         encoding="utf-8",
+        env={**os.environ, "NO_COLOR": "1"},
     )
     transcript: dict[str, object] = {
         "command": " ".join(("mcp-console", *arguments))
     }
     if result.returncode != 0:
         transcript["exit_code"] = result.returncode
-    transcript["stdout"] = ANSI_ESCAPE.sub("", result.stdout)
-    if stderr := ANSI_ESCAPE.sub("", result.stderr):
-        transcript["stderr"] = stderr
+    transcript["stdout"] = result.stdout
+    if result.stderr:
+        transcript["stderr"] = result.stderr
     return transcript
 
 
