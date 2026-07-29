@@ -41,7 +41,13 @@ class McpClient:
         self.next_request_id = 1
 
     def send(self, message: dict[str, Any]) -> TranscriptDocument:
-        document = {"input": message}
+        recorded_message = message.copy()
+        assert recorded_message.pop("jsonrpc", None) == "2.0", message
+
+        document = {}
+        if "id" in recorded_message:
+            document["id"] = recorded_message.pop("id")
+        document["input"] = recorded_message
         self.transcript.append(document)
         self.stdin.write(json.dumps(message) + "\n")
         self.stdin.flush()
@@ -50,7 +56,10 @@ class McpClient:
     def receive(self, document: TranscriptDocument) -> None:
         line = self.stdout.readline()
         assert line, "mcp-console stopped before replying"
-        document["output"] = json.loads(line)
+        message = json.loads(line)
+        assert message.pop("jsonrpc", None) == "2.0", message
+        assert message.pop("id", None) == document["id"], message
+        document["output"] = message
 
     def request(self, method: str, **params: Any) -> None:
         message: dict[str, Any] = {
