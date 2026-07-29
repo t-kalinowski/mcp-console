@@ -42,6 +42,21 @@ def load_cases(suite_path: Path) -> dict[str, TranscriptCase]:
     return cases
 
 
+def identical(left: object, right: object) -> bool:
+    if type(left) is not type(right):
+        return False
+    if isinstance(left, dict):
+        return left.keys() == right.keys() and all(
+            identical(left[key], right[key]) for key in left
+        )
+    if isinstance(left, list):
+        return len(left) == len(right) and all(
+            identical(left_item, right_item)
+            for left_item, right_item in zip(left, right)
+        )
+    return left == right
+
+
 suites = {path.stem: path for path in suite_paths}
 
 if options.list_tests:
@@ -96,7 +111,7 @@ for suite_name, selected_case_names in selected_suites.items():
             )
         else:
             expected = read_yaml(golden, multi=True)
-            if actual != expected:
+            if not identical(actual, expected):
                 expected_text = format_yaml(expected, multi=True)
                 sys.stderr.writelines(
                     difflib.unified_diff(
