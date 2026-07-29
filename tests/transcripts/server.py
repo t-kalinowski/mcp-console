@@ -3,8 +3,7 @@
 from pathlib import Path
 from textwrap import dedent
 
-from _runner import run_this_suite
-from _support import McpClient, Transcript
+from _support import McpClient, Transcript, run_this_suite
 
 
 def test_initializes_lists_tools_and_calls_console(binary: Path) -> Transcript:

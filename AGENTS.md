@@ -47,8 +47,7 @@ See `design-sketches/README.md` for the product overview and `design-sketches/do
 - `src/sandbox/` — platform implementation and macOS Seatbelt policy.
 - `tests/cli.rs` — public binary acceptance tests.
 - `tests/transcripts/_run.py` — discovers transcript suites and compares case snapshots.
-- `tests/transcripts/_runner.py` — standalone transcript suite launcher.
-- `tests/transcripts/_support.py` — shared external MCP stdio client and protocol helpers.
+- `tests/transcripts/_support.py` — shared MCP stdio client and transcript helpers.
 - `tests/transcripts/<suite>.py` — suites of named imperative transcript cases.
 - `tests/transcripts/golden/SUITE/` — human-readable YAML 1.2 case transcripts.
 - `tests/transcripts/README.md` — transcript test usage and authoring guide.

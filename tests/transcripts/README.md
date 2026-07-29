@@ -3,7 +3,8 @@
 A transcript suite is a non-private Python file in this directory.
 Each `test_` function in a suite is a transcript case.
 The function receives the built binary path, runs one imperative server session, and returns its transcript.
-The runner records every JSON-RPC input and output as one document in the matching YAML 1.2 stream under `golden/SUITE/CASE.yaml`.
+The runner records each JSON-RPC request and response pair as one document in the matching YAML 1.2 stream under `golden/SUITE/CASE.yaml`.
+Notifications are input-only documents.
 
 Run commands from the repository root:
 

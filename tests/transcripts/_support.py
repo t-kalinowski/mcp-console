@@ -4,7 +4,14 @@ from pathlib import Path
 from typing import Any
 
 
-Transcript = list[dict[str, dict[str, Any]]]
+TranscriptDocument = dict[str, dict[str, Any]]
+Transcript = list[TranscriptDocument]
+
+
+def run_this_suite(suite_path: str) -> None:
+    suite = Path(suite_path).resolve()
+    root = suite.parents[2]
+    subprocess.run([root / "scripts" / "test", suite.stem], check=True)
 
 
 class McpClient:
@@ -29,18 +36,20 @@ class McpClient:
         self.stdin = process.stdin
         self.stdout = process.stdout
         self.stderr = process.stderr
-        self.messages: list[dict[str, dict[str, Any]]] = []
+        self.transcript: Transcript = []
         self.next_request_id = 1
 
-    def send(self, message: dict[str, Any]) -> None:
-        self.messages.append({"input": message})
+    def send(self, message: dict[str, Any]) -> TranscriptDocument:
+        document = {"input": message}
+        self.transcript.append(document)
         self.stdin.write(json.dumps(message) + "\n")
         self.stdin.flush()
+        return document
 
-    def receive(self) -> None:
+    def receive(self, document: TranscriptDocument) -> None:
         line = self.stdout.readline()
         assert line, "mcp-console stopped before replying"
-        self.messages.append({"output": json.loads(line)})
+        document["output"] = json.loads(line)
 
     def request(self, method: str, **params: Any) -> None:
         message: dict[str, Any] = {
@@ -52,8 +61,8 @@ class McpClient:
         if params:
             message["params"] = params
 
-        self.send(message)
-        self.receive()
+        document = self.send(message)
+        self.receive(document)
 
     def notify(self, method: str, **params: Any) -> None:
         message: dict[str, Any] = {
@@ -98,4 +107,4 @@ class McpClient:
         assert extra_output == "", f"unexpected extra output: {extra_output}"
         assert standard_error == "", standard_error
 
-        return self.messages
+        return self.transcript

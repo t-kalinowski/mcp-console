@@ -9,7 +9,6 @@ input:
     clientInfo:
       name: acceptance-test
       version: 1.0.0
----
 output:
   jsonrpc: "2.0"
   id: 1
@@ -29,7 +28,6 @@ input:
   jsonrpc: "2.0"
   id: 2
   method: tools/list
----
 output:
   jsonrpc: "2.0"
   id: 2
@@ -51,7 +49,6 @@ input:
     arguments:
       python: "print('hello')"
       wait_ms: 0
----
 output:
   jsonrpc: "2.0"
   id: 3
