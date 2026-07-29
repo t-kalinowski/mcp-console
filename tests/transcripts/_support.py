@@ -4,8 +4,15 @@ from pathlib import Path
 from typing import Any
 
 
+Transcript = list[dict[str, dict[str, Any]]]
+
+
 class McpClient:
-    def __init__(self, binary: Path, arguments: tuple[str, ...]) -> None:
+    def __init__(
+        self,
+        binary: Path,
+        arguments: tuple[str, ...] = (),
+    ) -> None:
         process = subprocess.Popen(
             [binary, *arguments],
             stdin=subprocess.PIPE,
@@ -81,7 +88,7 @@ class McpClient:
     def console(self, **arguments: Any) -> None:
         self.call_tool("console", **arguments)
 
-    def finish(self) -> list[dict[str, dict[str, Any]]]:
+    def finish(self) -> Transcript:
         self.stdin.close()
         extra_output = self.stdout.read()
         standard_error = self.stderr.read()

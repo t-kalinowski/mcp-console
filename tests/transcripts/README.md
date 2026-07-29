@@ -1,30 +1,32 @@
 # Transcript tests
 
-Each Python file under `cases/` defines one imperative external server scenario.
-The runner records every JSON-RPC input and output as one document in the matching YAML 1.2 stream under `golden/`.
+A transcript suite is a non-private Python file in this directory.
+Each `test_` function in a suite is a transcript case.
+The function receives the built binary path, runs one imperative server session, and returns its transcript.
+The runner records every JSON-RPC input and output as one document in the matching YAML 1.2 stream under `golden/SUITE/CASE.yaml`.
 
 Run commands from the repository root:
 
 ```bash
 scripts/test
 scripts/test server
-scripts/test server another-case
+scripts/test server::initializes_lists_tools_and_calls_console
 scripts/test --list
-scripts/test --update server
+scripts/test --update server::initializes_lists_tools_and_calls_console
 ```
 
-With no case names, `scripts/test` runs every case.
-Case names are exact filename stems.
+With no selectors, `scripts/test` runs every suite and case.
+A suite selector runs every case in that file; a `SUITE::CASE` selector runs one named function.
 Use `--update` only to accept an intentional transcript change.
 
-Each case defines `run(client)`.
-Use the shared client methods for initialization and tool calls so the case contains only the behavior under test.
-By default a case runs `mcp-console`; define `server_invocations` when the same transcript must also hold for another implemented server entry point.
+Each case creates an `McpClient`, performs the session, and returns `client.finish()`.
+The binary arguments are explicit in the `McpClient` constructor.
 
-Each case is also directly runnable:
+Each suite is also directly runnable:
 
 ```bash
-uv run --script tests/transcripts/cases/server.py
+./tests/transcripts/server.py
 ```
 
-Its `__main__` block delegates to `scripts/test`, so direct runs build the binary and use the same golden comparison as the suite.
+Suite files use an `uv run --script` shebang.
+Their `__main__` blocks delegate to `scripts/test`, so direct runs build the binary and run every case in that suite.
