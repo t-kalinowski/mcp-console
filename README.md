@@ -39,6 +39,8 @@ Run the local checks with:
 scripts/check
 ```
 
+See [`tests/transcripts/README.md`](tests/transcripts/README.md) for running and authoring external server transcript tests.
+
 ## License
 
 MCP Console is licensed under the [MIT license](LICENSE).

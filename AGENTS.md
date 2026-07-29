@@ -46,6 +46,12 @@ See `design-sketches/README.md` for the product overview and `design-sketches/do
 - `src/sandbox.rs` — platform dispatch for the sandbox process launcher.
 - `src/sandbox/` — platform implementation and macOS Seatbelt policy.
 - `tests/cli.rs` — public binary acceptance tests.
+- `tests/transcripts/_run.py` — discovers transcript suites and compares case snapshots.
+- `tests/transcripts/_support.py` — shared MCP stdio client and transcript helpers.
+- `tests/transcripts/<suite>.py` — suites of named imperative transcript cases.
+- `tests/transcripts/golden/SUITE/` — human-readable YAML 1.2 case transcripts.
+- `tests/transcripts/README.md` — transcript test usage and authoring guide.
+- `scripts/test` — builds the binary and runs selected external Python tests through `uv`.
 - `scripts/check` — local formatting, Clippy, and test checks.
 - `.github/workflows/ci.yaml` — formatting, Clippy, and test checks.
 - `design-sketches/` — tentative product and architecture documents.
@@ -57,9 +63,10 @@ Begin as one Cargo package and split crates only when a real boundary emerges.
 
 ## Working rules
 
-- Keep PRs narrow and easy to review.
-  Most PRs should stay under 200 lines of diff, counting additions and deletions.
-  A larger PR is acceptable when splitting it would prevent each part from compiling, running, or being reviewed on its own.
+- Keep PRs coherent, compact, and easy to review.
+  As a heuristic, aim to keep implementation-code changes under 200 added and deleted lines.
+  Tests, golden snapshots, and documentation do not count toward this guideline.
+  The line count is not a limit; prefer a larger coherent change over splits that make the work harder to understand or validate.
 - Each PR should implement and test one observable behavior.
   Update design documents in the same PR only when they describe that behavior.
 - Add a public acceptance or regression test first and confirm that it fails before implementing behavior.
