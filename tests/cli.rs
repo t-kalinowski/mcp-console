@@ -1,14 +1,17 @@
 #[cfg(target_os = "macos")]
 use std::fs;
+use std::io::{BufRead, BufReader, Write};
 #[cfg(target_os = "macos")]
 use std::net::TcpListener;
 #[cfg(target_os = "macos")]
 use std::os::unix::fs::PermissionsExt;
 #[cfg(target_os = "macos")]
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 #[cfg(target_os = "macos")]
 use std::time::{SystemTime, UNIX_EPOCH};
+
+use serde_json::{Value, json};
 
 #[cfg(target_os = "macos")]
 struct TestDirectory(PathBuf);
@@ -54,6 +57,294 @@ fn version_reports_the_binary_name_and_package_version() {
     assert!(output.stderr.is_empty());
 }
 
+#[test]
+fn stdio_server_registers_a_persistent_r_console_tool() {
+    assert_stdio_server(&["serve"]);
+}
+
+fn assert_stdio_server(arguments: &[&str]) {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_mcp-console"));
+    command.args(arguments);
+    #[cfg(target_os = "linux")]
+    command.env_remove("LD_LIBRARY_PATH");
+    #[cfg(target_os = "macos")]
+    command.env_remove("DYLD_LIBRARY_PATH");
+    let mut server = command
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("mcp-console should start");
+    let mut server_input = server.stdin.take().expect("stdin should be piped");
+    let mut server_output = BufReader::new(server.stdout.take().expect("stdout should be piped"));
+
+    write_message(
+        &mut server_input,
+        &json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-11-25",
+                "capabilities": {},
+                "clientInfo": {
+                    "name": "acceptance-test",
+                    "version": "1.0.0"
+                }
+            }
+        }),
+    );
+    let initialize = read_message(&mut server_output);
+    assert_eq!(initialize["jsonrpc"], "2.0");
+    assert_eq!(initialize["id"], 1);
+    assert_eq!(initialize["result"]["protocolVersion"], "2025-11-25");
+    assert_eq!(initialize["result"]["capabilities"], json!({"tools": {}}));
+    assert_eq!(initialize["result"]["serverInfo"]["name"], "mcp-console");
+    assert_eq!(
+        initialize["result"]["serverInfo"]["version"],
+        env!("CARGO_PKG_VERSION")
+    );
+
+    write_message(
+        &mut server_input,
+        &json!({
+            "jsonrpc": "2.0",
+            "method": "notifications/initialized"
+        }),
+    );
+    write_message(
+        &mut server_input,
+        &json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/list"
+        }),
+    );
+    let tools = read_message(&mut server_output);
+    assert_eq!(tools["jsonrpc"], "2.0");
+    assert_eq!(tools["id"], 2);
+    assert_eq!(
+        tools["result"]["tools"]
+            .as_array()
+            .expect("tools should be an array")
+            .len(),
+        1
+    );
+    assert_eq!(tools["result"]["tools"][0]["name"], "console");
+    assert_eq!(tools["result"]["tools"][0]["inputSchema"]["type"], "object");
+    assert_eq!(
+        tools["result"]["tools"][0]["inputSchema"]["required"],
+        json!(["r"])
+    );
+    assert_eq!(
+        tools["result"]["tools"][0]["inputSchema"]["properties"]
+            .as_object()
+            .expect("tool properties should be an object")
+            .keys()
+            .collect::<Vec<_>>(),
+        vec!["r"]
+    );
+
+    let code = r#"
+answer <- (
+    38 + 2
+)
+answer + 2
+cat("done\n")
+invisible(99)
+cores <- parallel::detectCores()
+"parallel" %in% names(getLoadedDLLs())
+"#;
+    let call = call_console(&mut server_input, &mut server_output, 3, code);
+    assert_eq!(call["jsonrpc"], "2.0");
+    assert_eq!(call["id"], 3);
+    assert_eq!(call["result"]["content"][0]["type"], "text");
+    assert_eq!(
+        call["result"]["content"][0]["text"],
+        "[1] 42\ndone\n[1] TRUE\n"
+    );
+    assert_eq!(call["result"]["isError"], false);
+
+    let persistent_call = call_console(&mut server_input, &mut server_output, 4, "answer");
+    assert_eq!(persistent_call["jsonrpc"], "2.0");
+    assert_eq!(persistent_call["id"], 4);
+    assert_eq!(persistent_call["result"]["content"][0]["text"], "[1] 40\n");
+    assert_eq!(persistent_call["result"]["isError"], false);
+
+    let incomplete_call = call_console(
+        &mut server_input,
+        &mut server_output,
+        5,
+        r#"
+answer <- 41
+answer + (
+"#,
+    );
+    assert_eq!(incomplete_call["jsonrpc"], "2.0");
+    assert_eq!(incomplete_call["id"], 5);
+    assert_eq!(incomplete_call["result"]["isError"], true);
+    assert_eq!(
+        incomplete_call["result"]["content"][0]["text"],
+        "Error: Incomplete code\n"
+    );
+
+    let failing_code = r#"
+cat("before\n")
+stop("boom")
+"#;
+    let failed_call = call_console(&mut server_input, &mut server_output, 6, failing_code);
+    assert_eq!(failed_call["jsonrpc"], "2.0");
+    assert_eq!(failed_call["id"], 6);
+    assert_eq!(failed_call["result"]["isError"], true);
+    assert_eq!(
+        failed_call["result"]["content"][0]["text"],
+        "before\nError: boom\n"
+    );
+
+    let recovered_call = call_console(&mut server_input, &mut server_output, 7, "answer");
+    assert_eq!(recovered_call["jsonrpc"], "2.0");
+    assert_eq!(recovered_call["id"], 7);
+    assert_eq!(recovered_call["result"]["content"][0]["text"], "[1] 40\n");
+    assert_eq!(recovered_call["result"]["isError"], false);
+
+    let callback_call = call_console(
+        &mut server_input,
+        &mut server_output,
+        8,
+        r#"
+invisible(addTaskCallback(
+    function(...) {
+        cat("callback ran\n")
+        FALSE
+    },
+    name = "mcp-console-test"
+))
+"#,
+    );
+    assert_eq!(callback_call["jsonrpc"], "2.0");
+    assert_eq!(callback_call["id"], 8);
+    assert_eq!(
+        callback_call["result"]["content"][0]["text"],
+        "callback ran\n"
+    );
+    assert_eq!(callback_call["result"]["isError"], false);
+
+    let warning_call = call_console(
+        &mut server_input,
+        &mut server_output,
+        9,
+        r#"
+warning("careful")
+invisible(42)
+identical(base::.Last.value, 42) &&
+    !exists(".Last.value", envir = globalenv(), inherits = FALSE)
+"#,
+    );
+    assert_eq!(warning_call["jsonrpc"], "2.0");
+    assert_eq!(warning_call["id"], 9);
+    assert_eq!(
+        warning_call["result"]["content"][0]["text"],
+        "Warning message:\ncareful \n[1] TRUE\n"
+    );
+    assert_eq!(warning_call["result"]["isError"], false);
+
+    let fork_call = call_console(
+        &mut server_input,
+        &mut server_output,
+        10,
+        r#"
+job <- parallel::mcparallel(cat("forked output\n"))
+invisible(parallel::mccollect(job))
+"#,
+    );
+    assert_eq!(fork_call["jsonrpc"], "2.0");
+    assert_eq!(fork_call["id"], 10);
+    assert_eq!(fork_call["result"]["content"][0]["text"], "");
+    assert_eq!(fork_call["result"]["isError"], false);
+
+    let print_error_call = call_console(
+        &mut server_input,
+        &mut server_output,
+        11,
+        r#"
+print.mcp_console_boom <- function(...) stop("print failed")
+structure(1, class = "mcp_console_boom")
+"#,
+    );
+    assert_eq!(print_error_call["jsonrpc"], "2.0");
+    assert_eq!(print_error_call["id"], 11);
+    assert_eq!(
+        print_error_call["result"]["content"][0]["text"],
+        "Error in print.mcp_console_boom(x) : print failed\n"
+    );
+    assert_eq!(print_error_call["result"]["isError"], true);
+
+    let print_error_recovery = call_console(&mut server_input, &mut server_output, 12, "answer");
+    assert_eq!(print_error_recovery["jsonrpc"], "2.0");
+    assert_eq!(print_error_recovery["id"], 12);
+    assert_eq!(
+        print_error_recovery["result"]["content"][0]["text"],
+        "[1] 40\n"
+    );
+    assert_eq!(print_error_recovery["result"]["isError"], false);
+
+    let similarly_named_state = call_console(
+        &mut server_input,
+        &mut server_output,
+        13,
+        r#"
+..mcp_console_value.. <- 42
+..mcp_console_value..
+"#,
+    );
+    assert_eq!(similarly_named_state["jsonrpc"], "2.0");
+    assert_eq!(similarly_named_state["id"], 13);
+    assert_eq!(
+        similarly_named_state["result"]["content"][0]["text"],
+        "[1] 42\n"
+    );
+    assert_eq!(similarly_named_state["result"]["isError"], false);
+
+    drop(server_input);
+    drop(server_output);
+    let output = server
+        .wait_with_output()
+        .expect("mcp-console should stop when stdin closes");
+    assert!(output.status.success());
+    assert!(output.stderr.is_empty());
+}
+
+fn call_console(writer: &mut impl Write, reader: &mut impl BufRead, id: u64, r: &str) -> Value {
+    write_message(
+        writer,
+        &json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": "tools/call",
+            "params": {
+                "name": "console",
+                "arguments": {
+                    "r": r
+                }
+            }
+        }),
+    );
+    read_message(reader)
+}
+
+fn write_message(writer: &mut impl Write, message: &Value) {
+    writeln!(writer, "{message}").expect("MCP message should be written");
+    writer.flush().expect("MCP message should be flushed");
+}
+
+fn read_message(reader: &mut impl BufRead) -> Value {
+    let mut line = String::new();
+    reader
+        .read_line(&mut line)
+        .expect("MCP message should be read");
+    serde_json::from_str(&line).expect("MCP message should be JSON")
+}
+
 #[cfg(target_os = "macos")]
 #[test]
 fn sandbox_preserves_python_arguments_and_standard_output() {
@@ -65,6 +356,7 @@ print("|".join(sys.argv[1:]))
     let output = Command::new(env!("CARGO_BIN_EXE_mcp-console"))
         .args([
             "sandbox",
+            "--",
             "python",
             "-c",
             script,

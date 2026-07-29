@@ -21,9 +21,24 @@ mcp-console sandbox -- COMMAND [ARG]...
 `mcp-console` requires a subcommand.
 `mcp-console serve` runs a minimal MCP server over stdio.
 Run `mcp-console --help` or `mcp-console COMMAND --help` for command-line help.
-The server registers one `send` tool that accepts a JSON object and returns that object as JSON text.
-It does not execute code or retain state yet.
-Its MCP initialization identity remains `mcp-console`.
+On Unix, the server starts one private embedded-R worker and registers one `send` tool with this input:
+
+```json
+{ "r": "x <- 40\nx + 2" }
+```
+
+Each call supplies one complete R code cell.
+The worker parses the whole cell, evaluates its expressions sequentially at top level, and returns R console output, including every visible top-level value.
+State persists across calls for the life of the server.
+Incomplete input and R parse or evaluation failures are returned as tool errors rather than continuation prompts.
+R must be discoverable through `R_HOME` or `PATH` and must provide a shared library.
+This initial worker is a separate process but is not launched through `mcp-console sandbox` yet.
+The embedded-R worker is not implemented on Windows yet.
+Output from forked descendants is not supported by this initial worker.
+
+Python, SQL, interactive input, polling, named sessions, runtime restart, and output retention are not implemented yet.
+
+The MCP initialization identity remains `mcp-console`.
 The intended default client registration name is `console`:
 
 ```bash

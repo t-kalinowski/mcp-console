@@ -19,14 +19,22 @@ mcp-console sandbox [--] COMMAND [ARG]...
 The binary requires a subcommand.
 The `serve` command runs an MCP server over stdio.
 Clap provides command help, version output, argument parsing, and usage errors.
-The server registers only a `send` tool, which accepts any JSON object and echoes it as JSON text.
+On Unix, the server starts one private embedded-R worker and registers only a `send` tool.
+The tool accepts one required `r` string containing a complete R code cell.
+The worker parses the whole cell, evaluates its expressions sequentially at top level in persistent global state, and returns R console output, including every visible top-level value.
+Incomplete input and R parse or evaluation failures are tool errors, not continuation prompts.
+The MCP process and worker communicate over a private inherited JSON-lines sideband so R output cannot corrupt MCP stdio.
+This initial worker is not launched through the sandbox command.
+The embedded-R worker is unsupported on Windows.
+Top-level task callbacks receive an internal value-proxy expression rather than the user's parsed expression.
+Output from forked descendants is unsupported.
 The version command prints the package name and version.
 On macOS, the sandbox command launches a subprocess under `sandbox-exec` with host filesystem reads allowed, regular-file writes limited to a dedicated per-launch temporary directory, runtime device and IPC exceptions, and network access denied.
 This initial launcher waits only for the direct command.
 Background descendants are unsupported: they may outlive the launcher, which attempts to remove their dedicated temporary directory on a best-effort basis when it returns.
 Descendant supervision is intentionally deferred because it must account for process groups, session-detached children, signal forwarding, and PID reuse together.
 The sandbox command is unsupported on Linux and Windows.
-The session model, language runtimes, sidecar API, viewer, environment management, output retention, and transcript generation do not exist yet.
+Python and SQL runtimes, interactive input, polling, named-session management, worker restart, the sidecar API, the viewer, environment management, output retention, and transcript generation do not exist yet.
 
 ## Product direction
 
@@ -40,7 +48,7 @@ The MCP initialization identity remains `mcp-console`.
 The intended default client registration name is `console`, for example `codex mcp add console -- mcp-console serve`.
 Under Codex's current naming convention, the tools are `mcp__console.send` and `mcp__console.session`.
 The initial runtime design uses R as the host, embeds Python through reticulate, and runs SQL through the DuckDB R package and DBI.
-The worker backend remains an open design decision.
+The eventual full-runtime worker backend remains an open design decision; the current embedded-R worker implements only this minimal console slice.
 
 See `design-sketches/README.md` for the product overview and `design-sketches/docs/ARCHITECTURE.md` for the tentative architecture.
 
@@ -49,7 +57,9 @@ See `design-sketches/README.md` for the product overview and `design-sketches/do
 - `Cargo.toml` — Rust package metadata.
 - `src/main.rs` — current binary entry point.
 - `src/cli.rs` — clap command definitions and user-facing help.
-- `src/server.rs` — MCP stdio server and echoing `send` tool.
+- `src/server.rs` — MCP stdio server and R-evaluating `send` tool.
+- `src/worker.rs` — private persistent embedded-R worker and supervisor client.
+- `src/sideband.rs` — inherited Unix pipe transport for worker JSON-lines messages.
 - `src/sandbox.rs` — platform dispatch for the sandbox process launcher.
 - `src/sandbox/` — platform implementation and macOS Seatbelt policy.
 - `tests/cli.rs` — public binary acceptance tests.

@@ -1,3 +1,4 @@
+use std::ffi::OsStr;
 use std::process::ExitCode;
 
 use clap::Parser;
@@ -5,9 +6,20 @@ use clap::Parser;
 mod cli;
 mod sandbox;
 mod server;
+#[cfg(target_family = "unix")]
+mod sideband;
+mod worker;
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> ExitCode {
+    let arguments = std::env::args_os().skip(1).collect::<Vec<_>>();
+    if matches!(arguments.as_slice(), [mode] if mode == OsStr::new("__worker")) {
+        return match worker::run() {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => exit_with_error(error),
+        };
+    }
+
     match cli::Cli::parse().command {
         cli::Command::Serve => match server::run().await {
             Ok(()) => ExitCode::SUCCESS,
