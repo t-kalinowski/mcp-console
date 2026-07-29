@@ -6,4 +6,4 @@ cd "$(dirname "$0")/.."
 
 cargo build
 
-PYTHONDONTWRITEBYTECODE=1 uv run --script tests/transcripts/_run.py "$@"
+uv run --script tests/transcripts/_run.py "$@"

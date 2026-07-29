@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["py-yaml12==0.1.0"]
+# dependencies = ["py-yaml12"]
 # ///
 
 import argparse
