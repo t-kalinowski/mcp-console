@@ -9,8 +9,9 @@ MCP Console is an initial Rust binary package.
 The implemented commands are:
 
 ```text
-mcp-console
 mcp-console serve
+mcp-console --help
+mcp-console help [COMMAND]
 mcp-console --version
 mcp-console sandbox [--] COMMAND [ARG]...
 ```
@@ -95,9 +96,10 @@ Begin as one Cargo package and split crates only when a real boundary emerges.
 
 ## Working rules
 
-- Keep PRs narrow and easy to review.
-  Most PRs should stay under 200 lines of diff, counting additions and deletions.
-  A larger PR is acceptable when splitting it would prevent each part from compiling, running, or being reviewed on its own.
+- Keep PRs coherent, compact, and easy to review.
+  As a heuristic, aim to keep implementation-code changes under 200 added and deleted lines.
+  Tests, golden snapshots, and documentation do not count toward this guideline.
+  The line count is not a limit; prefer a larger coherent change over splits that make the work harder to understand or validate.
 - Each PR should implement and test one observable behavior.
   Update design documents in the same PR only when they describe that behavior.
 - Add a public acceptance or regression test first and confirm that it fails before implementing behavior.

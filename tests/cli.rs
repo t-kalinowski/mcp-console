@@ -60,60 +60,58 @@ fn version_reports_the_binary_name_and_package_version() {
 
 #[test]
 fn stdio_server_registers_only_a_lazy_r_console_tool() {
-    for arguments in [&[][..], &["serve"][..]] {
-        let mut client = McpClient::start_without_r(arguments);
-        let tools = client.request(2, "tools/list", None);
-        let tools = tools["result"]["tools"]
-            .as_array()
-            .expect("tools should be an array");
+    let mut client = McpClient::start_without_r(&["serve"]);
+    let tools = client.request(2, "tools/list", None);
+    let tools = tools["result"]["tools"]
+        .as_array()
+        .expect("tools should be an array");
 
-        assert_eq!(tools.len(), 1);
-        assert_eq!(tools[0]["name"], "console");
-        assert_eq!(tools[0]["inputSchema"]["type"], "object");
-        assert_eq!(tools[0]["inputSchema"]["additionalProperties"], false);
-        assert!(
-            tools[0]["inputSchema"]["required"].is_null()
-                || tools[0]["inputSchema"]["required"] == json!([])
-        );
-        assert_eq!(
-            tools[0]["inputSchema"]["properties"]
-                .as_object()
-                .expect("console properties should be an object")
-                .keys()
-                .collect::<Vec<_>>(),
-            ["r", "stdin"]
-        );
+    assert_eq!(tools.len(), 1);
+    assert_eq!(tools[0]["name"], "console");
+    assert_eq!(tools[0]["inputSchema"]["type"], "object");
+    assert_eq!(tools[0]["inputSchema"]["additionalProperties"], false);
+    assert!(
+        tools[0]["inputSchema"]["required"].is_null()
+            || tools[0]["inputSchema"]["required"] == json!([])
+    );
+    assert_eq!(
+        tools[0]["inputSchema"]["properties"]
+            .as_object()
+            .expect("console properties should be an object")
+            .keys()
+            .collect::<Vec<_>>(),
+        ["r", "stdin"]
+    );
 
-        assert_eq!(
-            client.call_console_error(3, json!({})),
-            "send exactly one of r or stdin"
-        );
-        assert_eq!(
-            client.call_console_error(4, json!({"r": "1", "stdin": "\n"})),
-            "send exactly one of r or stdin"
-        );
-        assert_eq!(
-            client.call_console_error(5, json!({"stdin": "\n"})),
-            "stdin is accepted only at an R input prompt"
-        );
+    assert_eq!(
+        client.call_console_error(3, json!({})),
+        "send exactly one of r or stdin"
+    );
+    assert_eq!(
+        client.call_console_error(4, json!({"r": "1", "stdin": "\n"})),
+        "send exactly one of r or stdin"
+    );
+    assert_eq!(
+        client.call_console_error(5, json!({"stdin": "\n"})),
+        "stdin is accepted only at an R input prompt"
+    );
 
-        let stopped = client.call_console_error(6, json!({"r": "1"}));
-        assert!(
-            stopped.starts_with("[stopped:"),
-            "startup failure should be an explicit stopped state: {stopped:?}"
-        );
-        assert_eq!(
-            client.call_console_error(7, json!({"r": "1"})),
-            stopped,
-            "a stopped worker must not restart implicitly"
-        );
-    }
+    let stopped = client.call_console_error(6, json!({"r": "1"}));
+    assert!(
+        stopped.starts_with("[stopped:"),
+        "startup failure should be an explicit stopped state: {stopped:?}"
+    );
+    assert_eq!(
+        client.call_console_error(7, json!({"r": "1"})),
+        stopped,
+        "a stopped worker must not restart implicitly"
+    );
 }
 
 #[cfg(target_os = "macos")]
 #[test]
 fn stdio_console_runs_complete_top_level_r_cells_in_persistent_state() {
-    let mut client = McpClient::start(&[]);
+    let mut client = McpClient::start(&["serve"]);
     let code = r#"
 answer <- (
     38 + 2
@@ -256,6 +254,7 @@ printf '%s\n' "$MCP_CONSOLE_REAL_R_HOME"
 
     let mut command = Command::new(env!("CARGO_BIN_EXE_mcp-console"));
     command
+        .arg("serve")
         .env_remove("R_HOME")
         .env("PATH", path)
         .env("MCP_CONSOLE_ESCAPE_PATH", &escaped)
@@ -291,7 +290,7 @@ exec /bin/sleep 3
     .expect("test PATH should be valid");
 
     let mut command = Command::new(env!("CARGO_BIN_EXE_mcp-console"));
-    command.env_remove("R_HOME").env("PATH", path);
+    command.arg("serve").env_remove("R_HOME").env("PATH", path);
     let mut client = McpClient::spawn(command);
     client.send_console(2, json!({"r": "1 + 1"}));
 
@@ -305,7 +304,7 @@ exec /bin/sleep 3
 #[cfg(target_os = "macos")]
 #[test]
 fn stdio_console_treats_r_failures_as_recoverable_language_outcomes() {
-    let mut client = McpClient::start(&[]);
+    let mut client = McpClient::start(&["serve"]);
     assert_eq!(
         client.call_console(2, json!({"r": "answer <- 40"})),
         "[done]"
@@ -403,7 +402,7 @@ structure(1, class = "mcp_console_boom")
 #[cfg(target_os = "macos")]
 #[test]
 fn stdio_console_supplies_exact_stdin_to_readline_and_browser() {
-    let mut client = McpClient::start(&[]);
+    let mut client = McpClient::start(&["serve"]);
     assert_eq!(
         client.call_console(
             2,
@@ -564,7 +563,7 @@ cat(
 cat("\n")
 "#
     );
-    let mut client = McpClient::start(&[]);
+    let mut client = McpClient::start(&["serve"]);
 
     assert_eq!(
         client.call_console(2, json!({"r": code})),
@@ -589,7 +588,7 @@ cat("\n")
 #[cfg(target_os = "macos")]
 #[test]
 fn stdio_console_keeps_a_stopped_worker_stopped() {
-    let mut client = McpClient::start(&[]);
+    let mut client = McpClient::start(&["serve"]);
     let stopped = client.call_console_error(
         2,
         json!({"r": r#"
@@ -608,7 +607,7 @@ quit(save = "no", status = 23, runLast = FALSE)
 #[cfg(target_os = "macos")]
 #[test]
 fn stdio_console_shutdown_is_bounded_while_r_waits_for_input() {
-    let mut client = McpClient::start(&[]);
+    let mut client = McpClient::start(&["serve"]);
     assert_eq!(
         client.call_console(
             2,
@@ -631,7 +630,7 @@ Sys.sleep(60)
 #[cfg(not(target_os = "macos"))]
 #[test]
 fn stdio_console_does_not_start_an_unsandboxed_r_session() {
-    let mut client = McpClient::start(&[]);
+    let mut client = McpClient::start(&["serve"]);
 
     assert_eq!(
         client.call_console_error(2, json!({"r": "1 + 1"})),
@@ -839,21 +838,6 @@ fn read_message(reader: &mut impl BufRead) -> Value {
         .read_line(&mut line)
         .expect("MCP message should be read");
     serde_json::from_str(&line).expect("MCP message should be JSON")
-}
-
-#[test]
-fn sandbox_requires_a_command() {
-    let output = Command::new(env!("CARGO_BIN_EXE_mcp-console"))
-        .arg("sandbox")
-        .output()
-        .expect("mcp-console should run");
-
-    assert_eq!(output.status.code(), Some(2));
-    assert!(output.stdout.is_empty());
-    assert_eq!(
-        String::from_utf8(output.stderr).expect("stderr should be UTF-8"),
-        "usage: mcp-console sandbox [--] COMMAND [ARG]...\n"
-    );
 }
 
 #[cfg(target_os = "macos")]

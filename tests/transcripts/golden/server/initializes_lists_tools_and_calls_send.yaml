@@ -24,28 +24,36 @@ id: 2
 input:
   method: tools/list
 output:
-  result:
-    tools:
+    result:
+      tools:
       - name: send
-        description: Echo the supplied arguments.
+        description: "Persistent R console. Send one complete r cell, or send stdin after the response ends with [input]."
         inputSchema:
-          $schema: https://json-schema.org/draft/2020-12/schema
-          additionalProperties: true
+          $schema: "https://json-schema.org/draft/2020-12/schema"
+          additionalProperties: false
           type: object
+          properties:
+            r:
+              description: Complete multiline R code evaluated as top-level expressions.
+              type:
+                - string
+                - "null"
+            stdin:
+              description: Exact text supplied after R requests interactive input.
+              type:
+                - string
+                - "null"
 ---
 id: 3
 input:
   method: tools/call
   params:
     name: send
-    arguments:
-      python: print('hello')
-      wait_ms: 0
+    arguments: {}
 output:
   result:
     content:
       - type: text
-        text: |-
-          {"python":"print('hello')","wait_ms":0}
-    isError: false
+        text: send exactly one of r or stdin
+    isError: true
 ...
