@@ -22,6 +22,7 @@ Separate language tools preserve some state but make interchange explicit and fi
 A notebook preserves cells and outputs, but it is primarily a document abstraction and carries kernel, MIME, editing, and execution-order conventions that are unnecessary for a high-frequency agent tool.
 
 MCP Console should make exploratory data work feel like a conversation with one live computational environment.
+Used this way, the console acts as a computational workbench for exploratory data work.
 The agent should choose the most useful language for each step without repeatedly reconstructing state or flooding its context with runtime details.
 A human should be able to observe and inspect the work at full fidelity without turning every plot, table, or progress update into LLM tokens.
 

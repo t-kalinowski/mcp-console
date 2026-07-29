@@ -52,6 +52,7 @@ The common interaction is deliberately small:
 
 The first three calls evaluate complete cells in a persistent shared session.
 The empty call waits for new output or completion of a long-running evaluation.
+Used this way, the console acts as a computational workbench: the agent keeps live state in one place and reaches for R, Python, or SQL as needed.
 
 When running code requests real console input, the same tool supplies exact `stdin` bytes:
 
