@@ -1,3 +1,4 @@
+# fmt: skip file
 ---
 command: mcp-console
 exit_code: 2

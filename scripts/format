@@ -4,18 +4,10 @@ set -eu
 
 cd "${0%/*}/.."
 
-if command -v uv >/dev/null 2>&1; then
-    uv format
-fi
+uv format || :
 
-if command -v yamark >/dev/null 2>&1; then
-    yamark format --wrap sentence
-fi
+yamark format --wrap sentence || :
 
-if command -v cargo >/dev/null 2>&1; then
-    cargo fmt --all
-fi
+cargo fmt --all || :
 
-if command -v air >/dev/null 2>&1; then
-    air format .
-fi
+air format . || :

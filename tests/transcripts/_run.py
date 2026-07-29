@@ -81,7 +81,9 @@ for suite_name, selected_case_names in selected_suites.items():
         selected_cases = ((name, cases[name]) for name in selected_case_names)
 
     for case_name, record_transcript in selected_cases:
-        transcript = format_yaml(record_transcript(binary), multi=True)
+        transcript = "# fmt: skip file\n" + format_yaml(
+            record_transcript(binary), multi=True
+        )
         golden = directory / "golden" / suite_name / f"{case_name}.yaml"
 
         if options.update:

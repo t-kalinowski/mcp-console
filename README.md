@@ -48,7 +48,7 @@ Format the repository with each installed formatter:
 scripts/format
 ```
 
-Missing formatter binaries are skipped.
+Formatter errors remain visible but do not stop the remaining formatters or make the script fail.
 
 See [`tests/transcripts/README.md`](tests/transcripts/README.md) for running and authoring external server transcript tests.
 

@@ -1,3 +1,4 @@
+# fmt: skip file
 ---
 input:
   jsonrpc: "2.0"
