@@ -17,12 +17,15 @@ def record(binary: Path, *arguments: str) -> dict[str, object]:
         text=True,
         encoding="utf-8",
     )
-    return {
-        "command": " ".join(("mcp-console", *arguments)),
-        "exit_code": result.returncode,
-        "stdout": ANSI_ESCAPE.sub("", result.stdout),
-        "stderr": ANSI_ESCAPE.sub("", result.stderr),
+    transcript: dict[str, object] = {
+        "command": " ".join(("mcp-console", *arguments))
     }
+    if result.returncode != 0:
+        transcript["exit_code"] = result.returncode
+    transcript["stdout"] = ANSI_ESCAPE.sub("", result.stdout)
+    if stderr := ANSI_ESCAPE.sub("", result.stderr):
+        transcript["stderr"] = stderr
+    return transcript
 
 
 def test_help(binary: Path) -> Transcript:

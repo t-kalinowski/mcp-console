@@ -21,7 +21,6 @@ stderr: |
     mcp-console sandbox -- python -c 'print("hello")'
 ---
 command: mcp-console --help
-exit_code: 0
 stdout: |
   Persistent R, Python, and SQL sessions for MCP clients
 
@@ -39,10 +38,8 @@ stdout: |
   Examples:
     mcp-console serve
     mcp-console sandbox -- python -c 'print("hello")'
-stderr: ""
 ---
 command: mcp-console serve --help
-exit_code: 0
 stdout: |
   Run the MCP server over standard input and output
 
@@ -50,7 +47,6 @@ stdout: |
 
   Options:
     -h, --help  Print help
-stderr: ""
 ---
 command: mcp-console sandbox
 exit_code: 2
@@ -64,7 +60,6 @@ stderr: |
   For more information, try '--help'.
 ---
 command: mcp-console sandbox --help
-exit_code: 0
 stdout: |
   Run a command with the MCP Console sandbox policy
 
@@ -79,5 +74,4 @@ stdout: |
   Examples:
     mcp-console sandbox -- Rscript analysis.R
     mcp-console sandbox -- python script.py
-stderr: ""
 ...

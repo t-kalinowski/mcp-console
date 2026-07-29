@@ -5,7 +5,8 @@ Each `test_` function in a suite is a transcript case.
 The function receives the built binary path and returns a list of mappings.
 The runner records each mapping as one document in the matching YAML 1.2 stream under `golden/SUITE/CASE.yaml`.
 Server cases record JSON-RPC requests and responses.
-The `help` suite records command lines, exit codes, stdout, and stderr in one ANSI-free stream.
+The `help` suite records command lines and stdout in one ANSI-free stream.
+It adds the exit code for failures and stderr when nonempty.
 
 Run commands from the repository root:
 
