@@ -11,13 +11,13 @@ The repository currently contains the initial Rust binary package.
 The following commands are implemented:
 
 ```bash
-mcp-console
 mcp-console serve
 mcp-console --version
 mcp-console sandbox -- COMMAND [ARG]...
 ```
 
-`mcp-console` and `mcp-console serve` run a minimal MCP server over stdio.
+`mcp-console` requires a subcommand.
+`mcp-console serve` runs a minimal MCP server over stdio.
 The server registers one `console` tool that accepts a JSON object and returns that object as JSON text.
 It does not execute code or retain state yet.
 

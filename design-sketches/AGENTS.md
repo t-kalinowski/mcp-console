@@ -39,7 +39,8 @@ Safety is enforced around the worker process and its descendants, not by filteri
 ## Settled product decisions
 
 - Product and binary name: `mcp-console`.
-- Default CLI behavior: run the MCP stdio server; intended registration command is `uvx mcp-console`.
+- CLI operations require explicit subcommands.
+  The MCP stdio server command is `mcp-console serve`, and the intended registration command is `uvx mcp-console serve`.
 - Frequent MCP tool: `console`.
 - Low-frequency environment and lifecycle tool: `console_session`.
 - Language is selected by the present object key: `r`, `python`, or `sql`.

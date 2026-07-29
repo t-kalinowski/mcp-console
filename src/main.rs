@@ -9,18 +9,13 @@ async fn main() -> ExitCode {
     let arguments = std::env::args_os().skip(1).collect::<Vec<_>>();
 
     match arguments.as_slice() {
-        arguments
-            if arguments.is_empty()
-                || matches!(arguments, [subcommand] if subcommand == OsStr::new("serve")) =>
-        {
-            match server::run().await {
-                Ok(()) => ExitCode::SUCCESS,
-                Err(error) => {
-                    eprintln!("{error}");
-                    ExitCode::FAILURE
-                }
+        [subcommand] if subcommand == OsStr::new("serve") => match server::run().await {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => {
+                eprintln!("{error}");
+                ExitCode::FAILURE
             }
-        }
+        },
         [argument] if argument == OsStr::new("--version") => {
             println!("mcp-console {}", env!("CARGO_PKG_VERSION"));
             ExitCode::SUCCESS
@@ -42,7 +37,7 @@ async fn main() -> ExitCode {
         }
         _ => {
             eprintln!(
-                "usage: mcp-console [serve]\n       mcp-console --version\n       mcp-console sandbox [--] COMMAND [ARG]..."
+                "usage: mcp-console serve\n       mcp-console --version\n       mcp-console sandbox [--] COMMAND [ARG]..."
             );
             ExitCode::from(2)
         }

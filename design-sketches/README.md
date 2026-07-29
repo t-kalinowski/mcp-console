@@ -11,13 +11,14 @@ One console session hosts R, Python, and SQL in a single process, allowing an ag
 The intended MCP server command is:
 
 ```bash
-uvx mcp-console
+uvx mcp-console serve
 ```
 
 The PyPI package will contain platform wheels with the standalone Rust binary and a minimal Python launcher.
 A persistent installation can use `uv tool install mcp-console`.
 
-`mcp-console` with no arguments starts the MCP stdio server.
+`mcp-console` requires a subcommand.
+`mcp-console serve` starts the MCP stdio server.
 Additional commands diagnose the runtime, register supported MCP clients, and attach human-facing viewers to an already-running server.
 See [`docs/CLI.md`](docs/CLI.md).
 

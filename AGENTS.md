@@ -9,13 +9,13 @@ MCP Console is an initial Rust binary package.
 The implemented commands are:
 
 ```text
-mcp-console
 mcp-console serve
 mcp-console --version
 mcp-console sandbox [--] COMMAND [ARG]...
 ```
 
-The default command and `serve` run an MCP server over stdio.
+The binary requires a subcommand.
+The `serve` command runs an MCP server over stdio.
 The server registers only a `console` tool, which accepts any JSON object and echoes it as JSON text.
 The version command prints the package name and version.
 On macOS, the sandbox command launches a subprocess under `sandbox-exec` with host filesystem reads allowed, regular-file writes limited to a dedicated per-launch temporary directory, runtime device and IPC exceptions, and network access denied.

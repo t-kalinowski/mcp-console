@@ -1,16 +1,17 @@
 # Command-line interface
 
-**Status:** Draft v0.2 \
-**Date:** 2026-07-27 \
+**Status:** Draft v0.3 \
+**Date:** 2026-07-29 \
 **Scope:** User-facing `mcp-console` command surface
 
 ## 1. Principles
 
 `mcp-console` is one standalone Rust binary.
-Its default behavior is to run the MCP stdio server, so the registration command remains:
+CLI operations require explicit subcommands.
+The `serve` subcommand runs the MCP stdio server, so the registration command is:
 
 ```bash
-uvx mcp-console
+uvx mcp-console serve
 ```
 
 The binary also exposes diagnostics, installation helpers, and commands that attach to an already-running MCP Console process.
@@ -30,7 +31,7 @@ The CLI follows these rules:
 ## 2. Command summary
 
 ```text
-mcp-console [serve]
+mcp-console serve
 mcp-console doctor
 mcp-console install <client>
 mcp-console list
@@ -78,7 +79,6 @@ When the MCP server runs on a remote host, inside an inaccessible container, or 
 ## 4. `serve`
 
 ```bash
-mcp-console
 mcp-console serve
 ```
 
@@ -136,7 +136,7 @@ Registers the MCP server command with a supported client or prints the configura
 Default registered command:
 
 ```bash
-uvx mcp-console
+uvx mcp-console serve
 ```
 
 Useful options:
@@ -157,13 +157,13 @@ For stable installations, users may prefer:
 
 ```bash
 uv tool install mcp-console
-mcp-console
+mcp-console serve
 ```
 
 Exact `uvx` pinning is supported:
 
 ```bash
-uvx mcp-console@0.3.0
+uvx mcp-console@0.3.0 serve
 ```
 
 ## 7. `list`

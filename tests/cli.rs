@@ -55,6 +55,20 @@ fn version_reports_the_binary_name_and_package_version() {
 }
 
 #[test]
+fn requires_a_subcommand() {
+    let output = Command::new(env!("CARGO_BIN_EXE_mcp-console"))
+        .output()
+        .expect("mcp-console should run");
+
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+    assert_eq!(
+        String::from_utf8(output.stderr).expect("stderr should be UTF-8"),
+        "usage: mcp-console serve\n       mcp-console --version\n       mcp-console sandbox [--] COMMAND [ARG]...\n"
+    );
+}
+
+#[test]
 fn sandbox_requires_a_command() {
     let output = Command::new(env!("CARGO_BIN_EXE_mcp-console"))
         .arg("sandbox")
