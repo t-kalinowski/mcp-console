@@ -10,12 +10,15 @@ The implemented commands are:
 
 ```text
 mcp-console serve
+mcp-console --help
+mcp-console help [COMMAND]
 mcp-console --version
 mcp-console sandbox [--] COMMAND [ARG]...
 ```
 
 The binary requires a subcommand.
 The `serve` command runs an MCP server over stdio.
+Clap provides command help, version output, argument parsing, and usage errors.
 The server registers only a `console` tool, which accepts any JSON object and echoes it as JSON text.
 The version command prints the package name and version.
 On macOS, the sandbox command launches a subprocess under `sandbox-exec` with host filesystem reads allowed, regular-file writes limited to a dedicated per-launch temporary directory, runtime device and IPC exceptions, and network access denied.
@@ -42,12 +45,13 @@ See `design-sketches/README.md` for the product overview and `design-sketches/do
 
 - `Cargo.toml` — Rust package metadata.
 - `src/main.rs` — current binary entry point.
+- `src/cli.rs` — clap command definitions and user-facing help.
 - `src/server.rs` — MCP stdio server and echoing `console` tool.
 - `src/sandbox.rs` — platform dispatch for the sandbox process launcher.
 - `src/sandbox/` — platform implementation and macOS Seatbelt policy.
 - `tests/cli.rs` — public binary acceptance tests.
 - `tests/transcripts/_run.py` — discovers transcript suites and compares case snapshots.
-- `tests/transcripts/_support.py` — shared MCP stdio client and transcript helpers.
+- `tests/transcripts/_support.py` — shared transcript types and MCP stdio client.
 - `tests/transcripts/<suite>.py` — suites of named imperative transcript cases.
 - `tests/transcripts/golden/SUITE/` — human-readable YAML 1.2 case transcripts.
 - `tests/transcripts/README.md` — transcript test usage and authoring guide.
