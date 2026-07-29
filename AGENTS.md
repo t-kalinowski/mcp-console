@@ -21,8 +21,8 @@ Clap provides command help, version output, argument parsing, and usage errors.
 The server registers only a `send` tool and starts no runtime during MCP initialization or tool listing.
 The tool accepts exactly one of an `r` string containing a complete R code cell or a `stdin` string supplying exact interactive input.
 The first `r` call lazily starts one private embedded-R worker.
-The worker parses the whole cell, evaluates its expressions sequentially at top level in persistent global state, and returns R console output, including every visible top-level value.
-Incomplete source is a parse error, not a continuation prompt.
+The worker feeds the cell to R's DLL REPL, which parses and evaluates its expressions sequentially at top level in persistent global state and returns R console output, including every visible top-level value.
+Cell EOF while R requires continuation input is a parse error, not an input prompt; earlier complete expressions from that cell remain applied.
 R parse, evaluation, and auto-print failures are normal language outcomes with `isError: false`.
 Silent successful evaluations return `[done]`.
 `readline()` and `browser()` can suspend the active evaluation at `[input]`; later `stdin` calls buffer partial or multiple exact lines without adding a newline.
@@ -36,7 +36,7 @@ Descendants inherit that policy.
 R calls are unsupported on platforms without an implemented worker sandbox.
 MCP shutdown requests orderly direct-worker exit, waits one second, then terminates and reaps an unresponsive worker.
 Native-worker descendants are not supervised or cleaned up after direct-worker termination and may outlive the server.
-Top-level task callbacks receive an internal value-proxy expression rather than the user's parsed expression.
+Top-level task callbacks receive the user's parsed expression.
 Submitted R functions do not currently retain a source filename.
 Direct subprocess output and output from forked descendants are unsupported.
 Forked descendants cannot use the inherited sideband.
@@ -67,10 +67,12 @@ See `design-sketches/README.md` for the product overview and `design-sketches/do
 ## Repository map
 
 - `Cargo.toml` — Rust package metadata.
+- `build.rs` — Unix C-shim build.
 - `src/main.rs` — current binary entry point.
 - `src/cli.rs` — clap command definitions and user-facing help.
 - `src/server.rs` — MCP stdio server and R-evaluating `send` tool.
 - `src/worker.rs` — private persistent embedded-R worker and supervisor client.
+- `src/r_repl.c` — C-owned per-cell DLL-REPL iterator and long-jump boundary.
 - `src/sideband.rs` — inherited Unix pipe transport for worker JSON-lines messages.
 - `src/sandbox.rs` — platform dispatch for the sandbox process launcher.
 - `src/sandbox/` — platform implementation and macOS Seatbelt policy.

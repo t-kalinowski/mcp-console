@@ -157,6 +157,7 @@ Complete text, plots, live table batches, and snapshots are fetched separately b
 - [`docs/CLI.md`](docs/CLI.md) — standalone binary, installation, diagnostics, viewer, watch, and sidecar-control commands.
 - [`docs/SIDECAR_API.md`](docs/SIDECAR_API.md) — process-scoped local API, event subscriptions, inspection boundary, data explorer, plots, and external evaluation semantics.
 - [`docs/RUNTIME_BACKEND.md`](docs/RUNTIME_BACKEND.md) — open Ark-versus-native worker decision, trade-offs, required spike, and decision criteria.
+- [`docs/R_REPL_DLL_ITERATOR.md`](docs/R_REPL_DLL_ITERATOR.md) — findings, decision, and implementation record for the native per-cell DLL-REPL adapter.
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — process model, runtime internals, output, viewer architecture, testing strategy, and implementation plan.
 - [`AGENTS.md`](AGENTS.md) — durable project context, key decisions, repository sitemap, and rules for coding agents.
 
@@ -170,7 +171,7 @@ Complete text, plots, live table batches, and snapshots are fetched separately b
 - Language selection: the object key is `r`, `python`, or `sql`.
 - Runtime substrate: open implementation decision.
   Evaluate an Ark-backed worker against a purpose-built `harp`/`libr` worker before committing; hide either behind the same runtime service.
-- R evaluation: native top-level evaluation; top-level cells are not transported through `ReadConsole`.
+- R evaluation: native top-level evaluation; complete cell source and evaluation-time stdin remain distinct queues even when a DLL-REPL backend transports both through `ReadConsole`.
 - SQL engine: embedded DuckDB through R/DBI initially; the DuckDB CLI is a behavioral reference only.
 - Output: bounded MCP text plus managed workspace files.
 - Environment: additive session requirements configured by `session`; they survive runtime restarts.

@@ -34,9 +34,9 @@ The server registers one `send` tool with two mutually exclusive inputs:
 Each `r` call supplies one complete R code cell.
 The first `r` call lazily starts one private embedded-R worker.
 MCP initialization and tool listing do not require R.
-The worker parses the whole cell, evaluates its expressions sequentially at top level, and returns R console output, including every visible top-level value.
+The worker feeds the cell to R's DLL REPL, which parses and evaluates its expressions sequentially at top level and returns R console output, including every visible top-level value.
 State persists across calls for the life of the server.
-Incomplete source is a parse error rather than a continuation prompt.
+Cell EOF while R requires continuation input is a parse error rather than an input prompt; earlier complete expressions from that cell remain applied.
 R parse, evaluation, and auto-print failures are normal language outcomes with `isError: false`; worker startup, sandbox, process, and private-protocol failures are tool errors.
 Successful silent evaluations return `[done]`.
 
@@ -74,11 +74,11 @@ Linux and Windows are not supported yet.
 
 ## Native R comparison snapshot
 
-The following observations come from three consecutive local Apple Silicon macOS release-build runs on July 29, 2026.
-They are a comparison snapshot, not a general benchmark:
+The behavioral observations below reflect current acceptance probes.
+The timing, process, memory, and binary-size numbers come from three consecutive local Apple Silicon macOS release-build runs on July 29, 2026, before the DLL-REPL iterator change; they are a historical comparison snapshot, not a general benchmark:
 
 - Functions parsed from submitted text had no source filename: `getSrcFilename()` returned an empty value.
-- A top-level task callback received the internal `base::get(...)` value-proxy expression used for native auto-print bookkeeping.
+- A top-level task callback receives the submitted parsed expression.
 - `system("printf child-output")` returned `[done]`; subprocess output written directly to the worker's standard output did not enter the MCP result.
 - Fresh-process MCP launch through initialization took 4.9--7.2 ms after the executable was cached; the first run immediately after rebuilding took 253 ms.
   First R evaluation took 155--177 ms.
@@ -88,7 +88,7 @@ They are a comparison snapshot, not a general benchmark:
 - The release binary was 5,332,272 bytes, about 5.09 MiB.
 - A sandboxed worker is implemented only on macOS.
 
-Remaining native-worker limitations include missing submitted-source filenames, value-proxy expressions in task callbacks, uncaptured direct child-process output, and no supervision or cleanup of worker descendants after direct-worker termination.
+Remaining native-worker limitations include missing submitted-source filenames, uncaptured direct child-process output, and no supervision or cleanup of worker descendants after direct-worker termination.
 Forked descendants cannot use the private sideband and therefore cannot contribute console output.
 
 The proposed product and architecture remain under [`design-sketches/`](design-sketches/README.md).

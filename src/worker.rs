@@ -6,12 +6,12 @@ pub enum Boundary {
 #[cfg(target_family = "unix")]
 mod unix {
     use std::error::Error;
-    use std::ffi::{CStr, CString, c_char, c_int, c_uchar, c_void};
+    use std::ffi::{CStr, CString, c_char, c_int, c_uchar};
     use std::io::{self, Read};
     use std::os::unix::process::CommandExt;
     use std::path::Path;
     use std::process::{Child, Command, Stdio};
-    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Mutex, OnceLock};
     use std::thread;
     use std::time::{Duration, Instant};
@@ -29,15 +29,29 @@ mod unix {
     static R_MAIN_ARGS: OnceLock<Vec<CString>> = OnceLock::new();
     static WORKER_READER: OnceLock<Mutex<sideband::Reader>> = OnceLock::new();
     static WORKER_WRITER: OnceLock<sideband::Writer> = OnceLock::new();
-    static R_REPL_INIT: OnceLock<unsafe extern "C-unwind" fn()> = OnceLock::new();
-    static R_REPL_DO_ONE: OnceLock<unsafe extern "C-unwind" fn() -> c_int> = OnceLock::new();
-    static mut TRACEBACK_CALL: Option<libr::SEXP> = None;
-    static R_REPL_INPUT: Mutex<Option<Vec<u8>>> = Mutex::new(None);
+    static R_REPL_INIT: OnceLock<ReplInit> = OnceLock::new();
+    static R_REPL_DO_ONE: OnceLock<ReplDoOne> = OnceLock::new();
+    static CELL_SOURCE: Mutex<Option<CellSource>> = Mutex::new(None);
     static INTERACTIVE_INPUT: Mutex<Vec<u8>> = Mutex::new(Vec::new());
     static WORKER_FAILURE: Mutex<Option<String>> = Mutex::new(None);
     static WORKER_SHUTDOWN: AtomicBool = AtomicBool::new(false);
-    static INTERACTIVE_READ: AtomicBool = AtomicBool::new(false);
-    static R_REPL_PROXY_COUNTER: AtomicU64 = AtomicU64::new(0);
+    static EVALUATION_STARTED: AtomicBool = AtomicBool::new(false);
+
+    type ReplInit = unsafe extern "C-unwind" fn();
+    type ReplDoOne = unsafe extern "C-unwind" fn() -> c_int;
+
+    struct CellSource {
+        text: String,
+        offset: usize,
+    }
+
+    unsafe extern "C" {
+        fn mcp_r_repl_run_cell(
+            init: ReplInit,
+            do_one: ReplDoOne,
+            before_do_one: extern "C" fn(),
+        ) -> c_int;
+    }
 
     #[derive(Serialize, Deserialize)]
     #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
@@ -258,9 +272,28 @@ mod unix {
             match receive_server_message()? {
                 ServerMessage::Evaluate { r } => {
                     clear_interactive_input();
-                    let message = match evaluate_r(&r) {
-                        Ok(()) => WorkerMessage::Completed,
-                        Err(error) => classify_r_error(error),
+                    let message = if r.contains('\0') {
+                        WorkerMessage::LanguageError {
+                            message: "R source cannot contain NUL".to_string(),
+                        }
+                    } else {
+                        set_cell_source(r);
+                        let status = run_repl_cell();
+                        clear_cell_source();
+                        match status {
+                            0 => WorkerMessage::LanguageError {
+                                message: String::new(),
+                            },
+                            1 => WorkerMessage::Completed,
+                            2 => WorkerMessage::LanguageError {
+                                message: "Incomplete code".to_string(),
+                            },
+                            status => WorkerMessage::Fatal {
+                                message: format!(
+                                    "R worker received unexpected DLL REPL status {status}"
+                                ),
+                            },
+                        }
                     };
                     clear_interactive_input();
                     if WORKER_SHUTDOWN.load(Ordering::SeqCst) {
@@ -316,6 +349,7 @@ mod unix {
             libr::set(libr::ptr_R_WriteConsoleEx, Some(r_write_console));
             libr::set(libr::ptr_R_ReadConsole, Some(r_read_console));
             libr::set(libr::ptr_R_ShowMessage, Some(r_show_message));
+            libr::set(libr::ptr_R_Busy, Some(r_busy));
             libr::setup_Rmainloop();
         }
 
@@ -325,50 +359,20 @@ mod unix {
         }
         harp::routines::r_register_routines();
         harp::initialize();
-        initialize_traceback_capture()?;
         initialize_r_repl()?;
         Ok(())
     }
 
-    fn initialize_traceback_capture() -> harp::Result<()> {
-        let function = harp::parse_eval_base(
-            r#"
-function() {
-    calls <- sys.calls()
-    count <- length(calls)
-    # Remove the three error-handling calls added around user evaluation.
-    if (count > 2L) {
-        calls <- calls[-seq.int(count - 2L, count)]
-    }
-    as.pairlist(rev(calls))
-}
-"#,
-        )?;
-        unsafe {
-            let call = libr::Rf_protect(libr::Rf_lang1(function.sexp));
-            libr::R_PreserveObject(call);
-            libr::Rf_unprotect(1);
-            TRACEBACK_CALL = Some(call);
-        }
-        Ok(())
-    }
-
     fn initialize_r_repl() -> Result<(), Box<dyn Error>> {
-        type Init = unsafe extern "C-unwind" fn();
-        type DoOne = unsafe extern "C-unwind" fn() -> c_int;
-
         let library = libloading::os::unix::Library::this();
-        let init = unsafe { *library.get::<Init>(b"R_ReplDLLinit\0")? };
-        let do_one = unsafe { *library.get::<DoOne>(b"R_ReplDLLdo1\0")? };
+        let init = unsafe { *library.get::<ReplInit>(b"R_ReplDLLinit\0")? };
+        let do_one = unsafe { *library.get::<ReplDoOne>(b"R_ReplDLLdo1\0")? };
         R_REPL_INIT
             .set(init)
             .map_err(|_| io::Error::other("R REPL was already initialized"))?;
         R_REPL_DO_ONE
             .set(do_one)
             .map_err(|_| io::Error::other("R REPL was already initialized"))?;
-        unsafe {
-            init();
-        }
         Ok(())
     }
 
@@ -405,142 +409,28 @@ function() {
         }
     }
 
-    fn evaluate_r(code: &str) -> harp::Result<()> {
-        let expressions = harp::parse_exprs(code)?;
-
-        for index in 0..expressions.length() {
-            let expression = harp::list_get(expressions.sexp, index);
-            INTERACTIVE_READ.store(false, Ordering::SeqCst);
-            let (value, visible) = evaluate_expression(expression)?;
-            if INTERACTIVE_READ.swap(false, Ordering::SeqCst) {
-                reset_r_repl();
-            }
-            let value = harp::RObject::from(value);
-            finish_top_level_expression(&value, visible)?;
-        }
-
-        Ok(())
-    }
-
-    #[repr(C)]
-    struct EvalBodyData {
-        expression: libr::SEXP,
-        environment: libr::SEXP,
-    }
-
-    unsafe extern "C-unwind" fn eval_body(data: *mut c_void) -> libr::SEXP {
-        let data = unsafe { &*(data.cast::<EvalBodyData>()) };
-        unsafe { libr::Rf_eval(data.expression, data.environment) }
-    }
-
-    unsafe extern "C-unwind" fn save_traceback(
-        _error: libr::SEXP,
-        _data: *mut c_void,
-    ) -> libr::SEXP {
-        let call = unsafe { TRACEBACK_CALL.unwrap_unchecked() };
-        unsafe {
-            let traceback = libr::Rf_protect(libr::Rf_eval(call, harp::R_ENVS.base));
-            let symbol = libr::Rf_install(c".Traceback".as_ptr());
-            libr::SETCDR(symbol, traceback);
-            libr::Rf_unprotect(1);
-        }
-        harp::r_null()
-    }
-
-    fn evaluate_expression(expression: libr::SEXP) -> harp::Result<(libr::SEXP, bool)> {
-        let mut data = EvalBodyData {
-            expression,
-            environment: harp::R_ENVS.global,
-        };
-        harp::try_catch(|| unsafe {
-            libr::set(libr::R_Visible, libr::Rboolean_FALSE);
-            let value = harp::exec::with_calling_error_handler(
-                eval_body,
-                (&mut data as *mut EvalBodyData).cast(),
-                save_traceback,
-                std::ptr::null_mut(),
-            );
-            let visible = libr::get(libr::R_Visible) == libr::Rboolean_TRUE;
-            (value, visible)
-        })
-    }
-
-    fn finish_top_level_expression(value: &harp::RObject, visible: bool) -> harp::Result<()> {
-        // The cell is already parsed and evaluated. This proxy asks R's native
-        // top-level loop only to autoprint and run warning and task-callback bookkeeping.
-        let (proxy_name, proxy) = unused_proxy_name();
-        harp::try_catch(|| unsafe {
-            libr::Rf_defineVar(proxy, value.sexp, harp::R_ENVS.global);
-        })?;
-        let input = if visible {
-            format!("base::get(\"{proxy_name}\", envir = base::globalenv(), inherits = FALSE)\n")
-        } else {
-            format!(
-                "base::invisible(base::get(\"{proxy_name}\", envir = base::globalenv(), inherits = FALSE))\n"
-            )
-        };
-        let mut pending = R_REPL_INPUT
-            .lock()
-            .expect("R REPL input lock should not be poisoned");
-        assert!(
-            pending.replace(input.into_bytes()).is_none(),
-            "R REPL input should be consumed before another expression"
-        );
-        drop(pending);
-
-        let do_one = *R_REPL_DO_ONE
-            .get()
-            .expect("R REPL should be initialized before evaluation");
-        let status = harp::top_level_exec(|| unsafe { do_one() });
-        if status.is_err() {
-            reset_r_repl();
-        }
-        unsafe {
-            libr::R_removeVarFromFrame(proxy, harp::R_ENVS.global);
-        }
-        let status = status?;
-        assert_eq!(status, 1, "fixed R top-level proxy should be complete");
-        Ok(())
-    }
-
-    fn reset_r_repl() {
+    fn run_repl_cell() -> c_int {
         let init = *R_REPL_INIT
             .get()
             .expect("R REPL should be initialized before evaluation");
-        unsafe {
-            init();
-        }
+        let do_one = *R_REPL_DO_ONE
+            .get()
+            .expect("R REPL should be initialized before evaluation");
+        unsafe { mcp_r_repl_run_cell(init, do_one, before_repl_iteration) }
     }
 
-    fn unused_proxy_name() -> (String, libr::SEXP) {
-        loop {
-            let counter = R_REPL_PROXY_COUNTER.fetch_add(1, Ordering::Relaxed);
-            let name = format!("..mcp_console_value_{}_{}..", std::process::id(), counter);
-            let c_name = CString::new(name.as_str()).expect("R proxy name should not contain NUL");
-            let symbol = unsafe { libr::Rf_install(c_name.as_ptr()) };
-            if unsafe {
-                libr::R_existsVarInFrame(harp::R_ENVS.global, symbol) == libr::Rboolean_FALSE
-            } {
-                return (name, symbol);
-            }
-        }
+    extern "C" fn before_repl_iteration() {
+        EVALUATION_STARTED.store(false, Ordering::SeqCst);
     }
 
-    fn classify_r_error(error: harp::Error) -> WorkerMessage {
-        match error {
-            harp::Error::ParseError { message, .. } | harp::Error::ParseSyntaxError { message } => {
-                WorkerMessage::LanguageError { message }
-            }
-            harp::Error::TryCatchError(error) => WorkerMessage::LanguageError {
-                message: error.message,
-            },
-            // R's native top-level loop already printed autoprint failures.
-            harp::Error::TopLevelExecError { .. } => WorkerMessage::LanguageError {
-                message: String::new(),
-            },
-            error => WorkerMessage::Fatal {
-                message: format!("R worker evaluation failed internally: {error}"),
-            },
+    extern "C-unwind" fn r_busy(which: c_int) {
+        // This is a latch for the outer DLL iteration. A nested browser REPL
+        // calls Busy(0) before requesting input, so only Busy(1) changes it.
+        // Parse-error handlers run before Busy(1); interactive reads from such
+        // handlers are unsupported because the public DLL API exposes no state
+        // that distinguishes them from cell-source reads.
+        if which != 0 {
+            EVALUATION_STARTED.store(true, Ordering::SeqCst);
         }
     }
 
@@ -551,6 +441,52 @@ function() {
             .lock()
             .map_err(|_| io::Error::other("R worker sideband reader lock poisoned"))?
             .receive()
+    }
+
+    fn set_cell_source(mut source: String) {
+        if !source.ends_with('\n') {
+            source.push('\n');
+        }
+        *CELL_SOURCE
+            .lock()
+            .expect("R cell source lock should not be poisoned") = Some(CellSource {
+            text: source,
+            offset: 0,
+        });
+    }
+
+    fn take_cell_source(max: usize) -> Option<Vec<u8>> {
+        let mut source = CELL_SOURCE
+            .lock()
+            .expect("R cell source lock should not be poisoned");
+        let source = source
+            .as_mut()
+            .expect("R cell source should be installed during evaluation");
+
+        if source.offset == source.text.len() {
+            return None;
+        }
+        let bytes = source.text.as_bytes();
+        let line_length = bytes[source.offset..]
+            .iter()
+            .position(|byte| *byte == b'\n')
+            .map_or(bytes.len() - source.offset, |index| index + 1);
+        let mut length = line_length.min(max);
+        while length > 0 && !source.text.is_char_boundary(source.offset + length) {
+            length -= 1;
+        }
+        assert!(length > 0, "R console buffer is too small for UTF-8 source");
+        let start = source.offset;
+        let end = start + length;
+        let chunk = bytes[start..end].to_vec();
+        source.offset = end;
+        Some(chunk)
+    }
+
+    fn clear_cell_source() {
+        *CELL_SOURCE
+            .lock()
+            .expect("R cell source lock should not be poisoned") = None;
     }
 
     fn clear_interactive_input() {
@@ -613,11 +549,12 @@ function() {
             return;
         };
         for chunk in bytes.chunks(OUTPUT_CHUNK_BYTES) {
-            writer
-                .send(&WorkerMessage::Output {
-                    data_b64: STANDARD.encode(chunk),
-                })
-                .expect("R console output should be sent over the worker sideband");
+            if let Err(error) = writer.send(&WorkerMessage::Output {
+                data_b64: STANDARD.encode(chunk),
+            }) {
+                record_worker_failure(format!("R worker failed to send console output: {error}"));
+                return;
+            }
         }
     }
 
@@ -647,18 +584,16 @@ function() {
         if buf.is_null() || buflen <= 1 {
             return 0;
         }
-        let internal_input = R_REPL_INPUT
-            .lock()
-            .ok()
-            .and_then(|mut pending| pending.take());
-        if let Some(input) = internal_input {
-            return write_console_input(buf, buflen, &input);
-        }
 
         if !sideband::available_in_process() {
             return console_eof(buf);
         }
-        INTERACTIVE_READ.store(true, Ordering::SeqCst);
+        if !EVALUATION_STARTED.load(Ordering::SeqCst) {
+            return match take_cell_source((buflen as usize) - 1) {
+                Some(source) => write_console_input(buf, buflen, &source),
+                None => console_eof(buf),
+            };
+        }
 
         let prompt = if prompt.is_null() {
             String::new()
@@ -759,10 +694,6 @@ function() {
             return console_eof(buf);
         }
         unsafe {
-            // Browser commands such as `c` return before R's nested REPL resets
-            // visibility. Reset it at the same input boundary so a prior
-            // browser expression is not spuriously auto-printed as the cell result.
-            libr::set(libr::R_Visible, libr::Rboolean_FALSE);
             std::ptr::copy_nonoverlapping(input.as_ptr(), buf, input.len());
             *buf.add(input.len()) = 0;
         }

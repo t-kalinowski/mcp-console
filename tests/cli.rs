@@ -156,16 +156,23 @@ user_calls()
         client.call_console(
             7,
             json!({"r": r#"
-invisible(addTaskCallback(
-    function(...) {
-        cat("callback ran\n")
+invisible(addTaskCallback(local({
+    first <- TRUE
+    function(expr, ...) {
+        if (first) {
+            first <<- FALSE
+            return(TRUE)
+        }
+        cat(deparse1(expr), "\n", sep = "")
         FALSE
-    },
+    }
+}),
     name = "mcp-console-test"
 ))
+mcp_console_callback_probe <- 42
 "#}),
         ),
-        "callback ran\n"
+        "mcp_console_callback_probe <- 42\n"
     );
 
     assert_eq!(
@@ -201,6 +208,18 @@ invisible(parallel::mccollect(job))
 "#}),
         ),
         "[1] 42\n"
+    );
+
+    let long_value = "é".repeat(3000);
+    let long_line = format!(
+        r#"
+long_line_value <- "{long_value}"
+nchar(long_line_value)
+"#
+    );
+    assert_eq!(
+        client.call_console(11, json!({"r": long_line})),
+        "[1] 3000\n"
     );
 }
 
@@ -305,8 +324,26 @@ answer + (
         "Error: Incomplete code\n"
     );
 
-    let stopped = client.call_console_response(
+    let syntax_error = client.call_console_response(
         4,
+        json!({"r": r#"
+answer <- 42
+)
+"#}),
+    );
+    assert_eq!(syntax_error["result"]["isError"], false);
+    assert!(
+        syntax_error["result"]["content"][0]["text"]
+            .as_str()
+            .expect("R syntax error should be text")
+            .contains("unexpected ')'"),
+        "syntax error: {:?}",
+        syntax_error["result"]["content"][0]["text"]
+    );
+    assert_eq!(client.call_console(5, json!({"r": "answer"})), "[1] 42\n");
+
+    let stopped = client.call_console_response(
+        6,
         json!({"r": r#"
 cat("before\n")
 stop("boom")
@@ -317,10 +354,10 @@ stop("boom")
         stopped["result"]["content"][0]["text"],
         "before\nError: boom\n"
     );
-    assert_eq!(client.call_console(5, json!({"r": "answer"})), "[1] 40\n");
+    assert_eq!(client.call_console(7, json!({"r": "answer"})), "[1] 42\n");
 
     let nested = client.call_console_response(
-        6,
+        8,
         json!({"r": r#"
 g <- function() stop("boom")
 f <- function() g()
@@ -335,7 +372,7 @@ f()
             .contains("boom")
     );
 
-    let traceback = client.call_console(7, json!({"r": "traceback()"}));
+    let traceback = client.call_console(9, json!({"r": "traceback()"}));
     assert!(
         traceback.contains("stop(\"boom\")"),
         "traceback: {traceback:?}"
@@ -349,7 +386,7 @@ f()
     assert!(!traceback.contains("base::get"), "traceback: {traceback:?}");
 
     let print_error = client.call_console_response(
-        8,
+        10,
         json!({"r": r#"
 print.mcp_console_boom <- function(...) stop("print failed")
 structure(1, class = "mcp_console_boom")
@@ -360,7 +397,7 @@ structure(1, class = "mcp_console_boom")
         print_error["result"]["content"][0]["text"],
         "Error in print.mcp_console_boom(x) : print failed\n"
     );
-    assert_eq!(client.call_console(9, json!({"r": "answer"})), "[1] 40\n");
+    assert_eq!(client.call_console(11, json!({"r": "answer"})), "[1] 42\n");
 }
 
 #[cfg(target_os = "macos")]

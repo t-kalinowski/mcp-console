@@ -496,6 +496,7 @@ name = "mcp-console"
 version = "0.1.0"
 dependencies = [
  "base64",
+ "cc",
  "harp",
  "libc",
  "libloading",

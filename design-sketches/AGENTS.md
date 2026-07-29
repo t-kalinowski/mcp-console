@@ -92,15 +92,15 @@ Neither choice may change agent-visible semantics, sidecar authorization, attrib
 ### Evaluation boundaries
 
 The worker receives structured commands such as `EvaluateCell`, `ProvideInput`, `Inspect`, and `Interrupt`.
-Complete code cells and interactive input must never share one undifferentiated line queue.
+Complete code cells and interactive input must remain distinct commands and state queues.
 
 R cells must have native top-level semantics regardless of backend.
 Preserve console visible-value behavior without placing a user-visible MCP Console wrapper around the entire cell.
 A user call to `sys.calls()` should not contain an MCP Console dispatcher frame merely because the code came from the tool.
 The Ark spike must verify this behavior rather than assuming it.
 
-`ReadConsole` or the backend's equivalent stdin path is reserved for genuine nested console input during an active evaluation.
-Ordinary top-level cells and interactive input must remain distinct protocol operations.
+A native DLL-REPL backend may route both queues through a custom `ReadConsole` callback.
+It must use interpreter state rather than prompt text to feed cell source only at primary or continuation reads and to request stdin only during active evaluation.
 
 Python uses a persistent cell executor in `__main__`, with a synthetic source filename, statement support, final-expression display, and language-native tracebacks.
 Do not use `reticulate::repl_python(input = ...)` as the core cell evaluator.
@@ -166,6 +166,7 @@ Update this map whenever ownership moves.
 - `docs/CLI.md` — standalone binary, installation, diagnostics, viewer, watch, and sidecar-control commands.
 - `docs/SIDECAR_API.md` — process-scoped local API, event model, inspection, live and snapshot data views, plots, and external control.
 - `docs/RUNTIME_BACKEND.md` — Ark-versus-native worker evaluation, spike plan, and decision gate.
+- `docs/R_REPL_DLL_ITERATOR.md` — native DLL-REPL findings, decision, and implementation record.
 - `docs/ARCHITECTURE.md` — implementation architecture and staged plan.
 
 Create focused documents only when a subsystem has enough detail to justify a separate source of truth:

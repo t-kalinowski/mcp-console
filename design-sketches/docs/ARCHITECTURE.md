@@ -77,7 +77,7 @@ Backend transport must not leak into MCP, session, transcript, or local sidecar 
 4. One backend-owned thread owns all direct calls into R.
 5. A worker executes at most one top-level evaluation at a time.
 6. Complete cells and interactive stdin are different internal command types.
-7. Complete cells are never transported through `ReadConsole`.
+7. Complete cells and evaluation-time stdin remain distinct commands and state queues, even when a native DLL-REPL adapter transports both through `ReadConsole`.
 8. R cells do not acquire a console-owned interpreted R frame.
 9. Runtime state comes from structured events, never prompt-string matching.
 10. Interrupt and termination control cannot wait behind the evaluation command queue.
@@ -505,18 +505,17 @@ A native backend should still build from `mcp-repl`/Ark patterns rather than re-
 
 ### 10.2 Complete-cell evaluation
 
-R source is not sent through `ReadConsole` as terminal lines.
+The native backend uses R's public `R_ReplDLLinit()` and `R_ReplDLLdo1()` pseudo-console API.
+For each R cell it:
 
-For each R cell:
+1. establishes a fresh DLL parser and top-level jump boundary without resetting the persistent global environment;
+2. feeds complete-cell source only when the outer DLL REPL requests primary or continuation input;
+3. lets R parse and evaluate each top-level expression, update `.Last.value`, auto-print visible values, print warnings, and invoke task callbacks;
+4. treats source EOF after a primary status as completion and source EOF after a continuation status as incomplete input;
+5. emits conditions, errors, artifacts, and completion under the evaluation ID;
+6. restores the per-cell source and stdin queues after completion or error.
 
-1. associate the source with a synthetic source name such as `<mcp-console:r:g1:e17>`;
-2. parse the complete cell with source references retained where practical;
-3. distinguish incomplete input from invalid syntax;
-4. evaluate top-level expressions sequentially in the persistent user environment;
-5. run each expression inside a native top-level error/interrupt boundary;
-6. inspect R's visibility state and print visible values with console semantics;
-7. emit conditions, errors, artifacts, and completion under the evaluation ID;
-8. restore runtime hooks after recoverable errors or interrupts.
+The implementation should retain source references and a synthetic source name when the DLL embedding API can support them without replacing R's native top-level loop.
 
 Earlier expressions in a multi-expression cell may have changed state before a later error.
 Do not pretend the whole cell is transactional.
@@ -527,7 +526,7 @@ The target is a native frontend evaluator equivalent in spirit to what a real co
 
 ### 10.3 R call-stack contract
 
-Because Rust invokes parsed expressions directly at a native boundary, ordinary R stack introspection should not contain a console-owned interpreted frame.
+Because R's DLL REPL evaluates the parsed expressions directly, ordinary R stack introspection should not contain a console-owned interpreted frame.
 
 For example:
 
@@ -544,7 +543,12 @@ This contract requires direct integration tests because subtle evaluation helper
 
 ### 10.4 `ReadConsole` and interactive input
 
-`ReadConsole` is reserved for genuine runtime input:
+The native DLL-REPL adapter uses `ReadConsole` for two separately owned queues:
+
+- primary and continuation reads consume source from the active complete cell;
+- reads after top-level evaluation begins consume genuine runtime input.
+
+Runtime input includes:
 
 - `readline()`;
 - `browser()` and `recover()`;
@@ -559,7 +563,8 @@ When called during an active evaluation, the callback:
 4. returns exactly that input line to R;
 5. emits consumption bookkeeping.
 
-It must not draw from a queue containing future source lines from the submitted cell.
+The callback uses a Busy-based evaluation latch rather than prompt comparison to select the queue.
+The cell-source queue and interactive-input queue must never be merged.
 
 ## 11. Python runtime through reticulate
 
