@@ -1,4 +1,3 @@
-# fmt: skip file
 ---
 input:
   jsonrpc: "2.0"
@@ -37,7 +36,7 @@ output:
       - name: console
         description: Echo the supplied arguments.
         inputSchema:
-          $schema: "https://json-schema.org/draft/2020-12/schema"
+          $schema: https://json-schema.org/draft/2020-12/schema
           additionalProperties: true
           type: object
 ---
@@ -48,7 +47,7 @@ input:
   params:
     name: console
     arguments:
-      python: "print('hello')"
+      python: print('hello')
       wait_ms: 0
 output:
   jsonrpc: "2.0"
@@ -56,6 +55,7 @@ output:
   result:
     content:
       - type: text
-        text: "{\"python\":\"print('hello')\",\"wait_ms\":0}"
+        text: |-
+          {"python":"print('hello')","wait_ms":0}
     isError: false
 ...

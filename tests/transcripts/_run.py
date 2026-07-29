@@ -11,7 +11,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from _support import Transcript
-from yaml12 import format_yaml
+from yaml12 import format_yaml, parse_yaml
 
 
 directory = Path(__file__).resolve().parent
@@ -81,9 +81,7 @@ for suite_name, selected_case_names in selected_suites.items():
         selected_cases = ((name, cases[name]) for name in selected_case_names)
 
     for case_name, record_transcript in selected_cases:
-        transcript = "# fmt: skip file\n" + format_yaml(
-            record_transcript(binary), multi=True
-        )
+        transcript = format_yaml(record_transcript(binary), multi=True)
         golden = directory / "golden" / suite_name / f"{case_name}.yaml"
 
         if options.update:
@@ -97,7 +95,7 @@ for suite_name, selected_case_names in selected_suites.items():
             )
         else:
             expected = golden.read_text(encoding="utf-8")
-            if transcript != expected:
+            if parse_yaml(transcript, multi=True) != parse_yaml(expected, multi=True):
                 sys.stderr.writelines(
                     difflib.unified_diff(
                         expected.splitlines(keepends=True),
