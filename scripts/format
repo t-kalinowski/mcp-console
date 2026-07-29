@@ -1,0 +1,13 @@
+#!/bin/sh
+
+set -eu
+
+cd "${0%/*}/.."
+
+uv format || :
+
+yamark format --wrap sentence || :
+
+cargo fmt --all || :
+
+air format . || :

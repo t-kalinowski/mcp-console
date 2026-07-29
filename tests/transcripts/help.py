@@ -15,9 +15,7 @@ def record(binary: Path, *arguments: str) -> dict[str, object]:
         encoding="utf-8",
         env={**os.environ, "NO_COLOR": "1"},
     )
-    transcript: dict[str, object] = {
-        "command": " ".join(("mcp-console", *arguments))
-    }
+    transcript: dict[str, object] = {"command": " ".join(("mcp-console", *arguments))}
     if result.returncode != 0:
         transcript["exit_code"] = result.returncode
     transcript["stdout"] = result.stdout

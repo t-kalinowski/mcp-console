@@ -42,6 +42,14 @@ Run the local checks with:
 scripts/check
 ```
 
+Format the repository with each installed formatter:
+
+```bash
+scripts/format
+```
+
+Formatter errors remain visible but do not stop the remaining formatters or make the script fail.
+
 See [`tests/transcripts/README.md`](tests/transcripts/README.md) for running and authoring external server transcript tests.
 
 ## License

@@ -56,6 +56,7 @@ See `design-sketches/README.md` for the product overview and `design-sketches/do
 - `tests/transcripts/golden/SUITE/` — human-readable YAML 1.2 case transcripts.
 - `tests/transcripts/README.md` — transcript test usage and authoring guide.
 - `scripts/test` — builds the binary and runs selected external Python tests through `uv`.
+- `scripts/format` — attempts each repository-wide formatter without requiring it.
 - `scripts/check` — local formatting, Clippy, and test checks.
 - `.github/workflows/ci.yaml` — formatting, Clippy, and test checks.
 - `design-sketches/` — tentative product and architecture documents.
