@@ -6,6 +6,8 @@ The function receives the built binary path and returns a list of mappings.
 The runner records each mapping as one document in the matching YAML 1.2 stream under `golden/SUITE/CASE.yaml`.
 The runner compares YAML 1.2 values, so equivalent scalar spellings and layouts are accepted.
 Server cases record JSON-RPC requests and responses.
+They omit the invariant `jsonrpc: "2.0"` field and show a matching request and response `id` once at the document root.
+The client validates both fields before recording the compact transcript.
 The `help` suite records command lines and stdout in one stream with color disabled.
 It adds the exit code for failures and stderr when nonempty.
 
