@@ -16,7 +16,9 @@ from yaml12 import format_yaml
 directory = Path(__file__).resolve().parent
 root = directory.parents[1]
 binary = root / "target" / "debug" / "mcp-console"
-all_case_paths = sorted((directory / "cases").glob("*.py"))
+case_directory = directory / "cases"
+all_case_paths = sorted(case_directory.glob("[!_]*.py"))
+sys.path.insert(0, str(case_directory))
 
 parser = argparse.ArgumentParser(prog="scripts/test")
 parser.add_argument("--list", action="store_true", dest="list_cases")
@@ -45,22 +47,22 @@ for case_path in case_paths:
     run_case = namespace.get("run")
     assert callable(run_case), f"{case_path.relative_to(root)} must define run(client)"
 
-    argument_sets = namespace.get("server_argument_sets", ((),))
+    server_invocations = namespace.get("server_invocations", {"mcp-console": ()})
     transcripts = []
-    for server_arguments in argument_sets:
+    for invocation, server_arguments in server_invocations.items():
         client = McpClient(binary, server_arguments)
         run_case(client)
-        transcripts.append((server_arguments, format_yaml(client.finish(), multi=True)))
+        transcripts.append((invocation, format_yaml(client.finish(), multi=True)))
 
     transcript = transcripts[0][1]
-    for server_arguments, other_transcript in transcripts[1:]:
+    for invocation, other_transcript in transcripts[1:]:
         if other_transcript != transcript:
             sys.stderr.writelines(
                 difflib.unified_diff(
                     transcript.splitlines(keepends=True),
                     other_transcript.splitlines(keepends=True),
-                    fromfile="mcp-console",
-                    tofile=" ".join(("mcp-console", *server_arguments)),
+                    fromfile=transcripts[0][0],
+                    tofile=invocation,
                 )
             )
             raise SystemExit(

@@ -1,9 +1,13 @@
 from textwrap import dedent
 
+from _runner import run_this_case
 from support import McpClient
 
 
-server_argument_sets = ((), ("serve",))
+server_invocations = {
+    "mcp-console": (),
+    "mcp-console serve": ("serve",),
+}
 
 
 def run(client: McpClient) -> None:
@@ -15,3 +19,7 @@ def run(client: McpClient) -> None:
         """).strip(),
         wait_ms=0,
     )
+
+
+if __name__ == "__main__":
+    run_this_case(__file__)

@@ -48,6 +48,7 @@ See `design-sketches/README.md` for the product overview and `design-sketches/do
 - `tests/cli.rs` — public binary acceptance tests.
 - `tests/transcripts/run.py` — discovers transcript cases and compares their golden snapshots.
 - `tests/transcripts/support.py` — shared external MCP stdio client and protocol helpers.
+- `tests/transcripts/cases/_runner.py` — standalone transcript case launcher.
 - `tests/transcripts/cases/` — imperative external server test cases.
 - `tests/transcripts/golden/` — human-readable YAML 1.2 message transcripts.
 - `tests/transcripts/README.md` — transcript test usage and authoring guide.
