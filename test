@@ -1,0 +1,12 @@
+#!/bin/sh
+
+set -eu
+
+cd "$(dirname "$0")"
+
+cargo build
+
+for test_script in tests/*.py
+do
+    uv run --script "$test_script"
+done

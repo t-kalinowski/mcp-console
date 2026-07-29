@@ -46,6 +46,9 @@ See `design-sketches/README.md` for the product overview and `design-sketches/do
 - `src/sandbox.rs` — platform dispatch for the sandbox process launcher.
 - `src/sandbox/` — platform implementation and macOS Seatbelt policy.
 - `tests/cli.rs` — public binary acceptance tests.
+- `tests/server.py` — external MCP server acceptance test and golden comparison.
+- `tests/golden/` — human-readable YAML 1.2 message transcripts.
+- `test` — builds the binary and runs the external Python tests through `uv`.
 - `scripts/check` — local formatting, Clippy, and test checks.
 - `.github/workflows/ci.yaml` — formatting, Clippy, and test checks.
 - `design-sketches/` — tentative product and architecture documents.

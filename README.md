@@ -33,6 +33,19 @@ The proposed product and architecture remain under [`design-sketches/`](design-s
 
 ## Development
 
+Run the external server tests with:
+
+```bash
+./test
+```
+
+The tests record each JSON-RPC input and output as one document in a checked-in YAML 1.2 stream.
+When an intentional behavior change alters a transcript, update its golden snapshot with:
+
+```bash
+UPDATE_GOLDEN=1 ./test
+```
+
 Run the local checks with:
 
 ```bash
