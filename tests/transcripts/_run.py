@@ -82,7 +82,10 @@ for suite_name, selected_case_names in selected_suites.items():
 
     for case_name, record_transcript in selected_cases:
         formatted = format_yaml(record_transcript(binary), multi=True)
-        transcript = "\n".join(line.rstrip() for line in formatted.splitlines()) + "\n"
+        transcript = (
+            "\n".join("" if line.isspace() else line for line in formatted.splitlines())
+            + "\n"
+        )
         golden = directory / "golden" / suite_name / f"{case_name}.yaml"
 
         if options.update:
