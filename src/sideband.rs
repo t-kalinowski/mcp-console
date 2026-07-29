@@ -68,6 +68,11 @@ pub fn connect_from_env() -> io::Result<(Reader, Writer)> {
     Ok((Reader::new(read), Writer::new(write)))
 }
 
+pub fn set_inherited_close_on_exec(enabled: bool) -> io::Result<()> {
+    set_close_on_exec(inherited_fd(READ_FD_ENV)?, enabled)?;
+    set_close_on_exec(inherited_fd(WRITE_FD_ENV)?, enabled)
+}
+
 impl Reader {
     fn new(reader: impl Read + Send + 'static) -> Self {
         Self {
@@ -149,8 +154,8 @@ fn set_close_on_exec(fd: RawFd, enabled: bool) -> io::Result<()> {
 
 extern "C" fn close_sideband_in_fork_child() {
     SIDEBAND_ALLOWED.store(false, Ordering::SeqCst);
-    let read = FORK_READ_FD.load(Ordering::SeqCst);
-    let write = FORK_WRITE_FD.load(Ordering::SeqCst);
+    let read = FORK_READ_FD.swap(-1, Ordering::SeqCst);
+    let write = FORK_WRITE_FD.swap(-1, Ordering::SeqCst);
     unsafe {
         if read >= 0 {
             libc::close(read);

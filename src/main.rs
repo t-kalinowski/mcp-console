@@ -13,6 +13,12 @@ mod worker;
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> ExitCode {
     let arguments = std::env::args_os().skip(1).collect::<Vec<_>>();
+    if matches!(arguments.as_slice(), [mode] if mode == OsStr::new("__worker_bootstrap")) {
+        return match worker::bootstrap() {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => exit_with_error(error),
+        };
+    }
     if matches!(arguments.as_slice(), [mode] if mode == OsStr::new("__worker")) {
         return match worker::run() {
             Ok(()) => ExitCode::SUCCESS,

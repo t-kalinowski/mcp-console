@@ -7,6 +7,7 @@ use std::process::{Command, ExitCode, ExitStatus};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const SANDBOX_EXEC: &str = "/usr/bin/sandbox-exec";
+const ENV: &str = "/usr/bin/env";
 const POLICY: &str = include_str!("read_only_policy.sbpl");
 
 pub(super) fn run(command: &[OsString]) -> Result<ExitCode, String> {
@@ -33,7 +34,27 @@ pub(super) fn run(command: &[OsString]) -> Result<ExitCode, String> {
     Ok(exit_code(status))
 }
 
-struct TemporaryDirectory(PathBuf);
+pub(super) fn worker_command() -> Result<(Command, TemporaryDirectory), String> {
+    let temporary_directory = TemporaryDirectory::new()?;
+    let mut command = Command::new(SANDBOX_EXEC);
+    command
+        .arg("-p")
+        .arg(POLICY)
+        .arg(parameter_definition(
+            "TEMP_DIRECTORY",
+            temporary_directory.path(),
+        ))
+        .arg("--")
+        // sandbox-exec removes DYLD_* variables before launching its child.
+        // Applying explicit worker variables through env restores them inside
+        // the sandbox without invoking a shell.
+        .arg(ENV)
+        .arg(environment_assignment("TMPDIR", temporary_directory.path()));
+
+    Ok((command, temporary_directory))
+}
+
+pub(super) struct TemporaryDirectory(PathBuf);
 
 impl TemporaryDirectory {
     fn new() -> Result<Self, String> {
@@ -80,6 +101,13 @@ impl Drop for TemporaryDirectory {
 fn parameter_definition(name: &str, path: &Path) -> OsString {
     let mut argument = OsString::from("-D");
     argument.push(name);
+    argument.push("=");
+    argument.push(path);
+    argument
+}
+
+fn environment_assignment(name: &str, path: &Path) -> OsString {
+    let mut argument = OsString::from(name);
     argument.push("=");
     argument.push(path);
     argument
