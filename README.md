@@ -33,25 +33,13 @@ The proposed product and architecture remain under [`design-sketches/`](design-s
 
 ## Development
 
-Run the external server tests with:
-
-```bash
-./test
-```
-
-The tests record each JSON-RPC input and output as one document in a checked-in YAML 1.2 stream.
-Add scenarios under `tests/transcripts/cases`; each case has a matching snapshot under `tests/transcripts/golden`.
-When an intentional behavior change alters a transcript, update its golden snapshot with:
-
-```bash
-UPDATE_GOLDEN=1 ./test
-```
-
 Run the local checks with:
 
 ```bash
 scripts/check
 ```
+
+See [`tests/transcripts/README.md`](tests/transcripts/README.md) for running and authoring external server transcript tests.
 
 ## License
 

@@ -50,7 +50,8 @@ See `design-sketches/README.md` for the product overview and `design-sketches/do
 - `tests/transcripts/support.py` — shared external MCP stdio client and protocol helpers.
 - `tests/transcripts/cases/` — imperative external server test cases.
 - `tests/transcripts/golden/` — human-readable YAML 1.2 message transcripts.
-- `test` — builds the binary and runs the external Python tests through `uv`.
+- `tests/transcripts/README.md` — transcript test usage and authoring guide.
+- `scripts/test` — builds the binary and runs selected external Python tests through `uv`.
 - `scripts/check` — local formatting, Clippy, and test checks.
 - `.github/workflows/ci.yaml` — formatting, Clippy, and test checks.
 - `design-sketches/` — tentative product and architecture documents.
