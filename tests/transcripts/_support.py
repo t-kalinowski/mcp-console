@@ -1,5 +1,6 @@
 import json
 import subprocess
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -99,9 +100,12 @@ class McpClient:
 
     def finish(self) -> Transcript:
         self.stdin.close()
-        extra_output = self.stdout.read()
-        standard_error = self.stderr.read()
-        return_code = self.process.wait()
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            stdout = executor.submit(self.stdout.read)
+            stderr = executor.submit(self.stderr.read)
+            return_code = self.process.wait()
+            extra_output = stdout.result()
+            standard_error = stderr.result()
 
         assert return_code == 0, standard_error
         assert extra_output == "", f"unexpected extra output: {extra_output}"

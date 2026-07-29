@@ -4,6 +4,6 @@ set -eu
 
 cd "$(dirname "$0")/.."
 
-cargo build
+cargo build --target-dir target
 
 uv run --script tests/transcripts/_run.py "$@"
