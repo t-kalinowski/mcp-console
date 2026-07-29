@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any
 
 
-TranscriptDocument = dict[str, dict[str, Any]]
+TranscriptDocument = dict[str, Any]
 Transcript = list[TranscriptDocument]
 
 
