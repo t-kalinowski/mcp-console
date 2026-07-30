@@ -49,7 +49,7 @@ def test_preserves_executable_names_with_equals_signs(binary: Path) -> Transcrip
     with TemporaryDirectory() as directory:
         current_directory = Path(directory)
         shutil.copy("/usr/bin/true", current_directory / "program=fixture")
-        transcript = record(
+        entry = record(
             binary,
             "sandbox",
             "--",
@@ -58,10 +58,10 @@ def test_preserves_executable_names_with_equals_signs(binary: Path) -> Transcrip
             current_directory=current_directory,
         )
 
-    assert "exit_code" not in transcript, (
+    assert "exit_code" not in entry, (
         "the executable name was parsed as an environment assignment"
     )
-    return [transcript]
+    return [entry]
 
 
 def test_preserves_python_arguments_and_standard_output(binary: Path) -> Transcript:
