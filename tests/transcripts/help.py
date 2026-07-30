@@ -4,10 +4,10 @@ import os
 import subprocess
 from pathlib import Path
 
-from _support import Transcript, run_this_suite
+from _support import Transcript, TranscriptEntry, run_this_suite
 
 
-def record(binary: Path, *arguments: str) -> dict[str, object]:
+def record(binary: Path, *arguments: str) -> TranscriptEntry:
     result = subprocess.run(
         [binary, *arguments],
         capture_output=True,
@@ -15,13 +15,13 @@ def record(binary: Path, *arguments: str) -> dict[str, object]:
         encoding="utf-8",
         env={**os.environ, "NO_COLOR": "1"},
     )
-    transcript: dict[str, object] = {"command": " ".join(("mcp-console", *arguments))}
+    entry: TranscriptEntry = {"command": " ".join(("mcp-console", *arguments))}
     if result.returncode != 0:
-        transcript["exit_code"] = result.returncode
-    transcript["stdout"] = result.stdout
+        entry["exit_code"] = result.returncode
+    entry["stdout"] = result.stdout
     if result.stderr:
-        transcript["stderr"] = result.stderr
-    return transcript
+        entry["stderr"] = result.stderr
+    return entry
 
 
 def test_help(binary: Path) -> Transcript:
