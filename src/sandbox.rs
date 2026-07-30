@@ -70,7 +70,7 @@ impl SandboxedCommandBuilder {
 
     pub(crate) fn finalize(mut self) -> SandboxedCommand {
         for (key, value) in self.environment {
-            self.launcher.arg(environment_assignment(&key, &value));
+            self.launcher.env(key, value);
         }
         self.launcher.arg(&self.sandboxed_program);
 
@@ -86,12 +86,4 @@ impl SandboxedCommand {
     pub(crate) fn launcher_mut(&mut self) -> &mut Command {
         &mut self.launcher
     }
-}
-
-#[cfg(target_os = "macos")]
-fn environment_assignment(key: &OsStr, value: &OsStr) -> OsString {
-    let mut assignment = key.to_os_string();
-    assignment.push("=");
-    assignment.push(value);
-    assignment
 }

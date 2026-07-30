@@ -7,7 +7,6 @@ use std::process::{Command, ExitCode, ExitStatus};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const SANDBOX_EXEC: &str = "/usr/bin/sandbox-exec";
-const ENV: &str = "/usr/bin/env";
 const POLICY: &str = include_str!("read_only_policy.sbpl");
 
 pub(super) fn sandboxed_command() -> Result<(Command, TemporaryDirectory, OsString), String> {
@@ -21,11 +20,7 @@ pub(super) fn sandboxed_command() -> Result<(Command, TemporaryDirectory, OsStri
             "TEMP_DIRECTORY",
             temporary_directory.path(),
         ))
-        .arg("--")
-        // sandbox-exec removes DYLD_* variables before launching its child.
-        // Applying explicit variables through env restores them inside the
-        // sandbox without invoking a shell.
-        .arg(ENV);
+        .arg("--");
 
     Ok((launcher, temporary_directory, temporary_directory_path))
 }
