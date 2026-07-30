@@ -43,31 +43,26 @@ def record(
 
 def test_preserves_python_arguments_and_standard_output(binary: Path) -> Transcript:
     # fmt: python
-    script = dedent(
-        r"""
+    script = dedent(r"""
         import sys
 
         print("|".join(sys.argv[1:]))
-        """
-    ).strip()
-    return [
-        record(
-            binary,
-            "sandbox",
-            "python",
-            "-c",
-            script,
-            "hello world",
-            "$(not-a-command)",
-            "--child-option",
-        )
-    ]
+        """).strip("\n")
+    arguments = (
+        "sandbox",
+        "python",
+        "-c",
+        script,
+        "hello world",
+        "$(not-a-command)",
+        "--child-option",
+    )
+    return [record(binary, *arguments)]
 
 
 def test_allows_python_multiprocessing_semaphores(binary: Path) -> Transcript:
     # fmt: python
-    script = dedent(
-        r"""
+    script = dedent(r"""
         import multiprocessing as mp
         import operator
 
@@ -80,69 +75,43 @@ def test_allows_python_multiprocessing_semaphores(binary: Path) -> Transcript:
         assert child.exitcode == 0
         assert lock.acquire(timeout=1)
         print("semaphore shared")
-        """
-    ).strip()
-    return [
-        record(
-            binary,
-            "sandbox",
-            "--",
-            "python",
-            "-c",
-            script,
-        )
-    ]
+        """).strip("\n")
+    return [record(binary, "sandbox", "--", "python", "-c", script)]
 
 
 def test_does_not_require_home(binary: Path) -> Transcript:
     # fmt: python
-    script = dedent(
-        r"""
+    script = dedent(r"""
         print("ran")
-        """
-    ).strip()
-    return [
-        record(
-            binary,
-            "sandbox",
-            "--",
-            "python",
-            "-c",
-            script,
-            environment={"HOME": None},
-        )
-    ]
+        """).strip("\n")
+    arguments = ("sandbox", "--", "python", "-c", script)
+    return [record(binary, *arguments, environment={"HOME": None})]
 
 
 def test_supports_r_runtime_queries_and_temporary_writes(binary: Path) -> Transcript:
     # fmt: r
-    script = dedent(
-        r"""
+    script = dedent(r"""
         {
           stopifnot(parallel::detectCores() >= 1)
+          stopifnot(file.exists("Cargo.toml"))
+
+          host_write <- try(
+            suppressWarnings(file("Cargo.toml", open = "r+")),
+            silent = TRUE
+          )
+          stopifnot(inherits(host_write, "try-error"))
 
           output <- file.path(tempdir(), "result.txt")
           writeLines("sandboxed R", output)
           writeLines(readLines(output))
         }
-        """
-    ).strip()
-    return [
-        record(
-            binary,
-            "sandbox",
-            "--",
-            "Rscript",
-            "-e",
-            script,
-        )
-    ]
+        """).strip("\n")
+    return [record(binary, "sandbox", "--", "Rscript", "-e", script)]
 
 
 def test_allows_processx_pty_processes(binary: Path) -> Transcript:
     # fmt: r
-    script = dedent(
-        r"""
+    script = dedent(r"""
         {
           p <- processx::process$new("/bin/cat", pty = TRUE)
           on.exit(if (p$is_alive()) p$kill())
@@ -151,18 +120,8 @@ def test_allows_processx_pty_processes(binary: Path) -> Transcript:
           cat(p$read_output())
           invisible(p$kill())
         }
-        """
-    ).strip()
-    return [
-        record(
-            binary,
-            "sandbox",
-            "--",
-            "Rscript",
-            "-e",
-            script,
-        )
-    ]
+        """).strip("\n")
+    return [record(binary, "sandbox", "--", "Rscript", "-e", script)]
 
 
 if __name__ == "__main__":
