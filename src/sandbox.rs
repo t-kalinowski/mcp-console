@@ -32,7 +32,6 @@ pub fn run(command_line: &[OsString]) -> Result<ExitCode, String> {
 pub(crate) struct SandboxedCommandBuilder {
     launcher: Command,
     sandboxed_program: OsString,
-    environment: Vec<(OsString, OsString)>,
     temporary_directory: platform::TemporaryDirectory,
 }
 
@@ -51,27 +50,27 @@ impl SandboxedCommandBuilder {
         let mut builder = Self {
             launcher,
             sandboxed_program: program.to_os_string(),
-            environment: Vec::new(),
             temporary_directory,
         };
         builder.env("TMPDIR", temporary_directory_path);
         Ok(builder)
     }
 
+    /// Adds a variable to the environment inherited through `sandbox-exec`
+    /// without encoding it in the launcher arguments.
+    ///
+    /// macOS filters `DYLD_*` variables when launching `sandbox-exec`; this
+    /// builder intentionally does not restore them inside the sandbox.
     pub(crate) fn env<K, V>(&mut self, key: K, value: V) -> &mut Self
     where
         K: AsRef<OsStr>,
         V: AsRef<OsStr>,
     {
-        self.environment
-            .push((key.as_ref().to_os_string(), value.as_ref().to_os_string()));
+        self.launcher.env(key, value);
         self
     }
 
     pub(crate) fn finalize(mut self) -> SandboxedCommand {
-        for (key, value) in self.environment {
-            self.launcher.env(key, value);
-        }
         self.launcher.arg(&self.sandboxed_program);
 
         SandboxedCommand {
