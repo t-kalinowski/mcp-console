@@ -42,6 +42,7 @@ def record(
 
 
 def test_preserves_python_arguments_and_standard_output(binary: Path) -> Transcript:
+    # fmt: python
     script = dedent(
         r"""
         import sys
@@ -64,6 +65,7 @@ def test_preserves_python_arguments_and_standard_output(binary: Path) -> Transcr
 
 
 def test_allows_python_multiprocessing_semaphores(binary: Path) -> Transcript:
+    # fmt: python
     script = dedent(
         r"""
         import multiprocessing as mp
@@ -93,6 +95,7 @@ def test_allows_python_multiprocessing_semaphores(binary: Path) -> Transcript:
 
 
 def test_does_not_require_home(binary: Path) -> Transcript:
+    # fmt: python
     script = dedent(
         r"""
         print("ran")
@@ -112,13 +115,16 @@ def test_does_not_require_home(binary: Path) -> Transcript:
 
 
 def test_supports_r_runtime_queries_and_temporary_writes(binary: Path) -> Transcript:
+    # fmt: r
     script = dedent(
         r"""
-        stopifnot(parallel::detectCores() >= 1)
+        {
+          stopifnot(parallel::detectCores() >= 1)
 
-        output <- file.path(tempdir(), "result.txt")
-        writeLines("sandboxed R", output)
-        writeLines(readLines(output))
+          output <- file.path(tempdir(), "result.txt")
+          writeLines("sandboxed R", output)
+          writeLines(readLines(output))
+        }
         """
     ).strip()
     return [
@@ -134,14 +140,17 @@ def test_supports_r_runtime_queries_and_temporary_writes(binary: Path) -> Transc
 
 
 def test_allows_processx_pty_processes(binary: Path) -> Transcript:
+    # fmt: r
     script = dedent(
         r"""
-        p <- processx::process$new("/bin/cat", pty = TRUE)
-        on.exit(if (p$is_alive()) p$kill())
-        p$write_input("sandboxed pty\n")
-        stopifnot(p$poll_io(5000)[["output"]] == "ready")
-        cat(p$read_output())
-        invisible(p$kill())
+        {
+          p <- processx::process$new("/bin/cat", pty = TRUE)
+          on.exit(if (p$is_alive()) p$kill())
+          p$write_input("sandboxed pty\n")
+          stopifnot(p$poll_io(5000)[["output"]] == "ready")
+          cat(p$read_output())
+          invisible(p$kill())
+        }
         """
     ).strip()
     return [

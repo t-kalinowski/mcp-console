@@ -6,11 +6,13 @@ command:
   - Rscript
   - -e
   - |-
-    stopifnot(parallel::detectCores() >= 1)
+    {
+      stopifnot(parallel::detectCores() >= 1)
 
-    output <- file.path(tempdir(), "result.txt")
-    writeLines("sandboxed R", output)
-    writeLines(readLines(output))
+      output <- file.path(tempdir(), "result.txt")
+      writeLines("sandboxed R", output)
+      writeLines(readLines(output))
+    }
 stdout: |
   sandboxed R
 ...
