@@ -108,12 +108,12 @@ for suite_name, selected_case_names in selected_suites.items():
 
     for case_name, record_transcript in selected_cases:
         actual = record_transcript(binary)
-        transcript = format_yaml(actual, multi=True)
+        transcript_text = format_yaml(actual, multi=True)
         golden = directory / "golden" / suite_name / f"{case_name}.yaml"
 
         if options.update:
             golden.parent.mkdir(parents=True, exist_ok=True)
-            golden.write_text(transcript, encoding="utf-8")
+            golden.write_text(transcript_text, encoding="utf-8")
             print(f"updated {golden.relative_to(root)}")
         elif not golden.exists():
             raise SystemExit(
@@ -127,7 +127,7 @@ for suite_name, selected_case_names in selected_suites.items():
                 sys.stderr.writelines(
                     difflib.unified_diff(
                         expected_text.splitlines(keepends=True),
-                        transcript.splitlines(keepends=True),
+                        transcript_text.splitlines(keepends=True),
                         fromfile=str(golden.relative_to(root)),
                         tofile="actual",
                     )

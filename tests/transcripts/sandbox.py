@@ -5,7 +5,7 @@ import subprocess
 from pathlib import Path
 from textwrap import dedent
 
-from _support import Transcript, run_this_suite
+from _support import Transcript, TranscriptEntry, run_this_suite
 
 
 PLATFORMS = {"darwin"}
@@ -15,7 +15,7 @@ def record(
     binary: Path,
     *arguments: str,
     environment: dict[str, str | None] | None = None,
-) -> dict[str, object]:
+) -> TranscriptEntry:
     child_environment = os.environ.copy()
     for name, value in (environment or {}).items():
         if value is None:
@@ -28,17 +28,17 @@ def record(
         capture_output=True,
         env=child_environment,
     )
-    transcript: dict[str, object] = {
+    entry: TranscriptEntry = {
         "command": ["mcp-console", *arguments],
     }
     if environment is not None:
-        transcript["environment"] = environment
+        entry["environment"] = environment
     if result.returncode != 0:
-        transcript["exit_code"] = result.returncode
-    transcript["stdout"] = result.stdout.decode("utf-8")
+        entry["exit_code"] = result.returncode
+    entry["stdout"] = result.stdout.decode("utf-8")
     if result.stderr:
-        transcript["stderr"] = result.stderr.decode("utf-8")
-    return transcript
+        entry["stderr"] = result.stderr.decode("utf-8")
+    return entry
 
 
 def test_preserves_python_arguments_and_standard_output(binary: Path) -> Transcript:
