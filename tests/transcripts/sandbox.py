@@ -1,8 +1,10 @@
 #!/usr/bin/env -S uv run --script
 
 import os
+import selectors
 import shutil
 import subprocess
+import time
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from textwrap import dedent
@@ -99,40 +101,72 @@ def test_forwards_interactive_standard_streams(binary: Path) -> Transcript:
         """).strip("\n")
     arguments = ("sandbox", "--", "python", "-c", script)
 
-    with subprocess.Popen(
+    process = subprocess.Popen(
         [binary, *arguments],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        text=True,
-        encoding="utf-8",
-    ) as process:
-        assert process.stdin is not None
-        assert process.stdout is not None
-        assert process.stderr is not None
+    )
+    assert process.stdin is not None
+    assert process.stdout is not None
+    assert process.stderr is not None
+    stdin = process.stdin
+    stdout = process.stdout
+    stderr = process.stderr
+    timeout = 5
 
-        input_line = "echo exactly: $(literal)\n"
-        process.stdin.write(input_line)
-        process.stdin.flush()
-        echoed_output = process.stdout.readline()
-        echoed_error = process.stderr.readline()
+    try:
+        input_line = b"echo exactly: $(literal)\n"
+        stdin.write(input_line)
+        stdin.flush()
+
+        output = {"stdout": bytearray(), "stderr": bytearray()}
+        with selectors.DefaultSelector() as selector:
+            selector.register(stdout, selectors.EVENT_READ, "stdout")
+            selector.register(stderr, selectors.EVENT_READ, "stderr")
+            deadline = time.monotonic() + timeout
+            while any(b"\n" not in stream for stream in output.values()):
+                remaining = deadline - time.monotonic()
+                assert remaining > 0, "timed out waiting for sandbox output"
+                ready = selector.select(remaining)
+                assert ready, "timed out waiting for sandbox output"
+                for key, _ in ready:
+                    chunk = os.read(key.fd, 4096)
+                    assert chunk, f"{key.data} closed before returning a line"
+                    output[key.data].extend(chunk)
+
+        echoed_output = output["stdout"].decode("utf-8")
+        echoed_error = output["stderr"].decode("utf-8")
+        input_text = input_line.decode("utf-8")
 
         assert process.poll() is None
-        assert echoed_output == input_line
-        assert echoed_error == input_line
+        assert echoed_output == input_text
+        assert echoed_error == input_text
 
-        process.stdin.write("EXIT\n")
-        process.stdin.flush()
-        exit_code = process.wait(timeout=5)
-        process.stdin.close()
-        assert process.stdout.read() == ""
-        assert process.stderr.read() == ""
+        stdin.write(b"EXIT\n")
+        stdin.flush()
+        exit_code = process.wait(timeout=timeout)
+        assert os.read(stdout.fileno(), 4096) == b""
+        assert os.read(stderr.fileno(), 4096) == b""
         assert exit_code == 0
+    finally:
+        try:
+            try:
+                stdin.close()
+            except BrokenPipeError:
+                pass
+            process.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=timeout)
+        finally:
+            stdout.close()
+            stderr.close()
 
     return [
         {
             "command": ["mcp-console", *arguments],
-            "stdin": input_line,
+            "stdin": input_text,
             "stdout": echoed_output,
             "stderr": echoed_error,
         },

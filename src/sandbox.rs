@@ -47,6 +47,14 @@ pub fn run(command_line: &[OsString]) -> Result<ExitCode, String> {
 /// use std::io::{Read, Write};
 /// use std::process::Stdio;
 ///
+/// fn read_echo(mut stream: impl Read) -> [u8; 6] {
+///     let mut output = [0; 6];
+///     stream
+///         .read_exact(&mut output)
+///         .expect("output should be readable");
+///     output
+/// }
+///
 /// let script = r#"
 /// import sys
 ///
@@ -54,7 +62,10 @@ pub fn run(command_line: &[OsString]) -> Result<ExitCode, String> {
 ///     if line == "EXIT\n":
 ///         break
 ///
-///     print(line, end="", flush=True)
+///     sys.stdout.write(line)
+///     sys.stdout.flush()
+///     sys.stderr.write(line)
+///     sys.stderr.flush()
 /// "#;
 ///
 /// let mut command =
@@ -62,26 +73,23 @@ pub fn run(command_line: &[OsString]) -> Result<ExitCode, String> {
 /// command
 ///     .args(["-c", script])
 ///     .stdin(Stdio::piped())
-///     .stdout(Stdio::piped());
+///     .stdout(Stdio::piped())
+///     .stderr(Stdio::piped());
 ///
 /// let mut child = command.spawn().expect("sandboxed Python should spawn");
-/// child
-///     .stdin_mut()
-///     .expect("stdin should be piped")
+/// let mut stdin = child.take_stdin().expect("stdin should be piped");
+/// let stdout = child.take_stdout().expect("stdout should be piped");
+/// let stderr = child.take_stderr().expect("stderr should be piped");
+/// let stdout = std::thread::spawn(move || read_echo(stdout));
+/// let stderr = std::thread::spawn(move || read_echo(stderr));
+///
+/// stdin
 ///     .write_all(b"hello\n")
 ///     .expect("input should be written");
+/// assert_eq!(stdout.join().expect("stdout reader should finish"), *b"hello\n");
+/// assert_eq!(stderr.join().expect("stderr reader should finish"), *b"hello\n");
 ///
-/// let mut output = [0; 6];
-/// child
-///     .stdout_mut()
-///     .expect("stdout should be piped")
-///     .read_exact(&mut output)
-///     .expect("output should be readable");
-/// assert_eq!(&output, b"hello\n");
-///
-/// child
-///     .stdin_mut()
-///     .expect("stdin should remain piped")
+/// stdin
 ///     .write_all(b"EXIT\n")
 ///     .expect("EXIT should be written");
 /// assert!(child.wait().expect("child should exit").success());
@@ -96,7 +104,8 @@ pub(crate) struct SandboxedCommand {
 ///
 /// Retain this owner until the child exits, then call `wait`. Dropping it does
 /// not terminate the child and removes the private directory. Background
-/// descendants are unsupported and may outlive this owner.
+/// descendants are unsupported and may outlive this owner. Piped streams can
+/// be taken and moved to independent I/O tasks before waiting.
 #[must_use = "retain the sandboxed child until it is explicitly waited"]
 pub(crate) struct SandboxedChild {
     child: Child,
@@ -182,18 +191,18 @@ impl SandboxedCommand {
 #[cfg(target_os = "macos")]
 impl SandboxedChild {
     #[allow(dead_code, reason = "used by spawned callers with piped stdin")]
-    pub(crate) fn stdin_mut(&mut self) -> Option<&mut ChildStdin> {
-        self.child.stdin.as_mut()
+    pub(crate) fn take_stdin(&mut self) -> Option<ChildStdin> {
+        self.child.stdin.take()
     }
 
     #[allow(dead_code, reason = "used by spawned callers with piped stdout")]
-    pub(crate) fn stdout_mut(&mut self) -> Option<&mut ChildStdout> {
-        self.child.stdout.as_mut()
+    pub(crate) fn take_stdout(&mut self) -> Option<ChildStdout> {
+        self.child.stdout.take()
     }
 
     #[allow(dead_code, reason = "used by spawned callers with piped stderr")]
-    pub(crate) fn stderr_mut(&mut self) -> Option<&mut ChildStderr> {
-        self.child.stderr.as_mut()
+    pub(crate) fn take_stderr(&mut self) -> Option<ChildStderr> {
+        self.child.stderr.take()
     }
 
     pub(crate) fn wait(mut self) -> Result<ExitStatus, String> {
