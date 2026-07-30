@@ -19,6 +19,7 @@ command:
       output <- file.path(tempdir(), "result.txt")
       writeLines("sandboxed R", output)
       writeLines(readLines(output))
+      writeLines(Sys.getenv("TMPDIR"))
     }
 stdout: |
   sandboxed R
