@@ -4,7 +4,7 @@ use std::process::ExitCode;
 #[cfg(target_os = "macos")]
 use std::ffi::OsStr;
 #[cfg(target_os = "macos")]
-use std::process::{Child, Command, ExitStatus, Stdio};
+use std::process::{Child, ChildStdin, ChildStdout, Command, ExitStatus, Stdio};
 
 #[cfg(target_os = "macos")]
 #[path = "sandbox/macos.rs"]
@@ -43,7 +43,8 @@ pub(crate) struct SandboxedCommand {
 /// A direct sandboxed child that retains its private temporary directory.
 ///
 /// Retain this owner until the child exits, then call `wait`. Dropping it does
-/// not terminate the child and removes the private directory.
+/// not terminate the child and removes the private directory. Background
+/// descendants are unsupported and may outlive this owner.
 #[must_use = "retain the sandboxed child until it is explicitly waited"]
 pub(crate) struct SandboxedChild {
     child: Child,
@@ -110,7 +111,10 @@ impl SandboxedCommand {
     /// guard to the returned child.
     pub(crate) fn spawn(mut self) -> Result<SandboxedChild, String> {
         self.command.env("TMPDIR", self.temporary_directory.path());
-        let child = platform::spawn(&mut self.command)?;
+        let child = self
+            .command
+            .spawn()
+            .map_err(|error| format!("failed to launch `{}`: {error}", platform::SANDBOX_EXEC))?;
         Ok(SandboxedChild {
             child,
             _temporary_directory: self.temporary_directory,
@@ -125,7 +129,74 @@ impl SandboxedCommand {
 
 #[cfg(target_os = "macos")]
 impl SandboxedChild {
+    #[allow(dead_code, reason = "used by spawned callers with piped stdin")]
+    pub(crate) fn stdin_mut(&mut self) -> Option<&mut ChildStdin> {
+        self.child.stdin.as_mut()
+    }
+
+    #[allow(dead_code, reason = "used by spawned callers with piped stdout")]
+    pub(crate) fn stdout_mut(&mut self) -> Option<&mut ChildStdout> {
+        self.child.stdout.as_mut()
+    }
+
     pub(crate) fn wait(mut self) -> Result<ExitStatus, String> {
-        platform::wait(&mut self.child)
+        self.child
+            .wait()
+            .map_err(|error| format!("failed to launch `{}`: {error}", platform::SANDBOX_EXEC))
+    }
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod tests {
+    use super::SandboxedCommand;
+    use std::ffi::OsStr;
+    use std::io::{BufRead, BufReader, Write};
+    use std::process::Stdio;
+
+    #[test]
+    fn sandboxed_command_spawns_and_communicates() {
+        // fmt: python
+        let script = r#"
+import sys
+
+for line in sys.stdin:
+    if line == "EXIT\n":
+        break
+
+    sys.stdout.write(line)
+    sys.stdout.flush()
+"#;
+
+        let mut command =
+            SandboxedCommand::new(OsStr::new("python")).expect("sandbox should be configured");
+        command
+            .args(["-c", script])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped());
+
+        let mut child = command.spawn().expect("sandboxed Python should spawn");
+        let input = "echo exactly: $(literal)\n";
+        child
+            .stdin_mut()
+            .expect("sandboxed Python stdin should be piped")
+            .write_all(input.as_bytes())
+            .expect("sandboxed Python should receive input");
+        let mut echoed = String::new();
+        BufReader::new(
+            child
+                .stdout_mut()
+                .expect("sandboxed Python stdout should be piped"),
+        )
+        .read_line(&mut echoed)
+        .expect("sandboxed Python output should be readable");
+        assert_eq!(echoed, input);
+
+        child
+            .stdin_mut()
+            .expect("sandboxed Python stdin should remain piped")
+            .write_all(b"EXIT\n")
+            .expect("sandboxed Python should receive EXIT");
+        let status = child.wait().expect("sandboxed Python should exit");
+        assert!(status.success());
     }
 }

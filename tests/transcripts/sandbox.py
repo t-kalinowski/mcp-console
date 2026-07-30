@@ -127,9 +127,17 @@ def test_supports_r_runtime_queries_and_temporary_writes(binary: Path) -> Transc
           output <- file.path(tempdir(), "result.txt")
           writeLines("sandboxed R", output)
           writeLines(readLines(output))
+          writeLines(Sys.getenv("TMPDIR"))
         }
         """).strip("\n")
-    return [record(binary, "sandbox", "--", "Rscript", "-e", script)]
+    entry = record(binary, "sandbox", "--", "Rscript", "-e", script)
+    stdout = entry["stdout"]
+    assert isinstance(stdout, str)
+    output, temporary_directory = stdout.splitlines()
+    assert output == "sandboxed R"
+    assert not Path(temporary_directory).exists()
+    entry["stdout"] = f"{output}\n"
+    return [entry]
 
 
 def test_allows_processx_pty_processes(binary: Path) -> Transcript:

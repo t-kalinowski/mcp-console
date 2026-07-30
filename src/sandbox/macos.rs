@@ -3,10 +3,10 @@ use std::fs::{self, DirBuilder};
 use std::os::unix::fs::DirBuilderExt;
 use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, ExitCode, ExitStatus};
+use std::process::{Command, ExitCode, ExitStatus};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-const SANDBOX_EXEC: &str = "/usr/bin/sandbox-exec";
+pub(super) const SANDBOX_EXEC: &str = "/usr/bin/sandbox-exec";
 const POLICY: &str = include_str!("read_only_policy.sbpl");
 
 pub(super) fn sandboxed_command() -> Result<(Command, TemporaryDirectory), String> {
@@ -22,23 +22,6 @@ pub(super) fn sandboxed_command() -> Result<(Command, TemporaryDirectory), Strin
         .arg("--");
 
     Ok((launcher, temporary_directory))
-}
-
-pub(super) fn spawn(launcher: &mut Command) -> Result<Child, String> {
-    launcher
-        .spawn()
-        .map_err(|error| format!("failed to launch `{SANDBOX_EXEC}`: {error}"))
-}
-
-pub(super) fn wait(child: &mut Child) -> Result<ExitStatus, String> {
-    // This initial launcher intentionally waits only for the direct command.
-    // Descendant cleanup is deferred because it must handle process groups,
-    // children that create new sessions, signal forwarding, and PID reuse as
-    // one lifecycle boundary. Background descendants are unsupported: they may
-    // outlive the launcher, which attempts to remove this directory on return.
-    child
-        .wait()
-        .map_err(|error| format!("failed to launch `{SANDBOX_EXEC}`: {error}"))
 }
 
 pub(super) struct TemporaryDirectory(PathBuf);
