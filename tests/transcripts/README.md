@@ -25,6 +25,8 @@ scripts/test --update server::initializes_lists_tools_and_calls_send
 With no selectors, `scripts/test` runs every suite and case.
 A suite selector runs every case in that file; a `SUITE::CASE` selector runs one named function.
 Use `--update` only to accept an intentional transcript change.
+A suite may set `PLATFORMS = {"darwin"}` to restrict execution and snapshot updates to those `sys.platform` values.
+Restricted cases remain visible under `scripts/test --list` and are skipped on other platforms.
 
 Server cases create an `McpClient`, perform the session, and return `client.finish()`.
 Other cases may invoke the binary directly and return their transcript documents.

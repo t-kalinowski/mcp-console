@@ -1,0 +1,16 @@
+---
+command:
+  - mcp-console
+  - sandbox
+  - python
+  - -c
+  - |-
+    import sys
+
+    print("|".join(sys.argv[1:]))
+  - hello world
+  - $(not-a-command)
+  - --child-option
+stdout: |
+  hello world|$(not-a-command)|--child-option
+...

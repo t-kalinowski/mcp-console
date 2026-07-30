@@ -1,0 +1,18 @@
+---
+command:
+  - mcp-console
+  - sandbox
+  - --
+  - Rscript
+  - -e
+  - |-
+    {
+      p <- processx::process$new("/bin/cat", pty = TRUE)
+      on.exit(if (p$is_alive()) p$kill())
+      p$write_input("sandboxed pty\n")
+      stopifnot(p$poll_io(5000)[["output"]] == "ready")
+      cat(p$read_output())
+      invisible(p$kill())
+    }
+stdout: "sandboxed pty\r\n"
+...
