@@ -1,0 +1,23 @@
+---
+command:
+  - mcp-console
+  - sandbox
+  - --
+  - python
+  - -c
+  - |-
+    import multiprocessing as mp
+    import operator
+
+    context = mp.get_context("spawn")
+    lock = context.Lock()
+    lock.acquire()
+    child = context.Process(target=operator.methodcaller("release"), args=(lock,))
+    child.start()
+    child.join()
+    assert child.exitcode == 0
+    assert lock.acquire(timeout=1)
+    print("semaphore shared")
+stdout: |
+  semaphore shared
+...

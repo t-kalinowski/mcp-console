@@ -1,0 +1,16 @@
+---
+command:
+  - mcp-console
+  - sandbox
+  - --
+  - Rscript
+  - -e
+  - |-
+    stopifnot(parallel::detectCores() >= 1)
+
+    output <- file.path(tempdir(), "result.txt")
+    writeLines("sandboxed R", output)
+    writeLines(readLines(output))
+stdout: |
+  sandboxed R
+...

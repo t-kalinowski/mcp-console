@@ -34,5 +34,9 @@ def test_help(binary: Path) -> Transcript:
     ]
 
 
+def test_version(binary: Path) -> Transcript:
+    return [record(binary, "--version")]
+
+
 if __name__ == "__main__":
     run_this_suite(__file__)
