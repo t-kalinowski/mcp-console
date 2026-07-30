@@ -4,7 +4,7 @@ use std::process::ExitCode;
 #[cfg(target_os = "macos")]
 use std::ffi::OsStr;
 #[cfg(target_os = "macos")]
-use std::process::{Child, ChildStdin, ChildStdout, Command, ExitStatus, Stdio};
+use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, ExitStatus, Stdio};
 
 #[cfg(target_os = "macos")]
 #[path = "sandbox/macos.rs"]
@@ -139,6 +139,11 @@ impl SandboxedChild {
         self.child.stdout.as_mut()
     }
 
+    #[allow(dead_code, reason = "used by spawned callers with piped stderr")]
+    pub(crate) fn stderr_mut(&mut self) -> Option<&mut ChildStderr> {
+        self.child.stderr.as_mut()
+    }
+
     pub(crate) fn wait(mut self) -> Result<ExitStatus, String> {
         self.child
             .wait()
@@ -165,6 +170,8 @@ for line in sys.stdin:
 
     sys.stdout.write(line)
     sys.stdout.flush()
+    sys.stderr.write(line)
+    sys.stderr.flush()
 "#;
 
         let mut command =
@@ -172,7 +179,8 @@ for line in sys.stdin:
         command
             .args(["-c", script])
             .stdin(Stdio::piped())
-            .stdout(Stdio::piped());
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
 
         let mut child = command.spawn().expect("sandboxed Python should spawn");
         let input = "echo exactly: $(literal)\n";
@@ -190,6 +198,16 @@ for line in sys.stdin:
         .read_line(&mut echoed)
         .expect("sandboxed Python output should be readable");
         assert_eq!(echoed, input);
+
+        let mut echoed_error = String::new();
+        BufReader::new(
+            child
+                .stderr_mut()
+                .expect("sandboxed Python stderr should be piped"),
+        )
+        .read_line(&mut echoed_error)
+        .expect("sandboxed Python error output should be readable");
+        assert_eq!(echoed_error, input);
 
         child
             .stdin_mut()
