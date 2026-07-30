@@ -41,25 +41,6 @@ impl Drop for TestDirectory {
 
 #[cfg(target_os = "macos")]
 #[test]
-fn sandbox_preserves_executable_names_with_equals_signs() {
-    let test_directory = TestDirectory::new("executable-name");
-    let program = test_directory.path().join("program=fixture");
-    fs::copy("/usr/bin/true", &program).expect("executable fixture should be copied");
-
-    let output = Command::new(env!("CARGO_BIN_EXE_mcp-console"))
-        .args(["sandbox", "--"])
-        .arg(program)
-        .arg("/usr/bin/false")
-        .output()
-        .expect("mcp-console sandbox should run");
-
-    assert!(output.status.success());
-    assert!(output.stdout.is_empty());
-    assert!(output.stderr.is_empty());
-}
-
-#[cfg(target_os = "macos")]
-#[test]
 fn sandbox_cannot_open_a_preexisting_pseudo_terminal() {
     let host_script = r#"
 import os

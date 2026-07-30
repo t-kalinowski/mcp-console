@@ -19,8 +19,9 @@ pub fn run(command_line: &[OsString]) -> Result<ExitCode, String> {
     let (program, arguments) = command_line
         .split_first()
         .expect("sandbox command must include a program");
-    let mut sandboxed = SandboxedCommandBuilder::new(program)?.finalize();
-    platform::status(sandboxed.launcher_mut().args(arguments))
+    let mut sandboxed = SandboxedCommand::new(program)?;
+    sandboxed.command_mut().args(arguments);
+    sandboxed.status()
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -29,56 +30,40 @@ pub fn run(command_line: &[OsString]) -> Result<ExitCode, String> {
 }
 
 #[cfg(target_os = "macos")]
-pub(crate) struct SandboxedCommandBuilder {
-    launcher: Command,
-    sandboxed_program: OsString,
+pub(crate) struct SandboxedCommand {
+    command: Command,
     temporary_directory: platform::TemporaryDirectory,
 }
 
 #[cfg(target_os = "macos")]
-pub(crate) struct SandboxedCommand {
-    launcher: Command,
-    // Keep the writable directory alive until the command owner is dropped.
-    _temporary_directory: platform::TemporaryDirectory,
-}
-
-#[cfg(target_os = "macos")]
-impl SandboxedCommandBuilder {
-    pub(crate) fn new(program: &OsStr) -> Result<Self, String> {
-        let (launcher, temporary_directory, temporary_directory_path) =
-            platform::sandboxed_command()?;
-        let mut builder = Self {
-            launcher,
-            sandboxed_program: program.to_os_string(),
-            temporary_directory,
-        };
-        builder.env("TMPDIR", temporary_directory_path);
-        Ok(builder)
-    }
-
-    /// Adds a variable to the environment inherited through `sandbox-exec`
-    /// without encoding it in the launcher arguments.
-    ///
-    /// macOS filters `DYLD_*` variables when launching `sandbox-exec`; this
-    /// builder intentionally does not restore them inside the sandbox.
-    pub(crate) fn env(&mut self, key: impl AsRef<OsStr>, value: impl AsRef<OsStr>) -> &mut Self {
-        self.launcher.env(key, value);
-        self
-    }
-
-    pub(crate) fn finalize(mut self) -> SandboxedCommand {
-        self.launcher.arg(&self.sandboxed_program);
-
-        SandboxedCommand {
-            launcher: self.launcher,
-            _temporary_directory: self.temporary_directory,
-        }
-    }
-}
-
-#[cfg(target_os = "macos")]
 impl SandboxedCommand {
-    pub(crate) fn launcher_mut(&mut self) -> &mut Command {
-        &mut self.launcher
+    pub(crate) fn new(program: &OsStr) -> Result<Self, String> {
+        let (mut command, temporary_directory) = platform::sandboxed_command()?;
+        command
+            .env("TMPDIR", temporary_directory.path())
+            .arg(program);
+        Ok(Self {
+            command,
+            temporary_directory,
+        })
+    }
+
+    /// Returns the `sandbox-exec` command for pre-launch configuration.
+    ///
+    /// Arguments added to it follow the sandboxed program.
+    /// Environment and stdio settings are inherited by the sandboxed program.
+    /// macOS filters `DYLD_*` variables when launching `sandbox-exec`; this
+    /// wrapper intentionally does not restore them inside the sandbox.
+    ///
+    /// Launch only through `SandboxedCommand` so the private temporary
+    /// directory remains available to the child. `TMPDIR` is reserved and
+    /// reset to that directory when the command launches.
+    pub(crate) fn command_mut(&mut self) -> &mut Command {
+        &mut self.command
+    }
+
+    pub(crate) fn status(mut self) -> Result<ExitCode, String> {
+        self.command.env("TMPDIR", self.temporary_directory.path());
+        platform::status(&mut self.command)
     }
 }

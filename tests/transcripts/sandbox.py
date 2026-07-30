@@ -1,8 +1,10 @@
 #!/usr/bin/env -S uv run --script
 
 import os
+import shutil
 import subprocess
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from textwrap import dedent
 
 from _support import Transcript, TranscriptEntry, run_this_suite
@@ -15,6 +17,7 @@ def record(
     binary: Path,
     *arguments: str,
     environment: dict[str, str | None] | None = None,
+    current_directory: Path | None = None,
 ) -> TranscriptEntry:
     child_environment = os.environ.copy()
     for name, value in (environment or {}).items():
@@ -26,6 +29,7 @@ def record(
     result = subprocess.run(
         [binary, *arguments],
         capture_output=True,
+        cwd=current_directory,
         env=child_environment,
     )
     entry: TranscriptEntry = {
@@ -39,6 +43,25 @@ def record(
     if result.stderr:
         entry["stderr"] = result.stderr.decode("utf-8")
     return entry
+
+
+def test_preserves_executable_names_with_equals_signs(binary: Path) -> Transcript:
+    with TemporaryDirectory() as directory:
+        current_directory = Path(directory)
+        shutil.copy("/usr/bin/true", current_directory / "program=fixture")
+        transcript = record(
+            binary,
+            "sandbox",
+            "--",
+            "./program=fixture",
+            "/usr/bin/false",
+            current_directory=current_directory,
+        )
+
+    assert "exit_code" not in transcript, (
+        "the executable name was parsed as an environment assignment"
+    )
+    return [transcript]
 
 
 def test_preserves_python_arguments_and_standard_output(binary: Path) -> Transcript:

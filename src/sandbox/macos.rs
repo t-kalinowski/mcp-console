@@ -9,9 +9,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 const SANDBOX_EXEC: &str = "/usr/bin/sandbox-exec";
 const POLICY: &str = include_str!("read_only_policy.sbpl");
 
-pub(super) fn sandboxed_command() -> Result<(Command, TemporaryDirectory, OsString), String> {
+pub(super) fn sandboxed_command() -> Result<(Command, TemporaryDirectory), String> {
     let temporary_directory = TemporaryDirectory::new()?;
-    let temporary_directory_path = temporary_directory.path().as_os_str().to_os_string();
     let mut launcher = Command::new(SANDBOX_EXEC);
     launcher
         .arg("-p")
@@ -22,7 +21,7 @@ pub(super) fn sandboxed_command() -> Result<(Command, TemporaryDirectory, OsStri
         ))
         .arg("--");
 
-    Ok((launcher, temporary_directory, temporary_directory_path))
+    Ok((launcher, temporary_directory))
 }
 
 pub(super) fn status(launcher: &mut Command) -> Result<ExitCode, String> {
@@ -69,7 +68,7 @@ impl TemporaryDirectory {
         Ok(directory)
     }
 
-    fn path(&self) -> &Path {
+    pub(super) fn path(&self) -> &Path {
         &self.0
     }
 }
