@@ -61,11 +61,7 @@ impl SandboxedCommandBuilder {
     ///
     /// macOS filters `DYLD_*` variables when launching `sandbox-exec`; this
     /// builder intentionally does not restore them inside the sandbox.
-    pub(crate) fn env<K, V>(&mut self, key: K, value: V) -> &mut Self
-    where
-        K: AsRef<OsStr>,
-        V: AsRef<OsStr>,
-    {
+    pub(crate) fn env(&mut self, key: impl AsRef<OsStr>, value: impl AsRef<OsStr>) -> &mut Self {
         self.launcher.env(key, value);
         self
     }
