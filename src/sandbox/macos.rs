@@ -6,52 +6,22 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, ExitStatus};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-const SANDBOX_EXEC: &str = "/usr/bin/sandbox-exec";
-const ENV: &str = "/usr/bin/env";
+pub(super) const SANDBOX_EXEC: &str = "/usr/bin/sandbox-exec";
 const POLICY: &str = include_str!("read_only_policy.sbpl");
 
-pub(super) fn run(command: &[OsString]) -> Result<ExitCode, String> {
-    let temp_directory = TemporaryDirectory::new()?;
-
-    // This initial launcher intentionally waits only for the direct command.
-    // Descendant cleanup is deferred because it must handle process groups,
-    // children that create new sessions, signal forwarding, and PID reuse as
-    // one lifecycle boundary. Background descendants are unsupported: they may
-    // outlive the launcher, which attempts to remove this directory on return.
-    let status = Command::new(SANDBOX_EXEC)
-        .arg("-p")
-        .arg(POLICY)
-        .arg(parameter_definition(
-            "TEMP_DIRECTORY",
-            temp_directory.path(),
-        ))
-        .arg("--")
-        .args(command)
-        .env("TMPDIR", temp_directory.path())
-        .status()
-        .map_err(|error| format!("failed to launch `{SANDBOX_EXEC}`: {error}"))?;
-
-    Ok(exit_code(status))
-}
-
-pub(super) fn worker_command() -> Result<(Command, TemporaryDirectory), String> {
+pub(super) fn sandboxed_command() -> Result<(Command, TemporaryDirectory), String> {
     let temporary_directory = TemporaryDirectory::new()?;
-    let mut command = Command::new(SANDBOX_EXEC);
-    command
+    let mut launcher = Command::new(SANDBOX_EXEC);
+    launcher
         .arg("-p")
         .arg(POLICY)
         .arg(parameter_definition(
             "TEMP_DIRECTORY",
             temporary_directory.path(),
         ))
-        .arg("--")
-        // sandbox-exec removes DYLD_* variables before launching its child.
-        // Applying explicit worker variables through env restores them inside
-        // the sandbox without invoking a shell.
-        .arg(ENV)
-        .arg(environment_assignment("TMPDIR", temporary_directory.path()));
+        .arg("--");
 
-    Ok((command, temporary_directory))
+    Ok((launcher, temporary_directory))
 }
 
 pub(super) struct TemporaryDirectory(PathBuf);
@@ -85,7 +55,7 @@ impl TemporaryDirectory {
         Ok(directory)
     }
 
-    fn path(&self) -> &Path {
+    pub(super) fn path(&self) -> &Path {
         &self.0
     }
 }
@@ -106,14 +76,7 @@ fn parameter_definition(name: &str, path: &Path) -> OsString {
     argument
 }
 
-fn environment_assignment(name: &str, path: &Path) -> OsString {
-    let mut argument = OsString::from(name);
-    argument.push("=");
-    argument.push(path);
-    argument
-}
-
-fn exit_code(status: ExitStatus) -> ExitCode {
+pub(super) fn exit_code(status: ExitStatus) -> ExitCode {
     let code = status
         .code()
         .unwrap_or_else(|| 128 + status.signal().unwrap_or(1));

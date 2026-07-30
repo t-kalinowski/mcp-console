@@ -31,7 +31,9 @@ assert suite_paths, "no transcript suites found"
 TranscriptCase = Callable[[Path], Transcript]
 
 
-def load_cases(suite_path: Path) -> dict[str, TranscriptCase]:
+def load_suite(
+    suite_path: Path,
+) -> tuple[dict[str, TranscriptCase], set[str] | None]:
     namespace = runpy.run_path(str(suite_path))
     cases = {
         name.removeprefix("test_"): value
@@ -39,7 +41,11 @@ def load_cases(suite_path: Path) -> dict[str, TranscriptCase]:
         if name.startswith("test_") and callable(value)
     }
     assert cases, f"{suite_path.relative_to(root)} defines no test_ functions"
-    return cases
+    platforms = namespace.get("PLATFORMS")
+    assert platforms is None or isinstance(platforms, set), (
+        f"{suite_path.relative_to(root)} PLATFORMS must be a set"
+    )
+    return cases, platforms
 
 
 def identical(left: object, right: object) -> bool:
@@ -61,7 +67,8 @@ suites = {path.stem: path for path in suite_paths}
 
 if options.list_tests:
     for suite_name, suite_path in suites.items():
-        for case_name in load_cases(suite_path):
+        cases, _ = load_suite(suite_path)
+        for case_name in cases:
             print(f"{suite_name}::{case_name}")
     raise SystemExit
 
@@ -83,7 +90,7 @@ else:
 
 for suite_name, selected_case_names in selected_suites.items():
     suite_path = suites[suite_name]
-    cases = load_cases(suite_path)
+    cases, platforms = load_suite(suite_path)
 
     if selected_case_names is None:
         selected_cases = cases.items()
@@ -95,14 +102,18 @@ for suite_name, selected_case_names in selected_suites.items():
             )
         selected_cases = ((name, cases[name]) for name in selected_case_names)
 
+    if platforms is not None and sys.platform not in platforms:
+        print(f"{suite_name}: skipped on {sys.platform}")
+        continue
+
     for case_name, record_transcript in selected_cases:
         actual = record_transcript(binary)
-        transcript = format_yaml(actual, multi=True)
+        transcript_text = format_yaml(actual, multi=True)
         golden = directory / "golden" / suite_name / f"{case_name}.yaml"
 
         if options.update:
             golden.parent.mkdir(parents=True, exist_ok=True)
-            golden.write_text(transcript, encoding="utf-8")
+            golden.write_text(transcript_text, encoding="utf-8")
             print(f"updated {golden.relative_to(root)}")
         elif not golden.exists():
             raise SystemExit(
@@ -116,7 +127,7 @@ for suite_name, selected_case_names in selected_suites.items():
                 sys.stderr.writelines(
                     difflib.unified_diff(
                         expected_text.splitlines(keepends=True),
-                        transcript.splitlines(keepends=True),
+                        transcript_text.splitlines(keepends=True),
                         fromfile=str(golden.relative_to(root)),
                         tofile="actual",
                     )

@@ -3,14 +3,14 @@ pub enum Boundary {
     Input(String),
 }
 
-#[cfg(target_family = "unix")]
+#[cfg(target_os = "macos")]
 mod unix {
     use std::error::Error;
-    use std::ffi::{CStr, CString, c_char, c_int, c_uchar};
+    use std::ffi::{CStr, CString, OsStr, OsString, c_char, c_int, c_uchar};
     use std::io::{self, Read};
     use std::os::unix::process::CommandExt;
     use std::path::Path;
-    use std::process::{Child, Command, Stdio};
+    use std::process::{Command, Stdio};
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Mutex, OnceLock};
     use std::thread;
@@ -76,13 +76,12 @@ mod unix {
     pub struct RWorker {
         reader: sideband::Reader,
         control: WorkerControl,
-        _sandbox: crate::sandbox::WorkerCommand,
     }
 
     #[derive(Clone)]
     pub struct WorkerControl {
         writer: sideband::Writer,
-        child: Arc<Mutex<Child>>,
+        child: Arc<Mutex<crate::sandbox::SandboxedChild>>,
     }
 
     impl RWorker {
@@ -91,22 +90,22 @@ mod unix {
                 .map_err(|error| format!("failed to create R worker sideband: {error}"))?;
             let executable = std::env::current_exe()
                 .map_err(|error| format!("failed to locate mcp-console: {error}"))?;
-            let mut sandbox = crate::sandbox::worker_command(executable.as_os_str())?;
-            restore_loader_environment(&mut sandbox);
-            let command = sandbox.command_mut();
+            let mut command = crate::sandbox::SandboxedCommand::new(OsStr::new("/usr/bin/env"))?;
+            restore_loader_environment(&mut command);
             command
+                .arg(executable.as_os_str())
                 .arg("__worker_bootstrap")
                 .stdin(Stdio::null())
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped());
-            child_fds.configure(command);
+            child_fds.configure(&mut command);
 
             let mut child = command
                 .spawn()
                 .map_err(|error| format!("failed to launch sandboxed R worker: {error}"))?;
             drop(child_fds);
-            drain(child.stdout.take());
-            drain(child.stderr.take());
+            drain(child.take_stdout());
+            drain(child.take_stderr());
             let child = Arc::new(Mutex::new(child));
             let control = WorkerControl { writer, child };
             on_started(control.clone());
@@ -124,11 +123,7 @@ mod unix {
                 return Err("R worker did not report readiness".to_string());
             }
 
-            Ok(Self {
-                reader,
-                control,
-                _sandbox: sandbox,
-            })
+            Ok(Self { reader, control })
         }
 
         pub fn evaluate(&mut self, r: String) -> Result<super::Boundary, String> {
@@ -400,12 +395,13 @@ mod unix {
         Ok(())
     }
 
-    fn restore_loader_environment(command: &mut crate::sandbox::WorkerCommand) {
-        // sandbox-exec strips DYLD_* variables. Restore an existing search
-        // path inside the sandbox before the bootstrap prefixes R's library.
-        #[cfg(target_os = "macos")]
+    fn restore_loader_environment(command: &mut crate::sandbox::SandboxedCommand) {
+        // sandbox-exec strips DYLD_* variables. The worker-only env process
+        // restores the caller's search path before the bootstrap prefixes R's.
         if let Some(existing) = std::env::var_os("DYLD_LIBRARY_PATH") {
-            command.env("DYLD_LIBRARY_PATH", existing);
+            let mut assignment = OsString::from("DYLD_LIBRARY_PATH=");
+            assignment.push(existing);
+            command.arg(assignment);
         }
     }
 
@@ -715,7 +711,7 @@ mod unix {
         }
     }
 
-    fn worker_io_error(child: &Mutex<Child>, error: io::Error) -> String {
+    fn worker_io_error(child: &Mutex<crate::sandbox::SandboxedChild>, error: io::Error) -> String {
         let started = Instant::now();
         while started.elapsed() < Duration::from_millis(250) {
             let status = match child.lock() {
@@ -734,17 +730,17 @@ mod unix {
     }
 }
 
-#[cfg(target_family = "unix")]
+#[cfg(target_os = "macos")]
 pub use unix::{RWorker, WorkerControl, bootstrap, run};
 
-#[cfg(not(target_family = "unix"))]
+#[cfg(not(target_os = "macos"))]
 pub struct RWorker;
 
-#[cfg(not(target_family = "unix"))]
+#[cfg(not(target_os = "macos"))]
 #[derive(Clone)]
 pub struct WorkerControl;
 
-#[cfg(not(target_family = "unix"))]
+#[cfg(not(target_os = "macos"))]
 impl RWorker {
     pub fn start(_on_started: impl FnOnce(WorkerControl)) -> Result<Self, String> {
         Err("sandboxed R sessions are not supported on this operating system".to_string())
@@ -763,12 +759,12 @@ impl RWorker {
     }
 }
 
-#[cfg(not(target_family = "unix"))]
+#[cfg(not(target_os = "macos"))]
 impl WorkerControl {
     pub fn shutdown(&self) {}
 }
 
-#[cfg(not(target_family = "unix"))]
+#[cfg(not(target_os = "macos"))]
 pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     Err(std::io::Error::new(
         std::io::ErrorKind::Unsupported,
@@ -777,7 +773,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     .into())
 }
 
-#[cfg(not(target_family = "unix"))]
+#[cfg(not(target_os = "macos"))]
 pub fn bootstrap() -> Result<(), Box<dyn std::error::Error>> {
     run()
 }

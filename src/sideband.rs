@@ -2,7 +2,6 @@ use std::ffi::c_int;
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::os::fd::{AsRawFd, FromRawFd, IntoRawFd, OwnedFd, RawFd};
-use std::process::Command;
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -123,7 +122,8 @@ pub fn available_in_process() -> bool {
 }
 
 impl ChildFds {
-    pub fn configure(&self, command: &mut Command) {
+    #[cfg(target_os = "macos")]
+    pub fn configure(&self, command: &mut crate::sandbox::SandboxedCommand) {
         command.env(READ_FD_ENV, self.read.as_raw_fd().to_string());
         command.env(WRITE_FD_ENV, self.write.as_raw_fd().to_string());
     }

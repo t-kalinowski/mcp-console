@@ -5,8 +5,8 @@ from pathlib import Path
 from typing import Any
 
 
-TranscriptDocument = dict[str, Any]
-Transcript = list[TranscriptDocument]
+TranscriptEntry = dict[str, Any]
+Transcript = list[TranscriptEntry]
 
 
 def run_this_suite(suite_path: str) -> None:
@@ -40,26 +40,26 @@ class McpClient:
         self.transcript: Transcript = []
         self.next_request_id = 1
 
-    def send(self, message: dict[str, Any]) -> TranscriptDocument:
+    def send(self, message: dict[str, Any]) -> TranscriptEntry:
         recorded_message = message.copy()
         assert recorded_message.pop("jsonrpc", None) == "2.0", message
 
-        document = {}
+        entry = {}
         if "id" in recorded_message:
-            document["id"] = recorded_message.pop("id")
-        document["input"] = recorded_message
-        self.transcript.append(document)
+            entry["id"] = recorded_message.pop("id")
+        entry["input"] = recorded_message
+        self.transcript.append(entry)
         self.stdin.write(json.dumps(message) + "\n")
         self.stdin.flush()
-        return document
+        return entry
 
-    def receive(self, document: TranscriptDocument) -> None:
+    def receive(self, entry: TranscriptEntry) -> None:
         line = self.stdout.readline()
         assert line, "mcp-console stopped before replying"
         message = json.loads(line)
         assert message.pop("jsonrpc", None) == "2.0", message
-        assert message.pop("id", None) == document["id"], message
-        document["output"] = message
+        assert message.pop("id", None) == entry["id"], message
+        entry["output"] = message
 
     def request(self, method: str, **params: Any) -> None:
         message: dict[str, Any] = {
@@ -71,8 +71,8 @@ class McpClient:
         if params:
             message["params"] = params
 
-        document = self.send(message)
-        self.receive(document)
+        entry = self.send(message)
+        self.receive(entry)
 
     def notify(self, method: str, **params: Any) -> None:
         message: dict[str, Any] = {

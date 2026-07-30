@@ -44,21 +44,6 @@ impl Drop for TestDirectory {
 }
 
 #[test]
-fn version_reports_the_binary_name_and_package_version() {
-    let output = Command::new(env!("CARGO_BIN_EXE_mcp-console"))
-        .arg("--version")
-        .output()
-        .expect("mcp-console should run");
-
-    assert!(output.status.success());
-    assert_eq!(
-        String::from_utf8(output.stdout).expect("stdout should be UTF-8"),
-        format!("mcp-console {}\n", env!("CARGO_PKG_VERSION"))
-    );
-    assert!(output.stderr.is_empty());
-}
-
-#[test]
 fn stdio_server_registers_only_a_lazy_r_console_tool() {
     let mut client = McpClient::start_without_r(&["serve"]);
     let tools = client.request(2, "tools/list", None);
@@ -67,7 +52,7 @@ fn stdio_server_registers_only_a_lazy_r_console_tool() {
         .expect("tools should be an array");
 
     assert_eq!(tools.len(), 1);
-    assert_eq!(tools[0]["name"], "console");
+    assert_eq!(tools[0]["name"], "send");
     assert_eq!(tools[0]["inputSchema"]["type"], "object");
     assert_eq!(tools[0]["inputSchema"]["additionalProperties"], false);
     assert!(
@@ -730,7 +715,7 @@ impl McpClient {
             id,
             "tools/call",
             Some(json!({
-                "name": "console",
+                "name": "send",
                 "arguments": arguments
             })),
         )
@@ -744,7 +729,7 @@ impl McpClient {
                 "id": id,
                 "method": "tools/call",
                 "params": {
-                    "name": "console",
+                    "name": "send",
                     "arguments": arguments
                 }
             }),
@@ -842,131 +827,6 @@ fn read_message(reader: &mut impl BufRead) -> Value {
 
 #[cfg(target_os = "macos")]
 #[test]
-fn sandbox_preserves_python_arguments_and_standard_output() {
-    let script = r#"
-import sys
-
-print("|".join(sys.argv[1:]))
-"#;
-    let output = Command::new(env!("CARGO_BIN_EXE_mcp-console"))
-        .args([
-            "sandbox",
-            "--",
-            "python",
-            "-c",
-            script,
-            "hello world",
-            "$(not-a-command)",
-            "--child-option",
-        ])
-        .output()
-        .expect("mcp-console sandbox should run");
-
-    assert!(output.status.success());
-    assert_eq!(
-        String::from_utf8(output.stdout).expect("stdout should be UTF-8"),
-        "hello world|$(not-a-command)|--child-option\n"
-    );
-    assert!(output.stderr.is_empty());
-}
-
-#[cfg(target_os = "macos")]
-#[test]
-fn sandbox_read_only_policy_allows_python_multiprocessing_semaphores() {
-    let script = r#"
-import multiprocessing as mp
-import operator
-
-context = mp.get_context("spawn")
-lock = context.Lock()
-lock.acquire()
-child = context.Process(target=operator.methodcaller("release"), args=(lock,))
-child.start()
-child.join()
-assert child.exitcode == 0
-assert lock.acquire(timeout=1)
-print("semaphore shared")
-"#;
-    let output = Command::new(env!("CARGO_BIN_EXE_mcp-console"))
-        .args(["sandbox", "--", "python", "-c", script])
-        .output()
-        .expect("mcp-console sandbox should run");
-
-    assert!(
-        output.status.success(),
-        "sandboxed Python failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert_eq!(output.stdout, b"semaphore shared\n");
-    assert!(output.stderr.is_empty());
-}
-
-#[cfg(target_os = "macos")]
-#[test]
-fn sandbox_does_not_require_home() {
-    let script = r#"
-print("ran")
-"#;
-    let output = Command::new(env!("CARGO_BIN_EXE_mcp-console"))
-        .env_remove("HOME")
-        .args(["sandbox", "--", "python", "-c", script])
-        .output()
-        .expect("mcp-console sandbox should run");
-
-    assert!(output.status.success());
-    assert_eq!(output.stdout, b"ran\n");
-    assert!(output.stderr.is_empty());
-}
-
-#[cfg(target_os = "macos")]
-#[test]
-fn sandbox_supports_r_runtime_queries_and_temporary_writes() {
-    let script = r#"
-stopifnot(parallel::detectCores() >= 1)
-
-output <- file.path(tempdir(), "result.txt")
-writeLines("sandboxed R", output)
-writeLines(readLines(output))
-"#;
-    let output = Command::new(env!("CARGO_BIN_EXE_mcp-console"))
-        .args(["sandbox", "--", "Rscript", "-e", script])
-        .output()
-        .expect("mcp-console sandbox should run");
-
-    assert!(
-        output.status.success(),
-        "sandboxed R failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert_eq!(output.stdout, b"sandboxed R\n");
-}
-
-#[cfg(target_os = "macos")]
-#[test]
-fn sandbox_read_only_policy_allows_processx_pty_processes() {
-    let script = r#"
-p <- processx::process$new("/bin/cat", pty = TRUE)
-on.exit(if (p$is_alive()) p$kill())
-p$write_input("sandboxed pty\n")
-stopifnot(p$poll_io(5000)[["output"]] == "ready")
-cat(p$read_output())
-invisible(p$kill())
-"#;
-    let output = Command::new(env!("CARGO_BIN_EXE_mcp-console"))
-        .args(["sandbox", "--", "Rscript", "-e", script])
-        .output()
-        .expect("mcp-console sandbox should run");
-
-    assert!(
-        output.status.success(),
-        "sandboxed processx failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert_eq!(output.stdout, b"sandboxed pty\r\n");
-}
-
-#[cfg(target_os = "macos")]
-#[test]
 fn sandbox_cannot_open_a_preexisting_pseudo_terminal() {
     let host_script = r#"
 import os
@@ -1022,7 +882,7 @@ print("blocked")
 #[cfg(target_os = "macos")]
 #[test]
 fn sandbox_is_read_only_except_for_a_dedicated_temp_directory() {
-    let test_directory = TestDirectory::new("write-boundary");
+    let test_directory = TestDirectory::new("write boundary $(literal)");
     let workspace = test_directory.path().join("workspace");
     let home = test_directory.path().join("home");
     fs::create_dir(&workspace).expect("workspace should be created");
