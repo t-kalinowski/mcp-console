@@ -34,6 +34,58 @@ pub fn run(command_line: &[OsString]) -> Result<ExitCode, String> {
 }
 
 #[cfg(target_os = "macos")]
+/// A command configured to run under the macOS sandbox.
+///
+/// The public sandbox transcript exercises this interaction. This example is
+/// ignored as a doctest because the type is crate-private in a binary target.
+///
+/// # Example
+///
+/// ```ignore
+/// use crate::sandbox::SandboxedCommand;
+/// use std::ffi::OsStr;
+/// use std::io::{Read, Write};
+/// use std::process::Stdio;
+///
+/// let script = r#"
+/// import sys
+///
+/// for line in sys.stdin:
+///     if line == "EXIT\n":
+///         break
+///
+///     print(line, end="", flush=True)
+/// "#;
+///
+/// let mut command =
+///     SandboxedCommand::new(OsStr::new("python")).expect("sandbox should be configured");
+/// command
+///     .args(["-c", script])
+///     .stdin(Stdio::piped())
+///     .stdout(Stdio::piped());
+///
+/// let mut child = command.spawn().expect("sandboxed Python should spawn");
+/// child
+///     .stdin_mut()
+///     .expect("stdin should be piped")
+///     .write_all(b"hello\n")
+///     .expect("input should be written");
+///
+/// let mut output = [0; 6];
+/// child
+///     .stdout_mut()
+///     .expect("stdout should be piped")
+///     .read_exact(&mut output)
+///     .expect("output should be readable");
+/// assert_eq!(&output, b"hello\n");
+///
+/// child
+///     .stdin_mut()
+///     .expect("stdin should remain piped")
+///     .write_all(b"EXIT\n")
+///     .expect("EXIT should be written");
+/// assert!(child.wait().expect("child should exit").success());
+/// ```
 pub(crate) struct SandboxedCommand {
     command: Command,
     temporary_directory: platform::TemporaryDirectory,
@@ -148,73 +200,5 @@ impl SandboxedChild {
         self.child
             .wait()
             .map_err(|error| format!("failed to launch `{}`: {error}", platform::SANDBOX_EXEC))
-    }
-}
-
-#[cfg(all(test, target_os = "macos"))]
-mod tests {
-    use super::SandboxedCommand;
-    use std::ffi::OsStr;
-    use std::io::{BufRead, BufReader, Write};
-    use std::process::Stdio;
-
-    #[test]
-    fn sandboxed_command_spawns_and_communicates() {
-        // fmt: python
-        let script = r#"
-import sys
-
-for line in sys.stdin:
-    if line == "EXIT\n":
-        break
-
-    sys.stdout.write(line)
-    sys.stdout.flush()
-    sys.stderr.write(line)
-    sys.stderr.flush()
-"#;
-
-        let mut command =
-            SandboxedCommand::new(OsStr::new("python")).expect("sandbox should be configured");
-        command
-            .args(["-c", script])
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-
-        let mut child = command.spawn().expect("sandboxed Python should spawn");
-        let input = "echo exactly: $(literal)\n";
-        child
-            .stdin_mut()
-            .expect("sandboxed Python stdin should be piped")
-            .write_all(input.as_bytes())
-            .expect("sandboxed Python should receive input");
-        let mut echoed = String::new();
-        BufReader::new(
-            child
-                .stdout_mut()
-                .expect("sandboxed Python stdout should be piped"),
-        )
-        .read_line(&mut echoed)
-        .expect("sandboxed Python output should be readable");
-        assert_eq!(echoed, input);
-
-        let mut echoed_error = String::new();
-        BufReader::new(
-            child
-                .stderr_mut()
-                .expect("sandboxed Python stderr should be piped"),
-        )
-        .read_line(&mut echoed_error)
-        .expect("sandboxed Python error output should be readable");
-        assert_eq!(echoed_error, input);
-
-        child
-            .stdin_mut()
-            .expect("sandboxed Python stdin should remain piped")
-            .write_all(b"EXIT\n")
-            .expect("sandboxed Python should receive EXIT");
-        let status = child.wait().expect("sandboxed Python should exit");
-        assert!(status.success());
     }
 }

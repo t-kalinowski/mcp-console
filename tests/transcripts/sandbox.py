@@ -83,6 +83,66 @@ def test_preserves_python_arguments_and_standard_output(binary: Path) -> Transcr
     return [record(binary, *arguments)]
 
 
+def test_forwards_interactive_standard_streams(binary: Path) -> Transcript:
+    # fmt: python
+    script = dedent(r"""
+        import sys
+
+        for line in sys.stdin:
+            if line == "EXIT\n":
+                break
+
+            sys.stdout.write(line)
+            sys.stdout.flush()
+            sys.stderr.write(line)
+            sys.stderr.flush()
+        """).strip("\n")
+    arguments = ("sandbox", "--", "python", "-c", script)
+
+    with subprocess.Popen(
+        [binary, *arguments],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+    ) as process:
+        assert process.stdin is not None
+        assert process.stdout is not None
+        assert process.stderr is not None
+
+        input_line = "echo exactly: $(literal)\n"
+        process.stdin.write(input_line)
+        process.stdin.flush()
+        echoed_output = process.stdout.readline()
+        echoed_error = process.stderr.readline()
+
+        assert process.poll() is None
+        assert echoed_output == input_line
+        assert echoed_error == input_line
+
+        process.stdin.write("EXIT\n")
+        process.stdin.flush()
+        exit_code = process.wait(timeout=5)
+        process.stdin.close()
+        assert process.stdout.read() == ""
+        assert process.stderr.read() == ""
+        assert exit_code == 0
+
+    return [
+        {
+            "command": ["mcp-console", *arguments],
+            "stdin": input_line,
+            "stdout": echoed_output,
+            "stderr": echoed_error,
+        },
+        {
+            "stdin": "EXIT\n",
+            "exit_code": exit_code,
+        },
+    ]
+
+
 def test_allows_python_multiprocessing_semaphores(binary: Path) -> Transcript:
     # fmt: python
     script = dedent(r"""
