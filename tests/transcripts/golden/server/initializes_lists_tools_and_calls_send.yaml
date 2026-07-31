@@ -27,25 +27,37 @@ output:
   result:
     tools:
       - name: send
-        description: Echo the supplied arguments.
+        description: >-
+          Persistent R console. Send one complete r cell, or send stdin after the
+          response ends with [input].
         inputSchema:
           $schema: https://json-schema.org/draft/2020-12/schema
-          additionalProperties: true
+          additionalProperties: false
           type: object
+          properties:
+            r:
+              description: Complete multiline R cell in persistent state.
+              type:
+                - string
+                - "null"
+            stdin:
+              description: >-
+                Exact text for an active R input prompt. A newline submits each input
+                line.
+              type:
+                - string
+                - "null"
 ---
 id: 3
 input:
   method: tools/call
   params:
     name: send
-    arguments:
-      python: print('hello')
-      wait_ms: 0
+    arguments: {}
 output:
   result:
     content:
       - type: text
-        text: |-
-          {"python":"print('hello')","wait_ms":0}
-    isError: false
+        text: send exactly one of r or stdin
+    isError: true
 ...
