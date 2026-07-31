@@ -59,6 +59,9 @@ scripts/format
 Formatter errors remain visible but do not stop the remaining formatters or make the script fail.
 
 See [`tests/transcripts/README.md`](tests/transcripts/README.md) for running and authoring external server transcript tests.
+The `zod` suite runs on macOS and Linux.
+It uses the hidden `serve --worker PATH` development option to exercise the server-side worker protocol with an executable Python fixture.
+The trusted fixture is launched directly; this suite covers worker communication and lifecycle rather than sandbox policy.
 
 ## License
 

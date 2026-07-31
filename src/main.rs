@@ -5,11 +5,14 @@ use clap::Parser;
 mod cli;
 mod sandbox;
 mod server;
+#[cfg(unix)]
+mod sideband;
+mod worker_client;
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> ExitCode {
     match cli::Cli::parse().command {
-        cli::Command::Serve => match server::run().await {
+        cli::Command::Serve { worker } => match server::run(worker).await {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => exit_with_error(error),
         },

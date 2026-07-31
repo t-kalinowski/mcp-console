@@ -20,9 +20,11 @@ class McpClient:
         self,
         binary: Path,
         arguments: tuple[str, ...] = (),
+        environment: dict[str, str] | None = None,
     ) -> None:
         process = subprocess.Popen(
             [binary, *arguments],
+            env=environment,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,

@@ -1,0 +1,57 @@
+#!/usr/bin/env python3
+
+import base64
+import json
+import os
+import time
+from pathlib import Path
+from typing import Any, TextIO
+
+
+READ_FD_ENV = "MCP_CONSOLE_SIDEBAND_READ_FD"
+WRITE_FD_ENV = "MCP_CONSOLE_SIDEBAND_WRITE_FD"
+
+
+def open_sideband(name: str, mode: str) -> TextIO:
+    descriptor = int(os.environ.pop(name))
+    os.set_inheritable(descriptor, False)
+    return os.fdopen(descriptor, mode, encoding="utf-8")
+
+
+def send(stream: TextIO, message: dict[str, Any]) -> None:
+    stream.write(json.dumps(message, separators=(",", ":")) + "\n")
+    stream.flush()
+
+
+def main() -> None:
+    """Run the deterministic sideband fixture until the server shuts it down."""
+    reader = open_sideband(READ_FD_ENV, "r")
+    writer = open_sideband(WRITE_FD_ENV, "w")
+    send(writer, {"type": "ready"})
+
+    for line in reader:
+        message = json.loads(line)
+        message_type = message["type"]
+        if message_type == "shutdown":
+            return
+
+        assert message_type == "evaluate"
+        assert set(message) == {"type", "r"}
+        if message["r"] == "stall":
+            Path(os.environ["ZOD_STALL_PATH"]).touch()
+            while True:
+                time.sleep(60)
+
+        for output in (b"zod: ", f"{message['r']}\n".encode()):
+            send(
+                writer,
+                {
+                    "type": "output",
+                    "data_b64": base64.b64encode(output).decode(),
+                },
+            )
+        send(writer, {"type": "completed"})
+
+
+if __name__ == "__main__":
+    main()
