@@ -95,16 +95,18 @@ Backend transport must not leak into MCP, session, transcript, or local sidecar 
 
 ### 4.1 Status
 
-The product and service contracts are defined, but the worker substrate is intentionally open until a focused implementation spike is complete.
+The current text R console uses the implemented native DLL-REPL worker.
+An Ark-backed R-only prototype was also implemented and evaluated; the native worker was selected for that slice because Ark required the full Jupyter adapter and a local browser-prompt API addition.
+The eventual R/Python/SQL and inspection backend remains open until the remaining implementation work is evaluated.
 The two serious candidates are:
 
 1. an **Ark-backed worker**, with the supervisor acting as a Jupyter client and translating Ark's execution, stdin, control, display, and custom comm messages into MCP Console's normalized runtime events;
-2. a **purpose-built native worker**, derived from `mcp-repl` and built on `harp`/`libr`, with a smaller private protocol designed directly around MCP Console's multi-language semantics.
+2. the **purpose-built native worker**, built on `harp`, `libr`, and libR's DLL-REPL API, with a narrower private protocol designed directly around MCP Console's multi-language semantics.
 
-A third outcome—extracting a reusable lower-level runtime shared by Ark and MCP Console—is preferred when practical, but it cannot be assumed before the spike.
+A third outcome—extracting a reusable lower-level runtime shared by Ark and MCP Console—is preferred when practical, but it cannot be assumed before the remaining full-runtime evaluation.
 
 The comparison and acceptance matrix live in [`RUNTIME_BACKEND.md`](RUNTIME_BACKEND.md).
-Do not encode either backend as a repository-wide invariant before that decision is recorded.
+Do not generalize the initial text R decision into a repository-wide backend invariant before the remaining decision is recorded.
 
 ### 4.2 Stable runtime service
 
@@ -181,7 +183,7 @@ Select Ark when the spike shows that:
 - packaging, startup, sandboxing, and version compatibility are acceptable;
 - required changes can be upstreamed or maintained without a long-lived fork.
 
-Select the native worker when Ark fails those tests and a narrower live/snapshot inspection backend can meet the product requirements with materially less complexity.
+Select the native worker when Ark's full-kernel integration or required extensions outweigh the capabilities MCP Console would reuse, and a narrower live/snapshot inspection backend can meet the product requirements with materially less complexity.
 
 Regardless of the outcome, record the decision as an ADR and retain the backend-neutral service boundary.
 

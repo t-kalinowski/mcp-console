@@ -37,6 +37,32 @@ Relevant R sources are:
 - `src/main/errors.c` and `src/main/context.c`: top-level error handling and non-local transfer;
 - `doc/manual/R-exts.texi`: the documented pseudo-console loop.
 
+## Why not reuse Ark's console?
+
+An Ark-backed prototype was implemented and evaluated, rather than rejected from source inspection alone.
+It embedded Ark in the sandboxed worker and translated Ark's Jupyter messages over private ZeroMQ sockets into the MCP `send` protocol.
+Persistent cells, every visible top-level value, errors, source-bearing tracebacks, `readline()`, `browser()`, `recover()`, menu input, and the tested partial and multiple LF-delimited stdin cases all worked.
+Ark also captured direct subprocess output, emitted plot MIME data, and opened a Data Explorer comm without a Positron frontend.
+
+At the inspected revision, however, Ark does not expose a narrow, transport-neutral console service.
+Its public startup path constructs a complete Jupyter kernel.
+Its lower-level console construction and evaluation machinery is not separately reusable: its callbacks, request channels, parser, and evaluator are coupled to Amalthea, IOPub, comms, graphics, help, LSP, DAP, and Ark's global console state.
+Using Ark therefore required MCP Console to implement a Jupyter frontend covering connection setup, kernel startup, shell, IOPub, stdin and control channels, message correlation, and completion detection.
+Its ZeroMQ Unix sockets also required a worker-sandbox exception that the inherited sideband does not need.
+
+The prototype needed a small Ark API addition to combine console-mode visible-value printing with structured stdin for an otherwise unconnected `browser()` prompt.
+Ark's stdin API treats each reply as a complete line and adds a newline, so the MCP adapter still had to buffer the tested partial and multiple LF-delimited chunks before passing complete lines to Ark.
+Ark also pre-parses the complete cell, calls `Rf_eval()` directly, and sends an internal `base::.ark_last_value` expression through R's REPL to finish top-level processing.
+Consequently, a top-level task callback sees that proxy rather than the submitted expression.
+That is the same pre-parse, direct-eval, and value-proxy machinery that the DLL iterator removes.
+
+The current worker therefore reuses the lower-level Harp and `libr` crates from the Ark repository for R discovery, loading, initialization helpers, and API bindings.
+MCP Console owns the narrower cell/stdin protocol and uses libR's DLL-REPL API for evaluation.
+This decision is limited to the current native worker; it is not a permanent rejection of Ark.
+
+Reconsider Ark when plots, help, interrupts, debugger support, Variables, or Data Explorer enter the implemented surface and can be consumed through a stable adapter.
+[`RUNTIME_BACKEND.md`](RUNTIME_BACKEND.md) records the required Ark-side changes, the MCP Console adapter work, and the optional lower-level extraction.
+
 ## Approaches considered
 
 ### Pre-parse and call `Rf_eval()`
@@ -55,7 +81,7 @@ It gives the host exact expression boundaries and makes cell EOF easy to classif
 The prior value-proxy technique delegated some of that work back to `R_ReplDLLdo1()`, but changes observable semantics: top-level task callbacks receive the generated `base::get()` call rather than the submitted expression.
 It also requires separate traceback and REPL-reset machinery.
 
-### Run `run_Rmainloop()`, as `mcp-repl` does
+### Run `run_Rmainloop()` with a simple source queue
 
 `mcp-repl` installs console callbacks and hands the runtime thread to `run_Rmainloop()`.
 This is a suitable balance for its readline-oriented input protocol: all submitted text enters one console queue, and its input batching normalizes partial input by adding a newline.

@@ -165,7 +165,7 @@ Update this map whenever ownership moves.
 - `docs/TOOL_DESCRIPTIONS.md` — exact registered tool and property descriptions.
 - `docs/CLI.md` — standalone binary, installation, diagnostics, viewer, watch, and sidecar-control commands.
 - `docs/SIDECAR_API.md` — process-scoped local API, event model, inspection, live and snapshot data views, plots, and external control.
-- `docs/RUNTIME_BACKEND.md` — Ark-versus-native worker evaluation, spike plan, and decision gate.
+- `docs/RUNTIME_BACKEND.md` — initial Ark-versus-native worker evaluation, remaining full-runtime work, and decision gate.
 - `docs/R_REPL_DLL_ITERATOR.md` — native DLL-REPL findings, decision, and implementation record.
 - `docs/ARCHITECTURE.md` — implementation architecture and staged plan.
 
