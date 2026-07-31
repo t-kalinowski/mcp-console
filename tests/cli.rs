@@ -721,6 +721,7 @@ impl McpClient {
         )
     }
 
+    #[cfg(target_os = "macos")]
     fn send_console(&mut self, id: u64, arguments: Value) {
         write_message(
             self.input.as_mut().expect("stdin should be open"),
@@ -736,6 +737,7 @@ impl McpClient {
         );
     }
 
+    #[cfg(target_os = "macos")]
     fn call_console(&mut self, id: u64, arguments: Value) -> String {
         let response = self.call_console_response(id, arguments);
         assert_eq!(response["result"]["isError"], false, "{response}");

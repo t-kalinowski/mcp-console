@@ -1,3 +1,4 @@
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub enum Boundary {
     Complete(String),
     Input(String),
@@ -757,6 +758,11 @@ impl RWorker {
     pub fn control(&self) -> WorkerControl {
         WorkerControl
     }
+}
+
+#[cfg(not(target_os = "macos"))]
+impl Drop for RWorker {
+    fn drop(&mut self) {}
 }
 
 #[cfg(not(target_os = "macos"))]

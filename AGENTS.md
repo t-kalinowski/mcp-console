@@ -68,13 +68,13 @@ See `design-sketches/README.md` for the product overview and `design-sketches/do
 ## Repository map
 
 - `Cargo.toml` — Rust package metadata.
-- `build.rs` — Unix C-shim build.
+- `build.rs` — macOS C-shim build.
 - `src/main.rs` — current binary entry point.
 - `src/cli.rs` — clap command definitions and user-facing help.
 - `src/server.rs` — MCP stdio server and R-evaluating `send` tool.
 - `src/worker.rs` — private persistent embedded-R worker and supervisor client.
 - `src/r_repl.c` — C-owned per-cell DLL-REPL iterator and long-jump boundary.
-- `src/sideband.rs` — inherited Unix pipe transport for worker JSON-lines messages.
+- `src/sideband.rs` — inherited pipe transport for the macOS worker's JSON-lines messages.
 - `src/sandbox.rs` — platform dispatch for the sandbox process launcher.
 - `src/sandbox/` — platform implementation and macOS Seatbelt policy.
 - `tests/cli.rs` — public binary acceptance tests.
