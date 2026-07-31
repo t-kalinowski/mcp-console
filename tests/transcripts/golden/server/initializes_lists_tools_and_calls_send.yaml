@@ -24,12 +24,14 @@ id: 2
 input:
   method: tools/list
 output:
-    result:
-      tools:
+  result:
+    tools:
       - name: send
-        description: "Persistent R console. Send one complete r cell, or send stdin after the response ends with [input]."
+        description: >-
+          Persistent R console. Send one complete r cell, or send stdin after the
+          response ends with [input].
         inputSchema:
-          $schema: "https://json-schema.org/draft/2020-12/schema"
+          $schema: https://json-schema.org/draft/2020-12/schema
           additionalProperties: false
           type: object
           properties:
@@ -50,6 +52,21 @@ input:
   params:
     name: send
     arguments: {}
+output:
+  result:
+    content:
+      - type: text
+        text: send exactly one of r or stdin
+    isError: true
+---
+id: 4
+input:
+  method: tools/call
+  params:
+    name: send
+    arguments:
+      r: "1"
+      stdin: input
 output:
   result:
     content:

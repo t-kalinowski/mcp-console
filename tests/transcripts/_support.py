@@ -84,7 +84,7 @@ class McpClient:
 
         self.send(message)
 
-    def initialize_and_list_tools(self) -> None:
+    def initialize(self) -> None:
         self.request(
             "initialize",
             protocolVersion="2025-11-25",
@@ -95,6 +95,9 @@ class McpClient:
             },
         )
         self.notify("notifications/initialized")
+
+    def initialize_and_list_tools(self) -> None:
+        self.initialize()
         self.request("tools/list")
 
     def call_tool(self, name: str, **arguments: Any) -> None:

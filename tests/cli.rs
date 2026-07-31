@@ -44,50 +44,17 @@ impl Drop for TestDirectory {
 }
 
 #[test]
-fn stdio_server_registers_only_a_lazy_r_console_tool() {
+fn stdio_server_starts_r_lazily_and_keeps_a_failed_worker_stopped() {
     let mut client = McpClient::start_without_r(&["serve"]);
-    let tools = client.request(2, "tools/list", None);
-    let tools = tools["result"]["tools"]
-        .as_array()
-        .expect("tools should be an array");
+    client.request(2, "tools/list", None);
 
-    assert_eq!(tools.len(), 1);
-    assert_eq!(tools[0]["name"], "send");
-    assert_eq!(tools[0]["inputSchema"]["type"], "object");
-    assert_eq!(tools[0]["inputSchema"]["additionalProperties"], false);
-    assert!(
-        tools[0]["inputSchema"]["required"].is_null()
-            || tools[0]["inputSchema"]["required"] == json!([])
-    );
-    assert_eq!(
-        tools[0]["inputSchema"]["properties"]
-            .as_object()
-            .expect("console properties should be an object")
-            .keys()
-            .collect::<Vec<_>>(),
-        ["r", "stdin"]
-    );
-
-    assert_eq!(
-        client.call_console_error(3, json!({})),
-        "send exactly one of r or stdin"
-    );
-    assert_eq!(
-        client.call_console_error(4, json!({"r": "1", "stdin": "\n"})),
-        "send exactly one of r or stdin"
-    );
-    assert_eq!(
-        client.call_console_error(5, json!({"stdin": "\n"})),
-        "stdin is accepted only at an R input prompt"
-    );
-
-    let stopped = client.call_console_error(6, json!({"r": "1"}));
+    let stopped = client.call_console_error(3, json!({"r": "1"}));
     assert!(
         stopped.starts_with("[stopped:"),
         "startup failure should be an explicit stopped state: {stopped:?}"
     );
     assert_eq!(
-        client.call_console_error(7, json!({"r": "1"})),
+        client.call_console_error(4, json!({"r": "1"})),
         stopped,
         "a stopped worker must not restart implicitly"
     );
@@ -95,104 +62,8 @@ fn stdio_server_registers_only_a_lazy_r_console_tool() {
 
 #[cfg(target_os = "macos")]
 #[test]
-fn stdio_console_runs_complete_top_level_r_cells_in_persistent_state() {
+fn stdio_console_accepts_long_multibyte_source_lines() {
     let mut client = McpClient::start(&["serve"]);
-    let code = r#"
-answer <- (
-    38 + 2
-)
-answer + 2
-cat("done\n")
-invisible(99)
-cores <- parallel::detectCores()
-"parallel" %in% names(getLoadedDLLs())
-"#;
-
-    assert_eq!(
-        client.call_console(2, json!({"r": code})),
-        "[1] 42\ndone\n[1] TRUE\n"
-    );
-    assert_eq!(
-        client.call_console(3, json!({"r": "silent <- 1"})),
-        "[done]"
-    );
-    assert_eq!(
-        client.call_console(4, json!({"r": "1\n2"})),
-        "[1] 1\n[1] 2\n"
-    );
-    assert_eq!(client.call_console(5, json!({"r": "answer"})), "[1] 40\n");
-
-    let calls = client.call_console(
-        6,
-        json!({"r": r#"
-user_calls <- function() {
-    vapply(sys.calls(), deparse1, character(1))
-}
-user_calls()
-"#}),
-    );
-    assert!(calls.contains("\"user_calls()\""), "R calls: {calls:?}");
-    assert!(!calls.contains("mcp_console"), "R calls: {calls:?}");
-    assert!(!calls.contains("base::get"), "R calls: {calls:?}");
-
-    assert_eq!(
-        client.call_console(
-            7,
-            json!({"r": r#"
-invisible(addTaskCallback(local({
-    first <- TRUE
-    function(expr, ...) {
-        if (first) {
-            first <<- FALSE
-            return(TRUE)
-        }
-        cat(deparse1(expr), "\n", sep = "")
-        FALSE
-    }
-}),
-    name = "mcp-console-test"
-))
-mcp_console_callback_probe <- 42
-"#}),
-        ),
-        "mcp_console_callback_probe <- 42\n"
-    );
-
-    assert_eq!(
-        client.call_console(
-            8,
-            json!({"r": r#"
-warning("careful")
-invisible(42)
-identical(base::.Last.value, 42) &&
-    !exists(".Last.value", envir = globalenv(), inherits = FALSE)
-"#}),
-        ),
-        "Warning message:\ncareful \n[1] TRUE\n"
-    );
-
-    assert_eq!(
-        client.call_console(
-            9,
-            json!({"r": r#"
-job <- parallel::mcparallel(cat("forked output\n"))
-invisible(parallel::mccollect(job))
-"#}),
-        ),
-        "[done]"
-    );
-
-    assert_eq!(
-        client.call_console(
-            10,
-            json!({"r": r#"
-..mcp_console_value.. <- 42
-..mcp_console_value..
-"#}),
-        ),
-        "[1] 42\n"
-    );
-
     let long_value = "é".repeat(3000);
     let long_line = format!(
         r#"
@@ -201,7 +72,7 @@ nchar(long_line_value)
 "#
     );
     assert_eq!(
-        client.call_console(11, json!({"r": long_line})),
+        client.call_console(2, json!({"r": long_line})),
         "[1] 3000\n"
     );
 }
@@ -288,28 +159,10 @@ exec /bin/sleep 3
 
 #[cfg(target_os = "macos")]
 #[test]
-fn stdio_console_treats_r_failures_as_recoverable_language_outcomes() {
+fn stdio_console_reports_syntax_errors_and_continues() {
     let mut client = McpClient::start(&["serve"]);
-    assert_eq!(
-        client.call_console(2, json!({"r": "answer <- 40"})),
-        "[done]"
-    );
-
-    let incomplete = client.call_console_response(
-        3,
-        json!({"r": r#"
-answer <- 41
-answer + (
-"#}),
-    );
-    assert_eq!(incomplete["result"]["isError"], false);
-    assert_eq!(
-        incomplete["result"]["content"][0]["text"],
-        "Error: Incomplete code\n"
-    );
-
     let syntax_error = client.call_console_response(
-        4,
+        2,
         json!({"r": r#"
 answer <- 42
 )
@@ -324,171 +177,15 @@ answer <- 42
         "syntax error: {:?}",
         syntax_error["result"]["content"][0]["text"]
     );
-    assert_eq!(client.call_console(5, json!({"r": "answer"})), "[1] 42\n");
-
-    let stopped = client.call_console_response(
-        6,
-        json!({"r": r#"
-cat("before\n")
-stop("boom")
-"#}),
-    );
-    assert_eq!(stopped["result"]["isError"], false);
-    assert_eq!(
-        stopped["result"]["content"][0]["text"],
-        "before\nError: boom\n"
-    );
-    assert_eq!(client.call_console(7, json!({"r": "answer"})), "[1] 42\n");
-
-    let nested = client.call_console_response(
-        8,
-        json!({"r": r#"
-g <- function() stop("boom")
-f <- function() g()
-f()
-"#}),
-    );
-    assert_eq!(nested["result"]["isError"], false);
-    assert!(
-        nested["result"]["content"][0]["text"]
-            .as_str()
-            .expect("R error should be text")
-            .contains("boom")
-    );
-
-    let traceback = client.call_console(9, json!({"r": "traceback()"}));
-    assert!(
-        traceback.contains("stop(\"boom\")"),
-        "traceback: {traceback:?}"
-    );
-    assert!(traceback.contains("g()"), "traceback: {traceback:?}");
-    assert!(traceback.contains("f()"), "traceback: {traceback:?}");
-    assert!(
-        !traceback.contains("mcp_console"),
-        "traceback: {traceback:?}"
-    );
-    assert!(!traceback.contains("base::get"), "traceback: {traceback:?}");
-
-    let print_error = client.call_console_response(
-        10,
-        json!({"r": r#"
-print.mcp_console_boom <- function(...) stop("print failed")
-structure(1, class = "mcp_console_boom")
-"#}),
-    );
-    assert_eq!(print_error["result"]["isError"], false);
-    assert_eq!(
-        print_error["result"]["content"][0]["text"],
-        "Error in print.mcp_console_boom(x) : print failed\n"
-    );
-    assert_eq!(client.call_console(11, json!({"r": "answer"})), "[1] 42\n");
-}
-
-#[cfg(target_os = "macos")]
-#[test]
-fn stdio_console_supplies_exact_stdin_to_readline_and_browser() {
-    let mut client = McpClient::start(&["serve"]);
     assert_eq!(
         client.call_console(
-            2,
+            3,
             json!({"r": r#"
-name <- readline("name> ")
-paste("hello", name)
+answer
 "#}),
         ),
-        "name>\n[input]"
+        "[1] 42\n"
     );
-    assert_eq!(
-        client.call_console(3, json!({"stdin": "Ad"})),
-        "name>\n[input]"
-    );
-    assert_eq!(
-        client.call_console(4, json!({"stdin": "a\n"})),
-        "[1] \"hello Ada\"\n"
-    );
-    assert_eq!(
-        client.call_console_error(5, json!({"stdin": "unused\n"})),
-        "stdin is accepted only at an R input prompt"
-    );
-
-    assert_eq!(
-        client.call_console(
-            6,
-            json!({"r": r#"
-first <- readline("first> ")
-second <- readline("second> ")
-paste(first, second)
-"#}),
-        ),
-        "first>\n[input]"
-    );
-    assert_eq!(
-        client.call_console(7, json!({"stdin": "one\ntwo\nunused\n"})),
-        "[1] \"one two\"\n"
-    );
-    assert_eq!(
-        client.call_console(
-            8,
-            json!({"r": r#"
-fresh <- readline("fresh> ")
-fresh
-"#}),
-        ),
-        "fresh>\n[input]"
-    );
-    assert_eq!(
-        client.call_console(9, json!({"stdin": "kept\n"})),
-        "[1] \"kept\"\n"
-    );
-
-    assert_eq!(
-        client.call_console(
-            10,
-            json!({"r": r#"
-readline("fail> ")
-stop("boom")
-"#}),
-        ),
-        "fail>\n[input]"
-    );
-    assert_eq!(
-        client.call_console(11, json!({"stdin": "used\nstale\n"})),
-        "[1] \"used\"\nError: boom\n"
-    );
-    assert_eq!(
-        client.call_console(
-            12,
-            json!({"r": r#"
-fresh <- readline("after error> ")
-fresh
-"#}),
-        ),
-        "after error>\n[input]"
-    );
-    assert_eq!(
-        client.call_console(13, json!({"stdin": "new\n"})),
-        "[1] \"new\"\n"
-    );
-
-    let browser = client.call_console(14, json!({"r": "browser()"}));
-    assert!(
-        browser.starts_with("Called from: top level"),
-        "browser output: {browser:?}"
-    );
-    assert!(browser.contains("\nBrowse["), "browser output: {browser:?}");
-    assert!(browser.ends_with(">\n[input]"));
-    assert_eq!(
-        client.call_console_error(15, json!({"r": "1"})),
-        "cannot evaluate R code while the session is waiting for stdin"
-    );
-
-    let browser_eval = client.call_console(16, json!({"stdin": "1 + 1\n"}));
-    assert!(
-        browser_eval.starts_with("[1] 2\nBrowse["),
-        "browser output: {browser_eval:?}"
-    );
-    assert!(browser_eval.ends_with(">\n[input]"));
-    assert_eq!(client.call_console(17, json!({"stdin": "c\n"})), "[done]");
 }
 
 #[cfg(target_os = "macos")]

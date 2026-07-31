@@ -1,0 +1,163 @@
+---
+id: 1
+input:
+  method: initialize
+  params:
+    protocolVersion: 2025-11-25
+    capabilities: {}
+    clientInfo:
+      name: acceptance-test
+      version: 1.0.0
+output:
+  result:
+    protocolVersion: 2025-11-25
+    capabilities:
+      tools: {}
+    serverInfo:
+      name: mcp-console
+      version: 0.1.0
+---
+input:
+  method: notifications/initialized
+---
+id: 2
+input:
+  method: tools/call
+  params:
+    name: send
+    arguments:
+      r: |-
+        first <- readline("first> ")
+        second <- readline("second> ")
+        paste(first, second)
+output:
+  result:
+    content:
+      - type: text
+        text: |-
+          first>
+          [input]
+    isError: false
+---
+id: 3
+input:
+  method: tools/call
+  params:
+    name: send
+    arguments:
+      stdin: |
+        one
+        two
+        unused
+output:
+  result:
+    content:
+      - type: text
+        text: |
+          [1] "one two"
+    isError: false
+---
+id: 4
+input:
+  method: tools/call
+  params:
+    name: send
+    arguments:
+      r: |-
+        fresh <- readline("fresh> ")
+        fresh
+output:
+  result:
+    content:
+      - type: text
+        text: |-
+          fresh>
+          [input]
+    isError: false
+---
+id: 5
+input:
+  method: tools/call
+  params:
+    name: send
+    arguments:
+      stdin: |
+        kept
+output:
+  result:
+    content:
+      - type: text
+        text: |
+          [1] "kept"
+    isError: false
+---
+id: 6
+input:
+  method: tools/call
+  params:
+    name: send
+    arguments:
+      r: |-
+        readline("fail> ")
+        stop("boom", call. = FALSE)
+output:
+  result:
+    content:
+      - type: text
+        text: |-
+          fail>
+          [input]
+    isError: false
+---
+id: 7
+input:
+  method: tools/call
+  params:
+    name: send
+    arguments:
+      stdin: |
+        used
+        stale
+output:
+  result:
+    content:
+      - type: text
+        text: |
+          [1] "used"
+          Error: boom
+    isError: false
+---
+id: 8
+input:
+  method: tools/call
+  params:
+    name: send
+    arguments:
+      r: |-
+        fresh <- readline("after error> ")
+        fresh
+output:
+  result:
+    content:
+      - type: text
+        text: |-
+          after error>
+          [input]
+    isError: false
+---
+id: 9
+input:
+  method: tools/call
+  params:
+    name: send
+    arguments:
+      stdin: |
+        new
+output:
+  result:
+    content:
+      - type: text
+        text: |
+          [1] "new"
+    isError: false
+...

@@ -77,7 +77,7 @@ See `design-sketches/README.md` for the product overview and `design-sketches/do
 - `src/sideband.rs` — inherited pipe transport for the macOS worker's JSON-lines messages.
 - `src/sandbox.rs` — platform dispatch for the sandbox process launcher.
 - `src/sandbox/` — platform implementation and macOS Seatbelt policy.
-- `tests/cli.rs` — public binary acceptance tests.
+- `tests/cli.rs` — public binary acceptance tests that need dynamic fixtures, timing, process control, or partial output assertions.
 - `tests/transcripts/_run.py` — discovers transcript suites and compares case snapshots.
 - `tests/transcripts/_support.py` — shared transcript types and MCP stdio client.
 - `tests/transcripts/<suite>.py` — suites of named imperative transcript cases.
