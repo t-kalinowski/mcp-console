@@ -8,13 +8,13 @@ pub(crate) struct Client(Arc<ClientState>);
 struct ClientState {
     path: PathBuf,
     process: Mutex<Option<platform::Worker>>,
-    lifecycle: Mutex<Lifecycle>,
+    shutdown_state: Mutex<ShutdownState>,
 }
 
-/// Couples lazy startup with shutdown so either side observes the other.
-enum Lifecycle {
+/// Couples worker-control publication with a concurrent shutdown request.
+enum ShutdownState {
     Open(Option<platform::WorkerControl>),
-    Shutdown,
+    Requested,
 }
 
 impl Client {
@@ -22,7 +22,7 @@ impl Client {
         Self(Arc::new(ClientState {
             path,
             process: Mutex::new(None),
-            lifecycle: Mutex::new(Lifecycle::Open(None)),
+            shutdown_state: Mutex::new(ShutdownState::Open(None)),
         }))
     }
 
@@ -38,7 +38,7 @@ impl Client {
     }
 
     fn evaluate_blocking(&self, r: String) -> Result<String, String> {
-        if self.is_shutdown()? {
+        if self.shutdown_requested()? {
             return Err("worker is shutting down".to_string());
         }
 
@@ -47,13 +47,13 @@ impl Client {
             .process
             .lock()
             .map_err(|_| "worker process lock poisoned".to_string())?;
-        if self.is_shutdown()? {
+        if self.shutdown_requested()? {
             return Err("worker is shutting down".to_string());
         }
 
         if process.is_none() {
             *process = Some(platform::Worker::start(&self.0.path, |control| {
-                self.publish(control);
+                self.publish_control(control);
             })?);
         }
         process
@@ -62,22 +62,22 @@ impl Client {
             .evaluate(r)
     }
 
-    fn is_shutdown(&self) -> Result<bool, String> {
+    fn shutdown_requested(&self) -> Result<bool, String> {
         self.0
-            .lifecycle
+            .shutdown_state
             .lock()
-            .map(|lifecycle| matches!(*lifecycle, Lifecycle::Shutdown))
-            .map_err(|_| "worker lifecycle lock poisoned".to_string())
+            .map(|state| matches!(*state, ShutdownState::Requested))
+            .map_err(|_| "worker shutdown lock poisoned".to_string())
     }
 
-    fn publish(&self, control: platform::WorkerControl) {
-        let shutdown = match self.0.lifecycle.lock() {
-            Ok(mut lifecycle) => match &mut *lifecycle {
-                Lifecycle::Open(current) => {
-                    *current = Some(control.clone());
+    fn publish_control(&self, control: platform::WorkerControl) {
+        let shutdown = match self.0.shutdown_state.lock() {
+            Ok(mut state) => match &mut *state {
+                ShutdownState::Open(control_slot) => {
+                    *control_slot = Some(control.clone());
                     false
                 }
-                Lifecycle::Shutdown => true,
+                ShutdownState::Requested => true,
             },
             Err(_) => true,
         };
@@ -96,14 +96,14 @@ impl Client {
 
     fn shutdown_blocking(&self) -> Result<(), String> {
         let control = {
-            let mut lifecycle = self
+            let mut state = self
                 .0
-                .lifecycle
+                .shutdown_state
                 .lock()
-                .map_err(|_| "worker lifecycle lock poisoned".to_string())?;
-            match std::mem::replace(&mut *lifecycle, Lifecycle::Shutdown) {
-                Lifecycle::Open(control) => control,
-                Lifecycle::Shutdown => None,
+                .map_err(|_| "worker shutdown lock poisoned".to_string())?;
+            match std::mem::replace(&mut *state, ShutdownState::Requested) {
+                ShutdownState::Open(control) => control,
+                ShutdownState::Requested => None,
             }
         };
         if let Some(control) = control {

@@ -68,6 +68,7 @@ See `design-sketches/README.md` for the product overview and `design-sketches/do
 - `scripts/format` — attempts each repository-wide formatter without requiring it.
 - `scripts/check` — local formatting, Clippy, and test checks.
 - `.github/workflows/ci.yaml` — formatting, Clippy, and test checks.
+- `docs/WORKER_PROTOCOL.md` — exact implemented development-worker launch and sideband protocol.
 - `design-sketches/` — tentative product and architecture documents.
 - `README.md` — current user-facing project status.
 - `LICENSE` — project license.

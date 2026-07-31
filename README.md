@@ -62,6 +62,7 @@ See [`tests/transcripts/README.md`](tests/transcripts/README.md) for running and
 The `zod` suite runs on macOS and Linux.
 It uses the hidden `serve --worker PATH` development option to exercise the server-side worker protocol with an executable Python fixture.
 The trusted fixture is launched directly; this suite covers worker communication and lifecycle rather than sandbox policy.
+See [`docs/WORKER_PROTOCOL.md`](docs/WORKER_PROTOCOL.md) for the exact implemented launch and message contract.
 
 ## License
 
