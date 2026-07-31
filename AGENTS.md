@@ -19,14 +19,25 @@ mcp-console sandbox [--] COMMAND [ARG]...
 The binary requires a subcommand.
 The `serve` command runs an MCP server over stdio.
 Clap provides command help, version output, argument parsing, and usage errors.
-The server registers only a `send` tool, which accepts any JSON object and echoes it as JSON text.
+The server registers only a `send` tool with `r` and `stdin` fields.
+On macOS, the first R call launches the same executable through its private, hidden `worker` subcommand under Seatbelt.
+The worker links Ark as a Rust crate, embeds R on its main thread, and runs Ark in console mode.
+R state persists across calls.
+Complete R cells auto-print each visible top-level expression and stop at the first R error.
+Each call blocks until evaluation completes or Ark sends an input request.
+Useful output and R errors are returned directly, `[done]` represents completion without useful text, and input boundaries end with `[input]`.
+`stdin` supplies exact newline-delimited input to `readline()`, `browser()`, `recover()`, and menu prompts.
+The worker and server communicate through private Jupyter channels over ZeroMQ Unix-domain sockets beneath a short, unique directory in `/tmp`.
+The worker and its descendants can read the host filesystem, can write only within that directory, and cannot access TCP or other Unix-domain sockets.
+Sandboxed R sessions are unsupported on Linux and Windows.
+
 The version command prints the package name and version.
 On macOS, the sandbox command launches a subprocess under `sandbox-exec` with host filesystem reads allowed, regular-file writes limited to a dedicated per-launch temporary directory, runtime device and IPC exceptions, and network access denied.
 This initial launcher waits only for the direct command.
 Background descendants are unsupported: they may outlive the launcher, which attempts to remove their dedicated temporary directory on a best-effort basis when it returns.
 Descendant supervision is intentionally deferred because it must account for process groups, session-detached children, signal forwarding, and PID reuse together.
 The sandbox command is unsupported on Linux and Windows.
-The session model, language runtimes, sidecar API, viewer, environment management, output retention, and transcript generation do not exist yet.
+Python, SQL, polling, interrupts, named sessions, sidecar APIs, the viewer, environment management, and bounded output retention do not exist yet.
 
 ## Product direction
 
@@ -49,10 +60,13 @@ See `design-sketches/README.md` for the product overview and `design-sketches/do
 - `Cargo.toml` — Rust package metadata.
 - `src/main.rs` — current binary entry point.
 - `src/cli.rs` — clap command definitions and user-facing help.
-- `src/server.rs` — MCP stdio server and echoing `send` tool.
+- `src/server.rs` — MCP stdio server and R-only `send` tool.
+- `src/ark.rs` — Ark worker supervisor, private Jupyter frontend, and text/input adapter.
+- `src/worker.rs` — embedded Ark and R worker entry point.
 - `src/sandbox.rs` — platform dispatch for the sandbox process launcher.
-- `src/sandbox/` — platform implementation and macOS Seatbelt policy.
+- `src/sandbox/` — platform implementation and macOS Seatbelt policies.
 - `tests/cli.rs` — public binary acceptance tests.
+- `tests/r_console.rs` — public R console acceptance tests.
 - `tests/transcripts/_run.py` — discovers transcript suites and compares case snapshots.
 - `tests/transcripts/_support.py` — shared transcript types and MCP stdio client.
 - `tests/transcripts/<suite>.py` — suites of named imperative transcript cases.

@@ -1,0 +1,7 @@
+; Ark and the MCP adapter communicate over ZeroMQ Unix-domain sockets created
+; inside the private temporary directory. Internet and loopback TCP remain
+; denied by the base policy.
+; SPDX-License-Identifier: MIT
+
+(allow network*
+  (subpath (param "TEMP_DIRECTORY")))

@@ -1,10 +1,9 @@
-use std::ffi::OsString;
-use std::process::ExitCode;
+use std::ffi::{OsStr, OsString};
+use std::path::Path;
+use std::process::{Command, ExitCode};
 
 #[cfg(target_os = "macos")]
-use std::ffi::OsStr;
-#[cfg(target_os = "macos")]
-use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, ExitStatus, Stdio};
+use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, ExitStatus, Stdio};
 
 #[cfg(target_os = "macos")]
 #[path = "sandbox/macos.rs"]
@@ -210,4 +209,11 @@ impl SandboxedChild {
             .wait()
             .map_err(|error| format!("failed to launch `{}`: {error}", platform::SANDBOX_EXEC))
     }
+}
+
+pub(crate) fn worker_command(
+    program: &OsStr,
+    temporary_directory: &Path,
+) -> Result<Command, String> {
+    platform::worker_command(program, temporary_directory)
 }

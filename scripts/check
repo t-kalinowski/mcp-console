@@ -2,7 +2,8 @@
 
 set -eu
 
-cargo fmt --all --check
+# `--all` follows the local Ark path dependencies into their workspace.
+cargo fmt --package mcp-console --check
 cargo clippy --all-targets --all-features -- -D warnings
 cargo test --all-targets --all-features
 scripts/test

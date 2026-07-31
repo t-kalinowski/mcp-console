@@ -8,6 +8,7 @@ uv format || :
 
 yamark format --wrap sentence || :
 
-cargo fmt --all || :
+# `--all` follows the local Ark path dependencies into their workspace.
+cargo fmt --package mcp-console || :
 
 air format . || :

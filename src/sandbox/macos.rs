@@ -1,4 +1,4 @@
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::fs::{self, DirBuilder};
 use std::os::unix::fs::DirBuilderExt;
 use std::os::unix::process::ExitStatusExt;
@@ -8,6 +8,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 pub(super) const SANDBOX_EXEC: &str = "/usr/bin/sandbox-exec";
 const POLICY: &str = include_str!("read_only_policy.sbpl");
+const WORKER_NETWORK_POLICY: &str = include_str!("ark_worker_network.sbpl");
 
 pub(super) fn sandboxed_command() -> Result<(Command, TemporaryDirectory), String> {
     let temporary_directory = TemporaryDirectory::new()?;
@@ -22,6 +23,22 @@ pub(super) fn sandboxed_command() -> Result<(Command, TemporaryDirectory), Strin
         .arg("--");
 
     Ok((launcher, temporary_directory))
+}
+
+pub(super) fn worker_command(
+    program: &OsStr,
+    temporary_directory: &Path,
+) -> Result<Command, String> {
+    let policy = format!("{POLICY}\n{WORKER_NETWORK_POLICY}");
+    let mut command = Command::new(SANDBOX_EXEC);
+    command
+        .arg("-p")
+        .arg(policy)
+        .arg(parameter_definition("TEMP_DIRECTORY", temporary_directory))
+        .arg("--")
+        .arg(program)
+        .env("TMPDIR", temporary_directory);
+    Ok(command)
 }
 
 pub(super) struct TemporaryDirectory(PathBuf);

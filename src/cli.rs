@@ -42,4 +42,12 @@ pub enum Command {
         )]
         command: Vec<OsString>,
     },
+
+    /// Run the private embedded Ark worker
+    #[command(hide = true)]
+    Worker {
+        /// Jupyter connection file created by the MCP server
+        #[arg(value_name = "CONNECTION_FILE")]
+        connection_file: OsString,
+    },
 }
