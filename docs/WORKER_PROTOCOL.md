@@ -53,7 +53,8 @@ server reader  <──  worker writer
 
 Each frame is one UTF-8 JSON object followed by `\n`.
 The sender flushes every frame.
-Binary output is base64 encoded inside JSON.
+Output text is carried directly in a JSON string.
+JSON escaping represents newlines, quotes, and other control characters on the wire.
 
 Worker standard output and standard error are not part of the protocol and are currently discarded.
 
@@ -87,10 +88,11 @@ worker_to_server:
   output:
     type: output
     fields:
-      data_b64: base64_encoded_bytes
+      data: string
     wire_example:
       type: output
-      data_b64: WzFdIDIK
+      data: |
+        [1] 2
 
   completed:
     type: completed
@@ -112,15 +114,14 @@ One evaluation has this shape:
 worker -> server  {"type":"ready"}
 
 server -> worker  {"type":"evaluate","r":"hello"}
-worker -> server  {"type":"output","data_b64":"em9kOiA="}
-worker -> server  {"type":"output","data_b64":"aGVsbG8K"}
+worker -> server  {"type":"output","data":"zod: "}
+worker -> server  {"type":"output","data":"hello\n"}
 worker -> server  {"type":"completed"}
 ```
 
 The worker may send zero or more `output` messages.
-The server decodes and concatenates their bytes in arrival order.
+The server concatenates their text in arrival order.
 `completed` ends the evaluation and permits the next one.
-The server converts the accumulated bytes to MCP text with lossy UTF-8 decoding.
 
 If the worker sends no output before `completed`, the current MCP projection returns `[done]`.
 That marker is produced by the server; it is not a sideband message.
@@ -165,7 +166,7 @@ evaluation_error:
   next_evaluation: reuses_the_same_worker
 ```
 
-Malformed JSON, invalid base64, an unexpected message, or sideband EOF fails the active operation.
+Malformed JSON, invalid UTF-8, an unexpected message, or sideband EOF fails the active operation.
 There is no structured protocol error message and no automatic worker restart.
 After an evaluation error, the cached worker and its sideband remain in place, so a later evaluation may encounter a misaligned stream and fail again.
 
@@ -212,6 +213,7 @@ The current implementation has no startup timeout, evaluation timeout, frame-siz
 Only shutdown has a timeout.
 
 It does not capture worker standard output or standard error.
+It does not support arbitrary binary output.
 It does not report a structured worker error or restart a failed worker.
 In worker mode, the MCP handler requires exactly one `r` string even though the static tool description still says “Echo” and its schema still permits any JSON object.
 

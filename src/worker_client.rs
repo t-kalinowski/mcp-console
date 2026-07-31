@@ -121,8 +121,6 @@ mod platform {
     use std::thread;
     use std::time::{Duration, Instant};
 
-    use base64::Engine as _;
-    use base64::engine::general_purpose::STANDARD;
     use serde::{Deserialize, Serialize};
 
     const SHUTDOWN_GRACE: Duration = Duration::from_secs(1);
@@ -139,7 +137,7 @@ mod platform {
     #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
     enum WorkerMessage {
         Ready,
-        Output { data_b64: String },
+        Output { data: String },
         Completed,
     }
 
@@ -191,21 +189,15 @@ mod platform {
                 .writer
                 .send(&ServerMessage::Evaluate { r })
                 .map_err(|error| format!("worker sideband write failed: {error}"))?;
-            let mut output = Vec::new();
+            let mut output = String::new();
             loop {
                 match self.receive()? {
-                    WorkerMessage::Output { data_b64 } => {
-                        output.extend(
-                            STANDARD
-                                .decode(data_b64)
-                                .map_err(|error| format!("worker sent invalid output: {error}"))?,
-                        );
-                    }
+                    WorkerMessage::Output { data } => output.push_str(&data),
                     WorkerMessage::Completed => {
                         if output.is_empty() {
-                            output.extend_from_slice(b"[done]");
+                            output.push_str("[done]");
                         }
-                        return Ok(String::from_utf8_lossy(&output).into_owned());
+                        return Ok(output);
                     }
                     WorkerMessage::Ready => {
                         return Err("worker sent an unexpected ready message".to_string());
