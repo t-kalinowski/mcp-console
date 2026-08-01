@@ -84,7 +84,7 @@ impl Client {
             .expect("worker should be running")
             .evaluate(r);
         if result.is_err() {
-            drop(worker.take());
+            *worker = None;
         }
         result
     }
