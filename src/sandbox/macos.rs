@@ -1,11 +1,14 @@
+mod file_descriptors;
 mod job_control;
 mod process;
 mod process_tracker;
 
+use self::file_descriptors::close_unlisted_on_exec;
 use self::job_control::{ForegroundTerminal, SignalRelay};
 use self::process_tracker::{DescendantTracker, EventWait};
 use std::ffi::OsString;
 use std::fs::{self, DirBuilder};
+use std::os::fd::RawFd;
 use std::os::unix::fs::DirBuilderExt;
 use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
@@ -14,6 +17,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 const SANDBOX_EXEC: &str = "/usr/bin/sandbox-exec";
 const POLICY: &str = include_str!("read_only_policy.sbpl");
+const INHERITED_DESCRIPTORS: [RawFd; 3] =
+    [libc::STDIN_FILENO, libc::STDOUT_FILENO, libc::STDERR_FILENO];
 
 pub(super) fn run(command: &[OsString]) -> Result<ExitCode, String> {
     let mut temp_directory = TemporaryDirectory::new()?;
@@ -32,6 +37,7 @@ pub(super) fn run(command: &[OsString]) -> Result<ExitCode, String> {
         .args(command)
         .env("TMPDIR", temp_directory.path());
     signal_relay.configure_child(&mut sandbox_command, foreground_terminal.descriptor());
+    close_unlisted_on_exec(&INHERITED_DESCRIPTORS)?;
 
     let mut child = sandbox_command
         .spawn()

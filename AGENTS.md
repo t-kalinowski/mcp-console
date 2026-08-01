@@ -18,7 +18,8 @@ mcp-console sandbox [--] COMMAND [ARG]...
 The default command and `serve` run an MCP server over stdio.
 The server registers only a `console` tool, which accepts any JSON object and echoes it as JSON text.
 The version command prints the package name and version.
-On macOS, the sandbox command launches a subprocess under `sandbox-exec` with host filesystem reads allowed, regular-file writes limited to a dedicated per-launch temporary directory, runtime device and IPC exceptions, and network access denied.
+On macOS, the sandbox command launches a subprocess under `sandbox-exec` with host filesystem opens allowed for reading, regular-file opens for writing limited to a dedicated per-launch temporary directory, runtime device and IPC exceptions, and network opens denied.
+The launcher passes only stdin, stdout, and stderr through exec; other inherited file descriptors are closed.
 When it owns a terminal, the launcher runs the command in a dedicated foreground process group so terminal-generated signals are delivered once.
 It relays `SIGHUP`, `SIGINT`, `SIGQUIT`, and `SIGTERM` sent directly to the launcher unless the signal was already blocked or ignored when the launcher started.
 It imposes no signal timeout, so a command that handles or ignores a signal may continue running.
@@ -50,7 +51,7 @@ See `design-sketches/README.md` for the product overview and `design-sketches/do
 - `src/server.rs` — MCP stdio server and echoing `console` tool.
 - `src/sandbox.rs` — platform dispatch for the sandbox process launcher.
 - `src/sandbox/macos.rs` — macOS sandbox-launch orchestration.
-- `src/sandbox/macos/` — macOS job-control and process-tracking internals.
+- `src/sandbox/macos/` — macOS descriptor, job-control, and process-tracking internals.
 - `src/sandbox/read_only_policy.sbpl` — macOS Seatbelt policy.
 - `src/sandbox/unsupported.rs` — unsupported-platform implementation.
 - `tests/cli.rs` — command-line interface acceptance tests.

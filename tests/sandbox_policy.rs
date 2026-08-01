@@ -178,6 +178,77 @@ print(temp_dir)
 }
 
 #[test]
+fn sandbox_does_not_inherit_unlisted_file_descriptors() {
+    let test_directory = TestDirectory::new("inherited-descriptor");
+    let host_file = test_directory.path().join("host.txt");
+    fs::write(&host_file, b"").expect("host fixture should be created");
+    let host_script = r#"
+import fcntl
+import os
+import subprocess
+import sys
+
+with open(sys.argv[1], "ab", buffering=0) as host_file:
+    descriptor = fcntl.fcntl(host_file.fileno(), fcntl.F_DUPFD, 64)
+    os.set_inheritable(descriptor, True)
+    try:
+        result = subprocess.run(
+            [
+                sys.argv[2],
+                "sandbox",
+                "--",
+                "python",
+                "-c",
+                sys.argv[3],
+                str(descriptor),
+            ],
+            pass_fds=(descriptor,),
+            capture_output=True,
+        )
+    finally:
+        os.close(descriptor)
+
+sys.stdout.buffer.write(result.stdout)
+sys.stderr.buffer.write(result.stderr)
+raise SystemExit(result.returncode)
+"#;
+    let sandboxed_script = r#"
+import errno
+import os
+import sys
+
+try:
+    os.write(int(sys.argv[1]), b"escaped")
+except OSError as error:
+    assert error.errno == errno.EBADF
+else:
+    raise SystemExit("unlisted inherited descriptor remained writable")
+
+print("closed")
+"#;
+
+    let output = Command::new("python")
+        .args(["-c", host_script])
+        .arg(&host_file)
+        .arg(env!("CARGO_BIN_EXE_mcp-console"))
+        .arg(sandboxed_script)
+        .output()
+        .expect("Python descriptor fixture should run");
+
+    assert!(
+        output.status.success(),
+        "sandboxed Python failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(output.stdout, b"closed\n");
+    assert!(output.stderr.is_empty());
+    assert_eq!(
+        fs::read(host_file).expect("host fixture should be readable"),
+        b""
+    );
+}
+
+#[test]
 fn sandbox_cannot_hard_link_host_files_into_its_writable_temp_directory() {
     let temp_root = TestDirectory::new("hard-link-boundary");
     let host_file = temp_root.path().join("host.txt");

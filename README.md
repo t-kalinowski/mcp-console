@@ -22,7 +22,9 @@ The server registers one `console` tool that accepts a JSON object and returns t
 It does not execute code or retain state yet.
 
 On macOS, `sandbox` launches the command under `/usr/bin/sandbox-exec`.
-The command can read the host filesystem, can write regular files only in a dedicated temporary directory, and cannot access the network.
+The command can open the host filesystem for reading and can open regular files for writing only in a dedicated temporary directory.
+Opening and connecting network sockets is denied.
+The launcher preserves stdin, stdout, and stderr as explicit capabilities, and closes every other inherited file descriptor when it executes the sandbox.
 The policy also permits the device and IPC operations needed for supported R and Python workflows, including sandbox-created PTYs and Python multiprocessing semaphores.
 When the launcher owns a terminal, it gives the sandbox command a dedicated foreground process group so terminal-generated signals are delivered once.
 `SIGHUP`, `SIGINT`, `SIGQUIT`, and `SIGTERM` sent directly to the launcher are relayed to that group unless the signal was already blocked or ignored when the launcher started.
