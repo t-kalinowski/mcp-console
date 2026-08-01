@@ -24,6 +24,76 @@ def test_routes_send_over_sideband(binary: Path) -> Transcript:
     return client.finish()
 
 
+def test_restarts_after_unexpected_sideband_message(binary: Path) -> Transcript:
+    zod = Path(__file__).resolve().parents[1] / "fixtures" / "zod"
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        temporary_path = Path(temporary_directory)
+        environment = os.environ.copy()
+        environment["TMPDIR"] = temporary_directory
+        environment["ZOD_REPORT_PROCESS_GROUP"] = "1"
+        client = McpClient(
+            binary,
+            ("serve", "--worker", str(zod)),
+            environment,
+        )
+        worker_group = None
+        passed = False
+        try:
+            client.initialize_and_list_tools()
+            failed_call = client.send(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 3,
+                    "method": "tools/call",
+                    "params": {
+                        "name": "send",
+                        "arguments": {"r": "violate protocol"},
+                    },
+                }
+            )
+            group_marker = wait_for_marker(
+                temporary_path,
+                "zod-process-group",
+                client,
+            )
+            worker_group = read_worker_group(group_marker)
+            client.receive(failed_call)
+            assert not process_group_exists(worker_group), "Zod outlived its failure"
+
+            restarted_call = client.send(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 4,
+                    "method": "tools/call",
+                    "params": {
+                        "name": "send",
+                        "arguments": {"r": "hello"},
+                    },
+                }
+            )
+            client.receive(restarted_call)
+            transcript = client.finish()
+            passed = True
+            return transcript
+        finally:
+            if not passed:
+                stop_process_group(worker_group)
+                stop_process(client.process)
+
+
+def test_restarts_after_worker_exit(binary: Path) -> Transcript:
+    zod = Path(__file__).resolve().parents[1] / "fixtures" / "zod"
+    client = McpClient(
+        binary,
+        ("serve", "--worker", str(zod)),
+    )
+    client.initialize_and_list_tools()
+    client.call_tool("send", r="exit unexpectedly")
+    assert client.transcript[-1]["output"]["result"]["isError"] is True
+    client.call_tool("send", r="hello")
+    return client.finish()
+
+
 def test_runs_worker_inside_sandbox(binary: Path) -> Transcript:
     zod = Path(__file__).resolve().parents[1] / "fixtures" / "zod"
     with tempfile.TemporaryDirectory() as temporary_directory:

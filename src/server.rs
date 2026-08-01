@@ -5,9 +5,10 @@ use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 
 use rmcp::{
-    ServerHandler, ServiceExt, handler::server::wrapper::Parameters, model::JsonObject,
-    serde_json::Value, tool, tool_handler, tool_router,
+    ServerHandler, ServiceExt, handler::server::wrapper::Parameters, schemars, tool, tool_handler,
+    tool_router,
 };
+use serde::Deserialize;
 use tokio::io::{AsyncRead, ReadBuf};
 use tokio::sync::oneshot;
 
@@ -15,42 +16,45 @@ const WORKER_SHUTDOWN_GRACE: Duration = Duration::from_secs(1);
 
 #[derive(Clone)]
 struct ConsoleServer {
-    worker: Option<crate::worker_client::Client>,
+    worker: crate::worker_client::Client,
+}
+
+#[derive(Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct SendArguments {
+    /// Complete multiline R code evaluated in persistent state.
+    r: String,
 }
 
 impl ConsoleServer {
-    fn new(worker: Option<PathBuf>) -> Self {
-        Self {
-            worker: worker.map(crate::worker_client::Client::new),
-        }
+    fn new(worker: Option<PathBuf>) -> Result<Self, String> {
+        let worker = match worker {
+            Some(program) => crate::worker_client::Client::new(program),
+            None => crate::worker_client::Client::r()?,
+        };
+        Ok(Self { worker })
     }
 }
 
 #[tool_router]
 impl ConsoleServer {
-    #[tool(description = "Echo the supplied arguments.")]
-    async fn send(&self, Parameters(arguments): Parameters<JsonObject>) -> Result<String, String> {
-        let Some(worker) = &self.worker else {
-            return Ok(Value::Object(arguments).to_string());
-        };
-        let r = arguments
-            .get("r")
-            .and_then(Value::as_str)
-            .filter(|_| arguments.len() == 1)
-            .ok_or_else(|| "send exactly one r argument".to_string())?
-            .to_string();
-        worker.evaluate(r).await
+    #[tool(description = "Evaluate one complete R code cell in persistent state.")]
+    async fn send(
+        &self,
+        Parameters(SendArguments { r }): Parameters<SendArguments>,
+    ) -> Result<String, String> {
+        self.worker.evaluate(r).await
     }
 }
 
 #[tool_handler(name = "mcp-console")]
 impl ServerHandler for ConsoleServer {}
 
-/// Runs the MCP stdio server and owns the selected development worker.
+/// Runs the MCP stdio server and owns the selected worker.
 ///
 /// Closing MCP input also stops a worker whose evaluation is still running.
 pub async fn run(worker: Option<PathBuf>) -> Result<(), Box<dyn Error>> {
-    let server = ConsoleServer::new(worker);
+    let server = ConsoleServer::new(worker).map_err(std::io::Error::other)?;
     let worker = server.worker.clone();
     let (input_closed, wait_for_input_close) = oneshot::channel();
     let input = ShutdownReader::new(tokio::io::stdin(), input_closed);
@@ -60,9 +64,7 @@ pub async fn run(worker: Option<PathBuf>) -> Result<(), Box<dyn Error>> {
             .await
             .unwrap_or_else(|_| Instant::now());
         let deadline = shutdown_started + WORKER_SHUTDOWN_GRACE;
-        if let Some(worker) = worker {
-            worker.shutdown(deadline).await?;
-        }
+        worker.shutdown(deadline).await?;
         Ok::<(), String>(())
     };
 

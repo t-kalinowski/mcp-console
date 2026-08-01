@@ -1,13 +1,15 @@
+use std::ffi::OsString;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-/// A cloneable handle to one lazily started development worker.
+/// A cloneable handle to one lazily started worker.
 #[derive(Clone)]
 pub(crate) struct Client(Arc<ClientInner>);
 
 struct ClientInner {
     program: PathBuf,
+    arguments: Vec<OsString>,
     worker: Mutex<Option<platform::Worker>>,
     shutdown_gate: Mutex<ShutdownGate>,
 }
@@ -24,8 +26,22 @@ enum ShutdownGate {
 
 impl Client {
     pub(crate) fn new(program: PathBuf) -> Self {
+        Self::with_arguments(program, Vec::new())
+    }
+
+    pub(crate) fn r() -> Result<Self, String> {
+        let program = std::env::current_exe()
+            .map_err(|error| format!("failed to locate the R worker executable: {error}"))?;
+        Ok(Self::with_arguments(
+            program,
+            vec![OsString::from("worker")],
+        ))
+    }
+
+    fn with_arguments(program: PathBuf, arguments: Vec<OsString>) -> Self {
         Self(Arc::new(ClientInner {
             program,
+            arguments,
             worker: Mutex::new(None),
             shutdown_gate: Mutex::new(ShutdownGate::Open { stop_handle: None }),
         }))
@@ -57,14 +73,20 @@ impl Client {
         }
 
         if worker.is_none() {
-            *worker = Some(platform::Worker::start(&self.0.program, |stop_handle| {
-                self.register_stop_handle(stop_handle)
-            })?);
+            *worker = Some(platform::Worker::start(
+                &self.0.program,
+                &self.0.arguments,
+                |stop_handle| self.register_stop_handle(stop_handle),
+            )?);
         }
-        worker
+        let result = worker
             .as_mut()
             .expect("worker should be running")
-            .evaluate(r)
+            .evaluate(r);
+        if result.is_err() {
+            *worker = None;
+        }
+        result
     }
 
     fn shutdown_requested(&self) -> Result<bool, String> {
@@ -125,28 +147,14 @@ impl Client {
 
 #[cfg(target_os = "macos")]
 mod platform {
+    use std::ffi::OsString;
     use std::path::Path;
     use std::process::Stdio;
     use std::sync::{Arc, Mutex};
     use std::thread;
     use std::time::Instant;
 
-    use serde::{Deserialize, Serialize};
-
-    #[derive(Serialize)]
-    #[serde(tag = "kind", rename_all = "snake_case")]
-    enum ServerMessage {
-        Evaluate { r: String },
-        Shutdown,
-    }
-
-    #[derive(Deserialize)]
-    #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-    enum WorkerMessage {
-        Ready,
-        Output { data: String },
-        Completed,
-    }
+    use crate::worker_protocol::{ServerMessage, WorkerMessage};
 
     pub(super) struct Worker {
         reader: crate::sideband::Reader,
@@ -163,6 +171,7 @@ mod platform {
         /// Starts an executable worker and waits for its ready message.
         pub(super) fn start(
             program: &Path,
+            arguments: &[OsString],
             on_started: impl FnOnce(StopHandle) -> Result<(), String>,
         ) -> Result<Self, String> {
             let (reader, writer, child_fds) = crate::sideband::bind()
@@ -170,6 +179,7 @@ mod platform {
             let mut command = crate::sandbox::SandboxedCommand::new(program.as_os_str())
                 .map_err(|error| format!("failed to prepare worker sandbox: {error}"))?;
             command
+                .args(arguments)
                 .stdin(Stdio::null())
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
@@ -261,6 +271,7 @@ mod platform {
 
 #[cfg(not(target_os = "macos"))]
 mod platform {
+    use std::ffi::OsString;
     use std::path::Path;
 
     pub(super) struct Worker;
@@ -271,9 +282,10 @@ mod platform {
     impl Worker {
         pub(super) fn start(
             _program: &Path,
+            _arguments: &[OsString],
             _on_started: impl FnOnce(StopHandle) -> Result<(), String>,
         ) -> Result<Self, String> {
-            Err("development workers are supported only on macOS".to_string())
+            Err("workers are supported only on macOS".to_string())
         }
 
         pub(super) fn evaluate(&mut self, _r: String) -> Result<String, String> {

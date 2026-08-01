@@ -26,8 +26,8 @@ MCP Console ships one user-facing Rust binary and launches one sandboxed worker 
 The worker implementation remains behind the runtime backend decision:
 
 ```text
-mcp-console                         MCP supervisor/server
-mcp-console __worker --native ...  purpose-built worker candidate
+mcp-console                        MCP supervisor/server
+mcp-console worker ...             purpose-built worker candidate
 ark or an Ark-linked worker mode   Ark-backed candidate
 ```
 
@@ -939,7 +939,7 @@ The implementation may combine:
 - DuckDB connection interruption where exposed.
 
 After interruption, the worker reports whether it recovered to idle.
-Do not silently restart if cooperative recovery fails.
+If cooperative recovery fails, report the failure before starting a fresh generation.
 
 ### 18.2 Restart
 
@@ -948,9 +948,9 @@ It destroys all in-memory state.
 
 ### 18.3 Crash
 
-A segfault, abort, OOM kill, or unrecoverable embedded-runtime failure marks the session stopped.
-Preserve the transcript and output produced before death.
-Do not restart automatically and imply state continuity.
+A segfault, abort, OOM kill, or unrecoverable embedded-runtime failure stops the current generation and fails the active evaluation.
+Preserve the transcript and output produced before death, and record the crash.
+The MCP server remains available; the next evaluation starts a fresh generation without implying state continuity.
 
 ## 19. Sandbox and security
 
