@@ -51,12 +51,13 @@ input:
   method: tools/call
   params:
     name: send
-    arguments: {}
+    arguments:
+      r: exit unexpectedly
 output:
   result:
     content:
       - type: text
-        text: send exactly one of r or stdin
+        text: "[stopped: worker exited with exit status: 86: worker sideband closed]"
     isError: true
 ---
 id: 4
@@ -65,28 +66,11 @@ input:
   params:
     name: send
     arguments:
-      r: "1"
-      stdin: input
+      r: hello
 output:
   result:
     content:
       - type: text
-        text: send exactly one of r or stdin
-    isError: true
----
-id: 5
-input:
-  method: tools/call
-  params:
-    name: send
-    arguments:
-      python: "1"
-output:
-  result:
-    content:
-      - type: text
-        text: >-
-          failed to deserialize parameters: unknown field `python`, expected `r`
-          or `stdin`
+        text: "[stopped: worker exited with exit status: 86: worker sideband closed]"
     isError: true
 ...

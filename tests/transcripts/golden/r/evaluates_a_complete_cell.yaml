@@ -22,12 +22,39 @@ input:
 ---
 id: 2
 input:
+  method: tools/list
+output:
+  result:
+    tools:
+      - name: send
+        description: >-
+          Persistent R console. Send one complete r cell, or send stdin after the
+          response ends with [input].
+        inputSchema:
+          $schema: https://json-schema.org/draft/2020-12/schema
+          additionalProperties: false
+          type: object
+          properties:
+            r:
+              description: Complete multiline R code evaluated as top-level expressions.
+              type:
+                - string
+                - "null"
+            stdin:
+              description: Exact text supplied after R requests interactive input.
+              type:
+                - string
+                - "null"
+---
+id: 3
+input:
   method: tools/call
   params:
     name: send
     arguments:
       r: |-
-        answer <- (38 + 2)
+        answer <- 40
+        answer + 1
         answer + 2
         cat("done\n")
         invisible(99)
@@ -36,11 +63,34 @@ output:
     content:
       - type: text
         text: |
+          [1] 41
           [1] 42
           done
     isError: false
 ---
-id: 3
+id: 4
+input:
+  method: tools/call
+  params:
+    name: send
+    arguments:
+      r: |-
+        identical(
+          as.vector(splines::splineDesign(
+            knots = c(0, 0, 0, 0, 1, 1, 1, 1),
+            x = 0.5
+          )),
+          c(0.125, 0.375, 0.375, 0.125)
+        )
+output:
+  result:
+    content:
+      - type: text
+        text: |
+          [1] TRUE
+    isError: false
+---
+id: 5
 input:
   method: tools/call
   params:
@@ -54,61 +104,7 @@ output:
         text: "[done]"
     isError: false
 ---
-id: 4
-input:
-  method: tools/call
-  params:
-    name: send
-    arguments:
-      r: |-
-        1
-        2
-        answer
-output:
-  result:
-    content:
-      - type: text
-        text: |
-          [1] 1
-          [1] 2
-          [1] 40
-    isError: false
----
-id: 5
-input:
-  method: tools/call
-  params:
-    name: send
-    arguments:
-      r: |-
-        cores <- parallel::detectCores()
-        "parallel" %in% names(getLoadedDLLs())
-output:
-  result:
-    content:
-      - type: text
-        text: |
-          [1] TRUE
-    isError: false
----
 id: 6
-input:
-  method: tools/call
-  params:
-    name: send
-    arguments:
-      r: |-
-        ..mcp_console_value.. <- 42
-        ..mcp_console_value..
-output:
-  result:
-    content:
-      - type: text
-        text: |
-          [1] 42
-    isError: false
----
-id: 7
 input:
   method: tools/call
   params:

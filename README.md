@@ -72,25 +72,6 @@ Background descendants are unsupported: they may outlive the launcher, which att
 Descendant supervision is intentionally deferred because it must account for process groups, session-detached children, signal forwarding, and PID reuse together.
 Linux and Windows are not supported yet.
 
-## Native R comparison snapshot
-
-The behavioral observations below reflect current acceptance probes.
-The timing, process, memory, and binary-size numbers come from three consecutive local Apple Silicon macOS release-build runs on July 29, 2026, before the DLL-REPL iterator change; they are a historical comparison snapshot, not a general benchmark:
-
-- Functions parsed from submitted text had no source filename: `getSrcFilename()` returned an empty value.
-- A top-level task callback receives the submitted parsed expression.
-- `system("printf child-output")` returned `[done]`; subprocess output written directly to the worker's standard output did not enter the MCP result.
-- Fresh-process MCP launch through initialization took 4.9--7.2 ms after the executable was cached; the first run immediately after rebuilding took 253 ms.
-  First R evaluation took 155--177 ms.
-  Twenty steady silent evaluations had a 0.086--0.089 ms median round trip.
-- After the first evaluation there were two direct processes.
-  The server used 6 threads and about 4,352--4,416 KiB RSS; the R worker used 1 thread and about 76,160--76,624 KiB RSS, for about 80,576--80,976 KiB total RSS.
-- The release binary was 5,332,272 bytes, about 5.09 MiB.
-- A sandboxed worker is implemented only on macOS.
-
-Remaining native-worker limitations include missing submitted-source filenames, uncaptured direct child-process output, and no supervision or cleanup of worker descendants after direct-worker termination.
-Forked descendants cannot use the private sideband and therefore cannot contribute console output.
-
 The proposed product and architecture remain under [`design-sketches/`](design-sketches/README.md).
 
 ## Development
@@ -110,6 +91,10 @@ scripts/format
 Formatter errors remain visible but do not stop the remaining formatters or make the script fail.
 
 See [`tests/transcripts/README.md`](tests/transcripts/README.md) for running and authoring external server transcript tests.
+The `r` suite exercises the built-in worker.
+The `zod` suite uses the hidden `serve --worker PATH` development option to exercise the same protocol with an executable Python fixture.
+Both suites run on macOS, where the sandbox policy is implemented.
+See [`docs/WORKER_PROTOCOL.md`](docs/WORKER_PROTOCOL.md) for the exact implemented launch and message contract.
 
 ## License
 

@@ -132,8 +132,8 @@ Python is embedded through reticulate.
 SQL is initially executed through the DuckDB R package and DBI, giving SQL direct access to live R data frames and persistent DuckDB catalog state.
 
 The supervisor exposes one backend-neutral runtime service for cell evaluation, output, interactive input, structured inspection, and control.
-The initial implementation must compare an Ark-backed worker with a purpose-built worker based on `harp`/`libr` and the current `mcp-repl` runtime.
-Ark may be worth its Jupyter machinery if its mature Data Explorer, plots, help, debugger, and runtime behavior can be reused without an invasive fork.
+An implemented Ark prototype was compared with the current purpose-built worker based on `harp`, `libr`, and libR's DLL REPL.
+The native worker was selected for the initial text-R console; Ark remains a candidate for the eventual full runtime if its Data Explorer, plots, help, debugger, and runtime behavior justify the Jupyter integration or become reusable through a narrower boundary.
 The public MCP and local sidecar contracts must not depend on which backend is selected.
 See [`docs/RUNTIME_BACKEND.md`](docs/RUNTIME_BACKEND.md).
 
@@ -169,8 +169,8 @@ Complete text, plots, live table batches, and snapshots are fetched separately b
 - Interactive input: exact, optionally multiline `stdin` text only when the active runtime requests it.
 - MCP surface: `send` plus a low-frequency `session` environment and lifecycle tool.
 - Language selection: the object key is `r`, `python`, or `sql`.
-- Runtime substrate: open implementation decision.
-  Evaluate an Ark-backed worker against a purpose-built `harp`/`libr` worker before committing; hide either behind the same runtime service.
+- Runtime substrate: the initial text-R console uses the purpose-built `harp`/`libr` worker after comparison with an implemented Ark prototype.
+  The eventual full-runtime backend remains open and stays hidden behind the same runtime service.
 - R evaluation: native top-level evaluation; complete cell source and evaluation-time stdin remain distinct queues even when a DLL-REPL backend transports both through `ReadConsole`.
 - SQL engine: embedded DuckDB through R/DBI initially; the DuckDB CLI is a behavioral reference only.
 - Output: bounded MCP text plus managed workspace files.
@@ -187,7 +187,7 @@ Complete text, plots, live table batches, and snapshots are fetched separately b
 The design builds on:
 
 - [posit-dev/mcp-repl](https://github.com/posit-dev/mcp-repl) for persistent worker, sandbox, output, and native R frontend patterns;
-- [posit-dev/ark](https://github.com/posit-dev/ark) for native R execution, Jupyter lifecycle, plots, help, debugging, Variables, and the Data Explorer comm/backend; `harp` and `libr` remain candidate lower-level building blocks for a custom worker;
+- [posit-dev/ark](https://github.com/posit-dev/ark) for native R execution, Jupyter lifecycle, plots, help, debugging, Variables, and the Data Explorer comm/backend; the current worker reuses its lower-level `harp` and `libr` crates;
 - [reticulate](https://rstudio.github.io/reticulate/) for embedded Python and R/Python object interchange;
 - [DuckDB](https://duckdb.org/docs/current/clients/r) and [DBI](https://dbi.r-dbi.org/) for embedded SQL;
 - [Quarto](https://quarto.org/) for the readable session transcript;

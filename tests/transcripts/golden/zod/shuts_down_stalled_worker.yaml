@@ -51,42 +51,6 @@ input:
   method: tools/call
   params:
     name: send
-    arguments: {}
-output:
-  result:
-    content:
-      - type: text
-        text: send exactly one of r or stdin
-    isError: true
----
-id: 4
-input:
-  method: tools/call
-  params:
-    name: send
     arguments:
-      r: "1"
-      stdin: input
-output:
-  result:
-    content:
-      - type: text
-        text: send exactly one of r or stdin
-    isError: true
----
-id: 5
-input:
-  method: tools/call
-  params:
-    name: send
-    arguments:
-      python: "1"
-output:
-  result:
-    content:
-      - type: text
-        text: >-
-          failed to deserialize parameters: unknown field `python`, expected `r`
-          or `stdin`
-    isError: true
+      r: stall
 ...

@@ -21,21 +21,34 @@ The `serve` command runs an MCP server over stdio.
 Clap provides command help, version output, argument parsing, and usage errors.
 The server registers only a `send` tool and starts no runtime during MCP initialization or tool listing.
 The tool accepts exactly one of an `r` string containing a complete R code cell or a `stdin` string supplying exact interactive input.
-The first `r` call lazily starts one private embedded-R worker.
-The worker feeds the cell to R's DLL REPL, which parses and evaluates its expressions sequentially at top level in persistent global state and returns R console output, including every visible top-level value.
+The first `r` call lazily starts the built-in R worker under the same sandbox policy as the `sandbox` command.
+
+The hidden `worker` command takes ownership of the sideband, discovers `R_HOME` through the selected R executable inside the sandbox, and opens `R_HOME/lib/libR.dylib` by its absolute path.
+It does not self-execute or set a dynamic-loader environment variable.
+The command runs synchronously on the process main thread; only `serve` creates a Tokio runtime.
+
+The worker embeds R through `libr` and `harp`.
+It feeds each cell to R's DLL REPL, which parses and evaluates its expressions sequentially at top level in persistent global state and returns R console output, including every visible top-level value.
 Cell EOF while R requires continuation input is a parse error, not an input prompt; earlier complete expressions from that cell remain applied.
 R parse, evaluation, and auto-print failures are normal language outcomes with `isError: false`.
 Silent successful evaluations return `[done]`.
+
 `readline()` and `browser()` can suspend the active evaluation at `[input]`; later `stdin` calls buffer partial or multiple exact lines without adding a newline.
 Unused buffered input is discarded when the evaluation ends.
 New R code is rejected while input is required, and stdin is rejected at other times.
+
+The hidden development option `serve --worker PATH` replaces the built-in worker with an executable that implements the same private protocol.
+The Python fixture `tests/fixtures/zod` provides deterministic acceptance coverage for that boundary.
 Worker startup, sandbox, process, and private-protocol failures are tool errors.
-Stopped workers are not restarted implicitly.
+A stopped worker is not restarted implicitly.
+
 The MCP process and worker communicate over a private inherited JSON-lines sideband so R output cannot corrupt MCP stdio.
 On macOS, the worker runs under the existing Seatbelt policy with host reads allowed, regular-file writes limited to a private per-worker temporary directory, and network access denied.
 Descendants inherit that policy.
 R calls are unsupported on platforms without an implemented worker sandbox.
-MCP shutdown requests orderly direct-worker exit, waits one second, then terminates and reaps an unresponsive worker.
+When MCP input closes, the server starts a one-second deadline and attempts graceful sideband shutdown without delaying it.
+If the direct sandbox process is still running when time expires, the sandbox boundary force-stops its process group and reaps that direct process.
+
 Native-worker descendants are not supervised or cleaned up after direct-worker termination and may outlive the server.
 Top-level task callbacks receive the user's parsed expression.
 Submitted R functions do not currently retain a source filename.
@@ -46,8 +59,8 @@ On macOS, the sandbox command launches a subprocess under `sandbox-exec` with ho
 This initial launcher waits only for the direct command.
 Background descendants are unsupported: they may outlive the launcher, which attempts to remove their dedicated temporary directory on a best-effort basis when it returns.
 Descendant supervision is intentionally deferred because it must account for process groups, session-detached children, signal forwarding, and PID reuse together.
-The sandbox command is unsupported on Linux and Windows.
-Python and SQL runtimes, polling, interrupts, named-session management, worker restart, the sidecar API, the viewer, environment management, output retention, and transcript generation do not exist yet.
+The sandbox command and worker are unsupported on Linux and Windows.
+The session model, Python and SQL runtimes, polling, interrupts, explicit worker restart, the sidecar API, the viewer, environment management, output retention, and transcript generation do not exist yet.
 
 ## Product direction
 
@@ -60,8 +73,10 @@ The planned public MCP surface has two tools:
 The MCP initialization identity remains `mcp-console`.
 The intended default client registration name is `console`, for example `codex mcp add console -- mcp-console serve`.
 Under Codex's current naming convention, the tools are `mcp__console.send` and `mcp__console.session`.
-The initial runtime design uses R as the host, embeds Python through reticulate, and runs SQL through the DuckDB R package and DBI.
-The eventual full-runtime worker backend remains an open design decision; the current embedded-R worker implements only this minimal console slice.
+
+The implemented R slice embeds R through `libr` and `harp`.
+The planned runtime uses R as the host, embeds Python through reticulate, and runs SQL through the DuckDB R package and DBI.
+The backend for that broader runtime surface remains an open design decision.
 
 See `design-sketches/README.md` for the product overview and `design-sketches/docs/ARCHITECTURE.md` for the tentative architecture.
 
@@ -71,13 +86,17 @@ See `design-sketches/README.md` for the product overview and `design-sketches/do
 - `build.rs` — macOS C-shim build.
 - `src/main.rs` — current binary entry point.
 - `src/cli.rs` — clap command definitions and user-facing help.
-- `src/server.rs` — MCP stdio server and R-evaluating `send` tool.
-- `src/worker.rs` — private persistent embedded-R worker and supervisor client.
+- `src/server.rs` — MCP stdio server, `send` tool, and worker selection.
+- `src/sideband.rs` — macOS inherited-pipe JSON-lines transport.
+- `src/worker.rs` — embedded R initialization, evaluation, and console callbacks.
 - `src/r_repl.c` — C-owned per-cell DLL-REPL iterator and long-jump boundary.
-- `src/sideband.rs` — inherited pipe transport for the macOS worker's JSON-lines messages.
+- `src/worker_client.rs` — server-side worker launch, lifecycle, and output collection.
+- `src/worker_protocol.rs` — shared sideband message definitions.
 - `src/sandbox.rs` — platform dispatch for the sandbox process launcher.
 - `src/sandbox/` — platform implementation and macOS Seatbelt policy.
-- `tests/cli.rs` — public binary acceptance tests that need dynamic fixtures, timing, process control, or partial output assertions.
+- `tests/cli.rs` — public binary acceptance tests.
+- `tests/fixtures/zod` — executable Python sideband worker used by acceptance tests.
+- `tests/transcripts/r.py` — public built-in R worker acceptance suite.
 - `tests/transcripts/_run.py` — discovers transcript suites and compares case snapshots.
 - `tests/transcripts/_support.py` — shared transcript types and MCP stdio client.
 - `tests/transcripts/<suite>.py` — suites of named imperative transcript cases.
@@ -87,6 +106,7 @@ See `design-sketches/README.md` for the product overview and `design-sketches/do
 - `scripts/format` — attempts each repository-wide formatter without requiring it.
 - `scripts/check` — local formatting, Clippy, and test checks.
 - `.github/workflows/ci.yaml` — formatting, Clippy, and test checks.
+- `docs/WORKER_PROTOCOL.md` — exact implemented worker launch and sideband protocol.
 - `design-sketches/` — tentative product and architecture documents.
 - `README.md` — current user-facing project status.
 - `LICENSE` — project license.

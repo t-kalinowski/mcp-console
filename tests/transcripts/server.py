@@ -10,6 +10,7 @@ def test_initializes_lists_tools_and_calls_send(binary: Path) -> Transcript:
     client.initialize_and_list_tools()
     client.call_tool("send")
     client.call_tool("send", r="1", stdin="input")
+    client.call_tool("send", python="1")
     return client.finish()
 
 

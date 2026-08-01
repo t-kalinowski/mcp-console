@@ -1,7 +1,6 @@
-use std::ffi::c_int;
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, Read, Write};
-use std::os::fd::{AsRawFd, FromRawFd, IntoRawFd, OwnedFd, RawFd};
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -14,30 +13,31 @@ const WRITE_FD_ENV: &str = "MCP_CONSOLE_SIDEBAND_WRITE_FD";
 static SIDEBAND_ALLOWED: AtomicBool = AtomicBool::new(true);
 static FORK_READ_FD: AtomicI32 = AtomicI32::new(-1);
 static FORK_WRITE_FD: AtomicI32 = AtomicI32::new(-1);
-static ATFORK_RESULT: OnceLock<c_int> = OnceLock::new();
+static ATFORK_RESULT: OnceLock<libc::c_int> = OnceLock::new();
 
-pub struct Reader {
+pub(crate) struct Reader {
     inner: BufReader<Box<dyn Read + Send>>,
 }
 
 #[derive(Clone)]
-pub struct Writer {
+pub(crate) struct Writer {
     inner: Arc<Mutex<Box<dyn Write + Send>>>,
 }
 
-pub struct ChildFds {
+pub(crate) struct ChildFds {
     read: OwnedFd,
     write: OwnedFd,
 }
 
-pub fn bind() -> io::Result<(Reader, Writer, ChildFds)> {
+/// Creates the two inherited pipes used for one duplex worker sideband.
+pub(crate) fn bind() -> io::Result<(Reader, Writer, ChildFds)> {
     let (server_read, child_write) = std::io::pipe()?;
     let (child_read, server_write) = std::io::pipe()?;
 
-    let child_read = unsafe { OwnedFd::from_raw_fd(child_read.into_raw_fd()) };
-    let child_write = unsafe { OwnedFd::from_raw_fd(child_write.into_raw_fd()) };
-    set_close_on_exec(child_read.as_raw_fd(), false)?;
-    set_close_on_exec(child_write.as_raw_fd(), false)?;
+    let child_read: OwnedFd = child_read.into();
+    let child_write: OwnedFd = child_write.into();
+    make_inheritable(child_read.as_raw_fd())?;
+    make_inheritable(child_write.as_raw_fd())?;
 
     Ok((
         Reader::new(server_read),
@@ -49,7 +49,8 @@ pub fn bind() -> io::Result<(Reader, Writer, ChildFds)> {
     ))
 }
 
-pub fn connect_from_env() -> io::Result<(Reader, Writer)> {
+/// Takes ownership of the sideband endpoints inherited by a worker.
+pub(crate) fn connect_from_env() -> io::Result<(Reader, Writer)> {
     let read = inherited_fd(READ_FD_ENV)?;
     let write = inherited_fd(WRITE_FD_ENV)?;
     set_close_on_exec(read, true)?;
@@ -67,11 +68,6 @@ pub fn connect_from_env() -> io::Result<(Reader, Writer)> {
     Ok((Reader::new(read), Writer::new(write)))
 }
 
-pub fn set_inherited_close_on_exec(enabled: bool) -> io::Result<()> {
-    set_close_on_exec(inherited_fd(READ_FD_ENV)?, enabled)?;
-    set_close_on_exec(inherited_fd(WRITE_FD_ENV)?, enabled)
-}
-
 impl Reader {
     fn new(reader: impl Read + Send + 'static) -> Self {
         Self {
@@ -79,7 +75,8 @@ impl Reader {
         }
     }
 
-    pub fn receive<T: DeserializeOwned>(&mut self) -> io::Result<T> {
+    /// Receives one newline-delimited JSON message from the worker.
+    pub(crate) fn receive<T: DeserializeOwned>(&mut self) -> io::Result<T> {
         let mut line = String::new();
         if self.inner.read_line(&mut line)? == 0 {
             return Err(io::Error::new(
@@ -100,13 +97,8 @@ impl Writer {
         }
     }
 
-    pub fn send<T: Serialize>(&self, message: &T) -> io::Result<()> {
-        if !available_in_process() {
-            return Err(io::Error::new(
-                io::ErrorKind::BrokenPipe,
-                "worker sideband is unavailable in a forked child",
-            ));
-        }
+    /// Sends and flushes one newline-delimited JSON message to the worker.
+    pub(crate) fn send<T: Serialize>(&self, message: &T) -> io::Result<()> {
         let mut writer = self
             .inner
             .lock()
@@ -117,16 +109,16 @@ impl Writer {
     }
 }
 
-pub fn available_in_process() -> bool {
-    SIDEBAND_ALLOWED.load(Ordering::SeqCst)
-}
-
 impl ChildFds {
-    #[cfg(target_os = "macos")]
-    pub fn configure(&self, command: &mut crate::sandbox::SandboxedCommand) {
+    /// Passes the inheritable worker endpoints to a child through its environment.
+    pub(crate) fn configure(&self, command: &mut crate::sandbox::SandboxedCommand) {
         command.env(READ_FD_ENV, self.read.as_raw_fd().to_string());
         command.env(WRITE_FD_ENV, self.write.as_raw_fd().to_string());
     }
+}
+
+fn make_inheritable(fd: RawFd) -> io::Result<()> {
+    set_close_on_exec(fd, false)
 }
 
 fn inherited_fd(name: &str) -> io::Result<RawFd> {
@@ -137,6 +129,7 @@ fn inherited_fd(name: &str) -> io::Result<RawFd> {
 }
 
 fn set_close_on_exec(fd: RawFd, enabled: bool) -> io::Result<()> {
+    // SAFETY: the caller owns the live descriptor, and F_GETFD does not modify memory.
     let flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
     if flags < 0 {
         return Err(io::Error::last_os_error());
@@ -146,10 +139,15 @@ fn set_close_on_exec(fd: RawFd, enabled: bool) -> io::Result<()> {
     } else {
         flags & !libc::FD_CLOEXEC
     };
+    // SAFETY: `fd` remains live, and F_SETFD receives the flags read above.
     if unsafe { libc::fcntl(fd, libc::F_SETFD, flags) } < 0 {
         return Err(io::Error::last_os_error());
     }
     Ok(())
+}
+
+pub(crate) fn available_in_process() -> bool {
+    SIDEBAND_ALLOWED.load(Ordering::SeqCst)
 }
 
 extern "C" fn close_sideband_in_fork_child() {

@@ -23,11 +23,11 @@ The architecture must support:
 ## 2. Architectural summary
 
 MCP Console ships one user-facing Rust binary and launches one sandboxed worker process per session.
-The worker implementation remains behind the runtime backend decision:
+The implemented text R console uses the built-in purpose-specific worker; the broader runtime remains behind the full-runtime backend decision:
 
 ```text
-mcp-console                         MCP supervisor/server
-mcp-console __worker --native ...  purpose-built worker candidate
+mcp-console                        MCP supervisor/server
+mcp-console worker ...             current native text-R worker
 ark or an Ark-linked worker mode   Ark-backed candidate
 ```
 
@@ -955,7 +955,7 @@ It destroys all in-memory state.
 
 ### 18.3 Crash
 
-A segfault, abort, OOM kill, or unrecoverable embedded-runtime failure marks the session stopped.
+A segfault, abort, OOM kill, or unrecoverable embedded-runtime failure marks the session stopped and fails the active evaluation.
 Preserve the transcript and output produced before death.
 Do not restart automatically and imply state continuity.
 
@@ -1088,26 +1088,28 @@ Avoid snapshots tied to terminal width, ANSI color, absolute temporary paths, pa
 
 Exit: all public states, lifecycle actions, and basic sidecar events work without real R.
 
-### Milestone 1: runtime backend spike and decision
+### Milestone 1: remaining runtime backend evaluation
 
-Implement the smallest viable Ark and native paths needed to compare:
+The R-only Ark and native paths have been implemented and compared.
+The native DLL-REPL worker was selected for the current text R slice.
+Complete the comparison for the capabilities that may change the full-runtime decision:
 
-- complete R cell execution, visible values, source references, and `sys.calls()`;
-- `readline()`, `browser()`, `recover()`, interrupt, and restart behavior;
+- interrupt and restart behavior;
 - plot and help publication;
 - Python and SQL dispatch with correct source and error attribution;
 - object inventory and an independent viewer fetching bounded rows/columns from a large live data frame;
 - busy-runtime behavior and snapshot materialization;
-- packaging, startup, sandbox, dependency, and version-maintenance costs.
+- current packaging, startup, sandbox, dependency, and version-maintenance costs.
 
 Record the result in an ADR and remove the losing backend from the critical path unless it remains useful as a test adapter.
 
 Exit: one backend is selected with evidence against the criteria in `RUNTIME_BACKEND.md`.
 
-### Milestone 2: selected persistent R worker
+### Milestone 2: extend the persistent R worker
 
+- retain the implemented structured cell and exact-input behavior;
 - complete the selected backend's lifecycle and capability adapter;
-- implement structured cell, input, inspection, interrupt, restart, and crash reporting;
+- implement inspection, interrupt, explicit restart, and crash reporting;
 - validate R stack and source semantics across supported platforms;
 - establish pinned compatibility tests for Ark/comm or `harp`/`libr` dependencies.
 
@@ -1169,11 +1171,13 @@ Exit: supported-platform security and resource tests pass in CI.
 
 ## 24. Required implementation spikes
 
-1. **Ark-backed end-to-end path:** launch Ark, correlate execute/busy/idle/stdin/control, and translate its outputs into normalized events.
+1. **Ark-backed end-to-end path:** the text-R path is complete.
+   Extend it only as needed to evaluate interrupt, plots/help, Python/SQL, and inspection through normalized events.
 2. **Independent Ark Data Explorer client:** from a separate process, retain and browse a large R data frame by bounded row/column requests; determine which comm/backend APIs are reusable and stable.
-3. **Native backend comparison:** implement the same minimum cell, stdin, plot/help, interrupt, and live-table operations on `mcp-repl`/`harp`/`libr` far enough to compare complexity and behavior.
+3. **Native backend comparison:** cell and stdin behavior are complete.
+   Implement enough plot/help, interrupt, and live-table behavior to compare the remaining full-runtime requirements.
 4. **Polyglot dispatch:** verify Python and SQL cells under both candidates, including tracebacks, source names, input, interruption, and R stack boundaries.
-5. **R semantics:** validate `sys.calls()`, traceback, source references, errors, visible values, `browser()`, and `recover()` under the selected path.
+5. **Remaining R semantics:** add submitted-source references and validate `recover()` and interrupt recovery under the selected path; retain the existing stack, traceback, error, visible-value, and `browser()` coverage.
 6. **Busy inspection:** characterize Ark comm and native inspection behavior while R is running, waiting for input, or stopped; do not assume Jupyter channels imply concurrent R execution.
 7. **Live versus snapshot views:** measure viewport latency, materialization cost, staleness, invalidation, and memory for representative large frames and Arrow/DuckDB sources.
 8. **Packaging and maintenance:** measure startup time, binary/wheel size, process count, sandbox requirements, version skew, and whether changes require an Ark fork.
@@ -1185,7 +1189,7 @@ Exit: supported-platform security and resource tests pass in CI.
 14. **Transcript recovery:** choose incremental QMD updates versus deterministic rebuild on startup.
 15. **Cancellation:** define exact mapping between MCP cancellation, initiating calls, later poll waiters, and runtime interrupts.
 
-Resolve spikes 1–8 before treating the backend substrate as settled.
+Resolve the remaining portions of spikes 1–8 before treating the full backend substrate as settled.
 Record the decision as a short ADR and update `AGENTS.md`, `README.md`, and this document rather than leaving contradictory alternatives in place.
 
 ## 25. External references

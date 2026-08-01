@@ -281,7 +281,7 @@ It preserves:
    - assert that a logical source line can span several `ReadConsole` buffers;
    - retain the existing visible-value, warning, `.Last.value`, error, traceback, auto-print failure, `readline()`, browser, stale-input, stopped worker, and shutdown coverage.
 2. Confirm the changed tests fail against the prior pre-parse/proxy worker.
-3. Add a Unix-only C shim and compile it with a small `build.rs`.
+3. Add a macOS C shim and compile it with a small `build.rs`.
 4. Keep the current runtime lookup of `R_ReplDLLinit()` and `R_ReplDLLdo1()`, but pass those pointers to the shim instead of invoking them from Rust.
 5. Add distinct cell-source state and the `evaluation_started` Busy latch.
 6. Change `ReadConsole` to route primary/continuation reads to cell source and evaluation-time reads to the existing exact-stdin path.

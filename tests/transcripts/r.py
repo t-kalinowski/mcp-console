@@ -19,13 +19,15 @@ def initialized_client(binary: Path) -> McpClient:
     return client
 
 
-def test_top_level_cells(binary: Path) -> Transcript:
-    client = initialized_client(binary)
+def test_evaluates_a_complete_cell(binary: Path) -> Transcript:
+    client = McpClient(binary, ("serve",))
+    client.initialize_and_list_tools()
     send_r(
         client,
         # fmt: r
         r"""
-        answer <- (38 + 2)
+        answer <- 40
+        answer + 1
         answer + 2
         cat("done\n")
         invisible(99)
@@ -35,34 +37,16 @@ def test_top_level_cells(binary: Path) -> Transcript:
         client,
         # fmt: r
         r"""
-        silent <- 1
+        identical(
+          as.vector(splines::splineDesign(
+            knots = c(0, 0, 0, 0, 1, 1, 1, 1),
+            x = 0.5
+          )),
+          c(0.125, 0.375, 0.375, 0.125)
+        )
         """,
     )
-    send_r(
-        client,
-        # fmt: r
-        r"""
-        1
-        2
-        answer
-        """,
-    )
-    send_r(
-        client,
-        # fmt: r
-        r"""
-        cores <- parallel::detectCores()
-        "parallel" %in% names(getLoadedDLLs())
-        """,
-    )
-    send_r(
-        client,
-        # fmt: r
-        r"""
-        ..mcp_console_value.. <- 42
-        ..mcp_console_value..
-        """,
-    )
+    client.call_tool("send", r="silent <- 1")
     send_r(
         client,
         # fmt: r
