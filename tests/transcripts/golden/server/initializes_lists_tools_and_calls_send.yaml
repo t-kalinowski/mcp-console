@@ -27,19 +27,37 @@ output:
   result:
     tools:
       - name: send
-        description: Evaluate one complete R code cell in persistent state.
+        description: "Evaluate one complete R code cell in persistent state. Stdin may accompany the cell or follow an [input] response."
         inputSchema:
-          $schema: https://json-schema.org/draft/2020-12/schema
-          required:
-            - r
+          $schema: "https://json-schema.org/draft/2020-12/schema"
+          additionalProperties: false
           type: object
           properties:
             r:
               description: Complete multiline R code evaluated in persistent state.
-              type: string
-          additionalProperties: false
+              type:
+                - string
+                - "null"
+            stdin:
+              description: "Exact text for this cell's first input request or an active [input] prompt."
+              type:
+                - string
+                - "null"
 ---
 id: 3
+input:
+  method: tools/call
+  params:
+    name: send
+    arguments: {}
+output:
+  result:
+    content:
+      - type: text
+        text: send requires r or stdin
+    isError: true
+---
+id: 4
 input:
   method: tools/call
   params:
@@ -51,6 +69,6 @@ output:
   result:
     content:
       - type: text
-        text: "failed to deserialize parameters: unknown field `python`, expected `r`"
+        text: "failed to deserialize parameters: unknown field `python`, expected `r` or `stdin`"
     isError: true
 ...

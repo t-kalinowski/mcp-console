@@ -39,6 +39,44 @@ def test_evaluates_a_complete_cell(binary: Path) -> Transcript:
     return client.finish()
 
 
+def test_routes_combined_and_followup_stdin(binary: Path) -> Transcript:
+    client = McpClient(binary, ("serve",))
+    client.initialize_and_list_tools()
+
+    # fmt: r
+    r = dedent(r"""
+        paste("hello", readline("name> "))
+        """).strip()
+    client.call_tool("send", r=r, stdin="Ada\nstale\n")
+    assert last_tool_text(client) == 'name>\n[1] "hello Ada"\n'
+
+    # fmt: r
+    r = dedent(r"""
+        42
+        """).strip()
+    client.call_tool("send", r=r, stdin="unused\n")
+    assert last_tool_text(client) == "[1] 42\n[stdin discarded]"
+
+    # fmt: r
+    r = dedent(r"""
+        paste("color", readline("color> "))
+        """).strip()
+    client.call_tool("send", r=r)
+    assert last_tool_text(client) == "color>\n[input]"
+    client.call_tool("send", stdin="bl")
+    assert last_tool_text(client) == "color>\n[input]"
+    client.call_tool("send", stdin="ue\n")
+    assert last_tool_text(client) == '[1] "color blue"\n'
+    return client.finish()
+
+
+def last_tool_text(client: McpClient) -> str:
+    result = client.transcript[-1]["output"]["result"]
+    assert result["isError"] is False, result
+    assert result["content"] == [{"type": "text", "text": result["content"][0]["text"]}]
+    return result["content"][0]["text"]
+
+
 def test_applies_complete_expressions_before_incomplete_source(
     binary: Path,
 ) -> Transcript:

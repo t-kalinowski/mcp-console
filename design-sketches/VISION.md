@@ -153,7 +153,7 @@ Every new public MCP field or tool has a permanent model-context cost.
 - Session: one sandboxed worker process containing R, reticulate Python, and DuckDB.
 - Submission: one complete R, Python, or SQL cell.
 - Evaluation: execution of one submission.
-- `stdin`: exact stream text for an already-running interactive consumer, not another code submission; it may contain multiple lines and receives no implicit newline.
+- `stdin`: exact stream text held for the submitted cell's first input request or sent to an already-running interactive consumer, not another code submission; it may contain multiple lines and receives no implicit newline.
 - Durable record: generated `transcript.qmd` plus retained output and artifact files.
 - Refined notebook, report, or script: a separate user artifact.
 - Local sidecar API: process-scoped observation, structured inspection, and attributed external control.

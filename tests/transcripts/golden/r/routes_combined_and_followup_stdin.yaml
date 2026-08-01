@@ -50,5 +50,82 @@ input:
   params:
     name: send
     arguments:
-      r: <large cell>
+      r: "paste(\"hello\", readline(\"name> \"))"
+      stdin: |
+        Ada
+        stale
+output:
+  result:
+    content:
+      - type: text
+        text: |
+          name>
+          [1] "hello Ada"
+    isError: false
+---
+id: 4
+input:
+  method: tools/call
+  params:
+    name: send
+    arguments:
+      r: "42"
+      stdin: |
+        unused
+output:
+  result:
+    content:
+      - type: text
+        text: |-
+          [1] 42
+          [stdin discarded]
+    isError: false
+---
+id: 5
+input:
+  method: tools/call
+  params:
+    name: send
+    arguments:
+      r: "paste(\"color\", readline(\"color> \"))"
+output:
+  result:
+    content:
+      - type: text
+        text: |-
+          color>
+          [input]
+    isError: false
+---
+id: 6
+input:
+  method: tools/call
+  params:
+    name: send
+    arguments:
+      stdin: bl
+output:
+  result:
+    content:
+      - type: text
+        text: |-
+          color>
+          [input]
+    isError: false
+---
+id: 7
+input:
+  method: tools/call
+  params:
+    name: send
+    arguments:
+      stdin: |
+        ue
+output:
+  result:
+    content:
+      - type: text
+        text: |
+          [1] "color blue"
+    isError: false
 ...

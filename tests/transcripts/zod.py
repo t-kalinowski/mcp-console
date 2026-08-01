@@ -24,6 +24,34 @@ def test_routes_send_over_sideband(binary: Path) -> Transcript:
     return client.finish()
 
 
+def test_routes_combined_and_followup_stdin(binary: Path) -> Transcript:
+    zod = Path(__file__).resolve().parents[1] / "fixtures" / "zod"
+    client = McpClient(
+        binary,
+        ("serve", "--worker", str(zod)),
+    )
+    client.initialize_and_list_tools()
+
+    client.call_tool("send", r="request input", stdin="combined\n")
+    assert last_tool_text(client) == "zod>\nzod stdin: combined\n"
+
+    client.call_tool("send", r="hello", stdin="unused\n")
+    assert last_tool_text(client) == "zod: hello\n[stdin discarded]"
+
+    client.call_tool("send", r="request input")
+    assert last_tool_text(client) == "zod>\n[input]"
+    client.call_tool("send", stdin="followup\n")
+    assert last_tool_text(client) == "zod stdin: followup\n"
+    return client.finish()
+
+
+def last_tool_text(client: McpClient) -> str:
+    result = client.transcript[-1]["output"]["result"]
+    assert result["isError"] is False, result
+    assert result["content"] == [{"type": "text", "text": result["content"][0]["text"]}]
+    return result["content"][0]["text"]
+
+
 def test_restarts_after_unexpected_sideband_message(binary: Path) -> Transcript:
     zod = Path(__file__).resolve().parents[1] / "fixtures" / "zod"
     with tempfile.TemporaryDirectory() as temporary_directory:

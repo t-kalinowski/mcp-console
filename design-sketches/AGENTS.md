@@ -49,7 +49,8 @@ Safety is enforced around the worker process and its descendants, not by filteri
   Under Codex's current naming convention, the tools are `mcp__console.send` and `mcp__console.session`.
 - Language is selected by the present object key: `r`, `python`, or `sql`.
 - Top-level submissions are complete cells, not line-by-line parser input.
-- `stdin` is accepted only for an already-active input consumer.
+- `stdin` may accompany a code cell or target an already-active input consumer.
+  Bundled input remains pending until that evaluation requests it and is discarded if evaluation finishes first.
   It is exact stream text, may contain multiple lines, and receives no implicit newline.
 - A named session runs at most one top-level evaluation at a time.
 - A logical session is created by its first code submission or successful `prepare` action; `prepare` may leave it configured without a worker until code is submitted.

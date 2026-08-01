@@ -23,7 +23,9 @@ struct ConsoleServer {
 #[serde(deny_unknown_fields)]
 struct SendArguments {
     /// Complete multiline R code evaluated in persistent state.
-    r: String,
+    r: Option<String>,
+    /// Exact text for this cell's first input request or an active [input] prompt.
+    stdin: Option<String>,
 }
 
 impl ConsoleServer {
@@ -38,12 +40,18 @@ impl ConsoleServer {
 
 #[tool_router]
 impl ConsoleServer {
-    #[tool(description = "Evaluate one complete R code cell in persistent state.")]
+    #[tool(
+        description = "Evaluate one complete R code cell in persistent state. Stdin may accompany the cell or follow an [input] response."
+    )]
     async fn send(
         &self,
-        Parameters(SendArguments { r }): Parameters<SendArguments>,
+        Parameters(SendArguments { r, stdin }): Parameters<SendArguments>,
     ) -> Result<String, String> {
-        self.worker.evaluate(r).await
+        match (r, stdin) {
+            (Some(r), stdin) => self.worker.evaluate(r, stdin).await,
+            (None, Some(stdin)) => self.worker.provide_input(stdin).await,
+            (None, None) => Err("send requires r or stdin".to_string()),
+        }
     }
 }
 

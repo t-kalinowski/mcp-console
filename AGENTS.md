@@ -19,15 +19,18 @@ mcp-console sandbox [--] COMMAND [ARG]...
 The binary requires a subcommand.
 The `serve` command runs an MCP server over stdio.
 Clap provides command help, version output, argument parsing, and usage errors.
-The server registers only a `send` tool, which accepts one complete `r` string.
+The server registers only a `send` tool, which accepts one complete `r` string with optional `stdin`, or `stdin` for an evaluation already waiting for input.
 On macOS, its first call lazily starts the built-in R worker under the same sandbox policy as the `sandbox` command.
 The worker embeds R through `libr` and `harp`, retains global state, and feeds each complete cell through R's DLL REPL iterator.
 R parses and evaluates its expressions sequentially, captures console output, prints visible values, and performs native top-level bookkeeping.
 Cell EOF while R requires continuation input is an error; earlier complete expressions from that cell remain applied.
+Evaluation-time `ReadConsole` requests return an `[input]` boundary and accept exact, optionally multiline `stdin` without adding a newline.
+When `r` and `stdin` arrive together, the server evaluates `r` first and sends `stdin` only after the worker requests input; it reports `[stdin discarded]` if evaluation completes first.
+Unused buffered input is discarded when the evaluation ends.
 The hidden `worker` command takes ownership of the sideband, discovers `R_HOME` through the selected R executable inside the sandbox, and opens `R_HOME/lib/libR.dylib` by its absolute path.
 It does not self-execute or set a dynamic-loader environment variable.
 The worker command runs synchronously on the process main thread; only `serve` creates a Tokio runtime.
-The hidden development option `serve --worker PATH` replaces the built-in worker with an executable that implements the same ready/evaluate/output/completed/shutdown protocol.
+The hidden development option `serve --worker PATH` replaces the built-in worker with an executable that implements the same ready/evaluate/input/output/input-requested/completed/shutdown protocol.
 The Python fixture `tests/fixtures/zod` provides deterministic acceptance coverage for that boundary.
 An infrastructure or protocol failure is returned as a tool error, force-stops and discards that worker, and lets the next evaluation start a fresh worker.
 When MCP input closes, the server starts a one-second deadline and attempts graceful sideband shutdown without delaying it.
@@ -38,7 +41,7 @@ This initial launcher waits only for the direct command.
 Background descendants are unsupported: they may outlive the launcher, which attempts to remove their dedicated temporary directory on a best-effort basis when it returns.
 Descendant supervision is intentionally deferred because it must account for process groups, session-detached children, signal forwarding, and PID reuse together.
 The sandbox command and worker are unsupported on Linux and Windows.
-Interactive input, the session model, Python and SQL runtimes, sidecar API, viewer, environment management, output retention, and transcript generation do not exist yet.
+The session model, Python and SQL runtimes, sidecar API, viewer, environment management, output retention, and transcript generation do not exist yet.
 
 ## Product direction
 
@@ -104,7 +107,7 @@ Begin as one Cargo package and split crates only when a real boundary emerges.
   Do not add tests for private helpers.
 - Format embedded R, Python, SQL, and shell test programs as multiline raw strings.
   Use escape sequences such as `\n` only when the program needs that character as data, not to lay out its source.
-- Keep complete code cells separate from interactive `stdin`.
+- Keep complete code cells and interactive `stdin` as separate worker commands and queues, even when one `send` call supplies both.
 - Keep the MCP adapter independent of interpreter implementation details.
 - Treat all runtime execution as shell-class capability and place safety at the worker-process boundary.
 - Update this file when a PR changes the implemented surface or repository map.

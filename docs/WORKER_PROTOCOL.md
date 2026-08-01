@@ -7,10 +7,10 @@ The message enums in `src/worker_protocol.rs` and the framing in `src/sideband.r
 ## Scope
 
 The current implementation provides one worker for one server process.
-It supports one operation: evaluate an `r` string and return its output.
+It evaluates one `r` cell at a time and accepts exact `stdin` text when that evaluation requests input.
 Evaluations run sequentially.
 
-The protocol does not yet include interactive input, interrupts, request IDs, errors, sessions, capabilities, or protocol version negotiation.
+The protocol does not yet include interrupts, request IDs, structured errors, sessions, capabilities, or protocol version negotiation.
 
 Plain `serve` selects the built-in R worker.
 The hidden `serve --worker PATH` option replaces it with a development worker.
@@ -73,13 +73,15 @@ The complete implemented message set is:
 | Direction | Frame | Meaning |
 | --- | --- | --- |
 | server → worker | `{"kind":"evaluate","r":"..."}` | Evaluate the `r` string. |
+| server → worker | `{"kind":"input","stdin":"..."}` | Supply exact text to the active input request. |
 | server → worker | `{"kind":"shutdown"}` | Exit without replying. |
 | worker → server | `{"kind":"ready"}` | Startup is complete. |
 | worker → server | `{"kind":"output","data":"..."}` | Append one output text chunk. |
+| worker → server | `{"kind":"input_requested","prompt":"..."}` | Suspend at an interactive input request. |
 | worker → server | `{"kind":"completed"}` | The evaluation is complete. |
 
 Every frame uses `kind` to select its message variant.
-Unknown worker-to-server fields are rejected.
+Unknown fields are rejected in either direction.
 
 ## Handshake and evaluation
 
@@ -107,6 +109,32 @@ That marker is produced by the server; it is not a sideband message.
 The protocol has no request IDs because only one evaluation can be in flight over this sideband.
 Concurrent MCP calls wait on the worker process mutex and reach the worker sequentially.
 
+### Interactive input
+
+When evaluated code calls `readline()` or enters `browser()`, the worker sends `input_requested`.
+Without bundled `stdin`, the MCP response returns the output collected so far, the trimmed prompt, and an `[input]` marker.
+A later `send` call supplies its `stdin` unchanged:
+
+```text
+server -> worker  {"kind":"evaluate","r":"readline('name> ')"}
+worker -> server  {"kind":"input_requested","prompt":"name> "}
+
+server -> worker  {"kind":"input","stdin":"Ada\n"}
+worker -> server  {"kind":"output","data":"[1] \"Ada\"\n"}
+worker -> server  {"kind":"completed"}
+```
+
+An MCP call may contain both `r` and `stdin`.
+The server sends `evaluate` first and holds `stdin` until the first `input_requested` message.
+It then sends one `input` frame and continues collecting the same call's output.
+If `completed` arrives first, the server does not send the pending input and appends `[stdin discarded]` to the MCP result.
+
+The worker adds no newline to input.
+It buffers partial and multiple lines.
+Partial input produces another prompt and `[input]` boundary.
+Unread buffered text is discarded when the outer evaluation completes or errors.
+New R code is rejected while input is required, and follow-up `stdin` is rejected at other times.
+
 ## State transitions
 
 | From | Frame | To |
@@ -114,8 +142,10 @@ Concurrent MCP calls wait on the worker process mutex and reach the worker seque
 | starting | worker → server `ready` | idle |
 | idle | server → worker `evaluate` | evaluating |
 | evaluating | worker → server `output` | evaluating |
+| evaluating | worker → server `input_requested` | input required |
+| input required | server → worker `input` | evaluating |
 | evaluating | worker → server `completed` | idle |
-| starting, idle, or evaluating | server → worker `shutdown` | terminal |
+| starting, idle, evaluating, or input required | server → worker `shutdown` | terminal |
 
 Malformed JSON, invalid UTF-8, an unexpected message, or sideband EOF fails the active operation.
 There is no structured protocol error message.
@@ -155,7 +185,10 @@ A successful silent cell produces no sideband output, so the MCP result is `[don
 The CLI runs `worker` synchronously without a Tokio runtime, so R initialization and evaluation remain on the process main thread.
 
 The worker supplies cell source through `ReadConsole` before each top-level evaluation starts.
-An evaluation-time `ReadConsole` request receives EOF because interactive input is not implemented yet.
+Evaluation-time `ReadConsole` requests use the separate interactive input queue.
+The callback sends `input_requested`, waits for an `input` frame, and preserves partial or additional lines for later reads in the same evaluation.
+It uses R's busy callback rather than prompt text to distinguish cell source from evaluated-code input.
+Unused input is cleared after both successful evaluation and language errors.
 Submitted source references are not retained.
 Parse, evaluation, and print errors are returned as console text followed by `completed`, so the worker remains available even though the protocol has no structured language-error message.
 
@@ -181,5 +214,6 @@ zod: <r>\n
 When `r` is exactly `stall`, Zod creates a checkpoint in its private temporary directory and sleeps forever.
 When `r` is `violate protocol`, it sends an unexpected second `ready` message.
 When `r` is `exit unexpectedly`, it exits with status 86 without replying.
+When `r` is `request input`, it sends `input_requested`, accepts one exact `input` frame, echoes its text in an `output` frame, and completes.
 Other fixture-only modes verify that the sandbox denies host writes and that a blocked sideband writer cannot delay shutdown.
 Those behaviors are test fixtures, not part of the worker protocol.

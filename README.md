@@ -21,7 +21,21 @@ mcp-console sandbox -- COMMAND [ARG]...
 `mcp-console` requires a subcommand.
 `mcp-console serve` runs a minimal MCP server over stdio.
 Run `mcp-console --help` or `mcp-console COMMAND --help` for command-line help.
-The server registers one `send` tool that accepts one complete `r` code cell.
+The server registers one `send` tool that accepts one complete `r` code cell with optional interactive `stdin`:
+
+```json
+{ "r": "name <- readline('name> ')\nname", "stdin": "Ada\n" }
+```
+
+The server evaluates `r` first and sends `stdin` only if that evaluation requests input.
+If evaluation finishes first, the result ends with `[stdin discarded]`.
+Without bundled input, an R `ReadConsole` request returns its prompt and `[input]`; a later call supplies exact text without adding a newline:
+
+```json
+{ "stdin": "Ada\n" }
+```
+
+Partial and multiple lines are buffered, and unread input is discarded when the evaluation ends.
 On macOS, the first call lazily starts a sandboxed embedded R worker.
 Later calls reuse the same global R state.
 The worker runs each cell through R's native top-level loop, captures R console output, prints each visible value, and maintains `.Last.value`.

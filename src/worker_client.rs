@@ -10,8 +10,24 @@ pub(crate) struct Client(Arc<ClientInner>);
 struct ClientInner {
     program: PathBuf,
     arguments: Vec<OsString>,
-    worker: Mutex<Option<platform::Worker>>,
+    state: Mutex<WorkerState>,
     shutdown_gate: Mutex<ShutdownGate>,
+}
+
+enum WorkerState {
+    Cold,
+    Idle(platform::Worker),
+    InputRequired(platform::Worker),
+}
+
+enum Operation {
+    Evaluate { r: String, stdin: Option<String> },
+    Input(String),
+}
+
+enum Boundary {
+    Complete(String),
+    Input(String),
 }
 
 /// Keeps the current stop handle available until shutdown closes the gate.
@@ -42,7 +58,7 @@ impl Client {
         Self(Arc::new(ClientInner {
             program,
             arguments,
-            worker: Mutex::new(None),
+            state: Mutex::new(WorkerState::Cold),
             shutdown_gate: Mutex::new(ShutdownGate::Open { stop_handle: None }),
         }))
     }
@@ -51,42 +67,94 @@ impl Client {
     ///
     /// The worker starts on the first call and is then reused by later calls.
     /// `spawn_blocking` owns a cheap handle clone, not a copy of the process.
-    pub(crate) async fn evaluate(&self, r: String) -> Result<String, String> {
+    pub(crate) async fn evaluate(
+        &self,
+        r: String,
+        stdin: Option<String>,
+    ) -> Result<String, String> {
+        self.run(Operation::Evaluate { r, stdin }).await
+    }
+
+    /// Supplies exact input after the worker requests it.
+    pub(crate) async fn provide_input(&self, stdin: String) -> Result<String, String> {
+        self.run(Operation::Input(stdin)).await
+    }
+
+    async fn run(&self, operation: Operation) -> Result<String, String> {
         let client = self.clone();
-        tokio::task::spawn_blocking(move || client.evaluate_blocking(r))
+        tokio::task::spawn_blocking(move || client.run_blocking(operation))
             .await
             .map_err(|error| format!("worker task failed: {error}"))?
     }
 
-    fn evaluate_blocking(&self, r: String) -> Result<String, String> {
+    fn run_blocking(&self, operation: Operation) -> Result<String, String> {
         if self.shutdown_requested()? {
             return Err("worker is shutting down".to_string());
         }
 
-        let mut worker = self
+        let mut state = self
             .0
-            .worker
+            .state
             .lock()
-            .map_err(|_| "worker lock poisoned".to_string())?;
+            .map_err(|_| "worker state lock poisoned".to_string())?;
         if self.shutdown_requested()? {
             return Err("worker is shutting down".to_string());
         }
 
-        if worker.is_none() {
-            *worker = Some(platform::Worker::start(
-                &self.0.program,
-                &self.0.arguments,
-                |stop_handle| self.register_stop_handle(stop_handle),
-            )?);
+        let current = std::mem::replace(&mut *state, WorkerState::Cold);
+        let (mut worker, operation) = match (operation, current) {
+            (operation @ Operation::Evaluate { .. }, WorkerState::Cold) => {
+                let worker =
+                    platform::Worker::start(&self.0.program, &self.0.arguments, |stop_handle| {
+                        self.register_stop_handle(stop_handle)
+                    })?;
+                (worker, operation)
+            }
+            (operation @ Operation::Evaluate { .. }, WorkerState::Idle(worker)) => {
+                (worker, operation)
+            }
+            (Operation::Evaluate { .. }, WorkerState::InputRequired(worker)) => {
+                *state = WorkerState::InputRequired(worker);
+                return Err(
+                    "cannot evaluate R code while the session is waiting for stdin".to_string(),
+                );
+            }
+            (Operation::Input(_), WorkerState::Cold) => {
+                *state = WorkerState::Cold;
+                return Err("stdin is accepted only at an R input prompt".to_string());
+            }
+            (Operation::Input(_), WorkerState::Idle(worker)) => {
+                *state = WorkerState::Idle(worker);
+                return Err("stdin is accepted only at an R input prompt".to_string());
+            }
+            (Operation::Input(stdin), WorkerState::InputRequired(worker)) => {
+                if stdin.contains('\0') {
+                    *state = WorkerState::InputRequired(worker);
+                    return Err("stdin cannot contain NUL".to_string());
+                }
+                (worker, Operation::Input(stdin))
+            }
+        };
+
+        let result = match operation {
+            Operation::Evaluate { r, stdin } => worker.evaluate(r, stdin),
+            Operation::Input(stdin) => worker.provide_input(stdin),
+        };
+        match result {
+            Ok(Boundary::Complete(output)) => {
+                *state = WorkerState::Idle(worker);
+                Ok(output)
+            }
+            Ok(Boundary::Input(output)) => {
+                *state = WorkerState::InputRequired(worker);
+                Ok(output)
+            }
+            Err(error) => {
+                drop(worker);
+                *state = WorkerState::Cold;
+                Err(error)
+            }
         }
-        let result = worker
-            .as_mut()
-            .expect("worker should be running")
-            .evaluate(r);
-        if result.is_err() {
-            *worker = None;
-        }
-        result
     }
 
     fn shutdown_requested(&self) -> Result<bool, String> {
@@ -205,21 +273,65 @@ mod platform {
             Ok(worker)
         }
 
-        /// Sends one cell and collects output until the completed message.
-        pub(super) fn evaluate(&mut self, r: String) -> Result<String, String> {
+        /// Sends one cell and collects output until completion or an input boundary.
+        pub(super) fn evaluate(
+            &mut self,
+            r: String,
+            stdin: Option<String>,
+        ) -> Result<super::Boundary, String> {
             self.stop_handle
                 .writer
                 .send(&ServerMessage::Evaluate { r })
                 .map_err(|error| format!("worker sideband write failed: {error}"))?;
+            self.read_boundary(stdin)
+        }
+
+        pub(super) fn provide_input(&mut self, stdin: String) -> Result<super::Boundary, String> {
+            if stdin.contains('\0') {
+                return Err("stdin cannot contain NUL".to_string());
+            }
+            self.stop_handle
+                .writer
+                .send(&ServerMessage::Input { stdin })
+                .map_err(|error| format!("worker sideband write failed: {error}"))?;
+            self.read_boundary(None)
+        }
+
+        fn read_boundary(
+            &mut self,
+            mut pending_stdin: Option<String>,
+        ) -> Result<super::Boundary, String> {
             let mut output = String::new();
             loop {
                 match self.receive()? {
                     WorkerMessage::Output { data } => output.push_str(&data),
+                    WorkerMessage::InputRequested { prompt } => {
+                        if let Some(stdin) = pending_stdin.take() {
+                            if stdin.contains('\0') {
+                                return Err("stdin cannot contain NUL".to_string());
+                            }
+                            append_text(&mut output, prompt.trim_end());
+                            append_newline(&mut output);
+                            self.stop_handle
+                                .writer
+                                .send(&ServerMessage::Input { stdin })
+                                .map_err(|error| {
+                                    format!("worker sideband write failed: {error}")
+                                })?;
+                        } else {
+                            append_text(&mut output, prompt.trim_end());
+                            append_marker(&mut output, "[input]");
+                            return Ok(super::Boundary::Input(output));
+                        }
+                    }
                     WorkerMessage::Completed => {
                         if output.is_empty() {
                             output.push_str("[done]");
                         }
-                        return Ok(output);
+                        if pending_stdin.is_some() {
+                            append_marker(&mut output, "[stdin discarded]");
+                        }
+                        return Ok(super::Boundary::Complete(output));
                     }
                     WorkerMessage::Ready => {
                         return Err("worker sent an unexpected ready message".to_string());
@@ -233,6 +345,23 @@ mod platform {
                 .receive()
                 .map_err(|error| format!("worker sideband read failed: {error}"))
         }
+    }
+
+    fn append_text(output: &mut String, text: &str) {
+        if !text.is_empty() {
+            output.push_str(text);
+        }
+    }
+
+    fn append_newline(output: &mut String) {
+        if !output.is_empty() && !output.ends_with('\n') {
+            output.push('\n');
+        }
+    }
+
+    fn append_marker(output: &mut String, marker: &str) {
+        append_newline(output);
+        output.push_str(marker);
     }
 
     impl Drop for Worker {
@@ -288,7 +417,15 @@ mod platform {
             Err("workers are supported only on macOS".to_string())
         }
 
-        pub(super) fn evaluate(&mut self, _r: String) -> Result<String, String> {
+        pub(super) fn evaluate(
+            &mut self,
+            _r: String,
+            _stdin: Option<String>,
+        ) -> Result<super::Boundary, String> {
+            unreachable!("unsupported workers cannot start")
+        }
+
+        pub(super) fn provide_input(&mut self, _stdin: String) -> Result<super::Boundary, String> {
             unreachable!("unsupported workers cannot start")
         }
     }

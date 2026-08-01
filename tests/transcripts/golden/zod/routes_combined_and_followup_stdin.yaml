@@ -50,5 +50,65 @@ input:
   params:
     name: send
     arguments:
-      r: <large cell>
+      r: request input
+      stdin: |
+        combined
+output:
+  result:
+    content:
+      - type: text
+        text: |
+          zod>
+          zod stdin: combined
+    isError: false
+---
+id: 4
+input:
+  method: tools/call
+  params:
+    name: send
+    arguments:
+      r: hello
+      stdin: |
+        unused
+output:
+  result:
+    content:
+      - type: text
+        text: |-
+          zod: hello
+          [stdin discarded]
+    isError: false
+---
+id: 5
+input:
+  method: tools/call
+  params:
+    name: send
+    arguments:
+      r: request input
+output:
+  result:
+    content:
+      - type: text
+        text: |-
+          zod>
+          [input]
+    isError: false
+---
+id: 6
+input:
+  method: tools/call
+  params:
+    name: send
+    arguments:
+      stdin: |
+        followup
+output:
+  result:
+    content:
+      - type: text
+        text: |
+          zod stdin: followup
+    isError: false
 ...
