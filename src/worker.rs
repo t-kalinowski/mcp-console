@@ -10,7 +10,6 @@ mod platform {
     use crate::worker_protocol::{ServerMessage, WorkerMessage};
 
     static R_MAIN_ARGS: OnceLock<Vec<CString>> = OnceLock::new();
-    static WORKER_READER: OnceLock<Mutex<crate::sideband::Reader>> = OnceLock::new();
     static WORKER_WRITER: OnceLock<crate::sideband::Writer> = OnceLock::new();
     static R_REPL_INIT: OnceLock<ReplInit> = OnceLock::new();
     static R_REPL_DO_ONE: OnceLock<ReplDoOne> = OnceLock::new();
@@ -41,19 +40,16 @@ mod platform {
         if unsafe { libc::pthread_main_np() } != 1 {
             return Err(io::Error::other("R worker must run on the process main thread").into());
         }
-        let (reader, writer) = crate::sideband::connect_from_env()?;
+        let (mut reader, writer) = crate::sideband::connect_from_env()?;
         let r_home = harp::command::r_home_setup()?;
         initialize_r(&r_home)?;
-        WORKER_READER
-            .set(Mutex::new(reader))
-            .map_err(|_| io::Error::other("R worker sideband reader was already initialized"))?;
         WORKER_WRITER
             .set(writer.clone())
             .map_err(|_| io::Error::other("R worker sideband was already initialized"))?;
         writer.send(&WorkerMessage::Ready)?;
 
         loop {
-            match receive_server_message()? {
+            match reader.receive()? {
                 ServerMessage::Evaluate { r } => {
                     clear_interactive_input();
                     let result = evaluate_cell(r);
@@ -66,12 +62,6 @@ mod platform {
                         return Err(io::Error::other(message).into());
                     }
                     writer.send(&WorkerMessage::Completed)?;
-                }
-                ServerMessage::Input { .. } => {
-                    return Err(io::Error::other(
-                        "R worker received stdin outside an input request",
-                    )
-                    .into());
                 }
                 ServerMessage::Shutdown => return Ok(()),
             }
@@ -182,15 +172,6 @@ mod platform {
         if which != 0 {
             EVALUATION_STARTED.store(true, Ordering::SeqCst);
         }
-    }
-
-    fn receive_server_message() -> io::Result<ServerMessage> {
-        WORKER_READER
-            .get()
-            .ok_or_else(|| io::Error::other("R worker sideband reader is unavailable"))?
-            .lock()
-            .map_err(|_| io::Error::other("R worker sideband reader lock poisoned"))?
-            .receive()
     }
 
     fn set_cell_source(mut source: String) {
@@ -351,16 +332,8 @@ mod platform {
                 return write_console_input(buf, buflen, &input);
             }
 
-            match receive_server_message() {
-                Ok(ServerMessage::Input { stdin }) => {
-                    if stdin.contains('\0') {
-                        record_worker_failure("R worker stdin contained NUL".to_string());
-                        return console_eof(buf);
-                    }
-                    INTERACTIVE_INPUT
-                        .lock()
-                        .expect("R interactive input lock should not be poisoned")
-                        .extend_from_slice(stdin.as_bytes());
+            match read_stdin() {
+                Ok(true) => {
                     if !interactive_input_has_line()
                         && let Err(error) = send_input_requested(&prompt)
                     {
@@ -368,20 +341,9 @@ mod platform {
                         return console_eof(buf);
                     }
                 }
-                Ok(ServerMessage::Shutdown) => {
-                    WORKER_SHUTDOWN.store(true, Ordering::SeqCst);
-                    return console_eof(buf);
-                }
-                Ok(ServerMessage::Evaluate { .. }) => {
-                    record_worker_failure(
-                        "R worker received code while waiting for stdin".to_string(),
-                    );
-                    return console_eof(buf);
-                }
+                Ok(false) => return console_eof(buf),
                 Err(error) => {
-                    record_worker_failure(format!(
-                        "R worker sideband read failed while waiting for stdin: {error}"
-                    ));
+                    record_worker_failure(error);
                     return console_eof(buf);
                 }
             }
@@ -403,6 +365,30 @@ mod platform {
             .lock()
             .expect("R interactive input lock should not be poisoned")
             .contains(&b'\n')
+    }
+
+    fn read_stdin() -> Result<bool, String> {
+        let mut input = [0_u8; 8192];
+        loop {
+            let count =
+                unsafe { libc::read(libc::STDIN_FILENO, input.as_mut_ptr().cast(), input.len()) };
+            if count > 0 {
+                INTERACTIVE_INPUT
+                    .lock()
+                    .expect("R interactive input lock should not be poisoned")
+                    .extend_from_slice(&input[..count as usize]);
+                return Ok(true);
+            }
+            if count == 0 {
+                WORKER_SHUTDOWN.store(true, Ordering::SeqCst);
+                return Ok(false);
+            }
+
+            let error = io::Error::last_os_error();
+            if error.kind() != io::ErrorKind::Interrupted {
+                return Err(format!("R worker stdin read failed: {error}"));
+            }
+        }
     }
 
     fn take_complete_console_input(max: usize) -> Option<Vec<u8>> {

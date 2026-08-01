@@ -39,12 +39,38 @@ output:
                 - string
                 - "null"
             stdin:
-              description: "Exact text for this cell's first input request or an active [input] prompt."
+              description: |-
+                Exact text supplied at this cell's first input request or an active [input]
+                prompt. One value may satisfy multiple reads in the same evaluation. Each
+                line is limited to 512 bytes, including its newline.
               type:
                 - string
                 - "null"
 ---
 id: 3
+input:
+  method: tools/call
+  params:
+    name: send
+    arguments:
+      r: |-
+        first <- readline("first> ")
+        second <- readline("second> ")
+        cat(paste(first, second, sep = "|"), "\n", sep = "")
+      stdin: |
+        Ada
+        Lovelace
+output:
+  result:
+    content:
+      - type: text
+        text: |
+          first>
+          second>
+          Ada|Lovelace
+    isError: false
+---
+id: 4
 input:
   method: tools/call
   params:
@@ -63,7 +89,42 @@ output:
           [1] "hello Ada"
     isError: false
 ---
-id: 4
+id: 5
+input:
+  method: tools/call
+  params:
+    name: send
+    arguments:
+      r: "paste(\"hello\", readline(\"name> \"))"
+      stdin: "<large multiline stdin>"
+output:
+  result:
+    content:
+      - type: text
+        text: |
+          name>
+          [1] "hello Ada"
+    isError: false
+---
+id: 6
+input:
+  method: tools/call
+  params:
+    name: send
+    arguments:
+      r: "readline(\"fresh> \")"
+      stdin: |
+        fresh
+output:
+  result:
+    content:
+      - type: text
+        text: |
+          fresh>
+          [1] "fresh"
+    isError: false
+---
+id: 7
 input:
   method: tools/call
   params:
@@ -81,7 +142,7 @@ output:
           [stdin discarded]
     isError: false
 ---
-id: 5
+id: 8
 input:
   method: tools/call
   params:
@@ -97,7 +158,21 @@ output:
           [input]
     isError: false
 ---
-id: 6
+id: 9
+input:
+  method: tools/call
+  params:
+    name: send
+    arguments:
+      stdin: ""
+output:
+  result:
+    content:
+      - type: text
+        text: "[input]"
+    isError: false
+---
+id: 10
 input:
   method: tools/call
   params:
@@ -113,7 +188,7 @@ output:
           [input]
     isError: false
 ---
-id: 7
+id: 11
 input:
   method: tools/call
   params:
@@ -128,4 +203,82 @@ output:
         text: |
           [1] "color blue"
     isError: false
+---
+id: 12
+input:
+  method: tools/call
+  params:
+    name: send
+    arguments:
+      r: "nchar(readline(\"limit> \"))"
+      stdin: "<maximum stdin line>"
+output:
+  result:
+    content:
+      - type: text
+        text: |
+          limit>
+          [1] 511
+    isError: false
+---
+id: 13
+input:
+  method: tools/call
+  params:
+    name: send
+    arguments:
+      r: "readline(\"long> \")"
+      stdin: "<oversized stdin line>"
+output:
+  result:
+    content:
+      - type: text
+        text: stdin lines cannot exceed 512 bytes including the newline
+    isError: true
+---
+id: 14
+input:
+  method: tools/call
+  params:
+    name: send
+    arguments:
+      r: "readline(\"long> \")"
+output:
+  result:
+    content:
+      - type: text
+        text: |-
+          long>
+          [input]
+    isError: false
+---
+id: 15
+input:
+  method: tools/call
+  params:
+    name: send
+    arguments:
+      stdin: "<partial stdin>"
+output:
+  result:
+    content:
+      - type: text
+        text: |-
+          long>
+          [input]
+    isError: false
+---
+id: 16
+input:
+  method: tools/call
+  params:
+    name: send
+    arguments:
+      stdin: "<oversized stdin continuation>"
+output:
+  result:
+    content:
+      - type: text
+        text: stdin lines cannot exceed 512 bytes including the newline
+    isError: true
 ...

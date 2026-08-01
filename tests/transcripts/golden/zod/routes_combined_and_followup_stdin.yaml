@@ -39,7 +39,10 @@ output:
                 - string
                 - "null"
             stdin:
-              description: "Exact text for this cell's first input request or an active [input] prompt."
+              description: |-
+                Exact text supplied at this cell's first input request or an active [input]
+                prompt. One value may satisfy multiple reads in the same evaluation. Each
+                line is limited to 512 bytes, including its newline.
               type:
                 - string
                 - "null"
@@ -52,14 +55,14 @@ input:
     arguments:
       r: request input
       stdin: |
-        combined
+        café
 output:
   result:
     content:
       - type: text
         text: |
           zod>
-          zod stdin: combined
+          zod stdin: café
     isError: false
 ---
 id: 4
@@ -111,4 +114,19 @@ output:
         text: |
           zod stdin: followup
     isError: false
+---
+id: 7
+input:
+  method: tools/call
+  params:
+    name: send
+    arguments:
+      r: request input
+      stdin: "<oversized stdin line>"
+output:
+  result:
+    content:
+      - type: text
+        text: stdin lines cannot exceed 512 bytes including the newline
+    isError: true
 ...

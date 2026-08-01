@@ -54,7 +54,7 @@ The interface is optimized for frequent use and global enablement:
       },
       "stdin": {
         "type": "string",
-        "description": "Raw text for the submitted cell's first input request, or appended to an active evaluation after [input]. It may contain one or more lines; newlines are significant and are not added automatically. Unconsumed text is discarded when the evaluation ends."
+        "description": "Raw text supplied at the submitted cell's first input request, or appended to an active evaluation after [input]. A single value may satisfy multiple reads; newlines are significant and are not added automatically. Unconsumed text is discarded when the evaluation ends."
       },
       "session": {
         "type": "string",

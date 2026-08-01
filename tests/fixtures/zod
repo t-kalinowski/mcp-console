@@ -64,19 +64,12 @@ def main() -> None:
 
         if message["r"] == "request input":
             send(writer, {"kind": "input_requested", "prompt": "zod> "})
-            input_line = reader.readline()
-            if not input_line:
-                return
-            input_message = json.loads(input_line)
-            if input_message["kind"] == "shutdown":
-                return
-            assert input_message["kind"] == "input"
-            assert set(input_message) == {"kind", "stdin"}
+            stdin = input()
             send(
                 writer,
                 {
                     "kind": "output",
-                    "data": f"zod stdin: {input_message['stdin']}",
+                    "data": f"zod stdin: {stdin}\n",
                 },
             )
             send(writer, {"kind": "completed"})

@@ -27,8 +27,9 @@ The server registers one `send` tool that accepts one complete `r` code cell wit
 { "r": "name <- readline('name> ')\nname", "stdin": "Ada\n" }
 ```
 
-The server evaluates `r` first and sends `stdin` only if that evaluation requests input.
+The server evaluates `r` first and writes the stdin bytes to worker fd 0 only if that evaluation requests input.
 If evaluation finishes first, the result ends with `[stdin discarded]`.
+Each input line is limited to 512 bytes, including its newline.
 Without bundled input, an R `ReadConsole` request returns its prompt and `[input]`; a later call supplies exact text without adding a newline:
 
 ```json

@@ -24,7 +24,9 @@ struct ConsoleServer {
 struct SendArguments {
     /// Complete multiline R code evaluated in persistent state.
     r: Option<String>,
-    /// Exact text for this cell's first input request or an active [input] prompt.
+    /// Exact text supplied at this cell's first input request or an active [input]
+    /// prompt. One value may satisfy multiple reads in the same evaluation. Each
+    /// line is limited to 512 bytes, including its newline.
     stdin: Option<String>,
 }
 

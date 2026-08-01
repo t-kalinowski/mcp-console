@@ -18,7 +18,7 @@ Property descriptions:
 - `r`: `Complete multiline R cell in persistent state. Python objects are available through py; R help, browser(), and recover() work.`
 - `python`: `Complete multiline Python cell in persistent state. R objects are available through r; help(), breakpoint(), and pdb work.`
 - `sql`: `Complete DuckDB SQL cell in the persistent catalog. Query live or registered tabular data; use SHOW TABLES, DESCRIBE, SUMMARIZE, and EXPLAIN for discovery. CLI dot commands are not supported.`
-- `stdin`: `Raw text for the submitted cell's first input request, or appended to an active evaluation after [input]. It may contain one or more lines; newlines are significant and are not added automatically. Unconsumed text is discarded when the evaluation ends.`
+- `stdin`: `Raw text supplied at the submitted cell's first input request, or appended to an active evaluation after [input]. A single value may satisfy multiple reads; newlines are significant and are not added automatically. Unconsumed text is discarded when the evaluation ends.`
 - `session`: `Persistent named session; defaults to default. Use another name for independent or concurrent state. A missing session is created only by a code cell.`
 - `label`: `Optional short heading for this cell in the Quarto transcript; it has no effect on execution.`
 - `wait_ms`: `Maximum time this call waits for output or a state change. It never limits or cancels the computation.`

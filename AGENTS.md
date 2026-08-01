@@ -25,12 +25,12 @@ The worker embeds R through `libr` and `harp`, retains global state, and feeds e
 R parses and evaluates its expressions sequentially, captures console output, prints visible values, and performs native top-level bookkeeping.
 Cell EOF while R requires continuation input is an error; earlier complete expressions from that cell remain applied.
 Evaluation-time `ReadConsole` requests return an `[input]` boundary and accept exact, optionally multiline `stdin` without adding a newline.
-When `r` and `stdin` arrive together, the server evaluates `r` first and sends `stdin` only after the worker requests input; it reports `[stdin discarded]` if evaluation completes first.
+When `r` and `stdin` arrive together, the server evaluates `r` first and writes stdin lines or partial-line fragments to worker fd 0 only as the worker requests input; one value may satisfy multiple reads, each logical line is limited to 512 bytes including its newline, and `[stdin discarded]` reports that evaluation completed before requesting any input.
 Unused buffered input is discarded when the evaluation ends.
 The hidden `worker` command takes ownership of the sideband, discovers `R_HOME` through the selected R executable inside the sandbox, and opens `R_HOME/lib/libR.dylib` by its absolute path.
 It does not self-execute or set a dynamic-loader environment variable.
 The worker command runs synchronously on the process main thread; only `serve` creates a Tokio runtime.
-The hidden development option `serve --worker PATH` replaces the built-in worker with an executable that implements the same ready/evaluate/input/output/input-requested/completed/shutdown protocol.
+The hidden development option `serve --worker PATH` replaces the built-in worker with an executable that implements the same sideband control and output protocol plus fd-0 stdin contract.
 The Python fixture `tests/fixtures/zod` provides deterministic acceptance coverage for that boundary.
 An infrastructure or protocol failure is returned as a tool error, force-stops and discards that worker, and lets the next evaluation start a fresh worker.
 When MCP input closes, the server starts a one-second deadline and attempts graceful sideband shutdown without delaying it.
@@ -70,7 +70,7 @@ See `design-sketches/README.md` for the product overview and `design-sketches/do
 - `src/r_repl.c` — C-owned per-cell DLL-REPL iterator and long-jump boundary.
 - `src/sideband.rs` — macOS inherited-pipe JSON-lines transport.
 - `src/worker.rs` — embedded R initialization, evaluation, and console callbacks.
-- `src/worker_client.rs` — server-side worker launch, lifecycle, and output collection.
+- `src/worker_client.rs` — server-side worker launch, lifecycle, fd-0 input, and output collection.
 - `src/worker_protocol.rs` — shared sideband message definitions.
 - `src/sandbox.rs` — platform dispatch for the sandbox process launcher.
 - `src/sandbox/` — platform implementation and macOS Seatbelt policy.
@@ -107,7 +107,7 @@ Begin as one Cargo package and split crates only when a real boundary emerges.
   Do not add tests for private helpers.
 - Format embedded R, Python, SQL, and shell test programs as multiline raw strings.
   Use escape sequences such as `\n` only when the program needs that character as data, not to lay out its source.
-- Keep complete code cells and interactive `stdin` as separate worker commands and queues, even when one `send` call supplies both.
+- Keep complete code-cell source on the worker sideband and interactive stdin bytes on fd 0, even when one `send` call supplies both.
 - Keep the MCP adapter independent of interpreter implementation details.
 - Treat all runtime execution as shell-class capability and place safety at the worker-process boundary.
 - Update this file when a PR changes the implemented surface or repository map.

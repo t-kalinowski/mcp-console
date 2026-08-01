@@ -32,8 +32,8 @@ def test_routes_combined_and_followup_stdin(binary: Path) -> Transcript:
     )
     client.initialize_and_list_tools()
 
-    client.call_tool("send", r="request input", stdin="combined\n")
-    assert last_tool_text(client) == "zod>\nzod stdin: combined\n"
+    client.call_tool("send", r="request input", stdin="café\n")
+    assert last_tool_text(client) == "zod>\nzod stdin: café\n"
 
     client.call_tool("send", r="hello", stdin="unused\n")
     assert last_tool_text(client) == "zod: hello\n[stdin discarded]"
@@ -42,6 +42,19 @@ def test_routes_combined_and_followup_stdin(binary: Path) -> Transcript:
     assert last_tool_text(client) == "zod>\n[input]"
     client.call_tool("send", stdin="followup\n")
     assert last_tool_text(client) == "zod stdin: followup\n"
+
+    client.call_tool("send", r="request input", stdin=("x" * 512) + "\n")
+    client.transcript[-1]["input"]["params"]["arguments"]["stdin"] = (
+        "<oversized stdin line>"
+    )
+    result = client.transcript[-1]["output"]["result"]
+    assert result["isError"] is True, result
+    assert result["content"] == [
+        {
+            "type": "text",
+            "text": "stdin lines cannot exceed 512 bytes including the newline",
+        }
+    ]
     return client.finish()
 
 
