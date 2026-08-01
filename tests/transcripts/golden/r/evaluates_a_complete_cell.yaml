@@ -45,12 +45,63 @@ input:
   params:
     name: send
     arguments:
-      r: probe sandbox
+      r: |-
+        answer <- 40
+        answer + 1
+        answer + 2
+        cat("done\n")
+        invisible(99)
 output:
   result:
     content:
       - type: text
         text: |
-          sandbox blocked host write
+          [1] 41
+          [1] 42
+          done
+    isError: false
+---
+id: 4
+input:
+  method: tools/call
+  params:
+    name: send
+    arguments:
+      r: stop("boom", call. = FALSE)
+output:
+  result:
+    content:
+      - type: text
+        text: |
+          Error: boom
+    isError: false
+---
+id: 5
+input:
+  method: tools/call
+  params:
+    name: send
+    arguments:
+      r: answer
+output:
+  result:
+    content:
+      - type: text
+        text: |
+          [1] 40
+    isError: false
+---
+id: 6
+input:
+  method: tools/call
+  params:
+    name: send
+    arguments:
+      r: silent <- 1
+output:
+  result:
+    content:
+      - type: text
+        text: "[done]"
     isError: false
 ...

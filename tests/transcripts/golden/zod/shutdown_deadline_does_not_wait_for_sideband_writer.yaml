@@ -27,11 +27,17 @@ output:
   result:
     tools:
       - name: send
-        description: Echo the supplied arguments.
+        description: Evaluate one complete R code cell in persistent state.
         inputSchema:
           $schema: https://json-schema.org/draft/2020-12/schema
-          additionalProperties: true
+          required:
+            - r
           type: object
+          properties:
+            r:
+              description: Complete multiline R code evaluated in persistent state.
+              type: string
+          additionalProperties: false
 ---
 id: 3
 input:

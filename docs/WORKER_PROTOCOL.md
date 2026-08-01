@@ -1,28 +1,33 @@
-# Development worker protocol
+# Worker protocol
 
-This document describes the worker protocol implemented by `mcp-console serve --worker PATH` and `tests/fixtures/zod`.
-It describes the current code, not the planned production worker in `design-sketches/`.
-The message enums in `src/worker_client.rs` and the framing in `src/sideband.rs` are the source of truth.
+This document describes the worker protocol implemented by `mcp-console serve`, the built-in R worker, and `tests/fixtures/zod`.
+It describes the current code, not the broader design under `design-sketches/`.
+The message enums in `src/worker_protocol.rs` and the framing in `src/sideband.rs` are the source of truth.
 
 ## Scope
 
-The current implementation provides one development worker for one server process.
+The current implementation provides one worker for one server process.
 It supports one operation: evaluate an `r` string and return its output.
 Evaluations run sequentially.
 
 The protocol does not yet include interactive input, interrupts, request IDs, errors, sessions, capabilities, or protocol version negotiation.
 
-Without `--worker PATH`, the server does not start a worker and `send` retains its JSON echo behavior.
+Plain `serve` selects the built-in R worker.
+The hidden `serve --worker PATH` option replaces it with a development worker.
 
 ## Launch contract
 
-`PATH` is one program name or path, with no arguments and no shell parsing.
-The worker starts lazily on the first worker-backed `send` call.
-On macOS, the server gives `PATH` to the same `SandboxedCommand` builder used by the `sandbox` command, producing a launch equivalent to:
+The worker starts lazily on the first `send` call.
+On macOS, the server uses the same `SandboxedCommand` builder as the `sandbox` command.
+For `--worker PATH`, `PATH` is one program name or path, with no arguments or shell parsing, producing a launch equivalent to:
 
 ```text
 /usr/bin/sandbox-exec <policy> -- PATH
 ```
+
+The built-in path launches the current `mcp-console` executable in an internal bootstrap mode.
+Inside the sandbox, the bootstrap discovers `R_HOME` and self-executes with R's library directory on the dynamic loader path.
+The final process initializes R through `libr` and `harp`.
 
 The server launches the sandboxed worker with null standard input, output, and error streams.
 The sideband pipes are its only communication channel.
@@ -42,7 +47,8 @@ It drops its duplicate child endpoints immediately after the spawn attempt.
 
 The worker takes ownership of those descriptors.
 Before it runs other programs or user code, it must remove the bootstrap environment variables and prevent descendants from inheriting the descriptors.
-Zod does this with `os.environ.pop()` and `os.set_inheritable(fd, False)`.
+The R worker also closes the descriptors in fork-only descendants.
+Zod uses `os.environ.pop()` and `os.set_inheritable(fd, False)`.
 
 ## Transport
 
@@ -114,7 +120,7 @@ Concurrent MCP calls wait on the worker process mutex and reach the worker seque
 Malformed JSON, invalid UTF-8, an unexpected message, or sideband EOF fails the active operation.
 There is no structured protocol error message and no automatic worker restart.
 Startup failure discards the worker, so a later evaluation may retry startup.
-After an evaluation error, the cached worker and its sideband remain in place, so a later evaluation may encounter a misaligned stream and fail again.
+A failure after startup leaves the failed worker cached.
 
 ## Shutdown
 
@@ -139,6 +145,15 @@ Shutdown closes a one-way gate that the client checks before and after acquiring
 Startup registers a separate stop handle before waiting for `ready`.
 If shutdown already closed the gate, startup stops the new child and fails immediately.
 
+## Built-in R worker
+
+The built-in worker parses each complete cell in memory, evaluates its expressions in the persistent global environment, captures R console output, and prints every visible value.
+A successful silent cell produces no sideband output, so the MCP result is `[done]`.
+
+This initial path does not use R's DLL REPL loop.
+It does not provide interactive input, top-level warning flushing, `.Last.value`, task callbacks, traceback bookkeeping, or source references.
+Parse, evaluation, and print errors are returned as console text followed by `completed`, so the worker remains available even though the protocol has no structured language-error message.
+
 ## Current limits
 
 The current implementation has no startup timeout, evaluation timeout, frame-size limit, or accumulated-output limit.
@@ -148,7 +163,6 @@ It does not capture worker standard output or standard error.
 It does not support arbitrary binary output.
 It does not report a structured worker error or restart a failed worker.
 The current sandbox child does not yet supervise descendants after its direct process exits, or descendants that leave its process group.
-In worker mode, the MCP handler requires exactly one `r` string even though the static tool description still says “Echo” and its schema still permits any JSON object.
 
 ## Zod fixture behavior
 

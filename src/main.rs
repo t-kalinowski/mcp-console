@@ -1,3 +1,4 @@
+use std::ffi::OsStr;
 use std::process::ExitCode;
 
 use clap::Parser;
@@ -7,10 +8,27 @@ mod sandbox;
 mod server;
 #[cfg(target_os = "macos")]
 mod sideband;
+mod worker;
 mod worker_client;
+#[cfg(target_os = "macos")]
+mod worker_protocol;
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> ExitCode {
+    let arguments = std::env::args_os().skip(1).collect::<Vec<_>>();
+    if matches!(arguments.as_slice(), [mode] if mode == OsStr::new("__worker_bootstrap")) {
+        return match worker::bootstrap() {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => exit_with_error(error),
+        };
+    }
+    if matches!(arguments.as_slice(), [mode] if mode == OsStr::new("__worker")) {
+        return match worker::run() {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => exit_with_error(error),
+        };
+    }
+
     match cli::Cli::parse().command {
         cli::Command::Serve { worker } => match server::run(worker).await {
             Ok(()) => ExitCode::SUCCESS,

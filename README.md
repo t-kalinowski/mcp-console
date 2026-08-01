@@ -21,8 +21,10 @@ mcp-console sandbox -- COMMAND [ARG]...
 `mcp-console` requires a subcommand.
 `mcp-console serve` runs a minimal MCP server over stdio.
 Run `mcp-console --help` or `mcp-console COMMAND --help` for command-line help.
-The server registers one `send` tool that accepts a JSON object and returns that object as JSON text.
-It does not execute code or retain state yet.
+The server registers one `send` tool that accepts one complete `r` code cell.
+On macOS, the first call lazily starts a sandboxed embedded R worker.
+Later calls reuse the same global R state.
+The worker captures R console output and prints each visible top-level value.
 Its MCP initialization identity remains `mcp-console`.
 The intended default client registration name is `console`:
 
@@ -59,9 +61,9 @@ scripts/format
 Formatter errors remain visible but do not stop the remaining formatters or make the script fail.
 
 See [`tests/transcripts/README.md`](tests/transcripts/README.md) for running and authoring external server transcript tests.
-The `zod` suite runs on macOS, where the sandbox policy is implemented.
-It uses the hidden `serve --worker PATH` development option to exercise the server-side worker protocol with an executable Python fixture.
-The server launches the fixture through the same sandbox boundary intended for the production worker.
+The `r` suite exercises the built-in worker.
+The `zod` suite uses the hidden `serve --worker PATH` development option to exercise the same protocol with an executable Python fixture.
+Both suites run on macOS, where the sandbox policy is implemented.
 See [`docs/WORKER_PROTOCOL.md`](docs/WORKER_PROTOCOL.md) for the exact implemented launch and message contract.
 
 ## License
