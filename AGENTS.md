@@ -21,17 +21,16 @@ The `serve` command runs an MCP server over stdio.
 Clap provides command help, version output, argument parsing, and usage errors.
 The server registers only a `send` tool and starts no runtime during MCP initialization or tool listing.
 The tool accepts exactly one of an `r` string containing a complete R code cell or a `stdin` string supplying exact interactive input.
-The first `r` call lazily starts the built-in R worker under the same sandbox policy as the `sandbox` command.
+On macOS, its first `r` call lazily starts the built-in R worker under the same sandbox policy as the `sandbox` command.
+The worker embeds R through `libr` and `harp`, retains global state, and feeds each complete cell through R's DLL REPL iterator.
+R parses and evaluates its expressions sequentially, captures console output, prints visible values, and performs native top-level bookkeeping.
+Cell EOF while R requires continuation input is an error; earlier complete expressions from that cell remain applied.
+R parse, evaluation, and auto-print failures are normal language outcomes with `isError: false`.
+Silent successful evaluations return `[done]`.
 
 The hidden `worker` command takes ownership of the sideband, discovers `R_HOME` through the selected R executable inside the sandbox, and opens `R_HOME/lib/libR.dylib` by its absolute path.
 It does not self-execute or set a dynamic-loader environment variable.
-The command runs synchronously on the process main thread; only `serve` creates a Tokio runtime.
-
-The worker embeds R through `libr` and `harp`.
-It feeds each cell to R's DLL REPL, which parses and evaluates its expressions sequentially at top level in persistent global state and returns R console output, including every visible top-level value.
-Cell EOF while R requires continuation input is a parse error, not an input prompt; earlier complete expressions from that cell remain applied.
-R parse, evaluation, and auto-print failures are normal language outcomes with `isError: false`.
-Silent successful evaluations return `[done]`.
+The worker command runs synchronously on the process main thread; only `serve` creates a Tokio runtime.
 
 `readline()` and `browser()` can suspend the active evaluation at `[input]`; later `stdin` calls buffer partial or multiple exact lines without adding a newline.
 Unused buffered input is discarded when the evaluation ends.
@@ -87,9 +86,9 @@ See `design-sketches/README.md` for the product overview and `design-sketches/do
 - `src/main.rs` — current binary entry point.
 - `src/cli.rs` — clap command definitions and user-facing help.
 - `src/server.rs` — MCP stdio server, `send` tool, and worker selection.
+- `src/r_repl.c` — C-owned per-cell DLL-REPL iterator and long-jump boundary.
 - `src/sideband.rs` — macOS inherited-pipe JSON-lines transport.
 - `src/worker.rs` — embedded R initialization, evaluation, and console callbacks.
-- `src/r_repl.c` — C-owned per-cell DLL-REPL iterator and long-jump boundary.
 - `src/worker_client.rs` — server-side worker launch, lifecycle, and output collection.
 - `src/worker_protocol.rs` — shared sideband message definitions.
 - `src/sandbox.rs` — platform dispatch for the sandbox process launcher.

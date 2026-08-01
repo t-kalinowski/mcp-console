@@ -148,44 +148,9 @@ MCP Console therefore does not need `harp::try_catch()`, `harp::top_level_exec()
 
 The C shim receives the already-resolved libR function pointers.
 It does not include R headers or link directly to libR.
-
-Conceptually:
-
-```c
-typedef void (*repl_init_fn)(void);
-typedef int (*repl_do_one_fn)(void);
-typedef void (*before_do_one_fn)(void);
-
-static volatile sig_atomic_t inside_do_one;
-
-int mcp_r_repl_run_cell(
-    repl_init_fn init,
-    repl_do_one_fn do_one,
-    before_do_one_fn before_do_one
-) {
-    int last_status = 1;
-
-    inside_do_one = 0;
-    init();
-
-    if (inside_do_one) {
-        inside_do_one = 0;
-        return 0;
-    }
-
-    for (;;) {
-        before_do_one();
-        inside_do_one = 1;
-        int status = do_one();
-        inside_do_one = 0;
-
-        if (status < 0) {
-            return last_status;
-        }
-        last_status = status;
-    }
-}
-```
+The implementation is intentionally kept in [`src/r_repl.c`](../../src/r_repl.c) rather than repeated here.
+It keeps `R_ReplDLLinit()` and every `R_ReplDLLdo1()` call beneath the C boundary.
+A `noinline` helper sets a volatile `sig_atomic_t` marker only after `R_ReplDLLdo1()` returns normally; after an R long-jump, the marker remains clear and the shim reports status `0`.
 
 Return values to Rust are:
 
@@ -193,7 +158,7 @@ Return values to Rust are:
 - `1`: source EOF at a complete primary boundary;
 - `2`: source EOF while the parser requires continuation input.
 
-The static volatile marker is deliberately the only C state consulted after a long-jump.
+The volatile marker is deliberately the only C state consulted after a long-jump.
 The shim must not depend on Rust destructors, Rust unwinding, or modified automatic C locals surviving that transfer.
 Rust callbacks invoked from R must return normally and must not panic.
 
@@ -248,8 +213,8 @@ The existing private protocol distinction remains:
 - worker startup, sandbox, process, and sideband failures are tool errors.
 
 On a native R long-jump, the console output already contains the R error.
-Rust sends an empty `LanguageError` boundary so it does not duplicate that text.
-An incomplete cell is the one language error synthesized by the host, because DLL EOF returns `-1` instead of producing R's full-console `unexpected end of input` error.
+The worker follows it with the same `completed` boundary used for successful cells.
+An incomplete cell is the one error synthesized by the host, because DLL EOF returns `-1` instead of producing R's full-console `unexpected end of input` error.
 
 If shutdown arrives while `ReadConsole` is waiting for stdin, the callback returns EOF and records the shutdown request.
 The C/Rust boundary exits at the next safe return or long-jump.

@@ -159,37 +159,6 @@ exec /bin/sleep 3
 
 #[cfg(target_os = "macos")]
 #[test]
-fn stdio_console_reports_syntax_errors_and_continues() {
-    let mut client = McpClient::start(&["serve"]);
-    let syntax_error = client.call_console_response(
-        2,
-        json!({"r": r#"
-answer <- 42
-)
-"#}),
-    );
-    assert_eq!(syntax_error["result"]["isError"], false);
-    assert!(
-        syntax_error["result"]["content"][0]["text"]
-            .as_str()
-            .expect("R syntax error should be text")
-            .contains("unexpected ')'"),
-        "syntax error: {:?}",
-        syntax_error["result"]["content"][0]["text"]
-    );
-    assert_eq!(
-        client.call_console(
-            3,
-            json!({"r": r#"
-answer
-"#}),
-        ),
-        "[1] 42\n"
-    );
-}
-
-#[cfg(target_os = "macos")]
-#[test]
 fn stdio_console_sandboxes_native_r_filesystem_processes_and_network() {
     let test_directory = TestDirectory::new("native-worker-boundary");
     let host_path = test_directory.path().join("host.txt");
@@ -264,25 +233,6 @@ cat("\n")
             .expect_err("sandboxed worker should not reach the listener")
             .kind(),
         std::io::ErrorKind::WouldBlock
-    );
-}
-
-#[cfg(target_os = "macos")]
-#[test]
-fn stdio_console_keeps_a_stopped_worker_stopped() {
-    let mut client = McpClient::start(&["serve"]);
-    let stopped = client.call_console_error(
-        2,
-        json!({"r": r#"
-quit(save = "no", status = 23, runLast = FALSE)
-"#}),
-    );
-    assert!(stopped.starts_with("[stopped:"), "worker exit: {stopped:?}");
-    assert!(stopped.contains("23"), "worker exit: {stopped:?}");
-    assert_eq!(
-        client.call_console_error(3, json!({"r": "1"})),
-        stopped,
-        "a stopped worker must not restart implicitly"
     );
 }
 

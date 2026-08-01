@@ -58,87 +58,13 @@ def test_evaluates_a_complete_cell(binary: Path) -> Transcript:
     return client.finish()
 
 
-def test_repl_bookkeeping(binary: Path) -> Transcript:
-    client = initialized_client(binary)
-    send_r(
-        client,
-        # fmt: r
-        r"""
-        user_calls <- function() {
-          vapply(sys.calls(), deparse1, character(1))
-        }
-        calls <- user_calls()
-        cat("contains user call: ", "user_calls()" %in% calls, "\n", sep = "")
-        cat(
-          "contains internal call: ",
-          any(grepl("mcp_console|base::get", calls)),
-          "\n",
-          sep = ""
-        )
-        """,
-    )
-    send_r(
-        client,
-        # fmt: r
-        r"""
-        invisible(addTaskCallback(
-          local({
-            first <- TRUE
-            function(expr, ...) {
-              if (first) {
-                first <<- FALSE
-                return(TRUE)
-              }
-              cat(deparse1(expr), "\n", sep = "")
-              FALSE
-            }
-          }),
-          name = "mcp-console-test"
-        ))
-        mcp_console_callback_probe <- 42
-        """,
-    )
-    send_r(
-        client,
-        # fmt: r
-        r"""
-        warning("careful", call. = FALSE)
-        invisible(42)
-        cat(
-          "last value: ",
-          identical(base::.Last.value, 42),
-          ", global binding: ",
-          exists(".Last.value", envir = globalenv(), inherits = FALSE),
-          "\n",
-          sep = ""
-        )
-        """,
-    )
-    return client.finish()
-
-
 def test_recoverable_language_errors(binary: Path) -> Transcript:
     client = initialized_client(binary)
     send_r(
         client,
         # fmt: r
         r"""
-        answer <- 40
-        """,
-    )
-    send_r(
-        client,
-        # fmt: r
-        r"""
         answer <- 41
-        answer + (
-        """,
-    )
-    send_r(
-        client,
-        # fmt: r
-        r"""
-        answer
         """,
     )
     send_r(
@@ -280,6 +206,77 @@ def test_browser_input(binary: Path) -> Transcript:
     )
     client.call_tool("send", stdin="1 + 1\n")
     client.call_tool("send", stdin="c\n")
+    return client.finish()
+
+
+def test_applies_complete_expressions_before_incomplete_source(
+    binary: Path,
+) -> Transcript:
+    client = McpClient(binary, ("serve",))
+    client.initialize_and_list_tools()
+    # fmt: r
+    r = dedent(r"""
+        answer <- 42
+        answer + (
+        """).strip()
+    client.call_tool("send", r=r)
+    client.call_tool("send", r="answer")
+    # fmt: r
+    r = dedent(r"""
+        answer <- 43
+        )
+        """).strip()
+    client.call_tool("send", r=r)
+    client.call_tool("send", r="answer")
+    return client.finish()
+
+
+def test_runs_native_top_level_bookkeeping(binary: Path) -> Transcript:
+    client = McpClient(binary, ("serve",))
+    client.initialize_and_list_tools()
+    # fmt: r
+    r = dedent(r"""
+        invisible(addTaskCallback(
+          local({
+            first <- TRUE
+            function(expr, ...) {
+              if (first) {
+                first <<- FALSE
+                return(TRUE)
+              }
+              cat(deparse1(expr), "\n", sep = "")
+              FALSE
+            }
+          }),
+          name = "mcp-console-test"
+        ))
+        mcp_console_callback_probe <- 42
+        """).strip()
+    client.call_tool("send", r=r)
+    # fmt: r
+    r = dedent(r"""
+        warning("careful", call. = FALSE)
+        invisible(42)
+        cat("last value: ", identical(base::.Last.value, 42), "\n", sep = "")
+        user_calls <- function() {
+          vapply(sys.calls(), deparse1, character(1))
+        }
+        calls <- user_calls()
+        cat("contains user call: ", "user_calls()" %in% calls, "\n", sep = "")
+        cat(
+          "contains internal call: ",
+          any(grepl("mcp_console|base::get", calls)),
+          "\n",
+          sep = ""
+        )
+        cat(
+          "global binding: ",
+          exists(".Last.value", envir = globalenv(), inherits = FALSE),
+          "\n",
+          sep = ""
+        )
+        """).strip()
+    client.call_tool("send", r=r)
     return client.finish()
 
 

@@ -320,8 +320,7 @@ mod platform {
             loop {
                 match self.receive()? {
                     WorkerMessage::Output { data } => output.push_str(&data),
-                    WorkerMessage::InputRequested { prompt }
-                    | WorkerMessage::InputPending { prompt } => {
+                    WorkerMessage::InputRequested { prompt } => {
                         append_text(&mut output, prompt.trim_end());
                         append_marker(&mut output, "[input]");
                         return Ok(super::Boundary::Input(output));
@@ -330,10 +329,6 @@ mod platform {
                         if output.is_empty() {
                             output.push_str("[done]");
                         }
-                        return Ok(super::Boundary::Complete(output));
-                    }
-                    WorkerMessage::LanguageError { message } => {
-                        append_language_error(&mut output, &message);
                         return Ok(super::Boundary::Complete(output));
                     }
                     WorkerMessage::Fatal { message } => return Err(message),
@@ -395,21 +390,6 @@ mod platform {
             output.push('\n');
         }
         output.push_str(marker);
-    }
-
-    fn append_language_error(output: &mut String, message: &str) {
-        if message.is_empty() {
-            if output.is_empty() {
-                output.push_str("Error: R top-level evaluation failed\n");
-            }
-            return;
-        }
-        if !output.is_empty() && !output.ends_with('\n') {
-            output.push('\n');
-        }
-        output.push_str("Error: ");
-        output.push_str(message.trim_end());
-        output.push('\n');
     }
 
     fn worker_io_error(child: &Mutex<crate::sandbox::SandboxedChild>, error: io::Error) -> String {

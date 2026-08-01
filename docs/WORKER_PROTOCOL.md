@@ -77,9 +77,7 @@ The complete implemented message set is:
 | worker → server | `{"kind":"ready"}` | Startup is complete. |
 | worker → server | `{"kind":"output","data":"..."}` | Append one output text chunk. |
 | worker → server | `{"kind":"input_requested","prompt":"..."}` | Suspend at an R input request. |
-| worker → server | `{"kind":"input_pending","prompt":"..."}` | The supplied text contains no complete line yet. |
 | worker → server | `{"kind":"completed"}` | The evaluation is complete. |
-| worker → server | `{"kind":"language_error","message":"..."}` | Complete with a normal R language outcome. |
 | worker → server | `{"kind":"fatal","message":"..."}` | Stop after an internal worker failure. |
 
 Every frame uses `kind` to select its message variant.
@@ -128,7 +126,7 @@ worker -> server  {"kind":"completed"}
 
 The worker adds no newline.
 It buffers partial and multiple lines.
-If a chunk contains no complete line, `input_pending` returns another `[input]` boundary.
+If a chunk contains no complete line, another `input_requested` message returns an `[input]` boundary.
 A complete line resumes evaluation, which may complete or request more input.
 Unused buffered text is discarded when the outer evaluation ends.
 
@@ -145,9 +143,7 @@ Those are MCP-side state errors; the worker also treats an out-of-state protocol
 | evaluating | worker → server `output` | evaluating |
 | evaluating | worker → server `input_requested` | input required |
 | input required | server → worker `input` | evaluating |
-| evaluating | worker → server `input_pending` | input required |
 | evaluating | worker → server `completed` | idle |
-| evaluating | worker → server `language_error` | idle |
 | starting, idle, evaluating, or input required | worker → server `fatal` | stopped |
 | starting, idle, evaluating, or input required | server → worker `shutdown` | terminal |
 
@@ -156,9 +152,8 @@ Malformed JSON, invalid UTF-8, an unexpected message, or sideband EOF fails the 
 Startup and post-ready failures leave the logical worker in a sticky stopped state.
 Later calls return the same stopped error rather than starting a replacement.
 
-R parse, evaluation, auto-print, and task-callback errors are normal language outcomes.
-R usually writes the native error text through `output`, after which the worker sends `language_error` with an empty message.
-Host-classified errors such as incomplete source use its message.
+R parse, evaluation, auto-print, and task-callback errors are written through `output` and followed by `completed`.
+The worker writes the host-classified incomplete-source error the same way.
 The server completes the tool operation with `isError: false`, and the worker remains reusable.
 
 ## Shutdown
@@ -187,17 +182,16 @@ If shutdown already closed the gate, startup stops the new child and fails immed
 ## Built-in R worker
 
 The built-in worker runs each complete cell through `R_ReplDLLinit()` and repeated `R_ReplDLLdo1()` calls.
-R parses and evaluates its expressions sequentially in the persistent global environment.
-This supplies native visible-value printing, warning flushing, `.Last.value`, traceback bookkeeping, and top-level task callbacks with the submitted parsed expression.
+R parses and evaluates its expressions sequentially in the persistent global environment, captures console output, prints every visible value, and performs native top-level bookkeeping such as updating `.Last.value`.
+A cell that ends while R requires continuation input produces `Error: Incomplete code`; earlier complete expressions from that cell remain applied.
 A successful silent cell produces no sideband output, so the MCP result is `[done]`.
 
 The CLI runs `worker` synchronously without a Tokio runtime, so R initialization and evaluation remain on the process main thread.
 A small C shim owns the DLL-REPL frame across R's top-level long-jump boundary.
 The custom `ReadConsole` callback keeps cell source separate from evaluation-time stdin and uses R's busy callback rather than prompt text to distinguish them.
 
-Cell source is consumed as a stream.
-If a cell contains complete expressions followed by incomplete source, the earlier expressions have already run when the worker returns the incomplete-code language error.
 Submitted functions do not yet receive a virtual source filename.
+Parse, evaluation, and print errors are returned as console text followed by `completed`, so the worker remains available even though the protocol has no structured language-error message.
 
 ## Current limits
 
@@ -206,7 +200,7 @@ Only shutdown has a deadline.
 
 It does not capture worker standard output or standard error.
 It does not support arbitrary binary output.
-Worker failures are projected as plain-text MCP tool errors.
+Worker failures are reported as plain-text MCP tool errors, not structured worker events.
 The current sandbox child does not yet supervise descendants after its direct process exits, or descendants that leave its process group.
 
 ## Zod fixture behavior

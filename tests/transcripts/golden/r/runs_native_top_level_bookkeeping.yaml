@@ -22,30 +22,29 @@ input:
 ---
 id: 2
 input:
-  method: tools/call
-  params:
-    name: send
-    arguments:
-      r: |-
-        user_calls <- function() {
-          vapply(sys.calls(), deparse1, character(1))
-        }
-        calls <- user_calls()
-        cat("contains user call: ", "user_calls()" %in% calls, "\n", sep = "")
-        cat(
-          "contains internal call: ",
-          any(grepl("mcp_console|base::get", calls)),
-          "\n",
-          sep = ""
-        )
+  method: tools/list
 output:
   result:
-    content:
-      - type: text
-        text: |
-          contains user call: TRUE
-          contains internal call: FALSE
-    isError: false
+    tools:
+      - name: send
+        description: >-
+          Persistent R console. Send one complete r cell, or send stdin after the
+          response ends with [input].
+        inputSchema:
+          $schema: https://json-schema.org/draft/2020-12/schema
+          additionalProperties: false
+          type: object
+          properties:
+            r:
+              description: Complete multiline R code evaluated as top-level expressions.
+              type:
+                - string
+                - "null"
+            stdin:
+              description: Exact text supplied after R requests interactive input.
+              type:
+                - string
+                - "null"
 ---
 id: 3
 input:
@@ -86,10 +85,20 @@ input:
       r: |-
         warning("careful", call. = FALSE)
         invisible(42)
+        cat("last value: ", identical(base::.Last.value, 42), "\n", sep = "")
+        user_calls <- function() {
+          vapply(sys.calls(), deparse1, character(1))
+        }
+        calls <- user_calls()
+        cat("contains user call: ", "user_calls()" %in% calls, "\n", sep = "")
         cat(
-          "last value: ",
-          identical(base::.Last.value, 42),
-          ", global binding: ",
+          "contains internal call: ",
+          any(grepl("mcp_console|base::get", calls)),
+          "\n",
+          sep = ""
+        )
+        cat(
+          "global binding: ",
           exists(".Last.value", envir = globalenv(), inherits = FALSE),
           "\n",
           sep = ""
@@ -98,6 +107,6 @@ output:
   result:
     content:
       - type: text
-        text: "Warning message:\ncareful\x20\nlast value: TRUE, global binding: FALSE\n"
+        text: "Warning message:\ncareful\x20\nlast value: TRUE\ncontains user call: TRUE\ncontains internal call: FALSE\nglobal binding: FALSE\n"
     isError: false
 ...

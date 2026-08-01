@@ -32,11 +32,11 @@ The server registers one `send` tool with two mutually exclusive inputs:
 ```
 
 Each `r` call supplies one complete R code cell.
-The first `r` call lazily starts one private embedded-R worker.
 MCP initialization and tool listing do not require R.
-The worker feeds the cell to R's DLL REPL, which parses and evaluates its expressions sequentially at top level and returns R console output, including every visible top-level value.
-State persists across calls for the life of the server.
-Cell EOF while R requires continuation input is a parse error rather than an input prompt; earlier complete expressions from that cell remain applied.
+On macOS, the first `r` call lazily starts a sandboxed embedded R worker.
+Later calls reuse the same global R state.
+The worker runs each cell through R's native top-level loop, captures R console output, prints each visible value, and maintains `.Last.value`.
+If a cell ends while an expression is incomplete, earlier complete expressions from that cell remain applied.
 R parse, evaluation, and auto-print failures are normal language outcomes with `isError: false`; worker startup, sandbox, process, and private-protocol failures are tool errors.
 Successful silent evaluations return `[done]`.
 

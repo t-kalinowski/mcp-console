@@ -26,7 +26,7 @@ input:
   params:
     name: send
     arguments:
-      r: answer <- 40
+      r: answer <- 41
 output:
   result:
     content:
@@ -41,14 +41,15 @@ input:
     name: send
     arguments:
       r: |-
-        answer <- 41
-        answer + (
+        cat("before\n")
+        stop("boom", call. = FALSE)
 output:
   result:
     content:
       - type: text
         text: |
-          Error: Incomplete code
+          before
+          Error: boom
     isError: false
 ---
 id: 4
@@ -73,39 +74,6 @@ input:
     name: send
     arguments:
       r: |-
-        cat("before\n")
-        stop("boom", call. = FALSE)
-output:
-  result:
-    content:
-      - type: text
-        text: |
-          before
-          Error: boom
-    isError: false
----
-id: 6
-input:
-  method: tools/call
-  params:
-    name: send
-    arguments:
-      r: answer
-output:
-  result:
-    content:
-      - type: text
-        text: |
-          [1] 41
-    isError: false
----
-id: 7
-input:
-  method: tools/call
-  params:
-    name: send
-    arguments:
-      r: |-
         g <- function() stop("boom", call. = FALSE)
         f <- function() g()
         f()
@@ -117,7 +85,7 @@ output:
           Error: boom
     isError: false
 ---
-id: 8
+id: 6
 input:
   method: tools/call
   params:
@@ -145,7 +113,7 @@ output:
           traceback: stop=TRUE, g=TRUE, f=TRUE, internal=FALSE
     isError: false
 ---
-id: 9
+id: 7
 input:
   method: tools/call
   params:
@@ -164,7 +132,7 @@ output:
           Error in print.transcript_boom(x) : print failed
     isError: false
 ---
-id: 10
+id: 8
 input:
   method: tools/call
   params:

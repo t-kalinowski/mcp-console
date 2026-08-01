@@ -57,22 +57,17 @@ mod platform {
             match receive_server_message()? {
                 ServerMessage::Evaluate { r } => {
                     clear_interactive_input();
-                    let message = evaluate_cell(r);
+                    let result = evaluate_cell(r);
                     clear_interactive_input();
 
                     if WORKER_SHUTDOWN.load(Ordering::SeqCst) {
                         return Ok(());
                     }
-                    if let Some(message) = take_worker_failure() {
+                    if let Some(message) = take_worker_failure().or_else(|| result.err()) {
                         writer.send(&WorkerMessage::Fatal { message })?;
                         return Ok(());
                     }
-
-                    let fatal = matches!(message, WorkerMessage::Fatal { .. });
-                    writer.send(&message)?;
-                    if fatal {
-                        return Ok(());
-                    }
+                    writer.send(&WorkerMessage::Completed)?;
                 }
                 ServerMessage::Input { .. } => {
                     writer.send(&WorkerMessage::Fatal {
@@ -85,27 +80,24 @@ mod platform {
         }
     }
 
-    fn evaluate_cell(r: String) -> WorkerMessage {
+    fn evaluate_cell(r: String) -> Result<(), String> {
         if r.contains('\0') {
-            return WorkerMessage::LanguageError {
-                message: "R source cannot contain NUL".to_string(),
-            };
+            emit_output(b"Error: R source cannot contain NUL\n");
+            return Ok(());
         }
 
         set_cell_source(r);
         let status = run_repl_cell();
         clear_cell_source();
         match status {
-            0 => WorkerMessage::LanguageError {
-                message: String::new(),
-            },
-            1 => WorkerMessage::Completed,
-            2 => WorkerMessage::LanguageError {
-                message: "Incomplete code".to_string(),
-            },
-            status => WorkerMessage::Fatal {
-                message: format!("R worker received unexpected DLL REPL status {status}"),
-            },
+            0 | 1 => Ok(()),
+            2 => {
+                emit_output(b"Error: Incomplete code\n");
+                Ok(())
+            }
+            status => Err(format!(
+                "R worker received unexpected DLL REPL status {status}"
+            )),
         }
     }
 
@@ -173,16 +165,22 @@ mod platform {
         let do_one = *R_REPL_DO_ONE
             .get()
             .expect("R REPL should be initialized before evaluation");
+        // SAFETY: Both function pointers are process-lifetime libR symbols with
+        // the declared ABI. This main thread owns R, and the C shim contains R's
+        // top-level jump so it cannot bypass a live Rust frame.
         unsafe { mcp_r_repl_run_cell(init, do_one, before_repl_iteration) }
     }
 
     extern "C" fn before_repl_iteration() {
+        // R may reuse buffered source without calling Busy(0), so reset before
+        // every outer DLL step. Busy(1) latches evaluation in r_busy().
         EVALUATION_STARTED.store(false, Ordering::SeqCst);
     }
 
     extern "C-unwind" fn r_busy(which: c_int) {
-        // Busy(1) means the outer DLL REPL has started evaluating an expression.
-        // Busy(0) may come from a nested browser REPL and must not clear the latch.
+        // ReadConsole serves cell source before Busy(1) and evaluated-code input
+        // afterwards. Ignore Busy(0): a nested R REPL can issue it before a
+        // ReadConsole request that still belongs to the evaluation.
         if which != 0 {
             EVALUATION_STARTED.store(true, Ordering::SeqCst);
         }
@@ -358,7 +356,7 @@ mod platform {
                         && let Err(error) = WORKER_WRITER
                             .get()
                             .expect("R worker sideband writer should be initialized")
-                            .send(&WorkerMessage::InputPending {
+                            .send(&WorkerMessage::InputRequested {
                                 prompt: prompt.clone(),
                             })
                     {
