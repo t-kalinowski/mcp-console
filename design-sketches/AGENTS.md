@@ -62,7 +62,7 @@ Safety is enforced around the worker process and its descendants, not by filteri
   They survive runtime restarts and are not accepted on ordinary `send` calls.
 - Interrupt, restart, close, and worker crash are distinct observable events.
   `restart` loses in-memory R, Python, SQL, debugger, and process state while retaining requirements, workspace files, and transcript.
-  Never silently replace a crashed worker.
+  A crash fails the active evaluation and is recorded before the next evaluation starts a fresh worker generation.
 
 See [`VISION.md`](VISION.md) for the fuller rationale and [`docs/MCP_INTERFACE.md`](docs/MCP_INTERFACE.md) for normative MCP behavior.
 
@@ -252,7 +252,7 @@ Create focused documents only when a subsystem has enough detail to justify a se
    Unseen overflow stays in the evaluation spool and is not forced through later calls.
 9. Keep the internal journal and generated QMD separate.
    The journal may be granular; the QMD is the readable agent artifact.
-10. Do not silently restart a crashed worker.
+10. Record a worker crash before automatically starting a fresh worker.
     Preserve honest state-loss and generation boundaries.
 11. Observation must never enter the runtime.
     Structured inspection must not accept caller-provided language source.

@@ -118,9 +118,9 @@ Concurrent MCP calls wait on the worker process mutex and reach the worker seque
 | starting, idle, or evaluating | server → worker `shutdown` | terminal |
 
 Malformed JSON, invalid UTF-8, an unexpected message, or sideband EOF fails the active operation.
-There is no structured protocol error message and no automatic worker restart.
-Startup failure discards the worker, so a later evaluation may retry startup.
-After `ready`, a sideband failure does not discard the worker; a later evaluation reuses it even if the process has exited or unread frames remain from the failed evaluation.
+There is no structured protocol error message.
+Startup failure leaves no cached worker, so a later evaluation retries startup.
+After `ready`, a sideband failure force-stops and discards the worker; a later evaluation starts a fresh worker.
 R parse and evaluation errors are not sideband failures: the built-in worker sends them as output followed by `completed` and remains reusable.
 
 ## Shutdown
@@ -163,7 +163,7 @@ Only shutdown has a deadline.
 
 It does not capture worker standard output or standard error.
 It does not support arbitrary binary output.
-It does not report a structured worker error or restart a failed worker.
+Worker failures are reported as plain-text MCP tool errors, not structured worker events.
 The current sandbox child does not yet supervise descendants after its direct process exits, or descendants that leave its process group.
 
 ## Zod fixture behavior
@@ -176,5 +176,7 @@ zod: <r>\n
 ```
 
 When `r` is exactly `stall`, Zod creates a checkpoint in its private temporary directory and sleeps forever.
+When `r` is `violate protocol`, it sends an unexpected second `ready` message.
+When `r` is `exit unexpectedly`, it exits with status 86 without replying.
 Other fixture-only modes verify that the sandbox denies host writes and that a blocked sideband writer cannot delay shutdown.
-Those behaviors are test synchronization, not part of the worker protocol.
+Those behaviors are test fixtures, not part of the worker protocol.

@@ -100,7 +100,8 @@ SQL uses persistent DuckDB state, live R relation discovery where safe, and expl
 A session runs at most one top-level evaluation at a time.
 Interrupt attempts to preserve state.
 Restart deliberately starts a new runtime generation and loses in-memory state while retaining session requirements, workspace files, and transcript.
-A crashed worker remains stopped until explicitly restarted or closed; the server never silently replaces it and implies that state survived.
+A worker crash fails the active evaluation and is recorded in the transcript.
+The server remains available, and the next evaluation starts a fresh worker generation without implying that state survived.
 
 ### 12. Process-level safety
 

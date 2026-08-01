@@ -79,10 +79,14 @@ impl Client {
                 |stop_handle| self.register_stop_handle(stop_handle),
             )?);
         }
-        worker
+        let result = worker
             .as_mut()
             .expect("worker should be running")
-            .evaluate(r)
+            .evaluate(r);
+        if result.is_err() {
+            drop(worker.take());
+        }
+        result
     }
 
     fn shutdown_requested(&self) -> Result<bool, String> {
