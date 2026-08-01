@@ -77,7 +77,7 @@ impl Writer {
 
 impl ChildFds {
     /// Passes the inheritable worker endpoints to a child through its environment.
-    pub(crate) fn configure(&self, command: &mut std::process::Command) {
+    pub(crate) fn configure(&self, command: &mut crate::sandbox::SandboxedCommand) {
         command.env(READ_FD_ENV, self.read.as_raw_fd().to_string());
         command.env(WRITE_FD_ENV, self.write.as_raw_fd().to_string());
     }

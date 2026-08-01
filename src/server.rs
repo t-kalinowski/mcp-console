@@ -2,6 +2,7 @@ use std::error::Error;
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::task::{Context, Poll};
+use std::time::{Duration, Instant};
 
 use rmcp::{
     ServerHandler, ServiceExt, handler::server::wrapper::Parameters, model::JsonObject,
@@ -9,6 +10,8 @@ use rmcp::{
 };
 use tokio::io::{AsyncRead, ReadBuf};
 use tokio::sync::oneshot;
+
+const WORKER_SHUTDOWN_GRACE: Duration = Duration::from_secs(1);
 
 #[derive(Clone)]
 struct ConsoleServer {
@@ -53,9 +56,12 @@ pub async fn run(worker: Option<PathBuf>) -> Result<(), Box<dyn Error>> {
     let input = ShutdownReader::new(tokio::io::stdin(), input_closed);
     let service = server.serve((input, tokio::io::stdout())).await?;
     let shutdown = async move {
-        let _ = wait_for_input_close.await;
+        let shutdown_started = wait_for_input_close
+            .await
+            .unwrap_or_else(|_| Instant::now());
+        let deadline = shutdown_started + WORKER_SHUTDOWN_GRACE;
         if let Some(worker) = worker {
-            worker.shutdown().await?;
+            worker.shutdown(deadline).await?;
         }
         Ok::<(), String>(())
     };
@@ -67,13 +73,14 @@ pub async fn run(worker: Option<PathBuf>) -> Result<(), Box<dyn Error>> {
 }
 
 /// Reports EOF to the worker owner while otherwise behaving like its input.
+/// Dropping the reader also wakes the owner by closing the one-shot channel.
 struct ShutdownReader<R> {
     inner: R,
-    input_closed: Option<oneshot::Sender<()>>,
+    input_closed: Option<oneshot::Sender<Instant>>,
 }
 
 impl<R> ShutdownReader<R> {
-    fn new(inner: R, input_closed: oneshot::Sender<()>) -> Self {
+    fn new(inner: R, input_closed: oneshot::Sender<Instant>) -> Self {
         Self {
             inner,
             input_closed: Some(input_closed),
@@ -82,7 +89,7 @@ impl<R> ShutdownReader<R> {
 
     fn report_input_closed(&mut self) {
         if let Some(input_closed) = self.input_closed.take() {
-            let _ = input_closed.send(());
+            let _ = input_closed.send(Instant::now());
         }
     }
 }

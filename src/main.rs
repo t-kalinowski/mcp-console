@@ -5,7 +5,7 @@ use clap::Parser;
 mod cli;
 mod sandbox;
 mod server;
-#[cfg(unix)]
+#[cfg(target_os = "macos")]
 mod sideband;
 mod worker_client;
 

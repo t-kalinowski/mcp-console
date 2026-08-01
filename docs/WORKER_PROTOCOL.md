@@ -17,17 +17,18 @@ Without `--worker PATH`, the server does not start a worker and `send` retains i
 ## Launch contract
 
 `PATH` is one program name or path, with no arguments and no shell parsing.
-The worker starts lazily on the first worker-backed `send` call as if by:
+The worker starts lazily on the first worker-backed `send` call.
+On macOS, the server gives `PATH` to the same `SandboxedCommand` builder used by the `sandbox` command, producing a launch equivalent to:
 
 ```text
-PATH
+/usr/bin/sandbox-exec <policy> -- PATH
 ```
 
-The server launches the worker directly with null standard input, output, and error streams.
+The server launches the sandboxed worker with null standard input, output, and error streams.
 The sideband pipes are its only communication channel.
-The worker leads a dedicated process group so bounded shutdown also stops wrappers and descendants that remain in that group.
+The sandbox child leads a dedicated process group so the current bounded shutdown can stop a live wrapper and its in-group descendants.
 
-This launch contract currently works on Unix.
+This launch contract currently works only on macOS because the sandbox is unsupported elsewhere.
 The executable receives two inherited file descriptor numbers:
 
 ```yaml
@@ -117,17 +118,18 @@ After an evaluation error, the cached worker and its sideband remain in place, s
 
 ## Shutdown
 
-The server requests shutdown when MCP input closes.
-Dropping the final shared client state also drops the cached worker, whose destructor requests shutdown.
-It sends:
+The server begins shutdown when MCP input closes or RMCP releases its transport.
+At that moment it fixes a deadline one second in the future and closes the client's shutdown gate.
+It then attempts to send:
 
 ```json
 { "kind": "shutdown" }
 ```
 
 The worker sends no acknowledgment; it exits.
-The server waits up to one second for the child process to exit.
-If the child is still running, the server attempts to kill its process group and reap the direct child; kill and wait errors are currently ignored.
+The graceful write runs independently of the deadline so a full sideband pipe cannot postpone forced termination.
+The sandbox child waits only for the time remaining before the original deadline.
+If its direct process is still running at the deadline, the sandbox force-stops its process group and reaps that direct process.
 
 Shutdown uses a stop handle separate from the evaluation lock.
 This lets the server terminate a child while another thread is blocked waiting for worker output.
@@ -140,12 +142,12 @@ If shutdown already closed the gate, startup stops the new child and fails immed
 ## Current limits
 
 The current implementation has no startup timeout, evaluation timeout, frame-size limit, or accumulated-output limit.
-Only shutdown has a timeout.
+Only shutdown has a deadline.
 
 It does not capture worker standard output or standard error.
 It does not support arbitrary binary output.
 It does not report a structured worker error or restart a failed worker.
-It does not supervise descendants that leave the worker process group.
+The current sandbox child does not yet supervise descendants after its direct process exits, or descendants that leave its process group.
 In worker mode, the MCP handler requires exactly one `r` string even though the static tool description still says “Echo” and its schema still permits any JSON object.
 
 ## Zod fixture behavior
@@ -157,5 +159,6 @@ For a normal `evaluate`, it sends two output chunks followed by `completed`:
 zod: <r>\n
 ```
 
-When `r` is exactly `stall`, Zod creates the file named by `ZOD_STALL_PATH` and sleeps forever.
-That behavior is test synchronization for bounded shutdown; it is not part of the worker protocol.
+When `r` is exactly `stall`, Zod creates a checkpoint in its private temporary directory and sleeps forever.
+Other fixture-only modes verify that the sandbox denies host writes and that a blocked sideband writer cannot delay shutdown.
+Those behaviors are test synchronization, not part of the worker protocol.

@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 /// A cloneable handle to one lazily started development worker.
 #[derive(Clone)]
@@ -16,7 +17,9 @@ enum ShutdownGate {
     Open {
         stop_handle: Option<platform::StopHandle>,
     },
-    Closed,
+    Closed {
+        deadline: Instant,
+    },
 }
 
 impl Client {
@@ -68,64 +71,67 @@ impl Client {
         self.0
             .shutdown_gate
             .lock()
-            .map(|gate| matches!(*gate, ShutdownGate::Closed))
+            .map(|gate| matches!(*gate, ShutdownGate::Closed { .. }))
             .map_err(|_| "worker shutdown gate lock poisoned".to_string())
     }
 
     fn register_stop_handle(&self, handle: platform::StopHandle) -> Result<(), String> {
-        let mut gate = self
-            .0
-            .shutdown_gate
-            .lock()
-            .map_err(|_| "worker shutdown gate lock poisoned".to_string())?;
-        match &mut *gate {
-            ShutdownGate::Open { stop_handle } => {
-                *stop_handle = Some(handle);
-                Ok(())
-            }
-            ShutdownGate::Closed => Err("worker is shutting down".to_string()),
-        }
-    }
-
-    /// Stops and reaps the worker, including one blocked in an evaluation.
-    pub(crate) async fn shutdown(&self) -> Result<(), String> {
-        let client = self.clone();
-        tokio::task::spawn_blocking(move || client.shutdown_blocking())
-            .await
-            .map_err(|error| format!("worker shutdown task failed: {error}"))?
-    }
-
-    fn shutdown_blocking(&self) -> Result<(), String> {
-        let stop_handle = {
+        let deadline = {
             let mut gate = self
                 .0
                 .shutdown_gate
                 .lock()
                 .map_err(|_| "worker shutdown gate lock poisoned".to_string())?;
-            match std::mem::replace(&mut *gate, ShutdownGate::Closed) {
-                ShutdownGate::Open { stop_handle } => stop_handle,
-                ShutdownGate::Closed => None,
+            match &mut *gate {
+                ShutdownGate::Open { stop_handle } => {
+                    *stop_handle = Some(handle);
+                    return Ok(());
+                }
+                ShutdownGate::Closed { deadline } => *deadline,
             }
         };
-        if let Some(stop_handle) = stop_handle {
-            stop_handle.shutdown();
+        handle.shutdown(deadline)?;
+        Err("worker is shutting down".to_string())
+    }
+
+    fn close_shutdown_gate(
+        &self,
+        deadline: Instant,
+    ) -> Result<Option<platform::StopHandle>, String> {
+        let mut gate = self
+            .0
+            .shutdown_gate
+            .lock()
+            .map_err(|_| "worker shutdown gate lock poisoned".to_string())?;
+        match std::mem::replace(&mut *gate, ShutdownGate::Closed { deadline }) {
+            ShutdownGate::Open { stop_handle } => Ok(stop_handle),
+            ShutdownGate::Closed { deadline } => {
+                *gate = ShutdownGate::Closed { deadline };
+                Ok(None)
+            }
         }
-        Ok(())
+    }
+
+    /// Stops and reaps the worker, including one blocked in an evaluation.
+    pub(crate) async fn shutdown(&self, deadline: Instant) -> Result<(), String> {
+        let Some(stop_handle) = self.close_shutdown_gate(deadline)? else {
+            return Ok(());
+        };
+        tokio::task::spawn_blocking(move || stop_handle.shutdown(deadline))
+            .await
+            .map_err(|error| format!("worker shutdown task failed: {error}"))?
     }
 }
 
-#[cfg(unix)]
+#[cfg(target_os = "macos")]
 mod platform {
-    use std::os::unix::process::CommandExt as _;
     use std::path::Path;
-    use std::process::{Child, Command, Stdio};
+    use std::process::Stdio;
     use std::sync::{Arc, Mutex};
-    use std::time::Duration;
+    use std::thread;
+    use std::time::Instant;
 
     use serde::{Deserialize, Serialize};
-    use wait_timeout::ChildExt as _;
-
-    const SHUTDOWN_GRACE: Duration = Duration::from_secs(1);
 
     #[derive(Serialize)]
     #[serde(tag = "kind", rename_all = "snake_case")]
@@ -150,7 +156,7 @@ mod platform {
     #[derive(Clone)]
     pub(super) struct StopHandle {
         writer: crate::sideband::Writer,
-        child: Arc<Mutex<Child>>,
+        child: Arc<Mutex<crate::sandbox::SandboxedChild>>,
     }
 
     impl Worker {
@@ -161,12 +167,13 @@ mod platform {
         ) -> Result<Self, String> {
             let (reader, writer, child_fds) = crate::sideband::bind()
                 .map_err(|error| format!("failed to create worker sideband: {error}"))?;
-            let mut command = Command::new(program);
+            let mut command = crate::sandbox::SandboxedCommand::new(program.as_os_str())
+                .map_err(|error| format!("failed to prepare worker sandbox: {error}"))?;
             command
                 .stdin(Stdio::null())
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
-                .process_group(0);
+                .new_process_group();
             child_fds.configure(&mut command);
             let child = command
                 .spawn()
@@ -220,26 +227,39 @@ mod platform {
 
     impl Drop for Worker {
         fn drop(&mut self) {
-            self.stop_handle.shutdown();
+            let _ = self.stop_handle.force_stop();
         }
     }
 
     impl StopHandle {
-        /// Waits for graceful shutdown, then kills and reaps a stalled worker.
-        pub(super) fn shutdown(&self) {
-            let _ = self.writer.send(&ServerMessage::Shutdown);
-            if let Ok(mut child) = self.child.lock()
-                && child.wait_timeout(SHUTDOWN_GRACE).ok().flatten().is_none()
-            {
-                // SAFETY: `process_group(0)` made the child's PID its process-group ID.
-                let _ = unsafe { libc::killpg(child.id() as libc::pid_t, libc::SIGKILL) };
-                let _ = child.wait();
+        /// Attempts graceful shutdown while independently enforcing its deadline.
+        pub(super) fn shutdown(&self, deadline: Instant) -> Result<(), String> {
+            let writer = self.writer.clone();
+            let _ = thread::spawn(move || {
+                let _ = writer.send(&ServerMessage::Shutdown);
+            });
+
+            let mut child = self
+                .child
+                .lock()
+                .map_err(|_| "worker child lock poisoned".to_string())?;
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if child.wait_timeout(remaining)?.is_none() {
+                child.force_stop()?;
             }
+            Ok(())
+        }
+
+        fn force_stop(&self) -> Result<(), String> {
+            self.child
+                .lock()
+                .map_err(|_| "worker child lock poisoned".to_string())?
+                .force_stop()
         }
     }
 }
 
-#[cfg(not(unix))]
+#[cfg(not(target_os = "macos"))]
 mod platform {
     use std::path::Path;
 
@@ -253,7 +273,7 @@ mod platform {
             _program: &Path,
             _on_started: impl FnOnce(StopHandle) -> Result<(), String>,
         ) -> Result<Self, String> {
-            Err("development workers are supported only on Unix".to_string())
+            Err("development workers are supported only on macOS".to_string())
         }
 
         pub(super) fn evaluate(&mut self, _r: String) -> Result<String, String> {
@@ -262,6 +282,8 @@ mod platform {
     }
 
     impl StopHandle {
-        pub(super) fn shutdown(&self) {}
+        pub(super) fn shutdown(&self, _deadline: std::time::Instant) -> Result<(), String> {
+            Ok(())
+        }
     }
 }
