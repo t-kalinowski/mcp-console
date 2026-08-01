@@ -29,7 +29,7 @@ output:
       - name: send
         description: Evaluate one complete R code cell in persistent state.
         inputSchema:
-          $schema: "https://json-schema.org/draft/2020-12/schema"
+          $schema: https://json-schema.org/draft/2020-12/schema
           required:
             - r
           type: object

@@ -140,17 +140,22 @@ mod platform {
         let do_one = *R_REPL_DO_ONE
             .get()
             .expect("R REPL should be initialized before evaluation");
+        // SAFETY: Both function pointers are process-lifetime libR symbols with
+        // the declared ABI. This main thread owns R, and the C shim contains R's
+        // top-level jump so it cannot bypass a live Rust frame.
         unsafe { mcp_r_repl_run_cell(init, do_one, before_repl_iteration) }
     }
 
     extern "C" fn before_repl_iteration() {
+        // R may reuse buffered source without calling Busy(0), so reset before
+        // every outer DLL step. Busy(1) latches evaluation in r_busy().
         EVALUATION_STARTED.store(false, Ordering::SeqCst);
     }
 
     extern "C-unwind" fn r_busy(which: c_int) {
-        // Keep this as a one-way latch for the current DLL iteration. A nested
-        // R REPL can call Busy(0) before ReadConsole, but that read belongs to
-        // evaluated code rather than the remaining cell source.
+        // ReadConsole serves cell source before Busy(1) and evaluated-code input
+        // afterwards. Ignore Busy(0): a nested R REPL can issue it before a
+        // ReadConsole request that still belongs to the evaluation.
         if which != 0 {
             EVALUATION_STARTED.store(true, Ordering::SeqCst);
         }
@@ -270,6 +275,8 @@ mod platform {
             return 0;
         }
         if EVALUATION_STARTED.load(Ordering::SeqCst) {
+            // Interactive stdin is not implemented yet, so evaluated-code input
+            // receives EOF instead of consuming the remaining cell source.
             return console_eof(buf);
         }
         match take_cell_source((buflen as usize) - 1) {

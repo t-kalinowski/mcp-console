@@ -83,5 +83,8 @@ output:
   result:
     content:
       - type: text
-        text: "Warning message:\ncareful\x20\nlast value: TRUE\n"
+        text: |
+          Warning message:
+          careful 
+          last value: TRUE
     isError: false
