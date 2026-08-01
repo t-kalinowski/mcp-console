@@ -25,9 +25,9 @@ For `--worker PATH`, `PATH` is one program name or path, with no arguments or sh
 /usr/bin/sandbox-exec <policy> -- PATH
 ```
 
-The built-in path launches `mcp-console worker bootstrap`.
-Inside the sandbox, that command discovers `R_HOME` and self-executes as `mcp-console worker run` with R's library directory on the dynamic loader path.
-The final process initializes R through `libr` and `harp`.
+The built-in path launches `mcp-console worker`.
+Inside the sandbox, the worker takes ownership of the sideband, discovers `R_HOME` through the selected R executable, and initializes R through `libr` and `harp`.
+Harp opens `R_HOME/lib/libR.dylib` by its absolute path, so the worker does not self-execute or set a dynamic-loader environment variable.
 
 The server launches the sandboxed worker with null standard input, output, and error streams.
 The sideband pipes are its only communication channel.
@@ -46,7 +46,7 @@ The server clears `FD_CLOEXEC` on the child endpoints before spawning the worker
 It drops its duplicate child endpoints immediately after the spawn attempt.
 
 The worker takes ownership of those descriptors.
-Before it runs other programs or user code, it must remove the bootstrap environment variables and prevent descendants from inheriting the descriptors.
+Before it runs other programs or user code, it must remove the sideband environment variables and prevent descendants from inheriting the descriptors.
 The R worker also closes the descriptors in fork-only descendants.
 Zod uses `os.environ.pop()` and `os.set_inheritable(fd, False)`.
 
@@ -150,7 +150,7 @@ If shutdown already closed the gate, startup stops the new child and fails immed
 
 The built-in worker parses each complete cell in memory, evaluates its expressions in the persistent global environment, captures R console output, and prints every visible value.
 A successful silent cell produces no sideband output, so the MCP result is `[done]`.
-The CLI runs `worker run` synchronously without a Tokio runtime, so R initialization and evaluation remain on the process main thread.
+The CLI runs `worker` synchronously without a Tokio runtime, so R initialization and evaluation remain on the process main thread.
 
 This initial path does not use R's DLL REPL loop.
 It does not provide interactive input, top-level warning flushing, `.Last.value`, task callbacks, traceback bookkeeping, or source references.

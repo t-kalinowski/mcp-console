@@ -34,12 +34,9 @@ pub enum Command {
         worker: Option<PathBuf>,
     },
 
-    /// Run an internal runtime worker
+    /// Run the internal R worker
     #[command(hide = true)]
-    Worker {
-        #[command(subcommand)]
-        command: WorkerCommand,
-    },
+    Worker,
 
     /// Run a command with the MCP Console sandbox policy
     #[command(after_help = SANDBOX_EXAMPLES)]
@@ -54,13 +51,4 @@ pub enum Command {
         )]
         command: Vec<OsString>,
     },
-}
-
-#[derive(Debug, Subcommand)]
-pub enum WorkerCommand {
-    /// Discover R and restart with its loader path
-    Bootstrap,
-
-    /// Initialize R and process sideband messages
-    Run,
 }

@@ -34,7 +34,7 @@ impl Client {
             .map_err(|error| format!("failed to locate the R worker executable: {error}"))?;
         Ok(Self::with_arguments(
             program,
-            vec![OsString::from("worker"), OsString::from("bootstrap")],
+            vec![OsString::from("worker")],
         ))
     }
 

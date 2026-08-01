@@ -22,8 +22,9 @@ Clap provides command help, version output, argument parsing, and usage errors.
 The server registers only a `send` tool, which accepts one complete `r` string.
 On macOS, its first call lazily starts the built-in R worker under the same sandbox policy as the `sandbox` command.
 The worker embeds R through `libr` and `harp`, retains global state, captures R console output, and prints each visible expression.
-The hidden internal commands `worker bootstrap` and `worker run` discover R and enter the embedded worker.
-The worker commands run synchronously on the process main thread; only `serve` creates a Tokio runtime.
+The hidden `worker` command takes ownership of the sideband, discovers `R_HOME` through the selected R executable inside the sandbox, and opens `R_HOME/lib/libR.dylib` by its absolute path.
+It does not self-execute or set a dynamic-loader environment variable.
+The worker command runs synchronously on the process main thread; only `serve` creates a Tokio runtime.
 The hidden development option `serve --worker PATH` replaces the built-in worker with an executable that implements the same ready/evaluate/output/completed/shutdown protocol.
 The Python fixture `tests/fixtures/zod` provides deterministic acceptance coverage for that boundary.
 When MCP input closes, the server starts a one-second deadline and attempts graceful sideband shutdown without delaying it.

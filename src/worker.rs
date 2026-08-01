@@ -3,8 +3,6 @@ mod platform {
     use std::error::Error;
     use std::ffi::{CStr, CString, c_char, c_int, c_uchar};
     use std::io;
-    use std::os::unix::process::CommandExt as _;
-    use std::process::Command;
     use std::sync::{Mutex, OnceLock};
     use std::thread;
 
@@ -14,32 +12,14 @@ mod platform {
     static WORKER_WRITER: OnceLock<crate::sideband::Writer> = OnceLock::new();
     static OUTPUT_FAILURE: Mutex<Option<String>> = Mutex::new(None);
 
-    pub(crate) fn bootstrap() -> Result<(), Box<dyn Error>> {
-        // R discovery executes user-selected code from PATH or R_HOME, so it
-        // happens only after sandbox-exec has established the worker boundary.
-        crate::sideband::set_inherited_close_on_exec(true)?;
-        let r_home = harp::command::r_home_setup()?;
-        let executable = std::env::current_exe()?;
-        let mut command = Command::new(executable);
-        configure_r_environment(&mut command, &r_home);
-        command.args(["worker", "run"]);
-
-        crate::sideband::set_inherited_close_on_exec(false)?;
-        let error = command.exec();
-        Err(io::Error::new(
-            error.kind(),
-            format!("failed to enter the embedded R worker: {error}"),
-        )
-        .into())
-    }
-
     pub(crate) fn run() -> Result<(), Box<dyn Error>> {
         // SAFETY: pthread_main_np has no preconditions.
         if unsafe { libc::pthread_main_np() } != 1 {
             return Err(io::Error::other("R worker must run on the process main thread").into());
         }
         let (mut reader, writer) = crate::sideband::connect_from_env()?;
-        initialize_r()?;
+        let r_home = harp::command::r_home_setup()?;
+        initialize_r(&r_home)?;
         WORKER_WRITER
             .set(writer.clone())
             .map_err(|_| io::Error::other("R worker sideband was already initialized"))?;
@@ -62,17 +42,8 @@ mod platform {
         }
     }
 
-    fn configure_r_environment(command: &mut Command, r_home: &std::path::Path) {
-        command
-            .env("R_HOME", r_home)
-            .env("DYLD_LIBRARY_PATH", r_home.join("lib"));
-    }
-
-    fn initialize_r() -> Result<(), Box<dyn Error>> {
-        let r_home = std::env::var_os("R_HOME")
-            .map(std::path::PathBuf::from)
-            .ok_or_else(|| io::Error::other("R worker bootstrap did not set R_HOME"))?;
-        let libraries = harp::library::RLibraries::from_r_home_path(&r_home);
+    fn initialize_r(r_home: &std::path::Path) -> Result<(), Box<dyn Error>> {
+        let libraries = harp::library::RLibraries::from_r_home_path(r_home);
         libraries.initialize_pre_setup_r();
 
         let arguments = ["mcp-console", "--quiet", "--interactive", "--vanilla"]
@@ -205,18 +176,13 @@ mod platform {
 }
 
 #[cfg(target_os = "macos")]
-pub(crate) use platform::{bootstrap, run};
+pub(crate) use platform::run;
 
 #[cfg(not(target_os = "macos"))]
-pub(crate) fn bootstrap() -> Result<(), Box<dyn std::error::Error>> {
+pub(crate) fn run() -> Result<(), Box<dyn std::error::Error>> {
     Err(std::io::Error::new(
         std::io::ErrorKind::Unsupported,
         "embedded R workers are supported only on macOS",
     )
     .into())
-}
-
-#[cfg(not(target_os = "macos"))]
-pub(crate) fn run() -> Result<(), Box<dyn std::error::Error>> {
-    bootstrap()
 }

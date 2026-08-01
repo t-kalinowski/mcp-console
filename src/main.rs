@@ -18,16 +18,10 @@ fn main() -> ExitCode {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => exit_with_error(error),
         },
-        cli::Command::Worker { command } => {
-            let result = match command {
-                cli::WorkerCommand::Bootstrap => worker::bootstrap(),
-                cli::WorkerCommand::Run => worker::run(),
-            };
-            match result {
-                Ok(()) => ExitCode::SUCCESS,
-                Err(error) => exit_with_error(error),
-            }
-        }
+        cli::Command::Worker => match worker::run() {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => exit_with_error(error),
+        },
         cli::Command::Sandbox { command } => match sandbox::run(&command) {
             Ok(exit_code) => exit_code,
             Err(error) => exit_with_error(error),

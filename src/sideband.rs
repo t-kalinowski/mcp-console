@@ -68,12 +68,6 @@ pub(crate) fn connect_from_env() -> io::Result<(Reader, Writer)> {
     Ok((Reader::new(read), Writer::new(write)))
 }
 
-/// Controls whether the inherited endpoints survive the next exec.
-pub(crate) fn set_inherited_close_on_exec(enabled: bool) -> io::Result<()> {
-    set_close_on_exec(inherited_fd(READ_FD_ENV)?, enabled)?;
-    set_close_on_exec(inherited_fd(WRITE_FD_ENV)?, enabled)
-}
-
 impl Reader {
     fn new(reader: impl Read + Send + 'static) -> Self {
         Self {

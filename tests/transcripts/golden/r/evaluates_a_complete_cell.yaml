@@ -67,7 +67,29 @@ input:
   params:
     name: send
     arguments:
-      r: stop("boom", call. = FALSE)
+      r: |-
+        identical(
+          as.vector(splines::splineDesign(
+            knots = c(0, 0, 0, 0, 1, 1, 1, 1),
+            x = 0.5
+          )),
+          c(0.125, 0.375, 0.375, 0.125)
+        )
+output:
+  result:
+    content:
+      - type: text
+        text: |
+          [1] TRUE
+    isError: false
+---
+id: 5
+input:
+  method: tools/call
+  params:
+    name: send
+    arguments:
+      r: "stop(\"boom\", call. = FALSE)"
 output:
   result:
     content:
@@ -76,7 +98,7 @@ output:
           Error: boom
     isError: false
 ---
-id: 5
+id: 6
 input:
   method: tools/call
   params:
@@ -91,7 +113,7 @@ output:
           [1] 40
     isError: false
 ---
-id: 6
+id: 7
 input:
   method: tools/call
   params:
