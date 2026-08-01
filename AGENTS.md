@@ -19,28 +19,37 @@ mcp-console sandbox [--] COMMAND [ARG]...
 The binary requires a subcommand.
 The `serve` command runs an MCP server over stdio.
 Clap provides command help, version output, argument parsing, and usage errors.
-The server registers only a `send` tool, which accepts any JSON object and echoes it as JSON text.
-On macOS, the hidden development option `serve --worker PATH` instead sends an `r` string to a worker launched through the same sandbox policy as the `sandbox` command.
+The server registers only a `send` tool, which accepts one complete `r` string.
+On macOS, its first call lazily starts the built-in R worker under the same sandbox policy as the `sandbox` command.
+The worker embeds R through `libr` and `harp`, retains global state, captures R console output, and prints each visible expression.
+The hidden `worker` command takes ownership of the sideband, discovers `R_HOME` through the selected R executable inside the sandbox, and opens `R_HOME/lib/libR.dylib` by its absolute path.
+It does not self-execute or set a dynamic-loader environment variable.
+The worker command runs synchronously on the process main thread; only `serve` creates a Tokio runtime.
+The hidden development option `serve --worker PATH` replaces the built-in worker with an executable that implements the same ready/evaluate/output/completed/shutdown protocol.
+The Python fixture `tests/fixtures/zod` provides deterministic acceptance coverage for that boundary.
+An infrastructure or protocol failure is returned as a tool error, force-stops and discards that worker, and lets the next evaluation start a fresh worker.
 When MCP input closes, the server starts a one-second deadline and attempts graceful sideband shutdown without delaying it.
 If the direct worker sandbox process is still running when time expires, the sandbox boundary force-stops its process group and reaps that direct process.
-The executable Python fixture `tests/fixtures/zod` implements the current ready/evaluate/output/completed/shutdown protocol for acceptance tests.
 The version command prints the package name and version.
+
 On macOS, the sandbox launch boundary passes only explicitly allowed file descriptors through exec.
-The public `sandbox` command preserves stdin, stdout, and stderr; the development worker connects those streams to `/dev/null` and also passes its two owned sideband pipes.
+The public `sandbox` command preserves stdin, stdout, and stderr; workers connect those streams to `/dev/null` and also pass their two owned sideband pipes.
 The sandbox command runs under `sandbox-exec` with host filesystem opens allowed for reading, regular-file opens for writing limited to a dedicated per-launch temporary directory, runtime device and IPC exceptions, and network opens denied.
 When it owns a terminal, the launcher runs the command in a dedicated foreground process group so terminal-generated signals are delivered once.
 It relays `SIGHUP`, `SIGINT`, `SIGQUIT`, and `SIGTERM` sent directly to the launcher unless the signal was already blocked or ignored when the launcher started.
 It imposes no signal timeout, so a command that handles or ignores a signal may continue running.
-Before returning, it terminates descendants observed by the macOS process tracker, including `processx` children that create another session, and waits up to five seconds for them to be reaped.
-On a process-observation error, the launcher attempts to terminate and reap the root process group before tearing down observed descendants.
-If root termination cannot be confirmed, the launcher reports both failures and preserves its temporary directory instead of running teardown that assumes the root exited.
+
+Before returning, the public sandbox launcher terminates descendants observed by the macOS process tracker, including `processx` children that create another session, and waits up to five seconds for them to be reaped.
+On a process-observation error, it attempts to terminate the root process group and reap the direct sandbox process.
+If root termination cannot be confirmed, it reports both failures and preserves its temporary directory instead of running teardown that assumes the root exited.
 Detached descendants may remain when supervision itself fails because their identities can no longer be verified safely.
 A descendant that orphans itself before macOS exposes it to the tracker is outside this initial supervision boundary.
 The launcher does not proxy stopped and continued job-control states: `Ctrl-Z` and use as one stage of an interactive terminal pipeline are unsupported.
-The development worker does not run the process tracker.
-Forced shutdown kills and reaps its live root process group, but descendants may outlive it if the root exits first or they leave that group; full observed-descendant teardown applies only to the public `sandbox` command.
-The sandbox command and development worker are unsupported on Linux and Windows.
-The production worker, session model, language runtimes, sidecar API, viewer, environment management, output retention, and runtime transcript persistence do not exist yet.
+
+Workers do not run the process tracker.
+Forced shutdown kills a live root process group and reaps the direct sandbox process, but descendants may outlive it if the root exits first or they leave that group; full observed-descendant teardown applies only to the public `sandbox` command.
+The sandbox command and workers are unsupported on Linux and Windows.
+Interactive input, the session model, Python and SQL runtimes, sidecar API, viewer, environment management, output retention, and runtime transcript generation do not exist yet.
 
 ## Product direction
 
@@ -53,8 +62,9 @@ The planned public MCP surface has two tools:
 The MCP initialization identity remains `mcp-console`.
 The intended default client registration name is `console`, for example `codex mcp add console -- mcp-console serve`.
 Under Codex's current naming convention, the tools are `mcp__console.send` and `mcp__console.session`.
-The initial runtime design uses R as the host, embeds Python through reticulate, and runs SQL through the DuckDB R package and DBI.
-The production worker backend remains an open design decision.
+The implemented R slice embeds R through `libr` and `harp`.
+The planned runtime uses R as the host, embeds Python through reticulate, and runs SQL through the DuckDB R package and DBI.
+The backend for that broader runtime surface remains an open design decision.
 
 See `design-sketches/README.md` for the product overview and `design-sketches/docs/ARCHITECTURE.md` for the tentative architecture.
 
@@ -63,9 +73,11 @@ See `design-sketches/README.md` for the product overview and `design-sketches/do
 - `Cargo.toml` — Rust package metadata.
 - `src/main.rs` — current binary entry point.
 - `src/cli.rs` — clap command definitions and user-facing help.
-- `src/server.rs` — MCP stdio server, echoing `send` tool, and development-worker selection.
-- `src/sideband.rs` — macOS server-side inherited-pipe JSON-lines transport.
-- `src/worker_client.rs` — server-side worker launch, protocol, and output collection.
+- `src/server.rs` — MCP stdio server, `send` tool, and worker selection.
+- `src/sideband.rs` — macOS inherited-pipe JSON-lines transport.
+- `src/worker.rs` — embedded R initialization, evaluation, and console callbacks.
+- `src/worker_client.rs` — server-side worker launch, lifecycle, and output collection.
+- `src/worker_protocol.rs` — shared sideband message definitions.
 - `src/sandbox.rs` — reusable sandbox command builder and platform dispatch.
 - `src/sandbox/macos.rs` — macOS sandbox launch and foreground-lifetime orchestration.
 - `src/sandbox/macos/` — macOS descriptor, job-control, and process-tracking internals.
@@ -77,6 +89,7 @@ See `design-sketches/README.md` for the product overview and `design-sketches/do
 - `tests/sandbox_supervision.rs` — sandbox descendant-supervision tests.
 - `tests/sandbox_terminal.rs` — sandbox terminal-behavior tests.
 - `tests/fixtures/zod` — executable Python sideband worker used by acceptance tests.
+- `tests/transcripts/r.py` — public built-in R worker acceptance suite.
 - `tests/transcripts/_run.py` — discovers transcript suites and compares case snapshots.
 - `tests/transcripts/_support.py` — shared transcript types and MCP stdio client.
 - `tests/transcripts/<suite>.py` — suites of named imperative transcript cases.
@@ -86,7 +99,7 @@ See `design-sketches/README.md` for the product overview and `design-sketches/do
 - `scripts/format` — attempts each repository-wide formatter without requiring it.
 - `scripts/check` — local formatting, Clippy, and test checks.
 - `.github/workflows/ci.yaml` — formatting, Clippy, and test checks.
-- `docs/WORKER_PROTOCOL.md` — exact implemented development-worker launch and sideband protocol.
+- `docs/WORKER_PROTOCOL.md` — exact implemented worker launch and sideband protocol.
 - `design-sketches/` — tentative product and architecture documents.
 - `README.md` — current user-facing project status.
 - `LICENSE` — project license.

@@ -29,7 +29,7 @@ output:
       - name: send
         description: Evaluate one complete R code cell in persistent state.
         inputSchema:
-          $schema: https://json-schema.org/draft/2020-12/schema
+          $schema: "https://json-schema.org/draft/2020-12/schema"
           required:
             - r
           type: object
@@ -45,12 +45,26 @@ input:
   params:
     name: send
     arguments:
-      r: probe sandbox
+      r: violate protocol
+output:
+  result:
+    content:
+      - type: text
+        text: worker sent an unexpected ready message
+    isError: true
+---
+id: 4
+input:
+  method: tools/call
+  params:
+    name: send
+    arguments:
+      r: hello
 output:
   result:
     content:
       - type: text
         text: |
-          sandbox blocked host write
+          zod: hello
     isError: false
 ...

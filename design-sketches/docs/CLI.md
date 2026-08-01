@@ -55,10 +55,10 @@ mcp-console --version
 Internal implementation mode:
 
 ```text
-mcp-console __worker ...
+mcp-console worker ...
 ```
 
-`__worker` is private, unstable, and absent from ordinary help output.
+`worker` is private, unstable, and absent from ordinary help output.
 
 ## 3. Target selection
 

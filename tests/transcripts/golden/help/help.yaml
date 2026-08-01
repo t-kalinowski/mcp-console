@@ -48,6 +48,15 @@ stdout: |
   Options:
     -h, --help  Print help
 ---
+command: mcp-console worker --help
+stdout: |
+  Run the internal R worker
+
+  Usage: mcp-console worker
+
+  Options:
+    -h, --help  Print help
+---
 command: mcp-console sandbox
 exit_code: 2
 stdout: ""

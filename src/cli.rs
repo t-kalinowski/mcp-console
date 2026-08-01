@@ -34,6 +34,10 @@ pub enum Command {
         worker: Option<PathBuf>,
     },
 
+    /// Run the internal R worker
+    #[command(hide = true)]
+    Worker,
+
     /// Run a command with the MCP Console sandbox policy
     #[command(after_help = SANDBOX_EXAMPLES)]
     Sandbox {

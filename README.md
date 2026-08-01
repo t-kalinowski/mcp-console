@@ -21,8 +21,10 @@ mcp-console sandbox -- COMMAND [ARG]...
 `mcp-console` requires a subcommand.
 `mcp-console serve` runs a minimal MCP server over stdio.
 Run `mcp-console --help` or `mcp-console COMMAND --help` for command-line help.
-The server registers one `send` tool that accepts a JSON object and returns that object as JSON text.
-It does not execute code or retain state yet.
+The server registers one `send` tool that accepts one complete `r` code cell.
+On macOS, the first call lazily starts a sandboxed embedded R worker.
+Later calls reuse the same global R state.
+The worker captures R console output and prints each visible top-level value.
 Its MCP initialization identity remains `mcp-console`.
 The intended default client registration name is `console`:
 
@@ -36,19 +38,19 @@ On macOS, `sandbox` launches the command under `/usr/bin/sandbox-exec`.
 The command can open the host filesystem for reading and can open regular files for writing only in a dedicated temporary directory.
 Opening and connecting network sockets is denied.
 The launcher preserves stdin, stdout, and stderr for the public `sandbox` command and closes every other inherited file descriptor when it executes that command.
-The development worker instead connects its standard streams to `/dev/null` and explicitly inherits its two sideband pipes.
+The workers instead connect their standard streams to `/dev/null` and explicitly inherit their two sideband pipes.
 The policy also permits the device and IPC operations needed for supported R and Python workflows, including sandbox-created PTYs and Python multiprocessing semaphores.
 When the launcher owns a terminal, it gives the sandbox command a dedicated foreground process group so terminal-generated signals are delivered once.
 `SIGHUP`, `SIGINT`, `SIGQUIT`, and `SIGTERM` sent directly to the launcher are relayed to that group unless the signal was already blocked or ignored when the launcher started.
 The launcher imposes no signal timeout, so a command that handles or ignores a signal may continue running.
 For the public `sandbox` command, before returning, the launcher terminates descendants observed by the macOS process tracker, including `processx` children that create another session, and waits up to five seconds for them to be reaped.
-A process-observation error first attempts to terminate and reap the root process group, then tears down observed descendants.
+A process-observation error attempts to terminate the root process group and reap the direct sandbox process.
 If root termination cannot be confirmed, the launcher reports both failures and preserves its temporary directory instead of running teardown that assumes the root exited.
 Detached descendants may remain when supervision itself fails because their identities can no longer be verified safely.
 A descendant that orphans itself before macOS exposes it to the tracker is outside this initial supervision boundary.
 Stopped and continued job-control states are not proxied: `Ctrl-Z` is unsupported, and the launcher is intended to supervise a single foreground command rather than act as one stage of an interactive terminal pipeline.
-The development worker does not run this process tracker.
-The `sandbox` command and development worker are not supported on Linux or Windows.
+Workers do not run this process tracker.
+The `sandbox` command and workers are not supported on Linux or Windows.
 
 The proposed product and architecture remain under [`design-sketches/`](design-sketches/README.md).
 
@@ -69,9 +71,9 @@ scripts/format
 Formatter errors remain visible but do not stop the remaining formatters or make the script fail.
 
 See [`tests/transcripts/README.md`](tests/transcripts/README.md) for running and authoring external server transcript tests.
-The `zod` suite runs on macOS, where the sandbox policy is implemented.
-It uses the hidden `serve --worker PATH` development option to exercise the server-side worker protocol with an executable Python fixture.
-The server launches the fixture through the same sandbox boundary intended for the production worker.
+The `r` suite exercises the built-in worker.
+The `zod` suite uses the hidden `serve --worker PATH` development option to exercise the same protocol with an executable Python fixture.
+Both suites run on macOS, where the sandbox policy is implemented.
 See [`docs/WORKER_PROTOCOL.md`](docs/WORKER_PROTOCOL.md) for the exact implemented launch and message contract.
 
 ## License

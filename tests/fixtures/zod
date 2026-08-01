@@ -55,6 +55,13 @@ def main() -> None:
             while True:
                 time.sleep(60)
 
+        if message["r"] == "violate protocol":
+            send(writer, {"kind": "ready"})
+            continue
+
+        if message["r"] == "exit unexpectedly":
+            os._exit(86)
+
         if message["r"] == "probe sandbox":
             try:
                 Path(os.environ["ZOD_SANDBOX_PROBE_PATH"]).write_text(
