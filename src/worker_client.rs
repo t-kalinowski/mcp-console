@@ -3,26 +3,28 @@ use std::sync::{Arc, Mutex};
 
 /// A cloneable handle to one lazily started development worker.
 #[derive(Clone)]
-pub(crate) struct Client(Arc<ClientState>);
+pub(crate) struct Client(Arc<ClientInner>);
 
-struct ClientState {
-    path: PathBuf,
-    process: Mutex<Option<platform::Worker>>,
-    shutdown_state: Mutex<ShutdownState>,
+struct ClientInner {
+    program: PathBuf,
+    worker: Mutex<Option<platform::Worker>>,
+    shutdown_gate: Mutex<ShutdownGate>,
 }
 
-/// Couples worker-control publication with a concurrent shutdown request.
-enum ShutdownState {
-    Open(Option<platform::WorkerControl>),
-    Requested,
+/// Keeps the current stop handle available until shutdown closes the gate.
+enum ShutdownGate {
+    Open {
+        stop_handle: Option<platform::StopHandle>,
+    },
+    Closed,
 }
 
 impl Client {
-    pub(crate) fn new(path: PathBuf) -> Self {
-        Self(Arc::new(ClientState {
-            path,
-            process: Mutex::new(None),
-            shutdown_state: Mutex::new(ShutdownState::Open(None)),
+    pub(crate) fn new(program: PathBuf) -> Self {
+        Self(Arc::new(ClientInner {
+            program,
+            worker: Mutex::new(None),
+            shutdown_gate: Mutex::new(ShutdownGate::Open { stop_handle: None }),
         }))
     }
 
@@ -42,21 +44,21 @@ impl Client {
             return Err("worker is shutting down".to_string());
         }
 
-        let mut process = self
+        let mut worker = self
             .0
-            .process
+            .worker
             .lock()
-            .map_err(|_| "worker process lock poisoned".to_string())?;
+            .map_err(|_| "worker lock poisoned".to_string())?;
         if self.shutdown_requested()? {
             return Err("worker is shutting down".to_string());
         }
 
-        if process.is_none() {
-            *process = Some(platform::Worker::start(&self.0.path, |control| {
-                self.publish_control(control);
+        if worker.is_none() {
+            *worker = Some(platform::Worker::start(&self.0.program, |stop_handle| {
+                self.register_stop_handle(stop_handle)
             })?);
         }
-        process
+        worker
             .as_mut()
             .expect("worker should be running")
             .evaluate(r)
@@ -64,25 +66,24 @@ impl Client {
 
     fn shutdown_requested(&self) -> Result<bool, String> {
         self.0
-            .shutdown_state
+            .shutdown_gate
             .lock()
-            .map(|state| matches!(*state, ShutdownState::Requested))
-            .map_err(|_| "worker shutdown lock poisoned".to_string())
+            .map(|gate| matches!(*gate, ShutdownGate::Closed))
+            .map_err(|_| "worker shutdown gate lock poisoned".to_string())
     }
 
-    fn publish_control(&self, control: platform::WorkerControl) {
-        let shutdown = match self.0.shutdown_state.lock() {
-            Ok(mut state) => match &mut *state {
-                ShutdownState::Open(control_slot) => {
-                    *control_slot = Some(control.clone());
-                    false
-                }
-                ShutdownState::Requested => true,
-            },
-            Err(_) => true,
-        };
-        if shutdown {
-            control.shutdown();
+    fn register_stop_handle(&self, handle: platform::StopHandle) -> Result<(), String> {
+        let mut gate = self
+            .0
+            .shutdown_gate
+            .lock()
+            .map_err(|_| "worker shutdown gate lock poisoned".to_string())?;
+        match &mut *gate {
+            ShutdownGate::Open { stop_handle } => {
+                *stop_handle = Some(handle);
+                Ok(())
+            }
+            ShutdownGate::Closed => Err("worker is shutting down".to_string()),
         }
     }
 
@@ -95,19 +96,19 @@ impl Client {
     }
 
     fn shutdown_blocking(&self) -> Result<(), String> {
-        let control = {
-            let mut state = self
+        let stop_handle = {
+            let mut gate = self
                 .0
-                .shutdown_state
+                .shutdown_gate
                 .lock()
-                .map_err(|_| "worker shutdown lock poisoned".to_string())?;
-            match std::mem::replace(&mut *state, ShutdownState::Requested) {
-                ShutdownState::Open(control) => control,
-                ShutdownState::Requested => None,
+                .map_err(|_| "worker shutdown gate lock poisoned".to_string())?;
+            match std::mem::replace(&mut *gate, ShutdownGate::Closed) {
+                ShutdownGate::Open { stop_handle } => stop_handle,
+                ShutdownGate::Closed => None,
             }
         };
-        if let Some(control) = control {
-            control.shutdown();
+        if let Some(stop_handle) = stop_handle {
+            stop_handle.shutdown();
         }
         Ok(())
     }
@@ -115,26 +116,26 @@ impl Client {
 
 #[cfg(unix)]
 mod platform {
+    use std::os::unix::process::CommandExt as _;
     use std::path::Path;
     use std::process::{Child, Command, Stdio};
     use std::sync::{Arc, Mutex};
-    use std::thread;
-    use std::time::{Duration, Instant};
+    use std::time::Duration;
 
     use serde::{Deserialize, Serialize};
+    use wait_timeout::ChildExt as _;
 
     const SHUTDOWN_GRACE: Duration = Duration::from_secs(1);
-    const CHILD_POLL_INTERVAL: Duration = Duration::from_millis(25);
 
     #[derive(Serialize)]
-    #[serde(tag = "type", rename_all = "snake_case")]
+    #[serde(tag = "kind", rename_all = "snake_case")]
     enum ServerMessage {
         Evaluate { r: String },
         Shutdown,
     }
 
     #[derive(Deserialize)]
-    #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+    #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
     enum WorkerMessage {
         Ready,
         Output { data: String },
@@ -143,11 +144,11 @@ mod platform {
 
     pub(super) struct Worker {
         reader: crate::sideband::Reader,
-        control: WorkerControl,
+        stop_handle: StopHandle,
     }
 
     #[derive(Clone)]
-    pub(super) struct WorkerControl {
+    pub(super) struct StopHandle {
         writer: crate::sideband::Writer,
         child: Arc<Mutex<Child>>,
     }
@@ -155,28 +156,32 @@ mod platform {
     impl Worker {
         /// Starts an executable worker and waits for its ready message.
         pub(super) fn start(
-            path: &Path,
-            on_started: impl FnOnce(WorkerControl),
+            program: &Path,
+            on_started: impl FnOnce(StopHandle) -> Result<(), String>,
         ) -> Result<Self, String> {
             let (reader, writer, child_fds) = crate::sideband::bind()
                 .map_err(|error| format!("failed to create worker sideband: {error}"))?;
-            let mut command = Command::new(path);
+            let mut command = Command::new(program);
             command
                 .stdin(Stdio::null())
                 .stdout(Stdio::null())
-                .stderr(Stdio::null());
+                .stderr(Stdio::null())
+                .process_group(0);
             child_fds.configure(&mut command);
             let child = command
                 .spawn()
                 .map_err(|error| format!("failed to launch worker: {error}"))?;
             drop(child_fds);
 
-            let control = WorkerControl {
+            let stop_handle = StopHandle {
                 writer,
                 child: Arc::new(Mutex::new(child)),
             };
-            let mut worker = Self { reader, control };
-            on_started(worker.control.clone());
+            let mut worker = Self {
+                reader,
+                stop_handle,
+            };
+            on_started(worker.stop_handle.clone())?;
             if !matches!(worker.receive()?, WorkerMessage::Ready) {
                 return Err("worker did not report readiness".to_string());
             }
@@ -185,7 +190,7 @@ mod platform {
 
         /// Sends one cell and collects output until the completed message.
         pub(super) fn evaluate(&mut self, r: String) -> Result<String, String> {
-            self.control
+            self.stop_handle
                 .writer
                 .send(&ServerMessage::Evaluate { r })
                 .map_err(|error| format!("worker sideband write failed: {error}"))?;
@@ -215,34 +220,21 @@ mod platform {
 
     impl Drop for Worker {
         fn drop(&mut self) {
-            self.control.shutdown();
+            self.stop_handle.shutdown();
         }
     }
 
-    impl WorkerControl {
-        /// Requests graceful shutdown, then kills and reaps a stalled worker.
+    impl StopHandle {
+        /// Waits for graceful shutdown, then kills and reaps a stalled worker.
         pub(super) fn shutdown(&self) {
-            if self.has_exited() {
-                return;
-            }
             let _ = self.writer.send(&ServerMessage::Shutdown);
-            let started = Instant::now();
-            while started.elapsed() < SHUTDOWN_GRACE {
-                if self.has_exited() {
-                    return;
-                }
-                thread::sleep(CHILD_POLL_INTERVAL);
-            }
-            if let Ok(mut child) = self.child.lock() {
-                let _ = child.kill();
+            if let Ok(mut child) = self.child.lock()
+                && child.wait_timeout(SHUTDOWN_GRACE).ok().flatten().is_none()
+            {
+                // SAFETY: `process_group(0)` made the child's PID its process-group ID.
+                let _ = unsafe { libc::killpg(child.id() as libc::pid_t, libc::SIGKILL) };
                 let _ = child.wait();
             }
-        }
-
-        fn has_exited(&self) -> bool {
-            self.child
-                .lock()
-                .is_ok_and(|mut child| matches!(child.try_wait(), Ok(Some(_))))
         }
     }
 }
@@ -254,12 +246,12 @@ mod platform {
     pub(super) struct Worker;
 
     #[derive(Clone)]
-    pub(super) struct WorkerControl;
+    pub(super) struct StopHandle;
 
     impl Worker {
         pub(super) fn start(
-            _path: &Path,
-            _on_started: impl FnOnce(WorkerControl),
+            _program: &Path,
+            _on_started: impl FnOnce(StopHandle) -> Result<(), String>,
         ) -> Result<Self, String> {
             Err("development workers are supported only on Unix".to_string())
         }
@@ -269,7 +261,7 @@ mod platform {
         }
     }
 
-    impl WorkerControl {
+    impl StopHandle {
         pub(super) fn shutdown(&self) {}
     }
 }

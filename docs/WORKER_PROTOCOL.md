@@ -25,6 +25,7 @@ PATH
 
 The server launches the worker directly with null standard input, output, and error streams.
 The sideband pipes are its only communication channel.
+The worker leads a dedicated process group so bounded shutdown also stops wrappers and descendants that remain in that group.
 
 This launch contract currently works on Unix.
 The executable receives two inherited file descriptor numbers:
@@ -62,45 +63,15 @@ Worker standard output and standard error are not part of the protocol and are c
 
 The complete implemented message set is:
 
-```yaml
-server_to_worker:
-  evaluate:
-    type: evaluate
-    fields:
-      r: string
-    wire_example:
-      type: evaluate
-      r: 1 + 1
+| Direction | Frame | Meaning |
+| --- | --- | --- |
+| server → worker | `{"kind":"evaluate","r":"..."}` | Evaluate the `r` string. |
+| server → worker | `{"kind":"shutdown"}` | Exit without replying. |
+| worker → server | `{"kind":"ready"}` | Startup is complete. |
+| worker → server | `{"kind":"output","data":"..."}` | Append one output text chunk. |
+| worker → server | `{"kind":"completed"}` | The evaluation is complete. |
 
-  shutdown:
-    type: shutdown
-    fields: {}
-    wire_example:
-      type: shutdown
-
-worker_to_server:
-  ready:
-    type: ready
-    fields: {}
-    wire_example:
-      type: ready
-
-  output:
-    type: output
-    fields:
-      data: string
-    wire_example:
-      type: output
-      data: |
-        [1] 2
-
-  completed:
-    type: completed
-    fields: {}
-    wire_example:
-      type: completed
-```
-
+Every frame uses `kind` to select its message variant.
 Unknown worker-to-server fields are rejected.
 
 ## Handshake and evaluation
@@ -111,12 +82,12 @@ The server does not send an evaluation before receiving it.
 One evaluation has this shape:
 
 ```text
-worker -> server  {"type":"ready"}
+worker -> server  {"kind":"ready"}
 
-server -> worker  {"type":"evaluate","r":"hello"}
-worker -> server  {"type":"output","data":"zod: "}
-worker -> server  {"type":"output","data":"hello\n"}
-worker -> server  {"type":"completed"}
+server -> worker  {"kind":"evaluate","r":"hello"}
+worker -> server  {"kind":"output","data":"zod: "}
+worker -> server  {"kind":"output","data":"hello\n"}
+worker -> server  {"kind":"completed"}
 ```
 
 The worker may send zero or more `output` messages.
@@ -129,45 +100,19 @@ That marker is produced by the server; it is not a sideband message.
 The protocol has no request IDs because only one evaluation can be in flight over this sideband.
 Concurrent MCP calls wait on the worker process mutex and reach the worker sequentially.
 
-## Protocol states
+## State transitions
 
-```yaml
-spawned:
-  expected_worker_message: ready
-  on_ready: idle
-  on_anything_else: startup_error
-
-idle:
-  accepted_server_messages:
-    evaluate: evaluating
-    shutdown: exiting
-
-evaluating:
-  accepted_worker_messages:
-    output: evaluating
-    completed: idle
-  on_ready_or_invalid_frame: evaluation_error
-  server_may_send: shutdown
-  on_worker_observes_shutdown: exiting
-  if_shutdown_is_not_observed: forced_termination
-
-exiting:
-  worker_reply: none
-  expected_result: process_exit
-
-startup_error:
-  active_call: failed
-  worker: stopped
-  next_evaluation: may_retry_startup
-
-evaluation_error:
-  active_call: failed
-  worker: retained
-  next_evaluation: reuses_the_same_worker
-```
+| From | Frame | To |
+| --- | --- | --- |
+| starting | worker → server `ready` | idle |
+| idle | server → worker `evaluate` | evaluating |
+| evaluating | worker → server `output` | evaluating |
+| evaluating | worker → server `completed` | idle |
+| starting, idle, or evaluating | server → worker `shutdown` | terminal |
 
 Malformed JSON, invalid UTF-8, an unexpected message, or sideband EOF fails the active operation.
 There is no structured protocol error message and no automatic worker restart.
+Startup failure discards the worker, so a later evaluation may retry startup.
 After an evaluation error, the cached worker and its sideband remain in place, so a later evaluation may encounter a misaligned stream and fail again.
 
 ## Shutdown
@@ -177,35 +122,20 @@ Dropping the final shared client state also drops the cached worker, whose destr
 It sends:
 
 ```json
-{ "type": "shutdown" }
+{ "kind": "shutdown" }
 ```
 
 The worker sends no acknowledgment; it exits.
-The server waits up to one second, polling the child every 25 milliseconds.
-If the child is still running, the server attempts to kill and reap it; kill and wait errors are currently ignored.
+The server waits up to one second for the child process to exit.
+If the child is still running, the server attempts to kill its process group and reap the direct child; kill and wait errors are currently ignored.
 
-Shutdown uses a control handle separate from the evaluation lock.
+Shutdown uses a stop handle separate from the evaluation lock.
 This lets the server terminate a child while another thread is blocked waiting for worker output.
 If the worker cannot observe the shutdown frame while evaluating, the bounded kill is the completion path.
 
-The internal `ShutdownState` is a shutdown gate, not the worker's full status:
-
-```yaml
-ShutdownState:
-  Open:
-    control:
-      before_worker_spawn: null
-      after_worker_spawn: WorkerControl
-  Requested:
-    meaning: no worker may remain running
-```
-
-The `Open` variant contains an optional control handle.
-It is absent before spawn and present after spawn, including while the client waits for `ready`.
-
-The client checks this state before and after acquiring the process mutex.
-Startup publishes the control handle before waiting for `ready`.
-If shutdown was requested in between, publication immediately stops the new child.
+Shutdown closes a one-way gate that the client checks before and after acquiring the worker lock.
+Startup registers a separate stop handle before waiting for `ready`.
+If shutdown already closed the gate, startup stops the new child and fails immediately.
 
 ## Current limits
 
@@ -215,11 +145,12 @@ Only shutdown has a timeout.
 It does not capture worker standard output or standard error.
 It does not support arbitrary binary output.
 It does not report a structured worker error or restart a failed worker.
+It does not supervise descendants that leave the worker process group.
 In worker mode, the MCP handler requires exactly one `r` string even though the static tool description still says “Echo” and its schema still permits any JSON object.
 
 ## Zod fixture behavior
 
-Zod implements the protocol as an executable Python shebang.
+Zod implements the protocol as an executable uv script requiring Python 3.11 or newer.
 For a normal `evaluate`, it sends two output chunks followed by `completed`:
 
 ```text

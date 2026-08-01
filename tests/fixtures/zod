@@ -1,4 +1,7 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# ///
 
 import json
 import os
@@ -26,16 +29,16 @@ def main() -> None:
     """Run the deterministic sideband fixture until the server shuts it down."""
     reader = open_sideband(READ_FD_ENV, "r")
     writer = open_sideband(WRITE_FD_ENV, "w")
-    send(writer, {"type": "ready"})
+    send(writer, {"kind": "ready"})
 
     for line in reader:
         message = json.loads(line)
-        message_type = message["type"]
-        if message_type == "shutdown":
+        message_kind = message["kind"]
+        if message_kind == "shutdown":
             return
 
-        assert message_type == "evaluate"
-        assert set(message) == {"type", "r"}
+        assert message_kind == "evaluate"
+        assert set(message) == {"kind", "r"}
         if message["r"] == "stall":
             Path(os.environ["ZOD_STALL_PATH"]).touch()
             while True:
@@ -45,11 +48,11 @@ def main() -> None:
             send(
                 writer,
                 {
-                    "type": "output",
+                    "kind": "output",
                     "data": output,
                 },
             )
-        send(writer, {"type": "completed"})
+        send(writer, {"kind": "completed"})
 
 
 if __name__ == "__main__":

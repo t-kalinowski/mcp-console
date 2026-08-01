@@ -21,7 +21,7 @@ The `serve` command runs an MCP server over stdio.
 Clap provides command help, version output, argument parsing, and usage errors.
 The server registers only a `send` tool, which accepts any JSON object and echoes it as JSON text.
 On macOS and Linux, the hidden development option `serve --worker PATH` instead sends an `r` string to a directly launched worker over a private JSON-lines sideband.
-The server shuts down and reaps that direct worker when MCP input closes, killing it after a bounded grace period if needed.
+The server shuts down and reaps that direct worker when MCP input closes, killing its process group after a bounded grace period if needed.
 The executable Python fixture `tests/fixtures/zod` implements the current ready/evaluate/output/completed/shutdown protocol for acceptance tests.
 The version command prints the package name and version.
 On macOS, the sandbox command launches a subprocess under `sandbox-exec` with host filesystem reads allowed, regular-file writes limited to a dedicated per-launch temporary directory, runtime device and IPC exceptions, and network access denied.
