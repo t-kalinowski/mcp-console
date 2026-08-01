@@ -46,28 +46,48 @@ pub(super) fn run(command: &[OsString]) -> Result<ExitCode, String> {
     let mut tracker = match DescendantTracker::start(child.id() as libc::pid_t, &signal_relay) {
         Ok(tracker) => tracker,
         Err(error) => {
-            let _ = kill_root(&mut child);
+            let error = match kill_root(&mut child) {
+                Ok(_) => error,
+                Err(kill_error) => additional_error(error, kill_error),
+            };
+            let error = match foreground_terminal.restore() {
+                Ok(()) => error,
+                Err(terminal_error) => additional_error(error, terminal_error),
+            };
             temp_directory.preserve();
             return Err(error);
         }
     };
 
-    let status_result = wait_for_root(&mut child, &signal_relay, &mut tracker);
-    let terminal_result = foreground_terminal.restore();
-    let status = match status_result {
+    let status = match wait_for_root(&mut child, &signal_relay, &mut tracker) {
         Ok(status) => status,
         Err(error) => {
-            let tracker_error = tracker.terminate().err();
             temp_directory.preserve();
-            return Err(tracker_error.unwrap_or(error));
+            let root_result = kill_root(&mut child);
+            let root_reaped = root_result.is_ok();
+            let mut error = match root_result {
+                Ok(_) => error,
+                Err(kill_error) => additional_error(error, kill_error),
+            };
+            if let Err(terminal_error) = foreground_terminal.restore() {
+                error = additional_error(error, terminal_error);
+            }
+            if root_reaped && let Err(tracker_error) = tracker.terminate_after_root_exit() {
+                error = additional_error(error, tracker_error);
+            }
+            return Err(error);
         }
     };
+    let terminal_result = foreground_terminal.restore();
 
-    if let Err(error) = tracker.terminate() {
+    if let Err(error) = tracker.terminate_after_root_exit() {
         // Descendants may still be using their writable directory. Preserve it
         // when supervision fails instead of deleting files underneath them.
         temp_directory.preserve();
-        return Err(error);
+        return Err(match terminal_result {
+            Ok(()) => error,
+            Err(terminal_error) => additional_error(error, terminal_error),
+        });
     }
 
     terminal_result?;
@@ -84,10 +104,7 @@ fn wait_for_root(
             Ok(Some(status)) => return Ok(status),
             Ok(None) => {
                 let process_group = child.id() as libc::pid_t;
-                if let Err(error) = signal_relay.relay_pending(process_group) {
-                    let _ = kill_root(child);
-                    return Err(error);
-                }
+                signal_relay.relay_pending(process_group)?;
                 match tracker.wait_for_events(None) {
                     Ok(EventWait::RootExited) => {
                         // Reaping the direct child produces its NOTE_REAP event;
@@ -97,18 +114,16 @@ fn wait_for_root(
                         });
                     }
                     Ok(EventWait::Events | EventWait::TimedOut) => {}
-                    Err(error) => {
-                        let _ = kill_root(child);
-                        return Err(error);
-                    }
+                    Err(error) => return Err(error),
                 }
             }
-            Err(error) => {
-                let _ = kill_root(child);
-                return Err(format!("failed to wait for `{SANDBOX_EXEC}`: {error}"));
-            }
+            Err(error) => return Err(format!("failed to wait for `{SANDBOX_EXEC}`: {error}")),
         }
     }
+}
+
+fn additional_error(primary: String, additional: String) -> String {
+    format!("{primary}; additionally, {additional}")
 }
 
 fn kill_root(child: &mut std::process::Child) -> Result<ExitStatus, String> {

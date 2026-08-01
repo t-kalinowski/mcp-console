@@ -134,7 +134,7 @@ impl DescendantTracker {
         })
     }
 
-    pub(super) fn terminate(mut self) -> Result<(), String> {
+    pub(super) fn terminate_after_root_exit(mut self) -> Result<(), String> {
         let deadline = Instant::now() + PROCESS_EXIT_TIMEOUT;
         loop {
             // The root may have exited before wait_for_root() blocked. Consume

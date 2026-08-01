@@ -24,7 +24,8 @@ When it owns a terminal, the launcher runs the command in a dedicated foreground
 It relays `SIGHUP`, `SIGINT`, `SIGQUIT`, and `SIGTERM` sent directly to the launcher unless the signal was already blocked or ignored when the launcher started.
 It imposes no signal timeout, so a command that handles or ignores a signal may continue running.
 Before returning, it terminates descendants observed by the macOS process tracker, including `processx` children that create another session, and waits up to five seconds for them to be reaped.
-A process-observation error terminates the root process group, reports an error, and preserves its temporary directory instead of treating the process as exited.
+On a process-observation error, the launcher attempts to terminate and reap the root process group before tearing down observed descendants.
+If root termination cannot be confirmed, the launcher reports both failures and preserves its temporary directory instead of running teardown that assumes the root exited.
 Detached descendants may remain when supervision itself fails because their identities can no longer be verified safely.
 A descendant that orphans itself before macOS exposes it to the tracker is outside this initial supervision boundary.
 The launcher does not proxy stopped and continued job-control states: `Ctrl-Z` and use as one stage of an interactive terminal pipeline are unsupported.
