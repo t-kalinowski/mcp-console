@@ -98,10 +98,14 @@ pub(super) fn supervised_status(
         // Descendants may still be using their writable directory. Preserve it
         // when supervision fails instead of deleting files underneath them.
         temp_directory.preserve();
-        return Err(match terminal_result {
-            Ok(()) => error,
-            Err(terminal_error) => additional_error(error, terminal_error),
-        });
+        let mut error = match kill_root(&mut child) {
+            Ok(_) => error,
+            Err(kill_error) => additional_error(error, kill_error),
+        };
+        if let Err(terminal_error) = terminal_result {
+            error = additional_error(error, terminal_error);
+        }
+        return Err(error);
     }
 
     terminal_result?;

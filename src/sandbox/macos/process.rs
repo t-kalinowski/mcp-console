@@ -27,7 +27,9 @@ pub(super) fn list_child_pids(parent: libc::pid_t) -> Result<Vec<libc::pid_t>, S
         };
         if count == 0 {
             let error_code = unsafe { *libc::__error() };
-            if error_code == 0 {
+            if error_code == 0 || error_code == libc::ESRCH {
+                // The parent may be reaped after its fork event is queued but
+                // before the tracker snapshots its children.
                 return Ok(Vec::new());
             }
             let error = std::io::Error::from_raw_os_error(error_code);
