@@ -24,7 +24,8 @@ Run `mcp-console --help` or `mcp-console COMMAND --help` for command-line help.
 The server registers one `send` tool that accepts one complete `r` code cell.
 On macOS, the first call lazily starts a sandboxed embedded R worker.
 Later calls reuse the same global R state.
-The worker captures R console output and prints each visible top-level value.
+The worker runs each cell through R's native top-level loop, captures R console output, prints each visible value, and maintains `.Last.value`.
+If a cell ends while an expression is incomplete, earlier complete expressions from that cell remain applied.
 Its MCP initialization identity remains `mcp-console`.
 The intended default client registration name is `console`:
 

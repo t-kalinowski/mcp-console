@@ -170,7 +170,7 @@ Complete text, plots, live table batches, and snapshots are fetched separately b
 - Language selection: the object key is `r`, `python`, or `sql`.
 - Runtime substrate: open implementation decision.
   Evaluate an Ark-backed worker against a purpose-built `harp`/`libr` worker before committing; hide either behind the same runtime service.
-- R evaluation: native top-level evaluation; top-level cells are not transported through `ReadConsole`.
+- R evaluation: native top-level evaluation; complete cell source and evaluation-time stdin remain distinct queues even when a DLL-REPL backend transports both through `ReadConsole`.
 - SQL engine: embedded DuckDB through R/DBI initially; the DuckDB CLI is a behavioral reference only.
 - Output: bounded MCP text plus managed workspace files.
 - Environment: additive session requirements configured by `session`; they survive runtime restarts.

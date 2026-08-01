@@ -148,12 +148,15 @@ If shutdown already closed the gate, startup stops the new child and fails immed
 
 ## Built-in R worker
 
-The built-in worker parses each complete cell in memory, evaluates its expressions in the persistent global environment, captures R console output, and prints every visible value.
+The built-in worker runs each complete cell through `R_ReplDLLinit()` and repeated `R_ReplDLLdo1()` calls.
+R parses and evaluates its expressions sequentially in the persistent global environment, captures console output, prints every visible value, and performs native top-level bookkeeping such as updating `.Last.value`.
+A cell that ends while R requires continuation input produces `Error: Incomplete code`; earlier complete expressions from that cell remain applied.
 A successful silent cell produces no sideband output, so the MCP result is `[done]`.
 The CLI runs `worker` synchronously without a Tokio runtime, so R initialization and evaluation remain on the process main thread.
 
-This initial path does not use R's DLL REPL loop.
-It does not provide interactive input, top-level warning flushing, `.Last.value`, task callbacks, traceback bookkeeping, or source references.
+The worker supplies cell source through `ReadConsole` before each top-level evaluation starts.
+An evaluation-time `ReadConsole` request receives EOF because interactive input is not implemented yet.
+Submitted source references are not retained.
 Parse, evaluation, and print errors are returned as console text followed by `completed`, so the worker remains available even though the protocol has no structured language-error message.
 
 ## Current limits
