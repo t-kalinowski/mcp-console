@@ -54,7 +54,7 @@ See `design-sketches/README.md` for the product overview and `design-sketches/do
 - `src/main.rs` — current binary entry point.
 - `src/cli.rs` — clap command definitions and user-facing help.
 - `src/server.rs` — MCP stdio server, echoing `send` tool, and development-worker selection.
-- `src/sideband.rs` — Unix server-side inherited-pipe JSON-lines transport.
+- `src/sideband.rs` — macOS server-side inherited-pipe JSON-lines transport.
 - `src/worker_client.rs` — server-side worker launch, protocol, and output collection.
 - `src/sandbox.rs` — platform dispatch for the sandbox process launcher.
 - `src/sandbox/` — platform implementation and macOS Seatbelt policy.
