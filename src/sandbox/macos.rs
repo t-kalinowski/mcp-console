@@ -73,8 +73,8 @@ pub(super) fn supervised_status(
         }
     };
 
-    let status = match wait_for_root(&mut child, &signal_relay, &mut tracker) {
-        Ok(status) => status,
+    match wait_for_root_exit(&child, &signal_relay, &mut tracker) {
+        Ok(()) => {}
         Err(error) => {
             temp_directory.preserve();
             let root_result = kill_root(&mut child);
@@ -91,9 +91,11 @@ pub(super) fn supervised_status(
             }
             return Err(error);
         }
-    };
+    }
     let terminal_result = foreground_terminal.restore();
 
+    // Keep the exited root waitable through descendant teardown. Its process
+    // table entry reserves the process-group ID for any fallback group signal.
     if let Err(error) = tracker.terminate_after_root_exit() {
         // Descendants may still be using their writable directory. Preserve it
         // when supervision fails instead of deleting files underneath them.
@@ -108,34 +110,61 @@ pub(super) fn supervised_status(
         return Err(error);
     }
 
+    let status = match child.wait() {
+        Ok(status) => status,
+        Err(wait_error) => {
+            let error = format!("failed to wait for `{SANDBOX_EXEC}`: {wait_error}");
+            return Err(match terminal_result {
+                Ok(()) => error,
+                Err(terminal_error) => additional_error(error, terminal_error),
+            });
+        }
+    };
     terminal_result?;
     Ok(exit_code(status))
 }
 
-fn wait_for_root(
-    child: &mut Child,
+fn wait_for_root_exit(
+    child: &Child,
     signal_relay: &SignalRelay,
     tracker: &mut DescendantTracker,
-) -> Result<ExitStatus, String> {
+) -> Result<(), String> {
     loop {
-        match child.try_wait() {
-            Ok(Some(status)) => return Ok(status),
-            Ok(None) => {
-                let process_group = child.id() as libc::pid_t;
-                signal_relay.relay_pending(process_group)?;
-                match tracker.wait_for_events(None) {
-                    Ok(EventWait::RootExited) => {
-                        // Reaping the direct child produces its NOTE_REAP event;
-                        // waiting on kqueue again here would deadlock.
-                        return child.wait().map_err(|error| {
-                            format!("failed to wait for `{SANDBOX_EXEC}`: {error}")
-                        });
-                    }
-                    Ok(EventWait::Events | EventWait::TimedOut) => {}
-                    Err(error) => return Err(error),
-                }
-            }
-            Err(error) => return Err(format!("failed to wait for `{SANDBOX_EXEC}`: {error}")),
+        if root_has_exited(child.id() as libc::pid_t)? {
+            return Ok(());
+        }
+
+        let process_group = child.id() as libc::pid_t;
+        signal_relay.relay_pending(process_group)?;
+        match tracker.wait_for_events(None) {
+            Ok(EventWait::RootExited) => return Ok(()),
+            Ok(EventWait::Events | EventWait::TimedOut) => {}
+            Err(error) => return Err(error),
+        }
+    }
+}
+
+fn root_has_exited(pid: libc::pid_t) -> Result<bool, String> {
+    loop {
+        let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+        // WNOWAIT observes exit without releasing the PID or process-group ID.
+        let result = unsafe {
+            libc::waitid(
+                libc::P_PID,
+                pid as libc::id_t,
+                &mut info,
+                libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
+            )
+        };
+        if result == 0 {
+            return Ok(info.si_pid != 0);
+        }
+
+        let error = std::io::Error::last_os_error();
+        if error.kind() != std::io::ErrorKind::Interrupted {
+            return Err(format!(
+                "failed to inspect `{SANDBOX_EXEC}` exit status: {error}"
+            ));
         }
     }
 }
@@ -144,6 +173,8 @@ fn additional_error(primary: String, additional: String) -> String {
     format!("{primary}; additionally, {additional}")
 }
 
+// Callers retain the direct child waitably until after this function signals
+// its process group, so its PID and process-group ID cannot be reused.
 fn kill_root(child: &mut Child) -> Result<ExitStatus, String> {
     let result = unsafe { libc::kill(-(child.id() as libc::pid_t), libc::SIGKILL) };
     if result != 0 {
