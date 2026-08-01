@@ -1,20 +1,36 @@
 use std::os::fd::RawFd;
+use std::os::unix::process::CommandExt as _;
+use std::process::Command;
 
-pub(super) fn close_unlisted_on_exec(allowed: &[RawFd]) -> Result<(), String> {
-    // The sandbox subcommand is a dedicated, current-thread launcher. No other
-    // thread can open or reuse a descriptor between this snapshot and spawn().
-    for descriptor in open_descriptors()? {
-        let flags = descriptor_flags(descriptor)?;
-        let desired = if allowed.contains(&descriptor) {
-            flags & !libc::FD_CLOEXEC
-        } else {
-            flags | libc::FD_CLOEXEC
-        };
-        if desired != flags {
-            set_descriptor_flags(descriptor, desired)?;
-        }
+pub(super) fn configure(command: &mut Command, allowed: Vec<RawFd>) -> Result<(), String> {
+    // Compute the bound in the parent, then change flags only in the child.
+    // Rust's private exec-error pipe remains open on failure and closes on exec.
+    let descriptor_limit = descriptor_limit()?;
+    unsafe {
+        command.pre_exec(move || {
+            for descriptor in (libc::STDERR_FILENO + 1)..descriptor_limit {
+                configure_descriptor(descriptor, allowed.contains(&descriptor))?;
+            }
+            Ok(())
+        });
     }
     Ok(())
+}
+
+fn descriptor_limit() -> Result<RawFd, String> {
+    let table_size = unsafe { libc::getdtablesize() };
+    if table_size <= 0 {
+        return Err(format!(
+            "failed to read the launcher file-descriptor limit: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    Ok(open_descriptors()?
+        .into_iter()
+        .max()
+        .map_or(table_size, |descriptor| {
+            table_size.max(descriptor.saturating_add(1))
+        }))
 }
 
 fn open_descriptors() -> Result<Vec<RawFd>, String> {
@@ -64,31 +80,37 @@ fn open_descriptors() -> Result<Vec<RawFd>, String> {
     }
 }
 
-fn descriptor_flags(descriptor: RawFd) -> Result<libc::c_int, String> {
-    loop {
+fn configure_descriptor(descriptor: RawFd, allowed: bool) -> std::io::Result<()> {
+    let flags = loop {
         let flags = unsafe { libc::fcntl(descriptor, libc::F_GETFD) };
         if flags >= 0 {
-            return Ok(flags);
+            break flags;
         }
         let error = std::io::Error::last_os_error();
-        if error.kind() != std::io::ErrorKind::Interrupted {
-            return Err(format!(
-                "failed to inspect launcher file descriptor {descriptor}: {error}"
-            ));
+        match error.raw_os_error() {
+            Some(libc::EINTR) => continue,
+            Some(libc::EBADF) => return Ok(()),
+            _ => return Err(error),
         }
+    };
+    let desired = if allowed {
+        flags & !libc::FD_CLOEXEC
+    } else {
+        flags | libc::FD_CLOEXEC
+    };
+    if desired == flags {
+        return Ok(());
     }
-}
 
-fn set_descriptor_flags(descriptor: RawFd, flags: libc::c_int) -> Result<(), String> {
     loop {
-        if unsafe { libc::fcntl(descriptor, libc::F_SETFD, flags) } == 0 {
+        if unsafe { libc::fcntl(descriptor, libc::F_SETFD, desired) } == 0 {
             return Ok(());
         }
         let error = std::io::Error::last_os_error();
-        if error.kind() != std::io::ErrorKind::Interrupted {
-            return Err(format!(
-                "failed to configure launcher file descriptor {descriptor}: {error}"
-            ));
+        match error.raw_os_error() {
+            Some(libc::EINTR) => continue,
+            Some(libc::EBADF) => return Ok(()),
+            _ => return Err(error),
         }
     }
 }

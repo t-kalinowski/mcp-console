@@ -9,11 +9,10 @@ license = "MIT"
 publish = false
 
 [dependencies]
-rmcp = { version = "2.2.0", default-features = false, features = ["macros", "server", "transport-io"] }
-tokio = { version = "1", features = ["macros", "rt"] }
-
-[dev-dependencies]
-serde_json = "1"
-
-[target.'cfg(target_os = "macos")'.dependencies]
+clap = { version = "4.5", features = ["derive"] }
 libc = "0.2"
+rmcp = { version = "2.2.0", default-features = false, features = ["macros", "server", "transport-io"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["macros", "rt", "sync"] }
+wait-timeout = "0.2"

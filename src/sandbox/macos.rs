@@ -3,46 +3,60 @@ mod job_control;
 mod process;
 mod process_tracker;
 
-use self::file_descriptors::close_unlisted_on_exec;
+use self::file_descriptors::configure as configure_file_descriptors;
 use self::job_control::{ForegroundTerminal, SignalRelay};
 use self::process_tracker::{DescendantTracker, EventWait};
 use std::ffi::OsString;
 use std::fs::{self, DirBuilder};
-use std::os::fd::RawFd;
+use std::os::fd::{AsRawFd as _, OwnedFd};
 use std::os::unix::fs::DirBuilderExt;
 use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, ExitCode, ExitStatus};
+use std::process::{Child, Command, ExitCode, ExitStatus};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-const SANDBOX_EXEC: &str = "/usr/bin/sandbox-exec";
+pub(super) const SANDBOX_EXEC: &str = "/usr/bin/sandbox-exec";
 const POLICY: &str = include_str!("read_only_policy.sbpl");
-const INHERITED_DESCRIPTORS: [RawFd; 3] =
-    [libc::STDIN_FILENO, libc::STDOUT_FILENO, libc::STDERR_FILENO];
 
-pub(super) fn run(command: &[OsString]) -> Result<ExitCode, String> {
-    let mut temp_directory = TemporaryDirectory::new()?;
-    let signal_relay = SignalRelay::install()?;
-    let mut foreground_terminal = ForegroundTerminal::detect();
-
-    let mut sandbox_command = Command::new(SANDBOX_EXEC);
-    sandbox_command
+pub(super) fn sandboxed_command() -> Result<(Command, TemporaryDirectory), String> {
+    let temporary_directory = TemporaryDirectory::new()?;
+    let mut launcher = Command::new(SANDBOX_EXEC);
+    launcher
         .arg("-p")
         .arg(POLICY)
         .arg(parameter_definition(
             "TEMP_DIRECTORY",
-            temp_directory.path(),
+            temporary_directory.path(),
         ))
-        .arg("--")
-        .args(command)
-        .env("TMPDIR", temp_directory.path());
+        .arg("--");
+
+    Ok((launcher, temporary_directory))
+}
+
+pub(super) fn spawn_command(
+    mut command: Command,
+    inherited_descriptors: Vec<OwnedFd>,
+) -> Result<Child, String> {
+    let allowed = inherited_descriptors
+        .iter()
+        .map(|descriptor| descriptor.as_raw_fd())
+        .collect();
+    configure_file_descriptors(&mut command, allowed)?;
+    let child = command.spawn();
+    drop(inherited_descriptors);
+    child.map_err(|error| format!("failed to launch `{SANDBOX_EXEC}`: {error}"))
+}
+
+pub(super) fn supervised_status(
+    mut sandbox_command: Command,
+    mut temp_directory: TemporaryDirectory,
+    inherited_descriptors: Vec<OwnedFd>,
+) -> Result<ExitCode, String> {
+    let signal_relay = SignalRelay::install()?;
+    let mut foreground_terminal = ForegroundTerminal::detect();
     signal_relay.configure_child(&mut sandbox_command, foreground_terminal.descriptor());
-    close_unlisted_on_exec(&INHERITED_DESCRIPTORS)?;
 
-    let mut child = sandbox_command
-        .spawn()
-        .map_err(|error| format!("failed to launch `{SANDBOX_EXEC}`: {error}"))?;
-
+    let mut child = spawn_command(sandbox_command, inherited_descriptors)?;
     let mut tracker = match DescendantTracker::start(child.id() as libc::pid_t, &signal_relay) {
         Ok(tracker) => tracker,
         Err(error) => {
@@ -95,7 +109,7 @@ pub(super) fn run(command: &[OsString]) -> Result<ExitCode, String> {
 }
 
 fn wait_for_root(
-    child: &mut std::process::Child,
+    child: &mut Child,
     signal_relay: &SignalRelay,
     tracker: &mut DescendantTracker,
 ) -> Result<ExitStatus, String> {
@@ -126,7 +140,7 @@ fn additional_error(primary: String, additional: String) -> String {
     format!("{primary}; additionally, {additional}")
 }
 
-fn kill_root(child: &mut std::process::Child) -> Result<ExitStatus, String> {
+fn kill_root(child: &mut Child) -> Result<ExitStatus, String> {
     let result = unsafe { libc::kill(-(child.id() as libc::pid_t), libc::SIGKILL) };
     if result != 0 {
         let kill_error = std::io::Error::last_os_error();
@@ -150,7 +164,7 @@ fn kill_root(child: &mut std::process::Child) -> Result<ExitStatus, String> {
         .map_err(|error| format!("failed to wait for terminated `{SANDBOX_EXEC}`: {error}"))
 }
 
-struct TemporaryDirectory {
+pub(super) struct TemporaryDirectory {
     path: PathBuf,
     remove_on_drop: bool,
 }
@@ -186,7 +200,7 @@ impl TemporaryDirectory {
         })
     }
 
-    fn path(&self) -> &Path {
+    pub(super) fn path(&self) -> &Path {
         &self.path
     }
 

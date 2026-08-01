@@ -11,7 +11,8 @@
 ; directory created for this sandbox invocation. The device and IPC rules below
 ; provide the additional write operations required by supported runtimes.
 ; Seatbelt does not revoke capabilities carried by open descriptors. The
-; launcher preserves standard streams and closes all other inherited descriptors.
+; launcher preserves standard streams and explicitly allowed sideband pipes;
+; all other inherited descriptors close on exec.
 ; Seatbelt checks both the existing vnode and the new directory entry for a
 ; hard-link operation. This permits links within the temporary directory but
 ; prevents importing an inode from a read-only host path.

@@ -88,7 +88,8 @@ print("blocked")
 
 #[test]
 fn sandbox_is_read_only_except_for_a_dedicated_temp_directory() {
-    let test_directory = TestDirectory::new("write-boundary");
+    // This path must reach the child unchanged without shell parsing.
+    let test_directory = TestDirectory::new("write boundary $(literal)");
     let workspace = test_directory.path().join("workspace");
     let home = test_directory.path().join("home");
     fs::create_dir(&workspace).expect("workspace should be created");
