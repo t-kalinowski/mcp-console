@@ -59,6 +59,10 @@ scripts/format
 Formatter errors remain visible but do not stop the remaining formatters or make the script fail.
 
 See [`tests/transcripts/README.md`](tests/transcripts/README.md) for running and authoring external server transcript tests.
+The `zod` suite runs on macOS, where the sandbox policy is implemented.
+It uses the hidden `serve --worker PATH` development option to exercise the server-side worker protocol with an executable Python fixture.
+The server launches the fixture through the same sandbox boundary intended for the production worker.
+See [`docs/WORKER_PROTOCOL.md`](docs/WORKER_PROTOCOL.md) for the exact implemented launch and message contract.
 
 ## License
 

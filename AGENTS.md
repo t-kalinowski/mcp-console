@@ -20,13 +20,17 @@ The binary requires a subcommand.
 The `serve` command runs an MCP server over stdio.
 Clap provides command help, version output, argument parsing, and usage errors.
 The server registers only a `send` tool, which accepts any JSON object and echoes it as JSON text.
+On macOS, the hidden development option `serve --worker PATH` instead sends an `r` string to a worker launched through the same sandbox policy as the `sandbox` command.
+When MCP input closes, the server starts a one-second deadline and attempts graceful sideband shutdown without delaying it.
+If the direct sandbox process is still running when time expires, the sandbox boundary force-stops its process group and reaps that direct process.
+The executable Python fixture `tests/fixtures/zod` implements the current ready/evaluate/output/completed/shutdown protocol for acceptance tests.
 The version command prints the package name and version.
 On macOS, the sandbox command launches a subprocess under `sandbox-exec` with host filesystem reads allowed, regular-file writes limited to a dedicated per-launch temporary directory, runtime device and IPC exceptions, and network access denied.
 This initial launcher waits only for the direct command.
 Background descendants are unsupported: they may outlive the launcher, which attempts to remove their dedicated temporary directory on a best-effort basis when it returns.
 Descendant supervision is intentionally deferred because it must account for process groups, session-detached children, signal forwarding, and PID reuse together.
 The sandbox command is unsupported on Linux and Windows.
-The session model, language runtimes, sidecar API, viewer, environment management, output retention, and transcript generation do not exist yet.
+The production worker, session model, language runtimes, sidecar API, viewer, environment management, output retention, and transcript generation do not exist yet.
 
 ## Product direction
 
@@ -49,10 +53,13 @@ See `design-sketches/README.md` for the product overview and `design-sketches/do
 - `Cargo.toml` — Rust package metadata.
 - `src/main.rs` — current binary entry point.
 - `src/cli.rs` — clap command definitions and user-facing help.
-- `src/server.rs` — MCP stdio server and echoing `send` tool.
+- `src/server.rs` — MCP stdio server, echoing `send` tool, and development-worker selection.
+- `src/sideband.rs` — macOS server-side inherited-pipe JSON-lines transport.
+- `src/worker_client.rs` — server-side worker launch, protocol, and output collection.
 - `src/sandbox.rs` — platform dispatch for the sandbox process launcher.
 - `src/sandbox/` — platform implementation and macOS Seatbelt policy.
 - `tests/cli.rs` — public binary acceptance tests.
+- `tests/fixtures/zod` — executable Python sideband worker used by acceptance tests.
 - `tests/transcripts/_run.py` — discovers transcript suites and compares case snapshots.
 - `tests/transcripts/_support.py` — shared transcript types and MCP stdio client.
 - `tests/transcripts/<suite>.py` — suites of named imperative transcript cases.
@@ -62,6 +69,7 @@ See `design-sketches/README.md` for the product overview and `design-sketches/do
 - `scripts/format` — attempts each repository-wide formatter without requiring it.
 - `scripts/check` — local formatting, Clippy, and test checks.
 - `.github/workflows/ci.yaml` — formatting, Clippy, and test checks.
+- `docs/WORKER_PROTOCOL.md` — exact implemented development-worker launch and sideband protocol.
 - `design-sketches/` — tentative product and architecture documents.
 - `README.md` — current user-facing project status.
 - `LICENSE` — project license.

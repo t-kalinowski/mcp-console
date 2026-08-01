@@ -4,7 +4,14 @@ use std::process::ExitCode;
 #[cfg(target_os = "macos")]
 use std::ffi::OsStr;
 #[cfg(target_os = "macos")]
+use std::os::unix::process::CommandExt as _;
+#[cfg(target_os = "macos")]
 use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, ExitStatus, Stdio};
+#[cfg(target_os = "macos")]
+use std::time::Duration;
+
+#[cfg(target_os = "macos")]
+use wait_timeout::ChildExt as _;
 
 #[cfg(target_os = "macos")]
 #[path = "sandbox/macos.rs"]
@@ -168,6 +175,12 @@ impl SandboxedCommand {
         self
     }
 
+    /// Isolates a background sandbox command for bounded forced termination.
+    pub(crate) fn new_process_group(&mut self) -> &mut Self {
+        self.command.process_group(0);
+        self
+    }
+
     /// Spawns the sandboxed program and transfers the temporary-directory
     /// guard to the returned child.
     pub(crate) fn spawn(mut self) -> Result<SandboxedChild, String> {
@@ -209,5 +222,56 @@ impl SandboxedChild {
         self.child
             .wait()
             .map_err(|error| format!("failed to launch `{}`: {error}", platform::SANDBOX_EXEC))
+    }
+
+    /// Waits at most `timeout` for the direct sandbox process to exit.
+    pub(crate) fn wait_timeout(&mut self, timeout: Duration) -> Result<Option<ExitStatus>, String> {
+        self.child.wait_timeout(timeout).map_err(|error| {
+            format!(
+                "failed to wait for `{}` to exit: {error}",
+                platform::SANDBOX_EXEC
+            )
+        })
+    }
+
+    /// Kills the live sandbox process group and reaps its direct process.
+    ///
+    /// Full descendant supervision, including a group whose leader has already
+    /// exited, belongs to the sandbox lifetime supervisor.
+    pub(crate) fn force_stop(&mut self) -> Result<(), String> {
+        match self.child.try_wait() {
+            Ok(Some(_)) => return Ok(()),
+            Ok(None) => {}
+            Err(error) => {
+                return Err(format!(
+                    "failed to read `{}` status before stopping it: {error}",
+                    platform::SANDBOX_EXEC
+                ));
+            }
+        }
+
+        // SAFETY: `new_process_group` made the child's PID its process-group ID.
+        let result = unsafe { libc::killpg(self.child.id() as libc::pid_t, libc::SIGKILL) };
+        if result < 0 {
+            let kill_error = std::io::Error::last_os_error();
+            return match self.child.try_wait() {
+                Ok(Some(_)) => Ok(()),
+                Ok(None) => Err(format!(
+                    "failed to stop `{}`: {kill_error}",
+                    platform::SANDBOX_EXEC
+                )),
+                Err(wait_error) => Err(format!(
+                    "failed to stop `{}`: {kill_error}; additionally failed to read its status: {wait_error}",
+                    platform::SANDBOX_EXEC
+                )),
+            };
+        }
+
+        self.child.wait().map(|_| ()).map_err(|error| {
+            format!(
+                "failed to reap stopped `{}`: {error}",
+                platform::SANDBOX_EXEC
+            )
+        })
     }
 }

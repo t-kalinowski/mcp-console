@@ -1,0 +1,84 @@
+#!/usr/bin/env -S uv run --no-cache --script
+# /// script
+# requires-python = ">=3.11"
+# ///
+
+import json
+import os
+import time
+from pathlib import Path
+from typing import Any, TextIO
+
+
+READ_FD_ENV = "MCP_CONSOLE_SIDEBAND_READ_FD"
+WRITE_FD_ENV = "MCP_CONSOLE_SIDEBAND_WRITE_FD"
+
+
+def open_sideband(name: str, mode: str) -> TextIO:
+    descriptor = int(os.environ.pop(name))
+    os.set_inheritable(descriptor, False)
+    return os.fdopen(descriptor, mode, encoding="utf-8")
+
+
+def send(stream: TextIO, message: dict[str, Any]) -> None:
+    stream.write(json.dumps(message, separators=(",", ":")) + "\n")
+    stream.flush()
+
+
+def main() -> None:
+    """Run the deterministic sideband fixture until the server shuts it down."""
+    reader = open_sideband(READ_FD_ENV, "r")
+    writer = open_sideband(WRITE_FD_ENV, "w")
+    if os.environ.get("ZOD_REPORT_PROCESS_GROUP") == "1":
+        Path(os.environ["TMPDIR"], "zod-process-group").write_text(
+            str(os.getpgrp()),
+            encoding="utf-8",
+        )
+    send(writer, {"kind": "ready"})
+
+    if os.environ.get("ZOD_BLOCK_SIDEBAND_WRITE") == "1":
+        reader.read(1)
+        Path(os.environ["TMPDIR"], "zod-sideband-blocked").touch()
+        while True:
+            time.sleep(60)
+
+    for line in reader:
+        message = json.loads(line)
+        message_kind = message["kind"]
+        if message_kind == "shutdown":
+            return
+
+        assert message_kind == "evaluate"
+        assert set(message) == {"kind", "r"}
+        if message["r"] == "stall":
+            Path(os.environ["TMPDIR"], "zod-stalled").touch()
+            while True:
+                time.sleep(60)
+
+        if message["r"] == "probe sandbox":
+            try:
+                Path(os.environ["ZOD_SANDBOX_PROBE_PATH"]).write_text(
+                    "escaped",
+                    encoding="utf-8",
+                )
+            except PermissionError:
+                output = "sandbox blocked host write\n"
+            else:
+                output = "worker escaped sandbox\n"
+            send(writer, {"kind": "output", "data": output})
+            send(writer, {"kind": "completed"})
+            continue
+
+        for output in ("zod: ", f"{message['r']}\n"):
+            send(
+                writer,
+                {
+                    "kind": "output",
+                    "data": output,
+                },
+            )
+        send(writer, {"kind": "completed"})
+
+
+if __name__ == "__main__":
+    main()

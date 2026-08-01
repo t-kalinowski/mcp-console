@@ -1,4 +1,5 @@
 use std::ffi::OsString;
+use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 
@@ -27,7 +28,11 @@ pub struct Cli {
 #[derive(Debug, Subcommand)]
 pub enum Command {
     /// Run the MCP server over standard input and output
-    Serve,
+    Serve {
+        /// Replace the runtime worker during development
+        #[arg(long, hide = true, value_name = "PATH")]
+        worker: Option<PathBuf>,
+    },
 
     /// Run a command with the MCP Console sandbox policy
     #[command(after_help = SANDBOX_EXAMPLES)]
