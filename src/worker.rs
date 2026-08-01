@@ -22,7 +22,7 @@ mod platform {
         let executable = std::env::current_exe()?;
         let mut command = Command::new(executable);
         configure_r_environment(&mut command, &r_home);
-        command.arg("__worker");
+        command.args(["worker", "run"]);
 
         crate::sideband::set_inherited_close_on_exec(false)?;
         let error = command.exec();
@@ -34,6 +34,10 @@ mod platform {
     }
 
     pub(crate) fn run() -> Result<(), Box<dyn Error>> {
+        // SAFETY: pthread_main_np has no preconditions.
+        if unsafe { libc::pthread_main_np() } != 1 {
+            return Err(io::Error::other("R worker must run on the process main thread").into());
+        }
         let (mut reader, writer) = crate::sideband::connect_from_env()?;
         initialize_r()?;
         WORKER_WRITER

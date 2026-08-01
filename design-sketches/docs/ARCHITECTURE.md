@@ -26,8 +26,8 @@ MCP Console ships one user-facing Rust binary and launches one sandboxed worker 
 The worker implementation remains behind the runtime backend decision:
 
 ```text
-mcp-console                         MCP supervisor/server
-mcp-console __worker --native ...  purpose-built worker candidate
+mcp-console                        MCP supervisor/server
+mcp-console worker ...             purpose-built worker candidate
 ark or an Ark-linked worker mode   Ark-backed candidate
 ```
 

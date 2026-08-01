@@ -25,8 +25,8 @@ For `--worker PATH`, `PATH` is one program name or path, with no arguments or sh
 /usr/bin/sandbox-exec <policy> -- PATH
 ```
 
-The built-in path launches the current `mcp-console` executable in an internal bootstrap mode.
-Inside the sandbox, the bootstrap discovers `R_HOME` and self-executes with R's library directory on the dynamic loader path.
+The built-in path launches `mcp-console worker bootstrap`.
+Inside the sandbox, that command discovers `R_HOME` and self-executes as `mcp-console worker run` with R's library directory on the dynamic loader path.
 The final process initializes R through `libr` and `harp`.
 
 The server launches the sandboxed worker with null standard input, output, and error streams.
@@ -120,7 +120,8 @@ Concurrent MCP calls wait on the worker process mutex and reach the worker seque
 Malformed JSON, invalid UTF-8, an unexpected message, or sideband EOF fails the active operation.
 There is no structured protocol error message and no automatic worker restart.
 Startup failure discards the worker, so a later evaluation may retry startup.
-A failure after startup leaves the failed worker cached.
+After `ready`, a sideband failure does not discard the worker; a later evaluation reuses it even if the process has exited or unread frames remain from the failed evaluation.
+R parse and evaluation errors are not sideband failures: the built-in worker sends them as output followed by `completed` and remains reusable.
 
 ## Shutdown
 
@@ -149,6 +150,7 @@ If shutdown already closed the gate, startup stops the new child and fails immed
 
 The built-in worker parses each complete cell in memory, evaluates its expressions in the persistent global environment, captures R console output, and prints every visible value.
 A successful silent cell produces no sideband output, so the MCP result is `[done]`.
+The CLI runs `worker run` synchronously without a Tokio runtime, so R initialization and evaluation remain on the process main thread.
 
 This initial path does not use R's DLL REPL loop.
 It does not provide interactive input, top-level warning flushing, `.Last.value`, task callbacks, traceback bookkeeping, or source references.

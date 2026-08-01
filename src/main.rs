@@ -1,4 +1,3 @@
-use std::ffi::OsStr;
 use std::process::ExitCode;
 
 use clap::Parser;
@@ -13,32 +12,34 @@ mod worker_client;
 #[cfg(target_os = "macos")]
 mod worker_protocol;
 
-#[tokio::main(flavor = "current_thread")]
-async fn main() -> ExitCode {
-    let arguments = std::env::args_os().skip(1).collect::<Vec<_>>();
-    if matches!(arguments.as_slice(), [mode] if mode == OsStr::new("__worker_bootstrap")) {
-        return match worker::bootstrap() {
-            Ok(()) => ExitCode::SUCCESS,
-            Err(error) => exit_with_error(error),
-        };
-    }
-    if matches!(arguments.as_slice(), [mode] if mode == OsStr::new("__worker")) {
-        return match worker::run() {
-            Ok(()) => ExitCode::SUCCESS,
-            Err(error) => exit_with_error(error),
-        };
-    }
-
+fn main() -> ExitCode {
     match cli::Cli::parse().command {
-        cli::Command::Serve { worker } => match server::run(worker).await {
+        cli::Command::Serve { worker } => match run_server(worker) {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => exit_with_error(error),
         },
+        cli::Command::Worker { command } => {
+            let result = match command {
+                cli::WorkerCommand::Bootstrap => worker::bootstrap(),
+                cli::WorkerCommand::Run => worker::run(),
+            };
+            match result {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(error) => exit_with_error(error),
+            }
+        }
         cli::Command::Sandbox { command } => match sandbox::run(&command) {
             Ok(exit_code) => exit_code,
             Err(error) => exit_with_error(error),
         },
     }
+}
+
+fn run_server(worker: Option<std::path::PathBuf>) -> Result<(), Box<dyn std::error::Error>> {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+    runtime.block_on(server::run(worker))
 }
 
 fn exit_with_error(error: impl std::fmt::Display) -> ExitCode {
