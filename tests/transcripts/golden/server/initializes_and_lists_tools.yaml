@@ -25,7 +25,7 @@ input:
 result:
   tools:
     - name: send
-      description: Evaluate one complete R code cell or poll its running evaluation.
+      description: Evaluate one complete R code cell, write its stdin, or poll it.
       inputSchema:
         $schema: https://json-schema.org/draft/2020-12/schema
         additionalProperties: false
@@ -33,13 +33,20 @@ result:
         properties:
           r:
             description: >-
-              Complete multiline R code evaluated in persistent state. Omit to poll a
-              running cell.
+              Complete multiline R code evaluated in persistent state. Omit to write
+              stdin or poll.
+            type:
+              - string
+              - "null"
+          stdin:
+            description: Exact UTF-8 text queued to worker fd 0 without adding a newline.
             type:
               - string
               - "null"
           timeout_ms:
-            description: Maximum time this call waits. It does not limit or stop the computation.
+            description: >-
+              Maximum time this call waits for an evaluation. It does not limit or
+              stop the computation.
             type: integer
             format: uint64
             minimum: 0

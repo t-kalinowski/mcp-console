@@ -59,6 +59,168 @@ def test_times_out_and_polls_running_evaluation(binary: Path) -> Transcript:
     return client.finish()
 
 
+def test_routes_idle_and_timed_out_stdin(binary: Path) -> Transcript:
+    client = McpClient(binary, ("serve",))
+    client.initialize_and_list_tools()
+
+    # fmt: r
+    direct_stdin = dedent(r"""
+        local({
+          connection <- suppressWarnings(file("/dev/stdin"))
+          on.exit(close(connection))
+          readLines(connection, n = 1)
+        })
+        """).strip()
+
+    client.call_tool("send", stdin="cold fd 0\n")
+    assert last_tool_text(client) == "[idle]"
+    client.call_tool("send", r=direct_stdin)
+    assert last_tool_text(client) == '[1] "cold fd 0"\n'
+
+    # fmt: r
+    r = dedent(r"""
+        prompted <- readline("bundled> ")
+        direct <- local({
+          connection <- suppressWarnings(file("/dev/stdin"))
+          on.exit(close(connection))
+          readLines(connection, n = 1)
+        })
+        paste(prompted, direct, sep = "|")
+        """).strip()
+    client.call_tool("send", r=r, stdin="café\n", timeout_ms=50)
+    assert last_tool_text(client) == "[running]"
+    client.call_tool("send", timeout_ms=0)
+    assert last_tool_text(client) == "[running]"
+    client.call_tool("send", stdin="timed out ", timeout_ms=50)
+    assert last_tool_text(client) == "[running]"
+    client.call_tool("send", stdin="fd 0\n", timeout_ms=3_000)
+    assert last_tool_text(client) == 'bundled>\n[1] "café|timed out fd 0"\n'
+    return client.finish()
+
+
+def test_routes_combined_and_followup_stdin(binary: Path) -> Transcript:
+    client = McpClient(binary, ("serve",))
+    client.initialize_and_list_tools()
+
+    # fmt: r
+    r = dedent(r"""
+        first <- readline("first> ")
+        second <- readline("second> ")
+        cat(paste(first, second, sep = "|"), "\n", sep = "")
+        """).strip()
+    client.call_tool("send", r=r, stdin="Ada\nLovelace\n")
+    output = last_tool_text(client)
+    assert output == "first>\nsecond>\nAda|Lovelace\n", output
+
+    # fmt: r
+    r = dedent(r"""
+        direct <- local({
+          connection <- suppressWarnings(file("/dev/stdin"))
+          on.exit(close(connection))
+          readLines(connection, n = 1)
+        })
+        prompted <- readline("after> ")
+        cat(paste(direct, prompted, sep = "|"), "\n", sep = "")
+        """).strip()
+    client.call_tool("send", r=r, stdin="direct\n", timeout_ms=1_000)
+    output = last_tool_text(client)
+    assert output == "after>\n[input]", output
+    client.call_tool("send", stdin="callback\n")
+    assert last_tool_text(client) == "direct|callback\n"
+
+    # fmt: r
+    r = dedent(r"""
+        paste("color", readline("color> "))
+        """).strip()
+    client.call_tool("send", r=r)
+    assert last_tool_text(client) == "color>\n[input]"
+    client.call_tool("send", stdin="bl", timeout_ms=50)
+    assert last_tool_text(client) == "[input]"
+    client.call_tool("send", stdin="ue\n")
+    assert last_tool_text(client) == '[1] "color blue"\n'
+
+    client.call_tool(
+        "send",
+        r='invisible(readline("silent> "))',
+        stdin="accepted\n",
+    )
+    assert last_tool_text(client) == "silent>\n"
+    return client.finish()
+
+
+def test_preserves_fd0_order_between_readers(binary: Path) -> Transcript:
+    client = McpClient(binary, ("serve",))
+    client.initialize_and_list_tools()
+
+    # fmt: r
+    r = dedent(r"""
+        prompted <- readline("callback> ")
+        direct <- local({
+          connection <- suppressWarnings(file("/dev/stdin"))
+          on.exit(close(connection))
+          readLines(connection, n = 1)
+        })
+        cat(paste(prompted, direct, sep = "|"), "\n", sep = "")
+        """).strip()
+    client.call_tool(
+        "send",
+        r=r,
+        stdin="callback\ndirect\n",
+        timeout_ms=1_000,
+    )
+    output = last_tool_text(client)
+    assert output == "callback>\ncallback|direct\n", output
+    return client.finish()
+
+
+def test_preserves_utf8_across_console_reads(binary: Path) -> Transcript:
+    client = McpClient(binary, ("serve",))
+    client.initialize_and_list_tools()
+
+    # fmt: r
+    r = dedent(r"""
+        value <- readline("long> ")
+        cat(paste(nchar(value, type = "bytes"), endsWith(value, "é")), "\n", sep = "")
+        """).strip()
+    client.call_tool("send", r=r, stdin=("x" * 4_094) + "é\n")
+    client.transcript[-1]["send"]["stdin"] = "<long stdin ending in UTF-8>"
+    output = last_tool_text(client)
+    assert output == "long>\nlong>\n4096 TRUE\n", output
+    return client.finish()
+
+
+def test_keeps_stdin_open_after_partial_payload(binary: Path) -> Transcript:
+    client = McpClient(binary, ("serve",))
+    client.initialize_and_list_tools()
+
+    # fmt: r
+    r = dedent(r"""
+        cat("before\n")
+        value <- readline("partial> ")
+        value
+        """).strip()
+    client.call_tool("send", r=r, stdin="without newline", timeout_ms=1_000)
+    output = last_tool_text(client)
+    assert output == "before\npartial>\n[input]", output
+
+    client.call_tool("send", stdin="\n")
+    assert last_tool_text(client) == '[1] "without newline"\n'
+
+    # fmt: r
+    r = dedent(r"""
+        readline("next> ")
+        """).strip()
+    client.call_tool("send", r=r, stdin="next\n")
+    assert last_tool_text(client) == 'next>\n[1] "next"\n'
+    return client.finish()
+
+
+def last_tool_text(client: McpClient) -> str:
+    result = client.transcript[-1]["result"]
+    assert result.get("isError") is not True, result
+    return result["content"][0]["text"]
+
+
 def test_applies_complete_expressions_before_incomplete_source(
     binary: Path,
 ) -> Transcript:

@@ -1,0 +1,27 @@
+---
+!same-as tests/transcripts/golden/server/initializes_and_lists_tools.yaml
+---
+id: 3
+send:
+  r: request input after timeout
+  timeout_ms: 0
+result:
+  content:
+    - type: text
+      text: "[running]"
+  isError: false
+---
+id: 4
+send:
+  stdin: |
+    answer
+  timeout_ms: 3000
+result:
+  content:
+    - type: text
+      text: |
+        before
+        late>
+        zod stdin: answer
+  isError: false
+...

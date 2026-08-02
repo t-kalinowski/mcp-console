@@ -10,7 +10,7 @@ These strings are part of the agent-facing interface and should change only when
 ## `send`
 
 ```text
-Persistent R, Python, and DuckDB SQL console. Use it whenever exact computation or direct inspection would improve accuracy—from arithmetic, string counting, parsing, and file or binary-data inspection to data wrangling, exploratory analysis, visualization, statistics, simulation, and model training or tuning. State persists across calls; R and Python exchange objects, and SQL queries live or registered tabular data. Language-native help, introspection, interactive input, and debuggers work. Send exactly one complete `r`, `python`, or `sql` cell; after `[input]`, send `stdin`; send no cell or `stdin` to wait/poll. Large values are previewed; oversized stdout/stderr, plots, artifacts, and the Quarto transcript are saved in the workspace.
+Persistent R, Python, and DuckDB SQL console. Use it whenever exact computation or direct inspection would improve accuracy—from arithmetic, string counting, parsing, and file or binary-data inspection to data wrangling, exploratory analysis, visualization, statistics, simulation, and model training or tuning. State persists across calls; R and Python exchange objects, and SQL queries live or registered tabular data. Language-native help, introspection, interactive input, and debuggers work. Send exactly one complete `r`, `python`, or `sql` cell, optionally with `stdin`; send `stdin` on its own to queue exact text to the session worker; send neither to wait/poll. Large values are previewed; oversized stdout/stderr, plots, artifacts, and the Quarto transcript are saved in the workspace.
 ```
 
 Property descriptions:
@@ -18,8 +18,8 @@ Property descriptions:
 - `r`: `Complete multiline R cell in persistent state. Python objects are available through py; R help, browser(), and recover() work.`
 - `python`: `Complete multiline Python cell in persistent state. R objects are available through r; help(), breakpoint(), and pdb work.`
 - `sql`: `Complete DuckDB SQL cell in the persistent catalog. Query live or registered tabular data; use SHOW TABLES, DESCRIBE, SUMMARIZE, and EXPLAIN for discovery. CLI dot commands are not supported.`
-- `stdin`: `Raw text appended to stdin of the active evaluation after [input]. It may contain one or more lines; newlines are significant and are not added automatically. Unconsumed text is discarded when the evaluation ends.`
-- `session`: `Persistent named session; defaults to default. Use another name for independent or concurrent state. A missing session is created only by a code cell.`
+- `stdin`: `Raw text queued to the session worker's standard input, whether it is evaluating or idle. A single value may satisfy multiple reads; newlines are significant and are not added automatically. Queuing does not acknowledge consumption, and unread text may satisfy later reads.`
+- `session`: `Persistent named session; defaults to default. Use another name for independent or concurrent state. A missing session is created by a code cell or nonempty stdin.`
 - `label`: `Optional short heading for this cell in the Quarto transcript; it has no effect on execution.`
 - `wait_ms`: `Maximum time this call waits for output or a state change. It never limits or cancels the computation.`
 

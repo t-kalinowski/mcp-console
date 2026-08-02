@@ -12,5 +12,7 @@ pub(crate) enum ServerMessage {
 pub(crate) enum WorkerMessage {
     Ready,
     Output { data: String },
+    InputRequested { prompt: String },
+    InputReceived,
     Completed,
 }

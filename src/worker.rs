@@ -14,7 +14,8 @@ mod platform {
     static R_REPL_INIT: OnceLock<ReplInit> = OnceLock::new();
     static R_REPL_DO_ONE: OnceLock<ReplDoOne> = OnceLock::new();
     static CELL_SOURCE: Mutex<Option<CellSource>> = Mutex::new(None);
-    static OUTPUT_FAILURE: Mutex<Option<String>> = Mutex::new(None);
+    static WORKER_FAILURE: Mutex<Option<String>> = Mutex::new(None);
+    static WORKER_SHUTDOWN: AtomicBool = AtomicBool::new(false);
     static EVALUATION_STARTED: AtomicBool = AtomicBool::new(false);
 
     type ReplInit = unsafe extern "C-unwind" fn();
@@ -47,32 +48,41 @@ mod platform {
         writer.send(&WorkerMessage::Ready)?;
 
         loop {
-            match reader.receive::<ServerMessage>()? {
+            match reader.receive()? {
                 ServerMessage::Evaluate { r } => {
-                    if r.contains('\0') {
-                        emit_output(b"Error: R source cannot contain NUL\n");
-                    } else {
-                        set_cell_source(r);
-                        let status = run_repl_cell();
-                        clear_cell_source();
-                        match status {
-                            0 | 1 => {}
-                            2 => emit_output(b"Error: Incomplete code\n"),
-                            status => {
-                                return Err(io::Error::other(format!(
-                                    "R worker received unexpected DLL REPL status {status}"
-                                ))
-                                .into());
-                            }
-                        }
+                    let result = evaluate_cell(r);
+
+                    if WORKER_SHUTDOWN.load(Ordering::SeqCst) {
+                        return Ok(());
                     }
-                    if let Some(message) = take_output_failure() {
+                    if let Some(message) = take_worker_failure().or_else(|| result.err()) {
                         return Err(io::Error::other(message).into());
                     }
                     writer.send(&WorkerMessage::Completed)?;
                 }
                 ServerMessage::Shutdown => return Ok(()),
             }
+        }
+    }
+
+    fn evaluate_cell(r: String) -> Result<(), String> {
+        if r.contains('\0') {
+            emit_output(b"Error: R source cannot contain NUL\n");
+            return Ok(());
+        }
+
+        set_cell_source(r);
+        let status = run_repl_cell();
+        clear_cell_source();
+        match status {
+            0 | 1 => Ok(()),
+            2 => {
+                emit_output(b"Error: Incomplete code\n");
+                Ok(())
+            }
+            status => Err(format!(
+                "R worker received unexpected DLL REPL status {status}"
+            )),
         }
     }
 
@@ -223,6 +233,22 @@ mod platform {
         0
     }
 
+    fn record_worker_failure(message: String) {
+        let mut failure = WORKER_FAILURE
+            .lock()
+            .expect("R worker failure lock should not be poisoned");
+        if failure.is_none() {
+            *failure = Some(message);
+        }
+    }
+
+    fn take_worker_failure() -> Option<String> {
+        WORKER_FAILURE
+            .lock()
+            .expect("R worker failure lock should not be poisoned")
+            .take()
+    }
+
     fn emit_output(bytes: &[u8]) {
         if !crate::sideband::available_in_process() {
             return;
@@ -230,22 +256,14 @@ mod platform {
         let Some(writer) = WORKER_WRITER.get() else {
             return;
         };
-        if OUTPUT_FAILURE.lock().is_ok_and(|failure| failure.is_some()) {
+        if WORKER_FAILURE.lock().is_ok_and(|failure| failure.is_some()) {
             return;
         }
         if let Err(error) = writer.send(&WorkerMessage::Output {
             data: String::from_utf8_lossy(bytes).into_owned(),
-        }) && let Ok(mut failure) = OUTPUT_FAILURE.lock()
-        {
-            *failure = Some(format!("R console output failed: {error}"));
+        }) {
+            record_worker_failure(format!("R console output failed: {error}"));
         }
-    }
-
-    fn take_output_failure() -> Option<String> {
-        OUTPUT_FAILURE
-            .lock()
-            .ok()
-            .and_then(|mut failure| failure.take())
     }
 
     extern "C-unwind" fn r_write_console(buf: *const c_char, buflen: c_int, _otype: c_int) {
@@ -266,7 +284,7 @@ mod platform {
     }
 
     extern "C-unwind" fn r_read_console(
-        _prompt: *const c_char,
+        prompt: *const c_char,
         buf: *mut c_uchar,
         buflen: c_int,
         _add_history: c_int,
@@ -274,15 +292,89 @@ mod platform {
         if buf.is_null() || buflen <= 1 {
             return 0;
         }
-        if EVALUATION_STARTED.load(Ordering::SeqCst) {
-            // Interactive stdin is not implemented yet, so evaluated-code input
-            // receives EOF instead of consuming the remaining cell source.
+        if !crate::sideband::available_in_process() {
             return console_eof(buf);
         }
-        match take_cell_source((buflen as usize) - 1) {
-            Some(source) => write_console_input(buf, buflen, &source),
-            None => console_eof(buf),
+        if !EVALUATION_STARTED.load(Ordering::SeqCst) {
+            return match take_cell_source((buflen as usize) - 1) {
+                Some(source) => write_console_input(buf, buflen, &source),
+                None => console_eof(buf),
+            };
         }
+
+        let prompt = if prompt.is_null() {
+            String::new()
+        } else {
+            unsafe { CStr::from_ptr(prompt) }
+                .to_string_lossy()
+                .into_owned()
+        };
+        if let Err(error) = send_input_requested(&prompt) {
+            record_worker_failure(error);
+            return console_eof(buf);
+        }
+
+        match read_console_stdin(buf, buflen) {
+            Ok(read) => {
+                if read != 0
+                    && let Err(error) = send_input_received()
+                {
+                    record_worker_failure(error);
+                    return console_eof(buf);
+                }
+                read
+            }
+            Err(error) => {
+                record_worker_failure(error);
+                console_eof(buf)
+            }
+        }
+    }
+
+    fn send_input_requested(prompt: &str) -> Result<(), String> {
+        WORKER_WRITER
+            .get()
+            .expect("R worker sideband writer should be initialized")
+            .send(&WorkerMessage::InputRequested {
+                prompt: prompt.to_string(),
+            })
+            .map_err(|error| format!("R worker failed to report an input request: {error}"))
+    }
+
+    fn send_input_received() -> Result<(), String> {
+        WORKER_WRITER
+            .get()
+            .expect("R worker sideband writer should be initialized")
+            .send(&WorkerMessage::InputReceived)
+            .map_err(|error| format!("R worker failed to report received input: {error}"))
+    }
+
+    fn read_console_stdin(buf: *mut c_uchar, buflen: c_int) -> Result<c_int, String> {
+        let mut length = 0;
+        while length < (buflen as usize) - 1 {
+            let byte = unsafe { buf.add(length) };
+            let count = unsafe { libc::read(libc::STDIN_FILENO, byte.cast(), 1) };
+            if count == 1 {
+                length += 1;
+                if unsafe { *byte } == b'\n' {
+                    break;
+                }
+                continue;
+            }
+            if count == 0 {
+                WORKER_SHUTDOWN.store(true, Ordering::SeqCst);
+                return Ok(console_eof(buf));
+            }
+
+            let error = io::Error::last_os_error();
+            if error.kind() != io::ErrorKind::Interrupted {
+                return Err(format!("R worker stdin read failed: {error}"));
+            }
+        }
+        unsafe {
+            *buf.add(length) = 0;
+        }
+        Ok(i32::from(length > 0))
     }
 }
 

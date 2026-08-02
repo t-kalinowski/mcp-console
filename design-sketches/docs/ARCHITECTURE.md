@@ -77,7 +77,7 @@ Backend transport must not leak into MCP, session, transcript, or local sidecar 
 4. One backend-owned thread owns all direct calls into R.
 5. A worker executes at most one top-level evaluation at a time.
 6. Complete cells and interactive stdin are different internal command types.
-7. Complete cells and evaluation-time stdin remain distinct commands and state queues, even when a native DLL-REPL adapter transports both through `ReadConsole`.
+7. Complete cells and worker stdin remain distinct commands and streams, even when a native DLL-REPL adapter obtains cell source through `ReadConsole`.
 8. R cells do not acquire a console-owned interpreted R frame.
 9. Runtime state comes from structured events, never prompt-string matching.
 10. Interrupt and termination control cannot wait behind the evaluation command queue.
@@ -114,7 +114,7 @@ The session manager depends on behavior, not transport:
 trait RuntimeBackend {
     fn capabilities(&self) -> RuntimeCapabilities;
     fn evaluate(&mut self, request: EvaluateCell) -> EvaluationHandle;
-    fn provide_input(&mut self, request: ProvideInput) -> Result<()>;
+    fn queue_input(&mut self, request: QueueInput) -> Result<()>;
     fn interrupt(&mut self, evaluation: Option<EvaluationId>) -> Result<()>;
     fn inspect(&mut self, request: InspectionRequest) -> InspectionHandle;
     fn restart(&mut self, environment: ResolvedEnvironment) -> Result<()>;
@@ -331,7 +331,7 @@ Responsibilities:
 - initialize and own R on the correct thread;
 - create a persistent R user environment and embed reticulate Python and DuckDB;
 - dispatch complete R, Python, and SQL cells;
-- route genuine interactive input to the active evaluation;
+- queue genuine interactive input to worker fd 0 whether the session is evaluating or idle;
 - emit structured state, output, display, plot, help, object, inspection, and completion events;
 - cooperate with interrupt, restart, shutdown, and sandbox policy;
 - retain private runtime and object-reference handles without exposing them to ordinary user code or sidecar clients.
@@ -383,7 +383,7 @@ An Ark backend may use Jupyter channels and custom comms internally, but its ada
 evaluation:    supervisor -> backend
 events:        backend -> supervisor
 inspection:    supervisor <-> backend
-stdin:         supervisor -> active input request
+stdin:         supervisor -> session worker
 control:       supervisor -> backend or OS runtime interrupt
 raw stdout:    worker and descendants -> supervisor when applicable
 raw stderr:    worker and descendants -> supervisor when applicable
@@ -391,6 +391,11 @@ raw stderr:    worker and descendants -> supervisor when applicable
 
 These are semantic channels, not necessarily separate file descriptors.
 The control path must remain usable while the R-owning thread is blocked in evaluation.
+
+Stdin is owned by the worker generation, not an evaluation.
+Unread bytes remain queued after an evaluation completes and may be consumed by a background job or later evaluation.
+Restart, close, or worker failure discards them with that generation.
+Supported console callbacks emit evaluation-scoped `InputRequested` and `InputReceived` events; direct fd-0 reads emit neither.
 
 ### 8.2 Representative commands
 
@@ -409,9 +414,7 @@ enum WorkerCommand {
         source: String,
         label: Option<String>,
     },
-    ProvideInput {
-        evaluation_id: EvaluationId,
-        input_request_id: InputRequestId,
+    QueueInput {
         text: String,
     },
     PrepareShutdown {
@@ -438,7 +441,7 @@ enum WorkerEvent {
         prompt: String,
         echo: bool,
     },
-    InputConsumed { evaluation_id: EvaluationId, input_request_id: InputRequestId },
+    InputReceived { evaluation_id: EvaluationId, input_request_id: InputRequestId },
     EvaluationFinished { evaluation_id: EvaluationId, outcome: EvaluationOutcome },
     InterruptAcknowledged { evaluation_id: Option<EvaluationId> },
     SessionEnded { reason: EndReason, message: Option<String> },
@@ -453,7 +456,17 @@ enum WorkerEvent {
 An evaluation is complete only after `EvaluationFinished` or worker termination.
 A quiet pipe, a familiar prompt, or a short settling delay is never sufficient evidence.
 
-An `InputRequested` event suspends the initiating MCP wait but does not finish the evaluation.
+`InputRequested` is provisional for a short grace window.
+If its matching `InputReceived` arrives in that window, the supervisor continues waiting because the runtime read already succeeded.
+Otherwise the prompt and `[input]` may return before the MCP wait deadline.
+This grace applies only to input state; it is never evidence that evaluation completed.
+
+`InputReceived` pairs with the runtime request ID.
+It does not acknowledge a `QueueInput` command, identify which payload supplied the bytes, or report direct fd-0 reads.
+
+The grace window is a latency heuristic, not proof that the read remains blocked.
+From `InputRequested` alone, the supervisor cannot distinguish incomplete input from a delayed receipt.
+Guaranteeing suppression would require waiting until the MCP deadline or adding another worker event that proves the read is still blocked; the initial design accepts an occasional extra `[input]` boundary instead.
 
 Move exact message schemas and ordering constraints into `docs/WORKER_PROTOCOL.md` once implementation begins.
 
@@ -478,7 +491,7 @@ The stack contract is intentionally asymmetric:
 | R | native top-level R cell behavior | no |
 | Python | private reticulate cell boundary | minimal and truthful if present |
 | SQL | private DBI/DuckDB boundary | minimal and truthful if present |
-| stdin | resume active input consumer | no new top-level frame |
+| stdin | append to worker input stream | no new top-level frame |
 
 This asymmetry follows the actual implementation boundaries and should be documented rather than concealed.
 
@@ -513,7 +526,7 @@ For each R cell it:
 3. lets R parse and evaluate each top-level expression, update `.Last.value`, auto-print visible values, print warnings, and invoke task callbacks;
 4. treats source EOF after a primary status as completion and source EOF after a continuation status as incomplete input;
 5. emits conditions, errors, artifacts, and completion under the evaluation ID;
-6. restores the per-cell source and stdin queues after completion or error.
+6. restores the per-cell source queue after completion or error without claiming that queued stdin was consumed.
 
 The implementation should retain source references and a synthetic source name when the DLL embedding API can support them without replacing R's native top-level loop.
 
@@ -559,9 +572,12 @@ When called during an active evaluation, the callback:
 
 1. allocates an `InputRequestId`;
 2. emits `InputRequested` with prompt and origin;
-3. blocks until the matching `ProvideInput` arrives, interrupt occurs, or shutdown begins;
-4. returns exactly that input line to R;
-5. emits consumption bookkeeping.
+3. blocks while reading fd 0 through one newline or the supplied callback buffer;
+4. emits the matching `InputReceived` after a nonempty read succeeds;
+5. returns that chunk to R and leaves additional bytes in the pipe for later console or direct reads.
+
+The supervisor may queue fd-0 bytes before `InputRequested`.
+The receipt describes the callback read, not consumption of a particular queued payload.
 
 The callback uses a Busy-based evaluation latch rather than prompt comparison to select the queue.
 The cell-source queue and interactive-input queue must never be merged.
@@ -616,7 +632,7 @@ A later supported native reticulate entry point could remove the console-owned R
 
 ### 11.4 Python stdin and debuggers
 
-Install a Python `sys.stdin` or `builtins.input` bridge that uses the same `InputRequested`/`ProvideInput` state machine as R.
+Install a Python `sys.stdin` or `builtins.input` bridge that uses the same fd-0 stream and paired `InputRequested`/`InputReceived` events as R.
 It should support at least ordinary `input()` and line-oriented debugger commands.
 
 Do not assume that R's `ReadConsole` automatically provides correct Python stdin semantics.
@@ -1003,7 +1019,6 @@ The public MCP protocol supports richer content, but v1 deliberately uses plain 
 
 - invalid mode combinations;
 - code sent while busy;
-- `stdin` while no input is pending;
 - missing session for poll/control;
 - dependency preparation failure;
 - worker startup or protocol failure;

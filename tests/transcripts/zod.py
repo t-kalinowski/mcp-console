@@ -46,6 +46,109 @@ def test_times_out_and_polls_running_evaluation(binary: Path) -> Transcript:
     return client.finish()
 
 
+def test_accepts_idle_stdin(binary: Path) -> Transcript:
+    zod = Path(__file__).resolve().parents[1] / "fixtures" / "zod"
+    client = McpClient(
+        binary,
+        ("serve", "--worker", str(zod)),
+    )
+    client.initialize_and_list_tools()
+
+    client.call_tool("send", stdin="cold\n")
+    assert last_tool_text(client) == "[idle]"
+    client.call_tool("send", r="input without request")
+    assert last_tool_text(client) == "zod stdin: cold\n"
+
+    client.call_tool("send", stdin="idle\n")
+    assert last_tool_text(client) == "[idle]"
+    client.call_tool("send", r="input without request")
+    assert last_tool_text(client) == "zod stdin: idle\n"
+    return client.finish()
+
+
+def test_routes_combined_and_followup_stdin(binary: Path) -> Transcript:
+    zod = Path(__file__).resolve().parents[1] / "fixtures" / "zod"
+    client = McpClient(
+        binary,
+        ("serve", "--worker", str(zod)),
+    )
+    client.initialize_and_list_tools()
+
+    client.call_tool(
+        "send",
+        r="input length without request",
+        stdin=("x" * 1024) + "café\0\n",
+    )
+    client.transcript[-1]["send"]["stdin"] = "<long UTF-8 stdin containing NUL>"
+    assert last_tool_text(client) == "zod stdin length: 1030\n"
+
+    client.call_tool("send", r="input without request", timeout_ms=0)
+    assert last_tool_text(client) == "[running]"
+    client.call_tool("send", stdin="followup\n", timeout_ms=3_000)
+    assert last_tool_text(client) == "zod stdin: followup\n"
+
+    client.call_tool("send", r="request input")
+    assert last_tool_text(client) == "zod>\n[input]"
+    client.call_tool("send", stdin="")
+    assert last_tool_text(client) == "[input]"
+    client.call_tool("send", stdin="prompted\n")
+    assert last_tool_text(client) == "zod stdin: prompted\n"
+
+    client.call_tool(
+        "send",
+        r="input without request then request input",
+        stdin="first\n",
+        timeout_ms=1_000,
+    )
+    assert last_tool_text(client) == "second>\n[input]"
+    client.call_tool("send", stdin="second\n")
+    assert last_tool_text(client) == "zod stdin: first|second\n"
+
+    client.call_tool("send", r="echo", stdin="stale\n")
+    assert last_tool_text(client) == "zod: echo\n"
+    client.call_tool("send", r="input without request")
+    assert last_tool_text(client) == "zod stdin: stale\n"
+
+    client.call_tool("send", r="echo", stdin="x" * (128 * 1024), timeout_ms=1_000)
+    client.transcript[-1]["send"]["stdin"] = "<large unread stdin>"
+    assert last_tool_text(client) == "zod: echo\n"
+    return client.finish()
+
+
+def test_preserves_unexposed_input_output(binary: Path) -> Transcript:
+    zod = Path(__file__).resolve().parents[1] / "fixtures" / "zod"
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        temporary_path = Path(temporary_directory)
+        environment = os.environ.copy()
+        environment["TMPDIR"] = temporary_directory
+        client = McpClient(
+            binary,
+            ("serve", "--worker", str(zod)),
+            environment,
+        )
+        client.initialize_and_list_tools()
+
+        client.call_tool("send", r="request input after timeout", timeout_ms=0)
+        assert last_tool_text(client) == "[running]"
+        waiting = wait_for_marker(
+            temporary_path,
+            "zod-waiting-to-request-input",
+            client,
+        )
+        (waiting.parent / "zod-release-input-request").touch()
+        wait_for_marker(temporary_path, "zod-input-requested", client)
+
+        client.call_tool("send", stdin="answer\n", timeout_ms=3_000)
+        assert last_tool_text(client) == "before\nlate>\nzod stdin: answer\n"
+        return client.finish()
+
+
+def last_tool_text(client: McpClient) -> str:
+    result = client.transcript[-1]["result"]
+    assert result.get("isError") is not True, result
+    return result["content"][0]["text"]
+
+
 def test_restarts_after_unexpected_sideband_message(binary: Path) -> Transcript:
     zod = Path(__file__).resolve().parents[1] / "fixtures" / "zod"
     with tempfile.TemporaryDirectory() as temporary_directory:
@@ -153,17 +256,21 @@ def test_shuts_down_stalled_worker(binary: Path) -> Transcript:
         passed = False
         try:
             client.initialize_and_list_tools()
-            client.send(
+            stalled = client.send(
                 {
                     "jsonrpc": "2.0",
                     "id": 3,
                     "method": "tools/call",
                     "params": {
                         "name": "send",
-                        "arguments": {"r": "stall"},
+                        "arguments": {
+                            "r": "stall",
+                            "stdin": "x" * (2 * 1024 * 1024),
+                        },
                     },
                 }
             )
+            stalled["send"]["stdin"] = "<large stdin>"
             group_marker = wait_for_marker(temporary_path, "zod-process-group", client)
             worker_group = read_worker_group(group_marker)
             wait_for_marker(temporary_path, "zod-stalled", client)
