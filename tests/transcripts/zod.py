@@ -89,7 +89,7 @@ def test_restarts_after_worker_exit(binary: Path) -> Transcript:
     )
     client.initialize_and_list_tools()
     client.call_tool("send", r="exit unexpectedly")
-    assert client.transcript[-1]["output"]["result"]["isError"] is True
+    assert client.transcript[-1]["result"]["isError"] is True
     client.call_tool("send", r="hello")
     return client.finish()
 
@@ -206,7 +206,7 @@ def test_shutdown_deadline_does_not_wait_for_sideband_writer(
                 "zod-sideband-blocked",
                 client,
             )
-            entry["input"]["params"]["arguments"]["r"] = "<large cell>"
+            entry["send"]["r"] = "<large cell>"
             shutdown_started = time.monotonic()
             client.stdin.close()
             try:

@@ -1,7 +1,7 @@
 use std::process::Command;
 
 #[test]
-fn format_script_attempts_all_formatters_when_they_are_missing() {
+fn format_script_calls_ruff_directly_and_attempts_all_formatters_when_missing() {
     let script = concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/format");
     let output = Command::new("/bin/sh")
         .arg(script)
@@ -16,7 +16,7 @@ fn format_script_attempts_all_formatters_when_they_are_missing() {
     );
 
     let stderr = String::from_utf8(output.stderr).expect("stderr should be UTF-8");
-    for formatter in ["uv", "yamark", "cargo", "air"] {
+    for formatter in ["ruff", "yamark", "cargo", "air"] {
         assert!(
             stderr.contains(formatter),
             "format script did not attempt {formatter}: {stderr}"

@@ -1,0 +1,13 @@
+---
+!same-as tests/transcripts/golden/server/initializes_and_lists_tools.yaml
+---
+id: 3
+send:
+  python: print('hello')
+  wait_ms: 0
+result:
+  content:
+    - type: text
+      text: "failed to deserialize parameters: unknown field `python`, expected `r`"
+  isError: true
+...

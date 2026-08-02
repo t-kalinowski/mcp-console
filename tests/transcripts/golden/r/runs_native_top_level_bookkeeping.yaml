@@ -1,90 +1,43 @@
 ---
-id: 1
-input:
-  method: initialize
-  params:
-    protocolVersion: 2025-11-25
-    capabilities: {}
-    clientInfo:
-      name: acceptance-test
-      version: 1.0.0
-output:
-  result:
-    protocolVersion: 2025-11-25
-    capabilities:
-      tools: {}
-    serverInfo:
-      name: mcp-console
-      version: 0.1.0
----
-input:
-  method: notifications/initialized
----
-id: 2
-input:
-  method: tools/list
-output:
-  result:
-    tools:
-      - name: send
-        description: Evaluate one complete R code cell in persistent state.
-        inputSchema:
-          $schema: https://json-schema.org/draft/2020-12/schema
-          required:
-            - r
-          type: object
-          properties:
-            r:
-              description: Complete multiline R code evaluated in persistent state.
-              type: string
-          additionalProperties: false
+!same-as tests/transcripts/golden/server/initializes_and_lists_tools.yaml
 ---
 id: 3
-input:
-  method: tools/call
-  params:
-    name: send
-    arguments:
-      r: |-
-        invisible(addTaskCallback(
-          local({
-            first <- TRUE
-            function(expr, ...) {
-              if (first) {
-                first <<- FALSE
-                return(TRUE)
-              }
-              cat(deparse1(expr), "\n", sep = "")
-              FALSE
-            }
-          }),
-          name = "mcp-console-test"
-        ))
+send:
+  r: |-
+    invisible(addTaskCallback(
+      local({
+        first <- TRUE
+        function(expr, ...) {
+          if (first) {
+            first <<- FALSE
+            return(TRUE)
+          }
+          cat(deparse1(expr), "\n", sep = "")
+          FALSE
+        }
+      }),
+      name = "mcp-console-test"
+    ))
+    mcp_console_callback_probe <- 42
+result:
+  content:
+    - type: text
+      text: |
         mcp_console_callback_probe <- 42
-output:
-  result:
-    content:
-      - type: text
-        text: |
-          mcp_console_callback_probe <- 42
-    isError: false
+  isError: false
 ---
 id: 4
-input:
-  method: tools/call
-  params:
-    name: send
-    arguments:
-      r: |-
-        warning("careful", call. = FALSE)
-        invisible(42)
-        cat("last value: ", identical(base::.Last.value, 42), "\n", sep = "")
-output:
-  result:
-    content:
-      - type: text
-        text: |
-          Warning message:
-          careful 
-          last value: TRUE
-    isError: false
+send:
+  r: |-
+    warning("careful", call. = FALSE)
+    invisible(42)
+    cat("last value: ", identical(base::.Last.value, 42), "\n", sep = "")
+result:
+  content:
+    - type: text
+      text: |
+        Warning message:
+        careful 
+        last value: TRUE
+  isError: false
+...
