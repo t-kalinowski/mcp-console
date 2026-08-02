@@ -3,49 +3,26 @@
 ---
 id: 3
 send:
-  r: input without request
-  stdin: |
-    café
+  r: input length without request
+  stdin: <long UTF-8 stdin containing NUL>
 result:
   content:
     - type: text
       text: |
-        zod stdin: café
+        zod stdin length: 1030
   isError: false
 ---
 id: 4
 send:
-  r: input length without request
-  stdin: "<long stdin>"
-result:
-  content:
-    - type: text
-      text: |
-        zod stdin length: 1024
-  isError: false
----
-id: 5
-send:
-  r: input length without request
-  stdin: "<stdin containing NUL>"
-result:
-  content:
-    - type: text
-      text: |
-        zod stdin length: 1
-  isError: false
----
-id: 6
-send:
   r: input without request
-  timeout_ms: 10
+  timeout_ms: 0
 result:
   content:
     - type: text
       text: "[running]"
   isError: false
 ---
-id: 7
+id: 5
 send:
   stdin: |
     followup
@@ -57,7 +34,7 @@ result:
         zod stdin: followup
   isError: false
 ---
-id: 8
+id: 6
 send:
   r: request input
 result:
@@ -68,17 +45,16 @@ result:
         [input]
   isError: false
 ---
-id: 9
+id: 7
 send:
   stdin: ""
-  timeout_ms: 10
 result:
   content:
     - type: text
       text: "[input]"
   isError: false
 ---
-id: 10
+id: 8
 send:
   stdin: |
     prompted
@@ -89,7 +65,7 @@ result:
         zod stdin: prompted
   isError: false
 ---
-id: 11
+id: 9
 send:
   r: input without request then request input
   stdin: |
@@ -103,7 +79,7 @@ result:
         [input]
   isError: false
 ---
-id: 12
+id: 10
 send:
   stdin: |
     second
@@ -114,7 +90,7 @@ result:
         zod stdin: first|second
   isError: false
 ---
-id: 13
+id: 11
 send:
   r: echo
   stdin: |
@@ -126,7 +102,7 @@ result:
         zod: echo
   isError: false
 ---
-id: 14
+id: 12
 send:
   r: input without request
 result:
@@ -136,10 +112,10 @@ result:
         zod stdin: stale
   isError: false
 ---
-id: 15
+id: 13
 send:
   r: echo
-  stdin: "<large unread stdin>"
+  stdin: <large unread stdin>
   timeout_ms: 1000
 result:
   content:

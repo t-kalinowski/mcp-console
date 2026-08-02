@@ -1,4 +1,3 @@
-use std::collections::VecDeque;
 use std::ffi::OsString;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -18,13 +17,15 @@ struct ClientInner {
 
 struct Evaluation {
     state: Mutex<EvaluationState>,
-    input: Mutex<InputRoute>,
     changed: tokio::sync::Notify,
 }
 
 struct EvaluationState {
     result: Option<Result<String, String>>,
-    input_required: Option<InputBoundary>,
+    input_request: Option<InputBoundary>,
+    #[cfg(target_os = "macos")]
+    stdin: Option<platform::StdinSender>,
+    pending_stdin: Vec<u8>,
 }
 
 struct InputBoundary {
@@ -32,14 +33,9 @@ struct InputBoundary {
     delivered: bool,
 }
 
-struct InputRoute {
-    writer: Option<platform::StdinSender>,
-    queued: VecDeque<Vec<u8>>,
-}
-
 enum EvaluationWait {
     Running,
-    InputRequired(String),
+    InputRequested(String),
     Completed(Result<String, String>),
 }
 
@@ -84,12 +80,12 @@ impl Client {
         stdin: Option<String>,
         timeout: Duration,
     ) -> Result<String, String> {
-        let (evaluation, defer_input) = match (r, stdin) {
+        let (evaluation, defer_request) = match (r, stdin) {
             (Some(r), stdin) => self.start_evaluation(r, stdin)?,
             (None, Some(stdin)) => match self.current_evaluation()? {
                 Some(evaluation) => {
-                    let defer_input = evaluation.submit_stdin(stdin)?;
-                    (evaluation, defer_input)
+                    let defer_request = evaluation.submit_stdin(stdin)?;
+                    (evaluation, defer_request)
                 }
                 None => {
                     return Err("stdin is accepted only while an R cell is active".to_string());
@@ -101,9 +97,9 @@ impl Client {
             },
         };
 
-        match evaluation.wait(timeout, defer_input).await? {
+        match evaluation.wait(timeout, defer_request).await? {
             EvaluationWait::Running => Ok("[running]".to_string()),
-            EvaluationWait::InputRequired(output) => Ok(output),
+            EvaluationWait::InputRequested(output) => Ok(output),
             EvaluationWait::Completed(result) => {
                 self.clear_evaluation(&evaluation)?;
                 result
@@ -123,15 +119,14 @@ impl Client {
         let evaluation = Arc::new(Evaluation {
             state: Mutex::new(EvaluationState {
                 result: None,
-                input_required: None,
-            }),
-            input: Mutex::new(InputRoute {
-                writer: None,
-                queued: VecDeque::new(),
+                input_request: None,
+                #[cfg(target_os = "macos")]
+                stdin: None,
+                pending_stdin: Vec::new(),
             }),
             changed: tokio::sync::Notify::new(),
         });
-        let defer_input = match stdin {
+        let defer_request = match stdin {
             Some(stdin) => evaluation.submit_stdin(stdin)?,
             None => false,
         };
@@ -152,10 +147,9 @@ impl Client {
 
         let client = self.clone();
         let running = evaluation.clone();
-        let evaluation_task = tokio::task::spawn_blocking({
-            let evaluation = evaluation.clone();
-            move || client.evaluate_blocking(r, &evaluation)
-        });
+        let evaluator = evaluation.clone();
+        let evaluation_task =
+            tokio::task::spawn_blocking(move || client.evaluate_blocking(r, &evaluator));
         let _completion_task = tokio::spawn(async move {
             let result = evaluation_task
                 .await
@@ -163,7 +157,7 @@ impl Client {
                 .and_then(|result| result);
             running.complete(result);
         });
-        Ok((evaluation, defer_input))
+        Ok((evaluation, defer_request))
     }
 
     fn current_evaluation(&self) -> Result<Option<Arc<Evaluation>>, String> {
@@ -280,51 +274,43 @@ impl Evaluation {
     /// Queues bytes and reports whether this call supplied nonempty stdin
     /// without replying to an input boundary already exposed to the caller.
     fn submit_stdin(&self, stdin: String) -> Result<bool, String> {
-        let defer_input = {
-            let mut state = self
-                .state
-                .lock()
-                .map_err(|_| "worker evaluation state lock poisoned".to_string())?;
-            if state.result.is_some() {
-                return Err(
-                    "the R cell has completed; poll its result before sending stdin".to_string(),
-                );
-            }
-            if stdin.is_empty() {
-                false
-            } else {
-                state.input_required.take().is_none()
-            }
-        };
-
-        let bytes = stdin.into_bytes();
-        let mut input = self
-            .input
+        let mut state = self
+            .state
             .lock()
-            .map_err(|_| "worker stdin route lock poisoned".to_string())?;
-        let result = match &input.writer {
-            Some(writer) => writer.send(bytes),
-            None => {
-                input.queued.push_back(bytes);
-                Ok(())
-            }
-        };
-        result.map(|()| defer_input)
+            .map_err(|_| "worker evaluation state lock poisoned".to_string())?;
+        if state.result.is_some() {
+            return Err(
+                "the R cell has completed; poll its result before sending stdin".to_string(),
+            );
+        }
+        if stdin.is_empty() {
+            return Ok(false);
+        }
+
+        let defer_request = state.input_request.take().is_none();
+        let bytes = stdin.into_bytes();
+        #[cfg(target_os = "macos")]
+        if let Some(writer) = &state.stdin {
+            writer.send(bytes)?;
+            return Ok(defer_request);
+        }
+        state.pending_stdin.extend(bytes);
+        Ok(defer_request)
     }
 
     #[cfg(target_os = "macos")]
     fn attach_writer(&self, writer: platform::StdinSender) -> Result<(), String> {
-        let mut input = self
-            .input
+        let mut state = self
+            .state
             .lock()
-            .map_err(|_| "worker stdin route lock poisoned".to_string())?;
-        if input.writer.is_some() {
+            .map_err(|_| "worker evaluation state lock poisoned".to_string())?;
+        if state.stdin.is_some() {
             return Err("worker stdin was already attached to this evaluation".to_string());
         }
-        for bytes in input.queued.drain(..) {
-            writer.send(bytes)?;
+        if !state.pending_stdin.is_empty() {
+            writer.send(std::mem::take(&mut state.pending_stdin))?;
         }
-        input.writer = Some(writer);
+        state.stdin = Some(writer);
         Ok(())
     }
 
@@ -334,12 +320,12 @@ impl Evaluation {
             .state
             .lock()
             .map_err(|_| "worker evaluation state lock poisoned".to_string())?;
-        append_text(output, prompt.trim_end());
+        output.push_str(prompt.trim_end());
         let mut boundary = InputBoundary {
             output: std::mem::take(output),
             delivered: false,
         };
-        if let Some(previous) = state.input_required.take()
+        if let Some(previous) = state.input_request.take()
             && !previous.delivered
         {
             let mut combined = previous.output;
@@ -347,8 +333,7 @@ impl Evaluation {
             combined.push_str(&boundary.output);
             boundary.output = combined;
         }
-        state.input_required = Some(boundary);
-        drop(state);
+        state.input_request = Some(boundary);
         self.changed.notify_one();
         Ok(())
     }
@@ -357,7 +342,7 @@ impl Evaluation {
         let Ok(mut state) = self.state.lock() else {
             return;
         };
-        if let Some(boundary) = state.input_required.take()
+        if let Some(boundary) = state.input_request.take()
             && !boundary.delivered
             && let Ok(output) = &mut result
         {
@@ -367,15 +352,14 @@ impl Evaluation {
             *output = combined;
         }
         state.result = Some(result);
-        drop(state);
         self.changed.notify_one();
     }
 
-    async fn wait(&self, timeout: Duration, defer_input: bool) -> Result<EvaluationWait, String> {
+    async fn wait(&self, timeout: Duration, defer_request: bool) -> Result<EvaluationWait, String> {
         let deadline = tokio::time::Instant::now() + timeout;
         loop {
             let changed = self.changed.notified();
-            if let Some(event) = self.take_event(!defer_input)? {
+            if let Some(event) = self.take_event(!defer_request)? {
                 return Ok(event);
             }
             if tokio::time::timeout_at(deadline, changed).await.is_err() {
@@ -384,7 +368,7 @@ impl Evaluation {
         }
     }
 
-    fn take_event(&self, include_input: bool) -> Result<Option<EvaluationWait>, String> {
+    fn take_event(&self, include_request: bool) -> Result<Option<EvaluationWait>, String> {
         let mut state = self
             .state
             .lock()
@@ -392,10 +376,10 @@ impl Evaluation {
         if let Some(result) = state.result.take() {
             return Ok(Some(EvaluationWait::Completed(result)));
         }
-        if !include_input {
+        if !include_request {
             return Ok(None);
         }
-        let Some(boundary) = state.input_required.as_mut() else {
+        let Some(boundary) = state.input_request.as_mut() else {
             return Ok(None);
         };
         let output = if boundary.delivered {
@@ -403,17 +387,11 @@ impl Evaluation {
         } else {
             boundary.delivered = true;
             let mut output = boundary.output.clone();
-            append_marker(&mut output, "[input]");
+            append_newline(&mut output);
+            output.push_str("[input]");
             output
         };
-        Ok(Some(EvaluationWait::InputRequired(output)))
-    }
-}
-
-#[cfg(target_os = "macos")]
-fn append_text(output: &mut String, text: &str) {
-    if !text.is_empty() {
-        output.push_str(text);
+        Ok(Some(EvaluationWait::InputRequested(output)))
     }
 }
 
@@ -421,11 +399,6 @@ fn append_newline(output: &mut String) {
     if !output.is_empty() && !output.ends_with('\n') {
         output.push('\n');
     }
-}
-
-fn append_marker(output: &mut String, marker: &str) {
-    append_newline(output);
-    output.push_str(marker);
 }
 
 #[cfg(target_os = "macos")]
@@ -442,7 +415,6 @@ mod platform {
 
     pub(super) struct Worker {
         reader: crate::sideband::Reader,
-        stdin: StdinSender,
         stop_handle: StopHandle,
     }
 
@@ -491,12 +463,11 @@ mod platform {
 
             let stop_handle = StopHandle {
                 writer,
-                stdin: stdin.clone(),
+                stdin,
                 child,
             };
             let mut worker = Self {
                 reader,
-                stdin,
                 stop_handle,
             };
             on_started(worker.stop_handle.clone())?;
@@ -516,7 +487,7 @@ mod platform {
                 .writer
                 .send(&ServerMessage::Evaluate { r })
                 .map_err(|error| format!("worker sideband write failed: {error}"))?;
-            evaluation.attach_writer(self.stdin.clone())?;
+            evaluation.attach_writer(self.stop_handle.stdin.clone())?;
 
             let mut output = String::new();
             loop {
@@ -625,15 +596,6 @@ mod platform {
 
     #[derive(Clone)]
     pub(super) struct StopHandle;
-
-    #[derive(Clone)]
-    pub(super) struct StdinSender;
-
-    impl StdinSender {
-        pub(super) fn send(&self, _bytes: Vec<u8>) -> Result<(), String> {
-            unreachable!("unsupported workers cannot accept stdin")
-        }
-    }
 
     impl Worker {
         pub(super) fn start(

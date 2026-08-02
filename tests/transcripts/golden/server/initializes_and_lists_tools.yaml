@@ -25,19 +25,21 @@ input:
 result:
   tools:
     - name: send
-      description: "Evaluate one complete R code cell, supply its stdin, or poll it."
+      description: Evaluate one complete R code cell, write its stdin, or poll it.
       inputSchema:
-        $schema: "https://json-schema.org/draft/2020-12/schema"
+        $schema: https://json-schema.org/draft/2020-12/schema
         additionalProperties: false
         type: object
         properties:
           r:
-            description: Complete multiline R code evaluated in persistent state. Omit to supply stdin or poll.
+            description: >-
+              Complete multiline R code evaluated in persistent state. Omit to write
+              stdin or poll.
             type:
               - string
               - "null"
           stdin:
-            description: "Exact text appended to the active worker's standard input without adding a newline."
+            description: Exact UTF-8 text queued to active worker fd 0 without adding a newline.
             type:
               - string
               - "null"

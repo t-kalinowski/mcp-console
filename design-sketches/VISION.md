@@ -50,8 +50,7 @@ Necessary R/Python or R/SQL bridge frames should be minimal and truthful rather 
 
 Top-level code is submitted as a complete cell.
 Incomplete parser input is an error rather than an invitation to continue a program over several MCP calls.
-While a cell is active, the session accepts exact, optionally multiline `stdin` text.
-An explicit input request or debugger entry exposes that runtime state without gating delivery.
+When evaluated code explicitly asks for input or enters a debugger, the session switches to an input state and accepts exact, optionally multiline `stdin` text.
 
 ### 5. Exact runtime state, never prompt inference
 
@@ -154,7 +153,7 @@ Every new public MCP field or tool has a permanent model-context cost.
 - Session: one sandboxed worker process containing R, reticulate Python, and DuckDB.
 - Submission: one complete R, Python, or SQL cell.
 - Evaluation: execution of one submission.
-- `stdin`: exact stream text queued to the active runtime, not another code submission; it may contain multiple lines, receives no implicit newline, and is not acknowledged as consumed.
+- `stdin`: exact stream text for an already-running interactive consumer, not another code submission; it may contain multiple lines and receives no implicit newline.
 - Durable record: generated `transcript.qmd` plus retained output and artifact files.
 - Refined notebook, report, or script: a separate user artifact.
 - Local sidecar API: process-scoped observation, structured inspection, and attributed external control.

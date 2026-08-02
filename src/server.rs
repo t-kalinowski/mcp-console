@@ -23,9 +23,9 @@ struct ConsoleServer {
 #[derive(Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct SendArguments {
-    /// Complete multiline R code evaluated in persistent state. Omit to supply stdin or poll.
+    /// Complete multiline R code evaluated in persistent state. Omit to write stdin or poll.
     r: Option<String>,
-    /// Exact text appended to the active worker's standard input without adding a newline.
+    /// Exact UTF-8 text queued to active worker fd 0 without adding a newline.
     stdin: Option<String>,
     /// Maximum time this call waits. It does not limit or stop the computation.
     #[serde(default = "default_timeout_ms")]
@@ -48,7 +48,7 @@ impl ConsoleServer {
 
 #[tool_router]
 impl ConsoleServer {
-    #[tool(description = "Evaluate one complete R code cell, supply its stdin, or poll it.")]
+    #[tool(description = "Evaluate one complete R code cell, write its stdin, or poll it.")]
     async fn send(
         &self,
         Parameters(SendArguments {

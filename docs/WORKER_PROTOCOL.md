@@ -81,7 +81,7 @@ The complete implemented message set is:
 | server → worker | `{"kind":"shutdown"}` | Exit without replying. |
 | worker → server | `{"kind":"ready"}` | Startup is complete. |
 | worker → server | `{"kind":"output","data":"..."}` | Append one output text chunk. |
-| worker → server | `{"kind":"input_requested","prompt":"..."}` | Suspend at an interactive input request. |
+| worker → server | `{"kind":"input_requested","prompt":"..."}` | Report that the runtime requested input. |
 | worker → server | `{"kind":"completed"}` | The evaluation is complete. |
 
 Every frame uses `kind` to select its message variant.
@@ -172,10 +172,9 @@ New R code is rejected while an evaluation or its uncollected result is active.
 | idle | server → worker `evaluate` | evaluating |
 | evaluating | MCP stdin submission | evaluating |
 | evaluating | worker → server `output` | evaluating |
-| evaluating | worker → server `input_requested` | input required |
-| input required | MCP stdin submission | evaluating |
+| evaluating | worker → server `input_requested` | evaluating |
 | evaluating | worker → server `completed` | idle |
-| starting, idle, evaluating, or input required | server → worker `shutdown` | terminal |
+| starting, idle, evaluating | server → worker `shutdown` | terminal |
 
 Malformed JSON, invalid UTF-8, an unexpected message, or sideband EOF fails the active operation.
 There is no structured protocol error message.

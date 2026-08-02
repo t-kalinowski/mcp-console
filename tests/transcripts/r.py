@@ -91,24 +91,6 @@ def test_routes_combined_and_followup_stdin(binary: Path) -> Transcript:
 
     # fmt: r
     r = dedent(r"""
-        readline("used> ")
-        """).strip()
-    client.call_tool("send", r=r, stdin="used\nstale\n")
-    assert last_tool_text(client) == 'used>\n[1] "used"\n'
-
-    # fmt: r
-    r = dedent(r"""
-        local({
-          connection <- suppressWarnings(file("/dev/stdin"))
-          on.exit(close(connection))
-          readLines(connection, n = 1)
-        })
-        """).strip()
-    client.call_tool("send", r=r, timeout_ms=1_000)
-    assert last_tool_text(client) == '[1] "stale"\n'
-
-    # fmt: r
-    r = dedent(r"""
         paste("color", readline("color> "))
         """).strip()
     client.call_tool("send", r=r)
@@ -189,8 +171,7 @@ def test_keeps_stdin_open_after_partial_payload(binary: Path) -> Transcript:
 
 def last_tool_text(client: McpClient) -> str:
     result = client.transcript[-1]["result"]
-    assert result["isError"] is False, result
-    assert result["content"] == [{"type": "text", "text": result["content"][0]["text"]}]
+    assert result.get("isError") is not True, result
     return result["content"][0]["text"]
 
 

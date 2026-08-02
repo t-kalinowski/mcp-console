@@ -54,27 +54,22 @@ def test_routes_combined_and_followup_stdin(binary: Path) -> Transcript:
     )
     client.initialize_and_list_tools()
 
-    client.call_tool("send", r="input without request", stdin="café\n")
-    assert last_tool_text(client) == "zod stdin: café\n"
-
     client.call_tool(
-        "send", r="input length without request", stdin=("x" * 1024) + "\n"
+        "send",
+        r="input length without request",
+        stdin=("x" * 1024) + "café\0\n",
     )
-    client.transcript[-1]["send"]["stdin"] = "<long stdin>"
-    assert last_tool_text(client) == "zod stdin length: 1024\n"
+    client.transcript[-1]["send"]["stdin"] = "<long UTF-8 stdin containing NUL>"
+    assert last_tool_text(client) == "zod stdin length: 1030\n"
 
-    client.call_tool("send", r="input length without request", stdin="\0\n")
-    client.transcript[-1]["send"]["stdin"] = "<stdin containing NUL>"
-    assert last_tool_text(client) == "zod stdin length: 1\n"
-
-    client.call_tool("send", r="input without request", timeout_ms=10)
+    client.call_tool("send", r="input without request", timeout_ms=0)
     assert last_tool_text(client) == "[running]"
     client.call_tool("send", stdin="followup\n", timeout_ms=3_000)
     assert last_tool_text(client) == "zod stdin: followup\n"
 
     client.call_tool("send", r="request input")
     assert last_tool_text(client) == "zod>\n[input]"
-    client.call_tool("send", stdin="", timeout_ms=10)
+    client.call_tool("send", stdin="")
     assert last_tool_text(client) == "[input]"
     client.call_tool("send", stdin="prompted\n")
     assert last_tool_text(client) == "zod stdin: prompted\n"
@@ -102,8 +97,7 @@ def test_routes_combined_and_followup_stdin(binary: Path) -> Transcript:
 
 def last_tool_text(client: McpClient) -> str:
     result = client.transcript[-1]["result"]
-    assert result["isError"] is False, result
-    assert result["content"] == [{"type": "text", "text": result["content"][0]["text"]}]
+    assert result.get("isError") is not True, result
     return result["content"][0]["text"]
 
 

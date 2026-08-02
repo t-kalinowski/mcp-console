@@ -24,25 +24,16 @@ Run `mcp-console --help` or `mcp-console COMMAND --help` for command-line help.
 The server registers one `send` tool.
 Supplying `r` evaluates one complete code cell and waits up to the optional `timeout_ms`, which defaults to 60 seconds.
 When that wait expires, the call returns `[running]` while computation continues; call `send` without `r` to poll for completion.
-A call may also supply exact standard-input text:
+A call may also supply exact standard-input text with `r` or while that evaluation remains active:
 
 ```json
 { "r": "readline('name> ')", "stdin": "Ada\n" }
 ```
 
-The server sends the cell first, then queues the string's UTF-8 bytes to worker fd 0 from an independent writer.
-It does not inspect the text, add a newline, impose a line-size limit, or wait for an input request.
-Ending a payload does not close fd 0 or produce EOF, so a newline-free fragment waits for later stdin.
-The R console callback stops after one newline or a full callback buffer, leaving later bytes on fd 0 for subsequent console or direct readers.
-When the worker reports an input request, `send` returns its prompt and `[input]`; a later call can append more bytes while the cell remains active:
-
-```json
-{ "stdin": "Ada\n" }
-```
-
-Queued input is not an acknowledgment of consumption.
-If the same call just queued nonempty stdin, it waits for completion until its deadline before returning that input boundary.
-The server does not drain unread bytes when evaluation ends, so they may satisfy a later worker read or evaluation.
+The server sends the cell first, then queues the string's UTF-8 bytes to worker fd 0 without inspecting it, adding a newline, imposing a size limit, or waiting for an input request.
+When the worker reports an input request, `send` returns its prompt and `[input]`; a later call can supply more bytes with `{ "stdin": "Ada\n" }`.
+Payload end is not EOF, and queued input is not an acknowledgment of consumption.
+Unread bytes may be completed by later stdin or satisfy a later worker read or evaluation.
 On macOS, the first evaluation lazily starts a sandboxed embedded R worker.
 Later calls reuse the same global R state.
 The worker runs each cell through R's native top-level loop, captures R console output, prints each visible value, and maintains `.Last.value`.

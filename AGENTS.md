@@ -23,13 +23,9 @@ The server registers only a `send` tool.
 Supplying `r` starts one complete cell and waits for up to `timeout_ms`, which defaults to 60 seconds.
 If that wait expires, `send` returns `[running]` without stopping the computation; a later call without `r` polls it, and a poll while idle returns `[idle]`.
 Concurrent `send` calls are unsupported.
-Supplying `stdin` with `r` or while that cell remains active queues its exact UTF-8 bytes to worker fd 0 from an independent FIFO writer.
-The server adds no newline, does not inspect or limit the text, and does not wait for an input request before writing it.
-The end of one stdin payload does not close fd 0 or produce EOF; newline-free fragments remain pending for later stdin.
-The R console callback reads only through one newline or its supplied buffer and leaves later bytes on fd 0 for subsequent console or direct readers.
-An `input_requested` frame reports the prompt and can wake `send` with `[input]`, but it neither gates fd-0 delivery nor acknowledges whether queued bytes were consumed.
-A call that just queued nonempty stdin may defer that boundary until completion or its own timeout; empty stdin writes no bytes and leaves an exposed boundary pending.
-Accepted stdin is queued rather than acknowledged as consumed, is not drained when evaluation completes, and may satisfy a later worker read or evaluation.
+Supplying `stdin` with `r` or while that cell remains active queues exact UTF-8 bytes to worker fd 0 without adding a newline, inspecting or limiting the text, or waiting for an input request.
+Payload end is not EOF; the R console callback reads through one newline or its supplied buffer, and unread bytes may satisfy later console or direct reads, including in a later evaluation.
+An `input_requested` frame observes worker state but does not gate delivery or acknowledge consumption; a call that just queued nonempty stdin may defer that boundary, while empty stdin leaves an exposed boundary pending.
 New code is rejected until the running evaluation's result has been collected.
 On macOS, the first evaluation lazily starts the built-in R worker under the same sandbox policy as the `sandbox` command.
 The worker embeds R through `libr` and `harp`, retains global state, and feeds each complete cell through R's DLL REPL iterator.
