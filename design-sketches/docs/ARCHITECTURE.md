@@ -77,7 +77,7 @@ Backend transport must not leak into MCP, session, transcript, or local sidecar 
 4. One backend-owned thread owns all direct calls into R.
 5. A worker executes at most one top-level evaluation at a time.
 6. Complete cells and interactive stdin are different internal command types.
-7. Complete cells and evaluation-time stdin remain distinct commands and state queues, even when a native DLL-REPL adapter transports both through `ReadConsole`.
+7. Complete cells and worker stdin remain distinct commands and streams, even when a native DLL-REPL adapter obtains cell source through `ReadConsole`.
 8. R cells do not acquire a console-owned interpreted R frame.
 9. Runtime state comes from structured events, never prompt-string matching.
 10. Interrupt and termination control cannot wait behind the evaluation command queue.
@@ -331,7 +331,7 @@ Responsibilities:
 - initialize and own R on the correct thread;
 - create a persistent R user environment and embed reticulate Python and DuckDB;
 - dispatch complete R, Python, and SQL cells;
-- route genuine interactive input to the active evaluation;
+- queue genuine interactive input to worker fd 0 whether the session is evaluating or idle;
 - emit structured state, output, display, plot, help, object, inspection, and completion events;
 - cooperate with interrupt, restart, shutdown, and sandbox policy;
 - retain private runtime and object-reference handles without exposing them to ordinary user code or sidecar clients.
@@ -383,7 +383,7 @@ An Ark backend may use Jupyter channels and custom comms internally, but its ada
 evaluation:    supervisor -> backend
 events:        backend -> supervisor
 inspection:    supervisor <-> backend
-stdin:         supervisor -> active evaluation
+stdin:         supervisor -> session worker
 control:       supervisor -> backend or OS runtime interrupt
 raw stdout:    worker and descendants -> supervisor when applicable
 raw stderr:    worker and descendants -> supervisor when applicable
@@ -391,6 +391,11 @@ raw stderr:    worker and descendants -> supervisor when applicable
 
 These are semantic channels, not necessarily separate file descriptors.
 The control path must remain usable while the R-owning thread is blocked in evaluation.
+
+Stdin is owned by the worker generation, not an evaluation.
+Unread bytes remain queued after an evaluation completes and may be consumed by a background job or later evaluation.
+Restart, close, or worker failure discards them with that generation.
+Supported console callbacks emit evaluation-scoped `InputRequested` and `InputReceived` events; direct fd-0 reads emit neither.
 
 ### 8.2 Representative commands
 
@@ -410,7 +415,6 @@ enum WorkerCommand {
         label: Option<String>,
     },
     QueueInput {
-        evaluation_id: EvaluationId,
         text: String,
     },
     PrepareShutdown {
@@ -487,7 +491,7 @@ The stack contract is intentionally asymmetric:
 | R | native top-level R cell behavior | no |
 | Python | private reticulate cell boundary | minimal and truthful if present |
 | SQL | private DBI/DuckDB boundary | minimal and truthful if present |
-| stdin | append to active input stream | no new top-level frame |
+| stdin | append to worker input stream | no new top-level frame |
 
 This asymmetry follows the actual implementation boundaries and should be documented rather than concealed.
 
@@ -1015,7 +1019,6 @@ The public MCP protocol supports richer content, but v1 deliberately uses plain 
 
 - invalid mode combinations;
 - code sent while busy;
-- `stdin` while no evaluation is active;
 - missing session for poll/control;
 - dependency preparation failure;
 - worker startup or protocol failure;

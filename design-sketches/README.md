@@ -81,7 +81,7 @@ Package requirements are configured less frequently at the logical-session level
 ```
 
 `prepare` may create a configured logical session without starting its worker.
-A later code cell starts the runtime with those requirements.
+A later code cell or nonempty stdin submission starts the runtime with those requirements.
 Once a runtime exists, this replaces it while retaining requirements, workspace files, and the transcript:
 
 ```json
@@ -173,12 +173,12 @@ Complete text, plots, live table batches, and snapshots are fetched separately b
 - Product name: **MCP Console**.
 - Public abstraction: a persistent console session, not a notebook or conventional line-oriented REPL.
 - Top-level input: complete R, Python, or SQL cells.
-- Interactive input: exact, optionally multiline `stdin` text queued while an evaluation is active; paired request and receipt events expose runtime input state without gating delivery.
+- Interactive input: exact, optionally multiline `stdin` text queued to the session worker whether it is evaluating or idle; paired request and receipt events expose supported runtime reads without gating delivery.
 - MCP surface: `send` plus a low-frequency `session` environment and lifecycle tool.
 - Language selection: the object key is `r`, `python`, or `sql`.
 - Runtime substrate: open implementation decision.
   Evaluate an Ark-backed worker against a purpose-built `harp`/`libr` worker before committing; hide either behind the same runtime service.
-- R evaluation: native top-level evaluation; complete cell source and evaluation-time stdin remain distinct queues even when a DLL-REPL backend transports both through `ReadConsole`.
+- R evaluation: native top-level evaluation; complete cell source and worker stdin remain distinct streams.
 - SQL engine: embedded DuckDB through R/DBI initially; the DuckDB CLI is a behavioral reference only.
 - Output: bounded MCP text plus managed workspace files.
 - Environment: additive session requirements configured by `session`; they survive runtime restarts.

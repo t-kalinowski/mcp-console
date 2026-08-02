@@ -302,7 +302,8 @@ An R, Python, or SQL submission is a **primary external evaluation**:
 There is intentionally no `--hidden`, `--scratch`, or `--read-only-code` mode.
 Arbitrary R and Python cannot be guaranteed non-mutating.
 
-`--stdin` is accepted while an evaluation is active and sends exact stream text.
+`--stdin` sends exact stream text to the selected session worker whether it is evaluating or idle.
+Nonempty input starts the session worker if needed.
 No newline is added.
 
 ## 12. `transcript`

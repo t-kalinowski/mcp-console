@@ -35,7 +35,7 @@ The interface is optimized for frequent use and global enablement:
 ```json
 {
   "name": "send",
-  "description": "Persistent R, Python, and DuckDB SQL console. Use it whenever exact computation or direct inspection would improve accuracy—from arithmetic, string counting, parsing, and file or binary-data inspection to data wrangling, exploratory analysis, visualization, statistics, simulation, and model training or tuning. State persists across calls; R and Python exchange objects, and SQL queries live or registered tabular data. Language-native help, introspection, interactive input, and debuggers work. Send exactly one complete r, python, or sql cell, optionally with stdin; send stdin while that evaluation is active; send neither to wait/poll. Large values are previewed; oversized stdout/stderr, plots, artifacts, and the Quarto transcript are saved in the workspace.",
+  "description": "Persistent R, Python, and DuckDB SQL console. Use it whenever exact computation or direct inspection would improve accuracy—from arithmetic, string counting, parsing, and file or binary-data inspection to data wrangling, exploratory analysis, visualization, statistics, simulation, and model training or tuning. State persists across calls; R and Python exchange objects, and SQL queries live or registered tabular data. Language-native help, introspection, interactive input, and debuggers work. Send exactly one complete r, python, or sql cell, optionally with stdin; send stdin on its own to queue exact text to the session worker; send neither to wait/poll. Large values are previewed; oversized stdout/stderr, plots, artifacts, and the Quarto transcript are saved in the workspace.",
   "inputSchema": {
     "type": "object",
     "additionalProperties": false,
@@ -54,7 +54,7 @@ The interface is optimized for frequent use and global enablement:
       },
       "stdin": {
         "type": "string",
-        "description": "Raw text queued to the active evaluation's standard input. A single value may satisfy multiple reads; newlines are significant and are not added automatically. Queuing does not acknowledge consumption, and unread text may satisfy later reads."
+        "description": "Raw text queued to the session worker's standard input, whether it is evaluating or idle. A single value may satisfy multiple reads; newlines are significant and are not added automatically. Queuing does not acknowledge consumption, and unread text may satisfy later reads."
       },
       "session": {
         "type": "string",
@@ -62,7 +62,7 @@ The interface is optimized for frequent use and global enablement:
         "minLength": 1,
         "maxLength": 64,
         "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$",
-        "description": "Persistent named session; defaults to default. Use another name for independent or concurrent state. A missing session is created only by a code cell."
+        "description": "Persistent named session; defaults to default. Use another name for independent or concurrent state. A missing session is created by a code cell or nonempty stdin."
       },
       "label": {
         "type": "string",
@@ -90,7 +90,7 @@ The server performs semantic mode validation and returns a short tool error for 
 | Present mode fields | Operation |
 | --- | --- |
 | exactly one of `r`, `python`, `sql`, optionally with `stdin` | Evaluate one complete cell |
-| `stdin` only | Append exact text to the active input stream |
+| `stdin` only | Queue exact text to the session worker |
 | none of `r`, `python`, `sql`, `stdin` | Wait for or poll the session |
 | any other combination | Tool error |
 
@@ -99,13 +99,15 @@ The server performs semantic mode validation and returns a short tool error for 
 Additional rules:
 
 - `label` is accepted only with a code cell.
-- Within `send`, a missing session is created only by a code cell.
+- Within `send`, a missing session is created by a code cell or nonempty `stdin`.
   The `session` `prepare` action may also create it.
-- Polling and `stdin` never create a missing session.
+- Polling and empty `stdin` do not create a missing session.
 - New code is accepted only while the session is idle.
 - A session runs one top-level evaluation at a time; code sent while it is busy is rejected rather than queued.
 - Bundled `stdin` is queued after the submitted cell starts, without waiting for an input request.
-- Follow-up `stdin` is accepted while that evaluation remains active.
+- Standalone `stdin` is accepted whether the worker is evaluating or idle.
+  It is queued to the same worker stream and may be consumed by a later evaluation or background runtime job.
+- `wait_ms` bounds waiting on an evaluation; it does not bound lazy worker startup for an idle stdin-only call.
 
 ### 2.3 Common calls
 
@@ -194,7 +196,7 @@ Browse[2]>
 [input]
 ```
 
-A call can append exact text while the evaluation remains active:
+A call can queue exact text while the evaluation is active or idle:
 
 ```json
 { "stdin": "where\nn\nc\n" }
@@ -203,7 +205,7 @@ A call can append exact text while the evaluation remains active:
 The text may contain one or more complete or partial lines.
 Newlines are significant and are not added automatically; send `"\n"` to submit a blank line.
 Queuing input does not acknowledge that the runtime consumed it.
-Unread queued text may satisfy later reads or evaluations and is discarded when the worker stops.
+Unread queued text may satisfy later reads or evaluations, including direct fd-0 reads by background jobs, and is discarded when the worker stops.
 
 The runtime emits `InputRequested` before a supported console read and `InputReceived` after that read succeeds.
 The supervisor treats the request as provisional for a short grace window.
@@ -212,9 +214,9 @@ The receipt belongs to the runtime read, not to a particular submitted stdin val
 Direct fd-0 reads emit neither event.
 The grace is intentionally a latency heuristic: a delayed receipt may expose an extra `[input]` boundary, while a longer wait would make genuinely incomplete input less responsive.
 
-`stdin` is not a new code cell.
-The active runtime decides whether the bytes are debugger commands, expressions accepted by the debugger, or ordinary program input.
-The original evaluation identity remains active until the evaluation ends.
+`stdin` is not a new code cell and is not owned by an evaluation.
+The runtime decides whether the bytes are debugger commands, expressions accepted by the debugger, ordinary program input, or input for a background job.
+When an evaluation is active, its identity remains active until that evaluation ends.
 
 The implementation must distinguish cell source from interactive input structurally.
 It must not preload a cell as generic console lines that a nested `readline()` or `input()` could accidentally consume.
@@ -363,7 +365,7 @@ transcript: .mcp-console/sessions/default/transcript.qmd
 
 `prepare` resolves and adds requirements.
 For a missing session it creates a configured logical session without starting a worker.
-The first code cell starts the runtime.
+The first code cell or nonempty stdin submission starts the runtime.
 For an existing session it never replaces the runtime implicitly.
 If activation requires replacement, it returns `restart required` and makes no change.
 
@@ -404,18 +406,29 @@ A missing session is absent, not another state.
 
 ```text
 absent
-  ├─ code cell ─> preparing? ─> starting ─> idle ─> running
-  └─ prepare ───> preparing ──> prepared
+  ├─ code cell ─────> preparing? ─> starting ─> running
+  ├─ nonempty stdin ──> preparing? ─> starting ─> idle
+  └─ prepare ───────> preparing ──> prepared
 
 prepared
-  ├─ code cell ─> starting ─> running
-  └─ close ─────> absent
+  ├─ code cell ─────> starting ─> running
+  ├─ nonempty stdin ──> starting ─> idle
+  └─ close ─────────> absent
+
+idle
+  ├─ code cell ─> running
+  └─ stdin ────> idle
 
 running
   ├─ success/error/interrupt ─> idle
+  ├─ stdin ─> running
   ├─ input request without receipt after grace ─> input_required
   ├─ input receipt ─────────────────────────────> running
   └─ crash/exit/kill ─────────> stopped
+
+input_required
+  ├─ stdin ─> input_required until a runtime event
+  └─ input receipt ─> running
 
 stopped
   ├─ restart ─> preparing? ─> starting
@@ -475,7 +488,6 @@ Use `isError: true` for failures to use or operate the tool, including:
 
 - conflicting mode fields;
 - code sent to a busy session;
-- `stdin` sent while no evaluation is active;
 - poll or control against an unknown session;
 - dependency preparation failure;
 - worker startup or private-protocol failure;

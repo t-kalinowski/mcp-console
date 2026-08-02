@@ -12,7 +12,7 @@ The agent can alternate among R, Python, and SQL while retaining objects, import
 
 The public abstraction is a **console session**.
 Normal top-level input is one complete R, Python, or SQL cell.
-Line-oriented `stdin` is a distinct stream that may be queued while an evaluation is active, including for R `readline()` or `browser()` and Python `input()` or a debugger.
+`stdin` is a distinct worker stream that may be queued whether the session is evaluating or idle, including for R `readline()` or `browser()`, Python `input()` or a debugger, and background runtime jobs.
 
 The tool must be cheap enough to remain globally enabled.
 Common calls should look like:
@@ -49,13 +49,13 @@ Safety is enforced around the worker process and its descendants, not by filteri
   Under Codex's current naming convention, the tools are `mcp__console.send` and `mcp__console.session`.
 - Language is selected by the present object key: `r`, `python`, or `sql`.
 - Top-level submissions are complete cells, not line-by-line parser input.
-- `stdin` may accompany a code cell or target an active evaluation.
-  Bundled input is queued to the active runtime immediately and may remain available to later reads if evaluation finishes first.
+- `stdin` may accompany a code cell or be sent on its own.
+  It is queued to the session worker immediately whether the session is evaluating or idle and may remain available to later reads.
   It is exact stream text, may contain multiple lines, receives no implicit newline, and is not acknowledged as consumed.
 - Runtime input requests are provisional state events.
   A matching receipt means that read succeeded; it does not identify which queued payload or bytes satisfied it.
 - A named session runs at most one top-level evaluation at a time.
-- A logical session is created by its first code submission or successful `prepare` action; `prepare` may leave it configured without a worker until code is submitted.
+- A logical session is created by its first code submission, nonempty stdin submission, or successful `prepare` action; `prepare` may leave it configured without a worker until code or stdin is submitted.
 - Independent or parallel work uses separately named sessions.
 - MCP results are text-only; v1 has no `outputSchema`, structured-content mirror, MCP resource dependency, or inline image result.
 - Oversized explicit output is retained in bounded session spools; each response contains only a bounded current excerpt.
@@ -102,8 +102,9 @@ Preserve console visible-value behavior without placing a user-visible MCP Conso
 A user call to `sys.calls()` should not contain an MCP Console dispatcher frame merely because the code came from the tool.
 The Ark spike must verify this behavior rather than assuming it.
 
-A native DLL-REPL backend may route both queues through a custom `ReadConsole` callback.
-It must use interpreter state rather than prompt text to feed cell source only at primary or continuation reads and to request stdin only during active evaluation.
+A native DLL-REPL backend may route cell source through a custom `ReadConsole` callback while retaining stdin on the worker's fd 0 stream.
+It must use interpreter state rather than prompt text to feed cell source only at primary or continuation reads.
+Runtime input request events describe supported console reads; they do not gate stdin delivery or cover direct fd-0 reads.
 
 Python uses a persistent cell executor in `__main__`, with a synthetic source filename, statement support, final-expression display, and language-native tracebacks.
 Do not use `reticulate::repl_python(input = ...)` as the core cell evaluator.
