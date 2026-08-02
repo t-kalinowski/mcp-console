@@ -35,7 +35,7 @@ The interface is optimized for frequent use and global enablement:
 ```json
 {
   "name": "send",
-  "description": "Persistent R, Python, and DuckDB SQL console. Use it whenever exact computation or direct inspection would improve accuracy—from arithmetic, string counting, parsing, and file or binary-data inspection to data wrangling, exploratory analysis, visualization, statistics, simulation, and model training or tuning. State persists across calls; R and Python exchange objects, and SQL queries live or registered tabular data. Language-native help, introspection, interactive input, and debuggers work. Send exactly one complete r, python, or sql cell; after [input], send stdin; send no cell or stdin to wait/poll. Large values are previewed; oversized stdout/stderr, plots, artifacts, and the Quarto transcript are saved in the workspace.",
+  "description": "Persistent R, Python, and DuckDB SQL console. Use it whenever exact computation or direct inspection would improve accuracy—from arithmetic, string counting, parsing, and file or binary-data inspection to data wrangling, exploratory analysis, visualization, statistics, simulation, and model training or tuning. State persists across calls; R and Python exchange objects, and SQL queries live or registered tabular data. Language-native help, introspection, interactive input, and debuggers work. Send exactly one complete r, python, or sql cell, optionally with stdin; send stdin while that evaluation is active; send neither to wait/poll. Large values are previewed; oversized stdout/stderr, plots, artifacts, and the Quarto transcript are saved in the workspace.",
   "inputSchema": {
     "type": "object",
     "additionalProperties": false,
@@ -54,7 +54,7 @@ The interface is optimized for frequent use and global enablement:
       },
       "stdin": {
         "type": "string",
-        "description": "Raw text appended to stdin of the active evaluation after [input]. It may contain one or more lines; newlines are significant and are not added automatically. Unconsumed text is discarded when the evaluation ends."
+        "description": "Raw text queued to the active evaluation's standard input. A single value may satisfy multiple reads; newlines are significant and are not added automatically. Queuing does not acknowledge consumption, and unread text may satisfy later reads."
       },
       "session": {
         "type": "string",
@@ -89,7 +89,7 @@ The server performs semantic mode validation and returns a short tool error for 
 
 | Present mode fields | Operation |
 | --- | --- |
-| exactly one of `r`, `python`, `sql` | Evaluate one complete cell |
+| exactly one of `r`, `python`, `sql`, optionally with `stdin` | Evaluate one complete cell |
 | `stdin` only | Append exact text to the active input stream |
 | none of `r`, `python`, `sql`, `stdin` | Wait for or poll the session |
 | any other combination | Tool error |
@@ -104,7 +104,8 @@ Additional rules:
 - Polling and `stdin` never create a missing session.
 - New code is accepted only while the session is idle.
 - A session runs one top-level evaluation at a time; code sent while it is busy is rejected rather than queued.
-- `stdin` is accepted only while that session has an unsatisfied input request.
+- Bundled `stdin` is queued after the submitted cell starts, without waiting for an input request.
+- Follow-up `stdin` is accepted while that evaluation remains active.
 
 ### 2.3 Common calls
 
@@ -184,7 +185,7 @@ Source is stored out of band and bridge calls use a short evaluation ID rather t
 
 ## 4. Interactive input and debuggers
 
-When evaluated code invokes a supported input consumer—such as R `readline()`, Python `input()`, R `browser()`, `recover()`, or a Python debugger—the session enters `input_required`.
+When evaluated code invokes a supported input consumer—such as R `readline()`, Python `input()`, R `browser()`, `recover()`, or a Python debugger—the session may enter `input_required` if queued stdin does not satisfy it.
 
 The initiating call returns the prompt and an explicit marker:
 
@@ -193,7 +194,7 @@ Browse[2]>
 [input]
 ```
 
-The next call appends exact text to the active input stream:
+A call can append exact text while the evaluation remains active:
 
 ```json
 { "stdin": "where\nn\nc\n" }
@@ -201,7 +202,15 @@ The next call appends exact text to the active input stream:
 
 The text may contain one or more complete or partial lines.
 Newlines are significant and are not added automatically; send `"\n"` to submit a blank line.
-Any unread buffered text is scoped to the active evaluation and discarded when it completes, errors, is interrupted, or the worker stops.
+Queuing input does not acknowledge that the runtime consumed it.
+Unread queued text may satisfy later reads or evaluations and is discarded when the worker stops.
+
+The runtime emits `InputRequested` before a supported console read and `InputReceived` after that read succeeds.
+The supervisor treats the request as provisional for a short grace window.
+If the receipt arrives in that window, it continues waiting for output, another request, completion, or the MCP deadline; otherwise it returns the prompt and `[input]` early.
+The receipt belongs to the runtime read, not to a particular submitted stdin value or byte range.
+Direct fd-0 reads emit neither event.
+The grace is intentionally a latency heuristic: a delayed receipt may expose an extra `[input]` boundary, while a longer wait would make genuinely incomplete input less responsive.
 
 `stdin` is not a new code cell.
 The active runtime decides whether the bytes are debugger commands, expressions accepted by the debugger, or ordinary program input.
@@ -215,7 +224,7 @@ It must not preload a cell as generic console lines that a nested `readline()` o
 The initiating code call waits until one of these occurs:
 
 - the evaluation completes or errors;
-- the runtime requests input;
+- a runtime input request remains unreceived past its grace window;
 - the worker stops;
 - `wait_ms` expires.
 
@@ -234,7 +243,7 @@ A call with no mode field waits for the selected session:
 {}
 ```
 
-It returns when new output appears, input is requested, the evaluation completes, the worker stops, or its own `wait_ms` expires.
+It returns when new output appears, an input request remains outstanding past its grace window or the call deadline, the evaluation completes, the worker stops, or its own `wait_ms` expires.
 `wait_ms: 0` is a nonblocking drain.
 
 An idle session returns:
@@ -404,7 +413,8 @@ prepared
 
 running
   ├─ success/error/interrupt ─> idle
-  ├─ input request ───────────> input_required ─> running
+  ├─ input request without receipt after grace ─> input_required
+  ├─ input receipt ─────────────────────────────> running
   └─ crash/exit/kill ─────────> stopped
 
 stopped
@@ -414,6 +424,7 @@ stopped
 
 Visible prompt strings are output.
 They are never used to infer these states.
+An input request is provisional internal state during its grace window; a receipt in that window keeps the externally meaningful state `running`.
 
 ## 9. Text result contract
 
@@ -464,7 +475,7 @@ Use `isError: true` for failures to use or operate the tool, including:
 
 - conflicting mode fields;
 - code sent to a busy session;
-- `stdin` sent while no input is requested;
+- `stdin` sent while no evaluation is active;
 - poll or control against an unknown session;
 - dependency preparation failure;
 - worker startup or private-protocol failure;

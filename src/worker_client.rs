@@ -3,6 +3,8 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+const INPUT_REQUEST_GRACE: Duration = Duration::from_millis(10);
+
 /// A cloneable handle to one lazily started worker.
 #[derive(Clone)]
 pub(crate) struct Client(Arc<ClientInner>);
@@ -31,12 +33,19 @@ struct EvaluationState {
 struct InputBoundary {
     output: String,
     delivered: bool,
+    report_at: Instant,
 }
 
 enum EvaluationWait {
     Running,
     InputRequested(String),
     Completed(Result<String, String>),
+}
+
+enum EvaluationStatus {
+    Waiting,
+    Grace(Duration),
+    Report(EvaluationWait),
 }
 
 /// Keeps the current stop handle available until shutdown closes the gate.
@@ -80,24 +89,24 @@ impl Client {
         stdin: Option<String>,
         timeout: Duration,
     ) -> Result<String, String> {
-        let (evaluation, defer_request) = match (r, stdin) {
+        let evaluation = match (r, stdin) {
             (Some(r), stdin) => self.start_evaluation(r, stdin)?,
             (None, Some(stdin)) => match self.current_evaluation()? {
                 Some(evaluation) => {
-                    let defer_request = evaluation.submit_stdin(stdin)?;
-                    (evaluation, defer_request)
+                    evaluation.submit_stdin(stdin)?;
+                    evaluation
                 }
                 None => {
                     return Err("stdin is accepted only while an R cell is active".to_string());
                 }
             },
             (None, None) => match self.current_evaluation()? {
-                Some(evaluation) => (evaluation, false),
+                Some(evaluation) => evaluation,
                 None => return Ok("[idle]".to_string()),
             },
         };
 
-        match evaluation.wait(timeout, defer_request).await? {
+        match evaluation.wait(timeout).await? {
             EvaluationWait::Running => Ok("[running]".to_string()),
             EvaluationWait::InputRequested(output) => Ok(output),
             EvaluationWait::Completed(result) => {
@@ -111,7 +120,7 @@ impl Client {
         &self,
         r: String,
         stdin: Option<String>,
-    ) -> Result<(Arc<Evaluation>, bool), String> {
+    ) -> Result<Arc<Evaluation>, String> {
         if self.shutdown_requested()? {
             return Err("worker is shutting down".to_string());
         }
@@ -126,10 +135,9 @@ impl Client {
             }),
             changed: tokio::sync::Notify::new(),
         });
-        let defer_request = match stdin {
-            Some(stdin) => evaluation.submit_stdin(stdin)?,
-            None => false,
-        };
+        if let Some(stdin) = stdin {
+            evaluation.submit_stdin(stdin)?;
+        }
 
         let mut active = self
             .0
@@ -157,7 +165,7 @@ impl Client {
                 .and_then(|result| result);
             running.complete(result);
         });
-        Ok((evaluation, defer_request))
+        Ok(evaluation)
     }
 
     fn current_evaluation(&self) -> Result<Option<Arc<Evaluation>>, String> {
@@ -271,9 +279,8 @@ impl Client {
 }
 
 impl Evaluation {
-    /// Queues bytes and reports whether this call supplied nonempty stdin
-    /// without replying to an input boundary already exposed to the caller.
-    fn submit_stdin(&self, stdin: String) -> Result<bool, String> {
+    /// Queues bytes and briefly defers any outstanding input report for its receipt.
+    fn submit_stdin(&self, stdin: String) -> Result<(), String> {
         let mut state = self
             .state
             .lock()
@@ -284,18 +291,20 @@ impl Evaluation {
             );
         }
         if stdin.is_empty() {
-            return Ok(false);
+            return Ok(());
         }
 
-        let defer_request = state.input_request.take().is_none();
+        if let Some(request) = state.input_request.as_mut() {
+            request.report_at = Instant::now() + INPUT_REQUEST_GRACE;
+        }
         let bytes = stdin.into_bytes();
         #[cfg(target_os = "macos")]
         if let Some(writer) = &state.stdin {
             writer.send(bytes)?;
-            return Ok(defer_request);
+            return Ok(());
         }
         state.pending_stdin.extend(bytes);
-        Ok(defer_request)
+        Ok(())
     }
 
     #[cfg(target_os = "macos")]
@@ -321,19 +330,35 @@ impl Evaluation {
             .lock()
             .map_err(|_| "worker evaluation state lock poisoned".to_string())?;
         output.push_str(prompt.trim_end());
-        let mut boundary = InputBoundary {
+        let boundary = InputBoundary {
             output: std::mem::take(output),
             delivered: false,
+            report_at: Instant::now() + INPUT_REQUEST_GRACE,
         };
-        if let Some(previous) = state.input_request.take()
-            && !previous.delivered
-        {
-            let mut combined = previous.output;
-            append_newline(&mut combined);
-            combined.push_str(&boundary.output);
-            boundary.output = combined;
+        if state.input_request.is_some() {
+            return Err("worker requested new input before receiving prior input".to_string());
         }
         state.input_request = Some(boundary);
+        self.changed.notify_one();
+        Ok(())
+    }
+
+    #[cfg(target_os = "macos")]
+    fn input_received(&self, output: &mut String) -> Result<(), String> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| "worker evaluation state lock poisoned".to_string())?;
+        let request = state
+            .input_request
+            .take()
+            .ok_or_else(|| "worker reported received input without requesting it".to_string())?;
+        if !request.delivered {
+            let mut combined = request.output;
+            append_newline(&mut combined);
+            combined.push_str(output);
+            *output = combined;
+        }
         self.changed.notify_one();
         Ok(())
     }
@@ -342,46 +367,67 @@ impl Evaluation {
         let Ok(mut state) = self.state.lock() else {
             return;
         };
-        if let Some(boundary) = state.input_request.take()
-            && !boundary.delivered
-            && let Ok(output) = &mut result
+        state.input_request = None;
+        if let Ok(output) = &mut result
+            && output.is_empty()
         {
-            let mut combined = boundary.output;
-            append_newline(&mut combined);
-            combined.push_str(output);
-            *output = combined;
+            output.push_str("[done]");
         }
         state.result = Some(result);
         self.changed.notify_one();
     }
 
-    async fn wait(&self, timeout: Duration, defer_request: bool) -> Result<EvaluationWait, String> {
-        let deadline = tokio::time::Instant::now() + timeout;
+    async fn wait(&self, timeout: Duration) -> Result<EvaluationWait, String> {
+        let started = Instant::now();
         loop {
             let changed = self.changed.notified();
-            if let Some(event) = self.take_event(!defer_request)? {
-                return Ok(event);
+            let grace = match self.reported_state(false)? {
+                EvaluationStatus::Waiting => None,
+                EvaluationStatus::Grace(grace) => Some(grace),
+                EvaluationStatus::Report(state) => return Ok(state),
+            };
+            let remaining = timeout.saturating_sub(started.elapsed());
+            if remaining.is_zero() {
+                return self.state_at_deadline();
             }
-            if tokio::time::timeout_at(deadline, changed).await.is_err() {
-                return Ok(self.take_event(true)?.unwrap_or(EvaluationWait::Running));
+            let wait = grace.map_or(remaining, |grace| grace.min(remaining));
+            if tokio::time::timeout(wait, changed).await.is_err() {
+                if grace.is_some_and(|grace| grace <= remaining) {
+                    continue;
+                }
+                return self.state_at_deadline();
             }
         }
     }
 
-    fn take_event(&self, include_request: bool) -> Result<Option<EvaluationWait>, String> {
+    fn state_at_deadline(&self) -> Result<EvaluationWait, String> {
+        match self.reported_state(true)? {
+            EvaluationStatus::Report(state) => Ok(state),
+            EvaluationStatus::Waiting | EvaluationStatus::Grace(_) => {
+                unreachable!("the deadline makes every evaluation state reportable")
+            }
+        }
+    }
+
+    fn reported_state(&self, at_deadline: bool) -> Result<EvaluationStatus, String> {
         let mut state = self
             .state
             .lock()
             .map_err(|_| "worker evaluation state lock poisoned".to_string())?;
         if let Some(result) = state.result.take() {
-            return Ok(Some(EvaluationWait::Completed(result)));
-        }
-        if !include_request {
-            return Ok(None);
+            return Ok(EvaluationStatus::Report(EvaluationWait::Completed(result)));
         }
         let Some(boundary) = state.input_request.as_mut() else {
-            return Ok(None);
+            return if at_deadline {
+                Ok(EvaluationStatus::Report(EvaluationWait::Running))
+            } else {
+                Ok(EvaluationStatus::Waiting)
+            };
         };
+        let grace = boundary.report_at.saturating_duration_since(Instant::now());
+        if !at_deadline && !grace.is_zero() {
+            return Ok(EvaluationStatus::Grace(grace));
+        }
         let output = if boundary.delivered {
             "[input]".to_string()
         } else {
@@ -391,7 +437,9 @@ impl Evaluation {
             output.push_str("[input]");
             output
         };
-        Ok(Some(EvaluationWait::InputRequested(output)))
+        Ok(EvaluationStatus::Report(EvaluationWait::InputRequested(
+            output,
+        )))
     }
 }
 
@@ -490,18 +538,33 @@ mod platform {
             evaluation.attach_writer(self.stop_handle.stdin.clone())?;
 
             let mut output = String::new();
+            let mut input_is_requested = false;
             loop {
                 match self.receive()? {
                     WorkerMessage::Output { data } => output.push_str(&data),
                     WorkerMessage::InputRequested { prompt } => {
+                        if input_is_requested {
+                            return Err("worker requested new input before receiving prior input"
+                                .to_string());
+                        }
+                        input_is_requested = true;
                         evaluation.input_requested(&mut output, prompt)?;
                     }
-                    WorkerMessage::Completed => {
-                        if output.is_empty() {
-                            output.push_str("[done]");
+                    WorkerMessage::InputReceived => {
+                        if !input_is_requested {
+                            return Err(
+                                "worker reported received input without requesting it".to_string()
+                            );
                         }
-                        return Ok(output);
+                        input_is_requested = false;
+                        evaluation.input_received(&mut output)?;
                     }
+                    WorkerMessage::Completed if input_is_requested => {
+                        return Err(
+                            "worker completed with an outstanding input request".to_string()
+                        );
+                    }
+                    WorkerMessage::Completed => return Ok(output),
                     WorkerMessage::Ready => {
                         return Err("worker sent an unexpected ready message".to_string());
                     }

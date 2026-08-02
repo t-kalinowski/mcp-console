@@ -163,6 +163,8 @@ Build the smallest end-to-end implementations needed to answer the following wit
 - What does `sys.calls()` show inside a user function?
 - Do errors and tracebacks omit incidental transport details?
 - Do `readline()`, `browser()`, `recover()`, menus, and nested prompts work?
+- Can the backend pair an input request with a successful-read receipt, so buffered input avoids an extra tool call while partial input still becomes visible promptly?
+- Can it keep that receipt distinct from payload or byte-consumption acknowledgment, including for code that reads fd 0 directly?
 - Can interrupt recover to idle without silently restarting?
 
 ### 6.2 Python and SQL

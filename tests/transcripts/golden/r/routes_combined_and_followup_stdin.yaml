@@ -69,7 +69,7 @@ send:
 result:
   content:
     - type: text
-      text: "[running]"
+      text: "[input]"
   isError: false
 ---
 id: 8
@@ -81,5 +81,17 @@ result:
     - type: text
       text: |
         [1] "color blue"
+  isError: false
+---
+id: 9
+send:
+  r: invisible(readline("silent> "))
+  stdin: |
+    accepted
+result:
+  content:
+    - type: text
+      text: |
+        silent>
   isError: false
 ...

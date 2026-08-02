@@ -82,6 +82,7 @@ The complete implemented message set is:
 | worker → server | `{"kind":"ready"}` | Startup is complete. |
 | worker → server | `{"kind":"output","data":"..."}` | Append one output text chunk. |
 | worker → server | `{"kind":"input_requested","prompt":"..."}` | Report that the runtime requested input. |
+| worker → server | `{"kind":"input_received"}` | Report that the current read succeeded. |
 | worker → server | `{"kind":"completed"}` | The evaluation is complete. |
 
 Every frame uses `kind` to select its message variant.
@@ -105,6 +106,8 @@ worker -> server  {"kind":"completed"}
 
 The worker may send zero or more `output` messages.
 The server concatenates their text in arrival order.
+`input_requested` starts one provisional input state, and the matching `input_received` clears it after the runtime read succeeds.
+Only one request may be outstanding: a second request, a receipt without a request, or completion before its receipt is a protocol failure.
 `completed` ends the sideband evaluation; collecting its MCP result permits the next one.
 
 If the worker sends no output before `completed`, the current MCP projection returns `[done]`.
@@ -119,9 +122,11 @@ The optional MCP `timeout_ms` argument defaults to 60,000 milliseconds.
 It bounds how long that `send` call waits for the worker; it is not sent over the sideband and does not bound or stop computation.
 The wait includes lazy worker startup.
 
-An `input_requested` frame normally returns the output collected so far, its prompt, and `[input]` immediately.
-A call that just queued nonempty stdin without replying to an already exposed boundary defers a new input frame until completion or its deadline.
-At that deadline, a pending input frame wins over `[running]`; otherwise an unfinished call returns `[running]` and retains the active evaluation.
+An `input_requested` frame remains provisional for 10 milliseconds.
+If `input_received` arrives first, the server restores the retained prompt output for an unexposed request and continues waiting for another request, completion, or the MCP deadline.
+If the grace expires first, the call returns output collected so far, the prompt, and `[input]` before that deadline.
+Supplying nonempty stdin for an outstanding request starts a fresh 10-millisecond grace window; the MCP deadline reports a still-outstanding request immediately, even inside that window.
+A pending input request wins over `[running]` at the deadline.
 A later `send` call without `r` polls that evaluation with its own `timeout_ms`; it may include `stdin` to queue bytes before waiting.
 Completion returns output not already delivered at an `[input]` boundary, or `[done]` when it produced none.
 If the poll wait expires first, it returns `[running]` again.
@@ -141,6 +146,7 @@ server -> worker  {"kind":"evaluate","r":"readline('name> ')"}
 worker -> server  {"kind":"input_requested","prompt":"name> "}
 
 server -> fd 0    Ada\n
+worker -> server  {"kind":"input_received"}
 worker -> server  {"kind":"output","data":"[1] \"Ada\"\n"}
 worker -> server  {"kind":"completed"}
 ```
@@ -155,9 +161,11 @@ The end of a payload does not close fd 0 and is not an EOF marker.
 A newline-free fragment remains pending until later stdin completes it or worker shutdown closes the stream.
 The R console callback consumes only through one newline or its supplied buffer; it does not prefetch later lines from fd 0.
 `input_requested` is an observation of worker state, not permission to write.
-A call that just queued nonempty stdin may wait past a new frame in case the evaluation completes, but the frame remains pending and is returned at that call's deadline.
-Nonempty stdin sent in reply to an exposed boundary clears that boundary; empty stdin writes no bytes and leaves it exposed.
-Code that reads fd 0 without sending the frame can consume bundled input or input sent after a polling timeout.
+After a nonempty callback read, `input_received` closes that provisional request before the runtime resumes.
+It does not acknowledge a particular stdin submission, identify which bytes satisfied the read, or report bytes consumed by code that reads fd 0 directly.
+If no receipt arrives during the grace window, the request remains exposed as `[input]`; a partial follow-up therefore returns `[input]` again rather than `[running]`.
+Empty stdin writes no bytes and leaves an exposed request immediately reportable.
+Code that reads fd 0 directly can consume bundled input or input sent after a polling timeout without sending either input frame.
 
 Acceptance means the bytes were queued, not that the current evaluation consumed them.
 The server does not retract or drain bytes after `completed`; data already in the pipe or retained by a runtime reader may satisfy later reads or later evaluations.
@@ -170,11 +178,12 @@ New R code is rejected while an evaluation or its uncollected result is active.
 | --- | --- | --- |
 | starting | worker → server `ready` | idle |
 | idle | server → worker `evaluate` | evaluating |
-| evaluating | MCP stdin submission | evaluating |
 | evaluating | worker → server `output` | evaluating |
-| evaluating | worker → server `input_requested` | evaluating |
-| evaluating | worker → server `completed` | idle |
-| starting, idle, evaluating | server → worker `shutdown` | terminal |
+| evaluating | worker → server `input_requested` | evaluating, input provisional |
+| evaluating, input provisional | worker → server `input_received` | evaluating |
+| evaluating, with or without input reported | MCP stdin submission | evaluating |
+| evaluating, no provisional input | worker → server `completed` | idle |
+| starting, idle, or evaluating | server → worker `shutdown` | terminal |
 
 Malformed JSON, invalid UTF-8, an unexpected message, or sideband EOF fails the active operation.
 There is no structured protocol error message.
@@ -216,6 +225,7 @@ The CLI runs `worker` synchronously without a Tokio runtime, so R initialization
 
 The worker supplies cell source through `ReadConsole` before each top-level evaluation starts.
 For every evaluation-time `ReadConsole` call, the callback sends `input_requested`, then reads fd 0 directly until one newline arrives or R's supplied buffer is full.
+After a nonempty read succeeds, it sends `input_received` before returning the bytes to R.
 A newline-free fragment shorter than that buffer keeps the callback blocked, while bytes after a returned chunk remain in the pipe for a later `ReadConsole` call or a direct fd-0 reader.
 It uses R's busy callback rather than prompt text to distinguish cell source from evaluated-code input.
 Unread fd-0 input remains available across evaluation boundaries.
@@ -226,6 +236,8 @@ Parse, evaluation, and print errors are returned as console text followed by `co
 
 The current implementation has no worker startup or execution timeout, frame-size limit, stdin queue limit, or accumulated-output limit.
 `timeout_ms` limits one MCP wait without terminating the worker or a blocked stdin write; only shutdown has a process deadline.
+The 10-millisecond input grace controls when a provisional request becomes visible and does not limit evaluation or stdin reads.
+It is a latency heuristic: scheduling can delay a receipt past the grace and expose an extra `[input]` boundary even when queued bytes subsequently satisfy the read.
 
 It does not capture worker standard output or standard error.
 It does not support arbitrary binary output.
@@ -246,9 +258,10 @@ When `r` is exactly `stall`, Zod creates a checkpoint in its private temporary d
 When `r` is `complete after timeout`, it pauses briefly before returning `zod: complete after timeout\n`.
 When `r` is `violate protocol`, it sends an unexpected second `ready` message.
 When `r` is `exit unexpectedly`, it exits with status 86 without replying.
-When `r` is `request input`, it sends `input_requested` and calls Python `input()` to consume one line from fd 0.
+When `r` is `request input`, it sends `input_requested`, calls Python `input()` to consume one line from fd 0, and sends `input_received` after that call returns.
+The `request input after timeout` mode gates that request until an earlier MCP wait expires, then covers retention of output attached to a still-unexposed request.
 The `input without request` and `input length without request` modes call `input()` without first sending a frame, covering proactive fd-0 delivery.
-The `input without request then request input` mode performs one direct read before reporting a second input boundary, covering the absence of server-side consumption inference.
+The `input without request then request input` mode performs one direct read before a reported request/receipt pair, covering the distinction between direct fd-0 reads and callback-style input state.
 Zod echoes the input or its byte length and completes.
 Its acceptance supplies newline-terminated text because Python `input()` waits for a complete line; partial-input boundaries are covered by the built-in R worker.
 Other fixture-only modes verify that the sandbox denies host writes and that a blocked sideband writer cannot delay shutdown.

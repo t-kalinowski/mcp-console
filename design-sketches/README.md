@@ -60,8 +60,16 @@ When running code requests real console input, the same tool supplies exact `std
 { "stdin": "where\nn\nc\n" }
 ```
 
+Input may also accompany the cell when it is already known:
+
+```json
+{ "r": "readline('name> ')", "stdin": "Ada\n" }
+```
+
 The text may contain one or more lines, and the server does not add a newline.
 This supports R `readline()` and `browser()`, Python `input()` and debuggers, and similar interactive modes without making ordinary code submission line-oriented.
+An input request is held briefly for a matching runtime receipt, so prequeued input can satisfy the read without forcing another tool call.
+The receipt identifies the read operation, not the submitted payload that supplied its bytes.
 
 Package requirements are configured less frequently at the logical-session level and persist across runtime restarts:
 
@@ -165,7 +173,7 @@ Complete text, plots, live table batches, and snapshots are fetched separately b
 - Product name: **MCP Console**.
 - Public abstraction: a persistent console session, not a notebook or conventional line-oriented REPL.
 - Top-level input: complete R, Python, or SQL cells.
-- Interactive input: exact, optionally multiline `stdin` text only when the active runtime requests it.
+- Interactive input: exact, optionally multiline `stdin` text queued while an evaluation is active; paired request and receipt events expose runtime input state without gating delivery.
 - MCP surface: `send` plus a low-frequency `session` environment and lifecycle tool.
 - Language selection: the object key is `r`, `python`, or `sql`.
 - Runtime substrate: open implementation decision.

@@ -315,7 +315,15 @@ mod platform {
         }
 
         match read_console_stdin(buf, buflen) {
-            Ok(read) => read,
+            Ok(read) => {
+                if read != 0
+                    && let Err(error) = send_input_received()
+                {
+                    record_worker_failure(error);
+                    return console_eof(buf);
+                }
+                read
+            }
             Err(error) => {
                 record_worker_failure(error);
                 console_eof(buf)
@@ -331,6 +339,14 @@ mod platform {
                 prompt: prompt.to_string(),
             })
             .map_err(|error| format!("R worker failed to report an input request: {error}"))
+    }
+
+    fn send_input_received() -> Result<(), String> {
+        WORKER_WRITER
+            .get()
+            .expect("R worker sideband writer should be initialized")
+            .send(&WorkerMessage::InputReceived)
+            .map_err(|error| format!("R worker failed to report received input: {error}"))
     }
 
     fn read_console_stdin(buf: *mut c_uchar, buflen: c_int) -> Result<c_int, String> {

@@ -25,7 +25,8 @@ If that wait expires, `send` returns `[running]` without stopping the computatio
 Concurrent `send` calls are unsupported.
 Supplying `stdin` with `r` or while that cell remains active queues exact UTF-8 bytes to worker fd 0 without adding a newline, inspecting or limiting the text, or waiting for an input request.
 Payload end is not EOF; the R console callback reads through one newline or its supplied buffer, and unread bytes may satisfy later console or direct reads, including in a later evaluation.
-An `input_requested` frame observes worker state but does not gate delivery or acknowledge consumption; a call that just queued nonempty stdin may defer that boundary, while empty stdin leaves an exposed boundary pending.
+An `input_requested` frame is provisional for up to 10 milliseconds; a matching `input_received` after a successful console read suppresses `[input]`, while an unmatched request returns `[input]` after that grace or at the MCP deadline, whichever comes first.
+The receipt describes that runtime read, not a submitted payload or byte count, and direct fd-0 reads emit neither frame.
 New code is rejected until the running evaluation's result has been collected.
 On macOS, the first evaluation lazily starts the built-in R worker under the same sandbox policy as the `sandbox` command.
 The worker embeds R through `libr` and `harp`, retains global state, and feeds each complete cell through R's DLL REPL iterator.
@@ -34,7 +35,7 @@ Cell EOF while R requires continuation input is an error; earlier complete expre
 The hidden `worker` command takes ownership of the sideband, discovers `R_HOME` through the selected R executable inside the sandbox, and opens `R_HOME/lib/libR.dylib` by its absolute path.
 It does not self-execute or set a dynamic-loader environment variable.
 The worker command runs synchronously on the process main thread; only `serve` creates a Tokio runtime.
-The hidden development option `serve --worker PATH` replaces the built-in worker with an executable that implements the same sideband protocol and fd-0 input contract.
+The hidden development option `serve --worker PATH` replaces the built-in worker with an executable that implements the same sideband request/receipt protocol and fd-0 input contract.
 The Python fixture `tests/fixtures/zod` provides deterministic acceptance coverage for that boundary, direct fd-0 input, and server-owned timeout and polling mechanics.
 An infrastructure or protocol failure is returned as a tool error, force-stops and discards that worker, and lets the next evaluation start a fresh worker.
 When MCP input closes, the server starts a one-second deadline and attempts graceful sideband shutdown without delaying it.

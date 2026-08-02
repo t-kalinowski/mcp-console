@@ -95,6 +95,34 @@ def test_routes_combined_and_followup_stdin(binary: Path) -> Transcript:
     return client.finish()
 
 
+def test_preserves_unexposed_input_output(binary: Path) -> Transcript:
+    zod = Path(__file__).resolve().parents[1] / "fixtures" / "zod"
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        temporary_path = Path(temporary_directory)
+        environment = os.environ.copy()
+        environment["TMPDIR"] = temporary_directory
+        client = McpClient(
+            binary,
+            ("serve", "--worker", str(zod)),
+            environment,
+        )
+        client.initialize_and_list_tools()
+
+        client.call_tool("send", r="request input after timeout", timeout_ms=0)
+        assert last_tool_text(client) == "[running]"
+        waiting = wait_for_marker(
+            temporary_path,
+            "zod-waiting-to-request-input",
+            client,
+        )
+        (waiting.parent / "zod-release-input-request").touch()
+        wait_for_marker(temporary_path, "zod-input-requested", client)
+
+        client.call_tool("send", stdin="answer\n", timeout_ms=3_000)
+        assert last_tool_text(client) == "before\nlate>\nzod stdin: answer\n"
+        return client.finish()
+
+
 def last_tool_text(client: McpClient) -> str:
     result = client.transcript[-1]["result"]
     assert result.get("isError") is not True, result

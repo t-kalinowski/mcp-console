@@ -96,9 +96,16 @@ def test_routes_combined_and_followup_stdin(binary: Path) -> Transcript:
     client.call_tool("send", r=r)
     assert last_tool_text(client) == "color>\n[input]"
     client.call_tool("send", stdin="bl", timeout_ms=0)
-    assert last_tool_text(client) == "[running]"
+    assert last_tool_text(client) == "[input]"
     client.call_tool("send", stdin="ue\n")
     assert last_tool_text(client) == '[1] "color blue"\n'
+
+    client.call_tool(
+        "send",
+        r='invisible(readline("silent> "))',
+        stdin="accepted\n",
+    )
+    assert last_tool_text(client) == "silent>\n"
     return client.finish()
 
 

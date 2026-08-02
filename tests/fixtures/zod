@@ -25,6 +25,18 @@ def send(stream: TextIO, message: dict[str, Any]) -> None:
     stream.flush()
 
 
+def synchronize_reader(stream: TextIO) -> None:
+    """Block until the server has read the preceding sideband frame."""
+    frame = json.dumps(
+        {"kind": "output", "data": ""},
+        separators=(",", ":"),
+    )
+    # This exceeds Darwin's pipe capacity, so flush returns only after the
+    # server enters its next read and has installed the preceding input request.
+    stream.write(frame + (" " * (2 * 1024 * 1024)) + "\n")
+    stream.flush()
+
+
 def main() -> None:
     """Run the deterministic sideband fixture until the server shuts it down."""
     reader = open_sideband(READ_FD_ENV, "r")
@@ -65,6 +77,7 @@ def main() -> None:
         if message["r"] == "request input":
             send(writer, {"kind": "input_requested", "prompt": "zod> "})
             stdin = input()
+            send(writer, {"kind": "input_received"})
             send(
                 writer,
                 {
@@ -75,10 +88,27 @@ def main() -> None:
             send(writer, {"kind": "completed"})
             continue
 
+        if message["r"] == "request input after timeout":
+            temporary = Path(os.environ["TMPDIR"])
+            waiting = temporary / "zod-waiting-to-request-input"
+            waiting.touch()
+            while not (temporary / "zod-release-input-request").exists():
+                time.sleep(0.01)
+            send(writer, {"kind": "output", "data": "before\n"})
+            send(writer, {"kind": "input_requested", "prompt": "late> "})
+            synchronize_reader(writer)
+            (temporary / "zod-input-requested").touch()
+            stdin = input()
+            send(writer, {"kind": "input_received"})
+            send(writer, {"kind": "output", "data": f"zod stdin: {stdin}\n"})
+            send(writer, {"kind": "completed"})
+            continue
+
         if message["r"] == "input without request then request input":
             first = input()
             send(writer, {"kind": "input_requested", "prompt": "second> "})
             second = input()
+            send(writer, {"kind": "input_received"})
             send(
                 writer,
                 {
