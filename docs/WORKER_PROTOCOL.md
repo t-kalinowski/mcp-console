@@ -42,8 +42,9 @@ environment:
   MCP_CONSOLE_SIDEBAND_WRITE_FD: <worker writes messages to the server here>
 ```
 
-The server clears `FD_CLOEXEC` on the child endpoints before spawning the worker.
-It drops its duplicate child endpoints immediately after the spawn attempt.
+The command owns the child endpoints through the spawn attempt.
+In the child, immediately before exec, the launcher clears `FD_CLOEXEC` on those two endpoints and sets it on every other nonstandard descriptor.
+The parent copies close immediately after the spawn attempt.
 
 The worker takes ownership of those descriptors.
 Before it runs other programs or user code, it must remove the sideband environment variables and prevent descendants from inheriting the descriptors.
@@ -167,7 +168,8 @@ Only shutdown has a deadline.
 It does not capture worker standard output or standard error.
 It does not support arbitrary binary output.
 Worker failures are reported as plain-text MCP tool errors, not structured worker events.
-The current sandbox child does not yet supervise descendants after its direct process exits, or descendants that leave its process group.
+Workers do not run the public `sandbox` command's process tracker.
+Forced shutdown kills a live root process group and reaps the direct sandbox process, but descendants may outlive it if the root exits first or they leave that group.
 
 ## Zod fixture behavior
 

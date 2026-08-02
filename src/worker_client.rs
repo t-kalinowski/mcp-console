@@ -188,7 +188,6 @@ mod platform {
             let child = command
                 .spawn()
                 .map_err(|error| format!("failed to launch worker: {error}"))?;
-            drop(child_fds);
 
             let stop_handle = StopHandle {
                 writer,

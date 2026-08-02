@@ -4,6 +4,8 @@ use std::process::ExitCode;
 #[cfg(target_os = "macos")]
 use std::ffi::OsStr;
 #[cfg(target_os = "macos")]
+use std::os::fd::OwnedFd;
+#[cfg(target_os = "macos")]
 use std::os::unix::process::CommandExt as _;
 #[cfg(target_os = "macos")]
 use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, ExitStatus, Stdio};
@@ -14,12 +16,14 @@ use std::time::Duration;
 use wait_timeout::ChildExt as _;
 
 #[cfg(target_os = "macos")]
-#[path = "sandbox/macos.rs"]
-mod platform;
+mod macos;
+#[cfg(target_os = "macos")]
+use self::macos as platform;
 
 #[cfg(not(target_os = "macos"))]
-#[path = "sandbox/unsupported.rs"]
-mod platform;
+mod unsupported;
+#[cfg(not(target_os = "macos"))]
+use self::unsupported as platform;
 
 #[cfg(target_os = "macos")]
 pub fn run(command_line: &[OsString]) -> Result<ExitCode, String> {
@@ -53,6 +57,7 @@ pub fn run(command_line: &[OsString]) -> Result<ExitCode, String> {
 /// use std::ffi::OsStr;
 /// use std::io::{Read, Write};
 /// use std::process::Stdio;
+/// use std::time::Duration;
 ///
 /// fn read_echo(mut stream: impl Read) -> [u8; 6] {
 ///     let mut output = [0; 6];
@@ -99,21 +104,26 @@ pub fn run(command_line: &[OsString]) -> Result<ExitCode, String> {
 /// stdin
 ///     .write_all(b"EXIT\n")
 ///     .expect("EXIT should be written");
-/// assert!(child.wait().expect("child should exit").success());
+/// let status = child
+///     .wait_timeout(Duration::from_secs(5))
+///     .expect("child wait should succeed")
+///     .expect("child should exit");
+/// assert!(status.success());
 /// ```
 pub(crate) struct SandboxedCommand {
     command: Command,
     temporary_directory: platform::TemporaryDirectory,
+    inherited_descriptors: Vec<OwnedFd>,
 }
 
 #[cfg(target_os = "macos")]
 /// A direct sandboxed child that retains its private temporary directory.
 ///
-/// Retain this owner until the child exits, then call `wait`. Dropping it does
-/// not terminate the child and removes the private directory. Background
-/// descendants are unsupported and may outlive this owner. Piped streams can
-/// be taken and moved to independent I/O tasks before waiting.
-#[must_use = "retain the sandboxed child until it is explicitly waited"]
+/// Retain this owner until the child exits, then wait for or stop it. Dropping
+/// it does not terminate the child and removes the private directory.
+/// Background descendants are unsupported and may outlive this owner. Piped
+/// streams can be taken and moved to independent I/O tasks before waiting.
+#[must_use = "retain the sandboxed child until it is explicitly waited or stopped"]
 pub(crate) struct SandboxedChild {
     child: Child,
     _temporary_directory: platform::TemporaryDirectory,
@@ -127,6 +137,7 @@ impl SandboxedCommand {
         let mut sandboxed = Self {
             command,
             temporary_directory,
+            inherited_descriptors: Vec::new(),
         };
         sandboxed
             .env("TMPDIR", temporary_directory_path)
@@ -175,6 +186,15 @@ impl SandboxedCommand {
         self
     }
 
+    /// Keeps these descriptors live and explicitly inherits them across exec.
+    pub(crate) fn inherit_descriptors(
+        &mut self,
+        descriptors: impl IntoIterator<Item = OwnedFd>,
+    ) -> &mut Self {
+        self.inherited_descriptors.extend(descriptors);
+        self
+    }
+
     /// Isolates a background sandbox command for bounded forced termination.
     pub(crate) fn new_process_group(&mut self) -> &mut Self {
         self.command.process_group(0);
@@ -185,19 +205,21 @@ impl SandboxedCommand {
     /// guard to the returned child.
     pub(crate) fn spawn(mut self) -> Result<SandboxedChild, String> {
         self.command.env("TMPDIR", self.temporary_directory.path());
-        let child = self
-            .command
-            .spawn()
-            .map_err(|error| format!("failed to launch `{}`: {error}", platform::SANDBOX_EXEC))?;
+        let child = platform::spawn_command(self.command, self.inherited_descriptors)?;
         Ok(SandboxedChild {
             child,
             _temporary_directory: self.temporary_directory,
         })
     }
 
-    pub(crate) fn status(self) -> Result<ExitCode, String> {
-        let status = self.spawn()?.wait()?;
-        Ok(platform::exit_code(status))
+    /// Runs this command as the supervised foreground sandbox job.
+    pub(crate) fn status(mut self) -> Result<ExitCode, String> {
+        self.command.env("TMPDIR", self.temporary_directory.path());
+        platform::supervised_status(
+            self.command,
+            self.temporary_directory,
+            self.inherited_descriptors,
+        )
     }
 }
 
@@ -216,12 +238,6 @@ impl SandboxedChild {
     #[allow(dead_code, reason = "used by spawned callers with piped stderr")]
     pub(crate) fn take_stderr(&mut self) -> Option<ChildStderr> {
         self.child.stderr.take()
-    }
-
-    pub(crate) fn wait(mut self) -> Result<ExitStatus, String> {
-        self.child
-            .wait()
-            .map_err(|error| format!("failed to launch `{}`: {error}", platform::SANDBOX_EXEC))
     }
 
     /// Waits at most `timeout` for the direct sandbox process to exit.

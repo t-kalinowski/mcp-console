@@ -36,8 +36,6 @@ pub(crate) fn bind() -> io::Result<(Reader, Writer, ChildFds)> {
 
     let child_read: OwnedFd = child_read.into();
     let child_write: OwnedFd = child_write.into();
-    make_inheritable(child_read.as_raw_fd())?;
-    make_inheritable(child_write.as_raw_fd())?;
 
     Ok((
         Reader::new(server_read),
@@ -111,14 +109,11 @@ impl Writer {
 
 impl ChildFds {
     /// Passes the inheritable worker endpoints to a child through its environment.
-    pub(crate) fn configure(&self, command: &mut crate::sandbox::SandboxedCommand) {
+    pub(crate) fn configure(self, command: &mut crate::sandbox::SandboxedCommand) {
         command.env(READ_FD_ENV, self.read.as_raw_fd().to_string());
         command.env(WRITE_FD_ENV, self.write.as_raw_fd().to_string());
+        command.inherit_descriptors([self.read, self.write]);
     }
-}
-
-fn make_inheritable(fd: RawFd) -> io::Result<()> {
-    set_close_on_exec(fd, false)
 }
 
 fn inherited_fd(name: &str) -> io::Result<RawFd> {

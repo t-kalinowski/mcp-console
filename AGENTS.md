@@ -31,14 +31,27 @@ The hidden development option `serve --worker PATH` replaces the built-in worker
 The Python fixture `tests/fixtures/zod` provides deterministic acceptance coverage for that boundary.
 An infrastructure or protocol failure is returned as a tool error, force-stops and discards that worker, and lets the next evaluation start a fresh worker.
 When MCP input closes, the server starts a one-second deadline and attempts graceful sideband shutdown without delaying it.
-If the direct sandbox process is still running when time expires, the sandbox boundary force-stops its process group and reaps that direct process.
+If the direct worker sandbox process is still running when time expires, the sandbox boundary force-stops its process group and reaps that direct process.
 The version command prints the package name and version.
-On macOS, the sandbox command launches a subprocess under `sandbox-exec` with host filesystem reads allowed, regular-file writes limited to a dedicated per-launch temporary directory, runtime device and IPC exceptions, and network access denied.
-This initial launcher waits only for the direct command.
-Background descendants are unsupported: they may outlive the launcher, which attempts to remove their dedicated temporary directory on a best-effort basis when it returns.
-Descendant supervision is intentionally deferred because it must account for process groups, session-detached children, signal forwarding, and PID reuse together.
-The sandbox command and worker are unsupported on Linux and Windows.
-Interactive input, the session model, Python and SQL runtimes, sidecar API, viewer, environment management, output retention, and transcript generation do not exist yet.
+
+On macOS, the sandbox launch boundary passes only explicitly allowed file descriptors through exec.
+The public `sandbox` command preserves stdin, stdout, and stderr; workers connect those streams to `/dev/null` and also pass their two owned sideband pipes.
+The sandbox command runs under `sandbox-exec` with host filesystem opens allowed for reading, regular-file opens for writing limited to a dedicated per-launch temporary directory, runtime device and IPC exceptions, and network opens denied.
+When it owns a terminal, the launcher runs the command in a dedicated foreground process group so terminal-generated signals are delivered once.
+It relays `SIGHUP`, `SIGINT`, `SIGQUIT`, and `SIGTERM` sent directly to the launcher unless the signal was already blocked or ignored when the launcher started.
+It imposes no signal timeout, so a command that handles or ignores a signal may continue running.
+
+Before returning, the public sandbox launcher terminates descendants observed by the macOS process tracker, including `processx` children that create another session, and waits up to five seconds for them to be reaped.
+On a process-observation error, it attempts to terminate the root process group and reap the direct sandbox process.
+If root termination cannot be confirmed, it reports both failures and preserves its temporary directory instead of running teardown that assumes the root exited.
+Detached descendants may remain when supervision itself fails because their identities can no longer be verified safely.
+A descendant that orphans itself before macOS exposes it to the tracker is outside this initial supervision boundary.
+The launcher does not proxy stopped and continued job-control states: `Ctrl-Z` and use as one stage of an interactive terminal pipeline are unsupported.
+
+Workers do not run the process tracker.
+Forced shutdown kills a live root process group and reaps the direct sandbox process, but descendants may outlive it if the root exits first or they leave that group; full observed-descendant teardown applies only to the public `sandbox` command.
+The sandbox command and workers are unsupported on Linux and Windows.
+Interactive input, the session model, Python and SQL runtimes, sidecar API, viewer, environment management, output retention, and runtime transcript generation do not exist yet.
 
 ## Product direction
 
@@ -69,9 +82,16 @@ See `design-sketches/README.md` for the product overview and `design-sketches/do
 - `src/worker.rs` — embedded R initialization, evaluation, and console callbacks.
 - `src/worker_client.rs` — server-side worker launch, lifecycle, and output collection.
 - `src/worker_protocol.rs` — shared sideband message definitions.
-- `src/sandbox.rs` — platform dispatch for the sandbox process launcher.
-- `src/sandbox/` — platform implementation and macOS Seatbelt policy.
-- `tests/cli.rs` — public binary acceptance tests.
+- `src/sandbox.rs` — reusable sandbox command builder and platform dispatch.
+- `src/sandbox/macos.rs` — macOS sandbox launch and foreground-lifetime orchestration.
+- `src/sandbox/macos/` — macOS descriptor, job-control, and process-tracking internals.
+- `src/sandbox/read_only_policy.sbpl` — macOS Seatbelt policy.
+- `src/sandbox/unsupported.rs` — unsupported-platform implementation.
+- `tests/cli.rs` — unsupported-platform sandbox acceptance test.
+- `tests/format_script.rs` — formatter-script acceptance tests.
+- `tests/sandbox_policy.rs` — sandbox access-policy tests.
+- `tests/sandbox_supervision.rs` — sandbox descendant-supervision tests.
+- `tests/sandbox_terminal.rs` — sandbox terminal-behavior tests.
 - `tests/fixtures/zod` — executable Python sideband worker used by acceptance tests.
 - `tests/transcripts/r.py` — public built-in R worker acceptance suite.
 - `tests/transcripts/_run.py` — discovers transcript suites and compares case snapshots.
@@ -97,6 +117,8 @@ Begin as one Cargo package and split crates only when a real boundary emerges.
   As a heuristic, aim to keep implementation-code changes under 200 added and deleted lines.
   Tests, golden snapshots, and documentation do not count toward this guideline.
   The line count is not a limit; prefer a larger coherent change over splits that make the work harder to understand or validate.
+- Treat 400 lines as a prompt to split a file.
+  Split earlier when it contains responsibilities that can be named independently; keep a cohesive implementation together when a split would make its control flow harder to follow.
 - Each PR should implement and test one observable behavior.
   Update design documents in the same PR only when they describe that behavior.
 - Add a public acceptance or regression test first and confirm that it fails before implementing behavior.
