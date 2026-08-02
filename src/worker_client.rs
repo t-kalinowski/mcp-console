@@ -312,6 +312,7 @@ impl Evaluation {
         result.map(|()| defer_input)
     }
 
+    #[cfg(target_os = "macos")]
     fn attach_writer(&self, writer: platform::StdinSender) -> Result<(), String> {
         let mut input = self
             .input
@@ -327,6 +328,7 @@ impl Evaluation {
         Ok(())
     }
 
+    #[cfg(target_os = "macos")]
     fn input_requested(&self, output: &mut String, prompt: String) -> Result<(), String> {
         let mut state = self
             .state
@@ -408,6 +410,7 @@ impl Evaluation {
     }
 }
 
+#[cfg(target_os = "macos")]
 fn append_text(output: &mut String, text: &str) {
     if !text.is_empty() {
         output.push_str(text);
