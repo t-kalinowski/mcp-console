@@ -24,19 +24,20 @@ Run `mcp-console --help` or `mcp-console COMMAND --help` for command-line help.
 The server registers one `send` tool.
 Supplying `r` evaluates one complete code cell and waits up to the optional `timeout_ms`, which defaults to 60 seconds.
 When that wait expires, the call returns `[running]` while computation continues; call `send` without `r` to poll for completion.
-A call may also supply exact standard-input text with `r` or while that evaluation remains active:
+A call may also supply exact standard-input text with `r`, during an evaluation, or while the worker is idle:
 
 ```json
 { "r": "readline('name> ')", "stdin": "Ada\n" }
 ```
 
 The server sends the cell first, then queues the string's UTF-8 bytes to worker fd 0 without inspecting it, adding a newline, imposing a size limit, or waiting for an input request.
+A stdin-only call while idle lazily starts the worker when needed, queues the bytes, and returns `[idle]`.
 When an input request remains outstanding for up to 10 milliseconds, bounded by the call deadline, `send` returns its prompt and `[input]`; a later call can supply more bytes with `{ "stdin": "Ada\n" }`.
 An immediate `input_received` receipt suppresses that boundary, so prequeued input can satisfy a console read without forcing another tool call.
 That receipt describes the runtime read, not a particular stdin payload; direct fd-0 reads emit no request or receipt.
 Payload end is not EOF, and queued input is not an acknowledgment of consumption.
 Unread bytes may be completed by later stdin or satisfy a later worker read or evaluation.
-On macOS, the first evaluation lazily starts a sandboxed embedded R worker.
+On macOS, the first nonempty stdin submission or evaluation lazily starts a sandboxed embedded R worker.
 Later calls reuse the same global R state.
 The worker runs each cell through R's native top-level loop, captures R console output, prints each visible value, and maintains `.Last.value`.
 If a cell ends while an expression is incomplete, earlier complete expressions from that cell remain applied.

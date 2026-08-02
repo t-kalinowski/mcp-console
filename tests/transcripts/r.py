@@ -59,6 +59,45 @@ def test_times_out_and_polls_running_evaluation(binary: Path) -> Transcript:
     return client.finish()
 
 
+def test_routes_idle_and_timed_out_stdin(binary: Path) -> Transcript:
+    client = McpClient(binary, ("serve",))
+    client.initialize_and_list_tools()
+
+    # fmt: r
+    direct_stdin = dedent(r"""
+        local({
+          connection <- suppressWarnings(file("/dev/stdin"))
+          on.exit(close(connection))
+          readLines(connection, n = 1)
+        })
+        """).strip()
+
+    client.call_tool("send", stdin="cold fd 0\n")
+    assert last_tool_text(client) == "[idle]"
+    client.call_tool("send", r=direct_stdin)
+    assert last_tool_text(client) == '[1] "cold fd 0"\n'
+
+    # fmt: r
+    r = dedent(r"""
+        prompted <- readline("bundled> ")
+        direct <- local({
+          connection <- suppressWarnings(file("/dev/stdin"))
+          on.exit(close(connection))
+          readLines(connection, n = 1)
+        })
+        paste(prompted, direct, sep = "|")
+        """).strip()
+    client.call_tool("send", r=r, stdin="café\n", timeout_ms=50)
+    assert last_tool_text(client) == "[running]"
+    client.call_tool("send", timeout_ms=0)
+    assert last_tool_text(client) == "[running]"
+    client.call_tool("send", stdin="timed out ", timeout_ms=50)
+    assert last_tool_text(client) == "[running]"
+    client.call_tool("send", stdin="fd 0\n", timeout_ms=3_000)
+    assert last_tool_text(client) == 'bundled>\n[1] "café|timed out fd 0"\n'
+    return client.finish()
+
+
 def test_routes_combined_and_followup_stdin(binary: Path) -> Transcript:
     client = McpClient(binary, ("serve",))
     client.initialize_and_list_tools()
@@ -95,7 +134,7 @@ def test_routes_combined_and_followup_stdin(binary: Path) -> Transcript:
         """).strip()
     client.call_tool("send", r=r)
     assert last_tool_text(client) == "color>\n[input]"
-    client.call_tool("send", stdin="bl", timeout_ms=0)
+    client.call_tool("send", stdin="bl", timeout_ms=50)
     assert last_tool_text(client) == "[input]"
     client.call_tool("send", stdin="ue\n")
     assert last_tool_text(client) == '[1] "color blue"\n'

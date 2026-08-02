@@ -23,12 +23,13 @@ The server registers only a `send` tool.
 Supplying `r` starts one complete cell and waits for up to `timeout_ms`, which defaults to 60 seconds.
 If that wait expires, `send` returns `[running]` without stopping the computation; a later call without `r` polls it, and a poll while idle returns `[idle]`.
 Concurrent `send` calls are unsupported.
-Supplying `stdin` with `r` or while that cell remains active queues exact UTF-8 bytes to worker fd 0 without adding a newline, inspecting or limiting the text, or waiting for an input request.
+Supplying `stdin` with `r`, during an evaluation, or while idle queues exact UTF-8 bytes to worker fd 0 without adding a newline, inspecting or limiting the text, or waiting for an input request.
+A nonempty idle stdin call lazily starts the worker when needed, queues the bytes, and returns `[idle]`; `timeout_ms` does not bound that startup because the call does not wait on an evaluation.
 Payload end is not EOF; the R console callback reads through one newline or its supplied buffer, and unread bytes may satisfy later console or direct reads, including in a later evaluation.
 An `input_requested` frame is provisional for up to 10 milliseconds; a matching `input_received` after a successful console read suppresses `[input]`, while an unmatched request returns `[input]` after that grace or at the MCP deadline, whichever comes first.
 The receipt describes that runtime read, not a submitted payload or byte count, and direct fd-0 reads emit neither frame.
 New code is rejected until the running evaluation's result has been collected.
-On macOS, the first evaluation lazily starts the built-in R worker under the same sandbox policy as the `sandbox` command.
+On macOS, the first nonempty stdin submission or evaluation lazily starts the built-in R worker under the same sandbox policy as the `sandbox` command.
 The worker embeds R through `libr` and `harp`, retains global state, and feeds each complete cell through R's DLL REPL iterator.
 R parses and evaluates its expressions sequentially, captures console output, prints visible values, and performs native top-level bookkeeping.
 Cell EOF while R requires continuation input is an error; earlier complete expressions from that cell remain applied.
@@ -53,7 +54,7 @@ The session model, Python and SQL runtimes, sidecar API, viewer, environment man
 MCP Console is intended to become a persistent, sandboxed R, Python, and DuckDB SQL console exposed through MCP.
 The planned public MCP surface has two tools:
 
-- `send` evaluates complete R, Python, or SQL cells, supplies interactive input to an active evaluation, and polls for output.
+- `send` evaluates complete R, Python, or SQL cells, writes to the session's stdin stream, and polls for output.
 - `session` manages session requirements and lifecycle operations.
 
 The MCP initialization identity remains `mcp-console`.

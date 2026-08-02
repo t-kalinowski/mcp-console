@@ -25,9 +25,9 @@ struct ConsoleServer {
 struct SendArguments {
     /// Complete multiline R code evaluated in persistent state. Omit to write stdin or poll.
     r: Option<String>,
-    /// Exact UTF-8 text queued to active worker fd 0 without adding a newline.
+    /// Exact UTF-8 text queued to worker fd 0 without adding a newline.
     stdin: Option<String>,
-    /// Maximum time this call waits. It does not limit or stop the computation.
+    /// Maximum time this call waits for an evaluation. It does not limit or stop the computation.
     #[serde(default = "default_timeout_ms")]
     timeout_ms: u64,
 }

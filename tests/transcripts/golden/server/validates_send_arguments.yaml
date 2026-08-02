@@ -21,14 +21,4 @@ result:
     - type: text
       text: "[idle]"
   isError: false
----
-id: 5
-send:
-  stdin: |
-    orphaned
-result:
-  content:
-    - type: text
-      text: stdin is accepted only while an R cell is active
-  isError: true
 ...

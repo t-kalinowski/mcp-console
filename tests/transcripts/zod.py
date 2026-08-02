@@ -46,6 +46,26 @@ def test_times_out_and_polls_running_evaluation(binary: Path) -> Transcript:
     return client.finish()
 
 
+def test_accepts_idle_stdin(binary: Path) -> Transcript:
+    zod = Path(__file__).resolve().parents[1] / "fixtures" / "zod"
+    client = McpClient(
+        binary,
+        ("serve", "--worker", str(zod)),
+    )
+    client.initialize_and_list_tools()
+
+    client.call_tool("send", stdin="cold\n")
+    assert last_tool_text(client) == "[idle]"
+    client.call_tool("send", r="input without request")
+    assert last_tool_text(client) == "zod stdin: cold\n"
+
+    client.call_tool("send", stdin="idle\n")
+    assert last_tool_text(client) == "[idle]"
+    client.call_tool("send", r="input without request")
+    assert last_tool_text(client) == "zod stdin: idle\n"
+    return client.finish()
+
+
 def test_routes_combined_and_followup_stdin(binary: Path) -> Transcript:
     zod = Path(__file__).resolve().parents[1] / "fixtures" / "zod"
     client = McpClient(

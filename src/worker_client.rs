@@ -24,16 +24,11 @@ struct Evaluation {
 
 struct EvaluationState {
     result: Option<Result<String, String>>,
-    input_request: Option<InputBoundary>,
+    output: String,
+    input_report_at: Option<Instant>,
     #[cfg(target_os = "macos")]
     stdin: Option<platform::StdinSender>,
     pending_stdin: Vec<u8>,
-}
-
-struct InputBoundary {
-    output: String,
-    delivered: bool,
-    report_at: Instant,
 }
 
 enum EvaluationWait {
@@ -89,20 +84,21 @@ impl Client {
         stdin: Option<String>,
         timeout: Duration,
     ) -> Result<String, String> {
-        let evaluation = match (r, stdin) {
-            (Some(r), stdin) => self.start_evaluation(r, stdin)?,
-            (None, Some(stdin)) => match self.current_evaluation()? {
+        let evaluation = match r {
+            Some(r) => self.start_evaluation(r, stdin)?,
+            None => match self.current_evaluation()? {
                 Some(evaluation) => {
-                    evaluation.submit_stdin(stdin)?;
+                    if let Some(stdin) = stdin {
+                        evaluation.submit_stdin(stdin)?;
+                    }
                     evaluation
                 }
                 None => {
-                    return Err("stdin is accepted only while an R cell is active".to_string());
+                    if let Some(stdin) = stdin {
+                        self.write_idle_stdin(stdin).await?;
+                    }
+                    return Ok("[idle]".to_string());
                 }
-            },
-            (None, None) => match self.current_evaluation()? {
-                Some(evaluation) => evaluation,
-                None => return Ok("[idle]".to_string()),
             },
         };
 
@@ -128,7 +124,8 @@ impl Client {
         let evaluation = Arc::new(Evaluation {
             state: Mutex::new(EvaluationState {
                 result: None,
-                input_request: None,
+                output: String::new(),
+                input_report_at: None,
                 #[cfg(target_os = "macos")]
                 stdin: None,
                 pending_stdin: Vec::new(),
@@ -176,6 +173,20 @@ impl Client {
             .map_err(|_| "worker evaluation lock poisoned".to_string())
     }
 
+    async fn write_idle_stdin(&self, stdin: String) -> Result<(), String> {
+        if stdin.is_empty() {
+            return Ok(());
+        }
+        let client = self.clone();
+        tokio::task::spawn_blocking(move || client.write_idle_stdin_blocking(stdin))
+            .await
+            .map_err(|error| format!("worker stdin task failed: {error}"))?
+    }
+
+    fn write_idle_stdin_blocking(&self, stdin: String) -> Result<(), String> {
+        self.with_worker(|worker| worker.write_stdin(stdin))
+    }
+
     fn clear_evaluation(&self, completed: &Arc<Evaluation>) -> Result<(), String> {
         let mut active = self
             .0
@@ -191,7 +202,14 @@ impl Client {
         Ok(())
     }
 
-    fn evaluate_blocking(&self, r: String, evaluation: &Evaluation) -> Result<String, String> {
+    fn evaluate_blocking(&self, r: String, evaluation: &Evaluation) -> Result<(), String> {
+        self.with_worker(|worker| worker.evaluate(r, evaluation))
+    }
+
+    fn with_worker<T>(
+        &self,
+        operation: impl FnOnce(&mut platform::Worker) -> Result<T, String>,
+    ) -> Result<T, String> {
         if self.shutdown_requested()? {
             return Err("worker is shutting down".to_string());
         }
@@ -212,10 +230,7 @@ impl Client {
                 |stop_handle| self.register_stop_handle(stop_handle),
             )?);
         }
-        let result = worker
-            .as_mut()
-            .expect("worker should be running")
-            .evaluate(r, evaluation);
+        let result = operation(worker.as_mut().expect("worker should be running"));
         if result.is_err() {
             *worker = None;
         }
@@ -285,17 +300,12 @@ impl Evaluation {
             .state
             .lock()
             .map_err(|_| "worker evaluation state lock poisoned".to_string())?;
-        if state.result.is_some() {
-            return Err(
-                "the R cell has completed; poll its result before sending stdin".to_string(),
-            );
-        }
         if stdin.is_empty() {
             return Ok(());
         }
 
-        if let Some(request) = state.input_request.as_mut() {
-            request.report_at = Instant::now() + INPUT_REQUEST_GRACE;
+        if let Some(report_at) = state.input_report_at.as_mut() {
+            *report_at = Instant::now() + INPUT_REQUEST_GRACE;
         }
         let bytes = stdin.into_bytes();
         #[cfg(target_os = "macos")]
@@ -324,55 +334,70 @@ impl Evaluation {
     }
 
     #[cfg(target_os = "macos")]
-    fn input_requested(&self, output: &mut String, prompt: String) -> Result<(), String> {
+    fn output(&self, output: String) -> Result<(), String> {
         let mut state = self
             .state
             .lock()
             .map_err(|_| "worker evaluation state lock poisoned".to_string())?;
-        output.push_str(prompt.trim_end());
-        let boundary = InputBoundary {
-            output: std::mem::take(output),
-            delivered: false,
-            report_at: Instant::now() + INPUT_REQUEST_GRACE,
-        };
-        if state.input_request.is_some() {
+        state.output.push_str(&output);
+        Ok(())
+    }
+
+    #[cfg(target_os = "macos")]
+    fn input_requested(&self, prompt: String) -> Result<(), String> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| "worker evaluation state lock poisoned".to_string())?;
+        if state.input_report_at.is_some() {
             return Err("worker requested new input before receiving prior input".to_string());
         }
-        state.input_request = Some(boundary);
+        state.output.push_str(prompt.trim_end());
+        append_newline(&mut state.output);
+        state.input_report_at = Some(Instant::now() + INPUT_REQUEST_GRACE);
         self.changed.notify_one();
         Ok(())
     }
 
     #[cfg(target_os = "macos")]
-    fn input_received(&self, output: &mut String) -> Result<(), String> {
+    fn input_received(&self) -> Result<(), String> {
         let mut state = self
             .state
             .lock()
             .map_err(|_| "worker evaluation state lock poisoned".to_string())?;
-        let request = state
-            .input_request
+        state
+            .input_report_at
             .take()
             .ok_or_else(|| "worker reported received input without requesting it".to_string())?;
-        if !request.delivered {
-            let mut combined = request.output;
-            append_newline(&mut combined);
-            combined.push_str(output);
-            *output = combined;
-        }
         self.changed.notify_one();
         Ok(())
     }
 
-    fn complete(&self, mut result: Result<String, String>) {
+    #[cfg(target_os = "macos")]
+    fn input_complete(&self) -> Result<(), String> {
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| "worker evaluation state lock poisoned".to_string())?;
+        if state.input_report_at.is_some() {
+            return Err("worker completed with an outstanding input request".to_string());
+        }
+        Ok(())
+    }
+
+    fn complete(&self, result: Result<(), String>) {
         let Ok(mut state) = self.state.lock() else {
             return;
         };
-        state.input_request = None;
-        if let Ok(output) = &mut result
-            && output.is_empty()
-        {
-            output.push_str("[done]");
-        }
+        state.input_report_at = None;
+        let result = result.map(|()| {
+            let output = std::mem::take(&mut state.output);
+            if output.is_empty() {
+                "[done]".to_string()
+            } else {
+                output
+            }
+        });
         state.result = Some(result);
         self.changed.notify_one();
     }
@@ -417,26 +442,20 @@ impl Evaluation {
         if let Some(result) = state.result.take() {
             return Ok(EvaluationStatus::Report(EvaluationWait::Completed(result)));
         }
-        let Some(boundary) = state.input_request.as_mut() else {
+        let Some(report_at) = state.input_report_at else {
             return if at_deadline {
                 Ok(EvaluationStatus::Report(EvaluationWait::Running))
             } else {
                 Ok(EvaluationStatus::Waiting)
             };
         };
-        let grace = boundary.report_at.saturating_duration_since(Instant::now());
+        let grace = report_at.saturating_duration_since(Instant::now());
         if !at_deadline && !grace.is_zero() {
             return Ok(EvaluationStatus::Grace(grace));
         }
-        let output = if boundary.delivered {
-            "[input]".to_string()
-        } else {
-            boundary.delivered = true;
-            let mut output = boundary.output.clone();
-            append_newline(&mut output);
-            output.push_str("[input]");
-            output
-        };
+        let mut output = std::mem::take(&mut state.output);
+        append_newline(&mut output);
+        output.push_str("[input]");
         Ok(EvaluationStatus::Report(EvaluationWait::InputRequested(
             output,
         )))
@@ -530,41 +549,24 @@ mod platform {
             &mut self,
             r: String,
             evaluation: &super::Evaluation,
-        ) -> Result<String, String> {
+        ) -> Result<(), String> {
             self.stop_handle
                 .writer
                 .send(&ServerMessage::Evaluate { r })
                 .map_err(|error| format!("worker sideband write failed: {error}"))?;
             evaluation.attach_writer(self.stop_handle.stdin.clone())?;
 
-            let mut output = String::new();
-            let mut input_is_requested = false;
             loop {
                 match self.receive()? {
-                    WorkerMessage::Output { data } => output.push_str(&data),
+                    WorkerMessage::Output { data } => evaluation.output(data)?,
                     WorkerMessage::InputRequested { prompt } => {
-                        if input_is_requested {
-                            return Err("worker requested new input before receiving prior input"
-                                .to_string());
-                        }
-                        input_is_requested = true;
-                        evaluation.input_requested(&mut output, prompt)?;
+                        evaluation.input_requested(prompt)?;
                     }
-                    WorkerMessage::InputReceived => {
-                        if !input_is_requested {
-                            return Err(
-                                "worker reported received input without requesting it".to_string()
-                            );
-                        }
-                        input_is_requested = false;
-                        evaluation.input_received(&mut output)?;
+                    WorkerMessage::InputReceived => evaluation.input_received()?,
+                    WorkerMessage::Completed => {
+                        evaluation.input_complete()?;
+                        return Ok(());
                     }
-                    WorkerMessage::Completed if input_is_requested => {
-                        return Err(
-                            "worker completed with an outstanding input request".to_string()
-                        );
-                    }
-                    WorkerMessage::Completed => return Ok(output),
                     WorkerMessage::Ready => {
                         return Err("worker sent an unexpected ready message".to_string());
                     }
@@ -576,6 +578,10 @@ mod platform {
             self.reader
                 .receive()
                 .map_err(|error| format!("worker sideband read failed: {error}"))
+        }
+
+        pub(super) fn write_stdin(&self, stdin: String) -> Result<(), String> {
+            self.stop_handle.stdin.send(stdin.into_bytes())
         }
     }
 
@@ -673,7 +679,11 @@ mod platform {
             &mut self,
             _r: String,
             _evaluation: &super::Evaluation,
-        ) -> Result<String, String> {
+        ) -> Result<(), String> {
+            unreachable!("unsupported workers cannot start")
+        }
+
+        pub(super) fn write_stdin(&self, _stdin: String) -> Result<(), String> {
             unreachable!("unsupported workers cannot start")
         }
     }

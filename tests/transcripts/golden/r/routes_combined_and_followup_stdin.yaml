@@ -65,7 +65,7 @@ result:
 id: 7
 send:
   stdin: bl
-  timeout_ms: 0
+  timeout_ms: 50
 result:
   content:
     - type: text

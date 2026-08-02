@@ -7,7 +7,7 @@ The message enums in `src/worker_protocol.rs`, the framing in `src/sideband.rs`,
 ## Scope
 
 The current implementation provides one worker for one server process.
-It evaluates one `r` cell at a time and accepts exact `stdin` text while that evaluation remains active.
+It evaluates one `r` cell at a time and accepts exact `stdin` text whether the worker is evaluating or idle.
 Evaluations run sequentially.
 
 The protocol does not yet include interrupts, request IDs, structured errors, sessions, capabilities, or protocol version negotiation.
@@ -17,7 +17,7 @@ The hidden `serve --worker PATH` option replaces it with a development worker.
 
 ## Launch contract
 
-The worker starts lazily on the first `send` call that supplies `r`.
+The worker starts lazily on the first `send` call that supplies `r` or nonempty `stdin`.
 On macOS, the server uses the same `SandboxedCommand` builder as the `sandbox` command.
 For `--worker PATH`, `PATH` is one program name or path, with no arguments or shell parsing, producing a launch equivalent to:
 
@@ -59,9 +59,8 @@ server writer  ──>  worker reader
 server reader  <──  worker writer
 ```
 
-The server also owns an independent FIFO writer connected to worker fd
-0. Each accepted `stdin` string is UTF-8 encoded and queued to that
-writer without inspection or framing.
+The server also owns an independent FIFO writer connected to the worker's standard input (fd 0).
+Each accepted `stdin` string is UTF-8 encoded and queued to that writer without inspection or framing.
 There is no sideband input frame.
 
 Each frame is one UTF-8 JSON object followed by `\n`.
@@ -120,17 +119,18 @@ New code is rejected while an evaluation or its uncollected result is active.
 
 The optional MCP `timeout_ms` argument defaults to 60,000 milliseconds.
 It bounds how long that `send` call waits for the worker; it is not sent over the sideband and does not bound or stop computation.
-The wait includes lazy worker startup.
+For a call with `r`, the evaluation wait includes lazy worker startup.
 
 An `input_requested` frame remains provisional for 10 milliseconds.
-If `input_received` arrives first, the server restores the retained prompt output for an unexposed request and continues waiting for another request, completion, or the MCP deadline.
+If `input_received` arrives first, the server retains the unexposed prompt output and continues waiting for another request, completion, or the MCP deadline.
 If the grace expires first, the call returns output collected so far, the prompt, and `[input]` before that deadline.
 Supplying nonempty stdin for an outstanding request starts a fresh 10-millisecond grace window; the MCP deadline reports a still-outstanding request immediately, even inside that window.
 A pending input request wins over `[running]` at the deadline.
 A later `send` call without `r` polls that evaluation with its own `timeout_ms`; it may include `stdin` to queue bytes before waiting.
 Completion returns output not already delivered at an `[input]` boundary, or `[done]` when it produced none.
 If the poll wait expires first, it returns `[running]` again.
-A call without `r` or `stdin` while no evaluation is active returns `[idle]`; stdin alone while idle is an error.
+A call without `r` or `stdin` while no evaluation is active returns `[idle]`.
+A stdin-only call in that state queues the bytes and also returns `[idle]`.
 
 Except for prompt boundaries, this slice does not expose partial output while an evaluation is running.
 Output cursors and general incremental polling remain unimplemented.
@@ -154,6 +154,7 @@ worker -> server  {"kind":"completed"}
 An MCP call may contain both `r` and `stdin`.
 The server flushes `evaluate` first, then attaches the evaluation to the worker's stdin writer and drains any queued input in submission order.
 A later stdin-only call uses the same route without acquiring the evaluation's worker lock, including after an earlier call returned `[running]`.
+When no evaluation is tracked, nonempty stdin lazily starts the worker if necessary and enters the same worker-owned FIFO; empty stdin is a no-op.
 
 The server writes each string blindly.
 It adds no newline, does not split or validate lines, and imposes no stdin size limit.
@@ -167,8 +168,8 @@ If no receipt arrives during the grace window, the request remains exposed as `[
 Empty stdin writes no bytes and leaves an exposed request immediately reportable.
 Code that reads fd 0 directly can consume bundled input or input sent after a polling timeout without sending either input frame.
 
-Acceptance means the bytes were queued, not that the current evaluation consumed them.
-The server does not retract or drain bytes after `completed`; data already in the pipe or retained by a runtime reader may satisfy later reads or later evaluations.
+Acceptance means the bytes were queued, not that an evaluation consumed them.
+The server does not retract or drain bytes after `completed`; data already in the pipe or retained by a runtime reader may satisfy an idle background consumer, later reads, or later evaluations.
 Worker shutdown or failure discards whatever remains.
 New R code is rejected while an evaluation or its uncollected result is active.
 
@@ -177,6 +178,7 @@ New R code is rejected while an evaluation or its uncollected result is active.
 | From | Frame | To |
 | --- | --- | --- |
 | starting | worker → server `ready` | idle |
+| absent or idle | MCP stdin submission | idle |
 | idle | server → worker `evaluate` | evaluating |
 | evaluating | worker → server `output` | evaluating |
 | evaluating | worker → server `input_requested` | evaluating, input provisional |
@@ -236,6 +238,7 @@ Parse, evaluation, and print errors are returned as console text followed by `co
 
 The current implementation has no worker startup or execution timeout, frame-size limit, stdin queue limit, or accumulated-output limit.
 `timeout_ms` limits one MCP wait without terminating the worker or a blocked stdin write; only shutdown has a process deadline.
+An idle stdin-only call does not wait on an evaluation, so `timeout_ms` does not bound lazy worker startup for that call.
 The 10-millisecond input grace controls when a provisional request becomes visible and does not limit evaluation or stdin reads.
 It is a latency heuristic: scheduling can delay a receipt past the grace and expose an extra `[input]` boundary even when queued bytes subsequently satisfy the read.
 
@@ -260,7 +263,7 @@ When `r` is `violate protocol`, it sends an unexpected second `ready` message.
 When `r` is `exit unexpectedly`, it exits with status 86 without replying.
 When `r` is `request input`, it sends `input_requested`, calls Python `input()` to consume one line from fd 0, and sends `input_received` after that call returns.
 The `request input after timeout` mode gates that request until an earlier MCP wait expires, then covers retention of output attached to a still-unexposed request.
-The `input without request` and `input length without request` modes call `input()` without first sending a frame, covering proactive fd-0 delivery.
+The `input without request` and `input length without request` modes call `input()` without first sending a frame, covering proactive fd-0 delivery, including input queued while Zod is idle.
 The `input without request then request input` mode performs one direct read before a reported request/receipt pair, covering the distinction between direct fd-0 reads and callback-style input state.
 Zod echoes the input or its byte length and completes.
 Its acceptance supplies newline-terminated text because Python `input()` waits for a complete line; partial-input boundaries are covered by the built-in R worker.
