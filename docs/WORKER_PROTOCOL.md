@@ -91,9 +91,9 @@ One evaluation has this shape:
 ```text
 worker -> server  {"kind":"ready"}
 
-server -> worker  {"kind":"evaluate","r":"hello"}
+server -> worker  {"kind":"evaluate","r":"echo"}
 worker -> server  {"kind":"output","data":"zod: "}
-worker -> server  {"kind":"output","data":"hello\n"}
+worker -> server  {"kind":"output","data":"echo\n"}
 worker -> server  {"kind":"completed"}
 ```
 
@@ -118,7 +118,6 @@ A later `send` call without `r` polls that evaluation with its own `timeout_ms`.
 If the evaluation completes, the poll returns all output accumulated since it started, or `[done]` when it produced none.
 If the poll wait expires first, it returns `[running]` again.
 A call without `r` while no evaluation is active returns `[idle]`.
-Only one `send` call may wait on or poll the active evaluation at a time; an overlapping call is a tool error.
 
 This slice does not expose partial output while an evaluation is running.
 Output cursors and incremental polling remain unimplemented.
@@ -183,20 +182,22 @@ The current implementation has no worker startup or execution timeout, frame-siz
 It does not capture worker standard output or standard error.
 It does not support arbitrary binary output.
 Worker failures are reported as plain-text MCP tool errors, not structured worker events.
+Concurrent MCP `send` calls are outside the current contract.
 The current sandbox child does not yet supervise descendants after its direct process exits, or descendants that leave its process group.
 
 ## Zod fixture behavior
 
 Zod implements the protocol as an executable uv script requiring Python 3.11 or newer.
-For a normal `evaluate`, it sends two output chunks followed by `completed`:
+When `r` is exactly `echo`, it sends two output chunks followed by `completed`:
 
 ```text
-zod: <r>\n
+zod: echo\n
 ```
 
 When `r` is exactly `stall`, Zod creates a checkpoint in its private temporary directory and sleeps forever.
-When `r` is `complete after timeout`, it pauses briefly before returning its normal output.
+When `r` is `complete after timeout`, it pauses briefly before returning `zod: complete after timeout\n`.
 When `r` is `violate protocol`, it sends an unexpected second `ready` message.
 When `r` is `exit unexpectedly`, it exits with status 86 without replying.
 Other fixture-only modes verify that the sandbox denies host writes and that a blocked sideband writer cannot delay shutdown.
+Other commands fail instead of being echoed implicitly.
 Those behaviors are test fixtures, not part of the worker protocol.

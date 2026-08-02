@@ -3,12 +3,12 @@
 ---
 id: 3
 send:
-  r: warm worker
+  r: echo
 result:
   content:
     - type: text
       text: |
-        zod: warm worker
+        zod: echo
   isError: false
 ---
 id: 4
@@ -33,20 +33,11 @@ result:
 ---
 id: 6
 send:
-  timeout_ms: 3000
-result:
-  content:
-    - type: text
-      text: another send call is already waiting for this evaluation
-  isError: true
----
-id: 7
-send:
-  r: after timeout
+  r: echo
 result:
   content:
     - type: text
       text: |
-        zod: after timeout
+        zod: echo
   isError: false
 ...

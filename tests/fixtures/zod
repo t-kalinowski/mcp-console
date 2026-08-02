@@ -62,9 +62,6 @@ def main() -> None:
         if message["r"] == "exit unexpectedly":
             os._exit(86)
 
-        if message["r"] == "complete after timeout":
-            time.sleep(0.25)
-
         if message["r"] == "probe sandbox":
             try:
                 Path(os.environ["ZOD_SANDBOX_PROBE_PATH"]).write_text(
@@ -78,6 +75,11 @@ def main() -> None:
             send(writer, {"kind": "output", "data": output})
             send(writer, {"kind": "completed"})
             continue
+
+        if message["r"] == "complete after timeout":
+            time.sleep(0.25)
+        elif message["r"] != "echo":
+            raise AssertionError(f"unsupported Zod command: {message['r']}")
 
         for output in ("zod: ", f"{message['r']}\n"):
             send(

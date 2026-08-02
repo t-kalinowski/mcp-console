@@ -35,10 +35,13 @@ result:
             description: >-
               Complete multiline R code evaluated in persistent state. Omit to poll a
               running cell.
-            type: string
+            type:
+              - string
+              - "null"
           timeout_ms:
             description: Maximum time this call waits. It does not limit or stop the computation.
             type: integer
-            default: 60000
+            format: uint64
             minimum: 0
+            default: 60000
 ...

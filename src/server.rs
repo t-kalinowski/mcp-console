@@ -24,42 +24,14 @@ struct ConsoleServer {
 #[serde(deny_unknown_fields)]
 struct SendArguments {
     /// Complete multiline R code evaluated in persistent state. Omit to poll a running cell.
-    #[schemars(transform = disallow_null)]
-    #[serde(default, deserialize_with = "deserialize_r")]
     r: Option<String>,
     /// Maximum time this call waits. It does not limit or stop the computation.
-    #[schemars(transform = remove_format)]
     #[serde(default = "default_timeout_ms")]
     timeout_ms: u64,
 }
 
 fn default_timeout_ms() -> u64 {
     DEFAULT_TIMEOUT_MS
-}
-
-fn deserialize_r<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    String::deserialize(deserializer).map(Some)
-}
-
-fn remove_format(schema: &mut schemars::Schema) {
-    schema.remove("format");
-}
-
-fn disallow_null(schema: &mut schemars::Schema) {
-    let object = schema.ensure_object();
-    object.remove("default");
-    let Some(serde_json::Value::Array(types)) = object.get_mut("type") else {
-        return;
-    };
-
-    types.retain(|value| value != "null");
-    if types.len() == 1 {
-        let only_type = types.pop().expect("one type should remain");
-        object.insert("type".to_owned(), only_type);
-    }
 }
 
 impl ConsoleServer {

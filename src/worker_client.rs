@@ -1,6 +1,5 @@
 use std::ffi::OsString;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -19,12 +18,6 @@ struct ClientInner {
 struct Evaluation {
     result: Mutex<Option<Result<String, String>>>,
     completed: tokio::sync::Notify,
-    waiting: AtomicBool,
-}
-
-struct EvaluationWaiter<'a> {
-    waiting: &'a AtomicBool,
-    release: bool,
 }
 
 enum EvaluationWait {
@@ -97,7 +90,6 @@ impl Client {
         let evaluation = Arc::new(Evaluation {
             result: Mutex::new(None),
             completed: tokio::sync::Notify::new(),
-            waiting: AtomicBool::new(false),
         });
         let mut active = self
             .0
@@ -246,51 +238,22 @@ impl Evaluation {
     }
 
     async fn wait(&self, timeout: Duration) -> Result<EvaluationWait, String> {
-        let waiter = self.claim_waiter()?;
-        if let Some(result) = self.result()? {
-            waiter.keep_claimed();
+        if let Some(result) = self.take_result()? {
             return Ok(EvaluationWait::Completed(result));
         }
 
         let _ = tokio::time::timeout(timeout, self.completed.notified()).await;
-        match self.result()? {
-            Some(result) => {
-                waiter.keep_claimed();
-                Ok(EvaluationWait::Completed(result))
-            }
+        match self.take_result()? {
+            Some(result) => Ok(EvaluationWait::Completed(result)),
             None => Ok(EvaluationWait::Running),
         }
     }
 
-    fn claim_waiter(&self) -> Result<EvaluationWaiter<'_>, String> {
-        self.waiting
-            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-            .map_err(|_| "another send call is already waiting for this evaluation".to_string())?;
-        Ok(EvaluationWaiter {
-            waiting: &self.waiting,
-            release: true,
-        })
-    }
-
-    fn result(&self) -> Result<Option<Result<String, String>>, String> {
+    fn take_result(&self) -> Result<Option<Result<String, String>>, String> {
         self.result
             .lock()
-            .map(|result| result.clone())
+            .map(|mut result| result.take())
             .map_err(|_| "worker evaluation result lock poisoned".to_string())
-    }
-}
-
-impl EvaluationWaiter<'_> {
-    fn keep_claimed(mut self) {
-        self.release = false;
-    }
-}
-
-impl Drop for EvaluationWaiter<'_> {
-    fn drop(&mut self) {
-        if self.release {
-            self.waiting.store(false, Ordering::Release);
-        }
     }
 }
 

@@ -112,22 +112,12 @@ class McpClient:
         self.notify("notifications/initialized")
         self.request("tools/list")
 
-    def start_tool_call(self, name: str, **arguments: Any) -> TranscriptEntry:
-        message = {
-            "jsonrpc": "2.0",
-            "id": self.next_request_id,
-            "method": "tools/call",
-            "params": {
-                "name": name,
-                "arguments": arguments,
-            },
-        }
-        self.next_request_id += 1
-        return self.send(message)
-
     def call_tool(self, name: str, **arguments: Any) -> None:
-        entry = self.start_tool_call(name, **arguments)
-        self.receive(entry)
+        self.request(
+            "tools/call",
+            name=name,
+            arguments=arguments,
+        )
 
     def finish(self) -> Transcript:
         self.stdin.close()

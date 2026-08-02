@@ -20,7 +20,7 @@ def test_routes_send_over_sideband(binary: Path) -> Transcript:
         ("serve", "--worker", str(zod)),
     )
     client.initialize_and_list_tools()
-    client.call_tool("send", r="hello")
+    client.call_tool("send", r="echo")
     return client.finish()
 
 
@@ -31,7 +31,7 @@ def test_times_out_and_polls_running_evaluation(binary: Path) -> Transcript:
         ("serve", "--worker", str(zod)),
     )
     client.initialize_and_list_tools()
-    client.call_tool("send", r="warm worker")
+    client.call_tool("send", r="echo")
     client.call_tool(
         "send",
         r="complete after timeout",
@@ -39,16 +39,10 @@ def test_times_out_and_polls_running_evaluation(binary: Path) -> Transcript:
     )
     output = client.transcript[-1]["result"]["content"][0]["text"]
     assert output == "[running]", output
-    poll = client.start_tool_call("send", timeout_ms=3_000)
-    overlapping_poll = client.start_tool_call("send", timeout_ms=3_000)
-    client.receive(overlapping_poll)
-    output = overlapping_poll["result"]["content"][0]["text"]
-    assert output == "another send call is already waiting for this evaluation", output
-    assert overlapping_poll["result"]["isError"] is True
-    client.receive(poll)
-    output = poll["result"]["content"][0]["text"]
+    client.call_tool("send", timeout_ms=3_000)
+    output = client.transcript[-1]["result"]["content"][0]["text"]
     assert output == "zod: complete after timeout\n", output
-    client.call_tool("send", r="after timeout")
+    client.call_tool("send", r="echo")
     return client.finish()
 
 
@@ -95,7 +89,7 @@ def test_restarts_after_unexpected_sideband_message(binary: Path) -> Transcript:
                     "method": "tools/call",
                     "params": {
                         "name": "send",
-                        "arguments": {"r": "hello"},
+                        "arguments": {"r": "echo"},
                     },
                 }
             )
@@ -118,7 +112,7 @@ def test_restarts_after_worker_exit(binary: Path) -> Transcript:
     client.initialize_and_list_tools()
     client.call_tool("send", r="exit unexpectedly")
     assert client.transcript[-1]["result"]["isError"] is True
-    client.call_tool("send", r="hello")
+    client.call_tool("send", r="echo")
     return client.finish()
 
 
