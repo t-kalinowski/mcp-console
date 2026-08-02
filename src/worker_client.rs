@@ -326,6 +326,7 @@ impl Client {
 }
 
 impl CapturedOutput {
+    #[cfg(target_os = "macos")]
     fn push(&self, text: &str) {
         self.0
             .lock()
