@@ -39,6 +39,26 @@ def test_evaluates_a_complete_cell(binary: Path) -> Transcript:
     return client.finish()
 
 
+def test_times_out_and_polls_running_evaluation(binary: Path) -> Transcript:
+    client = McpClient(binary, ("serve",))
+    client.initialize_and_list_tools()
+    client.call_tool("send", r="invisible(NULL)")
+    # fmt: r
+    r = dedent(r"""
+        Sys.sleep(0.25)
+        answer <- 42
+        answer
+        """).strip()
+    client.call_tool("send", r=r, timeout_ms=10)
+    output = client.transcript[-1]["output"]["result"]["content"][0]["text"]
+    assert output == "[running]", output
+    client.call_tool("send", timeout_ms=3_000)
+    output = client.transcript[-1]["output"]["result"]["content"][0]["text"]
+    assert output == "[1] 42\n", output
+    client.call_tool("send", r="answer + 1")
+    return client.finish()
+
+
 def test_applies_complete_expressions_before_incomplete_source(
     binary: Path,
 ) -> Transcript:

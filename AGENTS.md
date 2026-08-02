@@ -19,8 +19,12 @@ mcp-console sandbox [--] COMMAND [ARG]...
 The binary requires a subcommand.
 The `serve` command runs an MCP server over stdio.
 Clap provides command help, version output, argument parsing, and usage errors.
-The server registers only a `send` tool, which accepts one complete `r` string.
-On macOS, its first call lazily starts the built-in R worker under the same sandbox policy as the `sandbox` command.
+The server registers only a `send` tool.
+Supplying `r` starts one complete cell and waits for up to `timeout_ms`, which defaults to 60 seconds.
+If that wait expires, `send` returns `[running]` without stopping the computation; a later call without `r` polls it, and a poll while idle returns `[idle]`.
+Only one call may wait on or poll the active evaluation at a time.
+New code is rejected until the running evaluation's result has been collected.
+On macOS, the first evaluation lazily starts the built-in R worker under the same sandbox policy as the `sandbox` command.
 The worker embeds R through `libr` and `harp`, retains global state, and feeds each complete cell through R's DLL REPL iterator.
 R parses and evaluates its expressions sequentially, captures console output, prints visible values, and performs native top-level bookkeeping.
 Cell EOF while R requires continuation input is an error; earlier complete expressions from that cell remain applied.
@@ -28,7 +32,7 @@ The hidden `worker` command takes ownership of the sideband, discovers `R_HOME` 
 It does not self-execute or set a dynamic-loader environment variable.
 The worker command runs synchronously on the process main thread; only `serve` creates a Tokio runtime.
 The hidden development option `serve --worker PATH` replaces the built-in worker with an executable that implements the same ready/evaluate/output/completed/shutdown protocol.
-The Python fixture `tests/fixtures/zod` provides deterministic acceptance coverage for that boundary.
+The Python fixture `tests/fixtures/zod` provides deterministic acceptance coverage for that boundary and for server-owned timeout and polling mechanics.
 An infrastructure or protocol failure is returned as a tool error, force-stops and discards that worker, and lets the next evaluation start a fresh worker.
 When MCP input closes, the server starts a one-second deadline and attempts graceful sideband shutdown without delaying it.
 If the direct sandbox process is still running when time expires, the sandbox boundary force-stops its process group and reaps that direct process.

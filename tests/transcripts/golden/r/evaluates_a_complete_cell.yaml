@@ -27,17 +27,22 @@ output:
   result:
     tools:
       - name: send
-        description: Evaluate one complete R code cell in persistent state.
+        description: Evaluate one complete R code cell or poll its running evaluation.
         inputSchema:
           $schema: https://json-schema.org/draft/2020-12/schema
-          required:
-            - r
+          additionalProperties: false
           type: object
           properties:
             r:
-              description: Complete multiline R code evaluated in persistent state.
+              description: >-
+                Complete multiline R code evaluated in persistent state. Omit to poll a
+                running cell.
               type: string
-          additionalProperties: false
+            timeout_ms:
+              description: Maximum time this call waits. It does not limit or stop the computation.
+              type: integer
+              default: 60000
+              minimum: 0
 ---
 id: 3
 input:
@@ -89,7 +94,7 @@ input:
   params:
     name: send
     arguments:
-      r: "stop(\"boom\", call. = FALSE)"
+      r: stop("boom", call. = FALSE)
 output:
   result:
     content:

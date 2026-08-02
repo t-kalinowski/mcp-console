@@ -62,6 +62,9 @@ def main() -> None:
         if message["r"] == "exit unexpectedly":
             os._exit(86)
 
+        if message["r"] == "complete after timeout":
+            time.sleep(0.25)
+
         if message["r"] == "probe sandbox":
             try:
                 Path(os.environ["ZOD_SANDBOX_PROBE_PATH"]).write_text(

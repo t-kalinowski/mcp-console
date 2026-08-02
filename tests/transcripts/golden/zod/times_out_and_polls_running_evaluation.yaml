@@ -50,28 +50,13 @@ input:
   params:
     name: send
     arguments:
-      r: |-
-        invisible(addTaskCallback(
-          local({
-            first <- TRUE
-            function(expr, ...) {
-              if (first) {
-                first <<- FALSE
-                return(TRUE)
-              }
-              cat(deparse1(expr), "\n", sep = "")
-              FALSE
-            }
-          }),
-          name = "mcp-console-test"
-        ))
-        mcp_console_callback_probe <- 42
+      r: warm worker
 output:
   result:
     content:
       - type: text
         text: |
-          mcp_console_callback_probe <- 42
+          zod: warm worker
     isError: false
 ---
 id: 4
@@ -80,17 +65,56 @@ input:
   params:
     name: send
     arguments:
-      r: |-
-        warning("careful", call. = FALSE)
-        invisible(42)
-        cat("last value: ", identical(base::.Last.value, 42), "\n", sep = "")
+      r: complete after timeout
+      timeout_ms: 10
+output:
+  result:
+    content:
+      - type: text
+        text: "[running]"
+    isError: false
+---
+id: 5
+input:
+  method: tools/call
+  params:
+    name: send
+    arguments:
+      timeout_ms: 3000
 output:
   result:
     content:
       - type: text
         text: |
-          Warning message:
-          careful 
-          last value: TRUE
+          zod: complete after timeout
+    isError: false
+---
+id: 6
+input:
+  method: tools/call
+  params:
+    name: send
+    arguments:
+      timeout_ms: 3000
+output:
+  result:
+    content:
+      - type: text
+        text: another send call is already waiting for this evaluation
+    isError: true
+---
+id: 7
+input:
+  method: tools/call
+  params:
+    name: send
+    arguments:
+      r: after timeout
+output:
+  result:
+    content:
+      - type: text
+        text: |
+          zod: after timeout
     isError: false
 ...

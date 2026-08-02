@@ -50,28 +50,12 @@ input:
   params:
     name: send
     arguments:
-      r: |-
-        invisible(addTaskCallback(
-          local({
-            first <- TRUE
-            function(expr, ...) {
-              if (first) {
-                first <<- FALSE
-                return(TRUE)
-              }
-              cat(deparse1(expr), "\n", sep = "")
-              FALSE
-            }
-          }),
-          name = "mcp-console-test"
-        ))
-        mcp_console_callback_probe <- 42
+      r: invisible(NULL)
 output:
   result:
     content:
       - type: text
-        text: |
-          mcp_console_callback_probe <- 42
+        text: "[done]"
     isError: false
 ---
 id: 4
@@ -81,16 +65,44 @@ input:
     name: send
     arguments:
       r: |-
-        warning("careful", call. = FALSE)
-        invisible(42)
-        cat("last value: ", identical(base::.Last.value, 42), "\n", sep = "")
+        Sys.sleep(0.25)
+        answer <- 42
+        answer
+      timeout_ms: 10
+output:
+  result:
+    content:
+      - type: text
+        text: "[running]"
+    isError: false
+---
+id: 5
+input:
+  method: tools/call
+  params:
+    name: send
+    arguments:
+      timeout_ms: 3000
 output:
   result:
     content:
       - type: text
         text: |
-          Warning message:
-          careful 
-          last value: TRUE
+          [1] 42
+    isError: false
+---
+id: 6
+input:
+  method: tools/call
+  params:
+    name: send
+    arguments:
+      r: answer + 1
+output:
+  result:
+    content:
+      - type: text
+        text: |
+          [1] 43
     isError: false
 ...

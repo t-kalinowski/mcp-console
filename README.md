@@ -21,8 +21,10 @@ mcp-console sandbox -- COMMAND [ARG]...
 `mcp-console` requires a subcommand.
 `mcp-console serve` runs a minimal MCP server over stdio.
 Run `mcp-console --help` or `mcp-console COMMAND --help` for command-line help.
-The server registers one `send` tool that accepts one complete `r` code cell.
-On macOS, the first call lazily starts a sandboxed embedded R worker.
+The server registers one `send` tool.
+Supplying `r` evaluates one complete code cell and waits up to the optional `timeout_ms`, which defaults to 60 seconds.
+When that wait expires, the call returns `[running]` while computation continues; call `send` without `r` to poll for completion.
+On macOS, the first evaluation lazily starts a sandboxed embedded R worker.
 Later calls reuse the same global R state.
 The worker runs each cell through R's native top-level loop, captures R console output, prints each visible value, and maintains `.Last.value`.
 If a cell ends while an expression is incomplete, earlier complete expressions from that cell remain applied.

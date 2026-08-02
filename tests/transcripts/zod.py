@@ -24,6 +24,34 @@ def test_routes_send_over_sideband(binary: Path) -> Transcript:
     return client.finish()
 
 
+def test_times_out_and_polls_running_evaluation(binary: Path) -> Transcript:
+    zod = Path(__file__).resolve().parents[1] / "fixtures" / "zod"
+    client = McpClient(
+        binary,
+        ("serve", "--worker", str(zod)),
+    )
+    client.initialize_and_list_tools()
+    client.call_tool("send", r="warm worker")
+    client.call_tool(
+        "send",
+        r="complete after timeout",
+        timeout_ms=10,
+    )
+    output = client.transcript[-1]["output"]["result"]["content"][0]["text"]
+    assert output == "[running]", output
+    poll = client.start_tool_call("send", timeout_ms=3_000)
+    overlapping_poll = client.start_tool_call("send", timeout_ms=3_000)
+    client.receive(overlapping_poll)
+    output = overlapping_poll["output"]["result"]["content"][0]["text"]
+    assert output == "another send call is already waiting for this evaluation", output
+    assert overlapping_poll["output"]["result"]["isError"] is True
+    client.receive(poll)
+    output = poll["output"]["result"]["content"][0]["text"]
+    assert output == "zod: complete after timeout\n", output
+    client.call_tool("send", r="after timeout")
+    return client.finish()
+
+
 def test_restarts_after_unexpected_sideband_message(binary: Path) -> Transcript:
     zod = Path(__file__).resolve().parents[1] / "fixtures" / "zod"
     with tempfile.TemporaryDirectory() as temporary_directory:

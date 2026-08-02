@@ -17,6 +17,7 @@ def test_initializes_lists_tools_and_calls_send(binary: Path) -> Transcript:
         """).strip(),
         wait_ms=0,
     )
+    client.call_tool("send", r=None)
     return client.finish()
 
 
