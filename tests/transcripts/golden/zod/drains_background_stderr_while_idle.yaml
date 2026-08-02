@@ -1,0 +1,24 @@
+---
+!same-as tests/transcripts/golden/server/initializes_and_lists_tools.yaml
+---
+id: 3
+send:
+  r: start background stderr
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+id: 4
+send:
+  timeout_ms: 0
+result:
+  content:
+    - type: text
+      text: |-
+        zod background stderr
+        <large output>
+        [idle]
+  isError: false
+...

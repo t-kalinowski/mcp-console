@@ -14,8 +14,12 @@ struct ClientInner {
     arguments: Vec<OsString>,
     worker: Mutex<Option<platform::Worker>>,
     evaluation: Mutex<Option<Arc<Evaluation>>>,
+    output: CapturedOutput,
     shutdown_gate: Mutex<ShutdownGate>,
 }
+
+#[derive(Clone, Default)]
+struct CapturedOutput(Arc<Mutex<String>>);
 
 struct Evaluation {
     state: Mutex<EvaluationState>,
@@ -35,6 +39,13 @@ enum EvaluationWait {
     Running,
     InputRequested(String),
     Completed(Result<String, String>),
+}
+
+enum SendResponse {
+    Idle,
+    Running,
+    InputRequested(String),
+    Completed(String),
 }
 
 enum EvaluationStatus {
@@ -73,6 +84,7 @@ impl Client {
             arguments,
             worker: Mutex::new(None),
             evaluation: Mutex::new(None),
+            output: CapturedOutput::default(),
             shutdown_gate: Mutex::new(ShutdownGate::Open { stop_handle: None }),
         }))
     }
@@ -84,6 +96,16 @@ impl Client {
         stdin: Option<String>,
         timeout: Duration,
     ) -> Result<String, String> {
+        let result = self.send_inner(r, stdin, timeout).await;
+        self.attach_output(result)
+    }
+
+    async fn send_inner(
+        &self,
+        r: Option<String>,
+        stdin: Option<String>,
+        timeout: Duration,
+    ) -> Result<SendResponse, String> {
         let evaluation = match r {
             Some(r) => self.start_evaluation(r, stdin)?,
             None => match self.current_evaluation()? {
@@ -97,17 +119,17 @@ impl Client {
                     if let Some(stdin) = stdin {
                         self.write_idle_stdin(stdin).await?;
                     }
-                    return Ok("[idle]".to_string());
+                    return Ok(SendResponse::Idle);
                 }
             },
         };
 
         match evaluation.wait(timeout).await? {
-            EvaluationWait::Running => Ok("[running]".to_string()),
-            EvaluationWait::InputRequested(output) => Ok(output),
+            EvaluationWait::Running => Ok(SendResponse::Running),
+            EvaluationWait::InputRequested(output) => Ok(SendResponse::InputRequested(output)),
             EvaluationWait::Completed(result) => {
                 self.clear_evaluation(&evaluation)?;
-                result
+                result.map(SendResponse::Completed)
             }
         }
     }
@@ -227,6 +249,7 @@ impl Client {
             *worker = Some(platform::Worker::start(
                 &self.0.program,
                 &self.0.arguments,
+                self.0.output.clone(),
                 |stop_handle| self.register_stop_handle(stop_handle),
             )?);
         }
@@ -235,6 +258,15 @@ impl Client {
             *worker = None;
         }
         result
+    }
+
+    fn attach_output(&self, result: Result<SendResponse, String>) -> Result<String, String> {
+        let output = self.0.output.take();
+        match result {
+            Ok(response) => Ok(render_response(output, response)),
+            Err(error) if output.is_empty() => Err(error),
+            Err(error) => Err(attach_error_output(output, error)),
+        }
     }
 
     fn shutdown_requested(&self) -> Result<bool, String> {
@@ -290,6 +322,23 @@ impl Client {
         tokio::task::spawn_blocking(move || stop_handle.shutdown(deadline))
             .await
             .map_err(|error| format!("worker shutdown task failed: {error}"))?
+    }
+}
+
+impl CapturedOutput {
+    fn push(&self, text: &str) {
+        self.0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .push_str(text);
+    }
+
+    fn take(&self) -> String {
+        let mut output = self
+            .0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        std::mem::take(&mut *output)
     }
 }
 
@@ -390,14 +439,7 @@ impl Evaluation {
             return;
         };
         state.input_report_at = None;
-        let result = result.map(|()| {
-            let output = std::mem::take(&mut state.output);
-            if output.is_empty() {
-                "[done]".to_string()
-            } else {
-                output
-            }
-        });
+        let result = result.map(|()| std::mem::take(&mut state.output));
         state.result = Some(result);
         self.changed.notify_one();
     }
@@ -453,9 +495,7 @@ impl Evaluation {
         if !at_deadline && !grace.is_zero() {
             return Ok(EvaluationStatus::Grace(grace));
         }
-        let mut output = std::mem::take(&mut state.output);
-        append_newline(&mut output);
-        output.push_str("[input]");
+        let output = std::mem::take(&mut state.output);
         Ok(EvaluationStatus::Report(EvaluationWait::InputRequested(
             output,
         )))
@@ -468,10 +508,45 @@ fn append_newline(output: &mut String) {
     }
 }
 
+fn render_response(mut output: String, response: SendResponse) -> String {
+    match response {
+        SendResponse::Completed(completed) => {
+            output.push_str(&completed);
+            if output.is_empty() {
+                "[done]".to_string()
+            } else {
+                output
+            }
+        }
+        SendResponse::InputRequested(input) => {
+            output.push_str(&input);
+            append_newline(&mut output);
+            output.push_str("[input]");
+            output
+        }
+        SendResponse::Running => {
+            append_newline(&mut output);
+            output.push_str("[running]");
+            output
+        }
+        SendResponse::Idle => {
+            append_newline(&mut output);
+            output.push_str("[idle]");
+            output
+        }
+    }
+}
+
+fn attach_error_output(mut output: String, error: String) -> String {
+    append_newline(&mut output);
+    output.push_str(&error);
+    output
+}
+
 #[cfg(target_os = "macos")]
 mod platform {
     use std::ffi::OsString;
-    use std::io::Write;
+    use std::io::{Read, Write};
     use std::path::Path;
     use std::process::Stdio;
     use std::sync::{Arc, Mutex, mpsc};
@@ -505,6 +580,7 @@ mod platform {
         pub(super) fn start(
             program: &Path,
             arguments: &[OsString],
+            output: super::CapturedOutput,
             on_started: impl FnOnce(StopHandle) -> Result<(), String>,
         ) -> Result<Self, String> {
             let (reader, writer, child_fds) = crate::sideband::bind()
@@ -514,8 +590,8 @@ mod platform {
             command
                 .args(arguments)
                 .stdin(Stdio::piped())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
                 .new_process_group();
             child_fds.configure(&mut command);
             let mut child = command
@@ -525,6 +601,14 @@ mod platform {
             let stdin = child
                 .take_stdin()
                 .expect("piped worker stdin should be available");
+            let stdout = child
+                .take_stdout()
+                .expect("piped worker stdout should be available");
+            let stderr = child
+                .take_stderr()
+                .expect("piped worker stderr should be available");
+            start_output_reader(stdout, output.clone());
+            start_output_reader(stderr, output);
             let child = Arc::new(Mutex::new(child));
             let stdin = start_stdin_writer(stdin, child.clone());
 
@@ -582,6 +666,46 @@ mod platform {
 
         pub(super) fn write_stdin(&self, stdin: String) -> Result<(), String> {
             self.stop_handle.stdin.send(stdin.into_bytes())
+        }
+    }
+
+    fn start_output_reader(mut stream: impl Read + Send + 'static, output: super::CapturedOutput) {
+        let _ = thread::spawn(move || {
+            let mut pending = Vec::new();
+            let mut buffer = [0; 8 * 1024];
+            loop {
+                match stream.read(&mut buffer) {
+                    Ok(0) => {
+                        output.push(&String::from_utf8_lossy(&pending));
+                        return;
+                    }
+                    Ok(length) => {
+                        pending.extend_from_slice(&buffer[..length]);
+                        let complete = complete_utf8_prefix(&pending);
+                        let remainder = pending.split_off(complete);
+                        output.push(&String::from_utf8_lossy(&pending));
+                        pending = remainder;
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                    Err(_) => {
+                        output.push(&String::from_utf8_lossy(&pending));
+                        return;
+                    }
+                }
+            }
+        });
+    }
+
+    fn complete_utf8_prefix(bytes: &[u8]) -> usize {
+        let mut offset = 0;
+        loop {
+            match std::str::from_utf8(&bytes[offset..]) {
+                Ok(_) => return bytes.len(),
+                Err(error) => match error.error_len() {
+                    Some(length) => offset += error.valid_up_to() + length,
+                    None => return offset + error.valid_up_to(),
+                },
+            }
         }
     }
 
@@ -670,6 +794,7 @@ mod platform {
         pub(super) fn start(
             _program: &Path,
             _arguments: &[OsString],
+            _output: super::CapturedOutput,
             _on_started: impl FnOnce(StopHandle) -> Result<(), String>,
         ) -> Result<Self, String> {
             Err("workers are supported only on macOS".to_string())

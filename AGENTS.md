@@ -33,14 +33,18 @@ On macOS, the first nonempty stdin submission or evaluation lazily starts the bu
 The worker embeds R through `libr` and `harp`, retains global state, and feeds each complete cell through R's DLL REPL iterator.
 R parses and evaluates its expressions sequentially, captures console output, prints visible values, and performs native top-level bookkeeping.
 Cell EOF while R requires continuation input is an error; earlier complete expressions from that cell remain applied.
-R parse, evaluation, and auto-print failures are normal language outcomes with `isError: false`; silent successful cells return `[done]`.
+R parse, evaluation, and auto-print failures are normal language outcomes with `isError: false`; silent successful cells with no pending stream output return `[done]`.
 Submitted R functions do not currently retain a source filename.
-Direct subprocess output and output from forked descendants are unsupported, and forked descendants cannot use the inherited sideband.
+Worker standard output and standard error are piped and collected continuously, including while the worker is idle.
+Each `send` response drains stream text already collected at its response boundary; later text remains for the next response, and idle or running responses retain their state marker after that text.
+Completion returns collected stream and sideband output instead of `[done]` when either produced text.
+Ordering between the two standard streams and sideband output is best effort, and invalid UTF-8 is replaced.
+Output from descendants that inherit standard output or standard error follows the same path, but this does not add descendant supervision; forked descendants cannot use the inherited sideband.
 The hidden `worker` command takes ownership of the sideband, discovers `R_HOME` through the selected R executable inside the sandbox, and opens `R_HOME/lib/libR.dylib` by its absolute path.
 It does not self-execute or set a dynamic-loader environment variable.
 The worker command runs synchronously on the process main thread; only `serve` creates a Tokio runtime.
 The hidden development option `serve --worker PATH` replaces the built-in worker with an executable that implements the same sideband request/receipt protocol and fd-0 input contract.
-The Python fixture `tests/fixtures/zod` provides deterministic acceptance coverage for that boundary, direct fd-0 input, and server-owned timeout and polling mechanics.
+The Python fixture `tests/fixtures/zod` provides deterministic acceptance coverage for that boundary, direct fd-0 input, captured standard streams, and server-owned timeout and polling mechanics.
 An infrastructure or protocol failure is returned as a tool error, force-stops and discards that worker, and lets the next evaluation start a fresh worker.
 When MCP input closes, the server starts a one-second deadline and attempts graceful sideband shutdown without delaying it.
 If the direct sandbox process is still running when time expires, the sandbox boundary force-stops its process group and reaps that direct process.
