@@ -36,14 +36,4 @@ result:
             description: Complete multiline R code evaluated in persistent state.
             type: string
         additionalProperties: false
----
-id: 3
-send:
-  python: print('hello')
-  wait_ms: 0
-result:
-  content:
-    - type: text
-      text: "failed to deserialize parameters: unknown field `python`, expected `r`"
-  isError: true
 ...
