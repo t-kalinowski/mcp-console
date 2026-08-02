@@ -49,7 +49,18 @@ class McpClient:
         entry = {}
         if "id" in recorded_message:
             entry["id"] = recorded_message.pop("id")
-        entry["input"] = recorded_message
+        params = recorded_message.get("params")
+        if (
+            recorded_message.keys() == {"method", "params"}
+            and recorded_message["method"] == "tools/call"
+            and isinstance(params, dict)
+            and params.keys() == {"name", "arguments"}
+            and params["name"] == "send"
+            and isinstance(params["arguments"], dict)
+        ):
+            entry["send"] = params["arguments"]
+        else:
+            entry["input"] = recorded_message
         self.transcript.append(entry)
         self.stdin.write(json.dumps(message) + "\n")
         self.stdin.flush()
@@ -86,7 +97,12 @@ class McpClient:
 
         self.send(message)
 
-    def initialize_and_list_tools(self) -> None:
+    def initialize_and_list_tools(
+        self,
+        *,
+        include_in_transcript: bool = False,
+    ) -> None:
+        transcript_start = len(self.transcript)
         self.request(
             "initialize",
             protocolVersion="2025-11-25",
@@ -98,6 +114,9 @@ class McpClient:
         )
         self.notify("notifications/initialized")
         self.request("tools/list")
+        if not include_in_transcript:
+            del self.transcript[transcript_start:]
+            self.transcript.append({"handshake": "elided"})
 
     def call_tool(self, name: str, **arguments: Any) -> None:
         self.request(

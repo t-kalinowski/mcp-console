@@ -40,13 +40,9 @@ output:
           additionalProperties: false
 ---
 id: 3
-input:
-  method: tools/call
-  params:
-    name: send
-    arguments:
-      python: print('hello')
-      wait_ms: 0
+send:
+  python: print('hello')
+  wait_ms: 0
 output:
   result:
     content:

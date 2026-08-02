@@ -206,7 +206,7 @@ def test_shutdown_deadline_does_not_wait_for_sideband_writer(
                 "zod-sideband-blocked",
                 client,
             )
-            entry["input"]["params"]["arguments"]["r"] = "<large cell>"
+            entry["send"]["r"] = "<large cell>"
             shutdown_started = time.monotonic()
             client.stdin.close()
             try:

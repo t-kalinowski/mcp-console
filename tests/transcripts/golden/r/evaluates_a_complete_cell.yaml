@@ -1,56 +1,14 @@
 ---
-id: 1
-input:
-  method: initialize
-  params:
-    protocolVersion: 2025-11-25
-    capabilities: {}
-    clientInfo:
-      name: acceptance-test
-      version: 1.0.0
-output:
-  result:
-    protocolVersion: 2025-11-25
-    capabilities:
-      tools: {}
-    serverInfo:
-      name: mcp-console
-      version: 0.1.0
----
-input:
-  method: notifications/initialized
----
-id: 2
-input:
-  method: tools/list
-output:
-  result:
-    tools:
-      - name: send
-        description: Evaluate one complete R code cell in persistent state.
-        inputSchema:
-          $schema: https://json-schema.org/draft/2020-12/schema
-          required:
-            - r
-          type: object
-          properties:
-            r:
-              description: Complete multiline R code evaluated in persistent state.
-              type: string
-          additionalProperties: false
+handshake: elided
 ---
 id: 3
-input:
-  method: tools/call
-  params:
-    name: send
-    arguments:
-      r: |-
-        answer <- 40
-        answer + 1
-        answer + 2
-        cat("done\n")
-        invisible(99)
+send:
+  r: |-
+    answer <- 40
+    answer + 1
+    answer + 2
+    cat("done\n")
+    invisible(99)
 output:
   result:
     content:
@@ -62,19 +20,15 @@ output:
     isError: false
 ---
 id: 4
-input:
-  method: tools/call
-  params:
-    name: send
-    arguments:
-      r: |-
-        identical(
-          as.vector(splines::splineDesign(
-            knots = c(0, 0, 0, 0, 1, 1, 1, 1),
-            x = 0.5
-          )),
-          c(0.125, 0.375, 0.375, 0.125)
-        )
+send:
+  r: |-
+    identical(
+      as.vector(splines::splineDesign(
+        knots = c(0, 0, 0, 0, 1, 1, 1, 1),
+        x = 0.5
+      )),
+      c(0.125, 0.375, 0.375, 0.125)
+    )
 output:
   result:
     content:
@@ -84,12 +38,8 @@ output:
     isError: false
 ---
 id: 5
-input:
-  method: tools/call
-  params:
-    name: send
-    arguments:
-      r: "stop(\"boom\", call. = FALSE)"
+send:
+  r: stop("boom", call. = FALSE)
 output:
   result:
     content:
@@ -99,12 +49,8 @@ output:
     isError: false
 ---
 id: 6
-input:
-  method: tools/call
-  params:
-    name: send
-    arguments:
-      r: answer
+send:
+  r: answer
 output:
   result:
     content:
@@ -114,12 +60,8 @@ output:
     isError: false
 ---
 id: 7
-input:
-  method: tools/call
-  params:
-    name: send
-    arguments:
-      r: silent <- 1
+send:
+  r: silent <- 1
 output:
   result:
     content:
