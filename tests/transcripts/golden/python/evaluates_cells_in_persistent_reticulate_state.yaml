@@ -1,0 +1,132 @@
+---
+!same-as tests/transcripts/golden/server/initializes_and_lists_tools.yaml
+---
+id: 3
+send:
+  r: |-
+    from_r <- 40L
+    python_source_visible <- function() {
+      calls <- vapply(sys.calls(), deparse1, character(1))
+      marker <- paste0("unique_python_", "source_marker")
+      any(grepl(marker, calls, fixed = TRUE))
+    }
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+id: 4
+send:
+  python: |-
+    answer = r.from_r + 1
+    print("from Python")
+    answer + 1
+result:
+  content:
+    - type: text
+      text: |
+        from Python
+        42
+  isError: false
+---
+id: 5
+send:
+  python: |-
+    1
+    2
+result:
+  content:
+    - type: text
+      text: |
+        2
+  isError: false
+---
+id: 6
+send:
+  python: answer
+result:
+  content:
+    - type: text
+      text: |
+        41
+  isError: false
+---
+id: 7
+send:
+  r: reticulate::py$answer
+result:
+  content:
+    - type: text
+      text: |
+        [1] 41
+  isError: false
+---
+id: 8
+send:
+  python: |-
+    unique_python_source_marker = r.python_source_visible()
+    unique_python_source_marker
+result:
+  content:
+    - type: text
+      text: |
+        False
+  isError: false
+---
+id: 9
+send:
+  r: |-
+    .mcp_console_private <- "user value"
+    .mcp_console_python_source <- "user source"
+    .mcp_console_python_filename <- "user filename"
+    is.null <- function(...) FALSE
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+id: 10
+send:
+  python: answer + 1
+result:
+  content:
+    - type: text
+      text: |
+        42
+  isError: false
+---
+id: 11
+send:
+  python: |-
+    compile = "user compile"
+    eval = "user eval"
+    exec = "user exec"
+    isinstance = "user isinstance"
+    BaseException = "user BaseException"
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+id: 12
+send:
+  python: answer + 1
+result:
+  content:
+    - type: text
+      text: |
+        42
+  isError: false
+---
+id: 13
+send:
+  python: silent = True
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+...

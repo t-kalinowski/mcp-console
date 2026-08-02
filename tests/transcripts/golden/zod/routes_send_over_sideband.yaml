@@ -10,4 +10,14 @@ result:
       text: |
         zod: echo
   isError: false
+---
+id: 4
+send:
+  python: echo
+result:
+  content:
+    - type: text
+      text: |
+        zod python: echo
+  isError: false
 ...

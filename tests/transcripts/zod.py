@@ -21,6 +21,7 @@ def test_routes_send_over_sideband(binary: Path) -> Transcript:
     )
     client.initialize_and_list_tools()
     client.call_tool("send", r="echo")
+    client.call_tool("send", python="echo")
     return client.finish()
 
 

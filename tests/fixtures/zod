@@ -63,20 +63,30 @@ def main() -> None:
             return
 
         assert message_kind == "evaluate"
-        assert set(message) == {"kind", "r"}
-        if message["r"] == "stall":
+        assert set(message) == {"kind", "language", "source"}
+        language = message["language"]
+        source = message["source"]
+        if language == "python":
+            assert source == "echo"
+            for output in ("zod python: ", f"{source}\n"):
+                send(writer, {"kind": "output", "data": output})
+            send(writer, {"kind": "completed"})
+            continue
+
+        assert language == "r"
+        if source == "stall":
             Path(os.environ["TMPDIR"], "zod-stalled").touch()
             while True:
                 time.sleep(60)
 
-        if message["r"] == "violate protocol":
+        if source == "violate protocol":
             send(writer, {"kind": "ready"})
             continue
 
-        if message["r"] == "exit unexpectedly":
+        if source == "exit unexpectedly":
             os._exit(86)
 
-        if message["r"] == "request input":
+        if source == "request input":
             send(writer, {"kind": "input_requested", "prompt": "zod> "})
             stdin = input()
             send(writer, {"kind": "input_received"})
@@ -90,7 +100,7 @@ def main() -> None:
             send(writer, {"kind": "completed"})
             continue
 
-        if message["r"] == "request input after timeout":
+        if source == "request input after timeout":
             temporary = Path(os.environ["TMPDIR"])
             waiting = temporary / "zod-waiting-to-request-input"
             waiting.touch()
@@ -108,7 +118,7 @@ def main() -> None:
             send(writer, {"kind": "completed"})
             continue
 
-        if message["r"] == "input without request then request input":
+        if source == "input without request then request input":
             first = input()
             send(writer, {"kind": "input_requested", "prompt": "second> "})
             second = input()
@@ -123,18 +133,18 @@ def main() -> None:
             send(writer, {"kind": "completed"})
             continue
 
-        if message["r"] in {"input without request", "input length without request"}:
+        if source in {"input without request", "input length without request"}:
             stdin = input()
             output = (
                 f"zod stdin: {stdin}\n"
-                if message["r"] == "input without request"
+                if source == "input without request"
                 else f"zod stdin length: {len(stdin.encode())}\n"
             )
             send(writer, {"kind": "output", "data": output})
             send(writer, {"kind": "completed"})
             continue
 
-        if message["r"] == "probe sandbox":
+        if source == "probe sandbox":
             try:
                 Path(os.environ["ZOD_SANDBOX_PROBE_PATH"]).write_text(
                     "escaped",
@@ -148,12 +158,12 @@ def main() -> None:
             send(writer, {"kind": "completed"})
             continue
 
-        if message["r"] == "complete after timeout":
+        if source == "complete after timeout":
             time.sleep(0.25)
-        elif message["r"] != "echo":
-            raise AssertionError(f"unsupported Zod command: {message['r']}")
+        elif source != "echo":
+            raise AssertionError(f"unsupported Zod command: {source}")
 
-        for output in ("zod: ", f"{message['r']}\n"):
+        for output in ("zod: ", f"{source}\n"):
             send(
                 writer,
                 {

@@ -17,12 +17,13 @@ def test_validates_send_arguments(binary: Path) -> Transcript:
     client.initialize_and_list_tools()
     client.call_tool(
         "send",
-        # fmt: r
+        # fmt: python
         python=dedent("""
-            print('hello')
+            print("hello")
         """).strip(),
         wait_ms=0,
     )
+    client.call_tool("send", r="1", python="1")
     client.call_tool("send", r=None)
     output = client.transcript[-1]["result"]["content"][0]["text"]
     assert output == "[idle]", output

@@ -58,7 +58,7 @@ impl Client {
         Self::with_arguments(program, Vec::new())
     }
 
-    pub(crate) fn r() -> Result<Self, String> {
+    pub(crate) fn builtin() -> Result<Self, String> {
         let program = std::env::current_exe()
             .map_err(|error| format!("failed to locate the R worker executable: {error}"))?;
         Ok(Self::with_arguments(
@@ -80,12 +80,12 @@ impl Client {
     /// Starts one cell, supplies its stdin, or polls the cell already running.
     pub(crate) async fn send(
         &self,
-        r: Option<String>,
+        cell: Option<crate::cell::Cell>,
         stdin: Option<String>,
         timeout: Duration,
     ) -> Result<String, String> {
-        let evaluation = match r {
-            Some(r) => self.start_evaluation(r, stdin)?,
+        let evaluation = match cell {
+            Some(cell) => self.start_evaluation(cell, stdin)?,
             None => match self.current_evaluation()? {
                 Some(evaluation) => {
                     if let Some(stdin) = stdin {
@@ -114,7 +114,7 @@ impl Client {
 
     fn start_evaluation(
         &self,
-        r: String,
+        cell: crate::cell::Cell,
         stdin: Option<String>,
     ) -> Result<Arc<Evaluation>, String> {
         if self.shutdown_requested()? {
@@ -142,7 +142,9 @@ impl Client {
             .lock()
             .map_err(|_| "worker evaluation lock poisoned".to_string())?;
         if active.is_some() {
-            return Err("worker is already evaluating a cell; poll without `r`".to_string());
+            return Err(
+                "worker is already evaluating a cell; poll without a code field".to_string(),
+            );
         }
         if self.shutdown_requested()? {
             return Err("worker is shutting down".to_string());
@@ -154,7 +156,7 @@ impl Client {
         let running = evaluation.clone();
         let evaluator = evaluation.clone();
         let evaluation_task =
-            tokio::task::spawn_blocking(move || client.evaluate_blocking(r, &evaluator));
+            tokio::task::spawn_blocking(move || client.evaluate_blocking(cell, &evaluator));
         let _completion_task = tokio::spawn(async move {
             let result = evaluation_task
                 .await
@@ -202,8 +204,12 @@ impl Client {
         Ok(())
     }
 
-    fn evaluate_blocking(&self, r: String, evaluation: &Evaluation) -> Result<(), String> {
-        self.with_worker(|worker| worker.evaluate(r, evaluation))
+    fn evaluate_blocking(
+        &self,
+        cell: crate::cell::Cell,
+        evaluation: &Evaluation,
+    ) -> Result<(), String> {
+        self.with_worker(|worker| worker.evaluate(cell, evaluation))
     }
 
     fn with_worker<T>(
@@ -538,8 +544,12 @@ mod platform {
                 stop_handle,
             };
             on_started(worker.stop_handle.clone())?;
-            if !matches!(worker.receive()?, WorkerMessage::Ready) {
-                return Err("worker did not report readiness".to_string());
+            match worker.receive()? {
+                WorkerMessage::Ready => {}
+                WorkerMessage::Output { data } => {
+                    return Err(format!("worker emitted output before readiness: {data}"));
+                }
+                _ => return Err("worker did not report readiness".to_string()),
             }
             Ok(worker)
         }
@@ -547,12 +557,13 @@ mod platform {
         /// Sends one cell and collects output until the completed message.
         pub(super) fn evaluate(
             &mut self,
-            r: String,
+            cell: crate::cell::Cell,
             evaluation: &super::Evaluation,
         ) -> Result<(), String> {
+            let crate::cell::Cell { language, source } = cell;
             self.stop_handle
                 .writer
-                .send(&ServerMessage::Evaluate { r })
+                .send(&ServerMessage::Evaluate { language, source })
                 .map_err(|error| format!("worker sideband write failed: {error}"))?;
             evaluation.attach_writer(self.stop_handle.stdin.clone())?;
 
@@ -677,9 +688,11 @@ mod platform {
 
         pub(super) fn evaluate(
             &mut self,
-            _r: String,
+            cell: crate::cell::Cell,
             _evaluation: &super::Evaluation,
         ) -> Result<(), String> {
+            let crate::cell::Cell { language, source } = cell;
+            let _ = (language, source);
             unreachable!("unsupported workers cannot start")
         }
 

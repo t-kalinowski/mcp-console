@@ -22,9 +22,9 @@ mcp-console sandbox -- COMMAND [ARG]...
 `mcp-console serve` runs a minimal MCP server over stdio.
 Run `mcp-console --help` or `mcp-console COMMAND --help` for command-line help.
 The server registers one `send` tool.
-Supplying `r` evaluates one complete code cell and waits up to the optional `timeout_ms`, which defaults to 60 seconds.
-When that wait expires, the call returns `[running]` while computation continues; call `send` without `r` to poll for completion.
-A call may also supply exact standard-input text with `r`, during an evaluation, or while the worker is idle:
+Supplying exactly one of `r` or `python` evaluates one complete code cell and waits up to the optional `timeout_ms`, which defaults to 60 seconds.
+When that wait expires, the call returns `[running]` while computation continues; call `send` without a code field to poll for completion.
+A call may also supply exact standard-input text with a code cell, during an evaluation, or while the worker is idle:
 
 ```json
 { "r": "readline('name> ')", "stdin": "Ada\n" }
@@ -38,10 +38,17 @@ That receipt describes the runtime read, not a particular stdin payload; direct 
 Payload end is not EOF, and queued input is not an acknowledgment of consumption.
 Unread bytes may be completed by later stdin or satisfy a later worker read or evaluation.
 On macOS, the first nonempty stdin submission or evaluation lazily starts a sandboxed embedded R worker.
-Later calls reuse the same global R state.
-The worker runs each cell through R's native top-level loop, captures R console output, prints each visible value, and maintains `.Last.value`.
+Later calls reuse the same global R state and reticulate Python interpreter.
+The worker runs each R cell through R's native top-level loop, captures R console output, prints each visible value, and maintains `.Last.value`.
 If a cell ends while an expression is incomplete, earlier complete expressions from that cell remain applied.
-R language failures remain ordinary console results rather than MCP tool errors, and a silent successful cell returns `[done]`.
+Python cells execute statements in persistent `__main__` state and send a final expression through Python's display hook.
+R and Python can exchange objects through reticulate's `py` and `r` bridges.
+Python text written through `sys.stdout` and `sys.stderr`, including tracebacks, uses the same console output path as R.
+R and Python language failures remain ordinary console results rather than MCP tool errors, and a silent successful cell returns `[done]`.
+
+Python cells require the `reticulate` R package and an embeddable Python already initialized through reticulate, selected by `RETICULATE_PYTHON`, or available as `python3` on `PATH`.
+The worker does not install either dependency or access the network.
+Python `input()` can consume proactively queued standard input, but it does not emit input-request or input-receipt events; debugger integration has not been implemented.
 Its MCP initialization identity remains `mcp-console`.
 The intended default client registration name is `console`:
 
@@ -79,8 +86,9 @@ Formatter errors remain visible but do not stop the remaining formatters or make
 
 See [`tests/transcripts/README.md`](tests/transcripts/README.md) for running and authoring external server transcript tests.
 The `r` suite exercises the built-in worker.
+The `python` suite exercises Python cells through reticulate in that worker.
 The `zod` suite uses the hidden `serve --worker PATH` development option to exercise the same protocol with an executable Python fixture.
-Both suites run on macOS, where the sandbox policy is implemented.
+All three suites run on macOS, where the sandbox policy is implemented.
 See [`docs/WORKER_PROTOCOL.md`](docs/WORKER_PROTOCOL.md) for the exact implemented launch and message contract.
 
 ## License
