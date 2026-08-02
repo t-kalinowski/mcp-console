@@ -554,10 +554,9 @@ Runtime input includes:
 
 When called during an active evaluation, the callback:
 
-1. consumes a complete line already buffered in the worker, if present;
-2. otherwise emits `InputRequested` with prompt and origin;
-3. blocks while reading fd 0 until a complete line, interrupt, or shutdown;
-4. returns that line to R and retains any additional bytes for later reads.
+1. emits `InputRequested` with prompt and origin;
+2. blocks while reading fd 0 through one newline or the supplied callback buffer;
+3. returns that chunk to R and leaves additional bytes in the pipe for later console or direct reads.
 
 The supervisor may queue fd-0 bytes before the event and does not infer or acknowledge their consumption.
 

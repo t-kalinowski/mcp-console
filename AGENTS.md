@@ -25,6 +25,8 @@ If that wait expires, `send` returns `[running]` without stopping the computatio
 Concurrent `send` calls are unsupported.
 Supplying `stdin` with `r` or while that cell remains active queues its exact UTF-8 bytes to worker fd 0 from an independent FIFO writer.
 The server adds no newline, does not inspect or limit the text, and does not wait for an input request before writing it.
+The end of one stdin payload does not close fd 0 or produce EOF; newline-free fragments remain pending for later stdin.
+The R console callback reads only through one newline or its supplied buffer and leaves later bytes on fd 0 for subsequent console or direct readers.
 An `input_requested` frame reports the prompt and can wake `send` with `[input]`, but it neither gates fd-0 delivery nor acknowledges whether queued bytes were consumed.
 A call that just queued nonempty stdin may defer that boundary until completion or its own timeout; empty stdin writes no bytes and leaves an exposed boundary pending.
 Accepted stdin is queued rather than acknowledged as consumed, is not drained when evaluation completes, and may satisfy a later worker read or evaluation.
@@ -76,7 +78,7 @@ See `design-sketches/README.md` for the product overview and `design-sketches/do
 - `src/r_repl.c` — C-owned per-cell DLL-REPL iterator and long-jump boundary.
 - `src/sideband.rs` — macOS inherited-pipe JSON-lines transport.
 - `src/worker.rs` — embedded R initialization, evaluation, and console callbacks.
-- `src/worker_client.rs` — server-side worker launch, lifecycle, and output collection.
+- `src/worker_client.rs` — server-side worker launch, lifecycle, fd-0 input, and output collection.
 - `src/worker_protocol.rs` — shared sideband message definitions.
 - `src/sandbox.rs` — platform dispatch for the sandbox process launcher.
 - `src/sandbox/` — platform implementation and macOS Seatbelt policy.

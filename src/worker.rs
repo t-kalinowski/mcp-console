@@ -14,7 +14,6 @@ mod platform {
     static R_REPL_INIT: OnceLock<ReplInit> = OnceLock::new();
     static R_REPL_DO_ONE: OnceLock<ReplDoOne> = OnceLock::new();
     static CELL_SOURCE: Mutex<Option<CellSource>> = Mutex::new(None);
-    static INTERACTIVE_INPUT: Mutex<Vec<u8>> = Mutex::new(Vec::new());
     static WORKER_FAILURE: Mutex<Option<String>> = Mutex::new(None);
     static WORKER_SHUTDOWN: AtomicBool = AtomicBool::new(false);
     static EVALUATION_STARTED: AtomicBool = AtomicBool::new(false);
@@ -310,33 +309,16 @@ mod platform {
                 .to_string_lossy()
                 .into_owned()
         };
-        if let Some(input) = take_complete_console_input((buflen as usize) - 1) {
-            return write_console_input(buf, buflen, &input);
-        }
         if let Err(error) = send_input_requested(&prompt) {
             record_worker_failure(error);
             return console_eof(buf);
         }
 
-        loop {
-            if let Some(input) = take_complete_console_input((buflen as usize) - 1) {
-                return write_console_input(buf, buflen, &input);
-            }
-
-            match read_stdin() {
-                Ok(true) => {
-                    if !interactive_input_has_line()
-                        && let Err(error) = send_input_requested(&prompt)
-                    {
-                        record_worker_failure(error);
-                        return console_eof(buf);
-                    }
-                }
-                Ok(false) => return console_eof(buf),
-                Err(error) => {
-                    record_worker_failure(error);
-                    return console_eof(buf);
-                }
+        match read_console_stdin(buf, buflen) {
+            Ok(read) => read,
+            Err(error) => {
+                record_worker_failure(error);
+                console_eof(buf)
             }
         }
     }
@@ -351,28 +333,21 @@ mod platform {
             .map_err(|error| format!("R worker failed to report an input request: {error}"))
     }
 
-    fn interactive_input_has_line() -> bool {
-        INTERACTIVE_INPUT
-            .lock()
-            .expect("R interactive input lock should not be poisoned")
-            .contains(&b'\n')
-    }
-
-    fn read_stdin() -> Result<bool, String> {
-        let mut input = [0_u8; 8192];
-        loop {
-            let count =
-                unsafe { libc::read(libc::STDIN_FILENO, input.as_mut_ptr().cast(), input.len()) };
-            if count > 0 {
-                INTERACTIVE_INPUT
-                    .lock()
-                    .expect("R interactive input lock should not be poisoned")
-                    .extend_from_slice(&input[..count as usize]);
-                return Ok(true);
+    fn read_console_stdin(buf: *mut c_uchar, buflen: c_int) -> Result<c_int, String> {
+        let mut length = 0;
+        while length < (buflen as usize) - 1 {
+            let byte = unsafe { buf.add(length) };
+            let count = unsafe { libc::read(libc::STDIN_FILENO, byte.cast(), 1) };
+            if count == 1 {
+                length += 1;
+                if unsafe { *byte } == b'\n' {
+                    break;
+                }
+                continue;
             }
             if count == 0 {
                 WORKER_SHUTDOWN.store(true, Ordering::SeqCst);
-                return Ok(false);
+                return Ok(console_eof(buf));
             }
 
             let error = io::Error::last_os_error();
@@ -380,21 +355,10 @@ mod platform {
                 return Err(format!("R worker stdin read failed: {error}"));
             }
         }
-    }
-
-    fn take_complete_console_input(max: usize) -> Option<Vec<u8>> {
-        let mut input = INTERACTIVE_INPUT
-            .lock()
-            .expect("R interactive input lock should not be poisoned");
-        let newline = input.iter().position(|byte| *byte == b'\n')?;
-        let mut split = (newline + 1).min(max);
-        while split > 0
-            && std::str::from_utf8(&input).is_ok_and(|text| !text.is_char_boundary(split))
-        {
-            split -= 1;
+        unsafe {
+            *buf.add(length) = 0;
         }
-        assert!(split > 0, "R console buffer is too small for UTF-8 input");
-        Some(input.drain(..split).collect())
+        Ok(i32::from(length > 0))
     }
 }
 

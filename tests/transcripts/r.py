@@ -71,7 +71,7 @@ def test_routes_combined_and_followup_stdin(binary: Path) -> Transcript:
         """).strip()
     client.call_tool("send", r=r, stdin="Ada\nLovelace\n")
     output = last_tool_text(client)
-    assert output == "first>\nAda|Lovelace\n", output
+    assert output == "first>\nsecond>\nAda|Lovelace\n", output
 
     # fmt: r
     r = dedent(r"""
@@ -91,22 +91,20 @@ def test_routes_combined_and_followup_stdin(binary: Path) -> Transcript:
 
     # fmt: r
     r = dedent(r"""
-        cat("before\n")
-        readline("repeat> ")
-        """).strip()
-    client.call_tool("send", r=r, stdin="par", timeout_ms=1_000)
-    output = last_tool_text(client)
-    assert output == "before\nrepeat>\nrepeat>\n[input]", output
-    client.call_tool("send", stdin="tial\n")
-    assert last_tool_text(client) == '[1] "partial"\n'
-
-    # fmt: r
-    r = dedent(r"""
         readline("used> ")
         """).strip()
     client.call_tool("send", r=r, stdin="used\nstale\n")
     assert last_tool_text(client) == 'used>\n[1] "used"\n'
-    client.call_tool("send", r='readline("buffered> ")')
+
+    # fmt: r
+    r = dedent(r"""
+        local({
+          connection <- suppressWarnings(file("/dev/stdin"))
+          on.exit(close(connection))
+          readLines(connection, n = 1)
+        })
+        """).strip()
+    client.call_tool("send", r=r, timeout_ms=1_000)
     assert last_tool_text(client) == '[1] "stale"\n'
 
     # fmt: r
@@ -115,10 +113,77 @@ def test_routes_combined_and_followup_stdin(binary: Path) -> Transcript:
         """).strip()
     client.call_tool("send", r=r)
     assert last_tool_text(client) == "color>\n[input]"
-    client.call_tool("send", stdin="bl")
-    assert last_tool_text(client) == "color>\n[input]"
+    client.call_tool("send", stdin="bl", timeout_ms=0)
+    assert last_tool_text(client) == "[running]"
     client.call_tool("send", stdin="ue\n")
     assert last_tool_text(client) == '[1] "color blue"\n'
+    return client.finish()
+
+
+def test_preserves_fd0_order_between_readers(binary: Path) -> Transcript:
+    client = McpClient(binary, ("serve",))
+    client.initialize_and_list_tools()
+
+    # fmt: r
+    r = dedent(r"""
+        prompted <- readline("callback> ")
+        direct <- local({
+          connection <- suppressWarnings(file("/dev/stdin"))
+          on.exit(close(connection))
+          readLines(connection, n = 1)
+        })
+        cat(paste(prompted, direct, sep = "|"), "\n", sep = "")
+        """).strip()
+    client.call_tool(
+        "send",
+        r=r,
+        stdin="callback\ndirect\n",
+        timeout_ms=1_000,
+    )
+    output = last_tool_text(client)
+    assert output == "callback>\ncallback|direct\n", output
+    return client.finish()
+
+
+def test_preserves_utf8_across_console_reads(binary: Path) -> Transcript:
+    client = McpClient(binary, ("serve",))
+    client.initialize_and_list_tools()
+
+    # fmt: r
+    r = dedent(r"""
+        value <- readline("long> ")
+        cat(paste(nchar(value, type = "bytes"), endsWith(value, "é")), "\n", sep = "")
+        """).strip()
+    client.call_tool("send", r=r, stdin=("x" * 4_094) + "é\n")
+    client.transcript[-1]["send"]["stdin"] = "<long stdin ending in UTF-8>"
+    output = last_tool_text(client)
+    assert output == "long>\nlong>\n4096 TRUE\n", output
+    return client.finish()
+
+
+def test_keeps_stdin_open_after_partial_payload(binary: Path) -> Transcript:
+    client = McpClient(binary, ("serve",))
+    client.initialize_and_list_tools()
+
+    # fmt: r
+    r = dedent(r"""
+        cat("before\n")
+        value <- readline("partial> ")
+        value
+        """).strip()
+    client.call_tool("send", r=r, stdin="without newline", timeout_ms=1_000)
+    output = last_tool_text(client)
+    assert output == "before\npartial>\n[input]", output
+
+    client.call_tool("send", stdin="\n")
+    assert last_tool_text(client) == '[1] "without newline"\n'
+
+    # fmt: r
+    r = dedent(r"""
+        readline("next> ")
+        """).strip()
+    client.call_tool("send", r=r, stdin="next\n")
+    assert last_tool_text(client) == 'next>\n[1] "next"\n'
     return client.finish()
 
 

@@ -151,13 +151,16 @@ A later stdin-only call uses the same route without acquiring the evaluation's w
 
 The server writes each string blindly.
 It adds no newline, does not split or validate lines, and imposes no stdin size limit.
+The end of a payload does not close fd 0 and is not an EOF marker.
+A newline-free fragment remains pending until later stdin completes it or worker shutdown closes the stream.
+The R console callback consumes only through one newline or its supplied buffer; it does not prefetch later lines from fd 0.
 `input_requested` is an observation of worker state, not permission to write.
 A call that just queued nonempty stdin may wait past a new frame in case the evaluation completes, but the frame remains pending and is returned at that call's deadline.
 Nonempty stdin sent in reply to an exposed boundary clears that boundary; empty stdin writes no bytes and leaves it exposed.
 Code that reads fd 0 without sending the frame can consume bundled input or input sent after a polling timeout.
 
 Acceptance means the bytes were queued, not that the current evaluation consumed them.
-The server does not retract or drain bytes after `completed`; data already in the pipe or the R worker's input buffer may satisfy later reads or later evaluations.
+The server does not retract or drain bytes after `completed`; data already in the pipe or retained by a runtime reader may satisfy later reads or later evaluations.
 Worker shutdown or failure discards whatever remains.
 New R code is rejected while an evaluation or its uncollected result is active.
 
@@ -213,10 +216,10 @@ A successful silent cell produces no sideband output, so the MCP result is `[don
 The CLI runs `worker` synchronously without a Tokio runtime, so R initialization and evaluation remain on the process main thread.
 
 The worker supplies cell source through `ReadConsole` before each top-level evaluation starts.
-Evaluation-time `ReadConsole` requests use the separate interactive input queue.
-When its interactive buffer has no complete line, the callback sends `input_requested`, reads fd 0, and preserves partial or additional lines for later reads.
+For every evaluation-time `ReadConsole` call, the callback sends `input_requested`, then reads fd 0 directly until one newline arrives or R's supplied buffer is full.
+A newline-free fragment shorter than that buffer keeps the callback blocked, while bytes after a returned chunk remain in the pipe for a later `ReadConsole` call or a direct fd-0 reader.
 It uses R's busy callback rather than prompt text to distinguish cell source from evaluated-code input.
-Buffered interactive input remains available across evaluation boundaries.
+Unread fd-0 input remains available across evaluation boundaries.
 Submitted source references are not retained.
 Parse, evaluation, and print errors are returned as console text followed by `completed`, so the worker remains available even though the protocol has no structured language-error message.
 

@@ -32,6 +32,8 @@ A call may also supply exact standard-input text:
 
 The server sends the cell first, then queues the string's UTF-8 bytes to worker fd 0 from an independent writer.
 It does not inspect the text, add a newline, impose a line-size limit, or wait for an input request.
+Ending a payload does not close fd 0 or produce EOF, so a newline-free fragment waits for later stdin.
+The R console callback stops after one newline or a full callback buffer, leaving later bytes on fd 0 for subsequent console or direct readers.
 When the worker reports an input request, `send` returns its prompt and `[input]`; a later call can append more bytes while the cell remains active:
 
 ```json

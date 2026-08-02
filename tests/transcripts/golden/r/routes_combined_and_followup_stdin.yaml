@@ -15,6 +15,7 @@ result:
     - type: text
       text: |
         first>
+        second>
         Ada|Lovelace
   isError: false
 ---
@@ -52,34 +53,6 @@ result:
 ---
 id: 6
 send:
-  r: |-
-    cat("before\n")
-    readline("repeat> ")
-  stdin: par
-  timeout_ms: 1000
-result:
-  content:
-    - type: text
-      text: |-
-        before
-        repeat>
-        repeat>
-        [input]
-  isError: false
----
-id: 7
-send:
-  stdin: |
-    tial
-result:
-  content:
-    - type: text
-      text: |
-        [1] "partial"
-  isError: false
----
-id: 8
-send:
   r: "readline(\"used> \")"
   stdin: |
     used
@@ -92,9 +65,15 @@ result:
         [1] "used"
   isError: false
 ---
-id: 9
+id: 7
 send:
-  r: "readline(\"buffered> \")"
+  r: |-
+    local({
+      connection <- suppressWarnings(file("/dev/stdin"))
+      on.exit(close(connection))
+      readLines(connection, n = 1)
+    })
+  timeout_ms: 1000
 result:
   content:
     - type: text
@@ -102,7 +81,7 @@ result:
         [1] "stale"
   isError: false
 ---
-id: 10
+id: 8
 send:
   r: "paste(\"color\", readline(\"color> \"))"
 result:
@@ -113,18 +92,17 @@ result:
         [input]
   isError: false
 ---
-id: 11
+id: 9
 send:
   stdin: bl
+  timeout_ms: 0
 result:
   content:
     - type: text
-      text: |-
-        color>
-        [input]
+      text: "[running]"
   isError: false
 ---
-id: 12
+id: 10
 send:
   stdin: |
     ue

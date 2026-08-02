@@ -1,0 +1,43 @@
+---
+!same-as tests/transcripts/golden/server/initializes_and_lists_tools.yaml
+---
+id: 3
+send:
+  r: |-
+    cat("before\n")
+    value <- readline("partial> ")
+    value
+  stdin: without newline
+  timeout_ms: 1000
+result:
+  content:
+    - type: text
+      text: |-
+        before
+        partial>
+        [input]
+  isError: false
+---
+id: 4
+send:
+  stdin: "\n"
+result:
+  content:
+    - type: text
+      text: |
+        [1] "without newline"
+  isError: false
+---
+id: 5
+send:
+  r: "readline(\"next> \")"
+  stdin: |
+    next
+result:
+  content:
+    - type: text
+      text: |
+        next>
+        [1] "next"
+  isError: false
+...

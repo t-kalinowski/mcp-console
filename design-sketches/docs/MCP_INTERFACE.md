@@ -203,7 +203,7 @@ A call can append exact text while the evaluation remains active:
 The text may contain one or more complete or partial lines.
 Newlines are significant and are not added automatically; send `"\n"` to submit a blank line.
 Queuing input does not acknowledge that the runtime consumed it.
-Unread buffered text may satisfy later reads or evaluations and is discarded when the worker stops.
+Unread queued text may satisfy later reads or evaluations and is discarded when the worker stops.
 
 `stdin` is not a new code cell.
 The active runtime decides whether the bytes are debugger commands, expressions accepted by the debugger, or ordinary program input.
