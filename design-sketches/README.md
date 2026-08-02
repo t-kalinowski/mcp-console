@@ -140,10 +140,10 @@ Python is embedded through reticulate.
 SQL is initially executed through the DuckDB R package and DBI, giving SQL direct access to live R data frames and persistent DuckDB catalog state.
 
 The supervisor exposes one backend-neutral runtime service for cell evaluation, output, interactive input, structured inspection, and control.
-The initial implementation must compare an Ark-backed worker with a purpose-built worker based on `harp`/`libr` and the current `mcp-repl` runtime.
-Ark may be worth its Jupyter machinery if its mature Data Explorer, plots, help, debugger, and runtime behavior can be reused without an invasive fork.
+An Ark-backed R-only prototype was evaluated against the implemented purpose-built worker based on `harp`, `libr`, and libR's DLL REPL API.
+The native worker was selected for the current text R slice; the broader R/Python/SQL and inspection backend remains open.
 The public MCP and local sidecar contracts must not depend on which backend is selected.
-See [`docs/RUNTIME_BACKEND.md`](docs/RUNTIME_BACKEND.md).
+See [`docs/RUNTIME_BACKEND.md`](docs/RUNTIME_BACKEND.md) and [`docs/R_REPL_DLL_ITERATOR.md`](docs/R_REPL_DLL_ITERATOR.md).
 
 ## Output and durable context
 
@@ -164,7 +164,8 @@ Complete text, plots, live table batches, and snapshots are fetched separately b
 - [`docs/TOOL_DESCRIPTIONS.md`](docs/TOOL_DESCRIPTIONS.md) — exact descriptions registered for the two MCP tools.
 - [`docs/CLI.md`](docs/CLI.md) — standalone binary, installation, diagnostics, viewer, watch, and sidecar-control commands.
 - [`docs/SIDECAR_API.md`](docs/SIDECAR_API.md) — process-scoped local API, event subscriptions, inspection boundary, data explorer, plots, and external evaluation semantics.
-- [`docs/RUNTIME_BACKEND.md`](docs/RUNTIME_BACKEND.md) — open Ark-versus-native worker decision, trade-offs, required spike, and decision criteria.
+- [`docs/RUNTIME_BACKEND.md`](docs/RUNTIME_BACKEND.md) — initial Ark-versus-native evaluation, remaining full-runtime work, and decision criteria.
+- [`docs/R_REPL_DLL_ITERATOR.md`](docs/R_REPL_DLL_ITERATOR.md) — native DLL-REPL findings, decision, and implementation record.
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — process model, runtime internals, output, viewer architecture, testing strategy, and implementation plan.
 - [`AGENTS.md`](AGENTS.md) — durable project context, key decisions, repository sitemap, and rules for coding agents.
 
@@ -176,8 +177,8 @@ Complete text, plots, live table batches, and snapshots are fetched separately b
 - Interactive input: exact, optionally multiline `stdin` text queued to the session worker whether it is evaluating or idle; paired request and receipt events expose supported runtime reads without gating delivery.
 - MCP surface: `send` plus a low-frequency `session` environment and lifecycle tool.
 - Language selection: the object key is `r`, `python`, or `sql`.
-- Runtime substrate: open implementation decision.
-  Evaluate an Ark-backed worker against a purpose-built `harp`/`libr` worker before committing; hide either behind the same runtime service.
+- Runtime substrate: the current text R console uses the purpose-built `harp`/`libr` worker; the broader backend decision remains open.
+  Hide any backend behind the same runtime service.
 - R evaluation: native top-level evaluation; complete cell source and worker stdin remain distinct streams.
 - SQL engine: embedded DuckDB through R/DBI initially; the DuckDB CLI is a behavioral reference only.
 - Output: bounded MCP text plus managed workspace files.

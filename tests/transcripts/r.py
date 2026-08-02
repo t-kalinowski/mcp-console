@@ -39,6 +39,60 @@ def test_evaluates_a_complete_cell(binary: Path) -> Transcript:
     return client.finish()
 
 
+def test_recoverable_language_errors(binary: Path) -> Transcript:
+    client = McpClient(binary, ("serve",))
+    client.initialize_and_list_tools()
+    client.call_tool("send", r="answer <- 41")
+    # fmt: r
+    r = dedent(r"""
+        g <- function() stop("boom", call. = FALSE)
+        f <- function() g()
+        f()
+        """).strip()
+    client.call_tool("send", r=r)
+    # fmt: r
+    r = dedent(r"""
+        traceback_lines <- capture.output(traceback())
+        cat(
+          "traceback: stop=",
+          any(grepl("stop", traceback_lines, fixed = TRUE)),
+          ", g=",
+          any(grepl("g()", traceback_lines, fixed = TRUE)),
+          ", f=",
+          any(grepl("f()", traceback_lines, fixed = TRUE)),
+          ", internal=",
+          any(grepl("mcp_console|base::get", traceback_lines)),
+          "\n",
+          sep = ""
+        )
+        """).strip()
+    client.call_tool("send", r=r)
+    # fmt: r
+    r = dedent(r"""
+        print.transcript_boom <- function(...) {
+          stop("print failed")
+        }
+        structure(1, class = "transcript_boom")
+        """).strip()
+    client.call_tool("send", r=r)
+    client.call_tool("send", r="answer")
+    return client.finish()
+
+
+def test_browser_input(binary: Path) -> Transcript:
+    client = McpClient(binary, ("serve",))
+    client.initialize_and_list_tools()
+    client.call_tool("send", r="browser()")
+    assert last_tool_text(client).endswith("\n[input]")
+    client.call_tool("send", r="1")
+    assert client.transcript[-1]["result"]["isError"] is True
+    client.call_tool("send", stdin="1 + 1\n")
+    assert last_tool_text(client).endswith("\n[input]")
+    client.call_tool("send", stdin="c\n")
+    assert last_tool_text(client) == "[done]"
+    return client.finish()
+
+
 def test_times_out_and_polls_running_evaluation(binary: Path) -> Transcript:
     client = McpClient(binary, ("serve",))
     client.initialize_and_list_tools()
@@ -270,6 +324,33 @@ def test_runs_native_top_level_bookkeeping(binary: Path) -> Transcript:
         warning("careful", call. = FALSE)
         invisible(42)
         cat("last value: ", identical(base::.Last.value, 42), "\n", sep = "")
+        """).strip()
+    client.call_tool("send", r=r)
+    return client.finish()
+
+
+def test_preserves_native_stack_and_last_value_binding(binary: Path) -> Transcript:
+    client = McpClient(binary, ("serve",))
+    client.initialize_and_list_tools()
+    # fmt: r
+    r = dedent(r"""
+        user_calls <- function() {
+          vapply(sys.calls(), deparse1, character(1))
+        }
+        calls <- user_calls()
+        cat("contains user call: ", "user_calls()" %in% calls, "\n", sep = "")
+        cat(
+          "contains internal call: ",
+          any(grepl("mcp_console|base::get", calls)),
+          "\n",
+          sep = ""
+        )
+        cat(
+          "global binding: ",
+          exists(".Last.value", envir = globalenv(), inherits = FALSE),
+          "\n",
+          sep = ""
+        )
         """).strip()
     client.call_tool("send", r=r)
     return client.finish()

@@ -30,7 +30,7 @@ result:
 ---
 id: 5
 send:
-  r: "readline(\"next> \")"
+  r: readline("next> ")
   stdin: |
     next
 result:

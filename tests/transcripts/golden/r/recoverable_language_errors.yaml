@@ -1,0 +1,72 @@
+---
+!same-as tests/transcripts/golden/server/initializes_and_lists_tools.yaml
+---
+id: 3
+send:
+  r: answer <- 41
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+id: 4
+send:
+  r: |-
+    g <- function() stop("boom", call. = FALSE)
+    f <- function() g()
+    f()
+result:
+  content:
+    - type: text
+      text: |
+        Error: boom
+  isError: false
+---
+id: 5
+send:
+  r: |-
+    traceback_lines <- capture.output(traceback())
+    cat(
+      "traceback: stop=",
+      any(grepl("stop", traceback_lines, fixed = TRUE)),
+      ", g=",
+      any(grepl("g()", traceback_lines, fixed = TRUE)),
+      ", f=",
+      any(grepl("f()", traceback_lines, fixed = TRUE)),
+      ", internal=",
+      any(grepl("mcp_console|base::get", traceback_lines)),
+      "\n",
+      sep = ""
+    )
+result:
+  content:
+    - type: text
+      text: |
+        traceback: stop=TRUE, g=TRUE, f=TRUE, internal=FALSE
+  isError: false
+---
+id: 6
+send:
+  r: |-
+    print.transcript_boom <- function(...) {
+      stop("print failed")
+    }
+    structure(1, class = "transcript_boom")
+result:
+  content:
+    - type: text
+      text: |
+        Error in print.transcript_boom(x) : print failed
+  isError: false
+---
+id: 7
+send:
+  r: answer
+result:
+  content:
+    - type: text
+      text: |
+        [1] 41
+  isError: false
+...

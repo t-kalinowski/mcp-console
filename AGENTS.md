@@ -33,6 +33,9 @@ On macOS, the first nonempty stdin submission or evaluation lazily starts the bu
 The worker embeds R through `libr` and `harp`, retains global state, and feeds each complete cell through R's DLL REPL iterator.
 R parses and evaluates its expressions sequentially, captures console output, prints visible values, and performs native top-level bookkeeping.
 Cell EOF while R requires continuation input is an error; earlier complete expressions from that cell remain applied.
+R parse, evaluation, and auto-print failures are normal language outcomes with `isError: false`; silent successful cells return `[done]`.
+Submitted R functions do not currently retain a source filename.
+Direct subprocess output and output from forked descendants are unsupported, and forked descendants cannot use the inherited sideband.
 The hidden `worker` command takes ownership of the sideband, discovers `R_HOME` through the selected R executable inside the sandbox, and opens `R_HOME/lib/libR.dylib` by its absolute path.
 It does not self-execute or set a dynamic-loader environment variable.
 The worker command runs synchronously on the process main thread; only `serve` creates a Tokio runtime.

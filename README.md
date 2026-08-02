@@ -41,6 +41,7 @@ On macOS, the first nonempty stdin submission or evaluation lazily starts a sand
 Later calls reuse the same global R state.
 The worker runs each cell through R's native top-level loop, captures R console output, prints each visible value, and maintains `.Last.value`.
 If a cell ends while an expression is incomplete, earlier complete expressions from that cell remain applied.
+R language failures remain ordinary console results rather than MCP tool errors, and a silent successful cell returns `[done]`.
 Its MCP initialization identity remains `mcp-console`.
 The intended default client registration name is `console`:
 

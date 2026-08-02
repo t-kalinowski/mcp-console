@@ -1,0 +1,44 @@
+---
+!same-as tests/transcripts/golden/server/initializes_and_lists_tools.yaml
+---
+id: 3
+send:
+  r: browser()
+result:
+  content:
+    - type: text
+      text: "Called from: top level\x20\nBrowse[1]>\n[input]"
+  isError: false
+---
+id: 4
+send:
+  r: "1"
+result:
+  content:
+    - type: text
+      text: worker is already evaluating a cell; poll without `r`
+  isError: true
+---
+id: 5
+send:
+  stdin: |
+    1 + 1
+result:
+  content:
+    - type: text
+      text: |-
+        [1] 2
+        Browse[1]>
+        [input]
+  isError: false
+---
+id: 6
+send:
+  stdin: |
+    c
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+...

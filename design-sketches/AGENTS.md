@@ -81,8 +81,9 @@ The product-level runtime requirements are settled:
 - The supervisor consumes one normalized runtime service for evaluation, output, input, interrupt, lifecycle, plots, help, object inventory, and typed inspection.
 - The public MCP and local sidecar contracts must not expose the selected backend transport.
 
-The worker substrate is **not yet settled**.
-Before implementation commits to either path, complete the spike in [`docs/RUNTIME_BACKEND.md`](docs/RUNTIME_BACKEND.md):
+The implemented text R console uses the purpose-built native worker.
+An Ark-backed R-only prototype was also implemented and evaluated before that choice.
+The broader R/Python/SQL and inspection backend remains open pending the remaining work in [`docs/RUNTIME_BACKEND.md`](docs/RUNTIME_BACKEND.md):
 
 - **Ark-backed worker:** use Ark's Jupyter kernel and mature R-side facilities, including Data Explorer comms, where they can be consumed without an invasive fork.
 - **Native worker:** build a purpose-specific runtime from `mcp-repl`, `harp`, and `libr`, implementing the same normalized service directly.
@@ -100,7 +101,7 @@ Complete code cells and interactive input must remain distinct commands and stat
 R cells must have native top-level semantics regardless of backend.
 Preserve console visible-value behavior without placing a user-visible MCP Console wrapper around the entire cell.
 A user call to `sys.calls()` should not contain an MCP Console dispatcher frame merely because the code came from the tool.
-The Ark spike must verify this behavior rather than assuming it.
+The initial comparison verified this behavior for the native worker and found that Ark's value proxy changes the expression received by top-level task callbacks.
 
 A native DLL-REPL backend may route cell source through a custom `ReadConsole` callback while retaining stdin on the worker's fd 0 stream.
 It must use interpreter state rather than prompt text to feed cell source only at primary or continuation reads.
@@ -169,7 +170,8 @@ Update this map whenever ownership moves.
 - `docs/TOOL_DESCRIPTIONS.md` — exact registered tool and property descriptions.
 - `docs/CLI.md` — standalone binary, installation, diagnostics, viewer, watch, and sidecar-control commands.
 - `docs/SIDECAR_API.md` — process-scoped local API, event model, inspection, live and snapshot data views, plots, and external control.
-- `docs/RUNTIME_BACKEND.md` — Ark-versus-native worker evaluation, spike plan, and decision gate.
+- `docs/RUNTIME_BACKEND.md` — initial Ark-versus-native worker evaluation, remaining full-runtime work, and decision gate.
+- `docs/R_REPL_DLL_ITERATOR.md` — native DLL-REPL findings, decision, and implementation record.
 - `docs/ARCHITECTURE.md` — implementation architecture and staged plan.
 
 Create focused documents only when a subsystem has enough detail to justify a separate source of truth:
@@ -273,17 +275,17 @@ Create focused documents only when a subsystem has enough detail to justify a se
 18. Keep the session manager, MCP adapter, transcript pipeline, and local sidecar API backend-neutral.
     Jupyter messages and Ark comm payloads must not escape `runtime/ark`; `harp`/`libr` types must not escape `runtime/native`.
 19. Isolate backend-specific and unstable API use behind one adapter with pinned compatibility tests.
-20. Complete the Ark-versus-native spike before making either implementation the repository-wide assumption.
-    Record the result as an ADR and update this file.
+20. Do not generalize the native text-R decision into a repository-wide backend assumption.
+    Complete the remaining full-runtime evaluation, record the result as an ADR, and update this file.
 21. Record other substantial unresolved choices as focused spikes or ADRs, then update this file when they become settled.
 22. Keep this sitemap accurate.
     An agent should be able to find the owner of a behavior without broad exploratory search.
 
 ## First implementation priorities
 
-1. MCP server skeleton, tool validation, session state machine, normalized runtime interface, and deterministic fake backend.
-2. Time-boxed Ark-versus-native spike covering R cells, stdin/debuggers, interrupt, plots/help, Python and SQL dispatch, and an independent large-table viewer using live viewport requests.
-3. Record the backend decision, then implement one persistent R worker with structured evaluation, input, interrupt, restart, crash reporting, and capability negotiation.
+1. Build the session state machine, normalized runtime interface, and deterministic fake backend around the implemented persistent R worker.
+2. Complete the remaining backend evaluation covering interrupts, plots/help, Python and SQL dispatch, and an independent large-table viewer using live viewport requests.
+3. Record the full-runtime backend decision, then extend the selected worker with structured interrupt, restart, crash reporting, and capability negotiation.
 4. Bounded output spools, reply cursors, value previews, generated `transcript.qmd`, and managed artifacts.
 5. Reticulate Python cell execution and interactive input.
 6. Persistent DuckDB through R/DBI, bounded SQL results, R environment scanning, and explicit registration.
