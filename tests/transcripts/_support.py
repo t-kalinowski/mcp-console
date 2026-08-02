@@ -7,6 +7,9 @@ from typing import Any
 
 TranscriptEntry = dict[str, Any]
 Transcript = list[TranscriptEntry]
+FULL_HANDSHAKE_TRANSCRIPT = (
+    "tests/transcripts/golden/server/initializes_lists_tools_and_calls_send.yaml"
+)
 
 
 def run_this_suite(suite_path: str) -> None:
@@ -115,8 +118,17 @@ class McpClient:
         self.notify("notifications/initialized")
         self.request("tools/list")
         if not include_in_transcript:
+            from yaml12 import Yaml
+
             del self.transcript[transcript_start:]
-            self.transcript.append({"handshake": "elided"})
+            self.transcript.append(
+                {
+                    "handshake": Yaml(
+                        FULL_HANDSHAKE_TRANSCRIPT,
+                        tag="!elided-from",
+                    )
+                }
+            )
 
     def call_tool(self, name: str, **arguments: Any) -> None:
         self.request(
