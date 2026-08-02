@@ -6,12 +6,15 @@ The runner passes the built binary path to each case.
 Each case returns a `Transcript`: an ordered list of transcript entries.
 The runner serializes each entry as one document in the matching YAML 1.2 stream under `golden/SUITE/CASE.yaml`.
 The runner compares YAML 1.2 values, so equivalent scalar spellings and layouts are accepted.
-Server cases record JSON-RPC requests and responses.
-They omit the invariant `jsonrpc: "2.0"` field and show a matching request and response `id` once at the document root.
+Server cases record each JSON-RPC client message and any matching response as one YAML document.
+They omit the invariant `jsonrpc: "2.0"` field and show a request-response `id` once at the document root when present.
 Tool calls show the tool name and arguments directly, so a `tools/call` request for `send` is recorded as `send: ARGUMENTS`.
+The response's `result` or `error`, when present, appears directly at the document root after the request.
 The initialization, initialized notification, and tool-list exchange appear in full only in `server::initializes_lists_tools_and_calls_send`.
-Other server transcripts execute the same exchange but record it as `handshake: !elided-from PATH`.
-`PATH` identifies the snapshot whose initialization documents are omitted at that point; the tag is symbolic and does not load the file.
+Before compacting another transcript, the runner verifies that its three handshake documents equal those in the full snapshot.
+An identical handshake becomes a bare `!same-as PATH` document; a different handshake remains in full.
+`PATH` identifies the snapshot used for comparison, and the tag does not load the file.
+When accepting a handshake change, update the full snapshot before the abbreviated transcripts.
 The client validates both fields before recording the compact transcript.
 The `help` suite records command lines and stdout in one stream with color disabled.
 It adds the exit code for failures and stderr when nonempty.

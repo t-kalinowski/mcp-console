@@ -1,5 +1,5 @@
 ---
-handshake: !elided-from tests/transcripts/golden/server/initializes_lists_tools_and_calls_send.yaml
+!same-as tests/transcripts/golden/server/initializes_lists_tools_and_calls_send.yaml
 ---
 id: 3
 send:
@@ -9,15 +9,14 @@ send:
     answer + 2
     cat("done\n")
     invisible(99)
-output:
-  result:
-    content:
-      - type: text
-        text: |
-          [1] 41
-          [1] 42
-          done
-    isError: false
+result:
+  content:
+    - type: text
+      text: |
+        [1] 41
+        [1] 42
+        done
+  isError: false
 ---
 id: 4
 send:
@@ -29,43 +28,39 @@ send:
       )),
       c(0.125, 0.375, 0.375, 0.125)
     )
-output:
-  result:
-    content:
-      - type: text
-        text: |
-          [1] TRUE
-    isError: false
+result:
+  content:
+    - type: text
+      text: |
+        [1] TRUE
+  isError: false
 ---
 id: 5
 send:
   r: stop("boom", call. = FALSE)
-output:
-  result:
-    content:
-      - type: text
-        text: |
-          Error: boom
-    isError: false
+result:
+  content:
+    - type: text
+      text: |
+        Error: boom
+  isError: false
 ---
 id: 6
 send:
   r: answer
-output:
-  result:
-    content:
-      - type: text
-        text: |
-          [1] 40
-    isError: false
+result:
+  content:
+    - type: text
+      text: |
+        [1] 40
+  isError: false
 ---
 id: 7
 send:
   r: silent <- 1
-output:
-  result:
-    content:
-      - type: text
-        text: "[done]"
-    isError: false
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
 ...

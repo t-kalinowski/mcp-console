@@ -1,51 +1,47 @@
 ---
-handshake: !elided-from tests/transcripts/golden/server/initializes_lists_tools_and_calls_send.yaml
+!same-as tests/transcripts/golden/server/initializes_lists_tools_and_calls_send.yaml
 ---
 id: 3
 send:
   r: |-
     answer <- 42
     answer + (
-output:
-  result:
-    content:
-      - type: text
-        text: |
-          Error: Incomplete code
-    isError: false
+result:
+  content:
+    - type: text
+      text: |
+        Error: Incomplete code
+  isError: false
 ---
 id: 4
 send:
   r: answer
-output:
-  result:
-    content:
-      - type: text
-        text: |
-          [1] 42
-    isError: false
+result:
+  content:
+    - type: text
+      text: |
+        [1] 42
+  isError: false
 ---
 id: 5
 send:
   r: |-
     answer <- 43
     )
-output:
-  result:
-    content:
-      - type: text
-        text: |
-          Error: unexpected ')' in ")"
-    isError: false
+result:
+  content:
+    - type: text
+      text: |
+        Error: unexpected ')' in ")"
+  isError: false
 ---
 id: 6
 send:
   r: answer
-output:
-  result:
-    content:
-      - type: text
-        text: |
-          [1] 43
-    isError: false
+result:
+  content:
+    - type: text
+      text: |
+        [1] 43
+  isError: false
 ...

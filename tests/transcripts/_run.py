@@ -11,13 +11,17 @@ from collections.abc import Callable
 from pathlib import Path
 
 from _support import Transcript
-from yaml12 import format_yaml, read_yaml
+from yaml12 import Yaml, format_yaml, read_yaml
 
 
 directory = Path(__file__).resolve().parent
 root = directory.parents[1]
 binary = root / "target" / "debug" / "mcp-console"
 suite_paths = sorted(directory.glob("[!_]*.py"))
+handshake_reference = (
+    "tests/transcripts/golden/server/initializes_lists_tools_and_calls_send.yaml"
+)
+handshake_documents = 3
 
 parser = argparse.ArgumentParser(prog="scripts/test")
 parser.add_argument("--list", action="store_true", dest="list_tests")
@@ -107,9 +111,16 @@ for suite_name, selected_case_names in selected_suites.items():
         continue
 
     for case_name, record_transcript in selected_cases:
-        actual = record_transcript(binary)
-        transcript_text = format_yaml(actual, multi=True)
         golden = directory / "golden" / suite_name / f"{case_name}.yaml"
+        actual = record_transcript(binary)
+        if golden != root / handshake_reference:
+            reference = read_yaml(root / handshake_reference, multi=True)
+            if identical(actual[:handshake_documents], reference[:handshake_documents]):
+                actual = [
+                    Yaml(handshake_reference, tag="!same-as"),
+                    *actual[handshake_documents:],
+                ]
+        transcript_text = format_yaml(actual, multi=True)
 
         if options.update:
             golden.parent.mkdir(parents=True, exist_ok=True)

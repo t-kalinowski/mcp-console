@@ -1,5 +1,5 @@
 ---
-handshake: !elided-from tests/transcripts/golden/server/initializes_lists_tools_and_calls_send.yaml
+!same-as tests/transcripts/golden/server/initializes_lists_tools_and_calls_send.yaml
 ---
 id: 3
 send:

@@ -1,24 +1,22 @@
 ---
-handshake: !elided-from tests/transcripts/golden/server/initializes_lists_tools_and_calls_send.yaml
+!same-as tests/transcripts/golden/server/initializes_lists_tools_and_calls_send.yaml
 ---
 id: 3
 send:
   r: violate protocol
-output:
-  result:
-    content:
-      - type: text
-        text: worker sent an unexpected ready message
-    isError: true
+result:
+  content:
+    - type: text
+      text: worker sent an unexpected ready message
+  isError: true
 ---
 id: 4
 send:
   r: hello
-output:
-  result:
-    content:
-      - type: text
-        text: |
-          zod: hello
-    isError: false
+result:
+  content:
+    - type: text
+      text: |
+        zod: hello
+  isError: false
 ...

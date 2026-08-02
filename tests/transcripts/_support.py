@@ -7,9 +7,6 @@ from typing import Any
 
 TranscriptEntry = dict[str, Any]
 Transcript = list[TranscriptEntry]
-FULL_HANDSHAKE_TRANSCRIPT = (
-    "tests/transcripts/golden/server/initializes_lists_tools_and_calls_send.yaml"
-)
 
 
 def run_this_suite(suite_path: str) -> None:
@@ -75,7 +72,9 @@ class McpClient:
         message = json.loads(line)
         assert message.pop("jsonrpc", None) == "2.0", message
         assert message.pop("id", None) == entry["id"], message
-        entry["output"] = message
+        assert message.keys() == {"result"} or message.keys() == {"error"}, message
+        assert entry.keys().isdisjoint(message), message
+        entry.update(message)
 
     def request(self, method: str, **params: Any) -> None:
         message: dict[str, Any] = {
@@ -100,12 +99,7 @@ class McpClient:
 
         self.send(message)
 
-    def initialize_and_list_tools(
-        self,
-        *,
-        include_in_transcript: bool = False,
-    ) -> None:
-        transcript_start = len(self.transcript)
+    def initialize_and_list_tools(self) -> None:
         self.request(
             "initialize",
             protocolVersion="2025-11-25",
@@ -117,18 +111,6 @@ class McpClient:
         )
         self.notify("notifications/initialized")
         self.request("tools/list")
-        if not include_in_transcript:
-            from yaml12 import Yaml
-
-            del self.transcript[transcript_start:]
-            self.transcript.append(
-                {
-                    "handshake": Yaml(
-                        FULL_HANDSHAKE_TRANSCRIPT,
-                        tag="!elided-from",
-                    )
-                }
-            )
 
     def call_tool(self, name: str, **arguments: Any) -> None:
         self.request(
