@@ -13,6 +13,7 @@ use tokio::io::{AsyncRead, ReadBuf};
 use tokio::sync::oneshot;
 
 const WORKER_SHUTDOWN_GRACE: Duration = Duration::from_secs(1);
+const DEFAULT_TIMEOUT_MS: u64 = 60_000;
 
 #[derive(Clone)]
 struct ConsoleServer {
@@ -22,8 +23,15 @@ struct ConsoleServer {
 #[derive(Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct SendArguments {
-    /// Complete multiline R code evaluated in persistent state.
-    r: String,
+    /// Complete multiline R code evaluated in persistent state. Omit to poll a running cell.
+    r: Option<String>,
+    /// Maximum time this call waits. It does not limit or stop the computation.
+    #[serde(default = "default_timeout_ms")]
+    timeout_ms: u64,
+}
+
+fn default_timeout_ms() -> u64 {
+    DEFAULT_TIMEOUT_MS
 }
 
 impl ConsoleServer {
@@ -38,12 +46,12 @@ impl ConsoleServer {
 
 #[tool_router]
 impl ConsoleServer {
-    #[tool(description = "Evaluate one complete R code cell in persistent state.")]
+    #[tool(description = "Evaluate one complete R code cell or poll its running evaluation.")]
     async fn send(
         &self,
-        Parameters(SendArguments { r }): Parameters<SendArguments>,
+        Parameters(SendArguments { r, timeout_ms }): Parameters<SendArguments>,
     ) -> Result<String, String> {
-        self.worker.evaluate(r).await
+        self.worker.send(r, Duration::from_millis(timeout_ms)).await
     }
 }
 

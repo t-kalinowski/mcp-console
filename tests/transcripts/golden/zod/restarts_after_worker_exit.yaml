@@ -12,11 +12,11 @@ result:
 ---
 id: 4
 send:
-  r: hello
+  r: echo
 result:
   content:
     - type: text
       text: |
-        zod: hello
+        zod: echo
   isError: false
 ...

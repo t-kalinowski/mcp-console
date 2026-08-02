@@ -18,7 +18,7 @@ rmcp = { version = "2.2.0", default-features = false, features = ["macros", "ser
 rust-embed = { version = "8.11", features = ["debug-embed"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-tokio = { version = "1", features = ["macros", "rt", "sync"] }
+tokio = { version = "1", features = ["macros", "rt", "sync", "time"] }
 wait-timeout = "0.2"
 
 [build-dependencies]

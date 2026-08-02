@@ -1,0 +1,45 @@
+---
+!same-as tests/transcripts/golden/server/initializes_and_lists_tools.yaml
+---
+id: 3
+send:
+  r: invisible(NULL)
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+id: 4
+send:
+  r: |-
+    Sys.sleep(0.25)
+    answer <- 42
+    answer
+  timeout_ms: 10
+result:
+  content:
+    - type: text
+      text: "[running]"
+  isError: false
+---
+id: 5
+send:
+  timeout_ms: 3000
+result:
+  content:
+    - type: text
+      text: |
+        [1] 42
+  isError: false
+---
+id: 6
+send:
+  r: answer + 1
+result:
+  content:
+    - type: text
+      text: |
+        [1] 43
+  isError: false
+...

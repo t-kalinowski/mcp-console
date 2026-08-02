@@ -12,7 +12,7 @@ def test_initializes_and_lists_tools(binary: Path) -> Transcript:
     return client.finish()
 
 
-def test_rejects_invalid_send_arguments(binary: Path) -> Transcript:
+def test_validates_send_arguments(binary: Path) -> Transcript:
     client = McpClient(binary, ("serve",))
     client.initialize_and_list_tools()
     client.call_tool(
@@ -23,6 +23,9 @@ def test_rejects_invalid_send_arguments(binary: Path) -> Transcript:
         """).strip(),
         wait_ms=0,
     )
+    client.call_tool("send", r=None)
+    output = client.transcript[-1]["result"]["content"][0]["text"]
+    assert output == "[idle]", output
     return client.finish()
 
 

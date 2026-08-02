@@ -17,7 +17,7 @@ The hidden `serve --worker PATH` option replaces it with a development worker.
 
 ## Launch contract
 
-The worker starts lazily on the first `send` call.
+The worker starts lazily on the first `send` call that supplies `r`.
 On macOS, the server uses the same `SandboxedCommand` builder as the `sandbox` command.
 For `--worker PATH`, `PATH` is one program name or path, with no arguments or shell parsing, producing a launch equivalent to:
 
@@ -91,21 +91,36 @@ One evaluation has this shape:
 ```text
 worker -> server  {"kind":"ready"}
 
-server -> worker  {"kind":"evaluate","r":"hello"}
+server -> worker  {"kind":"evaluate","r":"echo"}
 worker -> server  {"kind":"output","data":"zod: "}
-worker -> server  {"kind":"output","data":"hello\n"}
+worker -> server  {"kind":"output","data":"echo\n"}
 worker -> server  {"kind":"completed"}
 ```
 
 The worker may send zero or more `output` messages.
 The server concatenates their text in arrival order.
-`completed` ends the evaluation and permits the next one.
+`completed` ends the sideband evaluation; collecting its MCP result permits the next one.
 
 If the worker sends no output before `completed`, the current MCP projection returns `[done]`.
 That marker is produced by the server; it is not a sideband message.
 
 The protocol has no request IDs because only one evaluation can be in flight over this sideband.
-Concurrent MCP calls wait on the worker process mutex and reach the worker sequentially.
+New code is rejected while an evaluation or its uncollected result is active.
+
+## MCP waiting and polling
+
+The optional MCP `timeout_ms` argument defaults to 60,000 milliseconds.
+It bounds how long that `send` call waits for the worker; it is not sent over the sideband and does not bound or stop computation.
+The wait includes lazy worker startup.
+
+If the wait expires before `completed`, the call returns `[running]` and retains the active evaluation.
+A later `send` call without `r` polls that evaluation with its own `timeout_ms`.
+If the evaluation completes, the poll returns all output accumulated since it started, or `[done]` when it produced none.
+If the poll wait expires first, it returns `[running]` again.
+A call without `r` while no evaluation is active returns `[idle]`.
+
+This slice does not expose partial output while an evaluation is running.
+Output cursors and incremental polling remain unimplemented.
 
 ## State transitions
 
@@ -161,25 +176,28 @@ Parse, evaluation, and print errors are returned as console text followed by `co
 
 ## Current limits
 
-The current implementation has no startup timeout, evaluation timeout, frame-size limit, or accumulated-output limit.
-Only shutdown has a deadline.
+The current implementation has no worker startup or execution timeout, frame-size limit, or accumulated-output limit.
+`timeout_ms` limits one MCP wait without terminating the worker; only shutdown has a process deadline.
 
 It does not capture worker standard output or standard error.
 It does not support arbitrary binary output.
 Worker failures are reported as plain-text MCP tool errors, not structured worker events.
+Concurrent MCP `send` calls are outside the current contract.
 The current sandbox child does not yet supervise descendants after its direct process exits, or descendants that leave its process group.
 
 ## Zod fixture behavior
 
 Zod implements the protocol as an executable uv script requiring Python 3.11 or newer.
-For a normal `evaluate`, it sends two output chunks followed by `completed`:
+When `r` is exactly `echo`, it sends two output chunks followed by `completed`:
 
 ```text
-zod: <r>\n
+zod: echo\n
 ```
 
 When `r` is exactly `stall`, Zod creates a checkpoint in its private temporary directory and sleeps forever.
+When `r` is `complete after timeout`, it pauses briefly before returning `zod: complete after timeout\n`.
 When `r` is `violate protocol`, it sends an unexpected second `ready` message.
 When `r` is `exit unexpectedly`, it exits with status 86 without replying.
 Other fixture-only modes verify that the sandbox denies host writes and that a blocked sideband writer cannot delay shutdown.
+Other commands fail instead of being echoed implicitly.
 Those behaviors are test fixtures, not part of the worker protocol.

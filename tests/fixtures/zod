@@ -76,6 +76,11 @@ def main() -> None:
             send(writer, {"kind": "completed"})
             continue
 
+        if message["r"] == "complete after timeout":
+            time.sleep(0.25)
+        elif message["r"] != "echo":
+            raise AssertionError(f"unsupported Zod command: {message['r']}")
+
         for output in ("zod: ", f"{message['r']}\n"):
             send(
                 writer,
