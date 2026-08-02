@@ -25,14 +25,16 @@ def send(stream: TextIO, message: dict[str, Any]) -> None:
     stream.flush()
 
 
-def synchronize_reader(stream: TextIO) -> None:
-    """Block until the server has read the preceding sideband frame."""
+def wait_for_server_to_process_input_request(stream: TextIO) -> None:
+    """Block until the server has installed the preceding input request."""
     frame = json.dumps(
         {"kind": "output", "data": ""},
         separators=(",", ":"),
     )
-    # This exceeds Darwin's pipe capacity, so flush returns only after the
-    # server enters its next read and has installed the preceding input request.
+    # Flushing input_requested only proves that it entered the kernel pipe.
+    # The appended spaces are valid trailing JSON whitespace, so this remains
+    # a no-output frame. Its size exceeds Darwin's pipe capacity, and FIFO
+    # backpressure forces the server to process the request before flush returns.
     stream.write(frame + (" " * (2 * 1024 * 1024)) + "\n")
     stream.flush()
 
@@ -96,7 +98,9 @@ def main() -> None:
                 time.sleep(0.01)
             send(writer, {"kind": "output", "data": "before\n"})
             send(writer, {"kind": "input_requested", "prompt": "late> "})
-            synchronize_reader(writer)
+            # Exercise follow-up stdin after the request is stored but before
+            # its prompt has been exposed by an MCP response.
+            wait_for_server_to_process_input_request(writer)
             (temporary / "zod-input-requested").touch()
             stdin = input()
             send(writer, {"kind": "input_received"})
