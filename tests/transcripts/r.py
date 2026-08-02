@@ -50,10 +50,10 @@ def test_times_out_and_polls_running_evaluation(binary: Path) -> Transcript:
         answer
         """).strip()
     client.call_tool("send", r=r, timeout_ms=10)
-    output = client.transcript[-1]["output"]["result"]["content"][0]["text"]
+    output = client.transcript[-1]["result"]["content"][0]["text"]
     assert output == "[running]", output
     client.call_tool("send", timeout_ms=3_000)
-    output = client.transcript[-1]["output"]["result"]["content"][0]["text"]
+    output = client.transcript[-1]["result"]["content"][0]["text"]
     assert output == "[1] 42\n", output
     client.call_tool("send", r="answer + 1")
     return client.finish()

@@ -11,13 +11,16 @@ from collections.abc import Callable
 from pathlib import Path
 
 from _support import Transcript
-from yaml12 import format_yaml, read_yaml
+from yaml12 import Yaml, format_yaml, read_yaml
 
 
 directory = Path(__file__).resolve().parent
 root = directory.parents[1]
 binary = root / "target" / "debug" / "mcp-console"
 suite_paths = sorted(directory.glob("[!_]*.py"))
+initialization_reference = (
+    "tests/transcripts/golden/server/initializes_and_lists_tools.yaml"
+)
 
 parser = argparse.ArgumentParser(prog="scripts/test")
 parser.add_argument("--list", action="store_true", dest="list_tests")
@@ -107,9 +110,17 @@ for suite_name, selected_case_names in selected_suites.items():
         continue
 
     for case_name, record_transcript in selected_cases:
-        actual = record_transcript(binary)
-        transcript_text = format_yaml(actual, multi=True)
         golden = directory / "golden" / suite_name / f"{case_name}.yaml"
+        actual = record_transcript(binary)
+        if golden != root / initialization_reference:
+            reference = read_yaml(root / initialization_reference, multi=True)
+            assert reference, f"{initialization_reference} contains no documents"
+            if identical(actual[: len(reference)], reference):
+                actual = [
+                    Yaml(initialization_reference, tag="!same-as"),
+                    *actual[len(reference) :],
+                ]
+        transcript_text = format_yaml(actual, multi=True)
 
         if options.update:
             golden.parent.mkdir(parents=True, exist_ok=True)

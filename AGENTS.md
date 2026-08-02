@@ -112,4 +112,5 @@ Begin as one Cargo package and split crates only when a real boundary emerges.
 - Keep the MCP adapter independent of interpreter implementation details.
 - Treat all runtime execution as shell-class capability and place safety at the worker-process boundary.
 - Update this file when a PR changes the implemented surface or repository map.
+- Before every commit, run `scripts/format` and review its changes.
 - Run `scripts/check` before opening a PR.

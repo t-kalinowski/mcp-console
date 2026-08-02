@@ -49,7 +49,18 @@ class McpClient:
         entry = {}
         if "id" in recorded_message:
             entry["id"] = recorded_message.pop("id")
-        entry["input"] = recorded_message
+        params = recorded_message.get("params")
+        if (
+            recorded_message.keys() == {"method", "params"}
+            and recorded_message["method"] == "tools/call"
+            and isinstance(params, dict)
+            and params.keys() == {"name", "arguments"}
+            and params["name"] == "send"
+            and isinstance(params["arguments"], dict)
+        ):
+            entry["send"] = params["arguments"]
+        else:
+            entry["input"] = recorded_message
         self.transcript.append(entry)
         self.stdin.write(json.dumps(message) + "\n")
         self.stdin.flush()
@@ -61,7 +72,9 @@ class McpClient:
         message = json.loads(line)
         assert message.pop("jsonrpc", None) == "2.0", message
         assert message.pop("id", None) == entry["id"], message
-        entry["output"] = message
+        assert message.keys() == {"result"} or message.keys() == {"error"}, message
+        assert entry.keys().isdisjoint(message), message
+        entry.update(message)
 
     def request(self, method: str, **params: Any) -> None:
         message: dict[str, Any] = {
