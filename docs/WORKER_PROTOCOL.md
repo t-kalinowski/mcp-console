@@ -7,7 +7,7 @@ The message enums in `src/worker_protocol.rs`, the framing in `src/sideband.rs`,
 ## Scope
 
 The current implementation provides one worker for one server process.
-It evaluates one `r` cell at a time and accepts exact `stdin` text when that evaluation requests input.
+It evaluates one `r` cell at a time and accepts exact `stdin` text while that evaluation remains active.
 Evaluations run sequentially.
 
 The protocol does not yet include interrupts, request IDs, structured errors, sessions, capabilities, or protocol version negotiation.
@@ -17,7 +17,7 @@ The hidden `serve --worker PATH` option replaces it with a development worker.
 
 ## Launch contract
 
-The worker starts lazily on the first `send` call.
+The worker starts lazily on the first `send` call that supplies `r`.
 On macOS, the server uses the same `SandboxedCommand` builder as the `sandbox` command.
 For `--worker PATH`, `PATH` is one program name or path, with no arguments or shell parsing, producing a launch equivalent to:
 
@@ -59,8 +59,9 @@ server writer  ──>  worker reader
 server reader  <──  worker writer
 ```
 
-The server also retains the write end of the pipe connected to worker fd 0.
-After `input_requested`, it writes the next accepted line or partial-line fragment directly to that pipe.
+The server also owns an independent FIFO writer connected to worker fd
+0. Each accepted `stdin` string is UTF-8 encoded and queued to that
+writer without inspection or framing.
 There is no sideband input frame.
 
 Each frame is one UTF-8 JSON object followed by `\n`.
@@ -96,26 +97,43 @@ One evaluation has this shape:
 ```text
 worker -> server  {"kind":"ready"}
 
-server -> worker  {"kind":"evaluate","r":"hello"}
+server -> worker  {"kind":"evaluate","r":"echo"}
 worker -> server  {"kind":"output","data":"zod: "}
-worker -> server  {"kind":"output","data":"hello\n"}
+worker -> server  {"kind":"output","data":"echo\n"}
 worker -> server  {"kind":"completed"}
 ```
 
 The worker may send zero or more `output` messages.
 The server concatenates their text in arrival order.
-`completed` ends the evaluation and permits the next one.
+`completed` ends the sideband evaluation; collecting its MCP result permits the next one.
 
 If the worker sends no output before `completed`, the current MCP projection returns `[done]`.
 That marker is produced by the server; it is not a sideband message.
 
 The protocol has no request IDs because only one evaluation can be in flight over this sideband.
-Concurrent MCP calls wait on the worker process mutex and reach the worker sequentially.
+New code is rejected while an evaluation or its uncollected result is active.
+
+## MCP waiting and polling
+
+The optional MCP `timeout_ms` argument defaults to 60,000 milliseconds.
+It bounds how long that `send` call waits for the worker; it is not sent over the sideband and does not bound or stop computation.
+The wait includes lazy worker startup.
+
+An `input_requested` frame normally returns the output collected so far, its prompt, and `[input]` immediately.
+A call that just queued nonempty stdin without replying to an already exposed boundary defers a new input frame until completion or its deadline.
+At that deadline, a pending input frame wins over `[running]`; otherwise an unfinished call returns `[running]` and retains the active evaluation.
+A later `send` call without `r` polls that evaluation with its own `timeout_ms`; it may include `stdin` to queue bytes before waiting.
+Completion returns output not already delivered at an `[input]` boundary, or `[done]` when it produced none.
+If the poll wait expires first, it returns `[running]` again.
+A call without `r` or `stdin` while no evaluation is active returns `[idle]`; stdin alone while idle is an error.
+
+Except for prompt boundaries, this slice does not expose partial output while an evaluation is running.
+Output cursors and general incremental polling remain unimplemented.
 
 ### Interactive input
 
-When evaluated code calls `readline()` or enters `browser()`, the worker sends `input_requested`.
-Without bundled `stdin`, the MCP response returns the output collected so far, the trimmed prompt, and an `[input]` marker.
+When evaluated code calls `readline()` or enters `browser()`, the worker may send `input_requested`.
+The MCP response returns the output collected so far, the trimmed prompt, and an `[input]` marker.
 A later `send` call supplies its `stdin` unchanged:
 
 ```text
@@ -128,17 +146,20 @@ worker -> server  {"kind":"completed"}
 ```
 
 An MCP call may contain both `r` and `stdin`.
-The server sends `evaluate` first and holds `stdin` until the first `input_requested` message.
-It then writes the next line or partial-line fragment to worker fd 0 and continues collecting the same call's output.
-Each logical line is at most 512 bytes including its newline, so every write is atomic on the macOS pipe; later `input_requested` messages can consume the rest of the same MCP value without placing unrequested bytes in the pipe.
-If `completed` arrives first, the server does not send the pending input and appends `[stdin discarded]` to the MCP result.
+The server flushes `evaluate` first, then attaches the evaluation to the worker's stdin writer and drains any queued input in submission order.
+A later stdin-only call uses the same route without acquiring the evaluation's worker lock, including after an earlier call returned `[running]`.
 
-The worker adds no newline to input.
-One `stdin` value may satisfy multiple reads; the server retains unsent text and the worker buffers partial text already read from fd 0.
-Partial input produces another prompt and `[input]` boundary.
-Input rejected before an fd-0 write leaves the current input request active, so a later valid `stdin` call can continue the same evaluation.
-Unsent and unread buffered text is discarded when the outer evaluation completes or errors.
-New R code is rejected while input is required, and follow-up `stdin` is rejected at other times.
+The server writes each string blindly.
+It adds no newline, does not split or validate lines, and imposes no stdin size limit.
+`input_requested` is an observation of worker state, not permission to write.
+A call that just queued nonempty stdin may wait past a new frame in case the evaluation completes, but the frame remains pending and is returned at that call's deadline.
+Nonempty stdin sent in reply to an exposed boundary clears that boundary; empty stdin writes no bytes and leaves it exposed.
+Code that reads fd 0 without sending the frame can consume bundled input or input sent after a polling timeout.
+
+Acceptance means the bytes were queued, not that the current evaluation consumed them.
+The server does not retract or drain bytes after `completed`; data already in the pipe or the R worker's input buffer may satisfy later reads or later evaluations.
+Worker shutdown or failure discards whatever remains.
+New R code is rejected while an evaluation or its uncollected result is active.
 
 ## State transitions
 
@@ -146,9 +167,10 @@ New R code is rejected while input is required, and follow-up `stdin` is rejecte
 | --- | --- | --- |
 | starting | worker → server `ready` | idle |
 | idle | server → worker `evaluate` | evaluating |
+| evaluating | MCP stdin submission | evaluating |
 | evaluating | worker → server `output` | evaluating |
 | evaluating | worker → server `input_requested` | input required |
-| input required | server → worker fd 0 | evaluating |
+| input required | MCP stdin submission | evaluating |
 | evaluating | worker → server `completed` | idle |
 | starting, idle, evaluating, or input required | server → worker `shutdown` | terminal |
 
@@ -169,7 +191,7 @@ It then attempts to send:
 ```
 
 The worker sends no acknowledgment; it exits.
-The shutdown task first closes worker stdin, then attempts the sideband write.
+The shutdown task queues worker-stdin closure, then attempts the sideband write.
 It runs independently of the deadline so a blocked stdin writer or full sideband pipe cannot postpone forced termination.
 The sandbox child waits only for the time remaining before the original deadline.
 If its direct process is still running at the deadline, the sandbox force-stops its process group and reaps that direct process.
@@ -192,36 +214,41 @@ The CLI runs `worker` synchronously without a Tokio runtime, so R initialization
 
 The worker supplies cell source through `ReadConsole` before each top-level evaluation starts.
 Evaluation-time `ReadConsole` requests use the separate interactive input queue.
-The callback sends `input_requested`, reads fd 0, and preserves partial or additional lines for later reads in the same evaluation.
+When its interactive buffer has no complete line, the callback sends `input_requested`, reads fd 0, and preserves partial or additional lines for later reads.
 It uses R's busy callback rather than prompt text to distinguish cell source from evaluated-code input.
-Unused input is cleared after both successful evaluation and language errors.
+Buffered interactive input remains available across evaluation boundaries.
 Submitted source references are not retained.
 Parse, evaluation, and print errors are returned as console text followed by `completed`, so the worker remains available even though the protocol has no structured language-error message.
 
 ## Current limits
 
-The current implementation has no startup timeout, evaluation timeout, frame-size limit, or accumulated-output limit.
-Only shutdown has a deadline.
+The current implementation has no worker startup or execution timeout, frame-size limit, stdin queue limit, or accumulated-output limit.
+`timeout_ms` limits one MCP wait without terminating the worker or a blocked stdin write; only shutdown has a process deadline.
 
 It does not capture worker standard output or standard error.
 It does not support arbitrary binary output.
 Worker failures are reported as plain-text MCP tool errors, not structured worker events.
+Concurrent MCP `send` calls are outside the current contract.
 The current sandbox child does not yet supervise descendants after its direct process exits, or descendants that leave its process group.
 
 ## Zod fixture behavior
 
 Zod implements the protocol as an executable uv script requiring Python 3.11 or newer.
-For a normal `evaluate`, it sends two output chunks followed by `completed`:
+When `r` is exactly `echo`, it sends two output chunks followed by `completed`:
 
 ```text
-zod: <r>\n
+zod: echo\n
 ```
 
 When `r` is exactly `stall`, Zod creates a checkpoint in its private temporary directory and sleeps forever.
+When `r` is `complete after timeout`, it pauses briefly before returning `zod: complete after timeout\n`.
 When `r` is `violate protocol`, it sends an unexpected second `ready` message.
 When `r` is `exit unexpectedly`, it exits with status 86 without replying.
 When `r` is `request input`, it sends `input_requested` and calls Python `input()` to consume one line from fd 0.
-It echoes that line in an `output` frame and completes.
-The Zod acceptance supplies newline-terminated text because Python `input()` waits for a complete line; partial-input boundaries are covered by the built-in R worker.
+The `input without request` and `input length without request` modes call `input()` without first sending a frame, covering proactive fd-0 delivery.
+The `input without request then request input` mode performs one direct read before reporting a second input boundary, covering the absence of server-side consumption inference.
+Zod echoes the input or its byte length and completes.
+Its acceptance supplies newline-terminated text because Python `input()` waits for a complete line; partial-input boundaries are covered by the built-in R worker.
 Other fixture-only modes verify that the sandbox denies host writes and that a blocked sideband writer cannot delay shutdown.
+Other commands fail instead of being echoed implicitly.
 Those behaviors are test fixtures, not part of the worker protocol.

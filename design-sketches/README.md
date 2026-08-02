@@ -165,7 +165,7 @@ Complete text, plots, live table batches, and snapshots are fetched separately b
 - Product name: **MCP Console**.
 - Public abstraction: a persistent console session, not a notebook or conventional line-oriented REPL.
 - Top-level input: complete R, Python, or SQL cells.
-- Interactive input: exact, optionally multiline `stdin` text only when the active runtime requests it.
+- Interactive input: exact, optionally multiline `stdin` text queued while an evaluation is active; runtime input events report state but do not gate delivery.
 - MCP surface: `send` plus a low-frequency `session` environment and lifecycle tool.
 - Language selection: the object key is `r`, `python`, or `sql`.
 - Runtime substrate: open implementation decision.

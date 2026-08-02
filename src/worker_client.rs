@@ -1,7 +1,8 @@
+use std::collections::VecDeque;
 use std::ffi::OsString;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 /// A cloneable handle to one lazily started worker.
 #[derive(Clone)]
@@ -10,29 +11,36 @@ pub(crate) struct Client(Arc<ClientInner>);
 struct ClientInner {
     program: PathBuf,
     arguments: Vec<OsString>,
-    state: Mutex<WorkerState>,
+    worker: Mutex<Option<platform::Worker>>,
+    evaluation: Mutex<Option<Arc<Evaluation>>>,
     shutdown_gate: Mutex<ShutdownGate>,
 }
 
-enum WorkerState {
-    Cold,
-    Idle(platform::Worker),
-    InputRequired(platform::Worker),
+struct Evaluation {
+    state: Mutex<EvaluationState>,
+    input: Mutex<InputRoute>,
+    changed: tokio::sync::Notify,
 }
 
-enum Operation {
-    Evaluate { r: String, stdin: Option<String> },
-    Input(String),
+struct EvaluationState {
+    result: Option<Result<String, String>>,
+    input_required: Option<InputBoundary>,
 }
 
-struct Boundary {
+struct InputBoundary {
     output: String,
-    input_required: bool,
+    delivered: bool,
 }
 
-struct OperationFailure {
-    message: String,
-    input_required: bool,
+struct InputRoute {
+    writer: Option<platform::StdinSender>,
+    queued: VecDeque<Vec<u8>>,
+}
+
+enum EvaluationWait {
+    Running,
+    InputRequired(String),
+    Completed(Result<String, String>),
 }
 
 /// Keeps the current stop handle available until shutdown closes the gate.
@@ -63,100 +71,153 @@ impl Client {
         Self(Arc::new(ClientInner {
             program,
             arguments,
-            state: Mutex::new(WorkerState::Cold),
+            worker: Mutex::new(None),
+            evaluation: Mutex::new(None),
             shutdown_gate: Mutex::new(ShutdownGate::Open { stop_handle: None }),
         }))
     }
 
-    /// Evaluates one cell without blocking the async MCP server runtime.
-    ///
-    /// The worker starts on the first call and is then reused by later calls.
-    /// `spawn_blocking` owns a cheap handle clone, not a copy of the process.
-    pub(crate) async fn evaluate(
+    /// Starts one cell, supplies its stdin, or polls the cell already running.
+    pub(crate) async fn send(
+        &self,
+        r: Option<String>,
+        stdin: Option<String>,
+        timeout: Duration,
+    ) -> Result<String, String> {
+        let (evaluation, defer_input) = match (r, stdin) {
+            (Some(r), stdin) => self.start_evaluation(r, stdin)?,
+            (None, Some(stdin)) => match self.current_evaluation()? {
+                Some(evaluation) => {
+                    let defer_input = evaluation.submit_stdin(stdin)?;
+                    (evaluation, defer_input)
+                }
+                None => {
+                    return Err("stdin is accepted only while an R cell is active".to_string());
+                }
+            },
+            (None, None) => match self.current_evaluation()? {
+                Some(evaluation) => (evaluation, false),
+                None => return Ok("[idle]".to_string()),
+            },
+        };
+
+        match evaluation.wait(timeout, defer_input).await? {
+            EvaluationWait::Running => Ok("[running]".to_string()),
+            EvaluationWait::InputRequired(output) => Ok(output),
+            EvaluationWait::Completed(result) => {
+                self.clear_evaluation(&evaluation)?;
+                result
+            }
+        }
+    }
+
+    fn start_evaluation(
         &self,
         r: String,
         stdin: Option<String>,
-    ) -> Result<String, String> {
-        self.run(Operation::Evaluate { r, stdin }).await
-    }
-
-    /// Supplies exact input after the worker requests it.
-    pub(crate) async fn provide_input(&self, stdin: String) -> Result<String, String> {
-        self.run(Operation::Input(stdin)).await
-    }
-
-    async fn run(&self, operation: Operation) -> Result<String, String> {
-        let client = self.clone();
-        tokio::task::spawn_blocking(move || client.run_blocking(operation))
-            .await
-            .map_err(|error| format!("worker task failed: {error}"))?
-    }
-
-    fn run_blocking(&self, operation: Operation) -> Result<String, String> {
+    ) -> Result<(Arc<Evaluation>, bool), String> {
         if self.shutdown_requested()? {
             return Err("worker is shutting down".to_string());
         }
 
-        let mut state = self
+        let evaluation = Arc::new(Evaluation {
+            state: Mutex::new(EvaluationState {
+                result: None,
+                input_required: None,
+            }),
+            input: Mutex::new(InputRoute {
+                writer: None,
+                queued: VecDeque::new(),
+            }),
+            changed: tokio::sync::Notify::new(),
+        });
+        let defer_input = match stdin {
+            Some(stdin) => evaluation.submit_stdin(stdin)?,
+            None => false,
+        };
+
+        let mut active = self
             .0
-            .state
+            .evaluation
             .lock()
-            .map_err(|_| "worker state lock poisoned".to_string())?;
+            .map_err(|_| "worker evaluation lock poisoned".to_string())?;
+        if active.is_some() {
+            return Err("worker is already evaluating a cell; poll without `r`".to_string());
+        }
+        if self.shutdown_requested()? {
+            return Err("worker is shutting down".to_string());
+        }
+        *active = Some(evaluation.clone());
+        drop(active);
+
+        let client = self.clone();
+        let running = evaluation.clone();
+        let evaluation_task = tokio::task::spawn_blocking({
+            let evaluation = evaluation.clone();
+            move || client.evaluate_blocking(r, &evaluation)
+        });
+        let _completion_task = tokio::spawn(async move {
+            let result = evaluation_task
+                .await
+                .map_err(|error| format!("worker task failed: {error}"))
+                .and_then(|result| result);
+            running.complete(result);
+        });
+        Ok((evaluation, defer_input))
+    }
+
+    fn current_evaluation(&self) -> Result<Option<Arc<Evaluation>>, String> {
+        self.0
+            .evaluation
+            .lock()
+            .map(|evaluation| evaluation.clone())
+            .map_err(|_| "worker evaluation lock poisoned".to_string())
+    }
+
+    fn clear_evaluation(&self, completed: &Arc<Evaluation>) -> Result<(), String> {
+        let mut active = self
+            .0
+            .evaluation
+            .lock()
+            .map_err(|_| "worker evaluation lock poisoned".to_string())?;
+        if active
+            .as_ref()
+            .is_some_and(|active| Arc::ptr_eq(active, completed))
+        {
+            *active = None;
+        }
+        Ok(())
+    }
+
+    fn evaluate_blocking(&self, r: String, evaluation: &Evaluation) -> Result<String, String> {
         if self.shutdown_requested()? {
             return Err("worker is shutting down".to_string());
         }
 
-        let current = std::mem::replace(&mut *state, WorkerState::Cold);
-        let (mut worker, operation) = match (operation, current) {
-            (operation @ Operation::Evaluate { .. }, WorkerState::Cold) => {
-                let worker =
-                    platform::Worker::start(&self.0.program, &self.0.arguments, |stop_handle| {
-                        self.register_stop_handle(stop_handle)
-                    })?;
-                (worker, operation)
-            }
-            (operation @ Operation::Evaluate { .. }, WorkerState::Idle(worker)) => {
-                (worker, operation)
-            }
-            (Operation::Evaluate { .. }, WorkerState::InputRequired(worker)) => {
-                *state = WorkerState::InputRequired(worker);
-                return Err(
-                    "cannot evaluate R code while the session is waiting for stdin".to_string(),
-                );
-            }
-            (Operation::Input(_), WorkerState::Cold) => {
-                *state = WorkerState::Cold;
-                return Err("stdin is accepted only at an R input prompt".to_string());
-            }
-            (Operation::Input(_), WorkerState::Idle(worker)) => {
-                *state = WorkerState::Idle(worker);
-                return Err("stdin is accepted only at an R input prompt".to_string());
-            }
-            (Operation::Input(stdin), WorkerState::InputRequired(worker)) => {
-                (worker, Operation::Input(stdin))
-            }
-        };
-
-        let result = match operation {
-            Operation::Evaluate { r, stdin } => worker.evaluate(r, stdin),
-            Operation::Input(stdin) => worker.provide_input(stdin),
-        };
-        match result {
-            Ok(boundary) => {
-                *state = if boundary.input_required {
-                    WorkerState::InputRequired(worker)
-                } else {
-                    WorkerState::Idle(worker)
-                };
-                Ok(boundary.output)
-            }
-            Err(error) => {
-                if error.input_required {
-                    *state = WorkerState::InputRequired(worker);
-                }
-                Err(error.message)
-            }
+        let mut worker = self
+            .0
+            .worker
+            .lock()
+            .map_err(|_| "worker lock poisoned".to_string())?;
+        if self.shutdown_requested()? {
+            return Err("worker is shutting down".to_string());
         }
+
+        if worker.is_none() {
+            *worker = Some(platform::Worker::start(
+                &self.0.program,
+                &self.0.arguments,
+                |stop_handle| self.register_stop_handle(stop_handle),
+            )?);
+        }
+        let result = worker
+            .as_mut()
+            .expect("worker should be running")
+            .evaluate(r, evaluation);
+        if result.is_err() {
+            *worker = None;
+        }
+        result
     }
 
     fn shutdown_requested(&self) -> Result<bool, String> {
@@ -215,57 +276,186 @@ impl Client {
     }
 }
 
+impl Evaluation {
+    /// Queues bytes and reports whether this call supplied nonempty stdin
+    /// without replying to an input boundary already exposed to the caller.
+    fn submit_stdin(&self, stdin: String) -> Result<bool, String> {
+        let defer_input = {
+            let mut state = self
+                .state
+                .lock()
+                .map_err(|_| "worker evaluation state lock poisoned".to_string())?;
+            if state.result.is_some() {
+                return Err(
+                    "the R cell has completed; poll its result before sending stdin".to_string(),
+                );
+            }
+            if stdin.is_empty() {
+                false
+            } else {
+                state.input_required.take().is_none()
+            }
+        };
+
+        let bytes = stdin.into_bytes();
+        let mut input = self
+            .input
+            .lock()
+            .map_err(|_| "worker stdin route lock poisoned".to_string())?;
+        let result = match &input.writer {
+            Some(writer) => writer.send(bytes),
+            None => {
+                input.queued.push_back(bytes);
+                Ok(())
+            }
+        };
+        result.map(|()| defer_input)
+    }
+
+    fn attach_writer(&self, writer: platform::StdinSender) -> Result<(), String> {
+        let mut input = self
+            .input
+            .lock()
+            .map_err(|_| "worker stdin route lock poisoned".to_string())?;
+        if input.writer.is_some() {
+            return Err("worker stdin was already attached to this evaluation".to_string());
+        }
+        for bytes in input.queued.drain(..) {
+            writer.send(bytes)?;
+        }
+        input.writer = Some(writer);
+        Ok(())
+    }
+
+    fn input_requested(&self, output: &mut String, prompt: String) -> Result<(), String> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| "worker evaluation state lock poisoned".to_string())?;
+        append_text(output, prompt.trim_end());
+        let mut boundary = InputBoundary {
+            output: std::mem::take(output),
+            delivered: false,
+        };
+        if let Some(previous) = state.input_required.take()
+            && !previous.delivered
+        {
+            let mut combined = previous.output;
+            append_newline(&mut combined);
+            combined.push_str(&boundary.output);
+            boundary.output = combined;
+        }
+        state.input_required = Some(boundary);
+        drop(state);
+        self.changed.notify_one();
+        Ok(())
+    }
+
+    fn complete(&self, mut result: Result<String, String>) {
+        let Ok(mut state) = self.state.lock() else {
+            return;
+        };
+        if let Some(boundary) = state.input_required.take()
+            && !boundary.delivered
+            && let Ok(output) = &mut result
+        {
+            let mut combined = boundary.output;
+            append_newline(&mut combined);
+            combined.push_str(output);
+            *output = combined;
+        }
+        state.result = Some(result);
+        drop(state);
+        self.changed.notify_one();
+    }
+
+    async fn wait(&self, timeout: Duration, defer_input: bool) -> Result<EvaluationWait, String> {
+        let deadline = tokio::time::Instant::now() + timeout;
+        loop {
+            let changed = self.changed.notified();
+            if let Some(event) = self.take_event(!defer_input)? {
+                return Ok(event);
+            }
+            if tokio::time::timeout_at(deadline, changed).await.is_err() {
+                return Ok(self.take_event(true)?.unwrap_or(EvaluationWait::Running));
+            }
+        }
+    }
+
+    fn take_event(&self, include_input: bool) -> Result<Option<EvaluationWait>, String> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| "worker evaluation state lock poisoned".to_string())?;
+        if let Some(result) = state.result.take() {
+            return Ok(Some(EvaluationWait::Completed(result)));
+        }
+        if !include_input {
+            return Ok(None);
+        }
+        let Some(boundary) = state.input_required.as_mut() else {
+            return Ok(None);
+        };
+        let output = if boundary.delivered {
+            "[input]".to_string()
+        } else {
+            boundary.delivered = true;
+            let mut output = boundary.output.clone();
+            append_marker(&mut output, "[input]");
+            output
+        };
+        Ok(Some(EvaluationWait::InputRequired(output)))
+    }
+}
+
+fn append_text(output: &mut String, text: &str) {
+    if !text.is_empty() {
+        output.push_str(text);
+    }
+}
+
+fn append_newline(output: &mut String) {
+    if !output.is_empty() && !output.ends_with('\n') {
+        output.push('\n');
+    }
+}
+
+fn append_marker(output: &mut String, marker: &str) {
+    append_newline(output);
+    output.push_str(marker);
+}
+
 #[cfg(target_os = "macos")]
 mod platform {
     use std::ffi::OsString;
     use std::io::Write;
     use std::path::Path;
-    use std::process::{ChildStdin, Stdio};
-    use std::sync::{Arc, Mutex};
+    use std::process::Stdio;
+    use std::sync::{Arc, Mutex, mpsc};
     use std::thread;
     use std::time::Instant;
 
     use crate::worker_protocol::{ServerMessage, WorkerMessage};
 
-    // POSIX's minimum atomic pipe write and macOS's reported PIPE_BUF.
-    const STDIN_LINE_BYTES: usize = 512;
-
-    fn worker_failure(message: String) -> super::OperationFailure {
-        super::OperationFailure {
-            message,
-            input_required: false,
-        }
-    }
-
-    fn input_rejected(message: String) -> super::OperationFailure {
-        super::OperationFailure {
-            message,
-            input_required: true,
-        }
-    }
-
     pub(super) struct Worker {
         reader: crate::sideband::Reader,
-        stdin: WorkerStdin,
-        input_line_bytes: usize,
+        stdin: StdinSender,
         stop_handle: StopHandle,
     }
 
     #[derive(Clone)]
     pub(super) struct StopHandle {
         writer: crate::sideband::Writer,
-        stdin: WorkerStdin,
+        stdin: StdinSender,
         child: Arc<Mutex<crate::sandbox::SandboxedChild>>,
     }
 
     #[derive(Clone)]
-    struct WorkerStdin(Arc<Mutex<Option<ChildStdin>>>);
+    pub(super) struct StdinSender(mpsc::Sender<StdinMessage>);
 
-    struct PendingInput {
-        bytes: Vec<u8>,
-        offset: usize,
-        requested: bool,
-        line_bytes: usize,
+    enum StdinMessage {
+        Write(Vec<u8>),
+        Close,
     }
 
     impl Worker {
@@ -290,21 +480,20 @@ mod platform {
                 .spawn()
                 .map_err(|error| format!("failed to launch worker: {error}"))?;
             drop(child_fds);
-            let stdin = WorkerStdin(Arc::new(Mutex::new(Some(
-                child
-                    .take_stdin()
-                    .expect("piped worker stdin should be available"),
-            ))));
+            let stdin = child
+                .take_stdin()
+                .expect("piped worker stdin should be available");
+            let child = Arc::new(Mutex::new(child));
+            let stdin = start_stdin_writer(stdin, child.clone());
 
             let stop_handle = StopHandle {
                 writer,
                 stdin: stdin.clone(),
-                child: Arc::new(Mutex::new(child)),
+                child,
             };
             let mut worker = Self {
                 reader,
                 stdin,
-                input_line_bytes: 0,
                 stop_handle,
             };
             on_started(worker.stop_handle.clone())?;
@@ -314,94 +503,33 @@ mod platform {
             Ok(worker)
         }
 
-        /// Sends one cell and collects output until completion or an input boundary.
+        /// Sends one cell and collects output until the completed message.
         pub(super) fn evaluate(
             &mut self,
             r: String,
-            stdin: Option<String>,
-        ) -> Result<super::Boundary, super::OperationFailure> {
-            self.input_line_bytes = 0;
+            evaluation: &super::Evaluation,
+        ) -> Result<String, String> {
             self.stop_handle
                 .writer
                 .send(&ServerMessage::Evaluate { r })
-                .map_err(|error| {
-                    worker_failure(format!("worker sideband write failed: {error}"))
-                })?;
-            self.read_boundary(stdin.map(|stdin| PendingInput::new(stdin, 0)))
-        }
+                .map_err(|error| format!("worker sideband write failed: {error}"))?;
+            evaluation.attach_writer(self.stdin.clone())?;
 
-        pub(super) fn provide_input(
-            &mut self,
-            stdin: String,
-        ) -> Result<super::Boundary, super::OperationFailure> {
-            let mut pending = PendingInput::new(stdin, self.input_line_bytes);
-            let Some(line) = pending.next_line().map_err(input_rejected)? else {
-                return Ok(super::Boundary {
-                    output: "[input]".to_string(),
-                    input_required: true,
-                });
-            };
-            self.stdin.write(line).map_err(worker_failure)?;
-            self.input_line_bytes = pending.line_bytes;
-            self.read_boundary(Some(pending))
-        }
-
-        fn write_pending_input(
-            &mut self,
-            pending: &mut PendingInput,
-        ) -> Result<bool, super::OperationFailure> {
-            let Some(line) = pending.next_line().map_err(input_rejected)? else {
-                return Ok(false);
-            };
-            self.stdin.write(line).map_err(worker_failure)?;
-            self.input_line_bytes = pending.line_bytes;
-            Ok(true)
-        }
-
-        fn read_boundary(
-            &mut self,
-            mut pending_stdin: Option<PendingInput>,
-        ) -> Result<super::Boundary, super::OperationFailure> {
             let mut output = String::new();
             loop {
-                match self.receive().map_err(worker_failure)? {
+                match self.receive()? {
                     WorkerMessage::Output { data } => output.push_str(&data),
                     WorkerMessage::InputRequested { prompt } => {
-                        if let Some(pending) = pending_stdin.as_mut()
-                            && self.write_pending_input(pending)?
-                        {
-                            append_text(&mut output, prompt.trim_end());
-                            append_newline(&mut output);
-                            continue;
-                        }
-
-                        append_text(&mut output, prompt.trim_end());
-                        append_marker(&mut output, "[input]");
-                        return Ok(super::Boundary {
-                            output,
-                            input_required: true,
-                        });
+                        evaluation.input_requested(&mut output, prompt)?;
                     }
                     WorkerMessage::Completed => {
-                        self.input_line_bytes = 0;
                         if output.is_empty() {
                             output.push_str("[done]");
                         }
-                        if pending_stdin
-                            .as_ref()
-                            .is_some_and(|pending| !pending.requested)
-                        {
-                            append_marker(&mut output, "[stdin discarded]");
-                        }
-                        return Ok(super::Boundary {
-                            output,
-                            input_required: false,
-                        });
+                        return Ok(output);
                     }
                     WorkerMessage::Ready => {
-                        return Err(worker_failure(
-                            "worker sent an unexpected ready message".to_string(),
-                        ));
+                        return Err("worker sent an unexpected ready message".to_string());
                     }
                 }
             }
@@ -414,84 +542,44 @@ mod platform {
         }
     }
 
-    fn append_text(output: &mut String, text: &str) {
-        if !text.is_empty() {
-            output.push_str(text);
-        }
+    fn start_stdin_writer(
+        mut stdin: std::process::ChildStdin,
+        child: Arc<Mutex<crate::sandbox::SandboxedChild>>,
+    ) -> StdinSender {
+        let (sender, receiver) = mpsc::channel();
+        let _ = thread::spawn(move || {
+            for message in receiver {
+                match message {
+                    StdinMessage::Write(bytes) => {
+                        if stdin.write_all(&bytes).is_err() {
+                            if let Ok(mut child) = child.lock() {
+                                let _ = child.force_stop();
+                            }
+                            return;
+                        }
+                    }
+                    StdinMessage::Close => return,
+                }
+            }
+        });
+        StdinSender(sender)
     }
 
-    fn append_newline(output: &mut String) {
-        if !output.is_empty() && !output.ends_with('\n') {
-            output.push('\n');
+    impl StdinSender {
+        pub(super) fn send(&self, bytes: Vec<u8>) -> Result<(), String> {
+            self.0
+                .send(StdinMessage::Write(bytes))
+                .map_err(|_| "worker stdin writer stopped".to_string())
         }
-    }
 
-    fn append_marker(output: &mut String, marker: &str) {
-        append_newline(output);
-        output.push_str(marker);
+        fn close(&self) {
+            let _ = self.0.send(StdinMessage::Close);
+        }
     }
 
     impl Drop for Worker {
         fn drop(&mut self) {
-            let _ = self.stdin.close();
             let _ = self.stop_handle.force_stop();
-        }
-    }
-
-    impl WorkerStdin {
-        fn write(&self, input: &[u8]) -> Result<(), String> {
-            self.0
-                .lock()
-                .map_err(|_| "worker stdin lock poisoned".to_string())?
-                .as_mut()
-                .ok_or_else(|| "worker stdin is closed".to_string())?
-                .write_all(input)
-                .map_err(|error| format!("worker stdin write failed: {error}"))
-        }
-
-        fn close(&self) -> Result<(), String> {
-            self.0
-                .lock()
-                .map_err(|_| "worker stdin lock poisoned".to_string())?
-                .take();
-            Ok(())
-        }
-    }
-
-    impl PendingInput {
-        fn new(input: String, line_bytes: usize) -> Self {
-            Self {
-                bytes: input.into_bytes(),
-                offset: 0,
-                requested: false,
-                line_bytes,
-            }
-        }
-
-        fn next_line(&mut self) -> Result<Option<&[u8]>, String> {
-            if !self.requested {
-                self.requested = true;
-                if self.bytes.contains(&0) {
-                    return Err("stdin cannot contain NUL".to_string());
-                }
-            }
-            if self.offset == self.bytes.len() {
-                return Ok(None);
-            }
-
-            let start = self.offset;
-            let newline = self.bytes[start..].iter().position(|byte| *byte == b'\n');
-            let length = newline.map_or(self.bytes.len() - start, |newline| newline + 1);
-            if self.line_bytes + length > STDIN_LINE_BYTES {
-                return Err("stdin lines cannot exceed 512 bytes including the newline".to_string());
-            }
-            self.offset += length;
-            self.line_bytes = if newline.is_some() {
-                0
-            } else {
-                self.line_bytes + length
-            };
-            Ok(Some(&self.bytes[start..self.offset]))
         }
     }
 
@@ -501,7 +589,7 @@ mod platform {
             let writer = self.writer.clone();
             let stdin = self.stdin.clone();
             let _ = thread::spawn(move || {
-                let _ = stdin.close();
+                stdin.close();
                 let _ = writer.send(&ServerMessage::Shutdown);
             });
 
@@ -535,6 +623,15 @@ mod platform {
     #[derive(Clone)]
     pub(super) struct StopHandle;
 
+    #[derive(Clone)]
+    pub(super) struct StdinSender;
+
+    impl StdinSender {
+        pub(super) fn send(&self, _bytes: Vec<u8>) -> Result<(), String> {
+            unreachable!("unsupported workers cannot accept stdin")
+        }
+    }
+
     impl Worker {
         pub(super) fn start(
             _program: &Path,
@@ -547,15 +644,8 @@ mod platform {
         pub(super) fn evaluate(
             &mut self,
             _r: String,
-            _stdin: Option<String>,
-        ) -> Result<super::Boundary, super::OperationFailure> {
-            unreachable!("unsupported workers cannot start")
-        }
-
-        pub(super) fn provide_input(
-            &mut self,
-            _stdin: String,
-        ) -> Result<super::Boundary, super::OperationFailure> {
+            _evaluation: &super::Evaluation,
+        ) -> Result<String, String> {
             unreachable!("unsupported workers cannot start")
         }
     }

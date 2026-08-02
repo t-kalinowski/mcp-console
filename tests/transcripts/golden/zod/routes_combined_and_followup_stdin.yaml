@@ -1,132 +1,150 @@
 ---
-id: 1
-input:
-  method: initialize
-  params:
-    protocolVersion: 2025-11-25
-    capabilities: {}
-    clientInfo:
-      name: acceptance-test
-      version: 1.0.0
-output:
-  result:
-    protocolVersion: 2025-11-25
-    capabilities:
-      tools: {}
-    serverInfo:
-      name: mcp-console
-      version: 0.1.0
----
-input:
-  method: notifications/initialized
----
-id: 2
-input:
-  method: tools/list
-output:
-  result:
-    tools:
-      - name: send
-        description: "Evaluate one complete R code cell in persistent state. Stdin may accompany the cell or follow an [input] response."
-        inputSchema:
-          $schema: "https://json-schema.org/draft/2020-12/schema"
-          additionalProperties: false
-          type: object
-          properties:
-            r:
-              description: Complete multiline R code evaluated in persistent state.
-              type:
-                - string
-                - "null"
-            stdin:
-              description: |-
-                Exact text supplied at this cell's first input request or an active [input]
-                prompt. One value may satisfy multiple reads in the same evaluation. Each
-                line is limited to 512 bytes, including its newline.
-              type:
-                - string
-                - "null"
+!same-as tests/transcripts/golden/server/initializes_and_lists_tools.yaml
 ---
 id: 3
-input:
-  method: tools/call
-  params:
-    name: send
-    arguments:
-      r: request input
-      stdin: |
-        café
-output:
-  result:
-    content:
-      - type: text
-        text: |
-          zod>
-          zod stdin: café
-    isError: false
+send:
+  r: input without request
+  stdin: |
+    café
+result:
+  content:
+    - type: text
+      text: |
+        zod stdin: café
+  isError: false
 ---
 id: 4
-input:
-  method: tools/call
-  params:
-    name: send
-    arguments:
-      r: hello
-      stdin: |
-        unused
-output:
-  result:
-    content:
-      - type: text
-        text: |-
-          zod: hello
-          [stdin discarded]
-    isError: false
+send:
+  r: input length without request
+  stdin: "<long stdin>"
+result:
+  content:
+    - type: text
+      text: |
+        zod stdin length: 1024
+  isError: false
 ---
 id: 5
-input:
-  method: tools/call
-  params:
-    name: send
-    arguments:
-      r: request input
-output:
-  result:
-    content:
-      - type: text
-        text: |-
-          zod>
-          [input]
-    isError: false
+send:
+  r: input length without request
+  stdin: "<stdin containing NUL>"
+result:
+  content:
+    - type: text
+      text: |
+        zod stdin length: 1
+  isError: false
 ---
 id: 6
-input:
-  method: tools/call
-  params:
-    name: send
-    arguments:
-      stdin: |
-        followup
-output:
-  result:
-    content:
-      - type: text
-        text: |
-          zod stdin: followup
-    isError: false
+send:
+  r: input without request
+  timeout_ms: 10
+result:
+  content:
+    - type: text
+      text: "[running]"
+  isError: false
 ---
 id: 7
-input:
-  method: tools/call
-  params:
-    name: send
-    arguments:
-      r: request input
-      stdin: "<oversized stdin line>"
-output:
-  result:
-    content:
-      - type: text
-        text: stdin lines cannot exceed 512 bytes including the newline
-    isError: true
+send:
+  stdin: |
+    followup
+  timeout_ms: 3000
+result:
+  content:
+    - type: text
+      text: |
+        zod stdin: followup
+  isError: false
+---
+id: 8
+send:
+  r: request input
+result:
+  content:
+    - type: text
+      text: |-
+        zod>
+        [input]
+  isError: false
+---
+id: 9
+send:
+  stdin: ""
+  timeout_ms: 10
+result:
+  content:
+    - type: text
+      text: "[input]"
+  isError: false
+---
+id: 10
+send:
+  stdin: |
+    prompted
+result:
+  content:
+    - type: text
+      text: |
+        zod stdin: prompted
+  isError: false
+---
+id: 11
+send:
+  r: input without request then request input
+  stdin: |
+    first
+  timeout_ms: 1000
+result:
+  content:
+    - type: text
+      text: |-
+        second>
+        [input]
+  isError: false
+---
+id: 12
+send:
+  stdin: |
+    second
+result:
+  content:
+    - type: text
+      text: |
+        zod stdin: first|second
+  isError: false
+---
+id: 13
+send:
+  r: echo
+  stdin: |
+    stale
+result:
+  content:
+    - type: text
+      text: |
+        zod: echo
+  isError: false
+---
+id: 14
+send:
+  r: input without request
+result:
+  content:
+    - type: text
+      text: |
+        zod stdin: stale
+  isError: false
+---
+id: 15
+send:
+  r: echo
+  stdin: "<large unread stdin>"
+  timeout_ms: 1000
+result:
+  content:
+    - type: text
+      text: |
+        zod: echo
+  isError: false
 ...

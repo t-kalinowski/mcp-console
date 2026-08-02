@@ -6,10 +6,15 @@ from textwrap import dedent
 from _support import McpClient, Transcript, run_this_suite
 
 
-def test_initializes_lists_tools_and_calls_send(binary: Path) -> Transcript:
+def test_initializes_and_lists_tools(binary: Path) -> Transcript:
     client = McpClient(binary, ("serve",))
     client.initialize_and_list_tools()
-    client.call_tool("send")
+    return client.finish()
+
+
+def test_validates_send_arguments(binary: Path) -> Transcript:
+    client = McpClient(binary, ("serve",))
+    client.initialize_and_list_tools()
     client.call_tool(
         "send",
         # fmt: r
@@ -18,6 +23,12 @@ def test_initializes_lists_tools_and_calls_send(binary: Path) -> Transcript:
         """).strip(),
         wait_ms=0,
     )
+    client.call_tool("send", r=None)
+    output = client.transcript[-1]["result"]["content"][0]["text"]
+    assert output == "[idle]", output
+    client.call_tool("send", stdin="orphaned\n")
+    result = client.transcript[-1]["result"]
+    assert result["isError"] is True, result
     return client.finish()
 
 

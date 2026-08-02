@@ -51,9 +51,7 @@ mod platform {
         loop {
             match reader.receive()? {
                 ServerMessage::Evaluate { r } => {
-                    clear_interactive_input();
                     let result = evaluate_cell(r);
-                    clear_interactive_input();
 
                     if WORKER_SHUTDOWN.load(Ordering::SeqCst) {
                         return Ok(());
@@ -218,13 +216,6 @@ mod platform {
         *CELL_SOURCE
             .lock()
             .expect("R cell source lock should not be poisoned") = None;
-    }
-
-    fn clear_interactive_input() {
-        INTERACTIVE_INPUT
-            .lock()
-            .expect("R interactive input lock should not be poisoned")
-            .clear();
     }
 
     fn write_console_input(buf: *mut c_uchar, buflen: c_int, input: &[u8]) -> c_int {

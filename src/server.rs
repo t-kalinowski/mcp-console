@@ -13,6 +13,7 @@ use tokio::io::{AsyncRead, ReadBuf};
 use tokio::sync::oneshot;
 
 const WORKER_SHUTDOWN_GRACE: Duration = Duration::from_secs(1);
+const DEFAULT_TIMEOUT_MS: u64 = 60_000;
 
 #[derive(Clone)]
 struct ConsoleServer {
@@ -22,12 +23,17 @@ struct ConsoleServer {
 #[derive(Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct SendArguments {
-    /// Complete multiline R code evaluated in persistent state.
+    /// Complete multiline R code evaluated in persistent state. Omit to supply stdin or poll.
     r: Option<String>,
-    /// Exact text supplied at this cell's first input request or an active [input]
-    /// prompt. One value may satisfy multiple reads in the same evaluation. Each
-    /// line is limited to 512 bytes, including its newline.
+    /// Exact text appended to the active worker's standard input without adding a newline.
     stdin: Option<String>,
+    /// Maximum time this call waits. It does not limit or stop the computation.
+    #[serde(default = "default_timeout_ms")]
+    timeout_ms: u64,
+}
+
+fn default_timeout_ms() -> u64 {
+    DEFAULT_TIMEOUT_MS
 }
 
 impl ConsoleServer {
@@ -42,18 +48,18 @@ impl ConsoleServer {
 
 #[tool_router]
 impl ConsoleServer {
-    #[tool(
-        description = "Evaluate one complete R code cell in persistent state. Stdin may accompany the cell or follow an [input] response."
-    )]
+    #[tool(description = "Evaluate one complete R code cell, supply its stdin, or poll it.")]
     async fn send(
         &self,
-        Parameters(SendArguments { r, stdin }): Parameters<SendArguments>,
+        Parameters(SendArguments {
+            r,
+            stdin,
+            timeout_ms,
+        }): Parameters<SendArguments>,
     ) -> Result<String, String> {
-        match (r, stdin) {
-            (Some(r), stdin) => self.worker.evaluate(r, stdin).await,
-            (None, Some(stdin)) => self.worker.provide_input(stdin).await,
-            (None, None) => Err("send requires r or stdin".to_string()),
-        }
+        self.worker
+            .send(r, stdin, Duration::from_millis(timeout_ms))
+            .await
     }
 }
 

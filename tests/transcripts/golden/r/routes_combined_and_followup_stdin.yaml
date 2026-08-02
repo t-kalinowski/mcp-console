@@ -1,300 +1,137 @@
 ---
-id: 1
-input:
-  method: initialize
-  params:
-    protocolVersion: 2025-11-25
-    capabilities: {}
-    clientInfo:
-      name: acceptance-test
-      version: 1.0.0
-output:
-  result:
-    protocolVersion: 2025-11-25
-    capabilities:
-      tools: {}
-    serverInfo:
-      name: mcp-console
-      version: 0.1.0
----
-input:
-  method: notifications/initialized
----
-id: 2
-input:
-  method: tools/list
-output:
-  result:
-    tools:
-      - name: send
-        description: "Evaluate one complete R code cell in persistent state. Stdin may accompany the cell or follow an [input] response."
-        inputSchema:
-          $schema: "https://json-schema.org/draft/2020-12/schema"
-          additionalProperties: false
-          type: object
-          properties:
-            r:
-              description: Complete multiline R code evaluated in persistent state.
-              type:
-                - string
-                - "null"
-            stdin:
-              description: |-
-                Exact text supplied at this cell's first input request or an active [input]
-                prompt. One value may satisfy multiple reads in the same evaluation. Each
-                line is limited to 512 bytes, including its newline.
-              type:
-                - string
-                - "null"
+!same-as tests/transcripts/golden/server/initializes_and_lists_tools.yaml
 ---
 id: 3
-input:
-  method: tools/call
-  params:
-    name: send
-    arguments:
-      r: |-
-        first <- readline("first> ")
-        second <- readline("second> ")
-        cat(paste(first, second, sep = "|"), "\n", sep = "")
-      stdin: |
-        Ada
-        Lovelace
-output:
-  result:
-    content:
-      - type: text
-        text: |
-          first>
-          second>
-          Ada|Lovelace
-    isError: false
+send:
+  r: |-
+    first <- readline("first> ")
+    second <- readline("second> ")
+    cat(paste(first, second, sep = "|"), "\n", sep = "")
+  stdin: |
+    Ada
+    Lovelace
+result:
+  content:
+    - type: text
+      text: |
+        first>
+        Ada|Lovelace
+  isError: false
 ---
 id: 4
-input:
-  method: tools/call
-  params:
-    name: send
-    arguments:
-      r: "paste(\"hello\", readline(\"name> \"))"
-      stdin: |
-        Ada
-        stale
-output:
-  result:
-    content:
-      - type: text
-        text: |
-          name>
-          [1] "hello Ada"
-    isError: false
+send:
+  r: |-
+    direct <- local({
+      connection <- suppressWarnings(file("/dev/stdin"))
+      on.exit(close(connection))
+      readLines(connection, n = 1)
+    })
+    prompted <- readline("after> ")
+    cat(paste(direct, prompted, sep = "|"), "\n", sep = "")
+  stdin: |
+    direct
+  timeout_ms: 1000
+result:
+  content:
+    - type: text
+      text: |-
+        after>
+        [input]
+  isError: false
 ---
 id: 5
-input:
-  method: tools/call
-  params:
-    name: send
-    arguments:
-      r: "paste(\"hello\", readline(\"name> \"))"
-      stdin: "<large multiline stdin>"
-output:
-  result:
-    content:
-      - type: text
-        text: |
-          name>
-          [1] "hello Ada"
-    isError: false
+send:
+  stdin: |
+    callback
+result:
+  content:
+    - type: text
+      text: |
+        direct|callback
+  isError: false
 ---
 id: 6
-input:
-  method: tools/call
-  params:
-    name: send
-    arguments:
-      r: "readline(\"fresh> \")"
-      stdin: |
-        fresh
-output:
-  result:
-    content:
-      - type: text
-        text: |
-          fresh>
-          [1] "fresh"
-    isError: false
+send:
+  r: |-
+    cat("before\n")
+    readline("repeat> ")
+  stdin: par
+  timeout_ms: 1000
+result:
+  content:
+    - type: text
+      text: |-
+        before
+        repeat>
+        repeat>
+        [input]
+  isError: false
 ---
 id: 7
-input:
-  method: tools/call
-  params:
-    name: send
-    arguments:
-      r: "42"
-      stdin: |
-        unused
-output:
-  result:
-    content:
-      - type: text
-        text: |-
-          [1] 42
-          [stdin discarded]
-    isError: false
+send:
+  stdin: |
+    tial
+result:
+  content:
+    - type: text
+      text: |
+        [1] "partial"
+  isError: false
 ---
 id: 8
-input:
-  method: tools/call
-  params:
-    name: send
-    arguments:
-      r: "paste(\"color\", readline(\"color> \"))"
-output:
-  result:
-    content:
-      - type: text
-        text: |-
-          color>
-          [input]
-    isError: false
+send:
+  r: "readline(\"used> \")"
+  stdin: |
+    used
+    stale
+result:
+  content:
+    - type: text
+      text: |
+        used>
+        [1] "used"
+  isError: false
 ---
 id: 9
-input:
-  method: tools/call
-  params:
-    name: send
-    arguments:
-      stdin: ""
-output:
-  result:
-    content:
-      - type: text
-        text: "[input]"
-    isError: false
+send:
+  r: "readline(\"buffered> \")"
+result:
+  content:
+    - type: text
+      text: |
+        [1] "stale"
+  isError: false
 ---
 id: 10
-input:
-  method: tools/call
-  params:
-    name: send
-    arguments:
-      stdin: bl
-output:
-  result:
-    content:
-      - type: text
-        text: |-
-          color>
-          [input]
-    isError: false
+send:
+  r: "paste(\"color\", readline(\"color> \"))"
+result:
+  content:
+    - type: text
+      text: |-
+        color>
+        [input]
+  isError: false
 ---
 id: 11
-input:
-  method: tools/call
-  params:
-    name: send
-    arguments:
-      stdin: |
-        ue
-output:
-  result:
-    content:
-      - type: text
-        text: |
-          [1] "color blue"
-    isError: false
+send:
+  stdin: bl
+result:
+  content:
+    - type: text
+      text: |-
+        color>
+        [input]
+  isError: false
 ---
 id: 12
-input:
-  method: tools/call
-  params:
-    name: send
-    arguments:
-      r: "nchar(readline(\"limit> \"))"
-      stdin: "<maximum stdin line>"
-output:
-  result:
-    content:
-      - type: text
-        text: |
-          limit>
-          [1] 511
-    isError: false
----
-id: 13
-input:
-  method: tools/call
-  params:
-    name: send
-    arguments:
-      r: "readline(\"long> \")"
-      stdin: "<oversized stdin line>"
-output:
-  result:
-    content:
-      - type: text
-        text: stdin lines cannot exceed 512 bytes including the newline
-    isError: true
----
-id: 14
-input:
-  method: tools/call
-  params:
-    name: send
-    arguments:
-      stdin: |
-        ok
-output:
-  result:
-    content:
-      - type: text
-        text: |
-          [1] "ok"
-    isError: false
----
-id: 15
-input:
-  method: tools/call
-  params:
-    name: send
-    arguments:
-      r: "readline(\"long> \")"
-output:
-  result:
-    content:
-      - type: text
-        text: |-
-          long>
-          [input]
-    isError: false
----
-id: 16
-input:
-  method: tools/call
-  params:
-    name: send
-    arguments:
-      stdin: "<partial stdin>"
-output:
-  result:
-    content:
-      - type: text
-        text: |-
-          long>
-          [input]
-    isError: false
----
-id: 17
-input:
-  method: tools/call
-  params:
-    name: send
-    arguments:
-      stdin: "<oversized stdin continuation>"
-output:
-  result:
-    content:
-      - type: text
-        text: stdin lines cannot exceed 512 bytes including the newline
-    isError: true
+send:
+  stdin: |
+    ue
+result:
+  content:
+    - type: text
+      text: |
+        [1] "color blue"
+  isError: false
 ...

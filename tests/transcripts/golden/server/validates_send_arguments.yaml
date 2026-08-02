@@ -1,0 +1,34 @@
+---
+!same-as tests/transcripts/golden/server/initializes_and_lists_tools.yaml
+---
+id: 3
+send:
+  python: print('hello')
+  wait_ms: 0
+result:
+  content:
+    - type: text
+      text: >-
+        failed to deserialize parameters: unknown field `python`, expected one
+        of `r`, `stdin`, `timeout_ms`
+  isError: true
+---
+id: 4
+send:
+  r: null
+result:
+  content:
+    - type: text
+      text: "[idle]"
+  isError: false
+---
+id: 5
+send:
+  stdin: |
+    orphaned
+result:
+  content:
+    - type: text
+      text: stdin is accepted only while an R cell is active
+  isError: true
+...

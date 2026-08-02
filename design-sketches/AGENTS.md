@@ -12,7 +12,7 @@ The agent can alternate among R, Python, and SQL while retaining objects, import
 
 The public abstraction is a **console session**.
 Normal top-level input is one complete R, Python, or SQL cell.
-Line-oriented `stdin` is used only when the active evaluation explicitly requests input, including R `readline()` or `browser()` and Python `input()` or a debugger.
+Line-oriented `stdin` is a distinct stream that may be queued while an evaluation is active, including for R `readline()` or `browser()` and Python `input()` or a debugger.
 
 The tool must be cheap enough to remain globally enabled.
 Common calls should look like:
@@ -49,9 +49,9 @@ Safety is enforced around the worker process and its descendants, not by filteri
   Under Codex's current naming convention, the tools are `mcp__console.send` and `mcp__console.session`.
 - Language is selected by the present object key: `r`, `python`, or `sql`.
 - Top-level submissions are complete cells, not line-by-line parser input.
-- `stdin` may accompany a code cell or target an already-active input consumer.
-  Bundled input remains pending until that evaluation requests it and is discarded if evaluation finishes first.
-  It is exact stream text, may contain multiple lines, and receives no implicit newline.
+- `stdin` may accompany a code cell or target an active evaluation.
+  Bundled input is queued to the active runtime immediately and may remain available to later reads if evaluation finishes first.
+  It is exact stream text, may contain multiple lines, receives no implicit newline, and is not acknowledged as consumed.
 - A named session runs at most one top-level evaluation at a time.
 - A logical session is created by its first code submission or successful `prepare` action; `prepare` may leave it configured without a worker until code is submitted.
 - Independent or parallel work uses separately named sessions.
@@ -92,7 +92,7 @@ Neither choice may change agent-visible semantics, sidecar authorization, attrib
 
 ### Evaluation boundaries
 
-The worker receives structured commands such as `EvaluateCell`, `ProvideInput`, `Inspect`, and `Interrupt`.
+The worker receives structured commands such as `EvaluateCell`, `QueueInput`, `Inspect`, and `Interrupt`.
 Complete code cells and interactive input must remain distinct commands and state queues.
 
 R cells must have native top-level semantics regardless of backend.

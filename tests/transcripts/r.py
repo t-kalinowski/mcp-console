@@ -39,6 +39,26 @@ def test_evaluates_a_complete_cell(binary: Path) -> Transcript:
     return client.finish()
 
 
+def test_times_out_and_polls_running_evaluation(binary: Path) -> Transcript:
+    client = McpClient(binary, ("serve",))
+    client.initialize_and_list_tools()
+    client.call_tool("send", r="invisible(NULL)")
+    # fmt: r
+    r = dedent(r"""
+        Sys.sleep(0.25)
+        answer <- 42
+        answer
+        """).strip()
+    client.call_tool("send", r=r, timeout_ms=10)
+    output = client.transcript[-1]["result"]["content"][0]["text"]
+    assert output == "[running]", output
+    client.call_tool("send", timeout_ms=3_000)
+    output = client.transcript[-1]["result"]["content"][0]["text"]
+    assert output == "[1] 42\n", output
+    client.call_tool("send", r="answer + 1")
+    return client.finish()
+
+
 def test_routes_combined_and_followup_stdin(binary: Path) -> Transcript:
     client = McpClient(binary, ("serve",))
     client.initialize_and_list_tools()
@@ -51,35 +71,43 @@ def test_routes_combined_and_followup_stdin(binary: Path) -> Transcript:
         """).strip()
     client.call_tool("send", r=r, stdin="Ada\nLovelace\n")
     output = last_tool_text(client)
-    assert output == "first>\nsecond>\nAda|Lovelace\n", output
+    assert output == "first>\nAda|Lovelace\n", output
 
     # fmt: r
     r = dedent(r"""
-        paste("hello", readline("name> "))
+        direct <- local({
+          connection <- suppressWarnings(file("/dev/stdin"))
+          on.exit(close(connection))
+          readLines(connection, n = 1)
+        })
+        prompted <- readline("after> ")
+        cat(paste(direct, prompted, sep = "|"), "\n", sep = "")
         """).strip()
-    client.call_tool("send", r=r, stdin="Ada\nstale\n")
-    assert last_tool_text(client) == 'name>\n[1] "hello Ada"\n'
-
-    stale_stdin = "Ada\n" + ("stale\n" * 1500)
-    client.call_tool("send", r=r, stdin=stale_stdin)
-    client.transcript[-1]["input"]["params"]["arguments"]["stdin"] = (
-        "<large multiline stdin>"
-    )
-    assert last_tool_text(client) == 'name>\n[1] "hello Ada"\n'
-
-    # fmt: r
-    r = dedent(r"""
-        readline("fresh> ")
-        """).strip()
-    client.call_tool("send", r=r, stdin="fresh\n")
-    assert last_tool_text(client) == 'fresh>\n[1] "fresh"\n'
+    client.call_tool("send", r=r, stdin="direct\n", timeout_ms=1_000)
+    output = last_tool_text(client)
+    assert output == "after>\n[input]", output
+    client.call_tool("send", stdin="callback\n")
+    assert last_tool_text(client) == "direct|callback\n"
 
     # fmt: r
     r = dedent(r"""
-        42
+        cat("before\n")
+        readline("repeat> ")
         """).strip()
-    client.call_tool("send", r=r, stdin="unused\n")
-    assert last_tool_text(client) == "[1] 42\n[stdin discarded]"
+    client.call_tool("send", r=r, stdin="par", timeout_ms=1_000)
+    output = last_tool_text(client)
+    assert output == "before\nrepeat>\nrepeat>\n[input]", output
+    client.call_tool("send", stdin="tial\n")
+    assert last_tool_text(client) == '[1] "partial"\n'
+
+    # fmt: r
+    r = dedent(r"""
+        readline("used> ")
+        """).strip()
+    client.call_tool("send", r=r, stdin="used\nstale\n")
+    assert last_tool_text(client) == 'used>\n[1] "used"\n'
+    client.call_tool("send", r='readline("buffered> ")')
+    assert last_tool_text(client) == '[1] "stale"\n'
 
     # fmt: r
     r = dedent(r"""
@@ -87,121 +115,15 @@ def test_routes_combined_and_followup_stdin(binary: Path) -> Transcript:
         """).strip()
     client.call_tool("send", r=r)
     assert last_tool_text(client) == "color>\n[input]"
-    client.call_tool("send", stdin="")
-    assert last_tool_text(client) == "[input]"
     client.call_tool("send", stdin="bl")
     assert last_tool_text(client) == "color>\n[input]"
     client.call_tool("send", stdin="ue\n")
     assert last_tool_text(client) == '[1] "color blue"\n'
-
-    # fmt: r
-    r = dedent(r"""
-        nchar(readline("limit> "))
-        """).strip()
-    client.call_tool("send", r=r, stdin=("x" * 511) + "\n")
-    client.transcript[-1]["input"]["params"]["arguments"]["stdin"] = (
-        "<maximum stdin line>"
-    )
-    assert last_tool_text(client) == "limit>\n[1] 511\n"
-
-    # fmt: r
-    r = dedent(r"""
-        readline("long> ")
-        """).strip()
-    client.call_tool("send", r=r, stdin=("x" * 512) + "\n")
-    client.transcript[-1]["input"]["params"]["arguments"]["stdin"] = (
-        "<oversized stdin line>"
-    )
-    result = client.transcript[-1]["output"]["result"]
-    assert result["isError"] is True, result
-    assert result["content"] == [
-        {
-            "type": "text",
-            "text": "stdin lines cannot exceed 512 bytes including the newline",
-        }
-    ]
-
-    client.call_tool("send", stdin="ok\n")
-    assert last_tool_text(client) == '[1] "ok"\n'
-
-    client.call_tool("send", r=r)
-    assert last_tool_text(client) == "long>\n[input]"
-    client.call_tool("send", stdin="x" * 256)
-    client.transcript[-1]["input"]["params"]["arguments"]["stdin"] = "<partial stdin>"
-    assert last_tool_text(client) == "long>\n[input]"
-    client.call_tool("send", stdin=("x" * 256) + "\n")
-    client.transcript[-1]["input"]["params"]["arguments"]["stdin"] = (
-        "<oversized stdin continuation>"
-    )
-    result = client.transcript[-1]["output"]["result"]
-    assert result["isError"] is True, result
-    assert result["content"] == [
-        {
-            "type": "text",
-            "text": "stdin lines cannot exceed 512 bytes including the newline",
-        }
-    ]
-    return client.finish()
-
-
-def test_preserves_worker_after_stdin_validation_errors(binary: Path) -> Transcript:
-    client = McpClient(binary, ("serve",))
-    client.initialize_and_list_tools()
-
-    # fmt: r
-    r = dedent(r"""
-        stdin_marker <- 41
-        nchar(readline("bundled> "))
-        """).strip()
-    client.call_tool("send", r=r, stdin=("x" * 512) + "\n")
-    client.transcript[-1]["input"]["params"]["arguments"]["stdin"] = (
-        "<oversized bundled stdin>"
-    )
-    result = client.transcript[-1]["output"]["result"]
-    assert result["isError"] is True, result
-    assert result["content"] == [
-        {
-            "type": "text",
-            "text": "stdin lines cannot exceed 512 bytes including the newline",
-        }
-    ]
-
-    client.call_tool("send", stdin="ok\n")
-    assert last_tool_text(client) == "[1] 2\n"
-    client.call_tool("send", r="stdin_marker + 1")
-    assert last_tool_text(client) == "[1] 42\n"
-
-    # fmt: r
-    r = dedent(r"""
-        nchar(readline("continued> "))
-        """).strip()
-    client.call_tool("send", r=r)
-    assert last_tool_text(client) == "continued>\n[input]"
-    client.call_tool("send", stdin="x" * 256)
-    client.transcript[-1]["input"]["params"]["arguments"]["stdin"] = "<partial stdin>"
-    assert last_tool_text(client) == "continued>\n[input]"
-    client.call_tool("send", stdin=("x" * 256) + "\n")
-    client.transcript[-1]["input"]["params"]["arguments"]["stdin"] = (
-        "<oversized stdin continuation>"
-    )
-    result = client.transcript[-1]["output"]["result"]
-    assert result["isError"] is True, result
-    assert result["content"] == [
-        {
-            "type": "text",
-            "text": "stdin lines cannot exceed 512 bytes including the newline",
-        }
-    ]
-
-    client.call_tool("send", stdin="y\n")
-    assert last_tool_text(client) == "[1] 257\n"
-    client.call_tool("send", r="stdin_marker + 1")
-    assert last_tool_text(client) == "[1] 42\n"
     return client.finish()
 
 
 def last_tool_text(client: McpClient) -> str:
-    result = client.transcript[-1]["output"]["result"]
+    result = client.transcript[-1]["result"]
     assert result["isError"] is False, result
     assert result["content"] == [{"type": "text", "text": result["content"][0]["text"]}]
     return result["content"][0]["text"]

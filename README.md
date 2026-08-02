@@ -21,24 +21,27 @@ mcp-console sandbox -- COMMAND [ARG]...
 `mcp-console` requires a subcommand.
 `mcp-console serve` runs a minimal MCP server over stdio.
 Run `mcp-console --help` or `mcp-console COMMAND --help` for command-line help.
-The server registers one `send` tool that accepts one complete `r` code cell with optional interactive `stdin`:
+The server registers one `send` tool.
+Supplying `r` evaluates one complete code cell and waits up to the optional `timeout_ms`, which defaults to 60 seconds.
+When that wait expires, the call returns `[running]` while computation continues; call `send` without `r` to poll for completion.
+A call may also supply exact standard-input text:
 
 ```json
-{ "r": "name <- readline('name> ')\nname", "stdin": "Ada\n" }
+{ "r": "readline('name> ')", "stdin": "Ada\n" }
 ```
 
-The server evaluates `r` first and writes the stdin bytes to worker fd 0 only if that evaluation requests input.
-If evaluation finishes first, the result ends with `[stdin discarded]`.
-Each input line is limited to 512 bytes, including its newline.
-Rejected input leaves the active prompt available for a corrected `stdin` call.
-Without bundled input, an R `ReadConsole` request returns its prompt and `[input]`; a later call supplies exact text without adding a newline:
+The server sends the cell first, then queues the string's UTF-8 bytes to worker fd 0 from an independent writer.
+It does not inspect the text, add a newline, impose a line-size limit, or wait for an input request.
+When the worker reports an input request, `send` returns its prompt and `[input]`; a later call can append more bytes while the cell remains active:
 
 ```json
 { "stdin": "Ada\n" }
 ```
 
-Partial and multiple lines are buffered, and unread input is discarded when the evaluation ends.
-On macOS, the first call lazily starts a sandboxed embedded R worker.
+Queued input is not an acknowledgment of consumption.
+If the same call just queued nonempty stdin, it waits for completion until its deadline before returning that input boundary.
+The server does not drain unread bytes when evaluation ends, so they may satisfy a later worker read or evaluation.
+On macOS, the first evaluation lazily starts a sandboxed embedded R worker.
 Later calls reuse the same global R state.
 The worker runs each cell through R's native top-level loop, captures R console output, prints each visible value, and maintains `.Last.value`.
 If a cell ends while an expression is incomplete, earlier complete expressions from that cell remain applied.

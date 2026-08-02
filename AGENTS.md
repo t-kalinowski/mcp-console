@@ -19,20 +19,25 @@ mcp-console sandbox [--] COMMAND [ARG]...
 The binary requires a subcommand.
 The `serve` command runs an MCP server over stdio.
 Clap provides command help, version output, argument parsing, and usage errors.
-The server registers only a `send` tool, which accepts one complete `r` string with optional `stdin`, or `stdin` for an evaluation already waiting for input.
-On macOS, its first call lazily starts the built-in R worker under the same sandbox policy as the `sandbox` command.
+The server registers only a `send` tool.
+Supplying `r` starts one complete cell and waits for up to `timeout_ms`, which defaults to 60 seconds.
+If that wait expires, `send` returns `[running]` without stopping the computation; a later call without `r` polls it, and a poll while idle returns `[idle]`.
+Concurrent `send` calls are unsupported.
+Supplying `stdin` with `r` or while that cell remains active queues its exact UTF-8 bytes to worker fd 0 from an independent FIFO writer.
+The server adds no newline, does not inspect or limit the text, and does not wait for an input request before writing it.
+An `input_requested` frame reports the prompt and can wake `send` with `[input]`, but it neither gates fd-0 delivery nor acknowledges whether queued bytes were consumed.
+A call that just queued nonempty stdin may defer that boundary until completion or its own timeout; empty stdin writes no bytes and leaves an exposed boundary pending.
+Accepted stdin is queued rather than acknowledged as consumed, is not drained when evaluation completes, and may satisfy a later worker read or evaluation.
+New code is rejected until the running evaluation's result has been collected.
+On macOS, the first evaluation lazily starts the built-in R worker under the same sandbox policy as the `sandbox` command.
 The worker embeds R through `libr` and `harp`, retains global state, and feeds each complete cell through R's DLL REPL iterator.
 R parses and evaluates its expressions sequentially, captures console output, prints visible values, and performs native top-level bookkeeping.
 Cell EOF while R requires continuation input is an error; earlier complete expressions from that cell remain applied.
-Evaluation-time `ReadConsole` requests return an `[input]` boundary and accept exact, optionally multiline `stdin` without adding a newline.
-When `r` and `stdin` arrive together, the server evaluates `r` first and writes stdin lines or partial-line fragments to worker fd 0 only as the worker requests input; one value may satisfy multiple reads, each logical line is limited to 512 bytes including its newline, and `[stdin discarded]` reports that evaluation completed before requesting any input.
-Rejected stdin remains unsent and leaves the active input request and persistent worker state intact.
-Unused buffered input is discarded when the evaluation ends.
 The hidden `worker` command takes ownership of the sideband, discovers `R_HOME` through the selected R executable inside the sandbox, and opens `R_HOME/lib/libR.dylib` by its absolute path.
 It does not self-execute or set a dynamic-loader environment variable.
 The worker command runs synchronously on the process main thread; only `serve` creates a Tokio runtime.
-The hidden development option `serve --worker PATH` replaces the built-in worker with an executable that implements the same sideband control and output protocol plus fd-0 stdin contract.
-The Python fixture `tests/fixtures/zod` provides deterministic acceptance coverage for that boundary.
+The hidden development option `serve --worker PATH` replaces the built-in worker with an executable that implements the same sideband protocol and fd-0 input contract.
+The Python fixture `tests/fixtures/zod` provides deterministic acceptance coverage for that boundary, direct fd-0 input, and server-owned timeout and polling mechanics.
 An infrastructure or protocol failure is returned as a tool error, force-stops and discards that worker, and lets the next evaluation start a fresh worker.
 When MCP input closes, the server starts a one-second deadline and attempts graceful sideband shutdown without delaying it.
 If the direct sandbox process is still running when time expires, the sandbox boundary force-stops its process group and reaps that direct process.
@@ -71,7 +76,7 @@ See `design-sketches/README.md` for the product overview and `design-sketches/do
 - `src/r_repl.c` — C-owned per-cell DLL-REPL iterator and long-jump boundary.
 - `src/sideband.rs` — macOS inherited-pipe JSON-lines transport.
 - `src/worker.rs` — embedded R initialization, evaluation, and console callbacks.
-- `src/worker_client.rs` — server-side worker launch, lifecycle, fd-0 input, and output collection.
+- `src/worker_client.rs` — server-side worker launch, lifecycle, and output collection.
 - `src/worker_protocol.rs` — shared sideband message definitions.
 - `src/sandbox.rs` — platform dispatch for the sandbox process launcher.
 - `src/sandbox/` — platform implementation and macOS Seatbelt policy.
@@ -108,8 +113,9 @@ Begin as one Cargo package and split crates only when a real boundary emerges.
   Do not add tests for private helpers.
 - Format embedded R, Python, SQL, and shell test programs as multiline raw strings.
   Use escape sequences such as `\n` only when the program needs that character as data, not to lay out its source.
-- Keep complete code-cell source on the worker sideband and interactive stdin bytes on fd 0, even when one `send` call supplies both.
+- Keep complete code cells separate from interactive `stdin`.
 - Keep the MCP adapter independent of interpreter implementation details.
 - Treat all runtime execution as shell-class capability and place safety at the worker-process boundary.
 - Update this file when a PR changes the implemented surface or repository map.
+- Before every commit, run `scripts/format` and review its changes.
 - Run `scripts/check` before opening a PR.

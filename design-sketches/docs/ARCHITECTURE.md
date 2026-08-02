@@ -114,7 +114,7 @@ The session manager depends on behavior, not transport:
 trait RuntimeBackend {
     fn capabilities(&self) -> RuntimeCapabilities;
     fn evaluate(&mut self, request: EvaluateCell) -> EvaluationHandle;
-    fn provide_input(&mut self, request: ProvideInput) -> Result<()>;
+    fn queue_input(&mut self, request: QueueInput) -> Result<()>;
     fn interrupt(&mut self, evaluation: Option<EvaluationId>) -> Result<()>;
     fn inspect(&mut self, request: InspectionRequest) -> InspectionHandle;
     fn restart(&mut self, environment: ResolvedEnvironment) -> Result<()>;
@@ -383,7 +383,7 @@ An Ark backend may use Jupyter channels and custom comms internally, but its ada
 evaluation:    supervisor -> backend
 events:        backend -> supervisor
 inspection:    supervisor <-> backend
-stdin:         supervisor -> active input request
+stdin:         supervisor -> active evaluation
 control:       supervisor -> backend or OS runtime interrupt
 raw stdout:    worker and descendants -> supervisor when applicable
 raw stderr:    worker and descendants -> supervisor when applicable
@@ -409,9 +409,8 @@ enum WorkerCommand {
         source: String,
         label: Option<String>,
     },
-    ProvideInput {
+    QueueInput {
         evaluation_id: EvaluationId,
-        input_request_id: InputRequestId,
         text: String,
     },
     PrepareShutdown {
@@ -433,12 +432,10 @@ enum WorkerEvent {
     ArtifactCreated { evaluation_id: EvaluationId, artifact: Artifact },
     InputRequested {
         evaluation_id: EvaluationId,
-        input_request_id: InputRequestId,
         origin: InputOrigin,
         prompt: String,
         echo: bool,
     },
-    InputConsumed { evaluation_id: EvaluationId, input_request_id: InputRequestId },
     EvaluationFinished { evaluation_id: EvaluationId, outcome: EvaluationOutcome },
     InterruptAcknowledged { evaluation_id: Option<EvaluationId> },
     SessionEnded { reason: EndReason, message: Option<String> },
@@ -478,7 +475,7 @@ The stack contract is intentionally asymmetric:
 | R | native top-level R cell behavior | no |
 | Python | private reticulate cell boundary | minimal and truthful if present |
 | SQL | private DBI/DuckDB boundary | minimal and truthful if present |
-| stdin | resume active input consumer | no new top-level frame |
+| stdin | append to active input stream | no new top-level frame |
 
 This asymmetry follows the actual implementation boundaries and should be documented rather than concealed.
 
@@ -513,7 +510,7 @@ For each R cell it:
 3. lets R parse and evaluate each top-level expression, update `.Last.value`, auto-print visible values, print warnings, and invoke task callbacks;
 4. treats source EOF after a primary status as completion and source EOF after a continuation status as incomplete input;
 5. emits conditions, errors, artifacts, and completion under the evaluation ID;
-6. restores the per-cell source and stdin queues after completion or error.
+6. restores the per-cell source queue after completion or error without claiming that queued stdin was consumed.
 
 The implementation should retain source references and a synthetic source name when the DLL embedding API can support them without replacing R's native top-level loop.
 
@@ -557,11 +554,12 @@ Runtime input includes:
 
 When called during an active evaluation, the callback:
 
-1. allocates an `InputRequestId`;
-2. emits `InputRequested` with prompt and origin;
-3. blocks until the matching `ProvideInput` arrives, interrupt occurs, or shutdown begins;
-4. returns exactly that input line to R;
-5. emits consumption bookkeeping.
+1. consumes a complete line already buffered in the worker, if present;
+2. otherwise emits `InputRequested` with prompt and origin;
+3. blocks while reading fd 0 until a complete line, interrupt, or shutdown;
+4. returns that line to R and retains any additional bytes for later reads.
+
+The supervisor may queue fd-0 bytes before the event and does not infer or acknowledge their consumption.
 
 The callback uses a Busy-based evaluation latch rather than prompt comparison to select the queue.
 The cell-source queue and interactive-input queue must never be merged.
@@ -616,7 +614,7 @@ A later supported native reticulate entry point could remove the console-owned R
 
 ### 11.4 Python stdin and debuggers
 
-Install a Python `sys.stdin` or `builtins.input` bridge that uses the same `InputRequested`/`ProvideInput` state machine as R.
+Install a Python `sys.stdin` or `builtins.input` bridge that uses the same fd-0 stream and observational `InputRequested` event contract as R.
 It should support at least ordinary `input()` and line-oriented debugger commands.
 
 Do not assume that R's `ReadConsole` automatically provides correct Python stdin semantics.
@@ -1003,7 +1001,7 @@ The public MCP protocol supports richer content, but v1 deliberately uses plain 
 
 - invalid mode combinations;
 - code sent while busy;
-- `stdin` while no input is pending;
+- `stdin` while no evaluation is active;
 - missing session for poll/control;
 - dependency preparation failure;
 - worker startup or protocol failure;
