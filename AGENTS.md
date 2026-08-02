@@ -26,6 +26,7 @@ R parses and evaluates its expressions sequentially, captures console output, pr
 Cell EOF while R requires continuation input is an error; earlier complete expressions from that cell remain applied.
 Evaluation-time `ReadConsole` requests return an `[input]` boundary and accept exact, optionally multiline `stdin` without adding a newline.
 When `r` and `stdin` arrive together, the server evaluates `r` first and writes stdin lines or partial-line fragments to worker fd 0 only as the worker requests input; one value may satisfy multiple reads, each logical line is limited to 512 bytes including its newline, and `[stdin discarded]` reports that evaluation completed before requesting any input.
+Rejected stdin remains unsent and leaves the active input request and persistent worker state intact.
 Unused buffered input is discarded when the evaluation ends.
 The hidden `worker` command takes ownership of the sideband, discovers `R_HOME` through the selected R executable inside the sandbox, and opens `R_HOME/lib/libR.dylib` by its absolute path.
 It does not self-execute or set a dynamic-loader environment variable.

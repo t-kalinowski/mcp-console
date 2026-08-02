@@ -136,6 +136,7 @@ If `completed` arrives first, the server does not send the pending input and app
 The worker adds no newline to input.
 One `stdin` value may satisfy multiple reads; the server retains unsent text and the worker buffers partial text already read from fd 0.
 Partial input produces another prompt and `[input]` boundary.
+Input rejected before an fd-0 write leaves the current input request active, so a later valid `stdin` call can continue the same evaluation.
 Unsent and unread buffered text is discarded when the outer evaluation completes or errors.
 New R code is rejected while input is required, and follow-up `stdin` is rejected at other times.
 

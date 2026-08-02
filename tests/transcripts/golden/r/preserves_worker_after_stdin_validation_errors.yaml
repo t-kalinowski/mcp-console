@@ -54,181 +54,9 @@ input:
     name: send
     arguments:
       r: |-
-        first <- readline("first> ")
-        second <- readline("second> ")
-        cat(paste(first, second, sep = "|"), "\n", sep = "")
-      stdin: |
-        Ada
-        Lovelace
-output:
-  result:
-    content:
-      - type: text
-        text: |
-          first>
-          second>
-          Ada|Lovelace
-    isError: false
----
-id: 4
-input:
-  method: tools/call
-  params:
-    name: send
-    arguments:
-      r: "paste(\"hello\", readline(\"name> \"))"
-      stdin: |
-        Ada
-        stale
-output:
-  result:
-    content:
-      - type: text
-        text: |
-          name>
-          [1] "hello Ada"
-    isError: false
----
-id: 5
-input:
-  method: tools/call
-  params:
-    name: send
-    arguments:
-      r: "paste(\"hello\", readline(\"name> \"))"
-      stdin: "<large multiline stdin>"
-output:
-  result:
-    content:
-      - type: text
-        text: |
-          name>
-          [1] "hello Ada"
-    isError: false
----
-id: 6
-input:
-  method: tools/call
-  params:
-    name: send
-    arguments:
-      r: "readline(\"fresh> \")"
-      stdin: |
-        fresh
-output:
-  result:
-    content:
-      - type: text
-        text: |
-          fresh>
-          [1] "fresh"
-    isError: false
----
-id: 7
-input:
-  method: tools/call
-  params:
-    name: send
-    arguments:
-      r: "42"
-      stdin: |
-        unused
-output:
-  result:
-    content:
-      - type: text
-        text: |-
-          [1] 42
-          [stdin discarded]
-    isError: false
----
-id: 8
-input:
-  method: tools/call
-  params:
-    name: send
-    arguments:
-      r: "paste(\"color\", readline(\"color> \"))"
-output:
-  result:
-    content:
-      - type: text
-        text: |-
-          color>
-          [input]
-    isError: false
----
-id: 9
-input:
-  method: tools/call
-  params:
-    name: send
-    arguments:
-      stdin: ""
-output:
-  result:
-    content:
-      - type: text
-        text: "[input]"
-    isError: false
----
-id: 10
-input:
-  method: tools/call
-  params:
-    name: send
-    arguments:
-      stdin: bl
-output:
-  result:
-    content:
-      - type: text
-        text: |-
-          color>
-          [input]
-    isError: false
----
-id: 11
-input:
-  method: tools/call
-  params:
-    name: send
-    arguments:
-      stdin: |
-        ue
-output:
-  result:
-    content:
-      - type: text
-        text: |
-          [1] "color blue"
-    isError: false
----
-id: 12
-input:
-  method: tools/call
-  params:
-    name: send
-    arguments:
-      r: "nchar(readline(\"limit> \"))"
-      stdin: "<maximum stdin line>"
-output:
-  result:
-    content:
-      - type: text
-        text: |
-          limit>
-          [1] 511
-    isError: false
----
-id: 13
-input:
-  method: tools/call
-  params:
-    name: send
-    arguments:
-      r: "readline(\"long> \")"
-      stdin: "<oversized stdin line>"
+        stdin_marker <- 41
+        nchar(readline("bundled> "))
+      stdin: "<oversized bundled stdin>"
 output:
   result:
     content:
@@ -236,7 +64,7 @@ output:
         text: stdin lines cannot exceed 512 bytes including the newline
     isError: true
 ---
-id: 14
+id: 4
 input:
   method: tools/call
   params:
@@ -249,26 +77,41 @@ output:
     content:
       - type: text
         text: |
-          [1] "ok"
+          [1] 2
     isError: false
 ---
-id: 15
+id: 5
 input:
   method: tools/call
   params:
     name: send
     arguments:
-      r: "readline(\"long> \")"
+      r: stdin_marker + 1
+output:
+  result:
+    content:
+      - type: text
+        text: |
+          [1] 42
+    isError: false
+---
+id: 6
+input:
+  method: tools/call
+  params:
+    name: send
+    arguments:
+      r: "nchar(readline(\"continued> \"))"
 output:
   result:
     content:
       - type: text
         text: |-
-          long>
+          continued>
           [input]
     isError: false
 ---
-id: 16
+id: 7
 input:
   method: tools/call
   params:
@@ -280,11 +123,11 @@ output:
     content:
       - type: text
         text: |-
-          long>
+          continued>
           [input]
     isError: false
 ---
-id: 17
+id: 8
 input:
   method: tools/call
   params:
@@ -297,4 +140,35 @@ output:
       - type: text
         text: stdin lines cannot exceed 512 bytes including the newline
     isError: true
+---
+id: 9
+input:
+  method: tools/call
+  params:
+    name: send
+    arguments:
+      stdin: |
+        y
+output:
+  result:
+    content:
+      - type: text
+        text: |
+          [1] 257
+    isError: false
+---
+id: 10
+input:
+  method: tools/call
+  params:
+    name: send
+    arguments:
+      r: stdin_marker + 1
+output:
+  result:
+    content:
+      - type: text
+        text: |
+          [1] 42
+    isError: false
 ...

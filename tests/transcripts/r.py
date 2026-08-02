@@ -121,6 +121,9 @@ def test_routes_combined_and_followup_stdin(binary: Path) -> Transcript:
         }
     ]
 
+    client.call_tool("send", stdin="ok\n")
+    assert last_tool_text(client) == '[1] "ok"\n'
+
     client.call_tool("send", r=r)
     assert last_tool_text(client) == "long>\n[input]"
     client.call_tool("send", stdin="x" * 256)
@@ -138,6 +141,62 @@ def test_routes_combined_and_followup_stdin(binary: Path) -> Transcript:
             "text": "stdin lines cannot exceed 512 bytes including the newline",
         }
     ]
+    return client.finish()
+
+
+def test_preserves_worker_after_stdin_validation_errors(binary: Path) -> Transcript:
+    client = McpClient(binary, ("serve",))
+    client.initialize_and_list_tools()
+
+    # fmt: r
+    r = dedent(r"""
+        stdin_marker <- 41
+        nchar(readline("bundled> "))
+        """).strip()
+    client.call_tool("send", r=r, stdin=("x" * 512) + "\n")
+    client.transcript[-1]["input"]["params"]["arguments"]["stdin"] = (
+        "<oversized bundled stdin>"
+    )
+    result = client.transcript[-1]["output"]["result"]
+    assert result["isError"] is True, result
+    assert result["content"] == [
+        {
+            "type": "text",
+            "text": "stdin lines cannot exceed 512 bytes including the newline",
+        }
+    ]
+
+    client.call_tool("send", stdin="ok\n")
+    assert last_tool_text(client) == "[1] 2\n"
+    client.call_tool("send", r="stdin_marker + 1")
+    assert last_tool_text(client) == "[1] 42\n"
+
+    # fmt: r
+    r = dedent(r"""
+        nchar(readline("continued> "))
+        """).strip()
+    client.call_tool("send", r=r)
+    assert last_tool_text(client) == "continued>\n[input]"
+    client.call_tool("send", stdin="x" * 256)
+    client.transcript[-1]["input"]["params"]["arguments"]["stdin"] = "<partial stdin>"
+    assert last_tool_text(client) == "continued>\n[input]"
+    client.call_tool("send", stdin=("x" * 256) + "\n")
+    client.transcript[-1]["input"]["params"]["arguments"]["stdin"] = (
+        "<oversized stdin continuation>"
+    )
+    result = client.transcript[-1]["output"]["result"]
+    assert result["isError"] is True, result
+    assert result["content"] == [
+        {
+            "type": "text",
+            "text": "stdin lines cannot exceed 512 bytes including the newline",
+        }
+    ]
+
+    client.call_tool("send", stdin="y\n")
+    assert last_tool_text(client) == "[1] 257\n"
+    client.call_tool("send", r="stdin_marker + 1")
+    assert last_tool_text(client) == "[1] 42\n"
     return client.finish()
 
 

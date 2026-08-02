@@ -30,6 +30,11 @@ struct Boundary {
     input_required: bool,
 }
 
+struct OperationFailure {
+    message: String,
+    input_required: bool,
+}
+
 /// Keeps the current stop handle available until shutdown closes the gate.
 enum ShutdownGate {
     Open {
@@ -128,10 +133,6 @@ impl Client {
                 return Err("stdin is accepted only at an R input prompt".to_string());
             }
             (Operation::Input(stdin), WorkerState::InputRequired(worker)) => {
-                if stdin.contains('\0') {
-                    *state = WorkerState::InputRequired(worker);
-                    return Err("stdin cannot contain NUL".to_string());
-                }
                 (worker, Operation::Input(stdin))
             }
         };
@@ -149,7 +150,12 @@ impl Client {
                 };
                 Ok(boundary.output)
             }
-            Err(error) => Err(error),
+            Err(error) => {
+                if error.input_required {
+                    *state = WorkerState::InputRequired(worker);
+                }
+                Err(error.message)
+            }
         }
     }
 
@@ -223,6 +229,20 @@ mod platform {
 
     // POSIX's minimum atomic pipe write and macOS's reported PIPE_BUF.
     const STDIN_LINE_BYTES: usize = 512;
+
+    fn worker_failure(message: String) -> super::OperationFailure {
+        super::OperationFailure {
+            message,
+            input_required: false,
+        }
+    }
+
+    fn input_rejected(message: String) -> super::OperationFailure {
+        super::OperationFailure {
+            message,
+            input_required: true,
+        }
+    }
 
     pub(super) struct Worker {
         reader: crate::sideband::Reader,
@@ -299,33 +319,41 @@ mod platform {
             &mut self,
             r: String,
             stdin: Option<String>,
-        ) -> Result<super::Boundary, String> {
+        ) -> Result<super::Boundary, super::OperationFailure> {
             self.input_line_bytes = 0;
             self.stop_handle
                 .writer
                 .send(&ServerMessage::Evaluate { r })
-                .map_err(|error| format!("worker sideband write failed: {error}"))?;
+                .map_err(|error| {
+                    worker_failure(format!("worker sideband write failed: {error}"))
+                })?;
             self.read_boundary(stdin.map(|stdin| PendingInput::new(stdin, 0)))
         }
 
-        pub(super) fn provide_input(&mut self, stdin: String) -> Result<super::Boundary, String> {
+        pub(super) fn provide_input(
+            &mut self,
+            stdin: String,
+        ) -> Result<super::Boundary, super::OperationFailure> {
             let mut pending = PendingInput::new(stdin, self.input_line_bytes);
-            let Some(line) = pending.next_line()? else {
+            let Some(line) = pending.next_line().map_err(input_rejected)? else {
                 return Ok(super::Boundary {
                     output: "[input]".to_string(),
                     input_required: true,
                 });
             };
-            self.stdin.write(line)?;
+            self.stdin.write(line).map_err(worker_failure)?;
             self.input_line_bytes = pending.line_bytes;
             self.read_boundary(Some(pending))
         }
 
-        fn write_pending_input(&mut self, pending: &mut PendingInput) -> Result<bool, String> {
-            let Some(line) = pending.next_line()? else {
+        fn write_pending_input(
+            &mut self,
+            pending: &mut PendingInput,
+        ) -> Result<bool, super::OperationFailure> {
+            let Some(line) = pending.next_line().map_err(input_rejected)? else {
                 return Ok(false);
             };
-            self.stdin.write(line)?;
+            self.stdin.write(line).map_err(worker_failure)?;
             self.input_line_bytes = pending.line_bytes;
             Ok(true)
         }
@@ -333,10 +361,10 @@ mod platform {
         fn read_boundary(
             &mut self,
             mut pending_stdin: Option<PendingInput>,
-        ) -> Result<super::Boundary, String> {
+        ) -> Result<super::Boundary, super::OperationFailure> {
             let mut output = String::new();
             loop {
-                match self.receive()? {
+                match self.receive().map_err(worker_failure)? {
                     WorkerMessage::Output { data } => output.push_str(&data),
                     WorkerMessage::InputRequested { prompt } => {
                         if let Some(pending) = pending_stdin.as_mut()
@@ -371,7 +399,9 @@ mod platform {
                         });
                     }
                     WorkerMessage::Ready => {
-                        return Err("worker sent an unexpected ready message".to_string());
+                        return Err(worker_failure(
+                            "worker sent an unexpected ready message".to_string(),
+                        ));
                     }
                 }
             }
@@ -518,11 +548,14 @@ mod platform {
             &mut self,
             _r: String,
             _stdin: Option<String>,
-        ) -> Result<super::Boundary, String> {
+        ) -> Result<super::Boundary, super::OperationFailure> {
             unreachable!("unsupported workers cannot start")
         }
 
-        pub(super) fn provide_input(&mut self, _stdin: String) -> Result<super::Boundary, String> {
+        pub(super) fn provide_input(
+            &mut self,
+            _stdin: String,
+        ) -> Result<super::Boundary, super::OperationFailure> {
             unreachable!("unsupported workers cannot start")
         }
     }
