@@ -3,19 +3,29 @@
 ---
 id: 3
 send:
-  r: |-
-    answer <- 42
-    answer + (
+  r: invisible(NULL)
 result:
   content:
     - type: text
-      text: |
-        Error: Incomplete code
+      text: "[done]"
   isError: false
 ---
 id: 4
 send:
-  r: answer
+  r: |-
+    Sys.sleep(0.25)
+    answer <- 42
+    answer
+  timeout_ms: 10
+result:
+  content:
+    - type: text
+      text: "[running]"
+  isError: false
+---
+id: 5
+send:
+  timeout_ms: 3000
 result:
   content:
     - type: text
@@ -23,21 +33,9 @@ result:
         [1] 42
   isError: false
 ---
-id: 5
-send:
-  r: |-
-    answer <- 43
-    )
-result:
-  content:
-    - type: text
-      text: |
-        Error: unexpected ')' in ")"
-  isError: false
----
 id: 6
 send:
-  r: answer
+  r: answer + 1
 result:
   content:
     - type: text

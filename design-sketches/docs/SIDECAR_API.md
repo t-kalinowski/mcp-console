@@ -296,7 +296,7 @@ session.closed
 evaluation.started
 evaluation.output
 evaluation.input_requested
-evaluation.input_consumed
+evaluation.input_received
 evaluation.finished
 
 artifact.created
@@ -648,7 +648,7 @@ The session manager applies the same acceptance rules as MCP:
 
 - one primary evaluation at a time;
 - code is rejected while busy rather than silently interleaved;
-- stdin is valid only for the active input request;
+- stdin is queued to the session worker FIFO whether it is evaluating or idle;
 - wait and cancellation do not imply process termination;
 - output is spooled and bounded;
 - lifecycle controls use the same state transitions.

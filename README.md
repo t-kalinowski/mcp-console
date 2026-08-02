@@ -21,41 +21,28 @@ mcp-console sandbox -- COMMAND [ARG]...
 `mcp-console` requires a subcommand.
 `mcp-console serve` runs a minimal MCP server over stdio.
 Run `mcp-console --help` or `mcp-console COMMAND --help` for command-line help.
-The server registers one `send` tool with two mutually exclusive inputs:
+The server registers one `send` tool.
+Supplying `r` evaluates one complete code cell and waits up to the optional `timeout_ms`, which defaults to 60 seconds.
+When that wait expires, the call returns `[running]` while computation continues; call `send` without `r` to poll for completion.
+A call may also supply exact standard-input text with `r`, during an evaluation, or while the worker is idle:
 
 ```json
-{ "r": "x <- 40\nx + 2" }
+{ "r": "readline('name> ')", "stdin": "Ada\n" }
 ```
 
-```json
-{ "stdin": "Ada\n" }
-```
-
-Each `r` call supplies one complete R code cell.
-MCP initialization and tool listing do not require R.
-On macOS, the first `r` call lazily starts a sandboxed embedded R worker.
+The server sends the cell first, then queues the string's UTF-8 bytes to worker fd 0 without inspecting it, adding a newline, imposing a size limit, or waiting for an input request.
+A stdin-only call while idle lazily starts the worker when needed, queues the bytes, and returns `[idle]`.
+When an input request remains outstanding for up to 10 milliseconds, bounded by the call deadline, `send` returns its prompt and `[input]`; a later call can supply more bytes with `{ "stdin": "Ada\n" }`.
+An immediate `input_received` receipt suppresses that boundary, so prequeued input can satisfy a console read without forcing another tool call.
+That receipt describes the runtime read, not a particular stdin payload; direct fd-0 reads emit no request or receipt.
+Payload end is not EOF, and queued input is not an acknowledgment of consumption.
+Unread bytes may be completed by later stdin or satisfy a later worker read or evaluation.
+On macOS, the first nonempty stdin submission or evaluation lazily starts a sandboxed embedded R worker.
 Later calls reuse the same global R state.
 The worker runs each cell through R's native top-level loop, captures R console output, prints each visible value, and maintains `.Last.value`.
 If a cell ends while an expression is incomplete, earlier complete expressions from that cell remain applied.
-R parse, evaluation, and auto-print failures are normal language outcomes with `isError: false`; worker startup, sandbox, process, and private-protocol failures are tool errors.
-Successful silent evaluations return `[done]`.
-
-When active R code calls `readline()` or enters `browser()`, the response ends in `[input]`.
-A later `stdin` call appends exact text to that evaluation without adding a newline.
-Partial and multiple lines are buffered, and unused text is discarded when the evaluation ends.
-New R cells are rejected while input is required, and `stdin` is rejected at other times.
-If the worker stops, later calls report the stopped state rather than starting a replacement.
-
-R must be discoverable through `R_HOME` or `PATH` and must provide a shared library.
-On macOS, the worker runs under the same read-only Seatbelt policy as the `sandbox` command.
-It can read host files, write regular files only in its private temporary directory, and cannot use the network.
-Its descendants inherit that policy.
-Platforms without an implemented worker sandbox reject `r` calls instead of starting R without one.
-MCP shutdown asks the direct worker to exit, then terminates and reaps it after a one-second grace period.
-
-Python, SQL, polling, interrupts, named sessions, runtime restart, and output retention are not implemented yet.
-
-The MCP initialization identity remains `mcp-console`.
+R language failures remain ordinary console results rather than MCP tool errors, and a silent successful cell returns `[done]`.
+Its MCP initialization identity remains `mcp-console`.
 The intended default client registration name is `console`:
 
 ```bash

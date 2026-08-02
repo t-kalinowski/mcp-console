@@ -1,83 +1,44 @@
 ---
-id: 1
-input:
-  method: initialize
-  params:
-    protocolVersion: 2025-11-25
-    capabilities: {}
-    clientInfo:
-      name: acceptance-test
-      version: 1.0.0
-output:
-  result:
-    protocolVersion: 2025-11-25
-    capabilities:
-      tools: {}
-    serverInfo:
-      name: mcp-console
-      version: 0.1.0
----
-input:
-  method: notifications/initialized
----
-id: 2
-input:
-  method: tools/call
-  params:
-    name: send
-    arguments:
-      r: browser()
-output:
-  result:
-    content:
-      - type: text
-        text: "Called from: top level\x20\nBrowse[1]>\n[input]"
-    isError: false
+!same-as tests/transcripts/golden/server/initializes_and_lists_tools.yaml
 ---
 id: 3
-input:
-  method: tools/call
-  params:
-    name: send
-    arguments:
-      r: "1"
-output:
-  result:
-    content:
-      - type: text
-        text: cannot evaluate R code while the session is waiting for stdin
-    isError: true
+send:
+  r: browser()
+result:
+  content:
+    - type: text
+      text: "Called from: top level\x20\nBrowse[1]>\n[input]"
+  isError: false
 ---
 id: 4
-input:
-  method: tools/call
-  params:
-    name: send
-    arguments:
-      stdin: |
-        1 + 1
-output:
-  result:
-    content:
-      - type: text
-        text: |-
-          [1] 2
-          Browse[1]>
-          [input]
-    isError: false
+send:
+  r: "1"
+result:
+  content:
+    - type: text
+      text: worker is already evaluating a cell; poll without `r`
+  isError: true
 ---
 id: 5
-input:
-  method: tools/call
-  params:
-    name: send
-    arguments:
-      stdin: |
-        c
-output:
-  result:
-    content:
-      - type: text
-        text: "[done]"
-    isError: false
+send:
+  stdin: |
+    1 + 1
+result:
+  content:
+    - type: text
+      text: |-
+        [1] 2
+        Browse[1]>
+        [input]
+  isError: false
+---
+id: 6
+send:
+  stdin: |
+    c
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
 ...

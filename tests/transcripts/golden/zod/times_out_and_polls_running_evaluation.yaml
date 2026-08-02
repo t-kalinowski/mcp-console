@@ -3,45 +3,41 @@
 ---
 id: 3
 send:
-  r: |-
-    answer <- 42
-    answer + (
+  r: echo
 result:
   content:
     - type: text
       text: |
-        Error: Incomplete code
+        zod: echo
   isError: false
 ---
 id: 4
 send:
-  r: answer
+  r: complete after timeout
+  timeout_ms: 10
 result:
   content:
     - type: text
-      text: |
-        [1] 42
+      text: "[running]"
   isError: false
 ---
 id: 5
 send:
-  r: |-
-    answer <- 43
-    )
+  timeout_ms: 3000
 result:
   content:
     - type: text
       text: |
-        Error: unexpected ')' in ")"
+        zod: complete after timeout
   isError: false
 ---
 id: 6
 send:
-  r: answer
+  r: echo
 result:
   content:
     - type: text
       text: |
-        [1] 43
+        zod: echo
   isError: false
 ...

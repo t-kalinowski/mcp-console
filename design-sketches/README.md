@@ -60,8 +60,16 @@ When running code requests real console input, the same tool supplies exact `std
 { "stdin": "where\nn\nc\n" }
 ```
 
+Input may also accompany the cell when it is already known:
+
+```json
+{ "r": "readline('name> ')", "stdin": "Ada\n" }
+```
+
 The text may contain one or more lines, and the server does not add a newline.
 This supports R `readline()` and `browser()`, Python `input()` and debuggers, and similar interactive modes without making ordinary code submission line-oriented.
+An input request is held briefly for a matching runtime receipt, so prequeued input can satisfy the read without forcing another tool call.
+The receipt identifies the read operation, not the submitted payload that supplied its bytes.
 
 Package requirements are configured less frequently at the logical-session level and persist across runtime restarts:
 
@@ -73,7 +81,7 @@ Package requirements are configured less frequently at the logical-session level
 ```
 
 `prepare` may create a configured logical session without starting its worker.
-A later code cell starts the runtime with those requirements.
+A later code cell or nonempty stdin submission starts the runtime with those requirements.
 Once a runtime exists, this replaces it while retaining requirements, workspace files, and the transcript:
 
 ```json
@@ -132,10 +140,10 @@ Python is embedded through reticulate.
 SQL is initially executed through the DuckDB R package and DBI, giving SQL direct access to live R data frames and persistent DuckDB catalog state.
 
 The supervisor exposes one backend-neutral runtime service for cell evaluation, output, interactive input, structured inspection, and control.
-An implemented Ark prototype was compared with the current purpose-built worker based on `harp`, `libr`, and libR's DLL REPL.
-The native worker was selected for the initial text-R console; Ark remains a candidate for the eventual full runtime if its Data Explorer, plots, help, debugger, and runtime behavior justify the Jupyter integration or become reusable through a narrower boundary.
+An Ark-backed R-only prototype was evaluated against the implemented purpose-built worker based on `harp`, `libr`, and libR's DLL REPL API.
+The native worker was selected for the current text R slice; the broader R/Python/SQL and inspection backend remains open.
 The public MCP and local sidecar contracts must not depend on which backend is selected.
-See [`docs/RUNTIME_BACKEND.md`](docs/RUNTIME_BACKEND.md).
+See [`docs/RUNTIME_BACKEND.md`](docs/RUNTIME_BACKEND.md) and [`docs/R_REPL_DLL_ITERATOR.md`](docs/R_REPL_DLL_ITERATOR.md).
 
 ## Output and durable context
 
@@ -156,8 +164,8 @@ Complete text, plots, live table batches, and snapshots are fetched separately b
 - [`docs/TOOL_DESCRIPTIONS.md`](docs/TOOL_DESCRIPTIONS.md) — exact descriptions registered for the two MCP tools.
 - [`docs/CLI.md`](docs/CLI.md) — standalone binary, installation, diagnostics, viewer, watch, and sidecar-control commands.
 - [`docs/SIDECAR_API.md`](docs/SIDECAR_API.md) — process-scoped local API, event subscriptions, inspection boundary, data explorer, plots, and external evaluation semantics.
-- [`docs/RUNTIME_BACKEND.md`](docs/RUNTIME_BACKEND.md) — evaluated initial Ark-versus-native worker decision, remaining full-runtime work, and decision criteria.
-- [`docs/R_REPL_DLL_ITERATOR.md`](docs/R_REPL_DLL_ITERATOR.md) — findings, decision, and implementation record for the native per-cell DLL-REPL adapter.
+- [`docs/RUNTIME_BACKEND.md`](docs/RUNTIME_BACKEND.md) — initial Ark-versus-native evaluation, remaining full-runtime work, and decision criteria.
+- [`docs/R_REPL_DLL_ITERATOR.md`](docs/R_REPL_DLL_ITERATOR.md) — native DLL-REPL findings, decision, and implementation record.
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — process model, runtime internals, output, viewer architecture, testing strategy, and implementation plan.
 - [`AGENTS.md`](AGENTS.md) — durable project context, key decisions, repository sitemap, and rules for coding agents.
 
@@ -166,12 +174,12 @@ Complete text, plots, live table batches, and snapshots are fetched separately b
 - Product name: **MCP Console**.
 - Public abstraction: a persistent console session, not a notebook or conventional line-oriented REPL.
 - Top-level input: complete R, Python, or SQL cells.
-- Interactive input: exact, optionally multiline `stdin` text only when the active runtime requests it.
+- Interactive input: exact, optionally multiline `stdin` text queued to the session worker whether it is evaluating or idle; paired request and receipt events expose supported runtime reads without gating delivery.
 - MCP surface: `send` plus a low-frequency `session` environment and lifecycle tool.
 - Language selection: the object key is `r`, `python`, or `sql`.
-- Runtime substrate: the initial text-R console uses the purpose-built `harp`/`libr` worker after comparison with an implemented Ark prototype.
-  The eventual full-runtime backend remains open and stays hidden behind the same runtime service.
-- R evaluation: native top-level evaluation; complete cell source and evaluation-time stdin remain distinct queues even when a DLL-REPL backend transports both through `ReadConsole`.
+- Runtime substrate: the current text R console uses the purpose-built `harp`/`libr` worker; the broader backend decision remains open.
+  Hide any backend behind the same runtime service.
+- R evaluation: native top-level evaluation; complete cell source and worker stdin remain distinct streams.
 - SQL engine: embedded DuckDB through R/DBI initially; the DuckDB CLI is a behavioral reference only.
 - Output: bounded MCP text plus managed workspace files.
 - Environment: additive session requirements configured by `session`; they survive runtime restarts.
@@ -187,7 +195,7 @@ Complete text, plots, live table batches, and snapshots are fetched separately b
 The design builds on:
 
 - [posit-dev/mcp-repl](https://github.com/posit-dev/mcp-repl) for persistent worker, sandbox, output, and native R frontend patterns;
-- [posit-dev/ark](https://github.com/posit-dev/ark) for native R execution, Jupyter lifecycle, plots, help, debugging, Variables, and the Data Explorer comm/backend; the current worker reuses its lower-level `harp` and `libr` crates;
+- [posit-dev/ark](https://github.com/posit-dev/ark) for native R execution, Jupyter lifecycle, plots, help, debugging, Variables, and the Data Explorer comm/backend; `harp` and `libr` remain candidate lower-level building blocks for a custom worker;
 - [reticulate](https://rstudio.github.io/reticulate/) for embedded Python and R/Python object interchange;
 - [DuckDB](https://duckdb.org/docs/current/clients/r) and [DBI](https://dbi.r-dbi.org/) for embedded SQL;
 - [Quarto](https://quarto.org/) for the readable session transcript;

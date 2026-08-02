@@ -1,149 +1,72 @@
 ---
-id: 1
-input:
-  method: initialize
-  params:
-    protocolVersion: 2025-11-25
-    capabilities: {}
-    clientInfo:
-      name: acceptance-test
-      version: 1.0.0
-output:
-  result:
-    protocolVersion: 2025-11-25
-    capabilities:
-      tools: {}
-    serverInfo:
-      name: mcp-console
-      version: 0.1.0
----
-input:
-  method: notifications/initialized
----
-id: 2
-input:
-  method: tools/call
-  params:
-    name: send
-    arguments:
-      r: answer <- 41
-output:
-  result:
-    content:
-      - type: text
-        text: "[done]"
-    isError: false
+!same-as tests/transcripts/golden/server/initializes_and_lists_tools.yaml
 ---
 id: 3
-input:
-  method: tools/call
-  params:
-    name: send
-    arguments:
-      r: |-
-        cat("before\n")
-        stop("boom", call. = FALSE)
-output:
-  result:
-    content:
-      - type: text
-        text: |
-          before
-          Error: boom
-    isError: false
+send:
+  r: answer <- 41
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
 ---
 id: 4
-input:
-  method: tools/call
-  params:
-    name: send
-    arguments:
-      r: answer
-output:
-  result:
-    content:
-      - type: text
-        text: |
-          [1] 41
-    isError: false
+send:
+  r: |-
+    g <- function() stop("boom", call. = FALSE)
+    f <- function() g()
+    f()
+result:
+  content:
+    - type: text
+      text: |
+        Error: boom
+  isError: false
 ---
 id: 5
-input:
-  method: tools/call
-  params:
-    name: send
-    arguments:
-      r: |-
-        g <- function() stop("boom", call. = FALSE)
-        f <- function() g()
-        f()
-output:
-  result:
-    content:
-      - type: text
-        text: |
-          Error: boom
-    isError: false
+send:
+  r: |-
+    traceback_lines <- capture.output(traceback())
+    cat(
+      "traceback: stop=",
+      any(grepl("stop", traceback_lines, fixed = TRUE)),
+      ", g=",
+      any(grepl("g()", traceback_lines, fixed = TRUE)),
+      ", f=",
+      any(grepl("f()", traceback_lines, fixed = TRUE)),
+      ", internal=",
+      any(grepl("mcp_console|base::get", traceback_lines)),
+      "\n",
+      sep = ""
+    )
+result:
+  content:
+    - type: text
+      text: |
+        traceback: stop=TRUE, g=TRUE, f=TRUE, internal=FALSE
+  isError: false
 ---
 id: 6
-input:
-  method: tools/call
-  params:
-    name: send
-    arguments:
-      r: |-
-        traceback_lines <- capture.output(traceback())
-        cat(
-          "traceback: stop=",
-          any(grepl("stop", traceback_lines, fixed = TRUE)),
-          ", g=",
-          any(grepl("g()", traceback_lines, fixed = TRUE)),
-          ", f=",
-          any(grepl("f()", traceback_lines, fixed = TRUE)),
-          ", internal=",
-          any(grepl("mcp_console|base::get", traceback_lines)),
-          "\n",
-          sep = ""
-        )
-output:
-  result:
-    content:
-      - type: text
-        text: |
-          traceback: stop=TRUE, g=TRUE, f=TRUE, internal=FALSE
-    isError: false
+send:
+  r: |-
+    print.transcript_boom <- function(...) {
+      stop("print failed")
+    }
+    structure(1, class = "transcript_boom")
+result:
+  content:
+    - type: text
+      text: |
+        Error in print.transcript_boom(x) : print failed
+  isError: false
 ---
 id: 7
-input:
-  method: tools/call
-  params:
-    name: send
-    arguments:
-      r: |-
-        print.transcript_boom <- function(...) {
-          stop("print failed")
-        }
-        structure(1, class = "transcript_boom")
-output:
-  result:
-    content:
-      - type: text
-        text: |
-          Error in print.transcript_boom(x) : print failed
-    isError: false
----
-id: 8
-input:
-  method: tools/call
-  params:
-    name: send
-    arguments:
-      r: answer
-output:
-  result:
-    content:
-      - type: text
-        text: |
-          [1] 41
-    isError: false
+send:
+  r: answer
+result:
+  content:
+    - type: text
+      text: |
+        [1] 41
+  isError: false
 ...

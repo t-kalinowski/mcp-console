@@ -73,7 +73,7 @@ It passed the tested core R contract after a small Ark API addition:
 - persistent cells and every visible top-level result;
 - R errors with source-bearing tracebacks;
 - `readline()`, `browser()`, `recover()`, menus, and the tested partial and multiple LF-delimited stdin chunks through the adapter;
-- sticky stopped-worker state and macOS sandbox restrictions;
+- worker-failure reporting and macOS sandbox restrictions;
 - adapter-provided synthetic source identities retained by Ark and direct subprocess-output capture.
 
 The prototype also confirmed that Ark can emit plot MIME data and open a Data Explorer comm without a Positron frontend.
@@ -155,7 +155,7 @@ Ark already provides Jupyter stream, result, error, display, comm, busy/idle, st
 The MCP Console adapter would still own:
 
 - connection files, authentication, the control, shell, stdin, and IOPub sockets, startup negotiation, message correlation, and completion detection;
-- exact MCP stdin buffering, line splitting, multiple-line carryover, and stale-input discard before sending line-oriented Jupyter replies;
+- worker-scoped stdin-stream semantics, including combined, idle, and timed-out delivery, partial-line buffering, multiple-line carryover, and persistence of unread bytes across evaluations, despite Jupyter's line-oriented replies;
 - background event consumption, bounded retention, polling cursors, and translation of MIME and comm messages;
 - sending and observing interrupt and shutdown requests without blocking behind the active evaluation;
 - matching the current incomplete-cell contract, either by segmenting requests or through an Ark execution option;
@@ -208,14 +208,15 @@ The implemented worker now covers:
 
 - R discovery, loading, initialization, and main-thread ownership;
 - persistent top-level cells with native visible-value, warning, `.Last.value`, traceback, and task-callback behavior;
-- exact interactive stdin for `readline()` and `browser()`;
-- private sideband output, worker lifecycle, orderly shutdown, and the macOS sandbox boundary.
+- exact worker-scoped stdin through fd 0 for `readline()`, `browser()`, and direct readers, with delivery alongside a cell, during a timed-out evaluation, or while idle, and with unread bytes retained across evaluations;
+- timeout-bounded MCP waits and later polling without stopping the active evaluation;
+- private sideband output, worker lifecycle, orderly shutdown, replacement after infrastructure failure, and the macOS sandbox boundary.
 
 The project remains responsible for:
 
 - platform support beyond the implemented macOS sandbox;
-- incremental polling, interrupts, direct subprocess capture, virtual source filenames, and richer condition events;
-- debugger behavior and crash recovery beyond the current stopped-worker boundary;
+- incremental output polling with cursors, interrupts, direct subprocess capture, virtual source filenames, and richer condition events;
+- debugger behavior and explicit crash reporting beyond the current discard-and-restart worker boundary;
 - plots, help, viewer content, object references, and Variables behavior;
 - a robust large-data inspection backend, including formatting, filtering, sorting, profiles, staleness, and invalidation.
 

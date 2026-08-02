@@ -12,7 +12,7 @@ The agent can alternate among R, Python, and SQL while retaining objects, import
 
 The public abstraction is a **console session**.
 Normal top-level input is one complete R, Python, or SQL cell.
-Line-oriented `stdin` is used only when the active evaluation explicitly requests input, including R `readline()` or `browser()` and Python `input()` or a debugger.
+`stdin` is a distinct worker stream that may be queued whether the session is evaluating or idle, including for R `readline()` or `browser()`, Python `input()` or a debugger, and background runtime jobs.
 
 The tool must be cheap enough to remain globally enabled.
 Common calls should look like:
@@ -49,10 +49,13 @@ Safety is enforced around the worker process and its descendants, not by filteri
   Under Codex's current naming convention, the tools are `mcp__console.send` and `mcp__console.session`.
 - Language is selected by the present object key: `r`, `python`, or `sql`.
 - Top-level submissions are complete cells, not line-by-line parser input.
-- `stdin` is accepted only for an already-active input consumer.
-  It is exact stream text, may contain multiple lines, and receives no implicit newline.
+- `stdin` may accompany a code cell or be sent on its own.
+  It is queued to the session worker immediately whether the session is evaluating or idle and may remain available to later reads.
+  It is exact stream text, may contain multiple lines, receives no implicit newline, and is not acknowledged as consumed.
+- Runtime input requests are provisional state events.
+  A matching receipt means that read succeeded; it does not identify which queued payload or bytes satisfied it.
 - A named session runs at most one top-level evaluation at a time.
-- A logical session is created by its first code submission or successful `prepare` action; `prepare` may leave it configured without a worker until code is submitted.
+- A logical session is created by its first code submission, nonempty stdin submission, or successful `prepare` action; `prepare` may leave it configured without a worker until code or stdin is submitted.
 - Independent or parallel work uses separately named sessions.
 - MCP results are text-only; v1 has no `outputSchema`, structured-content mirror, MCP resource dependency, or inline image result.
 - Oversized explicit output is retained in bounded session spools; each response contains only a bounded current excerpt.
@@ -62,7 +65,7 @@ Safety is enforced around the worker process and its descendants, not by filteri
   They survive runtime restarts and are not accepted on ordinary `send` calls.
 - Interrupt, restart, close, and worker crash are distinct observable events.
   `restart` loses in-memory R, Python, SQL, debugger, and process state while retaining requirements, workspace files, and transcript.
-  A crash fails the active evaluation and leaves the worker stopped until an explicit restart or close.
+  A crash fails the active evaluation and is recorded before the next evaluation starts a fresh worker generation.
 
 See [`VISION.md`](VISION.md) for the fuller rationale and [`docs/MCP_INTERFACE.md`](docs/MCP_INTERFACE.md) for normative MCP behavior.
 
@@ -92,7 +95,7 @@ Neither choice may change agent-visible semantics, sidecar authorization, attrib
 
 ### Evaluation boundaries
 
-The worker receives structured commands such as `EvaluateCell`, `ProvideInput`, `Inspect`, and `Interrupt`.
+The worker receives structured commands such as `EvaluateCell`, `QueueInput`, `Inspect`, and `Interrupt`.
 Complete code cells and interactive input must remain distinct commands and state queues.
 
 R cells must have native top-level semantics regardless of backend.
@@ -100,8 +103,9 @@ Preserve console visible-value behavior without placing a user-visible MCP Conso
 A user call to `sys.calls()` should not contain an MCP Console dispatcher frame merely because the code came from the tool.
 The initial comparison verified this behavior for the native worker and found that Ark's value proxy changes the expression received by top-level task callbacks.
 
-A native DLL-REPL backend may route both queues through a custom `ReadConsole` callback.
-It must use interpreter state rather than prompt text to feed cell source only at primary or continuation reads and to request stdin only during active evaluation.
+A native DLL-REPL backend may route cell source through a custom `ReadConsole` callback while retaining stdin on the worker's fd 0 stream.
+It must use interpreter state rather than prompt text to feed cell source only at primary or continuation reads.
+Runtime input request events describe supported console reads; they do not gate stdin delivery or cover direct fd-0 reads.
 
 Python uses a persistent cell executor in `__main__`, with a synthetic source filename, statement support, final-expression display, and language-native tracebacks.
 Do not use `reticulate::repl_python(input = ...)` as the core cell evaluator.
@@ -254,7 +258,7 @@ Create focused documents only when a subsystem has enough detail to justify a se
    Unseen overflow stays in the evaluation spool and is not forced through later calls.
 9. Keep the internal journal and generated QMD separate.
    The journal may be granular; the QMD is the readable agent artifact.
-10. Do not silently restart a crashed worker.
+10. Record a worker crash before automatically starting a fresh worker.
     Preserve honest state-loss and generation boundaries.
 11. Observation must never enter the runtime.
     Structured inspection must not accept caller-provided language source.

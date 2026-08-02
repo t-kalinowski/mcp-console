@@ -218,10 +218,6 @@ impl SandboxedChild {
         self.child.stderr.take()
     }
 
-    pub(crate) fn try_wait(&mut self) -> std::io::Result<Option<ExitStatus>> {
-        self.child.try_wait()
-    }
-
     pub(crate) fn wait(mut self) -> Result<ExitStatus, String> {
         self.child
             .wait()

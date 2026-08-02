@@ -1,16 +1,31 @@
 #!/usr/bin/env -S uv run --script
 
 from pathlib import Path
+from textwrap import dedent
 
 from _support import McpClient, Transcript, run_this_suite
 
 
-def test_initializes_lists_tools_and_calls_send(binary: Path) -> Transcript:
+def test_initializes_and_lists_tools(binary: Path) -> Transcript:
     client = McpClient(binary, ("serve",))
     client.initialize_and_list_tools()
-    client.call_tool("send")
-    client.call_tool("send", r="1", stdin="input")
-    client.call_tool("send", python="1")
+    return client.finish()
+
+
+def test_validates_send_arguments(binary: Path) -> Transcript:
+    client = McpClient(binary, ("serve",))
+    client.initialize_and_list_tools()
+    client.call_tool(
+        "send",
+        # fmt: r
+        python=dedent("""
+            print('hello')
+        """).strip(),
+        wait_ms=0,
+    )
+    client.call_tool("send", r=None)
+    output = client.transcript[-1]["result"]["content"][0]["text"]
+    assert output == "[idle]", output
     return client.finish()
 
 

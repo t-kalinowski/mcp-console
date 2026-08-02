@@ -89,7 +89,7 @@ This is a suitable balance for its readline-oriented input protocol: all submitt
 MCP Console has two distinct operations:
 
 - a complete code cell; and
-- exact stdin supplied only while that cell is evaluating.
+- an exact worker-scoped stdin stream that may be queued with a cell, during a timed-out evaluation, or while the worker is idle.
 
 A custom `ReadConsole` can feed both operations to the full main loop, but the public callback surface does not reveal whether a primary read is for a new expression or a continuation of an incomplete expression.
 Both reads call `R_Busy(0)`.
@@ -184,7 +184,7 @@ Rust maintains an `evaluation_started` latch:
 The `ReadConsole` callback then routes:
 
 - latch false: return the next logical line from the submitted cell;
-- latch true: request or consume exact MCP `stdin`.
+- latch true: report the input request and read exact bytes from worker fd 0.
 
 Ignoring `R_Busy(0)` after evaluation begins is required for `browser()`.
 Browser input runs a nested native REPL, and that nested loop calls `R_Busy(0)` before each browser prompt.
@@ -195,9 +195,10 @@ If a user `options(error=...)` handler entered by a parse error requests console
 Interactive reads from parse-error handlers are unsupported.
 Evaluation, auto-print, and task-callback error handlers occur after `R_Busy(1)` and route input normally.
 
-The callback continues to buffer partial and multiple stdin lines without adding a newline.
-Unused stdin is discarded when the outer cell completes or errors.
-Source and stdin remain separate protocol fields and separate queues even though both eventually pass through R's callback.
+The server writes each stdin string to worker fd 0 without adding a newline.
+The callback reads through one newline or the supplied R buffer and leaves later bytes in the stream.
+Payload end is not EOF, and unread bytes remain available after the outer cell completes or errors, including to direct fd-0 readers or a later evaluation.
+Cell source remains a sideband evaluation field rather than entering that stdin stream, even though both source and console input eventually pass through R's callback.
 
 Cell source receives a final newline internally when it does not already have one, matching the line contract expected by `ReadConsole`.
 The original MCP value is not modified.
@@ -212,11 +213,14 @@ The existing private protocol distinction remains:
 - R language failures are successful tool operations with `isError: false`;
 - worker startup, sandbox, process, and sideband failures are tool errors.
 
+An infrastructure failure discards that worker generation.
+A later evaluation may lazily start a fresh worker without implying that its in-memory state survived.
+
 On a native R long-jump, the console output already contains the R error.
 The worker follows it with the same `completed` boundary used for successful cells.
 An incomplete cell is the one error synthesized by the host, because DLL EOF returns `-1` instead of producing R's full-console `unexpected end of input` error.
 
-If shutdown arrives while `ReadConsole` is waiting for stdin, the callback returns EOF and records the shutdown request.
+Shutdown closes worker fd 0, so a `ReadConsole` callback blocked there returns EOF and records shutdown while the server independently attempts the sideband shutdown message.
 The C/Rust boundary exits at the next safe return or long-jump.
 Interrupting active R computation remains out of scope.
 
@@ -244,12 +248,12 @@ It preserves:
    - assert that an assignment before a trailing incomplete expression remains applied;
    - assert that a top-level task callback sees the submitted expression and not `base::get()`;
    - assert that a logical source line can span several `ReadConsole` buffers;
-   - retain the existing visible-value, warning, `.Last.value`, error, traceback, auto-print failure, `readline()`, browser, stale-input, stopped worker, and shutdown coverage.
+   - retain the existing visible-value, warning, `.Last.value`, error, traceback, auto-print failure, `readline()`, browser, fd-0 ordering, unread-input persistence, worker-restart, and shutdown coverage.
 2. Confirm the changed tests fail against the prior pre-parse/proxy worker.
 3. Add a macOS C shim and compile it with a small `build.rs`.
 4. Keep the current runtime lookup of `R_ReplDLLinit()` and `R_ReplDLLdo1()`, but pass those pointers to the shim instead of invoking them from Rust.
 5. Add distinct cell-source state and the `evaluation_started` Busy latch.
-6. Change `ReadConsole` to route primary/continuation reads to cell source and evaluation-time reads to the existing exact-stdin path.
+6. Change `ReadConsole` to route primary/continuation reads to cell source and evaluation-time reads to the worker fd-0 path.
 7. Replace the Rust worker's manual evaluation loop with one shim call per `Evaluate` message and classify its three return values.
 8. Delete the pre-parser, direct eval wrapper, calling error handler, traceback capture, value proxy, DLL proxy input, proxy-name generator, and manual REPL-reset code.
 9. Update `README.md`, root `AGENTS.md`, and conflicting intended-architecture text to describe the implementation that exists.

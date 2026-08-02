@@ -3,45 +3,41 @@
 ---
 id: 3
 send:
-  r: |-
-    answer <- 42
-    answer + (
+  stdin: |
+    cold
 result:
   content:
     - type: text
-      text: |
-        Error: Incomplete code
+      text: "[idle]"
   isError: false
 ---
 id: 4
 send:
-  r: answer
+  r: input without request
 result:
   content:
     - type: text
       text: |
-        [1] 42
+        zod stdin: cold
   isError: false
 ---
 id: 5
 send:
-  r: |-
-    answer <- 43
-    )
+  stdin: |
+    idle
 result:
   content:
     - type: text
-      text: |
-        Error: unexpected ')' in ")"
+      text: "[idle]"
   isError: false
 ---
 id: 6
 send:
-  r: answer
+  r: input without request
 result:
   content:
     - type: text
       text: |
-        [1] 43
+        zod stdin: idle
   isError: false
 ...

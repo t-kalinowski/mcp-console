@@ -43,23 +43,6 @@ impl Drop for TestDirectory {
     }
 }
 
-#[test]
-fn stdio_server_starts_r_lazily_and_keeps_a_failed_worker_stopped() {
-    let mut client = McpClient::start_without_r(&["serve"]);
-    client.request(2, "tools/list", None);
-
-    let stopped = client.call_console_error(3, json!({"r": "1"}));
-    assert!(
-        stopped.starts_with("[stopped:"),
-        "startup failure should be an explicit stopped state: {stopped:?}"
-    );
-    assert_eq!(
-        client.call_console_error(4, json!({"r": "1"})),
-        stopped,
-        "a stopped worker must not restart implicitly"
-    );
-}
-
 #[cfg(target_os = "macos")]
 #[test]
 fn stdio_console_accepts_long_multibyte_source_lines() {
@@ -266,7 +249,7 @@ fn stdio_console_does_not_start_an_unsandboxed_r_session() {
 
     assert_eq!(
         client.call_console_error(2, json!({"r": "1 + 1"})),
-        "[stopped: sandboxed R sessions are not supported on this operating system]"
+        "workers are supported only on macOS"
     );
 }
 
@@ -281,15 +264,6 @@ impl McpClient {
     fn start(arguments: &[&str]) -> Self {
         let mut command = Command::new(env!("CARGO_BIN_EXE_mcp-console"));
         command.args(arguments);
-        Self::spawn(command)
-    }
-
-    fn start_without_r(arguments: &[&str]) -> Self {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_mcp-console"));
-        command
-            .args(arguments)
-            .env("R_HOME", "/mcp-console-test/missing-r")
-            .env("PATH", "");
         Self::spawn(command)
     }
 
@@ -391,6 +365,7 @@ impl McpClient {
         response_text(&response)
     }
 
+    #[cfg(not(target_os = "macos"))]
     fn call_console_error(&mut self, id: u64, arguments: Value) -> String {
         let response = self.call_console_response(id, arguments);
         assert_eq!(response["result"]["isError"], true, "{response}");
@@ -531,6 +506,7 @@ print("blocked")
 #[cfg(target_os = "macos")]
 #[test]
 fn sandbox_is_read_only_except_for_a_dedicated_temp_directory() {
+    // This path must reach the child unchanged without shell parsing.
     let test_directory = TestDirectory::new("write boundary $(literal)");
     let workspace = test_directory.path().join("workspace");
     let home = test_directory.path().join("home");

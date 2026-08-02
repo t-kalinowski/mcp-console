@@ -13,6 +13,7 @@ use tokio::io::{AsyncRead, ReadBuf};
 use tokio::sync::oneshot;
 
 const WORKER_SHUTDOWN_GRACE: Duration = Duration::from_secs(1);
+const DEFAULT_TIMEOUT_MS: u64 = 60_000;
 
 #[derive(Clone)]
 struct ConsoleServer {
@@ -22,10 +23,17 @@ struct ConsoleServer {
 #[derive(Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct SendArguments {
-    /// Complete multiline R code evaluated as top-level expressions.
+    /// Complete multiline R code evaluated in persistent state. Omit to write stdin or poll.
     r: Option<String>,
-    /// Exact text supplied after R requests interactive input.
+    /// Exact UTF-8 text queued to worker fd 0 without adding a newline.
     stdin: Option<String>,
+    /// Maximum time this call waits for an evaluation. It does not limit or stop the computation.
+    #[serde(default = "default_timeout_ms")]
+    timeout_ms: u64,
+}
+
+fn default_timeout_ms() -> u64 {
+    DEFAULT_TIMEOUT_MS
 }
 
 impl ConsoleServer {
@@ -40,18 +48,18 @@ impl ConsoleServer {
 
 #[tool_router]
 impl ConsoleServer {
-    #[tool(
-        description = "Persistent R console. Send one complete r cell, or send stdin after the response ends with [input]."
-    )]
+    #[tool(description = "Evaluate one complete R code cell, write its stdin, or poll it.")]
     async fn send(
         &self,
-        Parameters(SendArguments { r, stdin }): Parameters<SendArguments>,
+        Parameters(SendArguments {
+            r,
+            stdin,
+            timeout_ms,
+        }): Parameters<SendArguments>,
     ) -> Result<String, String> {
-        match (r, stdin) {
-            (Some(r), None) => self.worker.evaluate(r).await,
-            (None, Some(stdin)) => self.worker.provide_input(stdin).await,
-            _ => Err("send exactly one of r or stdin".to_string()),
-        }
+        self.worker
+            .send(r, stdin, Duration::from_millis(timeout_ms))
+            .await
     }
 }
 

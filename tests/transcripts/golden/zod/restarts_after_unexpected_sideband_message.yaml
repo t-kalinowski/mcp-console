@@ -3,6 +3,15 @@
 ---
 id: 3
 send:
+  r: violate protocol
+result:
+  content:
+    - type: text
+      text: worker sent an unexpected ready message
+  isError: true
+---
+id: 4
+send:
   r: echo
 result:
   content:

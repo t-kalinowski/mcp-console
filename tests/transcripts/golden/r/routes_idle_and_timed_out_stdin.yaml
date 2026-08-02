@@ -1,0 +1,79 @@
+---
+!same-as tests/transcripts/golden/server/initializes_and_lists_tools.yaml
+---
+id: 3
+send:
+  stdin: |
+    cold fd 0
+result:
+  content:
+    - type: text
+      text: "[idle]"
+  isError: false
+---
+id: 4
+send:
+  r: |-
+    local({
+      connection <- suppressWarnings(file("/dev/stdin"))
+      on.exit(close(connection))
+      readLines(connection, n = 1)
+    })
+result:
+  content:
+    - type: text
+      text: |
+        [1] "cold fd 0"
+  isError: false
+---
+id: 5
+send:
+  r: |-
+    prompted <- readline("bundled> ")
+    direct <- local({
+      connection <- suppressWarnings(file("/dev/stdin"))
+      on.exit(close(connection))
+      readLines(connection, n = 1)
+    })
+    paste(prompted, direct, sep = "|")
+  stdin: |
+    café
+  timeout_ms: 50
+result:
+  content:
+    - type: text
+      text: "[running]"
+  isError: false
+---
+id: 6
+send:
+  timeout_ms: 0
+result:
+  content:
+    - type: text
+      text: "[running]"
+  isError: false
+---
+id: 7
+send:
+  stdin: "timed out "
+  timeout_ms: 50
+result:
+  content:
+    - type: text
+      text: "[running]"
+  isError: false
+---
+id: 8
+send:
+  stdin: |
+    fd 0
+  timeout_ms: 3000
+result:
+  content:
+    - type: text
+      text: |
+        bundled>
+        [1] "café|timed out fd 0"
+  isError: false
+...

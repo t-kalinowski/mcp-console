@@ -4,44 +4,40 @@
 id: 3
 send:
   r: |-
-    answer <- 42
-    answer + (
+    cat("before\n")
+    value <- readline("partial> ")
+    value
+  stdin: without newline
+  timeout_ms: 1000
 result:
   content:
     - type: text
-      text: |
-        Error: Incomplete code
+      text: |-
+        before
+        partial>
+        [input]
   isError: false
 ---
 id: 4
 send:
-  r: answer
+  stdin: "\n"
 result:
   content:
     - type: text
       text: |
-        [1] 42
+        [1] "without newline"
   isError: false
 ---
 id: 5
 send:
-  r: |-
-    answer <- 43
-    )
+  r: readline("next> ")
+  stdin: |
+    next
 result:
   content:
     - type: text
       text: |
-        Error: unexpected ')' in ")"
-  isError: false
----
-id: 6
-send:
-  r: answer
-result:
-  content:
-    - type: text
-      text: |
-        [1] 43
+        next>
+        [1] "next"
   isError: false
 ...

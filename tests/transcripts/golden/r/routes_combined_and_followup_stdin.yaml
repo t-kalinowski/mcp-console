@@ -1,0 +1,97 @@
+---
+!same-as tests/transcripts/golden/server/initializes_and_lists_tools.yaml
+---
+id: 3
+send:
+  r: |-
+    first <- readline("first> ")
+    second <- readline("second> ")
+    cat(paste(first, second, sep = "|"), "\n", sep = "")
+  stdin: |
+    Ada
+    Lovelace
+result:
+  content:
+    - type: text
+      text: |
+        first>
+        second>
+        Ada|Lovelace
+  isError: false
+---
+id: 4
+send:
+  r: |-
+    direct <- local({
+      connection <- suppressWarnings(file("/dev/stdin"))
+      on.exit(close(connection))
+      readLines(connection, n = 1)
+    })
+    prompted <- readline("after> ")
+    cat(paste(direct, prompted, sep = "|"), "\n", sep = "")
+  stdin: |
+    direct
+  timeout_ms: 1000
+result:
+  content:
+    - type: text
+      text: |-
+        after>
+        [input]
+  isError: false
+---
+id: 5
+send:
+  stdin: |
+    callback
+result:
+  content:
+    - type: text
+      text: |
+        direct|callback
+  isError: false
+---
+id: 6
+send:
+  r: paste("color", readline("color> "))
+result:
+  content:
+    - type: text
+      text: |-
+        color>
+        [input]
+  isError: false
+---
+id: 7
+send:
+  stdin: bl
+  timeout_ms: 50
+result:
+  content:
+    - type: text
+      text: "[input]"
+  isError: false
+---
+id: 8
+send:
+  stdin: |
+    ue
+result:
+  content:
+    - type: text
+      text: |
+        [1] "color blue"
+  isError: false
+---
+id: 9
+send:
+  r: invisible(readline("silent> "))
+  stdin: |
+    accepted
+result:
+  content:
+    - type: text
+      text: |
+        silent>
+  isError: false
+...

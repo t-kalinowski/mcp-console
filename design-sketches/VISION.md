@@ -50,7 +50,8 @@ Necessary R/Python or R/SQL bridge frames should be minimal and truthful rather 
 
 Top-level code is submitted as a complete cell.
 Incomplete parser input is an error rather than an invitation to continue a program over several MCP calls.
-When evaluated code explicitly asks for input or enters a debugger, the session switches to an input state and accepts exact, optionally multiline `stdin` text.
+The session accepts exact, optionally multiline `stdin` text whether it is evaluating or idle.
+Paired request and receipt events expose whether a supported runtime read remains unsatisfied without gating delivery.
 
 ### 5. Exact runtime state, never prompt inference
 
@@ -100,8 +101,8 @@ SQL uses persistent DuckDB state, live R relation discovery where safe, and expl
 A session runs at most one top-level evaluation at a time.
 Interrupt attempts to preserve state.
 Restart deliberately starts a new runtime generation and loses in-memory state while retaining session requirements, workspace files, and transcript.
-A worker crash fails the active evaluation and leaves the worker stopped until explicitly restarted or closed.
-The server never silently replaces it and implies that state survived.
+A worker crash fails the active evaluation and is recorded in the transcript.
+The server remains available, and the next evaluation starts a fresh worker generation without implying that state survived.
 
 ### 12. Process-level safety
 
@@ -153,7 +154,7 @@ Every new public MCP field or tool has a permanent model-context cost.
 - Session: one sandboxed worker process containing R, reticulate Python, and DuckDB.
 - Submission: one complete R, Python, or SQL cell.
 - Evaluation: execution of one submission.
-- `stdin`: exact stream text for an already-running interactive consumer, not another code submission; it may contain multiple lines and receives no implicit newline.
+- `stdin`: exact stream text queued to the session worker, not another code submission; it may contain multiple lines, receives no implicit newline, and is not acknowledged as consumed.
 - Durable record: generated `transcript.qmd` plus retained output and artifact files.
 - Refined notebook, report, or script: a separate user artifact.
 - Local sidecar API: process-scoped observation, structured inspection, and attributed external control.
