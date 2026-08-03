@@ -81,6 +81,7 @@ result:
   content:
     - type: text
       text: |
-        bundled> [1] "café|timed out fd 0"
+        [input requested: "bundled> "]
+        [1] "café|timed out fd 0"
   isError: false
 ...

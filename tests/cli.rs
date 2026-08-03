@@ -231,7 +231,7 @@ readline("value> ")
 Sys.sleep(60)
 "#}),
         ),
-        "value> \n[input]"
+        "[input requested: \"value> \"]\n[stdin needed]"
     );
     client.send_console(3, json!({"stdin": "resume\n"}));
 

@@ -19,6 +19,7 @@ result:
   content:
     - type: text
       text: |
-        callback> callback|direct
+        [input requested: "callback> "]
+        callback|direct
   isError: false
 ...

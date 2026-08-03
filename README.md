@@ -30,10 +30,11 @@ A call may also supply exact standard-input text with a code cell, during an eva
 { "r": "readline('name> ')", "stdin": "Ada\n" }
 ```
 
-The server sends the cell first, then queues the string's UTF-8 bytes to worker fd 0 without inspecting it, adding a newline, imposing a size limit, or waiting for an input request.
+The server sends the cell first, then queues the string's UTF-8 bytes to worker fd 0 without inspecting or echoing them, adding a newline, imposing a size limit, or waiting for an input request.
 A stdin-only call while idle lazily starts the worker when needed, queues the bytes, and returns the newline-prefixed banner `\n[idle]`.
-When an input request remains outstanding for up to 10 milliseconds, bounded by the call deadline, `send` returns its verbatim prompt followed by the newline-prefixed banner `\n[input]`; a later call can supply more bytes with `{ "stdin": "Ada\n" }`.
-An immediate `input_received` receipt suppresses that boundary, so prequeued input can satisfy a console read without forcing another tool call.
+Every `input_requested` event adds a server-owned record such as `[input requested: "name> "]`; the prompt is encoded as a JSON string so spaces and escaped characters remain explicit.
+When that request remains outstanding for up to 10 milliseconds, bounded by the call deadline, `send` follows the record with the newline-prefixed banner `\n[stdin needed]`; a later call can supply more bytes with `{ "stdin": "Ada\n" }`.
+An immediate `input_received` receipt retains the request record but suppresses `[stdin needed]`, so prequeued input can satisfy a console read without forcing another tool call.
 That receipt describes the runtime read, not a particular stdin payload; direct fd-0 reads emit no request or receipt.
 Payload end is not EOF, and queued input is not an acknowledgment of consumption.
 Unread bytes may be completed by later stdin or satisfy a later worker read or evaluation.

@@ -554,7 +554,15 @@ impl Evaluation {
         if state.input_report_at.is_some() {
             return Err("worker requested new input before receiving prior input".to_string());
         }
+        let prompt = serde_json::to_string(&prompt)
+            .map_err(|error| format!("failed to render worker input prompt: {error}"))?;
+        if !state.output.is_empty() && !state.output.ends_with('\n') {
+            state.output.push('\n');
+        }
+        state.output.push_str("[input requested: ");
         state.output.push_str(&prompt);
+        state.output.push(']');
+        state.output.push('\n');
         state.input_report_at = Some(Instant::now() + INPUT_REQUEST_GRACE);
         self.changed.notify_one();
         Ok(())
@@ -673,7 +681,7 @@ fn render_response(mut output: String, response: SendResponse, restart_notice: S
         }
         SendResponse::InputRequested(input) => {
             output.push_str(&input);
-            append_state_banner(&mut output, &restart_notice, "[input]");
+            append_input_banner(&mut output, &restart_notice);
             output
         }
         SendResponse::Running => {
@@ -685,6 +693,13 @@ fn render_response(mut output: String, response: SendResponse, restart_notice: S
             output
         }
     }
+}
+
+fn append_input_banner(output: &mut String, restart_notice: &str) {
+    if !append_restart_notice(output, restart_notice) && !output.ends_with('\n') {
+        output.push('\n');
+    }
+    output.push_str("[stdin needed]");
 }
 
 fn append_state_banner(output: &mut String, restart_notice: &str, banner: &str) {

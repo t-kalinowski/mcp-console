@@ -109,11 +109,12 @@ worker -> server  {"kind":"completed"}
 
 The worker may send zero or more `output` messages.
 The server concatenates their text in arrival order.
-`input_requested` starts one provisional input state, and the matching `input_received` clears it after the runtime read succeeds.
+`input_requested` appends one server-owned MCP request record and starts one provisional input state.
+The matching `input_received` clears that state after the runtime read succeeds without removing the record.
 Only one request may be outstanding: a second request, a receipt without a request, or completion before its receipt is a protocol failure.
 `completed` ends the sideband evaluation; collecting its MCP result permits the next one.
 
-If the worker sends no sideband output before `completed` and no standard-stream text is pending, the current MCP projection returns `[done]`.
+If no sideband text or input-request record remains pending at `completed` and no standard-stream text is pending, the current MCP projection returns `[done]`.
 That marker is produced by the server; it is not a sideband message.
 
 The protocol has no request IDs because only one evaluation can be in flight over this sideband.
@@ -125,16 +126,17 @@ The optional MCP `timeout_ms` argument defaults to 60,000 milliseconds.
 It bounds how long that `send` call waits for the worker; it is not sent over the sideband and does not bound or stop computation.
 For a call with `r` or `python`, the evaluation wait includes lazy worker startup.
 
-An `input_requested` frame remains provisional for 10 milliseconds.
-If `input_received` arrives first, the server retains the unexposed prompt output and continues waiting for another request, completion, or the MCP deadline.
-If the grace expires first, the call returns output collected so far, the verbatim prompt, and the `\n[input]` banner before that deadline.
+Every `input_requested` frame immediately adds `[input requested: <prompt>]` to pending MCP output, with the prompt encoded as a JSON string.
+Its outstanding state remains provisional for 10 milliseconds.
+If `input_received` arrives first, the server retains the request record and continues waiting for another request, completion, or the MCP deadline.
+If the grace expires first, the call returns output collected so far, the request record, and the `\n[stdin needed]` banner before that deadline.
 Supplying nonempty stdin for an outstanding request starts a fresh 10-millisecond grace window; the MCP deadline reports a still-outstanding request immediately, even inside that window.
 A pending input request wins over the `\n[running]` banner at the deadline.
 A later `send` call without a code field polls that evaluation with its own `timeout_ms`; it may include `stdin` to queue bytes before waiting.
 Every `send` response decodes and drains complete UTF-8 prefixes from standard-stream bytes already collected when that response is assembled.
 Bytes collected after that snapshot and incomplete trailing sequences remain for the next response; standard-stream output does not itself wake a waiting call.
-Completion returns decoded standard-stream text followed by sideband output not already delivered at an `[input]` boundary, or `[done]` when neither produced text.
-If evaluation instead ends in an infrastructure or protocol failure, all sideband output received before the failure precedes the tool error.
+Completion returns decoded standard-stream text followed by pending evaluation output, including sideband text and input-request records not already delivered at a `[stdin needed]` boundary, or `[done]` when neither produced text.
+If evaluation instead ends in an infrastructure or protocol failure, all pending evaluation output received before the failure precedes the tool error.
 When runtime output shares that response, the server starts the bracketed error on a new line, inserting a newline only when the output does not already end with one.
 A tool error returned without runtime output or a restart notice remains bare.
 If the poll wait expires first and no restart notice is pending, the literal `\n[running]` banner is appended to any collected standard-stream text.
@@ -144,28 +146,31 @@ A stdin-only call in that state queues the bytes and uses the same idle response
 After an infrastructure or protocol failure discards a ready worker, its successfully started replacement eagerly queues the literal `[worker restarted: in-memory state lost]\n` banner in pending MCP response output.
 Whichever response is assembled next drains that banner exactly once.
 This is server-owned MCP response text, not a sideband frame.
-It follows collected standard-stream, sideband, or error text and starts on a new line, without adding a blank line when that text already ends with a newline.
-If a final `[input]`, `[running]`, or `[idle]` banner follows, the restart notice's trailing newline supplies its separator.
+It follows collected standard-stream, evaluation, or error text and starts on a new line, without adding a blank line when that text already ends with a newline.
+If a final `[stdin needed]`, `[running]`, or `[idle]` banner follows, the restart notice's trailing newline supplies its separator.
 With no preceding or following text, the response is `\n[worker restarted: in-memory state lost]\n`.
 When it is the only text from a completed evaluation, it replaces `[done]`.
 Initial lazy startup and retries after a failure before `ready` remain silent because no established worker state was lost.
 
-Except for prompt boundaries, this slice does not expose partial sideband output while an evaluation is running.
-Standard-stream text is attached to whichever response is sent next, including `[running]`, `[input]`, or `[idle]` responses.
-Without a preceding restart notice, the leading newline belongs to each state banner and remains present when no worker or sideband output precedes it.
-The server does not inspect preceding output to normalize that boundary, so output that already ends in a newline leaves a blank line before the banner.
+Except for outstanding-input boundaries, this slice does not expose partial sideband output while an evaluation is running.
+Standard-stream text is attached to whichever response is sent next, including `[running]`, `[stdin needed]`, or `[idle]` responses.
+Without a preceding restart notice, each state banner has a newline before it, including when no worker or evaluation output precedes it.
+An existing trailing newline supplies that boundary for `[stdin needed]`; `[running]` and `[idle]` always add one, so their preceding output may leave a blank line.
 When a tool error shares the response with runtime output or a restart notice, brackets distinguish it from worker text and the server inserts a newline before it only when needed.
 Output cursors and general incremental polling remain unimplemented.
 
 ### Interactive input
 
 When evaluated code calls `readline()` or enters `browser()`, the worker may send `input_requested`.
-The server appends the prompt field verbatim to output collected so far, then appends the `\n[input]` banner if the request remains exposed.
+For every frame, the server appends exactly one record such as `[input requested: "name> "]` to pending MCP text.
+It encodes the prompt as a JSON string, preserving trailing spaces while escaping quotes, backslashes, newlines, and control characters.
+If the request remains outstanding, the response ends with `\n[stdin needed]`.
 A later `send` call supplies its `stdin` unchanged:
 
 ```text
 server -> worker  {"kind":"evaluate","language":"r","source":"readline('name> ')"}
 worker -> server  {"kind":"input_requested","prompt":"name> "}
+server -> MCP     [input requested: "name> "]\n[stdin needed]
 
 server -> fd 0    Ada\n
 worker -> server  {"kind":"input_received"}
@@ -173,20 +178,26 @@ worker -> server  {"kind":"output","data":"[1] \"Ada\"\n"}
 worker -> server  {"kind":"completed"}
 ```
 
+When stdin is already queued, the receipt can arrive inside the grace window.
+The intermediate MCP response and `[stdin needed]` marker are then suppressed, but the eventual response still contains the request record.
+Each record ends in a newline when it is recorded.
+That delimiter separates an immediately received record from later evaluation output and remains in a silent completion; if the request stays outstanding, `[stdin needed]` follows it in the same response.
+
 An MCP call may contain one code field and `stdin`.
 The server flushes `evaluate` first, then attaches the evaluation to the worker's stdin writer and drains any queued input in submission order.
 A later stdin-only call uses the same route without acquiring the evaluation's worker lock, including after an earlier call returned `\n[running]`.
 When no evaluation is tracked, nonempty stdin lazily starts the worker if necessary and enters the same worker-owned FIFO; empty stdin is a no-op.
 
-The server writes each string blindly.
+The server writes each string blindly and does not echo it into MCP output.
 It adds no newline, does not split or validate lines, and imposes no stdin size limit.
 The end of a payload does not close fd 0 and is not an EOF marker.
 A newline-free fragment remains pending until later stdin completes it or worker shutdown closes the stream.
 The R console callback consumes only through one newline or its supplied buffer; it does not prefetch later lines from fd 0.
 `input_requested` is an observation of worker state, not permission to write.
 After a nonempty callback read, `input_received` closes that provisional request before the runtime resumes.
+Each request frame produces one record, regardless of how many stdin payloads or polls occur while it remains outstanding.
 It does not acknowledge a particular stdin submission, identify which bytes satisfied the read, or report bytes consumed by code that reads fd 0 directly.
-If no receipt arrives during the grace window, the request remains exposed as `\n[input]`; a partial follow-up therefore returns `\n[input]` again rather than `\n[running]`.
+If no receipt arrives during the grace window, the request remains exposed as `\n[stdin needed]`; a partial follow-up therefore returns only `\n[stdin needed]` again rather than repeating the request record or returning `\n[running]`.
 Empty stdin writes no bytes and leaves an exposed request immediately reportable.
 Code that reads fd 0 directly can consume bundled input or input sent after a polling timeout without sending either input frame.
 
@@ -204,8 +215,8 @@ New code is rejected while an evaluation or its uncollected result is active.
 | absent or idle | MCP stdin submission | idle |
 | idle | server → worker `evaluate` | evaluating |
 | evaluating | worker → server `output` | evaluating |
-| evaluating | worker → server `input_requested` | evaluating, input provisional |
-| evaluating, input provisional | worker → server `input_received` | evaluating |
+| evaluating | worker → server `input_requested` | append request record; evaluating, input provisional |
+| evaluating, input provisional | worker → server `input_received` | retain request record; evaluating |
 | evaluating, with or without input reported | MCP stdin submission | evaluating |
 | evaluating, no provisional input | worker → server `completed` | idle |
 | starting, idle, or evaluating | server → worker `shutdown` | terminal |
@@ -257,7 +268,7 @@ The CLI runs `worker` synchronously without a Tokio runtime, so R initialization
 The worker supplies cell source through `ReadConsole` before each top-level evaluation starts.
 For every evaluation-time `ReadConsole` call, the callback sends `input_requested`, then reads fd 0 directly until one newline arrives or R's supplied buffer is full.
 The built-in worker sends R's prompt field verbatim, including trailing spaces or an empty prompt.
-The server does not rewrite prompts from the built-in worker or custom workers.
+The server preserves that value but JSON-quotes it in the MCP input-request record instead of appending it as bare prompt text.
 After a nonempty read succeeds, it sends `input_received` before returning the bytes to R.
 A newline-free fragment shorter than that buffer keeps the callback blocked, while bytes after a returned chunk remain in the pipe for a later `ReadConsole` call or a direct fd-0 reader.
 It uses R's busy callback rather than prompt text to distinguish cell source from evaluated-code input.
@@ -289,8 +300,8 @@ Python `input()` can consume proactively queued fd-0 input but emits neither `in
 The current implementation has no worker startup or execution timeout, frame-size limit, stdin queue limit, or accumulated-output limit.
 `timeout_ms` limits one MCP wait without terminating the worker or a blocked stdin write; only shutdown has a process deadline.
 An idle stdin-only call does not wait on an evaluation, so `timeout_ms` does not bound lazy worker startup for that call.
-The 10-millisecond input grace controls when a provisional request becomes visible and does not limit evaluation or stdin reads.
-It is a latency heuristic: scheduling can delay a receipt past the grace and expose an extra `[input]` boundary even when queued bytes subsequently satisfy the read.
+The 10-millisecond input grace controls when provisional state becomes visible as `[stdin needed]`; it does not control request-record retention or limit evaluation or stdin reads.
+It is a latency heuristic: scheduling can delay a receipt past the grace and expose an extra `[stdin needed]` boundary even when queued bytes subsequently satisfy the read.
 
 Standard output and standard error are decoded as UTF-8 only when a response is assembled, with replacement for invalid sequences; arbitrary binary output is not preserved byte for byte.
 Worker failures are reported as plain-text MCP tool errors, not structured worker events.
@@ -315,10 +326,10 @@ When the source is `violate protocol`, it sends an unexpected second `ready` mes
 When the source is `exit unexpectedly`, it exits with status 86 without replying.
 The `emit stdout` and `start background stderr` modes exercise continuous standard-stream capture during evaluation and after completion.
 When the source is `request input`, it sends `input_requested`, calls Python `input()` to consume one line from fd 0, and sends `input_received` after that call returns.
-The `request input after timeout` mode gates that request until an earlier MCP wait expires, then covers retention of output attached to a still-unexposed request.
+The `request input after timeout` mode gates that request until an earlier MCP wait expires, consumes prequeued stdin, emits output while the request remains provisional, then checkpoints after its receipt is processed to cover retention and delimiting of that still-unexposed request record.
 The `input without request` and `input length without request` modes call `input()` without first sending a frame, covering proactive fd-0 delivery, including input queued while Zod is idle.
 The `input without request then request input` mode performs one direct read before a reported request/receipt pair, covering the distinction between direct fd-0 reads and callback-style input state.
-Zod echoes the input or its byte length and completes.
+Zod emits fixture output containing the input or its byte length and completes; the server itself does not echo submitted stdin.
 Its acceptance supplies newline-terminated text because Python `input()` waits for a complete line; partial-input boundaries are covered by the built-in worker's R console.
 Other fixture-only modes verify that the sandbox denies host writes and that a blocked sideband writer cannot delay shutdown.
 Other commands fail instead of being echoed implicitly.

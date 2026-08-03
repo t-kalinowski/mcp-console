@@ -46,16 +46,16 @@ def emit_background_stderr(root: Path) -> None:
     (root / "zod-background-stderr-emitted").touch()
 
 
-def wait_for_server_to_process_input_request(stream: TextIO) -> None:
-    """Block until the server has installed the preceding input request."""
+def wait_for_server_to_process_sideband(stream: TextIO) -> None:
+    """Block until the server has processed the preceding sideband frames."""
     frame = json.dumps(
         {"kind": "output", "data": ""},
         separators=(",", ":"),
     )
-    # Flushing input_requested only proves that it entered the kernel pipe.
+    # Flushing a frame only proves that it entered the kernel pipe.
     # The appended spaces are valid trailing JSON whitespace, so this remains
     # a no-output frame. Its size exceeds Darwin's pipe capacity, and FIFO
-    # backpressure forces the server to process the request before flush returns.
+    # backpressure forces the server to process prior frames before flush returns.
     stream.write(frame + (" " * (2 * 1024 * 1024)) + "\n")
     stream.flush()
 
@@ -172,15 +172,17 @@ def main() -> None:
             waiting.touch()
             while not (temporary / "zod-release-input-request").exists():
                 time.sleep(0.01)
-            send(writer, {"kind": "output", "data": "before\n"})
+            send(writer, {"kind": "output", "data": "before"})
             send(writer, {"kind": "input_requested", "prompt": "late> "})
-            # Exercise follow-up stdin after the request is stored but before
-            # its prompt has been exposed by an MCP response.
-            wait_for_server_to_process_input_request(writer)
-            (temporary / "zod-input-requested").touch()
+            send(writer, {"kind": "output", "data": "during"})
+            send(writer, {"kind": "output", "data": " request\n"})
             stdin = input()
             send(writer, {"kind": "input_received"})
             send(writer, {"kind": "output", "data": f"zod stdin: {stdin}\n"})
+            # Prove that the receipt has cleared the provisional request before
+            # the client polls, so the fixed grace cannot add another boundary.
+            wait_for_server_to_process_sideband(writer)
+            (temporary / "zod-input-received").touch()
             send(writer, {"kind": "completed"})
             continue
 

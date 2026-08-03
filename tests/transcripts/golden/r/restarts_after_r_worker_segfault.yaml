@@ -32,7 +32,8 @@ result:
         2: normal R exit
         3: exit R without saving workspace
         4: exit R saving workspace
-        Selection: R is aborting now ...
+        [input requested: "Selection: "]
+        R is aborting now ...
         [worker sideband read failed: worker sideband closed]
   isError: true
 ---
