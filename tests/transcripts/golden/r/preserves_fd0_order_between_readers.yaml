@@ -3,7 +3,7 @@
 ---
 id: 3
 send:
-  r: |-
+  r: |
     prompted <- readline("callback> ")
     direct <- local({
       connection <- suppressWarnings(file("/dev/stdin"))

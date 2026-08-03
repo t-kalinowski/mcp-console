@@ -20,14 +20,14 @@ def test_evaluates_cells_in_persistent_reticulate_state(binary: Path) -> Transcr
           marker <- paste0("unique_python_", "source_marker")
           any(grepl(marker, calls, fixed = TRUE))
         }
-        """).strip()
+        """).removeprefix("\n")
     client.call_tool("send", r=r)
     # fmt: python
     python = dedent("""
         answer = r.from_r + 1
         print("from Python")
         answer + 1
-        """).strip()
+        """).removeprefix("\n")
     client.call_tool("send", python=python)
     output = last_tool_text(client)
     assert output == "from Python\n42\n", repr(output)
@@ -35,7 +35,7 @@ def test_evaluates_cells_in_persistent_reticulate_state(binary: Path) -> Transcr
     python = dedent("""
         1
         2
-        """).strip()
+        """).removeprefix("\n")
     client.call_tool("send", python=python)
     assert last_tool_text(client) == "2\n"
     client.call_tool("send", python="answer")
@@ -46,7 +46,7 @@ def test_evaluates_cells_in_persistent_reticulate_state(binary: Path) -> Transcr
     python = dedent("""
         unique_python_source_marker = r.python_source_visible()
         unique_python_source_marker
-        """).strip()
+        """).removeprefix("\n")
     client.call_tool("send", python=python)
     output = last_tool_text(client)
     assert output == "False\n", repr(output)
@@ -56,7 +56,7 @@ def test_evaluates_cells_in_persistent_reticulate_state(binary: Path) -> Transcr
         .mcp_console_python_source <- "user source"
         .mcp_console_python_filename <- "user filename"
         is.null <- function(...) FALSE
-        """).strip()
+        """).removeprefix("\n")
     client.call_tool("send", r=r)
     client.call_tool("send", python="answer + 1")
     assert last_tool_text(client) == "42\n"
@@ -67,7 +67,7 @@ def test_evaluates_cells_in_persistent_reticulate_state(binary: Path) -> Transcr
         exec = "user exec"
         isinstance = "user isinstance"
         BaseException = "user BaseException"
-        """).strip()
+        """).removeprefix("\n")
     client.call_tool("send", python=python)
     assert last_tool_text(client) == "[done]"
     client.call_tool("send", python="answer + 1")
@@ -90,7 +90,7 @@ def test_recovers_from_python_errors(binary: Path) -> Transcript:
 
 
         fail()
-        """).strip()
+        """).removeprefix("\n")
     client.call_tool("send", python=python)
     output = last_tool_text(client)
     assert client.transcript[-1]["result"]["isError"] is False
@@ -98,19 +98,16 @@ def test_recovers_from_python_errors(binary: Path) -> Transcript:
     assert "<mcp-console:python:" in output
     assert "in fail\n" in output
     assert output.endswith("ValueError: boom\n")
-    client.transcript[-1]["result"]["content"][0]["text"] = "<Python traceback>\n"
-
     # fmt: python
     python = dedent("""
         compile_partial = 9
         await missing()
-        """).strip()
+        """).removeprefix("\n")
     client.call_tool("send", python=python)
     output = last_tool_text(client)
     assert output.startswith("Traceback (most recent call last):\n")
     assert "<mcp-console:python:" in output
     assert output.endswith("SyntaxError: 'await' outside function\n")
-    client.transcript[-1]["result"]["content"][0]["text"] = "<Python syntax error>\n"
     client.call_tool("send", python='"compile_partial" in globals()')
     assert last_tool_text(client) == "False\n"
 
@@ -119,8 +116,6 @@ def test_recovers_from_python_errors(binary: Path) -> Transcript:
     assert client.transcript[-1]["result"]["isError"] is False
     assert "SyntaxError" in output
     assert "null bytes" in output
-    client.transcript[-1]["result"]["content"][0]["text"] = "<Python NUL error>\n"
-
     client.call_tool("send", python="answer")
     assert last_tool_text(client) == "41\n"
     return client.finish()
@@ -133,7 +128,7 @@ def test_restarts_after_python_bridge_failure(binary: Path) -> Transcript:
     r = dedent(r"""
         python_worker_marker <- TRUE
         Sys.setenv(RETICULATE_PYTHON = tempfile())
-        """).strip()
+        """).removeprefix("\n")
     client.call_tool("send", r=r)
     client.call_tool("send", python="6 * 7")
     assert client.transcript[-1]["result"]["isError"] is True

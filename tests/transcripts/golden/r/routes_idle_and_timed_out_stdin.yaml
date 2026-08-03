@@ -13,7 +13,7 @@ result:
 ---
 id: 4
 send:
-  r: |-
+  r: |
     local({
       connection <- suppressWarnings(file("/dev/stdin"))
       on.exit(close(connection))
@@ -28,7 +28,7 @@ result:
 ---
 id: 5
 send:
-  r: |-
+  r: |
     prompted <- readline("bundled> ")
     direct <- local({
       connection <- suppressWarnings(file("/dev/stdin"))

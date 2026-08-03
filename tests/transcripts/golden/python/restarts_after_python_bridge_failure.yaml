@@ -3,7 +3,7 @@
 ---
 id: 3
 send:
-  r: |-
+  r: |
     python_worker_marker <- TRUE
     Sys.setenv(RETICULATE_PYTHON = tempfile())
 result:

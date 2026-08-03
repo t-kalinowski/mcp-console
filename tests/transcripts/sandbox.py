@@ -72,7 +72,7 @@ def test_preserves_python_arguments_and_standard_output(binary: Path) -> Transcr
         import sys
 
         print("|".join(sys.argv[1:]))
-        """).strip("\n")
+        """).removeprefix("\n")
     arguments = (
         "sandbox",
         "python",
@@ -98,7 +98,7 @@ def test_forwards_interactive_standard_streams(binary: Path) -> Transcript:
             sys.stdout.flush()
             sys.stderr.write(line)
             sys.stderr.flush()
-        """).strip("\n")
+        """).removeprefix("\n")
     arguments = ("sandbox", "--", "python", "-c", script)
 
     process = subprocess.Popen(
@@ -192,7 +192,7 @@ def test_allows_python_multiprocessing_semaphores(binary: Path) -> Transcript:
         assert child.exitcode == 0
         assert lock.acquire(timeout=1)
         print("semaphore shared")
-        """).strip("\n")
+        """).removeprefix("\n")
     return [record(binary, "sandbox", "--", "python", "-c", script)]
 
 
@@ -200,7 +200,7 @@ def test_does_not_require_home(binary: Path) -> Transcript:
     # fmt: python
     script = dedent(r"""
         print("ran")
-        """).strip("\n")
+        """).removeprefix("\n")
     arguments = ("sandbox", "--", "python", "-c", script)
     return [record(binary, *arguments, environment={"HOME": None})]
 
@@ -223,7 +223,7 @@ def test_supports_r_runtime_queries_and_temporary_writes(binary: Path) -> Transc
           writeLines(readLines(output))
           writeLines(Sys.getenv("TMPDIR"))
         }
-        """).strip("\n")
+        """).removeprefix("\n")
     entry = record(binary, "sandbox", "--", "Rscript", "-e", script)
     stdout = entry["stdout"]
     assert isinstance(stdout, str)
@@ -245,7 +245,7 @@ def test_allows_processx_pty_processes(binary: Path) -> Transcript:
           cat(p$read_output())
           invisible(p$kill())
         }
-        """).strip("\n")
+        """).removeprefix("\n")
     return [record(binary, "sandbox", "--", "Rscript", "-e", script)]
 
 

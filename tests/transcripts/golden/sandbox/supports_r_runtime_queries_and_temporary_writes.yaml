@@ -5,7 +5,7 @@ command:
   - --
   - Rscript
   - -e
-  - |-
+  - |
     {
       stopifnot(parallel::detectCores() >= 1)
       stopifnot(file.exists("Cargo.toml"))

@@ -3,7 +3,7 @@
 ---
 id: 3
 send:
-  r: |-
+  r: |
     value <- readline("long> ")
     cat(paste(nchar(value, type = "bytes"), endsWith(value, "é")), "\n", sep = "")
   stdin: <long stdin ending in UTF-8>

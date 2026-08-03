@@ -3,7 +3,7 @@
 ---
 id: 3
 send:
-  r: |-
+  r: |
     answer <- 40
     answer + 1
     answer + 2
@@ -20,7 +20,7 @@ result:
 ---
 id: 4
 send:
-  r: |-
+  r: |
     identical(
       as.vector(splines::splineDesign(
         knots = c(0, 0, 0, 0, 1, 1, 1, 1),
@@ -37,7 +37,7 @@ result:
 ---
 id: 5
 send:
-  r: stop("boom", call. = FALSE)
+  r: stop("boom")
 result:
   content:
     - type: text

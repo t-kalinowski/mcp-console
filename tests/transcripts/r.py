@@ -19,7 +19,7 @@ def test_evaluates_a_complete_cell(binary: Path) -> Transcript:
         answer + 2
         cat("done\n")
         invisible(99)
-        """).strip()
+        """).removeprefix("\n")
     client.call_tool("send", r=r)
 
     # fmt: r
@@ -31,11 +31,29 @@ def test_evaluates_a_complete_cell(binary: Path) -> Transcript:
           )),
           c(0.125, 0.375, 0.375, 0.125)
         )
-        """).strip()
+        """).removeprefix("\n")
     client.call_tool("send", r=r)
-    client.call_tool("send", r='stop("boom", call. = FALSE)')
+    client.call_tool("send", r='stop("boom")')
     client.call_tool("send", r="answer")
     client.call_tool("send", r="silent <- 1")
+    return client.finish()
+
+
+def test_evaluates_source_without_final_newline(binary: Path) -> Transcript:
+    client = McpClient(binary, ("serve",))
+    client.initialize_and_list_tools()
+    # fmt: r
+    r = (
+        dedent(r"""
+        answer <- 40
+        answer + 2
+        """)
+        .removeprefix("\n")
+        .removesuffix("\n")
+    )
+    assert not r.endswith("\n")
+    client.call_tool("send", r=r)
+    assert last_tool_text(client) == "[1] 42\n"
     return client.finish()
 
 
@@ -45,27 +63,15 @@ def test_recoverable_language_errors(binary: Path) -> Transcript:
     client.call_tool("send", r="answer <- 41")
     # fmt: r
     r = dedent(r"""
-        g <- function() stop("boom", call. = FALSE)
+        g <- function() stop("boom")
         f <- function() g()
         f()
-        """).strip()
+        """).removeprefix("\n")
     client.call_tool("send", r=r)
     # fmt: r
     r = dedent(r"""
-        traceback_lines <- capture.output(traceback())
-        cat(
-          "traceback: stop=",
-          any(grepl("stop", traceback_lines, fixed = TRUE)),
-          ", g=",
-          any(grepl("g()", traceback_lines, fixed = TRUE)),
-          ", f=",
-          any(grepl("f()", traceback_lines, fixed = TRUE)),
-          ", internal=",
-          any(grepl("mcp_console|base::get", traceback_lines)),
-          "\n",
-          sep = ""
-        )
-        """).strip()
+        traceback()
+        """).removeprefix("\n")
     client.call_tool("send", r=r)
     # fmt: r
     r = dedent(r"""
@@ -73,7 +79,7 @@ def test_recoverable_language_errors(binary: Path) -> Transcript:
           stop("print failed")
         }
         structure(1, class = "transcript_boom")
-        """).strip()
+        """).removeprefix("\n")
     client.call_tool("send", r=r)
     client.call_tool("send", r="answer")
     return client.finish()
@@ -102,7 +108,7 @@ def test_times_out_and_polls_running_evaluation(binary: Path) -> Transcript:
         Sys.sleep(0.25)
         answer <- 42
         answer
-        """).strip()
+        """).removeprefix("\n")
     client.call_tool("send", r=r, timeout_ms=10)
     output = client.transcript[-1]["result"]["content"][0]["text"]
     assert output == "\n[running]", output
@@ -124,7 +130,7 @@ def test_routes_idle_and_timed_out_stdin(binary: Path) -> Transcript:
           on.exit(close(connection))
           readLines(connection, n = 1)
         })
-        """).strip()
+        """).removeprefix("\n")
 
     client.call_tool("send", stdin="cold fd 0\n")
     assert last_tool_text(client) == "\n[idle]"
@@ -140,7 +146,7 @@ def test_routes_idle_and_timed_out_stdin(binary: Path) -> Transcript:
           readLines(connection, n = 1)
         })
         paste(prompted, direct, sep = "|")
-        """).strip()
+        """).removeprefix("\n")
     client.call_tool("send", r=r, stdin="café\n", timeout_ms=50)
     assert last_tool_text(client) == "\n[running]"
     client.call_tool("send", timeout_ms=0)
@@ -161,7 +167,7 @@ def test_routes_combined_and_followup_stdin(binary: Path) -> Transcript:
         first <- readline("first> ")
         second <- readline("second> ")
         cat(paste(first, second, sep = "|"), "\n", sep = "")
-        """).strip()
+        """).removeprefix("\n")
     client.call_tool("send", r=r, stdin="Ada\nLovelace\n")
     output = last_tool_text(client)
     assert output == "first> second> Ada|Lovelace\n", output
@@ -175,7 +181,7 @@ def test_routes_combined_and_followup_stdin(binary: Path) -> Transcript:
         })
         prompted <- readline("after> ")
         cat(paste(direct, prompted, sep = "|"), "\n", sep = "")
-        """).strip()
+        """).removeprefix("\n")
     client.call_tool("send", r=r, stdin="direct\n", timeout_ms=1_000)
     output = last_tool_text(client)
     assert output == "after> \n[input]", output
@@ -185,7 +191,7 @@ def test_routes_combined_and_followup_stdin(binary: Path) -> Transcript:
     # fmt: r
     r = dedent(r"""
         paste("color", readline("color> "))
-        """).strip()
+        """).removeprefix("\n")
     client.call_tool("send", r=r)
     assert last_tool_text(client) == "color> \n[input]"
     client.call_tool("send", stdin="bl", timeout_ms=50)
@@ -215,7 +221,7 @@ def test_preserves_fd0_order_between_readers(binary: Path) -> Transcript:
           readLines(connection, n = 1)
         })
         cat(paste(prompted, direct, sep = "|"), "\n", sep = "")
-        """).strip()
+        """).removeprefix("\n")
     client.call_tool(
         "send",
         r=r,
@@ -235,7 +241,7 @@ def test_preserves_utf8_across_console_reads(binary: Path) -> Transcript:
     r = dedent(r"""
         value <- readline("long> ")
         cat(paste(nchar(value, type = "bytes"), endsWith(value, "é")), "\n", sep = "")
-        """).strip()
+        """).removeprefix("\n")
     client.call_tool("send", r=r, stdin=("x" * 4_094) + "é\n")
     client.transcript[-1]["send"]["stdin"] = "<long stdin ending in UTF-8>"
     output = last_tool_text(client)
@@ -252,7 +258,7 @@ def test_keeps_stdin_open_after_partial_payload(binary: Path) -> Transcript:
         cat("before\n")
         value <- readline("partial> ")
         value
-        """).strip()
+        """).removeprefix("\n")
     client.call_tool("send", r=r, stdin="without newline", timeout_ms=1_000)
     output = last_tool_text(client)
     assert output == "before\npartial> \n[input]", output
@@ -263,7 +269,7 @@ def test_keeps_stdin_open_after_partial_payload(binary: Path) -> Transcript:
     # fmt: r
     r = dedent(r"""
         readline("next> ")
-        """).strip()
+        """).removeprefix("\n")
     client.call_tool("send", r=r, stdin="next\n")
     assert last_tool_text(client) == 'next> [1] "next"\n'
     return client.finish()
@@ -284,14 +290,14 @@ def test_applies_complete_expressions_before_incomplete_source(
     r = dedent(r"""
         answer <- 42
         answer + (
-        """).strip()
+        """).removeprefix("\n")
     client.call_tool("send", r=r)
     client.call_tool("send", r="answer")
     # fmt: r
     r = dedent(r"""
         answer <- 43
         )
-        """).strip()
+        """).removeprefix("\n")
     client.call_tool("send", r=r)
     client.call_tool("send", r="answer")
     return client.finish()
@@ -317,14 +323,14 @@ def test_runs_native_top_level_bookkeeping(binary: Path) -> Transcript:
           name = "mcp-console-test"
         ))
         mcp_console_callback_probe <- 42
-        """).strip()
+        """).removeprefix("\n")
     client.call_tool("send", r=r)
     # fmt: r
     r = dedent(r"""
         warning("careful", call. = FALSE)
         invisible(42)
         cat("last value: ", identical(base::.Last.value, 42), "\n", sep = "")
-        """).strip()
+        """).removeprefix("\n")
     client.call_tool("send", r=r)
     return client.finish()
 
@@ -351,7 +357,7 @@ def test_preserves_native_stack_and_last_value_binding(binary: Path) -> Transcri
           "\n",
           sep = ""
         )
-        """).strip()
+        """).removeprefix("\n")
     client.call_tool("send", r=r)
     return client.finish()
 

@@ -20,7 +20,7 @@ def test_validates_send_arguments(binary: Path) -> Transcript:
         # fmt: python
         python=dedent("""
             print("hello")
-        """).strip(),
+        """).removeprefix("\n"),
         wait_ms=0,
     )
     client.call_tool("send", r="1", python="1")

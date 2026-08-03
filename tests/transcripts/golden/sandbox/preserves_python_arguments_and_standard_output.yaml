@@ -4,7 +4,7 @@ command:
   - sandbox
   - python
   - -c
-  - |-
+  - |
     import sys
 
     print("|".join(sys.argv[1:]))

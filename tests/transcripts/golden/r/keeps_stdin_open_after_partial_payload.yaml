@@ -3,7 +3,7 @@
 ---
 id: 3
 send:
-  r: |-
+  r: |
     cat("before\n")
     value <- readline("partial> ")
     value
@@ -27,7 +27,8 @@ result:
 ---
 id: 5
 send:
-  r: readline("next> ")
+  r: |
+    readline("next> ")
   stdin: |
     next
 result:
