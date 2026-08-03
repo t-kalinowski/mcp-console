@@ -138,6 +138,13 @@ If the poll wait expires first, the literal `\n[running]` banner is appended to 
 A call without a code field or `stdin` while no evaluation is active appends the literal `\n[idle]` banner to collected standard-stream text.
 A stdin-only call in that state queues the bytes and uses the same idle response projection.
 
+After an infrastructure or protocol failure discards a ready worker, the first response involving its successfully started replacement includes the literal `\n[worker restarted: in-memory state lost]` banner exactly once.
+This is server-owned MCP response text, not a sideband frame.
+It follows collected standard-stream and sideband output and precedes a final `\n[input]`, `\n[running]`, or `\n[idle]` banner.
+When it is the only text from a completed evaluation, it replaces `[done]`.
+A rejected new-code call does not consume a notice pending for the active replacement evaluation; the next poll or stdin submission for that evaluation still reports it.
+Initial lazy startup and retries after a failure before `ready` remain silent because no established worker state was lost.
+
 Except for prompt boundaries, this slice does not expose partial sideband output while an evaluation is running.
 Standard-stream text is attached to whichever response is sent next, including `[running]`, `[input]`, or `[idle]` responses.
 The leading newline belongs to each state banner and remains present when no worker or sideband output precedes it.
@@ -200,8 +207,8 @@ New code is rejected while an evaluation or its uncollected result is active.
 
 Malformed JSON, invalid UTF-8, an unexpected message, or sideband EOF fails the active operation.
 There is no structured protocol error message.
-Startup failure leaves no cached worker, so a later evaluation retries startup.
-After `ready`, a sideband failure force-stops and discards the worker; a later evaluation starts a fresh worker.
+Startup failure leaves no cached worker, so a later evaluation retries startup without a replacement notice.
+After `ready`, a sideband failure force-stops and discards the worker; a later evaluation or nonempty idle stdin submission starts a fresh worker and its first response includes the replacement notice described above.
 Standard-stream text collected before an infrastructure failure is attached to its tool error when available at the response boundary; text collected later remains for the next `send` response.
 The server inserts no separator between that text and the error.
 R parse and evaluation errors are not sideband failures: the built-in worker sends them as output followed by `completed` and remains reusable.

@@ -16,7 +16,9 @@ send:
 result:
   content:
     - type: text
-      text: |
+      text: |-
         zod: echo
+
+        [worker restarted: in-memory state lost]
   isError: false
 ...

@@ -4,6 +4,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 const INPUT_REQUEST_GRACE: Duration = Duration::from_millis(10);
+const WORKER_RESTART_BANNER: &str = "\n[worker restarted: in-memory state lost]";
 
 /// A cloneable handle to one lazily started worker.
 #[derive(Clone)]
@@ -15,7 +16,14 @@ struct ClientInner {
     worker: Mutex<Option<platform::Worker>>,
     evaluation: Mutex<Option<Arc<Evaluation>>>,
     output: CapturedOutput,
+    restart: Mutex<RestartState>,
     shutdown_gate: Mutex<ShutdownGate>,
+}
+
+#[derive(Default)]
+struct RestartState {
+    replacement_pending: bool,
+    notice_pending: bool,
 }
 
 #[cfg(target_os = "macos")]
@@ -109,6 +117,7 @@ impl Client {
             worker: Mutex::new(None),
             evaluation: Mutex::new(None),
             output: CapturedOutput::new(),
+            restart: Mutex::new(RestartState::default()),
             shutdown_gate: Mutex::new(ShutdownGate::Open { stop_handle: None }),
         }))
     }
@@ -120,8 +129,8 @@ impl Client {
         stdin: Option<String>,
         timeout: Duration,
     ) -> Result<String, String> {
-        let result = self.send_inner(cell, stdin, timeout).await;
-        self.attach_output(result)
+        let (result, uses_worker) = self.send_inner(cell, stdin, timeout).await;
+        self.attach_output(result, uses_worker)
     }
 
     async fn send_inner(
@@ -129,33 +138,44 @@ impl Client {
         cell: Option<crate::cell::Cell>,
         stdin: Option<String>,
         timeout: Duration,
-    ) -> Result<SendResponse, String> {
-        let evaluation = match cell {
-            Some(cell) => self.start_evaluation(cell, stdin)?,
-            None => match self.current_evaluation()? {
-                Some(evaluation) => {
-                    if let Some(stdin) = stdin {
-                        evaluation.submit_stdin(stdin)?;
-                    }
+    ) -> (Result<SendResponse, String>, bool) {
+        let mut uses_worker = false;
+        let result = async {
+            let evaluation = match cell {
+                Some(cell) => {
+                    let evaluation = self.start_evaluation(cell, stdin)?;
+                    uses_worker = true;
                     evaluation
                 }
-                None => {
-                    if let Some(stdin) = stdin {
-                        self.write_idle_stdin(stdin).await?;
+                None => match self.current_evaluation()? {
+                    Some(evaluation) => {
+                        uses_worker = true;
+                        if let Some(stdin) = stdin {
+                            evaluation.submit_stdin(stdin)?;
+                        }
+                        evaluation
                     }
-                    return Ok(SendResponse::Idle);
-                }
-            },
-        };
+                    None => {
+                        if let Some(stdin) = stdin {
+                            uses_worker = !stdin.is_empty();
+                            self.write_idle_stdin(stdin).await?;
+                        }
+                        return Ok(SendResponse::Idle);
+                    }
+                },
+            };
 
-        match evaluation.wait(timeout).await? {
-            EvaluationWait::Running => Ok(SendResponse::Running),
-            EvaluationWait::InputRequested(output) => Ok(SendResponse::InputRequested(output)),
-            EvaluationWait::Completed(result) => {
-                self.clear_evaluation(&evaluation)?;
-                result.map(SendResponse::Completed)
+            match evaluation.wait(timeout).await? {
+                EvaluationWait::Running => Ok(SendResponse::Running),
+                EvaluationWait::InputRequested(output) => Ok(SendResponse::InputRequested(output)),
+                EvaluationWait::Completed(result) => {
+                    self.clear_evaluation(&evaluation)?;
+                    result.map(SendResponse::Completed)
+                }
             }
         }
+        .await;
+        (result, uses_worker)
     }
 
     fn start_evaluation(
@@ -282,21 +302,56 @@ impl Client {
                 self.0.output.clone(),
                 |stop_handle| self.register_stop_handle(stop_handle),
             )?);
+            self.worker_started();
         }
         let result = operation(worker.as_mut().expect("worker should be running"));
         if result.is_err() {
             *worker = None;
+            self.worker_failed();
         }
         result
     }
 
-    fn attach_output(&self, result: Result<SendResponse, String>) -> Result<String, String> {
+    fn attach_output(
+        &self,
+        result: Result<SendResponse, String>,
+        uses_worker: bool,
+    ) -> Result<String, String> {
         let output = self.0.output.take();
+        let restarted = uses_worker && self.take_restart_notice();
         match result {
-            Ok(response) => Ok(render_response(output, response)),
-            Err(error) if output.is_empty() => Err(error),
-            Err(error) => Err(attach_error_output(output, error)),
+            Ok(response) => Ok(render_response(output, response, restarted)),
+            Err(error) if output.is_empty() && !restarted => Err(error),
+            Err(error) => Err(attach_error_output(output, error, restarted)),
         }
+    }
+
+    fn worker_started(&self) {
+        let mut restart = self
+            .0
+            .restart
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if std::mem::take(&mut restart.replacement_pending) {
+            restart.notice_pending = true;
+        }
+    }
+
+    fn worker_failed(&self) {
+        self.0
+            .restart
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .replacement_pending = true;
+    }
+
+    fn take_restart_notice(&self) -> bool {
+        let mut restart = self
+            .0
+            .restart
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        std::mem::take(&mut restart.notice_pending)
     }
 
     fn shutdown_requested(&self) -> Result<bool, String> {
@@ -603,10 +658,11 @@ impl Evaluation {
     }
 }
 
-fn render_response(mut output: String, response: SendResponse) -> String {
+fn render_response(mut output: String, response: SendResponse, restarted: bool) -> String {
     match response {
         SendResponse::Completed(completed) => {
             output.push_str(&completed);
+            append_restart_banner(&mut output, restarted);
             if output.is_empty() {
                 "[done]".to_string()
             } else {
@@ -615,24 +671,34 @@ fn render_response(mut output: String, response: SendResponse) -> String {
         }
         SendResponse::InputRequested(input) => {
             output.push_str(&input);
+            append_restart_banner(&mut output, restarted);
             output.push_str("\n[input]");
             output
         }
         SendResponse::Running => {
+            append_restart_banner(&mut output, restarted);
             output.push_str("\n[running]");
             output
         }
         SendResponse::Idle => {
+            append_restart_banner(&mut output, restarted);
             output.push_str("\n[idle]");
             output
         }
     }
 }
 
-fn attach_error_output(mut output: String, error: String) -> String {
+fn attach_error_output(mut output: String, error: String, restarted: bool) -> String {
     // Tool errors are not state banners and have no server-owned line prefix.
     output.push_str(&error);
+    append_restart_banner(&mut output, restarted);
     output
+}
+
+fn append_restart_banner(output: &mut String, restarted: bool) {
+    if restarted {
+        output.push_str(WORKER_RESTART_BANNER);
+    }
 }
 
 #[cfg(target_os = "macos")]

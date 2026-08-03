@@ -1,0 +1,55 @@
+---
+!same-as tests/transcripts/golden/server/initializes_and_lists_tools.yaml
+---
+id: 3
+send:
+  r: exit unexpectedly
+result:
+  content:
+    - type: text
+      text: "worker sideband read failed: worker sideband closed"
+  isError: true
+---
+id: 4
+send:
+  r: complete after release
+  timeout_ms: 0
+result:
+  content:
+    - type: text
+      text: |-
+
+        [running]
+  isError: false
+---
+id: 5
+send:
+  r: echo
+result:
+  content:
+    - type: text
+      text: worker is already evaluating a cell; poll without a code field
+  isError: true
+---
+id: 6
+send:
+  timeout_ms: 3000
+result:
+  content:
+    - type: text
+      text: |-
+        zod: complete after release
+
+        [worker restarted: in-memory state lost]
+  isError: false
+---
+id: 7
+send:
+  r: echo
+result:
+  content:
+    - type: text
+      text: |
+        zod: echo
+  isError: false
+...

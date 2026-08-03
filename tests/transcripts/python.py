@@ -132,7 +132,9 @@ def test_restarts_after_python_bridge_failure(binary: Path) -> Transcript:
     client.call_tool("send", python="6 * 7")
     assert client.transcript[-1]["result"]["isError"] is True
     client.call_tool("send", r='exists("python_worker_marker", inherits = FALSE)')
-    assert last_tool_text(client) == "[1] FALSE\n"
+    assert last_tool_text(client) == (
+        "[1] FALSE\n\n[worker restarted: in-memory state lost]"
+    )
     client.call_tool("send", python="6 * 7")
     assert last_tool_text(client) == "42\n"
     return client.finish()

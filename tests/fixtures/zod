@@ -60,12 +60,31 @@ def wait_for_server_to_process_input_request(stream: TextIO) -> None:
     stream.flush()
 
 
+def configure_startup(root: Path) -> None:
+    control_path = os.environ.get("ZOD_STARTUP_CONTROL")
+    if control_path is None:
+        return
+    control = Path(control_path)
+    mode = control.read_text(encoding="utf-8")
+    if mode == "fail":
+        os._exit(86)
+    if mode == "block":
+        (root / "zod-replacement-waiting-ready").touch()
+        release = Path(os.environ["ZOD_STARTUP_RELEASE"])
+        while not release.exists():
+            time.sleep(0.01)
+        mode = "ready"
+    assert mode == "ready", f"unsupported Zod startup mode: {mode}"
+
+
 def main() -> None:
     """Run the deterministic sideband fixture until the server shuts it down."""
     reader = open_sideband(READ_FD_ENV, "r")
     writer = open_sideband(WRITE_FD_ENV, "w")
+    temporary = Path(os.environ["TMPDIR"])
+    configure_startup(temporary)
     if os.environ.get("ZOD_REPORT_PROCESS_GROUP") == "1":
-        Path(os.environ["TMPDIR"], "zod-process-group").write_text(
+        (temporary / "zod-process-group").write_text(
             str(os.getpgrp()),
             encoding="utf-8",
         )
@@ -200,6 +219,10 @@ def main() -> None:
 
         if source == "complete after timeout":
             time.sleep(0.25)
+        elif source == "complete after release":
+            (temporary / "zod-evaluation-started").touch()
+            while not (temporary / "zod-release-evaluation").exists():
+                time.sleep(0.01)
         elif source != "echo":
             raise AssertionError(f"unsupported Zod command: {source}")
 

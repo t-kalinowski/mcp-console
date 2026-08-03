@@ -29,8 +29,10 @@ send:
 result:
   content:
     - type: text
-      text: |
+      text: |-
         [1] FALSE
+
+        [worker restarted: in-memory state lost]
   isError: false
 ---
 id: 6
