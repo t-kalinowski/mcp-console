@@ -1,0 +1,43 @@
+---
+!same-as tests/transcripts/golden/server/initializes_and_lists_tools.yaml
+---
+id: 3
+send:
+  r: |-
+    python_worker_marker <- TRUE
+    Sys.setenv(RETICULATE_PYTHON = tempfile())
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+id: 4
+send:
+  python: 6 * 7
+result:
+  content:
+    - type: text
+      text: "worker sideband read failed: worker sideband closed"
+  isError: true
+---
+id: 5
+send:
+  r: exists("python_worker_marker", inherits = FALSE)
+result:
+  content:
+    - type: text
+      text: |
+        [1] FALSE
+  isError: false
+---
+id: 6
+send:
+  python: 6 * 7
+result:
+  content:
+    - type: text
+      text: |
+        42
+  isError: false
+...

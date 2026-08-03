@@ -286,13 +286,20 @@ def _mcp_console_eval_cell(
                 let try_eval = R_TRY_EVAL
                     .get()
                     .expect("R_tryEval should be initialized before Python evaluation");
-                try_eval(call, PYTHON_STATE, std::ptr::null_mut());
+                let mut evaluation_error = 0;
+                try_eval(call, PYTHON_STATE, &mut evaluation_error);
                 libr::Rf_defineVar(source_symbol, libr::R_NilValue, PYTHON_STATE);
                 libr::Rf_unprotect(3);
+                evaluation_error
             }
         });
         EVALUATION_STARTED.store(false, Ordering::SeqCst);
-        result.map_err(|error| format!("failed to call the Python bridge: {error}"))
+        let evaluation_error =
+            result.map_err(|error| format!("failed to call the Python bridge: {error}"))?;
+        if evaluation_error != 0 {
+            return Err("Python bridge failed during R evaluation".to_string());
+        }
+        Ok(())
     }
 
     fn r_string(value: &str, length: c_int) -> libr::SEXP {

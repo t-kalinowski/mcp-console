@@ -126,6 +126,24 @@ def test_recovers_from_python_errors(binary: Path) -> Transcript:
     return client.finish()
 
 
+def test_restarts_after_python_bridge_failure(binary: Path) -> Transcript:
+    client = McpClient(binary, ("serve",))
+    client.initialize_and_list_tools()
+    # fmt: r
+    r = dedent(r"""
+        python_worker_marker <- TRUE
+        Sys.setenv(RETICULATE_PYTHON = tempfile())
+        """).strip()
+    client.call_tool("send", r=r)
+    client.call_tool("send", python="6 * 7")
+    assert client.transcript[-1]["result"]["isError"] is True
+    client.call_tool("send", r='exists("python_worker_marker", inherits = FALSE)')
+    assert last_tool_text(client) == "[1] FALSE\n"
+    client.call_tool("send", python="6 * 7")
+    assert last_tool_text(client) == "42\n"
+    return client.finish()
+
+
 def last_tool_text(client: McpClient) -> str:
     return client.transcript[-1]["result"]["content"][0]["text"]
 
