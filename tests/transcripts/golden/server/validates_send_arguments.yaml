@@ -3,17 +3,27 @@
 ---
 id: 3
 send:
-  python: print('hello')
+  python: print("hello")
   wait_ms: 0
 result:
   content:
     - type: text
       text: >-
-        failed to deserialize parameters: unknown field `python`, expected one
-        of `r`, `stdin`, `timeout_ms`
+        failed to deserialize parameters: unknown field `wait_ms`, expected one
+        of `r`, `python`, `stdin`, `timeout_ms`
   isError: true
 ---
 id: 4
+send:
+  r: "1"
+  python: "1"
+result:
+  content:
+    - type: text
+      text: only one of `r` or `python` may be supplied
+  isError: true
+---
+id: 5
 send:
   r: null
 result:

@@ -25,6 +25,8 @@ struct ConsoleServer {
 struct SendArguments {
     /// Complete multiline R code evaluated in persistent state. Omit to write stdin or poll.
     r: Option<String>,
+    /// Complete multiline Python code evaluated in persistent state. Omit to write stdin or poll.
+    python: Option<String>,
     /// Exact UTF-8 text queued to worker fd 0 without adding a newline.
     stdin: Option<String>,
     /// Maximum time this call waits for an evaluation. It does not limit or stop the computation.
@@ -40,7 +42,7 @@ impl ConsoleServer {
     fn new(worker: Option<PathBuf>) -> Result<Self, String> {
         let worker = match worker {
             Some(program) => crate::worker_client::Client::new(program),
-            None => crate::worker_client::Client::r()?,
+            None => crate::worker_client::Client::builtin()?,
         };
         Ok(Self { worker })
     }
@@ -48,17 +50,34 @@ impl ConsoleServer {
 
 #[tool_router]
 impl ConsoleServer {
-    #[tool(description = "Evaluate one complete R code cell, write its stdin, or poll it.")]
+    #[tool(
+        description = "Evaluate one complete R or Python code cell, write its stdin, or poll it."
+    )]
     async fn send(
         &self,
         Parameters(SendArguments {
             r,
+            python,
             stdin,
             timeout_ms,
         }): Parameters<SendArguments>,
     ) -> Result<String, String> {
+        let cell = match (r, python) {
+            (Some(source), None) => Some(crate::cell::Cell {
+                language: crate::cell::Language::R,
+                source,
+            }),
+            (None, Some(source)) => Some(crate::cell::Cell {
+                language: crate::cell::Language::Python,
+                source,
+            }),
+            (None, None) => None,
+            (Some(_), Some(_)) => {
+                return Err("only one of `r` or `python` may be supplied".to_string());
+            }
+        };
         self.worker
-            .send(r, stdin, Duration::from_millis(timeout_ms))
+            .send(cell, stdin, Duration::from_millis(timeout_ms))
             .await
     }
 }

@@ -16,7 +16,7 @@ send:
 result:
   content:
     - type: text
-      text: worker is already evaluating a cell; poll without `r`
+      text: worker is already evaluating a cell; poll without a code field
   isError: true
 ---
 id: 5

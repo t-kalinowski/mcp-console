@@ -25,7 +25,9 @@ input:
 result:
   tools:
     - name: send
-      description: Evaluate one complete R code cell, write its stdin, or poll it.
+      description: >-
+        Evaluate one complete R or Python code cell, write its stdin, or poll
+        it.
       inputSchema:
         $schema: https://json-schema.org/draft/2020-12/schema
         additionalProperties: false
@@ -35,6 +37,13 @@ result:
             description: >-
               Complete multiline R code evaluated in persistent state. Omit to write
               stdin or poll.
+            type:
+              - string
+              - "null"
+          python:
+            description: >-
+              Complete multiline Python code evaluated in persistent state. Omit to
+              write stdin or poll.
             type:
               - string
               - "null"

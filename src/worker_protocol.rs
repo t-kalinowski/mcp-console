@@ -1,9 +1,11 @@
 use serde::{Deserialize, Serialize};
 
+use crate::cell::Language;
+
 #[derive(Deserialize, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum ServerMessage {
-    Evaluate { r: String },
+    Evaluate { language: Language, source: String },
     Shutdown,
 }
 

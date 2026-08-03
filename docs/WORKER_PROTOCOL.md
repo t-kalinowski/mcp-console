@@ -1,23 +1,23 @@
 # Worker protocol
 
-This document describes the worker protocol implemented by `mcp-console serve`, the built-in R worker, and `tests/fixtures/zod`.
+This document describes the worker protocol implemented by `mcp-console serve`, the built-in worker, and `tests/fixtures/zod`.
 It describes the current code, not the broader design under `design-sketches/`.
 The message enums in `src/worker_protocol.rs`, the framing in `src/sideband.rs`, and the standard-stream routing in `src/worker_client.rs` are the source of truth.
 
 ## Scope
 
 The current implementation provides one worker for one server process.
-It evaluates one `r` cell at a time and accepts exact `stdin` text whether the worker is evaluating or idle.
+It evaluates one complete R or Python cell at a time and accepts exact `stdin` text whether the worker is evaluating or idle.
 Evaluations run sequentially.
 
 The protocol does not yet include interrupts, request IDs, structured errors, sessions, capabilities, or protocol version negotiation.
 
-Plain `serve` selects the built-in R worker.
+Plain `serve` selects the built-in worker.
 The hidden `serve --worker PATH` option replaces it with a development worker.
 
 ## Launch contract
 
-The worker starts lazily on the first `send` call that supplies `r` or nonempty `stdin`.
+The worker starts lazily on the first `send` call that supplies `r`, `python`, or nonempty `stdin`.
 On macOS, the server uses the same `SandboxedCommand` builder as the `sandbox` command.
 For `--worker PATH`, `PATH` is one program name or path, with no arguments or shell parsing, producing a launch equivalent to:
 
@@ -47,7 +47,7 @@ It drops its duplicate child endpoints immediately after the spawn attempt.
 
 The worker takes ownership of those descriptors.
 Before it runs other programs or user code, it must remove the sideband environment variables and prevent descendants from inheriting the descriptors.
-The R worker also closes the descriptors in fork-only descendants.
+The built-in worker also closes the descriptors in fork-only descendants.
 Zod uses `os.environ.pop()` and `os.set_inheritable(fd, False)`.
 
 ## Transport
@@ -80,7 +80,7 @@ The complete implemented message set is:
 
 | Direction | Frame | Meaning |
 | --- | --- | --- |
-| server → worker | `{"kind":"evaluate","r":"..."}` | Evaluate the `r` string. |
+| server → worker | `{"kind":"evaluate","language":"r","source":"..."}` | Evaluate one complete source string in the selected language. |
 | server → worker | `{"kind":"shutdown"}` | Exit without replying. |
 | worker → server | `{"kind":"ready"}` | Startup is complete. |
 | worker → server | `{"kind":"output","data":"..."}` | Append one output text chunk. |
@@ -101,7 +101,7 @@ One evaluation has this shape:
 ```text
 worker -> server  {"kind":"ready"}
 
-server -> worker  {"kind":"evaluate","r":"echo"}
+server -> worker  {"kind":"evaluate","language":"r","source":"echo"}
 worker -> server  {"kind":"output","data":"zod: "}
 worker -> server  {"kind":"output","data":"echo\n"}
 worker -> server  {"kind":"completed"}
@@ -113,7 +113,7 @@ The server concatenates their text in arrival order.
 Only one request may be outstanding: a second request, a receipt without a request, or completion before its receipt is a protocol failure.
 `completed` ends the sideband evaluation; collecting its MCP result permits the next one.
 
-If the worker sends no output before `completed`, the current MCP projection returns `[done]`.
+If the worker sends no sideband output before `completed` and no standard-stream text is pending, the current MCP projection returns `[done]`.
 That marker is produced by the server; it is not a sideband message.
 
 The protocol has no request IDs because only one evaluation can be in flight over this sideband.
@@ -123,19 +123,19 @@ New code is rejected while an evaluation or its uncollected result is active.
 
 The optional MCP `timeout_ms` argument defaults to 60,000 milliseconds.
 It bounds how long that `send` call waits for the worker; it is not sent over the sideband and does not bound or stop computation.
-For a call with `r`, the evaluation wait includes lazy worker startup.
+For a call with `r` or `python`, the evaluation wait includes lazy worker startup.
 
 An `input_requested` frame remains provisional for 10 milliseconds.
 If `input_received` arrives first, the server retains the unexposed prompt output and continues waiting for another request, completion, or the MCP deadline.
 If the grace expires first, the call returns output collected so far, the verbatim prompt, and the `\n[input]` banner before that deadline.
 Supplying nonempty stdin for an outstanding request starts a fresh 10-millisecond grace window; the MCP deadline reports a still-outstanding request immediately, even inside that window.
-A pending input request wins over `[running]` at the deadline.
-A later `send` call without `r` polls that evaluation with its own `timeout_ms`; it may include `stdin` to queue bytes before waiting.
+A pending input request wins over the `\n[running]` banner at the deadline.
+A later `send` call without a code field polls that evaluation with its own `timeout_ms`; it may include `stdin` to queue bytes before waiting.
 Every `send` response decodes and drains complete UTF-8 prefixes from standard-stream bytes already collected when that response is assembled.
 Bytes collected after that snapshot and incomplete trailing sequences remain for the next response; standard-stream output does not itself wake a waiting call.
 Completion returns decoded standard-stream text followed by sideband output not already delivered at an `[input]` boundary, or `[done]` when neither produced text.
 If the poll wait expires first, the literal `\n[running]` banner is appended to any collected standard-stream text.
-A call without `r` or `stdin` while no evaluation is active appends the literal `\n[idle]` banner to collected standard-stream text.
+A call without a code field or `stdin` while no evaluation is active appends the literal `\n[idle]` banner to collected standard-stream text.
 A stdin-only call in that state queues the bytes and uses the same idle response projection.
 
 Except for prompt boundaries, this slice does not expose partial sideband output while an evaluation is running.
@@ -152,7 +152,7 @@ The server appends the prompt field verbatim to output collected so far, then ap
 A later `send` call supplies its `stdin` unchanged:
 
 ```text
-server -> worker  {"kind":"evaluate","r":"readline('name> ')"}
+server -> worker  {"kind":"evaluate","language":"r","source":"readline('name> ')"}
 worker -> server  {"kind":"input_requested","prompt":"name> "}
 
 server -> fd 0    Ada\n
@@ -161,7 +161,7 @@ worker -> server  {"kind":"output","data":"[1] \"Ada\"\n"}
 worker -> server  {"kind":"completed"}
 ```
 
-An MCP call may contain both `r` and `stdin`.
+An MCP call may contain one code field and `stdin`.
 The server flushes `evaluate` first, then attaches the evaluation to the worker's stdin writer and drains any queued input in submission order.
 A later stdin-only call uses the same route without acquiring the evaluation's worker lock, including after an earlier call returned `\n[running]`.
 When no evaluation is tracked, nonempty stdin lazily starts the worker if necessary and enters the same worker-owned FIFO; empty stdin is a no-op.
@@ -181,7 +181,7 @@ Code that reads fd 0 directly can consume bundled input or input sent after a po
 Acceptance means the bytes were queued, not that an evaluation consumed them.
 The server does not retract or drain bytes after `completed`; data already in the pipe or retained by a runtime reader may satisfy an idle background consumer, later reads, or later evaluations.
 Worker shutdown or failure discards whatever remains.
-New R code is rejected while an evaluation or its uncollected result is active.
+New code is rejected while an evaluation or its uncollected result is active.
 
 ## State transitions
 
@@ -231,12 +231,14 @@ Shutdown closes a one-way gate that the client checks before and after acquiring
 Startup registers a separate stop handle before waiting for `ready`.
 If shutdown already closed the gate, startup stops the new child and fails immediately.
 
-## Built-in R worker
+## Built-in worker
+
+### R cells
 
 The built-in worker runs each complete cell through `R_ReplDLLinit()` and repeated `R_ReplDLLdo1()` calls.
 R parses and evaluates its expressions sequentially in the persistent global environment, captures console output, prints every visible value, and performs native top-level bookkeeping such as updating `.Last.value`.
 A cell that ends while R requires continuation input produces `Error: Incomplete code`; earlier complete expressions from that cell remain applied.
-A successful silent cell produces no sideband output, so the MCP result is `[done]`.
+A successful silent cell produces no sideband output; if no standard-stream text is pending, the MCP result is `[done]`.
 The CLI runs `worker` synchronously without a Tokio runtime, so R initialization and evaluation remain on the process main thread.
 
 The worker supplies cell source through `ReadConsole` before each top-level evaluation starts.
@@ -251,6 +253,24 @@ Submitted source references are not retained.
 Parse, evaluation, and print errors are returned as console text followed by `completed`, so the worker remains available even though the protocol has no structured language-error message.
 Subprocesses and descendants that write directly to retained fd 1 or fd 2 bypass the R console callbacks, but their output is still collected through the standard-stream pipes.
 
+### Python cells
+
+The worker embeds one persistent Python `__main__` interpreter through reticulate.
+Before any user R can initialize Python, it tells reticulate to remap Python text stdout and stderr through R's console callbacks.
+It reuses an already initialized reticulate Python; otherwise, it honors an explicit `RETICULATE_PYTHON` path and finally selects an existing `python3` from `PATH`.
+The worker does not install reticulate or Python and cannot use the network to discover or install them.
+
+Each Python cell receives a synthetic filename such as `<mcp-console:python:e1>`.
+The worker stores the source in a process-lifetime private R environment and calls its evaluator with only a short evaluation ID.
+The evaluator derives the synthetic filename from that ID, so neither the source nor the bridge implementation appears in its R call expression.
+That evaluator parses the complete cell with Python's `ast` module, executes statements in `__main__.__dict__`, and sends a final expression through `sys.displayhook()`.
+Assignments, imports, and objects remain available to later Python cells and through reticulate's R/Python object bridge.
+
+An uncaught Python exception prints its traceback and completes as a normal language outcome.
+The worker remains reusable, and state changes made before the exception remain applied.
+A successful cell without output or a final expression produces no sideband output; if no standard-stream text is pending, the MCP result is `[done]`.
+Python `input()` can consume proactively queued fd-0 input but emits neither `input_requested` nor `input_received`; debugger request integration is not implemented.
+
 ## Current limits
 
 The current implementation has no worker startup or execution timeout, frame-size limit, stdin queue limit, or accumulated-output limit.
@@ -262,28 +282,31 @@ It is a latency heuristic: scheduling can delay a receipt past the grace and exp
 Standard output and standard error are decoded as UTF-8 only when a response is assembled, with replacement for invalid sequences; arbitrary binary output is not preserved byte for byte.
 Worker failures are reported as plain-text MCP tool errors, not structured worker events.
 Concurrent MCP `send` calls are outside the current contract.
+Python cells require an installed reticulate R package and an embeddable Python already initialized through reticulate, selected by `RETICULATE_PYTHON`, or available as `python3` on `PATH`.
+The current Python evaluator does not report `input_requested` or `input_received`.
 The current sandbox child does not yet supervise descendants after its direct process exits, or descendants that leave its process group; capturing inherited standard streams does not change that boundary.
 
 ## Zod fixture behavior
 
 Zod implements the protocol as an executable uv script requiring Python 3.11 or newer.
-When `r` is exactly `echo`, it sends two output chunks followed by `completed`:
+When an R `source` is exactly `echo`, it sends two output chunks followed by `completed`:
 
 ```text
 zod: echo\n
 ```
 
-When `r` is exactly `stall`, Zod creates a checkpoint in its private temporary directory and sleeps forever.
-When `r` is `complete after timeout`, it pauses briefly before returning `zod: complete after timeout\n`.
-When `r` is `violate protocol`, it sends an unexpected second `ready` message.
-When `r` is `exit unexpectedly`, it exits with status 86 without replying.
+The Python `echo` mode returns `zod python: echo\n` and verifies that the server preserves the language tag.
+When an R `source` is exactly `stall`, Zod creates a checkpoint in its private temporary directory and sleeps forever.
+When the source is `complete after timeout`, it pauses briefly before returning `zod: complete after timeout\n`.
+When the source is `violate protocol`, it sends an unexpected second `ready` message.
+When the source is `exit unexpectedly`, it exits with status 86 without replying.
 The `emit stdout` and `start background stderr` modes exercise continuous standard-stream capture during evaluation and after completion.
-When `r` is `request input`, it sends `input_requested`, calls Python `input()` to consume one line from fd 0, and sends `input_received` after that call returns.
+When the source is `request input`, it sends `input_requested`, calls Python `input()` to consume one line from fd 0, and sends `input_received` after that call returns.
 The `request input after timeout` mode gates that request until an earlier MCP wait expires, then covers retention of output attached to a still-unexposed request.
 The `input without request` and `input length without request` modes call `input()` without first sending a frame, covering proactive fd-0 delivery, including input queued while Zod is idle.
 The `input without request then request input` mode performs one direct read before a reported request/receipt pair, covering the distinction between direct fd-0 reads and callback-style input state.
 Zod echoes the input or its byte length and completes.
-Its acceptance supplies newline-terminated text because Python `input()` waits for a complete line; partial-input boundaries are covered by the built-in R worker.
+Its acceptance supplies newline-terminated text because Python `input()` waits for a complete line; partial-input boundaries are covered by the built-in worker's R console.
 Other fixture-only modes verify that the sandbox denies host writes and that a blocked sideband writer cannot delay shutdown.
 Other commands fail instead of being echoed implicitly.
 Those behaviors are test fixtures, not part of the worker protocol.
