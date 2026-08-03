@@ -21,19 +21,19 @@ The `serve` command runs an MCP server over stdio.
 Clap provides command help, version output, argument parsing, and usage errors.
 The server registers only a `send` tool.
 Supplying exactly one of `r` or `python` starts one complete cell and waits for up to `timeout_ms`, which defaults to 60 seconds.
-If that wait expires, `send` returns `[running]` without stopping the computation; a later call without a code field polls it, and a poll while idle returns `[idle]`.
+If that wait expires, `send` returns the newline-prefixed banner `\n[running]` without stopping the computation; a later call without a code field polls it, and a poll while idle returns `\n[idle]`.
 Concurrent `send` calls are unsupported.
 Supplying `stdin` with a code cell, during an evaluation, or while idle queues exact UTF-8 bytes to worker fd 0 without adding a newline, inspecting or limiting the text, or waiting for an input request.
-A nonempty idle stdin call lazily starts the worker when needed, queues the bytes, and returns `[idle]`; `timeout_ms` does not bound that startup because the call does not wait on an evaluation.
+A nonempty idle stdin call lazily starts the worker when needed, queues the bytes, and returns `\n[idle]`; `timeout_ms` does not bound that startup because the call does not wait on an evaluation.
 Payload end is not EOF; the R console callback reads through one newline or its supplied buffer, and unread bytes may satisfy later console or direct reads, including in a later evaluation.
-An `input_requested` frame is provisional for up to 10 milliseconds; a matching `input_received` after a successful console read suppresses `[input]`, while an unmatched request returns `[input]` after that grace or at the MCP deadline, whichever comes first.
+An `input_requested` frame is provisional for up to 10 milliseconds; a matching `input_received` after a successful console read suppresses the `\n[input]` banner, while an unmatched request returns it after that grace or at the MCP deadline, whichever comes first.
 The receipt describes that runtime read, not a submitted payload or byte count, and direct fd-0 reads emit neither frame.
 New code is rejected until the running evaluation's result has been collected.
 On macOS, the first nonempty stdin submission or evaluation lazily starts the built-in worker under the same sandbox policy as the `sandbox` command.
 The worker embeds R through `libr` and `harp`, retains global state, and feeds each complete R cell through R's DLL REPL iterator.
 R parses and evaluates its expressions sequentially, captures console output, prints visible values, and performs native top-level bookkeeping.
 Cell EOF while R requires continuation input is an error; earlier complete expressions from that cell remain applied.
-R parse, evaluation, and auto-print failures are normal language outcomes with `isError: false`; silent successful cells return `[done]`.
+R parse, evaluation, and auto-print failures are normal language outcomes with `isError: false`; silent successful cells with no pending stream output return `[done]`.
 Submitted R functions do not currently retain a source filename.
 Python cells run in the same worker through reticulate, retain `__main__` state, execute statements, and send a final expression through `sys.displayhook()`.
 Python source uses a synthetic evaluation filename, and uncaught exceptions print a Python traceback as a normal language outcome with `isError: false`.
@@ -41,12 +41,18 @@ Reticulate remaps Python text stdout and stderr into the worker's console output
 The worker reuses an already initialized reticulate Python, otherwise honors `RETICULATE_PYTHON`, and finally selects `python3` from `PATH` without installing Python or accessing the network.
 R and Python share objects through reticulate's `py` and `r` bridges.
 Python `input()` can consume proactively queued fd-0 text, but it emits neither `input_requested` nor `input_received`; debugger integration is not implemented.
-Direct subprocess output and output from forked descendants are unsupported, and forked descendants cannot use the inherited sideband.
+Worker standard output and standard error are piped and collected continuously, including while the worker is idle.
+Each pipe reader queues raw byte chunks, and each `send` response decodes and drains complete UTF-8 prefixes from bytes already collected at its response boundary; later bytes remain for the next response.
+Idle, running, and input responses append the literal `\n[idle]`, `\n[running]`, or `\n[input]` banner; its leading newline is present even when no output precedes it.
+Completion returns collected standard-stream and sideband output instead of `[done]` when either produced text.
+Ordering between the two standard streams and sideband output is best effort; incomplete UTF-8 remains with its pipe until a later response, and invalid UTF-8 is replaced when output is rendered.
+The built-in worker and custom workers send console prompt fields verbatim; the server appends a prompt before its `\n[input]` banner without trimming it.
+Output from descendants that inherit standard output or standard error follows the same path, but this does not add descendant supervision; forked descendants cannot use the inherited sideband.
 The hidden `worker` command takes ownership of the sideband, discovers `R_HOME` through the selected R executable inside the sandbox, and opens `R_HOME/lib/libR.dylib` by its absolute path.
 It does not self-execute or set a dynamic-loader environment variable.
 The worker command runs synchronously on the process main thread; only `serve` creates a Tokio runtime.
 The hidden development option `serve --worker PATH` replaces the built-in worker with an executable that implements the same sideband request/receipt protocol and fd-0 input contract.
-The Python fixture `tests/fixtures/zod` provides deterministic acceptance coverage for that boundary, direct fd-0 input, and server-owned timeout and polling mechanics.
+The Python fixture `tests/fixtures/zod` provides deterministic acceptance coverage for that boundary, direct fd-0 input, captured standard streams, and server-owned timeout and polling mechanics.
 An infrastructure or protocol failure is returned as a tool error, force-stops and discards that worker, and lets the next evaluation start a fresh worker.
 When MCP input closes, the server starts a one-second deadline and attempts graceful sideband shutdown without delaying it.
 If the direct sandbox process is still running when time expires, the sandbox boundary force-stops its process group and reaps that direct process.

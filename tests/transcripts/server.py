@@ -26,7 +26,7 @@ def test_validates_send_arguments(binary: Path) -> Transcript:
     client.call_tool("send", r="1", python="1")
     client.call_tool("send", r=None)
     output = client.transcript[-1]["result"]["content"][0]["text"]
-    assert output == "[idle]", output
+    assert output == "\n[idle]", output
     return client.finish()
 
 

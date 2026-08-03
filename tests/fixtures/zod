@@ -12,6 +12,7 @@ from typing import Any, TextIO
 
 READ_FD_ENV = "MCP_CONSOLE_SIDEBAND_READ_FD"
 WRITE_FD_ENV = "MCP_CONSOLE_SIDEBAND_WRITE_FD"
+LARGE_OUTPUT_SIZE = 2 * 1024 * 1024
 
 
 def open_sideband(name: str, mode: str) -> TextIO:
@@ -23,6 +24,26 @@ def open_sideband(name: str, mode: str) -> TextIO:
 def send(stream: TextIO, message: dict[str, Any]) -> None:
     stream.write(json.dumps(message, separators=(",", ":")) + "\n")
     stream.flush()
+
+
+def write_all(descriptor: int, data: bytes) -> None:
+    remaining = memoryview(data)
+    while remaining:
+        written = os.write(descriptor, remaining)
+        remaining = remaining[written:]
+
+
+def emit_large_output(descriptor: int, prefix: bytes) -> None:
+    write_all(descriptor, prefix + (b"x" * LARGE_OUTPUT_SIZE))
+    # Completing a second pipe-sized write proves the preceding payload was read.
+    write_all(descriptor, b"y" * LARGE_OUTPUT_SIZE)
+
+
+def emit_background_stderr(root: Path) -> None:
+    while not (root / "zod-release-background-stderr").exists():
+        time.sleep(0.01)
+    emit_large_output(2, b"zod background stderr\n")
+    (root / "zod-background-stderr-emitted").touch()
 
 
 def wait_for_server_to_process_input_request(stream: TextIO) -> None:
@@ -85,6 +106,25 @@ def main() -> None:
 
         if source == "exit unexpectedly":
             os._exit(86)
+
+        if source == "emit stdout":
+            write_all(1, b"zod stdout ")
+            for part in ("👩", "🏽", "\u200d", "💻", "\n"):
+                write_all(1, part.encode())
+            emit_large_output(1, b"")
+            send(writer, {"kind": "completed"})
+            continue
+
+        if source == "start background stderr":
+            temporary = Path(os.environ["TMPDIR"])
+            if os.fork() == 0:
+                reader.close()
+                writer.close()
+                emit_background_stderr(temporary)
+                os._exit(0)
+            (temporary / "zod-background-stderr-started").touch()
+            send(writer, {"kind": "completed"})
+            continue
 
         if source == "request input":
             send(writer, {"kind": "input_requested", "prompt": "zod> "})

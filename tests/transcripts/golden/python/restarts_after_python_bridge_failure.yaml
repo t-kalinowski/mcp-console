@@ -18,7 +18,9 @@ send:
 result:
   content:
     - type: text
-      text: "worker sideband read failed: worker sideband closed"
+      text: |-
+        Python bridge failed during R evaluation
+        worker sideband read failed: worker sideband closed
   isError: true
 ---
 id: 5

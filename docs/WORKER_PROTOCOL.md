@@ -2,7 +2,7 @@
 
 This document describes the worker protocol implemented by `mcp-console serve`, the built-in worker, and `tests/fixtures/zod`.
 It describes the current code, not the broader design under `design-sketches/`.
-The message enums in `src/worker_protocol.rs`, the framing in `src/sideband.rs`, and the fd-0 routing in `src/worker_client.rs` are the source of truth.
+The message enums in `src/worker_protocol.rs`, the framing in `src/sideband.rs`, and the standard-stream routing in `src/worker_client.rs` are the source of truth.
 
 ## Scope
 
@@ -29,8 +29,8 @@ The built-in path launches `mcp-console worker`.
 Inside the sandbox, the worker takes ownership of the sideband, discovers `R_HOME` through the selected R executable, and initializes R through `libr` and `harp`.
 Harp opens `R_HOME/lib/libR.dylib` by its absolute path, so the worker does not self-execute or set a dynamic-loader environment variable.
 
-The server launches the sandboxed worker with piped standard input and null standard output and error streams.
-Sideband frames carry control and output; interactive input bytes travel through the worker's fd 0.
+The server launches the sandboxed worker with piped standard input, standard output, and standard error.
+Sideband frames carry control and managed output; interactive input bytes travel through the worker's fd 0, while the server drains fd 1 and fd 2 continuously.
 The sandbox child leads a dedicated process group so the current bounded shutdown can stop a live wrapper and its in-group descendants.
 
 This launch contract currently works only on macOS because the sandbox is unsupported elsewhere.
@@ -59,7 +59,7 @@ server writer  ──>  worker reader
 server reader  <──  worker writer
 ```
 
-The server also owns an independent FIFO writer connected to the worker's standard input (fd 0).
+The server also owns an independent FIFO writer connected to the worker's standard input (fd 0) and independent readers for standard output and standard error.
 Each accepted `stdin` string is UTF-8 encoded and queued to that writer without inspection or framing.
 There is no sideband input frame.
 
@@ -68,7 +68,11 @@ The sender flushes every frame.
 Output text is carried directly in a JSON string.
 JSON escaping represents newlines, quotes, and other control characters on the wire.
 
-Worker standard output and standard error are not part of the protocol and are currently discarded.
+Worker standard output and standard error are not protocol frames.
+Each pipe reader queues raw byte chunks without decoding them.
+When a response is assembled, the server decodes the queued chunks for each pipe as UTF-8, retains an incomplete trailing sequence for a later response, and replaces invalid sequences.
+It preserves order within each stream, but makes no relative ordering guarantee between standard output, standard error, and sideband output.
+Descendants that inherit fd 1 or fd 2 write into the same pipes even when the interpreter is idle.
 
 ## Messages
 
@@ -109,7 +113,7 @@ The server concatenates their text in arrival order.
 Only one request may be outstanding: a second request, a receipt without a request, or completion before its receipt is a protocol failure.
 `completed` ends the sideband evaluation; collecting its MCP result permits the next one.
 
-If the worker sends no output before `completed`, the current MCP projection returns `[done]`.
+If the worker sends no sideband output before `completed` and no standard-stream text is pending, the current MCP projection returns `[done]`.
 That marker is produced by the server; it is not a sideband message.
 
 The protocol has no request IDs because only one evaluation can be in flight over this sideband.
@@ -123,22 +127,28 @@ For a call with `r` or `python`, the evaluation wait includes lazy worker startu
 
 An `input_requested` frame remains provisional for 10 milliseconds.
 If `input_received` arrives first, the server retains the unexposed prompt output and continues waiting for another request, completion, or the MCP deadline.
-If the grace expires first, the call returns output collected so far, the prompt, and `[input]` before that deadline.
+If the grace expires first, the call returns output collected so far, the verbatim prompt, and the `\n[input]` banner before that deadline.
 Supplying nonempty stdin for an outstanding request starts a fresh 10-millisecond grace window; the MCP deadline reports a still-outstanding request immediately, even inside that window.
-A pending input request wins over `[running]` at the deadline.
+A pending input request wins over the `\n[running]` banner at the deadline.
 A later `send` call without a code field polls that evaluation with its own `timeout_ms`; it may include `stdin` to queue bytes before waiting.
-Completion returns output not already delivered at an `[input]` boundary, or `[done]` when it produced none.
-If the poll wait expires first, it returns `[running]` again.
-A call without a code field or `stdin` while no evaluation is active returns `[idle]`.
-A stdin-only call in that state queues the bytes and also returns `[idle]`.
+Every `send` response decodes and drains complete UTF-8 prefixes from standard-stream bytes already collected when that response is assembled.
+Bytes collected after that snapshot and incomplete trailing sequences remain for the next response; standard-stream output does not itself wake a waiting call.
+Completion returns decoded standard-stream text followed by sideband output not already delivered at an `[input]` boundary, or `[done]` when neither produced text.
+If the poll wait expires first, the literal `\n[running]` banner is appended to any collected standard-stream text.
+A call without a code field or `stdin` while no evaluation is active appends the literal `\n[idle]` banner to collected standard-stream text.
+A stdin-only call in that state queues the bytes and uses the same idle response projection.
 
-Except for prompt boundaries, this slice does not expose partial output while an evaluation is running.
+Except for prompt boundaries, this slice does not expose partial sideband output while an evaluation is running.
+Standard-stream text is attached to whichever response is sent next, including `[running]`, `[input]`, or `[idle]` responses.
+The leading newline belongs to each state banner and remains present when no worker or sideband output precedes it.
+The server does not inspect preceding output to normalize that boundary, so output that already ends in a newline leaves a blank line before the banner.
+The server inserts no separator before a tool error.
 Output cursors and general incremental polling remain unimplemented.
 
 ### Interactive input
 
 When evaluated code calls `readline()` or enters `browser()`, the worker may send `input_requested`.
-The MCP response returns the output collected so far, the trimmed prompt, and an `[input]` marker.
+The server appends the prompt field verbatim to output collected so far, then appends the `\n[input]` banner if the request remains exposed.
 A later `send` call supplies its `stdin` unchanged:
 
 ```text
@@ -153,7 +163,7 @@ worker -> server  {"kind":"completed"}
 
 An MCP call may contain one code field and `stdin`.
 The server flushes `evaluate` first, then attaches the evaluation to the worker's stdin writer and drains any queued input in submission order.
-A later stdin-only call uses the same route without acquiring the evaluation's worker lock, including after an earlier call returned `[running]`.
+A later stdin-only call uses the same route without acquiring the evaluation's worker lock, including after an earlier call returned `\n[running]`.
 When no evaluation is tracked, nonempty stdin lazily starts the worker if necessary and enters the same worker-owned FIFO; empty stdin is a no-op.
 
 The server writes each string blindly.
@@ -164,7 +174,7 @@ The R console callback consumes only through one newline or its supplied buffer;
 `input_requested` is an observation of worker state, not permission to write.
 After a nonempty callback read, `input_received` closes that provisional request before the runtime resumes.
 It does not acknowledge a particular stdin submission, identify which bytes satisfied the read, or report bytes consumed by code that reads fd 0 directly.
-If no receipt arrives during the grace window, the request remains exposed as `[input]`; a partial follow-up therefore returns `[input]` again rather than `[running]`.
+If no receipt arrives during the grace window, the request remains exposed as `\n[input]`; a partial follow-up therefore returns `\n[input]` again rather than `\n[running]`.
 Empty stdin writes no bytes and leaves an exposed request immediately reportable.
 Code that reads fd 0 directly can consume bundled input or input sent after a polling timeout without sending either input frame.
 
@@ -178,6 +188,7 @@ New code is rejected while an evaluation or its uncollected result is active.
 | From | Frame | To |
 | --- | --- | --- |
 | starting | worker → server `ready` | idle |
+| starting, idle, or evaluating | worker or descendant → fd 1 or fd 2 | unchanged |
 | absent or idle | MCP stdin submission | idle |
 | idle | server → worker `evaluate` | evaluating |
 | evaluating | worker → server `output` | evaluating |
@@ -191,6 +202,8 @@ Malformed JSON, invalid UTF-8, an unexpected message, or sideband EOF fails the 
 There is no structured protocol error message.
 Startup failure leaves no cached worker, so a later evaluation retries startup.
 After `ready`, a sideband failure force-stops and discards the worker; a later evaluation starts a fresh worker.
+Standard-stream text collected before an infrastructure failure is attached to its tool error when available at the response boundary; text collected later remains for the next `send` response.
+The server inserts no separator between that text and the error.
 R parse and evaluation errors are not sideband failures: the built-in worker sends them as output followed by `completed` and remains reusable.
 
 ## Shutdown
@@ -208,6 +221,7 @@ The shutdown task queues worker-stdin closure, then attempts the sideband write.
 It runs independently of the deadline so a blocked stdin writer or full sideband pipe cannot postpone forced termination.
 The sandbox child waits only for the time remaining before the original deadline.
 If its direct process is still running at the deadline, the sandbox force-stops its process group and reaps that direct process.
+Shutdown does not wait for the standard-stream readers to reach EOF because descendants may retain those descriptors.
 
 Shutdown uses a stop handle separate from the evaluation lock.
 This lets the server terminate a child while another thread is blocked waiting for worker output.
@@ -224,17 +238,20 @@ If shutdown already closed the gate, startup stops the new child and fails immed
 The built-in worker runs each complete cell through `R_ReplDLLinit()` and repeated `R_ReplDLLdo1()` calls.
 R parses and evaluates its expressions sequentially in the persistent global environment, captures console output, prints every visible value, and performs native top-level bookkeeping such as updating `.Last.value`.
 A cell that ends while R requires continuation input produces `Error: Incomplete code`; earlier complete expressions from that cell remain applied.
-A successful silent cell produces no sideband output, so the MCP result is `[done]`.
+A successful silent cell produces no sideband output; if no standard-stream text is pending, the MCP result is `[done]`.
 The CLI runs `worker` synchronously without a Tokio runtime, so R initialization and evaluation remain on the process main thread.
 
 The worker supplies cell source through `ReadConsole` before each top-level evaluation starts.
 For every evaluation-time `ReadConsole` call, the callback sends `input_requested`, then reads fd 0 directly until one newline arrives or R's supplied buffer is full.
+The built-in worker sends R's prompt field verbatim, including trailing spaces or an empty prompt.
+The server does not rewrite prompts from the built-in worker or custom workers.
 After a nonempty read succeeds, it sends `input_received` before returning the bytes to R.
 A newline-free fragment shorter than that buffer keeps the callback blocked, while bytes after a returned chunk remain in the pipe for a later `ReadConsole` call or a direct fd-0 reader.
 It uses R's busy callback rather than prompt text to distinguish cell source from evaluated-code input.
 Unread fd-0 input remains available across evaluation boundaries.
 Submitted source references are not retained.
 Parse, evaluation, and print errors are returned as console text followed by `completed`, so the worker remains available even though the protocol has no structured language-error message.
+Subprocesses and descendants that write directly to retained fd 1 or fd 2 bypass the R console callbacks, but their output is still collected through the standard-stream pipes.
 
 ### Python cells
 
@@ -251,7 +268,7 @@ Assignments, imports, and objects remain available to later Python cells and thr
 
 An uncaught Python exception prints its traceback and completes as a normal language outcome.
 The worker remains reusable, and state changes made before the exception remain applied.
-A successful cell without output or a final expression produces no sideband output, so the MCP result is `[done]`.
+A successful cell without output or a final expression produces no sideband output; if no standard-stream text is pending, the MCP result is `[done]`.
 Python `input()` can consume proactively queued fd-0 input but emits neither `input_requested` nor `input_received`; debugger request integration is not implemented.
 
 ## Current limits
@@ -262,13 +279,12 @@ An idle stdin-only call does not wait on an evaluation, so `timeout_ms` does not
 The 10-millisecond input grace controls when a provisional request becomes visible and does not limit evaluation or stdin reads.
 It is a latency heuristic: scheduling can delay a receipt past the grace and expose an extra `[input]` boundary even when queued bytes subsequently satisfy the read.
 
-It does not capture raw byte writes or direct writes to the worker's standard output or standard error; reticulate remaps Python text streams through R before they reach those descriptors.
-It does not support arbitrary binary output.
+Standard output and standard error are decoded as UTF-8 only when a response is assembled, with replacement for invalid sequences; arbitrary binary output is not preserved byte for byte.
 Worker failures are reported as plain-text MCP tool errors, not structured worker events.
 Concurrent MCP `send` calls are outside the current contract.
 Python cells require an installed reticulate R package and an embeddable Python already initialized through reticulate, selected by `RETICULATE_PYTHON`, or available as `python3` on `PATH`.
 The current Python evaluator does not report `input_requested` or `input_received`.
-The current sandbox child does not yet supervise descendants after its direct process exits, or descendants that leave its process group.
+The current sandbox child does not yet supervise descendants after its direct process exits, or descendants that leave its process group; capturing inherited standard streams does not change that boundary.
 
 ## Zod fixture behavior
 
@@ -284,6 +300,7 @@ When an R `source` is exactly `stall`, Zod creates a checkpoint in its private t
 When the source is `complete after timeout`, it pauses briefly before returning `zod: complete after timeout\n`.
 When the source is `violate protocol`, it sends an unexpected second `ready` message.
 When the source is `exit unexpectedly`, it exits with status 86 without replying.
+The `emit stdout` and `start background stderr` modes exercise continuous standard-stream capture during evaluation and after completion.
 When the source is `request input`, it sends `input_requested`, calls Python `input()` to consume one line from fd 0, and sends `input_received` after that call returns.
 The `request input after timeout` mode gates that request until an earlier MCP wait expires, then covers retention of output attached to a still-unexposed request.
 The `input without request` and `input length without request` modes call `input()` without first sending a frame, covering proactive fd-0 delivery, including input queued while Zod is idle.

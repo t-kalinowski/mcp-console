@@ -14,9 +14,7 @@ result:
   content:
     - type: text
       text: |
-        first>
-        second>
-        Ada|Lovelace
+        first> second> Ada|Lovelace
   isError: false
 ---
 id: 4
@@ -35,9 +33,7 @@ send:
 result:
   content:
     - type: text
-      text: |-
-        after>
-        [input]
+      text: "after>\x20\n[input]"
   isError: false
 ---
 id: 5
@@ -57,9 +53,7 @@ send:
 result:
   content:
     - type: text
-      text: |-
-        color>
-        [input]
+      text: "color>\x20\n[input]"
   isError: false
 ---
 id: 7
@@ -69,7 +63,7 @@ send:
 result:
   content:
     - type: text
-      text: "[input]"
+      text: "\n[input]"
   isError: false
 ---
 id: 8
@@ -91,7 +85,6 @@ send:
 result:
   content:
     - type: text
-      text: |
-        silent>
+      text: "silent> "
   isError: false
 ...

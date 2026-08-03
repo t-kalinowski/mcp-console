@@ -11,8 +11,6 @@ result:
   content:
     - type: text
       text: |
-        long>
-        long>
-        4096 TRUE
+        long> long> 4096 TRUE
   isError: false
 ...
