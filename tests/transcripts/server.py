@@ -1,9 +1,8 @@
 #!/usr/bin/env -S uv run --script
 
 from pathlib import Path
-from textwrap import dedent
 
-from _support import McpClient, Transcript, run_this_suite
+from _support import McpClient, Transcript, code, run_this_suite
 
 
 def test_initializes_and_lists_tools(binary: Path) -> Transcript:
@@ -18,9 +17,9 @@ def test_validates_send_arguments(binary: Path) -> Transcript:
     client.call_tool(
         "send",
         # fmt: python
-        python=dedent("""
+        python=code("""
             print("hello")
-        """).removeprefix("\n"),
+        """),
         wait_ms=0,
     )
     client.call_tool("send", r="1", python="1")

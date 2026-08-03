@@ -7,9 +7,8 @@ import subprocess
 import time
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from textwrap import dedent
 
-from _support import Transcript, TranscriptEntry, run_this_suite
+from _support import Transcript, TranscriptEntry, code, run_this_suite
 
 
 PLATFORMS = {"darwin"}
@@ -68,11 +67,11 @@ def test_preserves_executable_names_with_equals_signs(binary: Path) -> Transcrip
 
 def test_preserves_python_arguments_and_standard_output(binary: Path) -> Transcript:
     # fmt: python
-    script = dedent(r"""
+    script = code(r"""
         import sys
 
         print("|".join(sys.argv[1:]))
-        """).removeprefix("\n")
+        """)
     arguments = (
         "sandbox",
         "python",
@@ -87,7 +86,7 @@ def test_preserves_python_arguments_and_standard_output(binary: Path) -> Transcr
 
 def test_forwards_interactive_standard_streams(binary: Path) -> Transcript:
     # fmt: python
-    script = dedent(r"""
+    script = code(r"""
         import sys
 
         for line in sys.stdin:
@@ -98,7 +97,7 @@ def test_forwards_interactive_standard_streams(binary: Path) -> Transcript:
             sys.stdout.flush()
             sys.stderr.write(line)
             sys.stderr.flush()
-        """).removeprefix("\n")
+        """)
     arguments = ("sandbox", "--", "python", "-c", script)
 
     process = subprocess.Popen(
@@ -179,7 +178,7 @@ def test_forwards_interactive_standard_streams(binary: Path) -> Transcript:
 
 def test_allows_python_multiprocessing_semaphores(binary: Path) -> Transcript:
     # fmt: python
-    script = dedent(r"""
+    script = code(r"""
         import multiprocessing as mp
         import operator
 
@@ -192,22 +191,22 @@ def test_allows_python_multiprocessing_semaphores(binary: Path) -> Transcript:
         assert child.exitcode == 0
         assert lock.acquire(timeout=1)
         print("semaphore shared")
-        """).removeprefix("\n")
+        """)
     return [record(binary, "sandbox", "--", "python", "-c", script)]
 
 
 def test_does_not_require_home(binary: Path) -> Transcript:
     # fmt: python
-    script = dedent(r"""
+    script = code(r"""
         print("ran")
-        """).removeprefix("\n")
+        """)
     arguments = ("sandbox", "--", "python", "-c", script)
     return [record(binary, *arguments, environment={"HOME": None})]
 
 
 def test_supports_r_runtime_queries_and_temporary_writes(binary: Path) -> Transcript:
     # fmt: r
-    script = dedent(r"""
+    script = code(r"""
         {
           stopifnot(parallel::detectCores() >= 1)
           stopifnot(file.exists("Cargo.toml"))
@@ -223,7 +222,7 @@ def test_supports_r_runtime_queries_and_temporary_writes(binary: Path) -> Transc
           writeLines(readLines(output))
           writeLines(Sys.getenv("TMPDIR"))
         }
-        """).removeprefix("\n")
+        """)
     entry = record(binary, "sandbox", "--", "Rscript", "-e", script)
     stdout = entry["stdout"]
     assert isinstance(stdout, str)
@@ -236,7 +235,7 @@ def test_supports_r_runtime_queries_and_temporary_writes(binary: Path) -> Transc
 
 def test_allows_processx_pty_processes(binary: Path) -> Transcript:
     # fmt: r
-    script = dedent(r"""
+    script = code(r"""
         {
           p <- processx::process$new("/bin/cat", pty = TRUE)
           on.exit(if (p$is_alive()) p$kill())
@@ -245,7 +244,7 @@ def test_allows_processx_pty_processes(binary: Path) -> Transcript:
           cat(p$read_output())
           invisible(p$kill())
         }
-        """).removeprefix("\n")
+        """)
     return [record(binary, "sandbox", "--", "Rscript", "-e", script)]
 
 

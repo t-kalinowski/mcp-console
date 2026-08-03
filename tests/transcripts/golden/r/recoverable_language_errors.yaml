@@ -39,15 +39,15 @@ result:
 id: 6
 send:
   r: |
-    print.transcript_boom <- function(...) {
+    print.auto_print_failure <- function(...) {
       stop("print failed")
     }
-    structure(1, class = "transcript_boom")
+    structure(1, class = "auto_print_failure")
 result:
   content:
     - type: text
       text: |
-        Error in print.transcript_boom(x) : print failed
+        Error in print.auto_print_failure(x) : print failed
   isError: false
 ---
 id: 7
