@@ -11,6 +11,7 @@ from _support import McpClient, Transcript, run_this_suite
 
 
 PLATFORMS = {"darwin"}
+LARGE_OUTPUT_SIZE = 2 * 1024 * 1024
 
 
 def test_routes_send_over_sideband(binary: Path) -> Transcript:
@@ -22,6 +23,61 @@ def test_routes_send_over_sideband(binary: Path) -> Transcript:
     client.initialize_and_list_tools()
     client.call_tool("send", r="echo")
     return client.finish()
+
+
+def test_captures_worker_stdout(binary: Path) -> Transcript:
+    zod = Path(__file__).resolve().parents[1] / "fixtures" / "zod"
+    client = McpClient(
+        binary,
+        ("serve", "--worker", str(zod)),
+    )
+    client.initialize_and_list_tools()
+    client.call_tool("send", r="emit stdout")
+    output = last_tool_text(client)
+    assert_large_output(output, "zod stdout 👩🏽‍💻\n")
+    client.transcript[-1]["result"]["content"][0]["text"] = (
+        "zod stdout 👩🏽‍💻\n<large output>\n"
+    )
+    return client.finish()
+
+
+def test_drains_background_stderr_while_idle(binary: Path) -> Transcript:
+    zod = Path(__file__).resolve().parents[1] / "fixtures" / "zod"
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        temporary_path = Path(temporary_directory)
+        environment = os.environ.copy()
+        environment["TMPDIR"] = temporary_directory
+        client = McpClient(
+            binary,
+            ("serve", "--worker", str(zod)),
+            environment,
+        )
+        client.initialize_and_list_tools()
+        client.call_tool("send", r="start background stderr")
+        assert last_tool_text(client) == "[done]"
+        started = wait_for_marker(
+            temporary_path,
+            "zod-background-stderr-started",
+            client,
+        )
+        (started.parent / "zod-release-background-stderr").touch()
+        wait_for_marker(
+            temporary_path,
+            "zod-background-stderr-emitted",
+            client,
+        )
+
+        client.call_tool("send", timeout_ms=0)
+        output = last_tool_text(client)
+        assert output.endswith("\n[idle]"), output[-100:]
+        assert_large_output(
+            output.removesuffix("\n[idle]"),
+            "zod background stderr\n",
+        )
+        client.transcript[-1]["result"]["content"][0]["text"] = (
+            "zod background stderr\n<large output>\n[idle]"
+        )
+        return client.finish()
 
 
 def test_times_out_and_polls_running_evaluation(binary: Path) -> Transcript:
@@ -38,7 +94,7 @@ def test_times_out_and_polls_running_evaluation(binary: Path) -> Transcript:
         timeout_ms=10,
     )
     output = client.transcript[-1]["result"]["content"][0]["text"]
-    assert output == "[running]", output
+    assert output == "\n[running]", output
     client.call_tool("send", timeout_ms=3_000)
     output = client.transcript[-1]["result"]["content"][0]["text"]
     assert output == "zod: complete after timeout\n", output
@@ -55,12 +111,12 @@ def test_accepts_idle_stdin(binary: Path) -> Transcript:
     client.initialize_and_list_tools()
 
     client.call_tool("send", stdin="cold\n")
-    assert last_tool_text(client) == "[idle]"
+    assert last_tool_text(client) == "\n[idle]"
     client.call_tool("send", r="input without request")
     assert last_tool_text(client) == "zod stdin: cold\n"
 
     client.call_tool("send", stdin="idle\n")
-    assert last_tool_text(client) == "[idle]"
+    assert last_tool_text(client) == "\n[idle]"
     client.call_tool("send", r="input without request")
     assert last_tool_text(client) == "zod stdin: idle\n"
     return client.finish()
@@ -83,14 +139,14 @@ def test_routes_combined_and_followup_stdin(binary: Path) -> Transcript:
     assert last_tool_text(client) == "zod stdin length: 1030\n"
 
     client.call_tool("send", r="input without request", timeout_ms=0)
-    assert last_tool_text(client) == "[running]"
+    assert last_tool_text(client) == "\n[running]"
     client.call_tool("send", stdin="followup\n", timeout_ms=3_000)
     assert last_tool_text(client) == "zod stdin: followup\n"
 
     client.call_tool("send", r="request input")
-    assert last_tool_text(client) == "zod>\n[input]"
+    assert last_tool_text(client) == "zod> \n[input]"
     client.call_tool("send", stdin="")
-    assert last_tool_text(client) == "[input]"
+    assert last_tool_text(client) == "\n[input]"
     client.call_tool("send", stdin="prompted\n")
     assert last_tool_text(client) == "zod stdin: prompted\n"
 
@@ -100,7 +156,7 @@ def test_routes_combined_and_followup_stdin(binary: Path) -> Transcript:
         stdin="first\n",
         timeout_ms=1_000,
     )
-    assert last_tool_text(client) == "second>\n[input]"
+    assert last_tool_text(client) == "second> \n[input]"
     client.call_tool("send", stdin="second\n")
     assert last_tool_text(client) == "zod stdin: first|second\n"
 
@@ -129,7 +185,7 @@ def test_preserves_unexposed_input_output(binary: Path) -> Transcript:
         client.initialize_and_list_tools()
 
         client.call_tool("send", r="request input after timeout", timeout_ms=0)
-        assert last_tool_text(client) == "[running]"
+        assert last_tool_text(client) == "\n[running]"
         waiting = wait_for_marker(
             temporary_path,
             "zod-waiting-to-request-input",
@@ -139,7 +195,7 @@ def test_preserves_unexposed_input_output(binary: Path) -> Transcript:
         wait_for_marker(temporary_path, "zod-input-requested", client)
 
         client.call_tool("send", stdin="answer\n", timeout_ms=3_000)
-        assert last_tool_text(client) == "before\nlate>\nzod stdin: answer\n"
+        assert last_tool_text(client) == "before\nlate> zod stdin: answer\n"
         return client.finish()
 
 
@@ -147,6 +203,15 @@ def last_tool_text(client: McpClient) -> str:
     result = client.transcript[-1]["result"]
     assert result.get("isError") is not True, result
     return result["content"][0]["text"]
+
+
+def assert_large_output(output: str, prefix: str) -> None:
+    expected = prefix + ("x" * LARGE_OUTPUT_SIZE)
+    assert output.startswith(expected), (
+        f"captured {len(output)} bytes without the complete {len(expected)}-byte payload"
+    )
+    barrier = output.removeprefix(expected)
+    assert barrier and not barrier.strip("y"), "unexpected text after captured payload"
 
 
 def test_restarts_after_unexpected_sideband_message(binary: Path) -> Transcript:

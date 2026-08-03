@@ -105,7 +105,7 @@ def test_times_out_and_polls_running_evaluation(binary: Path) -> Transcript:
         """).strip()
     client.call_tool("send", r=r, timeout_ms=10)
     output = client.transcript[-1]["result"]["content"][0]["text"]
-    assert output == "[running]", output
+    assert output == "\n[running]", output
     client.call_tool("send", timeout_ms=3_000)
     output = client.transcript[-1]["result"]["content"][0]["text"]
     assert output == "[1] 42\n", output
@@ -127,7 +127,7 @@ def test_routes_idle_and_timed_out_stdin(binary: Path) -> Transcript:
         """).strip()
 
     client.call_tool("send", stdin="cold fd 0\n")
-    assert last_tool_text(client) == "[idle]"
+    assert last_tool_text(client) == "\n[idle]"
     client.call_tool("send", r=direct_stdin)
     assert last_tool_text(client) == '[1] "cold fd 0"\n'
 
@@ -142,13 +142,13 @@ def test_routes_idle_and_timed_out_stdin(binary: Path) -> Transcript:
         paste(prompted, direct, sep = "|")
         """).strip()
     client.call_tool("send", r=r, stdin="café\n", timeout_ms=50)
-    assert last_tool_text(client) == "[running]"
+    assert last_tool_text(client) == "\n[running]"
     client.call_tool("send", timeout_ms=0)
-    assert last_tool_text(client) == "[running]"
+    assert last_tool_text(client) == "\n[running]"
     client.call_tool("send", stdin="timed out ", timeout_ms=50)
-    assert last_tool_text(client) == "[running]"
+    assert last_tool_text(client) == "\n[running]"
     client.call_tool("send", stdin="fd 0\n", timeout_ms=3_000)
-    assert last_tool_text(client) == 'bundled>\n[1] "café|timed out fd 0"\n'
+    assert last_tool_text(client) == 'bundled> [1] "café|timed out fd 0"\n'
     return client.finish()
 
 
@@ -164,7 +164,7 @@ def test_routes_combined_and_followup_stdin(binary: Path) -> Transcript:
         """).strip()
     client.call_tool("send", r=r, stdin="Ada\nLovelace\n")
     output = last_tool_text(client)
-    assert output == "first>\nsecond>\nAda|Lovelace\n", output
+    assert output == "first> second> Ada|Lovelace\n", output
 
     # fmt: r
     r = dedent(r"""
@@ -178,7 +178,7 @@ def test_routes_combined_and_followup_stdin(binary: Path) -> Transcript:
         """).strip()
     client.call_tool("send", r=r, stdin="direct\n", timeout_ms=1_000)
     output = last_tool_text(client)
-    assert output == "after>\n[input]", output
+    assert output == "after> \n[input]", output
     client.call_tool("send", stdin="callback\n")
     assert last_tool_text(client) == "direct|callback\n"
 
@@ -187,9 +187,9 @@ def test_routes_combined_and_followup_stdin(binary: Path) -> Transcript:
         paste("color", readline("color> "))
         """).strip()
     client.call_tool("send", r=r)
-    assert last_tool_text(client) == "color>\n[input]"
+    assert last_tool_text(client) == "color> \n[input]"
     client.call_tool("send", stdin="bl", timeout_ms=50)
-    assert last_tool_text(client) == "[input]"
+    assert last_tool_text(client) == "\n[input]"
     client.call_tool("send", stdin="ue\n")
     assert last_tool_text(client) == '[1] "color blue"\n'
 
@@ -198,7 +198,7 @@ def test_routes_combined_and_followup_stdin(binary: Path) -> Transcript:
         r='invisible(readline("silent> "))',
         stdin="accepted\n",
     )
-    assert last_tool_text(client) == "silent>\n"
+    assert last_tool_text(client) == "silent> "
     return client.finish()
 
 
@@ -223,7 +223,7 @@ def test_preserves_fd0_order_between_readers(binary: Path) -> Transcript:
         timeout_ms=1_000,
     )
     output = last_tool_text(client)
-    assert output == "callback>\ncallback|direct\n", output
+    assert output == "callback> callback|direct\n", output
     return client.finish()
 
 
@@ -239,7 +239,7 @@ def test_preserves_utf8_across_console_reads(binary: Path) -> Transcript:
     client.call_tool("send", r=r, stdin=("x" * 4_094) + "é\n")
     client.transcript[-1]["send"]["stdin"] = "<long stdin ending in UTF-8>"
     output = last_tool_text(client)
-    assert output == "long>\nlong>\n4096 TRUE\n", output
+    assert output == "long> long> 4096 TRUE\n", output
     return client.finish()
 
 
@@ -255,7 +255,7 @@ def test_keeps_stdin_open_after_partial_payload(binary: Path) -> Transcript:
         """).strip()
     client.call_tool("send", r=r, stdin="without newline", timeout_ms=1_000)
     output = last_tool_text(client)
-    assert output == "before\npartial>\n[input]", output
+    assert output == "before\npartial> \n[input]", output
 
     client.call_tool("send", stdin="\n")
     assert last_tool_text(client) == '[1] "without newline"\n'
@@ -265,7 +265,7 @@ def test_keeps_stdin_open_after_partial_payload(binary: Path) -> Transcript:
         readline("next> ")
         """).strip()
     client.call_tool("send", r=r, stdin="next\n")
-    assert last_tool_text(client) == 'next>\n[1] "next"\n'
+    assert last_tool_text(client) == 'next> [1] "next"\n'
     return client.finish()
 
 

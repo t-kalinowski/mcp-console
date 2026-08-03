@@ -19,7 +19,6 @@ result:
   content:
     - type: text
       text: |
-        callback>
-        callback|direct
+        callback> callback|direct
   isError: false
 ...

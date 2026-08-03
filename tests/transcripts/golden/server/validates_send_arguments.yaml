@@ -19,6 +19,6 @@ send:
 result:
   content:
     - type: text
-      text: "[idle]"
+      text: "\n[idle]"
   isError: false
 ...

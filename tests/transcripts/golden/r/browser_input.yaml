@@ -7,7 +7,7 @@ send:
 result:
   content:
     - type: text
-      text: "Called from: top level\x20\nBrowse[1]>\n[input]"
+      text: "Called from: top level\x20\nBrowse[1]>\x20\n[input]"
   isError: false
 ---
 id: 4
@@ -26,10 +26,7 @@ send:
 result:
   content:
     - type: text
-      text: |-
-        [1] 2
-        Browse[1]>
-        [input]
+      text: "[1] 2\nBrowse[1]>\x20\n[input]"
   isError: false
 ---
 id: 6
