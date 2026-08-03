@@ -145,9 +145,9 @@ def test_routes_combined_and_followup_stdin(binary: Path) -> Transcript:
     assert last_tool_text(client) == "zod stdin: followup\n"
 
     client.call_tool("send", r="request input")
-    assert last_tool_text(client) == "zod> \n[input]"
+    assert last_tool_text(client) == '[input requested: "zod> "]\n[stdin needed]'
     client.call_tool("send", stdin="")
-    assert last_tool_text(client) == "\n[input]"
+    assert last_tool_text(client) == "\n[stdin needed]"
     client.call_tool("send", stdin="prompted\n")
     assert last_tool_text(client) == "zod stdin: prompted\n"
 
@@ -157,7 +157,7 @@ def test_routes_combined_and_followup_stdin(binary: Path) -> Transcript:
         stdin="first\n",
         timeout_ms=1_000,
     )
-    assert last_tool_text(client) == "second> \n[input]"
+    assert last_tool_text(client) == '[input requested: "second> "]\n[stdin needed]'
     client.call_tool("send", stdin="second\n")
     assert last_tool_text(client) == "zod stdin: first|second\n"
 
@@ -196,7 +196,9 @@ def test_preserves_unexposed_input_output(binary: Path) -> Transcript:
         wait_for_marker(temporary_path, "zod-input-requested", client)
 
         client.call_tool("send", stdin="answer\n", timeout_ms=3_000)
-        assert last_tool_text(client) == "before\nlate> zod stdin: answer\n"
+        assert last_tool_text(client) == (
+            'before\n[input requested: "late> "]\nduring request\nzod stdin: answer\n'
+        )
         return client.finish()
 
 

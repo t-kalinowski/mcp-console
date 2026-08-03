@@ -23,10 +23,11 @@ The server registers only a `send` tool.
 Supplying exactly one of `r` or `python` starts one complete cell and waits for up to `timeout_ms`, which defaults to 60 seconds.
 If that wait expires, `send` returns the newline-prefixed banner `\n[running]` without stopping the computation; a later call without a code field polls it, and a poll while idle returns `\n[idle]`.
 Concurrent `send` calls are unsupported.
-Supplying `stdin` with a code cell, during an evaluation, or while idle queues exact UTF-8 bytes to worker fd 0 without adding a newline, inspecting or limiting the text, or waiting for an input request.
+Supplying `stdin` with a code cell, during an evaluation, or while idle queues exact UTF-8 bytes to worker fd 0 without adding a newline, inspecting, echoing, or limiting the text, or waiting for an input request.
 A nonempty idle stdin call lazily starts the worker when needed, queues the bytes, and returns `\n[idle]`; `timeout_ms` does not bound that startup because the call does not wait on an evaluation.
 Payload end is not EOF; the R console callback reads through one newline or its supplied buffer, and unread bytes may satisfy later console or direct reads, including in a later evaluation.
-An `input_requested` frame is provisional for up to 10 milliseconds; a matching `input_received` after a successful console read suppresses the `\n[input]` banner, while an unmatched request returns it after that grace or at the MCP deadline, whichever comes first.
+Every `input_requested` frame immediately appends `[input requested: <JSON-quoted prompt>]` to pending response output.
+Its outstanding state is provisional for up to 10 milliseconds; a matching `input_received` after a successful console read retains the request record but suppresses the `\n[stdin needed]` banner, while an unmatched request returns that marker after the grace or at the MCP deadline, whichever comes first.
 The receipt describes that runtime read, not a submitted payload or byte count, and direct fd-0 reads emit neither frame.
 New code is rejected until the running evaluation's result has been collected.
 On macOS, the first nonempty stdin submission or evaluation lazily starts the built-in worker under the same sandbox policy as the `sandbox` command.
@@ -43,16 +44,16 @@ R and Python share objects through reticulate's `py` and `r` bridges.
 Python `input()` can consume proactively queued fd-0 text, but it emits neither `input_requested` nor `input_received`; debugger integration is not implemented.
 Worker standard output and standard error are piped and collected continuously, including while the worker is idle.
 Each pipe reader queues raw byte chunks, and each `send` response decodes and drains complete UTF-8 prefixes from bytes already collected at its response boundary; later bytes remain for the next response.
-Without a pending restart notice, idle, running, and input responses append the literal `\n[idle]`, `\n[running]`, or `\n[input]` banner; its leading newline is present even when no output precedes it.
+Without a pending restart notice, idle, running, and outstanding-input responses append the literal `\n[idle]`, `\n[running]`, or `\n[stdin needed]` banner; its leading newline is present even when no output precedes it.
 After an infrastructure failure discards a ready worker, its successfully started replacement queues `[worker restarted: in-memory state lost]\n` in pending response output.
 The next response drains it exactly once, after runtime or error text, inserting a preceding newline only when needed.
-If an idle, running, or input banner follows, the restart notice's trailing newline supplies its separator.
+If an idle, running, or outstanding-input banner follows, the restart notice's trailing newline supplies its separator.
 Initial lazy startup and retries before a worker reaches ready are silent.
-Completion returns collected standard-stream and sideband output instead of `[done]` when either produced text.
-A failed evaluation likewise returns all accumulated sideband output and any complete standard-stream output available at the response boundary before its infrastructure or protocol error.
+Completion returns collected standard-stream and pending evaluation output, including sideband text and input-request records, instead of `[done]` when either produced text.
+A failed evaluation likewise returns all pending evaluation output and any complete standard-stream output available at the response boundary before its infrastructure or protocol error.
 When worker output or a restart notice shares that response, the server starts the bracketed error on a new line; an error returned alone remains bare.
 Ordering between the two standard streams and sideband output is best effort; incomplete UTF-8 remains with its pipe until a later response, and invalid UTF-8 is replaced when output is rendered.
-The built-in worker and custom workers send console prompt fields verbatim; the server appends a prompt before its `\n[input]` banner without trimming it.
+The built-in worker and custom workers send console prompt fields verbatim; the server preserves each value without trimming it and renders it as a JSON-quoted `[input requested: ...]` record.
 Output from descendants that inherit standard output or standard error follows the same path, but this does not add descendant supervision; forked descendants cannot use the inherited sideband.
 The hidden `worker` command takes ownership of the sideband, discovers `R_HOME` through the selected R executable inside the sandbox, and opens `R_HOME/lib/libR.dylib` by its absolute path.
 It does not self-execute or set a dynamic-loader environment variable.

@@ -172,8 +172,10 @@ def main() -> None:
             waiting.touch()
             while not (temporary / "zod-release-input-request").exists():
                 time.sleep(0.01)
-            send(writer, {"kind": "output", "data": "before\n"})
+            send(writer, {"kind": "output", "data": "before"})
             send(writer, {"kind": "input_requested", "prompt": "late> "})
+            send(writer, {"kind": "output", "data": "during"})
+            send(writer, {"kind": "output", "data": " request\n"})
             # Exercise follow-up stdin after the request is stored but before
             # its prompt has been exposed by an MCP response.
             wait_for_server_to_process_input_request(writer)

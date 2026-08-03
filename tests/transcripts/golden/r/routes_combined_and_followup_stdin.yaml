@@ -14,7 +14,9 @@ result:
   content:
     - type: text
       text: |
-        first> second> Ada|Lovelace
+        [input requested: "first> "]
+        [input requested: "second> "]
+        Ada|Lovelace
   isError: false
 ---
 id: 4
@@ -34,8 +36,8 @@ result:
   content:
     - type: text
       text: |-
-        after> 
-        [input]
+        [input requested: "after> "]
+        [stdin needed]
   isError: false
 ---
 id: 5
@@ -57,8 +59,8 @@ result:
   content:
     - type: text
       text: |-
-        color> 
-        [input]
+        [input requested: "color> "]
+        [stdin needed]
   isError: false
 ---
 id: 7
@@ -70,7 +72,7 @@ result:
     - type: text
       text: |-
         
-        [input]
+        [stdin needed]
   isError: false
 ---
 id: 8
@@ -86,12 +88,15 @@ result:
 ---
 id: 9
 send:
-  r: invisible(readline("silent> "))
+  r: |
+    prompt <- paste0('quoted "prompt"', "\n", "> ")
+    invisible(readline(prompt))
   stdin: |
     accepted
 result:
   content:
     - type: text
-      text: "silent> "
+      text: |
+        [input requested: "quoted \"prompt\"\n> "]
   isError: false
 ...

@@ -43,8 +43,8 @@ result:
   content:
     - type: text
       text: |-
-        zod> 
-        [input]
+        [input requested: "zod> "]
+        [stdin needed]
   isError: false
 ---
 id: 7
@@ -55,7 +55,7 @@ result:
     - type: text
       text: |-
         
-        [input]
+        [stdin needed]
   isError: false
 ---
 id: 8
@@ -79,8 +79,8 @@ result:
   content:
     - type: text
       text: |-
-        second> 
-        [input]
+        [input requested: "second> "]
+        [stdin needed]
   isError: false
 ---
 id: 10

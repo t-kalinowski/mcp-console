@@ -97,7 +97,7 @@ def test_restarts_after_r_worker_segfault(binary: Path) -> Transcript:
     fatal_output = result["content"][0]["text"]
     assert "Possible actions:\n1: abort (with core dump, if enabled)\n" in fatal_output
     assert fatal_output.endswith(
-        "Selection: R is aborting now ...\n"
+        '[input requested: "Selection: "]\nR is aborting now ...\n'
         "[worker sideband read failed: worker sideband closed]"
     )
 
@@ -143,14 +143,31 @@ def test_reports_r_worker_restart_with_idle_stdin(binary: Path) -> Transcript:
 def test_browser_input(binary: Path) -> Transcript:
     client = McpClient(binary, ("serve",))
     client.initialize_and_list_tools()
-    client.call_tool("send", r="browser()")
-    assert last_tool_text(client).endswith("\n[input]")
+    # fmt: r
+    r = code(r"""
+        step <- function() {
+          value <- 1
+          browser()
+          value <- value + 1
+          value <- value + 1
+          value
+        }
+        step()
+        """)
+    client.call_tool("send", r=r)
+    output = last_tool_text(client)
+    assert output.count('[input requested: "Browse[1]> "]') == 1, output
+    assert output.endswith("\n[stdin needed]"), output
     client.call_tool("send", r="1")
     assert client.transcript[-1]["result"]["isError"] is True
-    client.call_tool("send", stdin="1 + 1\n")
-    assert last_tool_text(client).endswith("\n[input]")
+    client.call_tool("send", stdin="n\nn\nn\n")
+    output = last_tool_text(client)
+    assert output.count('[input requested: "Browse[1]> "]') == 3, output
+    assert output.endswith("\n[stdin needed]"), output
+    assert "n" not in output.splitlines(), output
     client.call_tool("send", stdin="c\n")
-    assert last_tool_text(client) == "[done]"
+    output = last_tool_text(client)
+    assert output == "[1] 3\n", output
     return client.finish()
 
 
@@ -209,7 +226,9 @@ def test_routes_idle_and_timed_out_stdin(binary: Path) -> Transcript:
     client.call_tool("send", stdin="timed out ", timeout_ms=50)
     assert last_tool_text(client) == "\n[running]"
     client.call_tool("send", stdin="fd 0\n", timeout_ms=3_000)
-    assert last_tool_text(client) == 'bundled> [1] "café|timed out fd 0"\n'
+    assert last_tool_text(client) == (
+        '[input requested: "bundled> "]\n[1] "café|timed out fd 0"\n'
+    )
     return client.finish()
 
 
@@ -225,7 +244,9 @@ def test_routes_combined_and_followup_stdin(binary: Path) -> Transcript:
         """)
     client.call_tool("send", r=r, stdin="Ada\nLovelace\n")
     output = last_tool_text(client)
-    assert output == "first> second> Ada|Lovelace\n", output
+    assert output == (
+        '[input requested: "first> "]\n[input requested: "second> "]\nAda|Lovelace\n'
+    ), output
 
     # fmt: r
     r = code(r"""
@@ -239,7 +260,7 @@ def test_routes_combined_and_followup_stdin(binary: Path) -> Transcript:
         """)
     client.call_tool("send", r=r, stdin="direct\n", timeout_ms=1_000)
     output = last_tool_text(client)
-    assert output == "after> \n[input]", output
+    assert output == '[input requested: "after> "]\n[stdin needed]', output
     client.call_tool("send", stdin="callback\n")
     assert last_tool_text(client) == "direct|callback\n"
 
@@ -248,18 +269,21 @@ def test_routes_combined_and_followup_stdin(binary: Path) -> Transcript:
         paste("color", readline("color> "))
         """)
     client.call_tool("send", r=r)
-    assert last_tool_text(client) == "color> \n[input]"
+    assert last_tool_text(client) == '[input requested: "color> "]\n[stdin needed]'
     client.call_tool("send", stdin="bl", timeout_ms=50)
-    assert last_tool_text(client) == "\n[input]"
+    assert last_tool_text(client) == "\n[stdin needed]"
     client.call_tool("send", stdin="ue\n")
     assert last_tool_text(client) == '[1] "color blue"\n'
 
-    client.call_tool(
-        "send",
-        r='invisible(readline("silent> "))',
-        stdin="accepted\n",
-    )
-    assert last_tool_text(client) == "silent> "
+    # fmt: r
+    r = code(r"""
+        prompt <- paste0('quoted "prompt"', "\n", "> ")
+        invisible(readline(prompt))
+        """)
+    client.call_tool("send", r=r, stdin="accepted\n")
+    output = last_tool_text(client)
+    assert output == '[input requested: "quoted \\"prompt\\"\\n> "]\n', output
+    assert "accepted" not in output
     return client.finish()
 
 
@@ -284,7 +308,7 @@ def test_preserves_fd0_order_between_readers(binary: Path) -> Transcript:
         timeout_ms=1_000,
     )
     output = last_tool_text(client)
-    assert output == "callback> callback|direct\n", output
+    assert output == '[input requested: "callback> "]\ncallback|direct\n', output
     return client.finish()
 
 
@@ -300,7 +324,9 @@ def test_preserves_utf8_across_console_reads(binary: Path) -> Transcript:
     client.call_tool("send", r=r, stdin=("x" * 4_094) + "é\n")
     client.transcript[-1]["send"]["stdin"] = "<long stdin ending in UTF-8>"
     output = last_tool_text(client)
-    assert output == "long> long> 4096 TRUE\n", output
+    assert output == (
+        '[input requested: "long> "]\n[input requested: "long> "]\n4096 TRUE\n'
+    ), output
     return client.finish()
 
 
@@ -316,7 +342,7 @@ def test_keeps_stdin_open_after_partial_payload(binary: Path) -> Transcript:
         """)
     client.call_tool("send", r=r, stdin="without newline", timeout_ms=1_000)
     output = last_tool_text(client)
-    assert output == "before\npartial> \n[input]", output
+    assert output == 'before\n[input requested: "partial> "]\n[stdin needed]', output
 
     client.call_tool("send", stdin="\n")
     assert last_tool_text(client) == '[1] "without newline"\n'
@@ -326,7 +352,7 @@ def test_keeps_stdin_open_after_partial_payload(binary: Path) -> Transcript:
         readline("next> ")
         """)
     client.call_tool("send", r=r, stdin="next\n")
-    assert last_tool_text(client) == 'next> [1] "next"\n'
+    assert last_tool_text(client) == '[input requested: "next> "]\n[1] "next"\n'
     return client.finish()
 
 

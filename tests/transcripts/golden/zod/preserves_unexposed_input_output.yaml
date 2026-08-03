@@ -23,6 +23,8 @@ result:
     - type: text
       text: |
         before
-        late> zod stdin: answer
+        [input requested: "late> "]
+        during request
+        zod stdin: answer
   isError: false
 ...

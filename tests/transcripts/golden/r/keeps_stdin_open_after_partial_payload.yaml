@@ -14,8 +14,8 @@ result:
     - type: text
       text: |-
         before
-        partial> 
-        [input]
+        [input requested: "partial> "]
+        [stdin needed]
   isError: false
 ---
 id: 4
@@ -38,6 +38,7 @@ result:
   content:
     - type: text
       text: |
-        next> [1] "next"
+        [input requested: "next> "]
+        [1] "next"
   isError: false
 ...
