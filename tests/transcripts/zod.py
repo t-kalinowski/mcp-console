@@ -290,7 +290,7 @@ def test_restarts_after_worker_exit(binary: Path) -> Transcript:
     return client.finish()
 
 
-def test_preserves_restart_notice_after_rejected_code(binary: Path) -> Transcript:
+def test_reports_restart_notice_on_next_response(binary: Path) -> Transcript:
     zod = Path(__file__).resolve().parents[1] / "fixtures" / "zod"
     with tempfile.TemporaryDirectory() as temporary_directory:
         temporary_path = Path(temporary_directory)
@@ -326,14 +326,13 @@ def test_preserves_restart_notice_after_rejected_code(binary: Path) -> Transcrip
         assert result["isError"] is True
         assert result["content"][0]["text"] == (
             "worker is already evaluating a cell; poll without a code field"
+            "\n[worker restarted: in-memory state lost]"
         )
 
         (evaluation_started.parent / "zod-release-evaluation").touch()
         client.call_tool("send", timeout_ms=3_000)
         output = last_tool_text(client)
-        assert output == (
-            "zod: complete after release\n\n[worker restarted: in-memory state lost]"
-        ), repr(output)
+        assert output == "zod: complete after release\n", repr(output)
         client.call_tool("send", r="echo")
         assert last_tool_text(client) == "zod: echo\n"
         return client.finish()

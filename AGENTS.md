@@ -44,8 +44,8 @@ Python `input()` can consume proactively queued fd-0 text, but it emits neither 
 Worker standard output and standard error are piped and collected continuously, including while the worker is idle.
 Each pipe reader queues raw byte chunks, and each `send` response decodes and drains complete UTF-8 prefixes from bytes already collected at its response boundary; later bytes remain for the next response.
 Idle, running, and input responses append the literal `\n[idle]`, `\n[running]`, or `\n[input]` banner; its leading newline is present even when no output precedes it.
-After an infrastructure failure discards a ready worker, the first response involving its successfully started replacement appends `\n[worker restarted: in-memory state lost]` exactly once, after runtime text and before any idle, running, or input banner.
-Rejected new code does not consume a notice pending for the active replacement evaluation.
+After an infrastructure failure discards a ready worker, its successfully started replacement queues `\n[worker restarted: in-memory state lost]` in pending response output.
+The next response drains it exactly once, after runtime or error text and before any idle, running, or input banner.
 Initial lazy startup and retries before a worker reaches ready are silent.
 Completion returns collected standard-stream and sideband output instead of `[done]` when either produced text.
 Ordering between the two standard streams and sideband output is best effort; incomplete UTF-8 remains with its pipe until a later response, and invalid UTF-8 is replaced when output is rendered.
