@@ -81,16 +81,19 @@ def test_recoverable_language_errors(binary: Path) -> Transcript:
     return client.finish()
 
 
-def test_restarts_after_r_worker_exit(binary: Path) -> Transcript:
+def test_restarts_after_r_worker_segfault(binary: Path) -> Transcript:
     client = McpClient(binary, ("serve",))
     client.initialize_and_list_tools()
     client.call_tool("send", r="r_worker_marker <- TRUE")
-    client.call_tool("send", r="tools::pskill(Sys.getpid(), signal = 9L)")
+
+    # Ask R's fatal-signal handler to abort after reporting the crash.
+    # fmt: r
+    r = code(r"""
+        tools::pskill(Sys.getpid(), signal = 11L)
+        """)
+    client.call_tool("send", r=r, stdin="1\n")
     result = client.transcript[-1]["result"]
     assert result["isError"] is True
-    assert result["content"][0]["text"] == (
-        "worker sideband read failed: worker sideband closed"
-    )
 
     client.call_tool("send", r='exists("r_worker_marker", inherits = FALSE)')
     assert last_tool_text(client) == (
@@ -105,7 +108,12 @@ def test_reports_r_worker_restart_with_idle_stdin(binary: Path) -> Transcript:
     client = McpClient(binary, ("serve",))
     client.initialize_and_list_tools()
     client.call_tool("send", r="invisible(NULL)")
-    client.call_tool("send", r="tools::pskill(Sys.getpid(), signal = 9L)")
+
+    # fmt: r
+    r = code(r"""
+        tools::pskill(Sys.getpid(), signal = 9L)
+        """).removesuffix("\n")
+    client.call_tool("send", r=r)
     assert client.transcript[-1]["result"]["isError"] is True
 
     client.call_tool("send", stdin="replacement\n")
