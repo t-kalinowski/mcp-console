@@ -568,7 +568,13 @@ impl Evaluation {
             return;
         };
         state.input_report_at = None;
-        let result = result.map(|()| std::mem::take(&mut state.output));
+        let result = match result {
+            Ok(()) => Ok(std::mem::take(&mut state.output)),
+            Err(error) => {
+                state.output.push_str(&error);
+                Err(std::mem::take(&mut state.output))
+            }
+        };
         state.result = Some(result);
         self.changed.notify_one();
     }

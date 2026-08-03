@@ -48,6 +48,7 @@ After an infrastructure failure discards a ready worker, its successfully starte
 The next response drains it exactly once, after runtime or error text and before any idle, running, or input banner.
 Initial lazy startup and retries before a worker reaches ready are silent.
 Completion returns collected standard-stream and sideband output instead of `[done]` when either produced text.
+A failed evaluation likewise returns all accumulated sideband output before its infrastructure or protocol error, with no inserted separator.
 Ordering between the two standard streams and sideband output is best effort; incomplete UTF-8 remains with its pipe until a later response, and invalid UTF-8 is replaced when output is rendered.
 The built-in worker and custom workers send console prompt fields verbatim; the server appends a prompt before its `\n[input]` banner without trimming it.
 Output from descendants that inherit standard output or standard error follows the same path, but this does not add descendant supervision; forked descendants cannot use the inherited sideband.

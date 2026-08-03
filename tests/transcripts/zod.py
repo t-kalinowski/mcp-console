@@ -249,6 +249,12 @@ def test_restarts_after_unexpected_sideband_message(binary: Path) -> Transcript:
             )
             worker_group = read_worker_group(group_marker)
             client.receive(failed_call)
+            result = failed_call["result"]
+            assert result["isError"] is True
+            assert result["content"][0]["text"] == (
+                "zod output before protocol failure\n"
+                "worker sent an unexpected ready message"
+            )
             assert not process_group_exists(worker_group), "Zod outlived its failure"
 
             restarted_call = client.send(

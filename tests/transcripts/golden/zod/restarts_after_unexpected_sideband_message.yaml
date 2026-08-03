@@ -7,7 +7,9 @@ send:
 result:
   content:
     - type: text
-      text: worker sent an unexpected ready message
+      text: |-
+        zod output before protocol failure
+        worker sent an unexpected ready message
   isError: true
 ---
 id: 4
@@ -18,7 +20,7 @@ result:
     - type: text
       text: |-
         zod: echo
-
+        
         [worker restarted: in-memory state lost]
   isError: false
 ...

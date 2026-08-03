@@ -5,7 +5,7 @@ id: 3
 send:
   r: |
     python_worker_marker <- TRUE
-    Sys.setenv(RETICULATE_PYTHON = tempfile())
+    Sys.setenv(RETICULATE_PYTHON = "/mcp-console-missing-python")
 result:
   content:
     - type: text
@@ -20,6 +20,8 @@ result:
     - type: text
       text: |-
         Python bridge failed during R evaluation
+        Error in py_discover_config(required_module, use_environment) : 
+          Python specified in RETICULATE_PYTHON (/mcp-console-missing-python) does not exist
         worker sideband read failed: worker sideband closed
   isError: true
 ---
@@ -31,7 +33,7 @@ result:
     - type: text
       text: |-
         [1] FALSE
-
+        
         [worker restarted: in-memory state lost]
   isError: false
 ---

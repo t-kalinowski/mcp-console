@@ -94,6 +94,12 @@ def test_restarts_after_r_worker_segfault(binary: Path) -> Transcript:
     client.call_tool("send", r=r, stdin="1\n")
     result = client.transcript[-1]["result"]
     assert result["isError"] is True
+    fatal_output = result["content"][0]["text"]
+    assert "Possible actions:\n1: abort (with core dump, if enabled)\n" in fatal_output
+    assert fatal_output.endswith(
+        "Selection: R is aborting now ...\n"
+        "worker sideband read failed: worker sideband closed"
+    )
 
     client.call_tool("send", r='exists("r_worker_marker", inherits = FALSE)')
     assert last_tool_text(client) == (

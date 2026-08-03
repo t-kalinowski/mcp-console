@@ -134,6 +134,7 @@ A later `send` call without a code field polls that evaluation with its own `tim
 Every `send` response decodes and drains complete UTF-8 prefixes from standard-stream bytes already collected when that response is assembled.
 Bytes collected after that snapshot and incomplete trailing sequences remain for the next response; standard-stream output does not itself wake a waiting call.
 Completion returns decoded standard-stream text followed by sideband output not already delivered at an `[input]` boundary, or `[done]` when neither produced text.
+If evaluation instead ends in an infrastructure or protocol failure, all sideband output received before the failure precedes the tool error with no inserted separator.
 If the poll wait expires first, the literal `\n[running]` banner is appended to any collected standard-stream text.
 A call without a code field or `stdin` while no evaluation is active appends the literal `\n[idle]` banner to collected standard-stream text.
 A stdin-only call in that state queues the bytes and uses the same idle response projection.
@@ -209,6 +210,7 @@ Malformed JSON, invalid UTF-8, an unexpected message, or sideband EOF fails the 
 There is no structured protocol error message.
 Startup failure leaves no cached worker, so a later evaluation retries startup without a replacement notice.
 After `ready`, a sideband failure force-stops and discards the worker; a later evaluation or nonempty idle stdin submission starts a fresh worker and queues the replacement notice described above for the next response.
+Sideband output received before that failure is retained and prepended to the tool error.
 Standard-stream text collected before an infrastructure failure is attached to its tool error when available at the response boundary; text collected later remains for the next `send` response.
 The server inserts no separator between that text and the error.
 R parse and evaluation errors are not sideband failures: the built-in worker sends them as output followed by `completed` and remains reusable.

@@ -120,6 +120,13 @@ def main() -> None:
                 time.sleep(60)
 
         if source == "violate protocol":
+            send(
+                writer,
+                {
+                    "kind": "output",
+                    "data": "zod output before protocol failure\n",
+                },
+            )
             send(writer, {"kind": "ready"})
             continue
 
