@@ -4,6 +4,8 @@
 id: 3
 send:
   r: request input after timeout
+  stdin: |
+    answer
   timeout_ms: 0
 result:
   content:
@@ -15,8 +17,6 @@ result:
 ---
 id: 4
 send:
-  stdin: |
-    answer
   timeout_ms: 3000
 result:
   content:

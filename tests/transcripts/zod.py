@@ -185,7 +185,12 @@ def test_preserves_unexposed_input_output(binary: Path) -> Transcript:
         )
         client.initialize_and_list_tools()
 
-        client.call_tool("send", r="request input after timeout", timeout_ms=0)
+        client.call_tool(
+            "send",
+            r="request input after timeout",
+            stdin="answer\n",
+            timeout_ms=0,
+        )
         assert last_tool_text(client) == "\n[running]"
         waiting = wait_for_marker(
             temporary_path,
@@ -193,9 +198,9 @@ def test_preserves_unexposed_input_output(binary: Path) -> Transcript:
             client,
         )
         (waiting.parent / "zod-release-input-request").touch()
-        wait_for_marker(temporary_path, "zod-input-requested", client)
+        wait_for_marker(temporary_path, "zod-input-received", client)
 
-        client.call_tool("send", stdin="answer\n", timeout_ms=3_000)
+        client.call_tool("send", timeout_ms=3_000)
         assert last_tool_text(client) == (
             'before\n[input requested: "late> "]\nduring request\nzod stdin: answer\n'
         )

@@ -326,7 +326,7 @@ When the source is `violate protocol`, it sends an unexpected second `ready` mes
 When the source is `exit unexpectedly`, it exits with status 86 without replying.
 The `emit stdout` and `start background stderr` modes exercise continuous standard-stream capture during evaluation and after completion.
 When the source is `request input`, it sends `input_requested`, calls Python `input()` to consume one line from fd 0, and sends `input_received` after that call returns.
-The `request input after timeout` mode gates that request until an earlier MCP wait expires, emits output while the request remains provisional, then covers retention and delimiting of that still-unexposed request record.
+The `request input after timeout` mode gates that request until an earlier MCP wait expires, consumes prequeued stdin, emits output while the request remains provisional, then checkpoints after its receipt is processed to cover retention and delimiting of that still-unexposed request record.
 The `input without request` and `input length without request` modes call `input()` without first sending a frame, covering proactive fd-0 delivery, including input queued while Zod is idle.
 The `input without request then request input` mode performs one direct read before a reported request/receipt pair, covering the distinction between direct fd-0 reads and callback-style input state.
 Zod emits fixture output containing the input or its byte length and completes; the server itself does not echo submitted stdin.
