@@ -76,6 +76,25 @@ def test_evaluates_cells_in_persistent_reticulate_state(binary: Path) -> Transcr
     return client.finish()
 
 
+def test_runs_async_python_explicitly(binary: Path) -> Transcript:
+    client = McpClient(binary, ("serve",))
+    client.initialize_and_list_tools()
+    # fmt: python
+    python = code("""
+        import asyncio
+
+
+        async def answer():
+            await asyncio.sleep(0)
+            return 42
+        """)
+    client.call_tool("send", python=python)
+    assert last_tool_text(client) == "[done]"
+    client.call_tool("send", python="asyncio.run(answer())")
+    assert last_tool_text(client) == "42\n"
+    return client.finish()
+
+
 def test_recovers_from_python_errors(binary: Path) -> Transcript:
     client = McpClient(binary, ("serve",))
     client.initialize_and_list_tools()

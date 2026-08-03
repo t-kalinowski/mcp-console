@@ -1,0 +1,28 @@
+---
+!same-as tests/transcripts/golden/server/initializes_and_lists_tools.yaml
+---
+id: 3
+send:
+  python: |
+    import asyncio
+    
+    
+    async def answer():
+        await asyncio.sleep(0)
+        return 42
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+id: 4
+send:
+  python: asyncio.run(answer())
+result:
+  content:
+    - type: text
+      text: |
+        42
+  isError: false
+...
