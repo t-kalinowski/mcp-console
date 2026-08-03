@@ -192,63 +192,35 @@ def _mcp_console_eval_cell(
     fn initialize_python_bridge() -> Result<(), String> {
         let source_length = c_int::try_from(PYTHON_BRIDGE_INIT.len())
             .expect("the fixed Python bridge should fit in an R string");
-        let (parse_status, expression_count, evaluation_error, state, is_environment) =
-            harp::top_level_exec(|| {
-                // SAFETY: This runs on R's main thread. The top-level boundary
-                // contains parser allocation failures, and R_tryEval contains
-                // errors raised while evaluating the fixed bridge expression.
-                unsafe {
-                    let source = libr::Rf_protect(r_string(PYTHON_BRIDGE_INIT, source_length));
-                    let mut parse_status = libr::ParseStatus_PARSE_NULL;
-                    let expressions = libr::Rf_protect(libr::R_ParseVector(
-                        source,
-                        -1,
-                        &mut parse_status,
-                        libr::R_NilValue,
-                    ));
-                    let expression_count = libr::Rf_xlength(expressions);
-                    if parse_status != libr::ParseStatus_PARSE_OK || expression_count != 1 {
-                        libr::Rf_unprotect(2);
-                        return (parse_status, expression_count, 0, libr::SEXP::null(), false);
-                    }
-
-                    let expression = libr::VECTOR_ELT(expressions, 0);
-                    let mut evaluation_error = 0;
-                    let try_eval = R_TRY_EVAL
-                        .get()
-                        .expect("R_tryEval should be initialized before bridge setup");
-                    let state = try_eval(expression, libr::R_BaseEnv, &mut evaluation_error);
-                    if evaluation_error != 0 || state.is_null() {
-                        libr::Rf_unprotect(2);
-                        return (
-                            parse_status,
-                            expression_count,
-                            evaluation_error,
-                            state,
-                            false,
-                        );
-                    }
-                    let state = libr::Rf_protect(state);
-                    let is_environment = libr::TYPEOF(state) == libr::ENVSXP as c_int;
-                    if is_environment {
-                        libr::R_PreserveObject(state);
-                    }
+        let (evaluation_error, state, is_environment) = harp::top_level_exec(|| {
+            // SAFETY: This runs on R's main thread. The top-level boundary
+            // contains allocation failures, and R_tryEval contains errors raised
+            // while R parses and evaluates the fixed bridge source.
+            unsafe {
+                let source = libr::Rf_protect(r_string(PYTHON_BRIDGE_INIT, source_length));
+                let str2expression = libr::Rf_install(c"str2expression".as_ptr());
+                let call = libr::Rf_protect(libr::Rf_lang2(str2expression, source));
+                let eval = libr::Rf_install(c"eval".as_ptr());
+                let call = libr::Rf_protect(libr::Rf_lang2(eval, call));
+                let try_eval = R_TRY_EVAL
+                    .get()
+                    .expect("R_tryEval should be initialized before bridge setup");
+                let mut evaluation_error = 0;
+                let state = try_eval(call, libr::R_BaseEnv, &mut evaluation_error);
+                if evaluation_error != 0 || state.is_null() {
                     libr::Rf_unprotect(3);
-                    (
-                        parse_status,
-                        expression_count,
-                        evaluation_error,
-                        state,
-                        is_environment,
-                    )
+                    return (evaluation_error, state, false);
                 }
-            })
-            .map_err(|error| format!("failed to initialize the Python bridge: {error}"))?;
-        if parse_status != libr::ParseStatus_PARSE_OK || expression_count != 1 {
-            return Err(format!(
-                "Python bridge initialization parsed with status {parse_status} and produced {expression_count} expressions"
-            ));
-        }
+                let state = libr::Rf_protect(state);
+                let is_environment = libr::TYPEOF(state) == libr::ENVSXP as c_int;
+                if is_environment {
+                    libr::R_PreserveObject(state);
+                }
+                libr::Rf_unprotect(4);
+                (evaluation_error, state, is_environment)
+            }
+        })
+        .map_err(|error| format!("failed to initialize the Python bridge: {error}"))?;
         if evaluation_error != 0 {
             return Err("Python bridge initialization failed during R evaluation".to_string());
         }
