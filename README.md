@@ -23,7 +23,7 @@ mcp-console sandbox -- COMMAND [ARG]...
 Run `mcp-console --help` or `mcp-console COMMAND --help` for command-line help.
 The server registers one `send` tool.
 Supplying `r` evaluates one complete code cell and waits up to the optional `timeout_ms`, which defaults to 60 seconds.
-When that wait expires, the call returns `[running]` while computation continues; call `send` without `r` to poll for completion.
+When that wait expires, the call returns the newline-prefixed banner `\n[running]` while computation continues; call `send` without `r` to poll for completion.
 A call may also supply exact standard-input text with `r`, during an evaluation, or while the worker is idle:
 
 ```json
@@ -31,8 +31,8 @@ A call may also supply exact standard-input text with `r`, during an evaluation,
 ```
 
 The server sends the cell first, then queues the string's UTF-8 bytes to worker fd 0 without inspecting it, adding a newline, imposing a size limit, or waiting for an input request.
-A stdin-only call while idle lazily starts the worker when needed, queues the bytes, and returns `[idle]`.
-When an input request remains outstanding for up to 10 milliseconds, bounded by the call deadline, `send` returns its prompt and `[input]`; a later call can supply more bytes with `{ "stdin": "Ada\n" }`.
+A stdin-only call while idle lazily starts the worker when needed, queues the bytes, and returns the newline-prefixed banner `\n[idle]`.
+When an input request remains outstanding for up to 10 milliseconds, bounded by the call deadline, `send` returns its verbatim prompt followed by the newline-prefixed banner `\n[input]`; a later call can supply more bytes with `{ "stdin": "Ada\n" }`.
 An immediate `input_received` receipt suppresses that boundary, so prequeued input can satisfy a console read without forcing another tool call.
 That receipt describes the runtime read, not a particular stdin payload; direct fd-0 reads emit no request or receipt.
 Payload end is not EOF, and queued input is not an acknowledgment of consumption.
@@ -41,7 +41,7 @@ On macOS, the first nonempty stdin submission or evaluation lazily starts a sand
 Later calls reuse the same global R state.
 The worker runs each cell through R's native top-level loop, captures R console output, prints each visible value, and maintains `.Last.value`.
 The server also collects text written directly to the worker's standard output and standard error, including by descendants that inherit those streams.
-It retains raw bytes until the next `send` response is assembled; output produced while R is idle can therefore appear on a later idle poll directly before `[idle]`, without an added separator.
+It retains raw bytes until the next `send` response is assembled; output produced while R is idle can therefore appear on a later idle poll before the server-owned `\n[idle]` banner.
 Ordering between the two standard streams and R console output is best effort.
 If a cell ends while an expression is incomplete, earlier complete expressions from that cell remain applied.
 R language failures remain ordinary console results rather than MCP tool errors, and a silent successful cell with no pending stream output returns `[done]`.

@@ -609,21 +609,22 @@ fn render_response(mut output: String, response: SendResponse) -> String {
         }
         SendResponse::InputRequested(input) => {
             output.push_str(&input);
-            output.push_str("[input]");
+            output.push_str("\n[input]");
             output
         }
         SendResponse::Running => {
-            output.push_str("[running]");
+            output.push_str("\n[running]");
             output
         }
         SendResponse::Idle => {
-            output.push_str("[idle]");
+            output.push_str("\n[idle]");
             output
         }
     }
 }
 
 fn attach_error_output(mut output: String, error: String) -> String {
+    // Tool errors are not state banners and have no server-owned line prefix.
     output.push_str(&error);
     output
 }

@@ -19,7 +19,7 @@ send:
 result:
   content:
     - type: text
-      text: "[running]"
+      text: "\n[running]"
   isError: false
 ---
 id: 5
@@ -40,7 +40,7 @@ send:
 result:
   content:
     - type: text
-      text: zod> [input]
+      text: "zod>\x20\n[input]"
   isError: false
 ---
 id: 7
@@ -49,7 +49,7 @@ send:
 result:
   content:
     - type: text
-      text: "[input]"
+      text: "\n[input]"
   isError: false
 ---
 id: 8
@@ -72,7 +72,7 @@ send:
 result:
   content:
     - type: text
-      text: second> [input]
+      text: "second>\x20\n[input]"
   isError: false
 ---
 id: 10

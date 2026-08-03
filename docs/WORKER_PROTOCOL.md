@@ -127,31 +127,33 @@ For a call with `r`, the evaluation wait includes lazy worker startup.
 
 An `input_requested` frame remains provisional for 10 milliseconds.
 If `input_received` arrives first, the server retains the unexposed prompt output and continues waiting for another request, completion, or the MCP deadline.
-If the grace expires first, the call returns output collected so far, the prompt, and `[input]` before that deadline.
+If the grace expires first, the call returns output collected so far, the verbatim prompt, and the `\n[input]` banner before that deadline.
 Supplying nonempty stdin for an outstanding request starts a fresh 10-millisecond grace window; the MCP deadline reports a still-outstanding request immediately, even inside that window.
 A pending input request wins over `[running]` at the deadline.
 A later `send` call without `r` polls that evaluation with its own `timeout_ms`; it may include `stdin` to queue bytes before waiting.
 Every `send` response decodes and drains complete UTF-8 prefixes from standard-stream bytes already collected when that response is assembled.
 Bytes collected after that snapshot and incomplete trailing sequences remain for the next response; standard-stream output does not itself wake a waiting call.
 Completion returns decoded standard-stream text followed by sideband output not already delivered at an `[input]` boundary, or `[done]` when neither produced text.
-If the poll wait expires first, `[running]` is appended directly to any collected standard-stream text.
-A call without `r` or `stdin` while no evaluation is active appends `[idle]` directly to collected standard-stream text, or returns `[idle]` alone.
+If the poll wait expires first, the literal `\n[running]` banner is appended to any collected standard-stream text.
+A call without `r` or `stdin` while no evaluation is active appends the literal `\n[idle]` banner to collected standard-stream text.
 A stdin-only call in that state queues the bytes and uses the same idle response projection.
 
 Except for prompt boundaries, this slice does not expose partial sideband output while an evaluation is running.
 Standard-stream text is attached to whichever response is sent next, including `[running]`, `[input]`, or `[idle]` responses.
-The server inserts no separator before a state marker or tool error.
+The leading newline belongs to each state banner and remains present when no worker or sideband output precedes it.
+The server does not inspect preceding output to normalize that boundary, so output that already ends in a newline leaves a blank line before the banner.
+The server inserts no separator before a tool error.
 Output cursors and general incremental polling remain unimplemented.
 
 ### Interactive input
 
 When evaluated code calls `readline()` or enters `browser()`, the worker may send `input_requested`.
-The server appends the prompt field verbatim to output collected so far, then appends `[input]` directly if the request remains exposed.
+The server appends the prompt field verbatim to output collected so far, then appends the `\n[input]` banner if the request remains exposed.
 A later `send` call supplies its `stdin` unchanged:
 
 ```text
 server -> worker  {"kind":"evaluate","r":"readline('name> ')"}
-worker -> server  {"kind":"input_requested","prompt":"name>\n"}
+worker -> server  {"kind":"input_requested","prompt":"name> "}
 
 server -> fd 0    Ada\n
 worker -> server  {"kind":"input_received"}
@@ -161,7 +163,7 @@ worker -> server  {"kind":"completed"}
 
 An MCP call may contain both `r` and `stdin`.
 The server flushes `evaluate` first, then attaches the evaluation to the worker's stdin writer and drains any queued input in submission order.
-A later stdin-only call uses the same route without acquiring the evaluation's worker lock, including after an earlier call returned `[running]`.
+A later stdin-only call uses the same route without acquiring the evaluation's worker lock, including after an earlier call returned `\n[running]`.
 When no evaluation is tracked, nonempty stdin lazily starts the worker if necessary and enters the same worker-owned FIFO; empty stdin is a no-op.
 
 The server writes each string blindly.
@@ -172,7 +174,7 @@ The R console callback consumes only through one newline or its supplied buffer;
 `input_requested` is an observation of worker state, not permission to write.
 After a nonempty callback read, `input_received` closes that provisional request before the runtime resumes.
 It does not acknowledge a particular stdin submission, identify which bytes satisfied the read, or report bytes consumed by code that reads fd 0 directly.
-If no receipt arrives during the grace window, the request remains exposed as `[input]`; a partial follow-up therefore returns `[input]` again rather than `[running]`.
+If no receipt arrives during the grace window, the request remains exposed as `\n[input]`; a partial follow-up therefore returns `\n[input]` again rather than `\n[running]`.
 Empty stdin writes no bytes and leaves an exposed request immediately reportable.
 Code that reads fd 0 directly can consume bundled input or input sent after a polling timeout without sending either input frame.
 
@@ -239,8 +241,8 @@ The CLI runs `worker` synchronously without a Tokio runtime, so R initialization
 
 The worker supplies cell source through `ReadConsole` before each top-level evaluation starts.
 For every evaluation-time `ReadConsole` call, the callback sends `input_requested`, then reads fd 0 directly until one newline arrives or R's supplied buffer is full.
-Before sending the frame, the built-in worker trims trailing whitespace from R's prompt and terminates a nonempty prompt with one newline.
-The server does not apply that formatting to prompts from other workers.
+The built-in worker sends R's prompt field verbatim, including trailing spaces or an empty prompt.
+The server does not rewrite prompts from the built-in worker or custom workers.
 After a nonempty read succeeds, it sends `input_received` before returning the bytes to R.
 A newline-free fragment shorter than that buffer keeps the callback blocked, while bytes after a returned chunk remain in the pipe for a later `ReadConsole` call or a direct fd-0 reader.
 It uses R's busy callback rather than prompt text to distinguish cell source from evaluated-code input.

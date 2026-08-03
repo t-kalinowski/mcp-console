@@ -254,6 +254,8 @@ An idle session returns:
 [idle]
 ```
 
+The leading newline is part of each server-owned `[running]`, `[idle]`, and `[input]` banner, even when no output precedes it.
+
 A poll against a missing session is a tool error.
 
 MCP request cancellation is distinct from wait expiry:

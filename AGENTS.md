@@ -21,12 +21,12 @@ The `serve` command runs an MCP server over stdio.
 Clap provides command help, version output, argument parsing, and usage errors.
 The server registers only a `send` tool.
 Supplying `r` starts one complete cell and waits for up to `timeout_ms`, which defaults to 60 seconds.
-If that wait expires, `send` returns `[running]` without stopping the computation; a later call without `r` polls it, and a poll while idle returns `[idle]`.
+If that wait expires, `send` returns the newline-prefixed banner `\n[running]` without stopping the computation; a later call without `r` polls it, and a poll while idle returns `\n[idle]`.
 Concurrent `send` calls are unsupported.
 Supplying `stdin` with `r`, during an evaluation, or while idle queues exact UTF-8 bytes to worker fd 0 without adding a newline, inspecting or limiting the text, or waiting for an input request.
-A nonempty idle stdin call lazily starts the worker when needed, queues the bytes, and returns `[idle]`; `timeout_ms` does not bound that startup because the call does not wait on an evaluation.
+A nonempty idle stdin call lazily starts the worker when needed, queues the bytes, and returns `\n[idle]`; `timeout_ms` does not bound that startup because the call does not wait on an evaluation.
 Payload end is not EOF; the R console callback reads through one newline or its supplied buffer, and unread bytes may satisfy later console or direct reads, including in a later evaluation.
-An `input_requested` frame is provisional for up to 10 milliseconds; a matching `input_received` after a successful console read suppresses `[input]`, while an unmatched request returns `[input]` after that grace or at the MCP deadline, whichever comes first.
+An `input_requested` frame is provisional for up to 10 milliseconds; a matching `input_received` after a successful console read suppresses the `\n[input]` banner, while an unmatched request returns it after that grace or at the MCP deadline, whichever comes first.
 The receipt describes that runtime read, not a submitted payload or byte count, and direct fd-0 reads emit neither frame.
 New code is rejected until the running evaluation's result has been collected.
 On macOS, the first nonempty stdin submission or evaluation lazily starts the built-in R worker under the same sandbox policy as the `sandbox` command.
@@ -37,10 +37,10 @@ R parse, evaluation, and auto-print failures are normal language outcomes with `
 Submitted R functions do not currently retain a source filename.
 Worker standard output and standard error are piped and collected continuously, including while the worker is idle.
 Each pipe reader queues raw byte chunks, and each `send` response decodes and drains complete UTF-8 prefixes from bytes already collected at its response boundary; later bytes remain for the next response.
-Idle, running, and input responses append their state marker directly after worker output without inserting a separator.
+Idle, running, and input responses append the literal `\n[idle]`, `\n[running]`, or `\n[input]` banner; its leading newline is present even when no output precedes it.
 Completion returns collected stream and sideband output instead of `[done]` when either produced text.
 Ordering between the two standard streams and sideband output is best effort; incomplete UTF-8 remains with its pipe until a later response, and invalid UTF-8 is replaced when output is rendered.
-The built-in R worker formats nonempty console prompts as lines before sending them, while the server appends other workers' prompt fields verbatim.
+The built-in R worker and custom workers send console prompt fields verbatim; the server appends a prompt before its `\n[input]` banner without trimming it.
 Output from descendants that inherit standard output or standard error follows the same path, but this does not add descendant supervision; forked descendants cannot use the inherited sideband.
 The hidden `worker` command takes ownership of the sideband, discovers `R_HOME` through the selected R executable inside the sandbox, and opens `R_HOME/lib/libR.dylib` by its absolute path.
 It does not self-execute or set a dynamic-loader environment variable.

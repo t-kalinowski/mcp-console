@@ -8,7 +8,7 @@ send:
 result:
   content:
     - type: text
-      text: "[running]"
+      text: "\n[running]"
   isError: false
 ---
 id: 4
