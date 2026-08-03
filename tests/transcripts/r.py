@@ -81,6 +81,65 @@ def test_recoverable_language_errors(binary: Path) -> Transcript:
     return client.finish()
 
 
+def test_restarts_after_r_worker_segfault(binary: Path) -> Transcript:
+    client = McpClient(binary, ("serve",))
+    client.initialize_and_list_tools()
+    client.call_tool("send", r="r_worker_marker <- TRUE")
+
+    # Ask R's fatal-signal handler to abort after reporting the crash.
+    # fmt: r
+    r = code(r"""
+        tools::pskill(Sys.getpid(), signal = 11L)
+        """)
+    client.call_tool("send", r=r, stdin="1\n")
+    result = client.transcript[-1]["result"]
+    assert result["isError"] is True
+    fatal_output = result["content"][0]["text"]
+    assert "Possible actions:\n1: abort (with core dump, if enabled)\n" in fatal_output
+    assert fatal_output.endswith(
+        "Selection: R is aborting now ...\n"
+        "[worker sideband read failed: worker sideband closed]"
+    )
+
+    client.call_tool("send", r='exists("r_worker_marker", inherits = FALSE)')
+    assert last_tool_text(client) == (
+        "[1] FALSE\n[worker restarted: in-memory state lost]\n"
+    )
+    client.call_tool("send", r="1 + 1")
+    assert last_tool_text(client) == "[1] 2\n"
+    return client.finish()
+
+
+def test_reports_r_worker_restart_with_idle_stdin(binary: Path) -> Transcript:
+    client = McpClient(binary, ("serve",))
+    client.initialize_and_list_tools()
+    client.call_tool("send", r="invisible(NULL)")
+
+    # fmt: r
+    r = code(r"""
+        tools::pskill(Sys.getpid(), signal = 9L)
+        """).removesuffix("\n")
+    client.call_tool("send", r=r)
+    assert client.transcript[-1]["result"]["isError"] is True
+
+    client.call_tool("send", stdin="replacement\n")
+    assert last_tool_text(client) == (
+        "\n[worker restarted: in-memory state lost]\n[idle]"
+    )
+
+    # fmt: r
+    direct_stdin = code(r"""
+        local({
+          connection <- suppressWarnings(file("/dev/stdin"))
+          on.exit(close(connection))
+          readLines(connection, n = 1)
+        })
+        """)
+    client.call_tool("send", r=direct_stdin)
+    assert last_tool_text(client) == '[1] "replacement"\n'
+    return client.finish()
+
+
 def test_browser_input(binary: Path) -> Transcript:
     client = McpClient(binary, ("serve",))
     client.initialize_and_list_tools()

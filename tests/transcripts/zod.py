@@ -249,6 +249,12 @@ def test_restarts_after_unexpected_sideband_message(binary: Path) -> Transcript:
             )
             worker_group = read_worker_group(group_marker)
             client.receive(failed_call)
+            result = failed_call["result"]
+            assert result["isError"] is True
+            assert result["content"][0]["text"] == (
+                "zod output before protocol failure\n"
+                "[worker sent an unexpected ready message]"
+            )
             assert not process_group_exists(worker_group), "Zod outlived its failure"
 
             restarted_call = client.send(
@@ -258,11 +264,14 @@ def test_restarts_after_unexpected_sideband_message(binary: Path) -> Transcript:
                     "method": "tools/call",
                     "params": {
                         "name": "send",
-                        "arguments": {"r": "echo"},
+                        "arguments": {"r": "complete silently"},
                     },
                 }
             )
             client.receive(restarted_call)
+            assert last_tool_text(client) == (
+                "\n[worker restarted: in-memory state lost]\n"
+            )
             transcript = client.finish()
             passed = True
             return transcript
@@ -281,8 +290,87 @@ def test_restarts_after_worker_exit(binary: Path) -> Transcript:
     client.initialize_and_list_tools()
     client.call_tool("send", r="exit unexpectedly")
     assert client.transcript[-1]["result"]["isError"] is True
-    client.call_tool("send", r="echo")
+    client.call_tool("send", stdin="replacement\n")
+    assert last_tool_text(client) == (
+        "\n[worker restarted: in-memory state lost]\n[idle]"
+    )
+    client.call_tool("send", r="input without request")
+    assert last_tool_text(client) == "zod stdin: replacement\n"
     return client.finish()
+
+
+def test_reports_restart_notice_on_next_response(binary: Path) -> Transcript:
+    zod = Path(__file__).resolve().parents[1] / "fixtures" / "zod"
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        temporary_path = Path(temporary_directory)
+        startup_control = temporary_path / "zod-startup-control"
+        startup_release = temporary_path / "zod-startup-release"
+        startup_control.write_text("ready", encoding="utf-8")
+        environment = os.environ.copy()
+        environment["TMPDIR"] = temporary_directory
+        environment["ZOD_STARTUP_CONTROL"] = str(startup_control)
+        environment["ZOD_STARTUP_RELEASE"] = str(startup_release)
+        client = McpClient(
+            binary,
+            ("serve", "--worker", str(zod)),
+            environment,
+        )
+        client.initialize_and_list_tools()
+        client.call_tool("send", r="exit unexpectedly")
+        assert client.transcript[-1]["result"]["isError"] is True
+
+        startup_control.write_text("block", encoding="utf-8")
+        client.call_tool("send", r="complete after release", timeout_ms=0)
+        assert last_tool_text(client) == "\n[running]"
+        wait_for_marker(temporary_path, "zod-replacement-waiting-ready", client)
+        startup_release.touch()
+        evaluation_started = wait_for_marker(
+            temporary_path,
+            "zod-evaluation-started",
+            client,
+        )
+
+        client.call_tool("send", r="echo")
+        result = client.transcript[-1]["result"]
+        assert result["isError"] is True
+        assert result["content"][0]["text"] == (
+            "[worker is already evaluating a cell; poll without a code field]"
+            "\n[worker restarted: in-memory state lost]\n"
+        )
+
+        (evaluation_started.parent / "zod-release-evaluation").touch()
+        client.call_tool("send", timeout_ms=3_000)
+        output = last_tool_text(client)
+        assert output == "zod: complete after release\n", repr(output)
+        client.call_tool("send", r="echo")
+        assert last_tool_text(client) == "zod: echo\n"
+        return client.finish()
+
+
+def test_retries_initial_startup_silently(binary: Path) -> Transcript:
+    zod = Path(__file__).resolve().parents[1] / "fixtures" / "zod"
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        startup_control = Path(temporary_directory) / "zod-startup-control"
+        startup_control.write_text("fail", encoding="utf-8")
+        environment = os.environ.copy()
+        environment["TMPDIR"] = temporary_directory
+        environment["ZOD_STARTUP_CONTROL"] = str(startup_control)
+        client = McpClient(
+            binary,
+            ("serve", "--worker", str(zod)),
+            environment,
+        )
+        client.initialize_and_list_tools()
+        client.call_tool("send", r="echo")
+        result = client.transcript[-1]["result"]
+        assert result["isError"] is True
+        assert result["content"][0]["text"] == (
+            "worker sideband read failed: worker sideband closed"
+        )
+        startup_control.write_text("ready", encoding="utf-8")
+        client.call_tool("send", r="echo")
+        assert last_tool_text(client) == "zod: echo\n"
+        return client.finish()
 
 
 def test_runs_worker_inside_sandbox(binary: Path) -> Transcript:

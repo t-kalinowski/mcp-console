@@ -126,13 +126,23 @@ def test_restarts_after_python_bridge_failure(binary: Path) -> Transcript:
     # fmt: r
     r = code(r"""
         python_worker_marker <- TRUE
-        Sys.setenv(RETICULATE_PYTHON = tempfile())
+        Sys.setenv(RETICULATE_PYTHON = "/mcp-console-missing-python")
         """)
     client.call_tool("send", r=r)
     client.call_tool("send", python="6 * 7")
-    assert client.transcript[-1]["result"]["isError"] is True
+    result = client.transcript[-1]["result"]
+    assert result["isError"] is True
+    assert result["content"][0]["text"] == (
+        "Python bridge failed during R evaluation\n"
+        "Error in py_discover_config(required_module, use_environment) : \n"
+        "  Python specified in RETICULATE_PYTHON "
+        "(/mcp-console-missing-python) does not exist\n"
+        "[worker sideband read failed: worker sideband closed]"
+    )
     client.call_tool("send", r='exists("python_worker_marker", inherits = FALSE)')
-    assert last_tool_text(client) == "[1] FALSE\n"
+    assert last_tool_text(client) == (
+        "[1] FALSE\n[worker restarted: in-memory state lost]\n"
+    )
     client.call_tool("send", python="6 * 7")
     assert last_tool_text(client) == "42\n"
     return client.finish()

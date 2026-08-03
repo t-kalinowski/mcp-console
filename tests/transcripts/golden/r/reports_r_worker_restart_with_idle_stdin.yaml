@@ -3,14 +3,23 @@
 ---
 id: 3
 send:
-  r: exit unexpectedly
+  r: invisible(NULL)
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+id: 4
+send:
+  r: tools::pskill(Sys.getpid(), signal = 9L)
 result:
   content:
     - type: text
       text: "worker sideband read failed: worker sideband closed"
   isError: true
 ---
-id: 4
+id: 5
 send:
   stdin: |
     replacement
@@ -23,13 +32,18 @@ result:
         [idle]
   isError: false
 ---
-id: 5
+id: 6
 send:
-  r: input without request
+  r: |
+    local({
+      connection <- suppressWarnings(file("/dev/stdin"))
+      on.exit(close(connection))
+      readLines(connection, n = 1)
+    })
 result:
   content:
     - type: text
       text: |
-        zod stdin: replacement
+        [1] "replacement"
   isError: false
 ...

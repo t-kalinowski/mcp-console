@@ -3,23 +3,20 @@
 ---
 id: 3
 send:
-  r: violate protocol
+  r: echo
 result:
   content:
     - type: text
-      text: |-
-        zod output before protocol failure
-        [worker sent an unexpected ready message]
+      text: "worker sideband read failed: worker sideband closed"
   isError: true
 ---
 id: 4
 send:
-  r: complete silently
+  r: echo
 result:
   content:
     - type: text
       text: |
-        
-        [worker restarted: in-memory state lost]
+        zod: echo
   isError: false
 ...
