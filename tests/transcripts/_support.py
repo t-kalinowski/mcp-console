@@ -2,11 +2,16 @@ import json
 import subprocess
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from textwrap import dedent
 from typing import Any
 
 
 TranscriptEntry = dict[str, Any]
 Transcript = list[TranscriptEntry]
+
+
+def code(source: str) -> str:
+    return dedent(source).removeprefix("\n")
 
 
 def run_this_suite(suite_path: str) -> None:

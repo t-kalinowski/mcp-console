@@ -5,7 +5,8 @@ command:
   - --
   - python
   - -c
-  - print("ran")
+  - |
+    print("ran")
 environment:
   HOME: null
 stdout: |

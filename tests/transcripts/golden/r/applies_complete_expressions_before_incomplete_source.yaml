@@ -3,7 +3,7 @@
 ---
 id: 3
 send:
-  r: |-
+  r: |
     answer <- 42
     answer + (
 result:
@@ -25,7 +25,7 @@ result:
 ---
 id: 5
 send:
-  r: |-
+  r: |
     answer <- 43
     )
 result:

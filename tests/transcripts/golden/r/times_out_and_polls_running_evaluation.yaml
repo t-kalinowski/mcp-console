@@ -12,7 +12,7 @@ result:
 ---
 id: 4
 send:
-  r: |-
+  r: |
     Sys.sleep(0.25)
     answer <- 42
     answer

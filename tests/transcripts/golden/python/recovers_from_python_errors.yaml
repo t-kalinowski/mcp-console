@@ -3,7 +3,7 @@
 ---
 id: 3
 send:
-  python: |-
+  python: |
     answer = 41
 
 
@@ -16,19 +16,26 @@ result:
   content:
     - type: text
       text: |
-        <Python traceback>
+        Traceback (most recent call last):
+          File "<string>", line 38, in _mcp_console_eval_cell
+          File "<mcp-console:python:e1>", line 8, in <module>
+          File "<mcp-console:python:e1>", line 5, in fail
+        ValueError: boom
   isError: false
 ---
 id: 4
 send:
-  python: |-
+  python: |
     compile_partial = 9
     await missing()
 result:
   content:
     - type: text
       text: |
-        <Python syntax error>
+        Traceback (most recent call last):
+          File "<string>", line 30, in _mcp_console_eval_cell
+          File "<mcp-console:python:e2>", line 2
+        SyntaxError: 'await' outside function
   isError: false
 ---
 id: 5
@@ -48,7 +55,7 @@ result:
   content:
     - type: text
       text: |
-        <Python NUL error>
+        SyntaxError: source code string cannot contain null bytes
   isError: false
 ---
 id: 7

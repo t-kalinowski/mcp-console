@@ -3,7 +3,8 @@
 ---
 id: 3
 send:
-  python: print("hello")
+  python: |
+    print("hello")
   wait_ms: 0
 result:
   content:

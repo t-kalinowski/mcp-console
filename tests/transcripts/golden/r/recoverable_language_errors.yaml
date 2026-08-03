@@ -12,52 +12,42 @@ result:
 ---
 id: 4
 send:
-  r: |-
-    g <- function() stop("boom", call. = FALSE)
+  r: |
+    g <- function() stop("boom")
     f <- function() g()
     f()
 result:
   content:
     - type: text
       text: |
-        Error: boom
+        Error in g() : boom
   isError: false
 ---
 id: 5
 send:
-  r: |-
-    traceback_lines <- capture.output(traceback())
-    cat(
-      "traceback: stop=",
-      any(grepl("stop", traceback_lines, fixed = TRUE)),
-      ", g=",
-      any(grepl("g()", traceback_lines, fixed = TRUE)),
-      ", f=",
-      any(grepl("f()", traceback_lines, fixed = TRUE)),
-      ", internal=",
-      any(grepl("mcp_console|base::get", traceback_lines)),
-      "\n",
-      sep = ""
-    )
+  r: |
+    traceback()
 result:
   content:
     - type: text
       text: |
-        traceback: stop=TRUE, g=TRUE, f=TRUE, internal=FALSE
+        3: stop("boom") at #1
+        2: g() at #1
+        1: f()
   isError: false
 ---
 id: 6
 send:
-  r: |-
-    print.transcript_boom <- function(...) {
+  r: |
+    print.auto_print_failure <- function(...) {
       stop("print failed")
     }
-    structure(1, class = "transcript_boom")
+    structure(1, class = "auto_print_failure")
 result:
   content:
     - type: text
       text: |
-        Error in print.transcript_boom(x) : print failed
+        Error in print.auto_print_failure(x) : print failed
   isError: false
 ---
 id: 7

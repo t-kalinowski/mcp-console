@@ -3,7 +3,7 @@
 ---
 id: 3
 send:
-  r: |-
+  r: |
     from_r <- 40L
     python_source_visible <- function() {
       calls <- vapply(sys.calls(), deparse1, character(1))
@@ -18,7 +18,7 @@ result:
 ---
 id: 4
 send:
-  python: |-
+  python: |
     answer = r.from_r + 1
     print("from Python")
     answer + 1
@@ -32,7 +32,7 @@ result:
 ---
 id: 5
 send:
-  python: |-
+  python: |
     1
     2
 result:
@@ -64,7 +64,7 @@ result:
 ---
 id: 8
 send:
-  python: |-
+  python: |
     unique_python_source_marker = r.python_source_visible()
     unique_python_source_marker
 result:
@@ -76,7 +76,7 @@ result:
 ---
 id: 9
 send:
-  r: |-
+  r: |
     .mcp_console_private <- "user value"
     .mcp_console_python_source <- "user source"
     .mcp_console_python_filename <- "user filename"
@@ -99,7 +99,7 @@ result:
 ---
 id: 11
 send:
-  python: |-
+  python: |
     compile = "user compile"
     eval = "user eval"
     exec = "user exec"

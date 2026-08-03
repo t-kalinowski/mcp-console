@@ -3,7 +3,7 @@
 ---
 id: 3
 send:
-  r: |-
+  r: |
     invisible(addTaskCallback(
       local({
         first <- TRUE
@@ -28,7 +28,7 @@ result:
 ---
 id: 4
 send:
-  r: |-
+  r: |
     warning("careful", call. = FALSE)
     invisible(42)
     cat("last value: ", identical(base::.Last.value, 42), "\n", sep = "")

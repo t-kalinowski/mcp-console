@@ -3,7 +3,7 @@
 ---
 id: 3
 send:
-  r: |-
+  r: |
     user_calls <- function() {
       vapply(sys.calls(), deparse1, character(1))
     }

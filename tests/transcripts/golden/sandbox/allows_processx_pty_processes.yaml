@@ -5,7 +5,7 @@ command:
   - --
   - Rscript
   - -e
-  - |-
+  - |
     {
       p <- processx::process$new("/bin/cat", pty = TRUE)
       on.exit(if (p$is_alive()) p$kill())
