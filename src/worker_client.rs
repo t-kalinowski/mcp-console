@@ -4,6 +4,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 const INPUT_REQUEST_GRACE: Duration = Duration::from_millis(10);
+#[cfg(target_os = "macos")]
 const WORKER_RESTART_BANNER: &str = "\n[worker restarted: in-memory state lost]";
 
 /// A cloneable handle to one lazily started worker.
