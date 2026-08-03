@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 
 const INPUT_REQUEST_GRACE: Duration = Duration::from_millis(10);
 #[cfg(target_os = "macos")]
-const WORKER_RESTART_BANNER: &str = "\n[worker restarted: in-memory state lost]";
+const WORKER_RESTART_BANNER: &str = "[worker restarted: in-memory state lost]\n";
 
 /// A cloneable handle to one lazily started worker.
 #[derive(Clone)]
@@ -60,7 +60,7 @@ struct Evaluation {
 }
 
 struct EvaluationState {
-    result: Option<Result<String, String>>,
+    result: Option<Result<String, SendFailure>>,
     output: String,
     input_report_at: Option<Instant>,
     #[cfg(target_os = "macos")]
@@ -71,7 +71,7 @@ struct EvaluationState {
 enum EvaluationWait {
     Running,
     InputRequested(String),
-    Completed(Result<String, String>),
+    Completed(Result<String, SendFailure>),
 }
 
 enum SendResponse {
@@ -79,6 +79,20 @@ enum SendResponse {
     Running,
     InputRequested(String),
     Completed(String),
+}
+
+struct SendFailure {
+    output: String,
+    message: String,
+}
+
+impl From<String> for SendFailure {
+    fn from(message: String) -> Self {
+        Self {
+            output: String::new(),
+            message,
+        }
+    }
 }
 
 enum EvaluationStatus {
@@ -138,7 +152,7 @@ impl Client {
         cell: Option<crate::cell::Cell>,
         stdin: Option<String>,
         timeout: Duration,
-    ) -> Result<SendResponse, String> {
+    ) -> Result<SendResponse, SendFailure> {
         let evaluation = match cell {
             Some(cell) => self.start_evaluation(cell, stdin)?,
             None => match self.current_evaluation()? {
@@ -307,12 +321,21 @@ impl Client {
         result
     }
 
-    fn attach_output(&self, result: Result<SendResponse, String>) -> Result<String, String> {
-        let (output, restart_notice) = self.0.output.take();
+    fn attach_output(&self, result: Result<SendResponse, SendFailure>) -> Result<String, String> {
+        let (mut output, restart_notice) = self.0.output.take();
         match result {
             Ok(response) => Ok(render_response(output, response, restart_notice)),
-            Err(error) if output.is_empty() && restart_notice.is_empty() => Err(error),
-            Err(error) => Err(attach_error_output(output, error, restart_notice)),
+            Err(SendFailure {
+                output: worker_output,
+                message,
+            }) => {
+                output.push_str(&worker_output);
+                if output.is_empty() && restart_notice.is_empty() {
+                    Err(message)
+                } else {
+                    Err(attach_error_output(output, message, restart_notice))
+                }
+            }
         }
     }
 
@@ -570,10 +593,10 @@ impl Evaluation {
         state.input_report_at = None;
         let result = match result {
             Ok(()) => Ok(std::mem::take(&mut state.output)),
-            Err(error) => {
-                state.output.push_str(&error);
-                Err(std::mem::take(&mut state.output))
-            }
+            Err(message) => Err(SendFailure {
+                output: std::mem::take(&mut state.output),
+                message,
+            }),
         };
         state.result = Some(result);
         self.changed.notify_one();
@@ -641,7 +664,7 @@ fn render_response(mut output: String, response: SendResponse, restart_notice: S
     match response {
         SendResponse::Completed(completed) => {
             output.push_str(&completed);
-            output.push_str(&restart_notice);
+            append_restart_notice(&mut output, &restart_notice);
             if output.is_empty() {
                 "[done]".to_string()
             } else {
@@ -650,27 +673,46 @@ fn render_response(mut output: String, response: SendResponse, restart_notice: S
         }
         SendResponse::InputRequested(input) => {
             output.push_str(&input);
-            output.push_str(&restart_notice);
-            output.push_str("\n[input]");
+            append_state_banner(&mut output, &restart_notice, "[input]");
             output
         }
         SendResponse::Running => {
-            output.push_str(&restart_notice);
-            output.push_str("\n[running]");
+            append_state_banner(&mut output, &restart_notice, "[running]");
             output
         }
         SendResponse::Idle => {
-            output.push_str(&restart_notice);
-            output.push_str("\n[idle]");
+            append_state_banner(&mut output, &restart_notice, "[idle]");
             output
         }
     }
 }
 
+fn append_state_banner(output: &mut String, restart_notice: &str, banner: &str) {
+    if !append_restart_notice(output, restart_notice) {
+        output.push('\n');
+    }
+    output.push_str(banner);
+}
+
+fn append_restart_notice(output: &mut String, restart_notice: &str) -> bool {
+    if restart_notice.is_empty() {
+        return false;
+    }
+    if !output.ends_with('\n') {
+        output.push('\n');
+    }
+    output.push_str(restart_notice);
+    true
+}
+
 fn attach_error_output(mut output: String, error: String, restart_notice: String) -> String {
-    // Tool errors are not state banners and have no server-owned line prefix.
+    if !output.is_empty() && !output.ends_with('\n') {
+        output.push('\n');
+    }
+    output.push('[');
     output.push_str(&error);
-    output.push_str(&restart_notice);
+    output.push(']');
+    append_restart_notice(&mut output, &restart_notice);
     output
 }
 

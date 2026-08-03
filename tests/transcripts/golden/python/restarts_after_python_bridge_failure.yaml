@@ -22,7 +22,7 @@ result:
         Python bridge failed during R evaluation
         Error in py_discover_config(required_module, use_environment) : 
           Python specified in RETICULATE_PYTHON (/mcp-console-missing-python) does not exist
-        worker sideband read failed: worker sideband closed
+        [worker sideband read failed: worker sideband closed]
   isError: true
 ---
 id: 5
@@ -31,9 +31,8 @@ send:
 result:
   content:
     - type: text
-      text: |-
+      text: |
         [1] FALSE
-        
         [worker restarted: in-memory state lost]
   isError: false
 ---

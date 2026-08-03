@@ -43,12 +43,14 @@ R and Python share objects through reticulate's `py` and `r` bridges.
 Python `input()` can consume proactively queued fd-0 text, but it emits neither `input_requested` nor `input_received`; debugger integration is not implemented.
 Worker standard output and standard error are piped and collected continuously, including while the worker is idle.
 Each pipe reader queues raw byte chunks, and each `send` response decodes and drains complete UTF-8 prefixes from bytes already collected at its response boundary; later bytes remain for the next response.
-Idle, running, and input responses append the literal `\n[idle]`, `\n[running]`, or `\n[input]` banner; its leading newline is present even when no output precedes it.
-After an infrastructure failure discards a ready worker, its successfully started replacement queues `\n[worker restarted: in-memory state lost]` in pending response output.
-The next response drains it exactly once, after runtime or error text and before any idle, running, or input banner.
+Without a pending restart notice, idle, running, and input responses append the literal `\n[idle]`, `\n[running]`, or `\n[input]` banner; its leading newline is present even when no output precedes it.
+After an infrastructure failure discards a ready worker, its successfully started replacement queues `[worker restarted: in-memory state lost]\n` in pending response output.
+The next response drains it exactly once, after runtime or error text, inserting a preceding newline only when needed.
+If an idle, running, or input banner follows, the restart notice's trailing newline supplies its separator.
 Initial lazy startup and retries before a worker reaches ready are silent.
 Completion returns collected standard-stream and sideband output instead of `[done]` when either produced text.
-A failed evaluation likewise returns all accumulated sideband output before its infrastructure or protocol error, with no inserted separator.
+A failed evaluation likewise returns all accumulated sideband output and any complete standard-stream output available at the response boundary before its infrastructure or protocol error.
+When worker output or a restart notice shares that response, the server starts the bracketed error on a new line; an error returned alone remains bare.
 Ordering between the two standard streams and sideband output is best effort; incomplete UTF-8 remains with its pipe until a later response, and invalid UTF-8 is replaced when output is rendered.
 The built-in worker and custom workers send console prompt fields verbatim; the server appends a prompt before its `\n[input]` banner without trimming it.
 Output from descendants that inherit standard output or standard error follows the same path, but this does not add descendant supervision; forked descendants cannot use the inherited sideband.

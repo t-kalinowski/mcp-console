@@ -40,8 +40,8 @@ Unread bytes may be completed by later stdin or satisfy a later worker read or e
 On macOS, the first nonempty stdin submission or evaluation lazily starts a sandboxed embedded R worker.
 Later calls reuse the same global R state and reticulate Python interpreter.
 An infrastructure or protocol failure discards that worker and its in-memory R and Python state.
-Sideband output received before the failure remains visible before the MCP tool error instead of being discarded.
-The next response after its replacement successfully starts includes the newline-prefixed banner `\n[worker restarted: in-memory state lost]`; initial lazy startup remains silent.
+Worker output available when the failure response is assembled remains visible; when it shares that response with the MCP tool error, the server starts the bracketed error on a new line.
+The next response after its replacement successfully starts includes the newline-delimited banner `[worker restarted: in-memory state lost]\n`, preceded by a newline when prior output does not already supply one; initial lazy startup remains silent.
 The worker runs each R cell through R's native top-level loop, captures R console output, prints each visible value, and maintains `.Last.value`.
 If a cell ends while an expression is incomplete, earlier complete expressions from that cell remain applied.
 Python cells execute statements in persistent `__main__` state and send a final expression through Python's display hook.

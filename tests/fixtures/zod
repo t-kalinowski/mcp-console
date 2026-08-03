@@ -124,7 +124,7 @@ def main() -> None:
                 writer,
                 {
                     "kind": "output",
-                    "data": "zod output before protocol failure\n",
+                    "data": "zod output before protocol failure",
                 },
             )
             send(writer, {"kind": "ready"})
@@ -221,6 +221,10 @@ def main() -> None:
             else:
                 output = "worker escaped sandbox\n"
             send(writer, {"kind": "output", "data": output})
+            send(writer, {"kind": "completed"})
+            continue
+
+        if source == "complete silently":
             send(writer, {"kind": "completed"})
             continue
 

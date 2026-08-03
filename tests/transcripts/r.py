@@ -98,12 +98,12 @@ def test_restarts_after_r_worker_segfault(binary: Path) -> Transcript:
     assert "Possible actions:\n1: abort (with core dump, if enabled)\n" in fatal_output
     assert fatal_output.endswith(
         "Selection: R is aborting now ...\n"
-        "worker sideband read failed: worker sideband closed"
+        "[worker sideband read failed: worker sideband closed]"
     )
 
     client.call_tool("send", r='exists("r_worker_marker", inherits = FALSE)')
     assert last_tool_text(client) == (
-        "[1] FALSE\n\n[worker restarted: in-memory state lost]"
+        "[1] FALSE\n[worker restarted: in-memory state lost]\n"
     )
     client.call_tool("send", r="1 + 1")
     assert last_tool_text(client) == "[1] 2\n"

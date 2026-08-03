@@ -134,23 +134,27 @@ A later `send` call without a code field polls that evaluation with its own `tim
 Every `send` response decodes and drains complete UTF-8 prefixes from standard-stream bytes already collected when that response is assembled.
 Bytes collected after that snapshot and incomplete trailing sequences remain for the next response; standard-stream output does not itself wake a waiting call.
 Completion returns decoded standard-stream text followed by sideband output not already delivered at an `[input]` boundary, or `[done]` when neither produced text.
-If evaluation instead ends in an infrastructure or protocol failure, all sideband output received before the failure precedes the tool error with no inserted separator.
-If the poll wait expires first, the literal `\n[running]` banner is appended to any collected standard-stream text.
-A call without a code field or `stdin` while no evaluation is active appends the literal `\n[idle]` banner to collected standard-stream text.
+If evaluation instead ends in an infrastructure or protocol failure, all sideband output received before the failure precedes the tool error.
+When runtime output shares that response, the server starts the bracketed error on a new line, inserting a newline only when the output does not already end with one.
+A tool error returned without runtime output or a restart notice remains bare.
+If the poll wait expires first and no restart notice is pending, the literal `\n[running]` banner is appended to any collected standard-stream text.
+A call without a code field or `stdin` while no evaluation is active and no restart notice is pending appends the literal `\n[idle]` banner to collected standard-stream text.
 A stdin-only call in that state queues the bytes and uses the same idle response projection.
 
-After an infrastructure or protocol failure discards a ready worker, its successfully started replacement eagerly queues the literal `\n[worker restarted: in-memory state lost]` banner in pending MCP response output.
+After an infrastructure or protocol failure discards a ready worker, its successfully started replacement eagerly queues the literal `[worker restarted: in-memory state lost]\n` banner in pending MCP response output.
 Whichever response is assembled next drains that banner exactly once.
 This is server-owned MCP response text, not a sideband frame.
-It follows collected standard-stream, sideband, or error text and precedes a final `\n[input]`, `\n[running]`, or `\n[idle]` banner.
+It follows collected standard-stream, sideband, or error text and starts on a new line, without adding a blank line when that text already ends with a newline.
+If a final `[input]`, `[running]`, or `[idle]` banner follows, the restart notice's trailing newline supplies its separator.
+With no preceding or following text, the response is `\n[worker restarted: in-memory state lost]\n`.
 When it is the only text from a completed evaluation, it replaces `[done]`.
 Initial lazy startup and retries after a failure before `ready` remain silent because no established worker state was lost.
 
 Except for prompt boundaries, this slice does not expose partial sideband output while an evaluation is running.
 Standard-stream text is attached to whichever response is sent next, including `[running]`, `[input]`, or `[idle]` responses.
-The leading newline belongs to each state banner and remains present when no worker or sideband output precedes it.
+Without a preceding restart notice, the leading newline belongs to each state banner and remains present when no worker or sideband output precedes it.
 The server does not inspect preceding output to normalize that boundary, so output that already ends in a newline leaves a blank line before the banner.
-The server inserts no separator before a tool error.
+When a tool error shares the response with runtime output or a restart notice, brackets distinguish it from worker text and the server inserts a newline before it only when needed.
 Output cursors and general incremental polling remain unimplemented.
 
 ### Interactive input
@@ -212,7 +216,7 @@ Startup failure leaves no cached worker, so a later evaluation retries startup w
 After `ready`, a sideband failure force-stops and discards the worker; a later evaluation or nonempty idle stdin submission starts a fresh worker and queues the replacement notice described above for the next response.
 Sideband output received before that failure is retained and prepended to the tool error.
 Standard-stream text collected before an infrastructure failure is attached to its tool error when available at the response boundary; text collected later remains for the next `send` response.
-The server inserts no separator between that text and the error.
+If either output path contributed text, the server starts the bracketed error on a new line.
 R parse and evaluation errors are not sideband failures: the built-in worker sends them as output followed by `completed` and remains reusable.
 
 ## Shutdown

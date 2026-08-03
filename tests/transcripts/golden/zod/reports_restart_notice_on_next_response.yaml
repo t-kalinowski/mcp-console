@@ -28,8 +28,8 @@ send:
 result:
   content:
     - type: text
-      text: |-
-        worker is already evaluating a cell; poll without a code field
+      text: |
+        [worker is already evaluating a cell; poll without a code field]
         [worker restarted: in-memory state lost]
   isError: true
 ---

@@ -137,11 +137,11 @@ def test_restarts_after_python_bridge_failure(binary: Path) -> Transcript:
         "Error in py_discover_config(required_module, use_environment) : \n"
         "  Python specified in RETICULATE_PYTHON "
         "(/mcp-console-missing-python) does not exist\n"
-        "worker sideband read failed: worker sideband closed"
+        "[worker sideband read failed: worker sideband closed]"
     )
     client.call_tool("send", r='exists("python_worker_marker", inherits = FALSE)')
     assert last_tool_text(client) == (
-        "[1] FALSE\n\n[worker restarted: in-memory state lost]"
+        "[1] FALSE\n[worker restarted: in-memory state lost]\n"
     )
     client.call_tool("send", python="6 * 7")
     assert last_tool_text(client) == "42\n"

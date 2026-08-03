@@ -253,7 +253,7 @@ def test_restarts_after_unexpected_sideband_message(binary: Path) -> Transcript:
             assert result["isError"] is True
             assert result["content"][0]["text"] == (
                 "zod output before protocol failure\n"
-                "worker sent an unexpected ready message"
+                "[worker sent an unexpected ready message]"
             )
             assert not process_group_exists(worker_group), "Zod outlived its failure"
 
@@ -264,11 +264,14 @@ def test_restarts_after_unexpected_sideband_message(binary: Path) -> Transcript:
                     "method": "tools/call",
                     "params": {
                         "name": "send",
-                        "arguments": {"r": "echo"},
+                        "arguments": {"r": "complete silently"},
                     },
                 }
             )
             client.receive(restarted_call)
+            assert last_tool_text(client) == (
+                "\n[worker restarted: in-memory state lost]\n"
+            )
             transcript = client.finish()
             passed = True
             return transcript
@@ -331,8 +334,8 @@ def test_reports_restart_notice_on_next_response(binary: Path) -> Transcript:
         result = client.transcript[-1]["result"]
         assert result["isError"] is True
         assert result["content"][0]["text"] == (
-            "worker is already evaluating a cell; poll without a code field"
-            "\n[worker restarted: in-memory state lost]"
+            "[worker is already evaluating a cell; poll without a code field]"
+            "\n[worker restarted: in-memory state lost]\n"
         )
 
         (evaluation_started.parent / "zod-release-evaluation").touch()
