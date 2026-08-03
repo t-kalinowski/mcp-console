@@ -18,7 +18,6 @@ result:
     - type: text
       text: |-
         zod background stderr
-        <large output>
-        [idle]
+        <large output>[idle]
   isError: false
 ...

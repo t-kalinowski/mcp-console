@@ -41,7 +41,7 @@ On macOS, the first nonempty stdin submission or evaluation lazily starts a sand
 Later calls reuse the same global R state.
 The worker runs each cell through R's native top-level loop, captures R console output, prints each visible value, and maintains `.Last.value`.
 The server also collects text written directly to the worker's standard output and standard error, including by descendants that inherit those streams.
-It includes text already collected in the next `send` response; output produced while R is idle can therefore appear on a later idle poll before `[idle]`.
+It retains raw bytes until the next `send` response is assembled; output produced while R is idle can therefore appear on a later idle poll directly before `[idle]`, without an added separator.
 Ordering between the two standard streams and R console output is best effort.
 If a cell ends while an expression is incomplete, earlier complete expressions from that cell remain applied.
 R language failures remain ordinary console results rather than MCP tool errors, and a silent successful cell with no pending stream output returns `[done]`.

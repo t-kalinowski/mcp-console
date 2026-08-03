@@ -18,8 +18,32 @@ struct ClientInner {
     shutdown_gate: Mutex<ShutdownGate>,
 }
 
-#[derive(Clone, Default)]
-struct CapturedOutput(Arc<Mutex<String>>);
+#[cfg(target_os = "macos")]
+#[derive(Clone)]
+struct CapturedOutput(Arc<Mutex<CapturedOutputState>>);
+
+#[cfg(not(target_os = "macos"))]
+#[derive(Clone)]
+struct CapturedOutput;
+
+#[cfg(target_os = "macos")]
+#[derive(Default)]
+struct CapturedOutputState {
+    streams: Vec<Option<Vec<u8>>>,
+    events: Vec<CapturedOutputEvent>,
+}
+
+#[cfg(target_os = "macos")]
+enum CapturedOutputEvent {
+    Data { stream: usize, bytes: Vec<u8> },
+    Closed { stream: usize },
+}
+
+#[cfg(target_os = "macos")]
+struct CapturedOutputStream {
+    output: CapturedOutput,
+    stream: usize,
+}
 
 struct Evaluation {
     state: Mutex<EvaluationState>,
@@ -84,7 +108,7 @@ impl Client {
             arguments,
             worker: Mutex::new(None),
             evaluation: Mutex::new(None),
-            output: CapturedOutput::default(),
+            output: CapturedOutput::new(),
             shutdown_gate: Mutex::new(ShutdownGate::Open { stop_handle: None }),
         }))
     }
@@ -325,21 +349,92 @@ impl Client {
     }
 }
 
+#[cfg(target_os = "macos")]
 impl CapturedOutput {
-    #[cfg(target_os = "macos")]
-    fn push(&self, text: &str) {
-        self.0
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .push_str(text);
+    fn new() -> Self {
+        Self(Arc::new(Mutex::new(CapturedOutputState::default())))
     }
 
-    fn take(&self) -> String {
-        let mut output = self
+    fn stream(&self) -> CapturedOutputStream {
+        let mut state = self
             .0
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        std::mem::take(&mut *output)
+        let stream = state.streams.len();
+        state.streams.push(Some(Vec::new()));
+        CapturedOutputStream {
+            output: self.clone(),
+            stream,
+        }
+    }
+
+    fn take(&self) -> String {
+        let mut state = self
+            .0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let events = std::mem::take(&mut state.events);
+        let mut output = String::new();
+
+        for event in events {
+            match event {
+                CapturedOutputEvent::Data { stream, bytes } => {
+                    let pending = state.streams[stream]
+                        .as_mut()
+                        .expect("captured output stream should be open");
+                    pending.extend_from_slice(&bytes);
+                    let complete = complete_utf8_prefix(pending);
+                    let incomplete = pending.split_off(complete);
+                    let complete = std::mem::replace(pending, incomplete);
+                    output.push_str(&String::from_utf8_lossy(&complete));
+                }
+                CapturedOutputEvent::Closed { stream } => {
+                    let pending = state.streams[stream]
+                        .take()
+                        .expect("captured output stream should be open");
+                    output.push_str(&String::from_utf8_lossy(&pending));
+                }
+            }
+        }
+
+        output
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+impl CapturedOutput {
+    fn new() -> Self {
+        Self
+    }
+
+    fn take(&self) -> String {
+        String::new()
+    }
+}
+
+#[cfg(target_os = "macos")]
+impl CapturedOutputStream {
+    fn push(&self, bytes: &[u8]) {
+        self.output
+            .0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .events
+            .push(CapturedOutputEvent::Data {
+                stream: self.stream,
+                bytes: bytes.to_vec(),
+            });
+    }
+
+    fn close(&self) {
+        self.output
+            .0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .events
+            .push(CapturedOutputEvent::Closed {
+                stream: self.stream,
+            });
     }
 }
 
@@ -402,8 +497,7 @@ impl Evaluation {
         if state.input_report_at.is_some() {
             return Err("worker requested new input before receiving prior input".to_string());
         }
-        state.output.push_str(prompt.trim_end());
-        append_newline(&mut state.output);
+        state.output.push_str(&prompt);
         state.input_report_at = Some(Instant::now() + INPUT_REQUEST_GRACE);
         self.changed.notify_one();
         Ok(())
@@ -503,12 +597,6 @@ impl Evaluation {
     }
 }
 
-fn append_newline(output: &mut String) {
-    if !output.is_empty() && !output.ends_with('\n') {
-        output.push('\n');
-    }
-}
-
 fn render_response(mut output: String, response: SendResponse) -> String {
     match response {
         SendResponse::Completed(completed) => {
@@ -521,17 +609,14 @@ fn render_response(mut output: String, response: SendResponse) -> String {
         }
         SendResponse::InputRequested(input) => {
             output.push_str(&input);
-            append_newline(&mut output);
             output.push_str("[input]");
             output
         }
         SendResponse::Running => {
-            append_newline(&mut output);
             output.push_str("[running]");
             output
         }
         SendResponse::Idle => {
-            append_newline(&mut output);
             output.push_str("[idle]");
             output
         }
@@ -539,9 +624,22 @@ fn render_response(mut output: String, response: SendResponse) -> String {
 }
 
 fn attach_error_output(mut output: String, error: String) -> String {
-    append_newline(&mut output);
     output.push_str(&error);
     output
+}
+
+#[cfg(target_os = "macos")]
+fn complete_utf8_prefix(bytes: &[u8]) -> usize {
+    let mut offset = 0;
+    loop {
+        match std::str::from_utf8(&bytes[offset..]) {
+            Ok(_) => return bytes.len(),
+            Err(error) => match error.error_len() {
+                Some(length) => offset += error.valid_up_to() + length,
+                None => return offset + error.valid_up_to(),
+            },
+        }
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -608,8 +706,8 @@ mod platform {
             let stderr = child
                 .take_stderr()
                 .expect("piped worker stderr should be available");
-            start_output_reader(stdout, output.clone());
-            start_output_reader(stderr, output);
+            start_output_reader(stdout, output.stream());
+            start_output_reader(stderr, output.stream());
             let child = Arc::new(Mutex::new(child));
             let stdin = start_stdin_writer(stdin, child.clone());
 
@@ -670,44 +768,29 @@ mod platform {
         }
     }
 
-    fn start_output_reader(mut stream: impl Read + Send + 'static, output: super::CapturedOutput) {
+    fn start_output_reader(
+        mut stream: impl Read + Send + 'static,
+        output: super::CapturedOutputStream,
+    ) {
         let _ = thread::spawn(move || {
-            let mut pending = Vec::new();
             let mut buffer = [0; 8 * 1024];
             loop {
                 match stream.read(&mut buffer) {
                     Ok(0) => {
-                        output.push(&String::from_utf8_lossy(&pending));
+                        output.close();
                         return;
                     }
                     Ok(length) => {
-                        pending.extend_from_slice(&buffer[..length]);
-                        let complete = complete_utf8_prefix(&pending);
-                        let remainder = pending.split_off(complete);
-                        output.push(&String::from_utf8_lossy(&pending));
-                        pending = remainder;
+                        output.push(&buffer[..length]);
                     }
                     Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
                     Err(_) => {
-                        output.push(&String::from_utf8_lossy(&pending));
+                        output.close();
                         return;
                     }
                 }
             }
         });
-    }
-
-    fn complete_utf8_prefix(bytes: &[u8]) -> usize {
-        let mut offset = 0;
-        loop {
-            match std::str::from_utf8(&bytes[offset..]) {
-                Ok(_) => return bytes.len(),
-                Err(error) => match error.error_len() {
-                    Some(length) => offset += error.valid_up_to() + length,
-                    None => return offset + error.valid_up_to(),
-                },
-            }
-        }
     }
 
     fn start_stdin_writer(

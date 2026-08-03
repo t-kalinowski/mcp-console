@@ -8,7 +8,7 @@ result:
   content:
     - type: text
       text: |
-        zod stdout
+        zod stdout 👩🏽‍💻
         <large output>
   isError: false
 ...

@@ -69,7 +69,8 @@ Output text is carried directly in a JSON string.
 JSON escaping represents newlines, quotes, and other control characters on the wire.
 
 Worker standard output and standard error are not protocol frames.
-The server decodes each stream as UTF-8, replacing invalid sequences, and appends decoded text to one pending buffer.
+Each pipe reader queues raw byte chunks without decoding them.
+When a response is assembled, the server decodes the queued chunks for each pipe as UTF-8, retains an incomplete trailing sequence for a later response, and replaces invalid sequences.
 It preserves order within each stream, but makes no relative ordering guarantee between standard output, standard error, and sideband output.
 Descendants that inherit fd 1 or fd 2 write into the same pipes even when the interpreter is idle.
 
@@ -130,26 +131,27 @@ If the grace expires first, the call returns output collected so far, the prompt
 Supplying nonempty stdin for an outstanding request starts a fresh 10-millisecond grace window; the MCP deadline reports a still-outstanding request immediately, even inside that window.
 A pending input request wins over `[running]` at the deadline.
 A later `send` call without `r` polls that evaluation with its own `timeout_ms`; it may include `stdin` to queue bytes before waiting.
-Every `send` response drains standard-stream text already collected when that response is assembled.
-Text collected after that snapshot remains for the next response; standard-stream output does not itself wake a waiting call.
-Completion returns collected standard-stream text followed by sideband output not already delivered at an `[input]` boundary, or `[done]` when neither produced text.
-If the poll wait expires first, any collected standard-stream text is followed by `[running]`.
-A call without `r` or `stdin` while no evaluation is active returns collected standard-stream text followed by `[idle]`, or `[idle]` alone.
+Every `send` response decodes and drains complete UTF-8 prefixes from standard-stream bytes already collected when that response is assembled.
+Bytes collected after that snapshot and incomplete trailing sequences remain for the next response; standard-stream output does not itself wake a waiting call.
+Completion returns decoded standard-stream text followed by sideband output not already delivered at an `[input]` boundary, or `[done]` when neither produced text.
+If the poll wait expires first, `[running]` is appended directly to any collected standard-stream text.
+A call without `r` or `stdin` while no evaluation is active appends `[idle]` directly to collected standard-stream text, or returns `[idle]` alone.
 A stdin-only call in that state queues the bytes and uses the same idle response projection.
 
 Except for prompt boundaries, this slice does not expose partial sideband output while an evaluation is running.
 Standard-stream text is attached to whichever response is sent next, including `[running]`, `[input]`, or `[idle]` responses.
+The server inserts no separator before a state marker or tool error.
 Output cursors and general incremental polling remain unimplemented.
 
 ### Interactive input
 
 When evaluated code calls `readline()` or enters `browser()`, the worker may send `input_requested`.
-The MCP response returns the output collected so far, the trimmed prompt, and an `[input]` marker.
+The server appends the prompt field verbatim to output collected so far, then appends `[input]` directly if the request remains exposed.
 A later `send` call supplies its `stdin` unchanged:
 
 ```text
 server -> worker  {"kind":"evaluate","r":"readline('name> ')"}
-worker -> server  {"kind":"input_requested","prompt":"name> "}
+worker -> server  {"kind":"input_requested","prompt":"name>\n"}
 
 server -> fd 0    Ada\n
 worker -> server  {"kind":"input_received"}
@@ -199,6 +201,7 @@ There is no structured protocol error message.
 Startup failure leaves no cached worker, so a later evaluation retries startup.
 After `ready`, a sideband failure force-stops and discards the worker; a later evaluation starts a fresh worker.
 Standard-stream text collected before an infrastructure failure is attached to its tool error when available at the response boundary; text collected later remains for the next `send` response.
+The server inserts no separator between that text and the error.
 R parse and evaluation errors are not sideband failures: the built-in worker sends them as output followed by `completed` and remains reusable.
 
 ## Shutdown
@@ -236,6 +239,8 @@ The CLI runs `worker` synchronously without a Tokio runtime, so R initialization
 
 The worker supplies cell source through `ReadConsole` before each top-level evaluation starts.
 For every evaluation-time `ReadConsole` call, the callback sends `input_requested`, then reads fd 0 directly until one newline arrives or R's supplied buffer is full.
+Before sending the frame, the built-in worker trims trailing whitespace from R's prompt and terminates a nonempty prompt with one newline.
+The server does not apply that formatting to prompts from other workers.
 After a nonempty read succeeds, it sends `input_received` before returning the bytes to R.
 A newline-free fragment shorter than that buffer keeps the callback blocked, while bytes after a returned chunk remain in the pipe for a later `ReadConsole` call or a direct fd-0 reader.
 It uses R's busy callback rather than prompt text to distinguish cell source from evaluated-code input.
@@ -252,7 +257,7 @@ An idle stdin-only call does not wait on an evaluation, so `timeout_ms` does not
 The 10-millisecond input grace controls when a provisional request becomes visible and does not limit evaluation or stdin reads.
 It is a latency heuristic: scheduling can delay a receipt past the grace and expose an extra `[input]` boundary even when queued bytes subsequently satisfy the read.
 
-Standard output and standard error are treated as UTF-8 text with replacement for invalid sequences; arbitrary binary output is not preserved byte for byte.
+Standard output and standard error are decoded as UTF-8 only when a response is assembled, with replacement for invalid sequences; arbitrary binary output is not preserved byte for byte.
 Worker failures are reported as plain-text MCP tool errors, not structured worker events.
 Concurrent MCP `send` calls are outside the current contract.
 The current sandbox child does not yet supervise descendants after its direct process exits, or descendants that leave its process group; capturing inherited standard streams does not change that boundary.

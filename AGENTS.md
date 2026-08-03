@@ -36,9 +36,11 @@ Cell EOF while R requires continuation input is an error; earlier complete expre
 R parse, evaluation, and auto-print failures are normal language outcomes with `isError: false`; silent successful cells with no pending stream output return `[done]`.
 Submitted R functions do not currently retain a source filename.
 Worker standard output and standard error are piped and collected continuously, including while the worker is idle.
-Each `send` response drains stream text already collected at its response boundary; later text remains for the next response, and idle or running responses retain their state marker after that text.
+Each pipe reader queues raw byte chunks, and each `send` response decodes and drains complete UTF-8 prefixes from bytes already collected at its response boundary; later bytes remain for the next response.
+Idle, running, and input responses append their state marker directly after worker output without inserting a separator.
 Completion returns collected stream and sideband output instead of `[done]` when either produced text.
-Ordering between the two standard streams and sideband output is best effort, and invalid UTF-8 is replaced.
+Ordering between the two standard streams and sideband output is best effort; incomplete UTF-8 remains with its pipe until a later response, and invalid UTF-8 is replaced when output is rendered.
+The built-in R worker formats nonempty console prompts as lines before sending them, while the server appends other workers' prompt fields verbatim.
 Output from descendants that inherit standard output or standard error follows the same path, but this does not add descendant supervision; forked descendants cannot use the inherited sideband.
 The hidden `worker` command takes ownership of the sideband, discovers `R_HOME` through the selected R executable inside the sandbox, and opens `R_HOME/lib/libR.dylib` by its absolute path.
 It does not self-execute or set a dynamic-loader environment variable.

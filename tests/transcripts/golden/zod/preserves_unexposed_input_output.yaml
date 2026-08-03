@@ -21,7 +21,6 @@ result:
     - type: text
       text: |
         before
-        late>
-        zod stdin: answer
+        late> zod stdin: answer
   isError: false
 ...

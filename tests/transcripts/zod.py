@@ -34,9 +34,9 @@ def test_captures_worker_stdout(binary: Path) -> Transcript:
     client.initialize_and_list_tools()
     client.call_tool("send", r="emit stdout")
     output = last_tool_text(client)
-    assert_large_output(output, "zod stdout\n")
+    assert_large_output(output, "zod stdout 👩🏽‍💻\n")
     client.transcript[-1]["result"]["content"][0]["text"] = (
-        "zod stdout\n<large output>\n"
+        "zod stdout 👩🏽‍💻\n<large output>\n"
     )
     return client.finish()
 
@@ -69,13 +69,13 @@ def test_drains_background_stderr_while_idle(binary: Path) -> Transcript:
 
         client.call_tool("send", timeout_ms=0)
         output = last_tool_text(client)
-        assert output.endswith("\n[idle]"), output[-100:]
+        assert output.endswith("[idle]"), output[-100:]
         assert_large_output(
-            output.removesuffix("\n[idle]"),
+            output.removesuffix("[idle]"),
             "zod background stderr\n",
         )
         client.transcript[-1]["result"]["content"][0]["text"] = (
-            "zod background stderr\n<large output>\n[idle]"
+            "zod background stderr\n<large output>[idle]"
         )
         return client.finish()
 
@@ -144,7 +144,7 @@ def test_routes_combined_and_followup_stdin(binary: Path) -> Transcript:
     assert last_tool_text(client) == "zod stdin: followup\n"
 
     client.call_tool("send", r="request input")
-    assert last_tool_text(client) == "zod>\n[input]"
+    assert last_tool_text(client) == "zod> [input]"
     client.call_tool("send", stdin="")
     assert last_tool_text(client) == "[input]"
     client.call_tool("send", stdin="prompted\n")
@@ -156,7 +156,7 @@ def test_routes_combined_and_followup_stdin(binary: Path) -> Transcript:
         stdin="first\n",
         timeout_ms=1_000,
     )
-    assert last_tool_text(client) == "second>\n[input]"
+    assert last_tool_text(client) == "second> [input]"
     client.call_tool("send", stdin="second\n")
     assert last_tool_text(client) == "zod stdin: first|second\n"
 
@@ -195,7 +195,7 @@ def test_preserves_unexposed_input_output(binary: Path) -> Transcript:
         wait_for_marker(temporary_path, "zod-input-requested", client)
 
         client.call_tool("send", stdin="answer\n", timeout_ms=3_000)
-        assert last_tool_text(client) == "before\nlate>\nzod stdin: answer\n"
+        assert last_tool_text(client) == "before\nlate> zod stdin: answer\n"
         return client.finish()
 
 

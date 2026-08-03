@@ -332,12 +332,14 @@ mod platform {
     }
 
     fn send_input_requested(prompt: &str) -> Result<(), String> {
+        let mut prompt = prompt.trim_end().to_string();
+        if !prompt.is_empty() {
+            prompt.push('\n');
+        }
         WORKER_WRITER
             .get()
             .expect("R worker sideband writer should be initialized")
-            .send(&WorkerMessage::InputRequested {
-                prompt: prompt.to_string(),
-            })
+            .send(&WorkerMessage::InputRequested { prompt })
             .map_err(|error| format!("R worker failed to report an input request: {error}"))
     }
 

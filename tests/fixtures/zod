@@ -98,7 +98,10 @@ def main() -> None:
             os._exit(86)
 
         if message["r"] == "emit stdout":
-            emit_large_output(1, b"zod stdout\n")
+            write_all(1, b"zod stdout ")
+            for part in ("👩", "🏽", "\u200d", "💻", "\n"):
+                write_all(1, part.encode())
+            emit_large_output(1, b"")
             send(writer, {"kind": "completed"})
             continue
 
