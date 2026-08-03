@@ -38,7 +38,7 @@ struct CapturedOutput;
 struct CapturedOutputState {
     streams: Vec<Option<Vec<u8>>>,
     events: Vec<CapturedOutputEvent>,
-    response_suffix: String,
+    restart_notice: String,
 }
 
 #[cfg(target_os = "macos")]
@@ -293,7 +293,7 @@ impl Client {
             )?;
             *worker = WorkerState::Running(running);
             if replacing {
-                self.0.output.push_response_suffix(WORKER_RESTART_BANNER);
+                self.0.output.push_restart_notice();
             }
         }
         let WorkerState::Running(running) = &mut *worker else {
@@ -307,11 +307,11 @@ impl Client {
     }
 
     fn attach_output(&self, result: Result<SendResponse, String>) -> Result<String, String> {
-        let (output, suffix) = self.0.output.take();
+        let (output, restart_notice) = self.0.output.take();
         match result {
-            Ok(response) => Ok(render_response(output, response, suffix)),
-            Err(error) if output.is_empty() && suffix.is_empty() => Err(error),
-            Err(error) => Err(attach_error_output(output, error, suffix)),
+            Ok(response) => Ok(render_response(output, response, restart_notice)),
+            Err(error) if output.is_empty() && restart_notice.is_empty() => Err(error),
+            Err(error) => Err(attach_error_output(output, error, restart_notice)),
         }
     }
 
@@ -390,12 +390,12 @@ impl CapturedOutput {
         }
     }
 
-    fn push_response_suffix(&self, suffix: &str) {
+    fn push_restart_notice(&self) {
         self.0
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .response_suffix
-            .push_str(suffix);
+            .restart_notice
+            .push_str(WORKER_RESTART_BANNER);
     }
 
     fn take(&self) -> (String, String) {
@@ -404,7 +404,7 @@ impl CapturedOutput {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         let events = std::mem::take(&mut state.events);
-        let suffix = std::mem::take(&mut state.response_suffix);
+        let restart_notice = std::mem::take(&mut state.restart_notice);
         let mut output = String::new();
 
         for event in events {
@@ -428,7 +428,7 @@ impl CapturedOutput {
             }
         }
 
-        (output, suffix)
+        (output, restart_notice)
     }
 }
 
@@ -438,7 +438,7 @@ impl CapturedOutput {
         Self
     }
 
-    fn push_response_suffix(&self, _suffix: &str) {}
+    fn push_restart_notice(&self) {}
 
     fn take(&self) -> (String, String) {
         (String::new(), String::new())
@@ -630,11 +630,11 @@ impl Evaluation {
     }
 }
 
-fn render_response(mut output: String, response: SendResponse, suffix: String) -> String {
+fn render_response(mut output: String, response: SendResponse, restart_notice: String) -> String {
     match response {
         SendResponse::Completed(completed) => {
             output.push_str(&completed);
-            output.push_str(&suffix);
+            output.push_str(&restart_notice);
             if output.is_empty() {
                 "[done]".to_string()
             } else {
@@ -643,27 +643,27 @@ fn render_response(mut output: String, response: SendResponse, suffix: String) -
         }
         SendResponse::InputRequested(input) => {
             output.push_str(&input);
-            output.push_str(&suffix);
+            output.push_str(&restart_notice);
             output.push_str("\n[input]");
             output
         }
         SendResponse::Running => {
-            output.push_str(&suffix);
+            output.push_str(&restart_notice);
             output.push_str("\n[running]");
             output
         }
         SendResponse::Idle => {
-            output.push_str(&suffix);
+            output.push_str(&restart_notice);
             output.push_str("\n[idle]");
             output
         }
     }
 }
 
-fn attach_error_output(mut output: String, error: String, suffix: String) -> String {
+fn attach_error_output(mut output: String, error: String, restart_notice: String) -> String {
     // Tool errors are not state banners and have no server-owned line prefix.
     output.push_str(&error);
-    output.push_str(&suffix);
+    output.push_str(&restart_notice);
     output
 }
 

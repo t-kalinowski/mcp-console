@@ -81,6 +81,51 @@ def test_recoverable_language_errors(binary: Path) -> Transcript:
     return client.finish()
 
 
+def test_restarts_after_r_worker_exit(binary: Path) -> Transcript:
+    client = McpClient(binary, ("serve",))
+    client.initialize_and_list_tools()
+    client.call_tool("send", r="r_worker_marker <- TRUE")
+    client.call_tool("send", r="tools::pskill(Sys.getpid(), signal = 9L)")
+    result = client.transcript[-1]["result"]
+    assert result["isError"] is True
+    assert result["content"][0]["text"] == (
+        "worker sideband read failed: worker sideband closed"
+    )
+
+    client.call_tool("send", r='exists("r_worker_marker", inherits = FALSE)')
+    assert last_tool_text(client) == (
+        "[1] FALSE\n\n[worker restarted: in-memory state lost]"
+    )
+    client.call_tool("send", r="1 + 1")
+    assert last_tool_text(client) == "[1] 2\n"
+    return client.finish()
+
+
+def test_reports_r_worker_restart_with_idle_stdin(binary: Path) -> Transcript:
+    client = McpClient(binary, ("serve",))
+    client.initialize_and_list_tools()
+    client.call_tool("send", r="invisible(NULL)")
+    client.call_tool("send", r="tools::pskill(Sys.getpid(), signal = 9L)")
+    assert client.transcript[-1]["result"]["isError"] is True
+
+    client.call_tool("send", stdin="replacement\n")
+    assert last_tool_text(client) == (
+        "\n[worker restarted: in-memory state lost]\n[idle]"
+    )
+
+    # fmt: r
+    direct_stdin = code(r"""
+        local({
+          connection <- suppressWarnings(file("/dev/stdin"))
+          on.exit(close(connection))
+          readLines(connection, n = 1)
+        })
+        """)
+    client.call_tool("send", r=direct_stdin)
+    assert last_tool_text(client) == '[1] "replacement"\n'
+    return client.finish()
+
+
 def test_browser_input(binary: Path) -> Transcript:
     client = McpClient(binary, ("serve",))
     client.initialize_and_list_tools()
