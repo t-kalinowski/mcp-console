@@ -1,2 +1,5 @@
 /target
 __pycache__/
+.codex
+.claude
+.positai
