@@ -12,7 +12,10 @@ send:
 result:
   content:
     - type: text
-      text: "before\npartial>\x20\n[input]"
+      text: |-
+        before
+        partial> 
+        [input]
   isError: false
 ---
 id: 4

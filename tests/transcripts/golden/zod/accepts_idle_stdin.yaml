@@ -8,7 +8,9 @@ send:
 result:
   content:
     - type: text
-      text: "\n[idle]"
+      text: |-
+        
+        [idle]
   isError: false
 ---
 id: 4
@@ -28,7 +30,9 @@ send:
 result:
   content:
     - type: text
-      text: "\n[idle]"
+      text: |-
+        
+        [idle]
   isError: false
 ---
 id: 6

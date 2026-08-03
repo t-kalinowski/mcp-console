@@ -18,7 +18,9 @@ send:
 result:
   content:
     - type: text
-      text: "\n[running]"
+      text: |-
+        
+        [running]
   isError: false
 ---
 id: 5

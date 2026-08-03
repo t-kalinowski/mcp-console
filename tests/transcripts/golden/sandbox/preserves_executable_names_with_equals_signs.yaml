@@ -2,8 +2,8 @@
 command:
   - mcp-console
   - sandbox
-  - "--"
-  - "./program=fixture"
+  - --
+  - ./program=fixture
   - /usr/bin/false
 stdout: ""
 ...

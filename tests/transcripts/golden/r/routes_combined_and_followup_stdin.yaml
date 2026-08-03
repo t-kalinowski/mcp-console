@@ -33,7 +33,9 @@ send:
 result:
   content:
     - type: text
-      text: "after>\x20\n[input]"
+      text: |-
+        after> 
+        [input]
   isError: false
 ---
 id: 5
@@ -54,7 +56,9 @@ send:
 result:
   content:
     - type: text
-      text: "color>\x20\n[input]"
+      text: |-
+        color> 
+        [input]
   isError: false
 ---
 id: 7
@@ -64,7 +68,9 @@ send:
 result:
   content:
     - type: text
-      text: "\n[input]"
+      text: |-
+        
+        [input]
   isError: false
 ---
 id: 8

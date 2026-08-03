@@ -30,6 +30,8 @@ send:
 result:
   content:
     - type: text
-      text: "\n[idle]"
+      text: |-
+        
+        [idle]
   isError: false
 ...
