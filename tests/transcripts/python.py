@@ -15,10 +15,11 @@ def test_preserves_configured_python_environment(binary: Path) -> Transcript:
     environment["RETICULATE_PYTHON"] = "configured-by-user"
     client = McpClient(binary, ("serve",), environment)
     client.initialize_and_list_tools()
-    client.call_tool(
-        "send",
-        r='Sys.getenv("RETICULATE_PYTHON", unset = NA_character_)',
-    )
+    # fmt: r
+    r = code(r"""
+        Sys.getenv("RETICULATE_PYTHON", unset = NA_character_)
+        """)
+    client.call_tool("send", r=r)
     assert last_tool_text(client) == '[1] "configured-by-user"\n'
     return client.finish()
 
@@ -28,10 +29,11 @@ def test_preserves_empty_python_environment(binary: Path) -> Transcript:
     environment["RETICULATE_PYTHON"] = ""
     client = McpClient(binary, ("serve",), environment)
     client.initialize_and_list_tools()
-    client.call_tool(
-        "send",
-        r='Sys.getenv("RETICULATE_PYTHON", unset = NA_character_)',
-    )
+    # fmt: r
+    r = code(r"""
+        Sys.getenv("RETICULATE_PYTHON", unset = NA_character_)
+        """)
+    client.call_tool("send", r=r)
     assert last_tool_text(client) == '[1] ""\n'
     return client.finish()
 
@@ -64,7 +66,11 @@ def managed_python_transcript(binary: Path, configured: bool) -> Transcript:
         """)
     client.call_tool("send", r=r)
     assert last_tool_text(client) == "[done]"
-    client.call_tool("send", python="40 + 2")
+    # fmt: python
+    python = code(r"""
+        40 + 2
+        """)
+    client.call_tool("send", python=python)
     output = last_tool_text(client)
     assert output == "42\n", repr(output)
     return client.finish()
@@ -84,10 +90,11 @@ def test_forces_uv_offline_in_builtin_worker(binary: Path) -> Transcript:
     environment["UV_OFFLINE"] = "0"
     client = McpClient(binary, ("serve",), environment)
     client.initialize_and_list_tools()
-    client.call_tool(
-        "send",
-        r='Sys.getenv("UV_OFFLINE", unset = NA_character_)',
-    )
+    # fmt: r
+    r = code(r"""
+        Sys.getenv("UV_OFFLINE", unset = NA_character_)
+        """)
+    client.call_tool("send", r=r)
     assert last_tool_text(client) == '[1] "1"\n'
     return client.finish()
 

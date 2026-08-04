@@ -3,7 +3,8 @@
 ---
 id: 3
 send:
-  r: Sys.getenv("UV_OFFLINE", unset = NA_character_)
+  r: |
+    Sys.getenv("UV_OFFLINE", unset = NA_character_)
 result:
   content:
     - type: text

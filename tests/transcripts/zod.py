@@ -7,7 +7,7 @@ import tempfile
 import time
 from pathlib import Path
 
-from _support import McpClient, Transcript, run_this_suite
+from _support import McpClient, Transcript, code, run_this_suite
 
 
 PLATFORMS = {"darwin"}
@@ -37,7 +37,11 @@ def test_custom_worker_skips_managed_python_preflight(binary: Path) -> Transcrip
         environment,
     )
     client.initialize_and_list_tools()
-    client.call_tool("send", python="echo")
+    # fmt: python
+    python = code(r"""
+        echo
+        """).removesuffix("\n")
+    client.call_tool("send", python=python)
     return client.finish()
 
 

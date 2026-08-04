@@ -22,7 +22,8 @@ result:
 ---
 id: 4
 send:
-  python: 40 + 2
+  python: |
+    40 + 2
 result:
   content:
     - type: text
