@@ -29,15 +29,6 @@ base::local({
 
   evaluate <- function(id) {
     if (is.null(evaluator)) {
-      if (!reticulate::py_available(initialize = FALSE) &&
-          !nzchar(Sys.getenv("RETICULATE_PYTHON"))) {
-        python <- Sys.which("python3")
-        if (!nzchar(python)) {
-          stop("python3 was not found on PATH", call. = FALSE)
-        }
-        reticulate::use_python(python, required = TRUE)
-      }
-
       private <- reticulate::py_run_string(r"---(
 import __main__ as _main
 import ast as _ast
@@ -112,17 +103,16 @@ def _mcp_console_eval_cell(
         if unsafe { libc::pthread_main_np() } != 1 {
             return Err(io::Error::other("R worker must run on the process main thread").into());
         }
-        // The worker owns its environment and is still single-threaded. Reticulate
-        // must replace Python's fd-backed streams before user R can initialize it.
-        if unsafe {
-            libc::setenv(
-                c"RETICULATE_REMAP_OUTPUT_STREAMS".as_ptr(),
-                c"1".as_ptr(),
-                1,
-            )
-        } != 0
-        {
-            return Err(io::Error::last_os_error().into());
+        // The worker owns its environment and is still single-threaded. Configure
+        // reticulate before user R can initialize Python.
+        for (name, value, overwrite) in [
+            (c"RETICULATE_REMAP_OUTPUT_STREAMS", c"1", 1),
+            (c"RETICULATE_PYTHON", c"managed", 0),
+            (c"UV_OFFLINE", c"1", 1),
+        ] {
+            if unsafe { libc::setenv(name.as_ptr(), value.as_ptr(), overwrite) } != 0 {
+                return Err(io::Error::last_os_error().into());
+            }
         }
         let (mut reader, writer) = crate::sideband::connect_from_env()?;
         let r_home = harp::command::r_home_setup()?;

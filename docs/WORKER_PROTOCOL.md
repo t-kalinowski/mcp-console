@@ -288,8 +288,11 @@ A fork-only Python child inherits the remapped text streams after its sideband i
 An exec descendant that retains fd 1/2 creates fresh standard streams backed by those descriptors, so its ordinary stdout and stderr writes are captured.
 There is no relative ordering guarantee between those pipes and sideband output, as described under [Transport](#transport).
 
-The worker reuses an already initialized reticulate Python; otherwise, it honors an explicit `RETICULATE_PYTHON` path and finally selects an existing `python3` from `PATH`.
-The worker does not install reticulate or Python and cannot use the network to discover or install them.
+Before initializing R, the worker sets `RETICULATE_PYTHON=managed` when the variable is absent and preserves any existing value.
+It also forces `UV_OFFLINE=1`, overwriting any inherited value before user code runs.
+Reticulate then owns interpreter selection and provisioning when Python is first initialized, whether from an R or Python cell, and the worker reuses that interpreter afterward.
+Managed selection may invoke `uv`, which can use only cached or local Python and package artifacts.
+That work remains inside the worker sandbox, which denies network access and regular-file writes outside its per-launch temporary directory.
 
 Each Python cell receives a synthetic filename such as `<mcp-console:python:e1>`.
 The worker stores the source in a process-lifetime private R environment and calls its evaluator with only a short evaluation ID.
@@ -315,7 +318,9 @@ It is a latency heuristic: scheduling can delay a receipt past the grace and exp
 Standard output and standard error are decoded as UTF-8 only when a response is assembled, with replacement for invalid sequences; arbitrary binary output is not preserved byte for byte.
 Worker failures are reported as plain-text MCP tool errors, not structured worker events.
 Concurrent MCP `send` calls are outside the current contract.
-Python cells require an installed reticulate R package and an embeddable Python already initialized through reticulate, selected by `RETICULATE_PYTHON`, or available as `python3` on `PATH`.
+Python cells require an installed reticulate R package and an interpreter that reticulate can initialize under the sandbox policy.
+MCP Console does not install reticulate.
+Callers can set `RETICULATE_PYTHON` to an existing interpreter when managed selection requires access that the sandbox does not permit.
 The Python input bridge does not observe direct `sys.stdin` or fd-0 reads.
 The current sandbox child does not yet supervise descendants after its direct process exits, or descendants that leave its process group; capturing inherited standard streams does not change that boundary.
 

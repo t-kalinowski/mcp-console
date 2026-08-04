@@ -44,7 +44,9 @@ Within the worker process, reticulate then routes Python text writes, including 
 Writes through `sys.stdout.buffer`, `sys.stderr.buffer`, or native fd 1/2 bypass that remap and use the captured standard streams.
 A fork-only Python child cannot use the sideband: writes through its inherited remapped text streams are discarded, while buffer and direct-fd writes remain captured.
 An exec descendant that retains fd 1/2 creates fresh standard streams backed by those descriptors, so its ordinary stdout and stderr are captured.
-The worker reuses an already initialized reticulate Python, otherwise honors `RETICULATE_PYTHON`, and finally selects `python3` from `PATH` without installing Python or accessing the network.
+Before initializing R, the worker sets `RETICULATE_PYTHON=managed` when the variable is absent and preserves any existing value.
+It also forces `UV_OFFLINE=1`, overwriting any inherited value to match the sandbox's network denial.
+Reticulate then owns interpreter selection and provisioning; managed work remains subject to the worker sandbox's filesystem and network policy.
 R and Python share objects through reticulate's `py` and `r` bridges.
 A silent successful Python cell sends `completed` without an `output` frame and projects to `[done]` when no other response text is pending.
 Python `input()` and `breakpoint()`/`pdb` use reticulate's R console bridge, so they emit `input_requested` before a read and `input_received` after it succeeds.

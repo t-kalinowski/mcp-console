@@ -1,5 +1,7 @@
 #!/usr/bin/env -S uv run --script
 
+import os
+import shutil
 from pathlib import Path
 
 from _support import McpClient, Transcript, code, run_this_suite
@@ -8,8 +10,62 @@ from _support import McpClient, Transcript, code, run_this_suite
 PLATFORMS = {"darwin"}
 
 
+def configured_python_environment() -> dict[str, str]:
+    environment = os.environ.copy()
+    python = shutil.which("python3")
+    assert python is not None
+    environment["RETICULATE_PYTHON"] = python
+    return environment
+
+
+def test_configures_reticulate_python_environment(binary: Path) -> Transcript:
+    environment = os.environ.copy()
+    environment.pop("RETICULATE_PYTHON", None)
+    client = McpClient(binary, ("serve",), environment)
+    client.initialize_and_list_tools()
+    client.call_tool(
+        "send",
+        r='Sys.getenv("RETICULATE_PYTHON", unset = NA_character_)',
+    )
+    assert last_tool_text(client) == '[1] "managed"\n'
+    transcript = client.finish()
+
+    environment["RETICULATE_PYTHON"] = "configured-by-user"
+    client = McpClient(binary, ("serve",), environment)
+    client.initialize_and_list_tools()
+    client.call_tool(
+        "send",
+        r='Sys.getenv("RETICULATE_PYTHON", unset = NA_character_)',
+    )
+    assert last_tool_text(client) == '[1] "configured-by-user"\n'
+    transcript += client.finish()
+
+    environment["RETICULATE_PYTHON"] = ""
+    client = McpClient(binary, ("serve",), environment)
+    client.initialize_and_list_tools()
+    client.call_tool(
+        "send",
+        r='Sys.getenv("RETICULATE_PYTHON", unset = NA_character_)',
+    )
+    assert last_tool_text(client) == '[1] ""\n'
+    return transcript + client.finish()
+
+
+def test_forces_uv_offline_in_builtin_worker(binary: Path) -> Transcript:
+    environment = os.environ.copy()
+    environment["UV_OFFLINE"] = "0"
+    client = McpClient(binary, ("serve",), environment)
+    client.initialize_and_list_tools()
+    client.call_tool(
+        "send",
+        r='Sys.getenv("UV_OFFLINE", unset = NA_character_)',
+    )
+    assert last_tool_text(client) == '[1] "1"\n'
+    return client.finish()
+
+
 def test_evaluates_cells_in_persistent_reticulate_state(binary: Path) -> Transcript:
-    client = McpClient(binary, ("serve",))
+    client = McpClient(binary, ("serve",), configured_python_environment())
     client.initialize_and_list_tools()
     # fmt: r
     r = code(r"""
@@ -77,7 +133,7 @@ def test_evaluates_cells_in_persistent_reticulate_state(binary: Path) -> Transcr
 
 
 def test_runs_async_python_explicitly(binary: Path) -> Transcript:
-    client = McpClient(binary, ("serve",))
+    client = McpClient(binary, ("serve",), configured_python_environment())
     client.initialize_and_list_tools()
     # fmt: python
     python = code("""
@@ -96,7 +152,7 @@ def test_runs_async_python_explicitly(binary: Path) -> Transcript:
 
 
 def test_recovers_from_python_errors(binary: Path) -> Transcript:
-    client = McpClient(binary, ("serve",))
+    client = McpClient(binary, ("serve",), configured_python_environment())
     client.initialize_and_list_tools()
     # fmt: python
     python = code("""
@@ -140,7 +196,7 @@ def test_recovers_from_python_errors(binary: Path) -> Transcript:
 
 
 def test_routes_python_input(binary: Path) -> Transcript:
-    client = McpClient(binary, ("serve",))
+    client = McpClient(binary, ("serve",), configured_python_environment())
     client.initialize_and_list_tools()
 
     # fmt: python
@@ -174,7 +230,7 @@ def test_routes_python_input(binary: Path) -> Transcript:
 
 
 def test_python_debugger_input(binary: Path) -> Transcript:
-    client = McpClient(binary, ("serve",))
+    client = McpClient(binary, ("serve",), configured_python_environment())
     client.initialize_and_list_tools()
 
     # fmt: python
@@ -204,7 +260,7 @@ def test_python_debugger_input(binary: Path) -> Transcript:
 
 
 def test_restarts_after_python_bridge_failure(binary: Path) -> Transcript:
-    client = McpClient(binary, ("serve",))
+    client = McpClient(binary, ("serve",), configured_python_environment())
     client.initialize_and_list_tools()
     # fmt: r
     r = code(r"""

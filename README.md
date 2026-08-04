@@ -58,8 +58,13 @@ Ordering between the two standard streams and console output is best effort.
 R language failures and uncaught Python exceptions remain ordinary console results rather than MCP tool errors.
 A silent successful R or Python cell sends no sideband `output` frame, still sends `completed`, and projects to `[done]` when no other response text is pending.
 
-Python cells require the `reticulate` R package and an embeddable Python already initialized through reticulate, selected by `RETICULATE_PYTHON`, or available as `python3` on `PATH`.
-The worker does not install either dependency or access the network.
+Python cells require the `reticulate` R package.
+Before R starts, the worker sets `RETICULATE_PYTHON=managed` when the variable is absent and preserves any existing value.
+It also forces `UV_OFFLINE=1`, overwriting any inherited value to match the sandbox's network denial.
+Reticulate then owns interpreter selection and provisioning; its managed mode may invoke `uv`, which can use only cached or local Python and package artifacts.
+That work remains inside the worker sandbox, which denies network access and regular-file writes outside its per-launch temporary directory.
+Set `RETICULATE_PYTHON` to an existing interpreter when managed selection requires access that the sandbox does not permit.
+MCP Console does not install reticulate.
 Python `input()` and `breakpoint()`/`pdb` use reticulate's R console bridge, so each read emits `input_requested` before reading and `input_received` after a successful read.
 They accept proactively queued or follow-up stdin, including repeated debugger commands.
 Reads through Python `sys.stdin` or fd 0 directly bypass the bridge and emit neither event.
