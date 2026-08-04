@@ -2,7 +2,6 @@
 
 import os
 import shutil
-import tempfile
 from pathlib import Path
 
 from _support import McpClient, Transcript, code, run_this_suite
@@ -46,38 +45,37 @@ def test_preserves_empty_python_environment(binary: Path) -> Transcript:
 
 
 def managed_python_transcript(binary: Path, configured: bool) -> Transcript:
-    with tempfile.TemporaryDirectory() as temporary_directory:
-        marker = Path(temporary_directory) / "managed-python"
-        environment = os.environ.copy()
-        if configured:
-            environment["RETICULATE_PYTHON"] = "managed"
-        else:
-            environment.pop("RETICULATE_PYTHON", None)
-        environment["RETICULATE_UV"] = str(
-            Path(__file__).resolve().parents[1] / "fixtures" / "uv"
-        )
-        python = shutil.which("python3")
-        assert python is not None
-        environment["MCP_CONSOLE_TEST_PYTHON"] = python
-        environment["MCP_CONSOLE_UV_MARKER"] = str(marker)
-        environment["UV_OFFLINE"] = "1"
+    environment = os.environ.copy()
+    if configured:
+        environment["RETICULATE_PYTHON"] = "managed"
+    else:
+        environment.pop("RETICULATE_PYTHON", None)
+    uv = shutil.which("uv")
+    assert uv is not None, "real uv is required for managed-Python tests"
+    environment.pop("RETICULATE_UV", None)
+    environment["UV_OFFLINE"] = "1"
 
-        client = McpClient(binary, ("serve",), environment)
-        client.initialize_and_list_tools()
-        assert marker.read_text(encoding="utf-8") == "managed Python provisioned\n"
-        client.call_tool("send", r="reticulate::py_config()$ephemeral")
-        assert last_tool_text(client) == "[1] TRUE\n"
-        client.call_tool(
-            "send",
-            r='reticulate::py_require("mcp-console-test-package")',
+    client = McpClient(binary, ("serve",), environment)
+    client.initialize_and_list_tools()
+    # fmt: r
+    r = code(r"""
+        python <- Sys.getenv("RETICULATE_PYTHON", unset = NA_character_)
+        stopifnot(
+          !is.na(python),
+          !identical(python, "managed"),
+          file.exists(python),
+          identical(
+            normalizePath(reticulate::py_config()$python),
+            normalizePath(python)
+          )
         )
-        assert last_tool_text(client) == "[done]"
-        client.call_tool("send", r="reticulate::py_config()$ephemeral")
-        assert last_tool_text(client) == "[1] TRUE\n"
-        client.call_tool("send", python="40 + 2")
-        output = last_tool_text(client)
-        assert output == "42\n", repr(output)
-        return client.finish()
+        """)
+    client.call_tool("send", r=r)
+    assert last_tool_text(client) == "[done]"
+    client.call_tool("send", python="40 + 2")
+    output = last_tool_text(client)
+    assert output == "42\n", repr(output)
+    return client.finish()
 
 
 def test_evaluates_with_default_managed_python(binary: Path) -> Transcript:

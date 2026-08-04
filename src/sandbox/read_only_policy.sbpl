@@ -8,9 +8,8 @@
 
 ; Commands may read the host filesystem, except for pre-existing terminal
 ; devices. Regular host-file writes are limited to the private temporary
-; directory created for this sandbox invocation and an optional explicit
-; per-server cache directory. The device and IPC rules below provide the
-; additional write operations required by supported runtimes.
+; directory created for this sandbox invocation. The device and IPC rules below
+; provide the additional write operations required by supported runtimes.
 ; Seatbelt checks both the existing vnode and the new directory entry for a
 ; hard-link operation. This permits links within the temporary directory but
 ; prevents importing an inode from a read-only host path.
@@ -20,8 +19,6 @@
   (regex #"^/dev/ttys[0-9]+$"))
 (allow file-write*
   (subpath (param "TEMP_DIRECTORY")))
-(allow file-write*
-  (subpath (param "EXTRA_WRITABLE_DIRECTORY")))
 
 ; child processes inherit the policy of their parent
 (allow process-exec)

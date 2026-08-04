@@ -797,11 +797,11 @@ mod platform {
         ) -> Result<Self, String> {
             let (reader, writer, child_fds) = crate::sideband::bind()
                 .map_err(|error| format!("failed to create worker sideband: {error}"))?;
-            let mut command = match managed_python {
-                Some(managed_python) => managed_python.sandboxed_command(program.as_os_str()),
-                None => crate::sandbox::SandboxedCommand::new(program.as_os_str()),
+            let mut command = crate::sandbox::SandboxedCommand::new(program.as_os_str())
+                .map_err(|error| format!("failed to prepare worker sandbox: {error}"))?;
+            if let Some(managed_python) = managed_python {
+                managed_python.configure_worker(&mut command);
             }
-            .map_err(|error| format!("failed to prepare worker sandbox: {error}"))?;
             command
                 .args(arguments)
                 .stdin(Stdio::piped())

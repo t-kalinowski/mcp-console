@@ -59,11 +59,11 @@ R language failures and uncaught Python exceptions remain ordinary console resul
 A silent successful R or Python cell sends no sideband `output` frame, still sends `completed`, and projects to `[done]` when no other response text is pending.
 
 Python cells require the `reticulate` R package.
-When `RETICULATE_PYTHON` is unset or is `managed`, `mcp-console serve` runs a reticulate preflight outside the worker sandbox and allows it to provision Python and packages in a dedicated per-server cache.
+When `RETICULATE_PYTHON` is unset or is `managed`, `mcp-console serve` runs a reticulate preflight outside the worker sandbox, where reticulate can use its normal global caches and network access to select an interpreter.
 Other configured values, including an empty value, are preserved and skip the preflight.
-The preflight may access the network and write that cache; it executes installed R and reticulate code, but no MCP-submitted code.
-The sandboxed worker remains in reticulate's managed mode, forces `UV_OFFLINE=1`, and can write only its private temporary directory and the prepared cache.
-Cached `py_require()` additions remain supported, and the server attempts to remove the cache when it exits.
+The server passes the selected interpreter path to the sandboxed worker, which forces `UV_OFFLINE=1` and otherwise uses the existing sandbox policy unchanged.
+The selection is fixed during preflight; worker-side `py_require()` calls do not revise it.
+The preflight executes installed R and reticulate code, but no MCP-submitted code.
 If the preflight cannot select an interpreter, `serve` exits before accepting MCP requests.
 MCP Console does not install reticulate.
 Python `input()` and `breakpoint()`/`pdb` use reticulate's R console bridge, so each read emits `input_requested` before reading and `input_received` after a successful read.

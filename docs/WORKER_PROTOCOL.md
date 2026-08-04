@@ -24,12 +24,11 @@ Rscript --vanilla -e 'Sys.setenv(RETICULATE_PYTHON = "managed"); cat(reticulate:
 ```
 
 The server uses `$R_HOME/bin/Rscript` when `R_HOME` is set and otherwise selects `Rscript` from `PATH`.
-It removes inherited `UV_OFFLINE`, requires the command to return a valid interpreter path, and prepares a dedicated per-server reticulate and uv cache.
-Every worker generation receives `RETICULATE_PYTHON=managed`, `R_USER_CACHE_DIR`, `UV_CACHE_DIR`, and `UV_PYTHON_INSTALL_DIR` values that select that cache.
+It removes inherited `UV_OFFLINE`, allows reticulate and uv to use their normal global caches, and requires the command to return a valid interpreter path.
+Every worker generation receives that path as `RETICULATE_PYTHON`.
 Other inherited values, including an empty value, bypass the preflight unchanged; custom workers also skip it.
-The preflight completes before sideband pipes are created, receives no MCP stdin, and may use the network and write the dedicated cache.
+The preflight completes before sideband pipes are created, receives no MCP stdin, and may use the network and write normal host caches.
 A preflight failure prevents server initialization.
-The sandbox permits regular-file writes to that cache as well as the worker's private temporary directory, and the server attempts to remove the cache when it exits.
 
 The worker starts lazily on the first `send` call that supplies `r`, `python`, or nonempty `stdin`.
 On macOS, the server uses the same `SandboxedCommand` builder as the `sandbox` command.
@@ -302,10 +301,10 @@ A fork-only Python child inherits the remapped text streams after its sideband i
 An exec descendant that retains fd 1/2 creates fresh standard streams backed by those descriptors, so its ordinary stdout and stderr writes are captured.
 There is no relative ordering guarantee between those pipes and sideband output, as described under [Transport](#transport).
 
-The built-in worker receives either the managed environment and cache prepared by the preflight or the caller's existing `RETICULATE_PYTHON` value.
+The built-in worker receives either the interpreter path selected by the preflight or the caller's existing `RETICULATE_PYTHON` value.
 Before initializing R, it forces `UV_OFFLINE=1`, overwriting any inherited value before user code runs.
 Reticulate initializes that selection on first use from R or Python and reuses it afterward.
-Managed `py_require()` additions can activate environments that uv can resolve from the prepared cache; uncached requirements fail under the offline worker policy.
+Because the preflight-selected interpreter is passed as a concrete path, worker-side `py_require()` calls do not revise that selection.
 
 Each Python cell receives a synthetic filename such as `<mcp-console:python:e1>`.
 The worker stores the source in a process-lifetime private R environment and calls its evaluator with only a short evaluation ID.
@@ -322,7 +321,8 @@ Direct `sys.stdin` or fd-0 reads bypass the callback and produce neither frame.
 
 ## Current limits
 
-The current implementation has no managed-Python preflight, worker startup, or execution timeout, frame-size limit, stdin queue limit, or accumulated-output limit.
+No timeout bounds managed-Python preflight, worker startup, or execution.
+The current implementation also has no frame-size limit, stdin queue limit, or accumulated-output limit.
 `timeout_ms` limits one MCP wait without terminating the worker or a blocked stdin write; only shutdown has a process deadline.
 An idle stdin-only call does not wait on an evaluation, so `timeout_ms` does not bound lazy worker startup for that call.
 The 10-millisecond input grace controls when provisional state becomes visible as `[stdin needed]`; it does not control request-record retention or limit evaluation or stdin reads.
@@ -333,7 +333,7 @@ Worker failures are reported as plain-text MCP tool errors, not structured worke
 Concurrent MCP `send` calls are outside the current contract.
 Python cells require an installed reticulate R package.
 MCP Console does not install reticulate.
-The default preflight must be able to resolve or provision its interpreter and initial requirements outside the sandbox; later managed requirements must be available in its cache.
+The default preflight must be able to resolve or provision its interpreter and initial requirements outside the sandbox.
 An explicitly configured interpreter must be initializable under the offline worker policy.
 The Python input bridge does not observe direct `sys.stdin` or fd-0 reads.
 The current sandbox child does not yet supervise descendants after its direct process exits, or descendants that leave its process group; capturing inherited standard streams does not change that boundary.

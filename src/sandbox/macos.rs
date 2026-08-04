@@ -9,11 +9,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 pub(super) const SANDBOX_EXEC: &str = "/usr/bin/sandbox-exec";
 const POLICY: &str = include_str!("read_only_policy.sbpl");
 
-pub(super) fn sandboxed_command(
-    writable_directory: Option<&Path>,
-) -> Result<(Command, TemporaryDirectory), String> {
+pub(super) fn sandboxed_command() -> Result<(Command, TemporaryDirectory), String> {
     let temporary_directory = TemporaryDirectory::new()?;
-    let writable_directory = writable_directory.unwrap_or_else(|| temporary_directory.path());
     let mut launcher = Command::new(SANDBOX_EXEC);
     launcher
         .arg("-p")
@@ -22,19 +19,15 @@ pub(super) fn sandboxed_command(
             "TEMP_DIRECTORY",
             temporary_directory.path(),
         ))
-        .arg(parameter_definition(
-            "EXTRA_WRITABLE_DIRECTORY",
-            writable_directory,
-        ))
         .arg("--");
 
     Ok((launcher, temporary_directory))
 }
 
-pub(crate) struct TemporaryDirectory(PathBuf);
+pub(super) struct TemporaryDirectory(PathBuf);
 
 impl TemporaryDirectory {
-    pub(crate) fn new() -> Result<Self, String> {
+    fn new() -> Result<Self, String> {
         let unique = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_err(|error| format!("failed to read the system clock: {error}"))?
@@ -62,7 +55,7 @@ impl TemporaryDirectory {
         Ok(directory)
     }
 
-    pub(crate) fn path(&self) -> &Path {
+    pub(super) fn path(&self) -> &Path {
         &self.0
     }
 }

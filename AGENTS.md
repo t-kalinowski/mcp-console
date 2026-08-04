@@ -44,12 +44,12 @@ Within the worker process, reticulate then routes Python text writes, including 
 Writes through `sys.stdout.buffer`, `sys.stderr.buffer`, or native fd 1/2 bypass that remap and use the captured standard streams.
 A fork-only Python child cannot use the sideband: writes through its inherited remapped text streams are discarded, while buffer and direct-fd writes remain captured.
 An exec descendant that retains fd 1/2 creates fresh standard streams backed by those descriptors, so its ordinary stdout and stderr are captured.
-When inherited `RETICULATE_PYTHON` is absent or exactly `managed`, built-in server startup asks reticulate to prepare managed Python outside the sandbox in a dedicated per-server cache.
+When inherited `RETICULATE_PYTHON` is absent or exactly `managed`, built-in server startup asks reticulate to resolve managed Python outside the sandbox and injects the resulting interpreter path into every worker generation.
 Other inherited values, including an empty value, are preserved and skip that preflight; custom workers also skip it.
-The preflight may access the network and write that cache, but it runs before sideband setup and evaluates no submitted cell.
-The sandbox permits regular-file writes to the cache and the worker's private temporary directory; the server attempts to remove the cache when it exits.
+The preflight may access the network and write normal reticulate and uv host caches, but it runs before sideband setup and evaluates no submitted cell.
 Before initializing R, the worker forces `UV_OFFLINE=1`, overwriting any inherited value to match the sandbox's network denial.
-Reticulate remains in managed mode and can resolve cached `py_require()` additions, or it reuses the caller-selected interpreter.
+Reticulate reuses the preflight-selected or caller-selected interpreter.
+Because the preflight-selected interpreter is passed as a concrete path, worker-side `py_require()` calls do not revise that selection.
 R and Python share objects through reticulate's `py` and `r` bridges.
 A silent successful Python cell sends `completed` without an `output` frame and projects to `[done]` when no other response text is pending.
 Python `input()` and `breakpoint()`/`pdb` use reticulate's R console bridge, so they emit `input_requested` before a read and `input_received` after it succeeds.
@@ -78,7 +78,6 @@ When MCP input closes, the server starts a one-second deadline and attempts grac
 If the direct sandbox process is still running when time expires, the sandbox boundary force-stops its process group and reaps that direct process.
 The version command prints the package name and version.
 On macOS, the sandbox command launches a subprocess under `sandbox-exec` with host filesystem reads allowed, regular-file writes limited to a dedicated per-launch temporary directory, runtime device and IPC exceptions, and network access denied.
-The built-in managed-Python worker additionally receives write access to its dedicated per-server cache.
 This initial launcher waits only for the direct command.
 Background descendants are unsupported: they may outlive the launcher, which attempts to remove their dedicated temporary directory on a best-effort basis when it returns.
 Descendant supervision is intentionally deferred because it must account for process groups, session-detached children, signal forwarding, and PID reuse together.
@@ -110,7 +109,7 @@ See `design-sketches/README.md` for the product overview and `design-sketches/do
 - `src/main.rs` — current binary entry point.
 - `src/cell.rs` — language-neutral complete-cell type shared by the server and worker protocol.
 - `src/cli.rs` — clap command definitions and user-facing help.
-- `src/python.rs` — managed-Python preflight, cache ownership, worker environment, and reticulate bridge.
+- `src/python.rs` — managed-Python preflight, worker environment, and reticulate bridge.
 - `src/server.rs` — MCP stdio server, `send` tool, and worker selection.
 - `src/r_repl.c` — C-owned per-cell DLL-REPL iterator and long-jump boundary.
 - `src/sideband.rs` — macOS inherited-pipe JSON-lines transport.
@@ -120,7 +119,6 @@ See `design-sketches/README.md` for the product overview and `design-sketches/do
 - `src/sandbox.rs` — platform dispatch for the sandbox process launcher.
 - `src/sandbox/` — platform implementation and macOS Seatbelt policy.
 - `tests/cli.rs` — public binary acceptance tests.
-- `tests/fixtures/uv` — deterministic managed-Python preflight fixture used by the public Python acceptance suite.
 - `tests/fixtures/zod` — executable Python sideband worker used by acceptance tests.
 - `tests/fixtures/worker_mitm` — transparent worker proxy used to capture sideband and standard-stream events through `serve`.
 - `tests/transcripts/r.py` — public built-in R worker acceptance suite.

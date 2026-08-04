@@ -1,8 +1,8 @@
 #[cfg(target_os = "macos")]
 mod platform {
-    use std::ffi::{OsStr, c_int};
+    use std::ffi::c_int;
     use std::io;
-    use std::path::{Path, PathBuf};
+    use std::path::PathBuf;
     use std::process::{Command, Stdio};
 
     const PREFLIGHT: &str =
@@ -76,49 +76,12 @@ def _mcp_console_eval_cell(
     }
 
     pub(crate) struct Managed {
-        directory: crate::sandbox::TemporaryDirectory,
-        r_cache: PathBuf,
-        uv_cache: PathBuf,
-        uv_python: PathBuf,
+        python: PathBuf,
     }
 
     impl Managed {
-        fn new() -> Result<Self, String> {
-            let directory = crate::sandbox::TemporaryDirectory::new()?;
-            Ok(Self {
-                r_cache: directory.path().to_path_buf(),
-                uv_cache: directory.path().join("R/reticulate/uv/cache"),
-                uv_python: directory.path().join("R/reticulate/uv/python"),
-                directory,
-            })
-        }
-
-        fn cache(&self) -> &Path {
-            self.directory.path()
-        }
-
-        pub(crate) fn sandboxed_command(
-            &self,
-            program: &OsStr,
-        ) -> Result<crate::sandbox::SandboxedCommand, String> {
-            let mut command = crate::sandbox::SandboxedCommand::new_with_writable_directory(
-                program,
-                self.cache(),
-            )?;
-            command
-                .env("RETICULATE_PYTHON", "managed")
-                .env("R_USER_CACHE_DIR", &self.r_cache)
-                .env("UV_CACHE_DIR", &self.uv_cache)
-                .env("UV_PYTHON_INSTALL_DIR", &self.uv_python);
-            Ok(command)
-        }
-
-        fn configure_preflight(&self, command: &mut Command) {
-            command
-                .env("R_USER_CACHE_DIR", &self.r_cache)
-                .env("UV_CACHE_DIR", &self.uv_cache)
-                .env("UV_PYTHON_INSTALL_DIR", &self.uv_python)
-                .env_remove("UV_OFFLINE");
+        pub(crate) fn configure_worker(&self, command: &mut crate::sandbox::SandboxedCommand) {
+            command.env("RETICULATE_PYTHON", &self.python);
         }
     }
 
@@ -228,15 +191,14 @@ def _mcp_console_eval_cell(
             return Ok(None);
         }
 
-        let managed = Managed::new()?;
         let rscript = std::env::var_os("R_HOME")
             .map(|r_home| PathBuf::from(r_home).join("bin/Rscript"))
             .unwrap_or_else(|| PathBuf::from("Rscript"));
         let mut command = Command::new(&rscript);
         command
             .args(["--vanilla", "-e", PREFLIGHT])
+            .env_remove("UV_OFFLINE")
             .stdin(Stdio::null());
-        managed.configure_preflight(&mut command);
         let output = command.output().map_err(|error| {
             format!(
                 "failed to run managed Python preflight with `{}`: {error}",
@@ -261,7 +223,7 @@ def _mcp_console_eval_cell(
                 python.display()
             ));
         }
-        Ok(Some(managed))
+        Ok(Some(Managed { python }))
     }
 
     fn r_string(value: &str, length: c_int) -> libr::SEXP {
