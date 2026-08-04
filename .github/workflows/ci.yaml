@@ -31,7 +31,7 @@ jobs:
         with:
           packages: |
             any::processx
-            any::reticulate
+            github::rstudio/reticulate@afe2221ded74a7f18ab3d5e89bb0a49b1f9d3114
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable

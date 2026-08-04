@@ -78,26 +78,6 @@ def _mcp_console_eval_cell(
             _sys.displayhook(_eval(expression, _main.__dict__))
     except _BaseException:
         _print_exc()
-
-
-import os as _os
-from rpytools.output import OutputRemap as _OutputRemap
-
-
-def _mcp_console_after_fork_in_child(
-    _isinstance=_builtins.isinstance,
-    _OutputRemap=_OutputRemap,
-    _sys=_sys,
-):
-    # Reticulate enters its remapping context without retaining it. Restore the
-    # original streams directly until reticulate owns this fork hook.
-    if _isinstance(_sys.stdout, _OutputRemap):
-        _sys.stdout = _sys.stdout.target
-    if _isinstance(_sys.stderr, _OutputRemap):
-        _sys.stderr = _sys.stderr.target
-
-
-_os.register_at_fork(after_in_child=_mcp_console_after_fork_in_child)
 )---", local = TRUE, convert = FALSE)
       evaluator <<- private$`_mcp_console_eval_cell`
     }
