@@ -77,8 +77,8 @@ server:
     sys.stderr.buffer.flush()
     direct_stdout = os.write(1, b"direct stdout\n")
     direct_stderr = os.write(2, b"direct stderr\n")
-    descendant_source = 'import os\n\nos.write(1, b"descendant stdout\\n")\nos.write(2, b"descendant stderr\\n")\n'
-    descendant = subprocess.run(
+    descendant_source = 'import sys\n\nprint("exec descendant stdout")\nsys.stderr.write("exec descendant stderr\\n")\n'
+    exec_descendant = subprocess.run(
         [sys.executable, "-c", descendant_source],
         check=True,
     )
@@ -86,18 +86,12 @@ server:
 stdout: |
   buffer stdout
   direct stdout
-  descendant stdout
----
+  exec descendant stdout
 stderr: |
   buffer stderr
   direct stderr
-  descendant stderr
+  exec descendant stderr
 ---
 worker:
   kind: completed
----
-server:
-  kind: shutdown
----
-exit_code: 0
 ...

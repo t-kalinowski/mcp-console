@@ -1,6 +1,4 @@
 import json
-import os
-import select
 import subprocess
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -139,92 +137,4 @@ class McpClient:
         assert extra_output == "", f"unexpected extra output: {extra_output}"
         assert standard_error == "", standard_error
 
-        return self.transcript
-
-
-class WorkerClient:
-    def __init__(self, binary: Path) -> None:
-        worker_read, server_write = os.pipe()
-        server_read, worker_write = os.pipe()
-        environment = os.environ.copy()
-        environment["MCP_CONSOLE_SIDEBAND_READ_FD"] = str(worker_read)
-        environment["MCP_CONSOLE_SIDEBAND_WRITE_FD"] = str(worker_write)
-        process = subprocess.Popen(
-            [binary, "worker"],
-            env=environment,
-            pass_fds=(worker_read, worker_write),
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            encoding="utf-8",
-        )
-        os.close(worker_read)
-        os.close(worker_write)
-        assert process.stdin is not None
-        assert process.stdout is not None
-        assert process.stderr is not None
-
-        self.process = process
-        self.input = os.fdopen(server_write, "w", encoding="utf-8")
-        self.output = os.fdopen(server_read, "r", encoding="utf-8")
-        self.transcript: Transcript = []
-        assert self.receive() == {"kind": "ready"}
-
-    def send(self, message: TranscriptEntry) -> None:
-        frame = json.dumps(message, separators=(",", ":"))
-        self.transcript.append({"server": message.copy()})
-        self.input.write(frame + "\n")
-        self.input.flush()
-
-    def receive(self) -> TranscriptEntry:
-        line = self.output.readline()
-        assert line, "mcp-console worker stopped before replying"
-        frame = line.removesuffix("\n")
-        message = json.loads(frame)
-        assert isinstance(message, dict), message
-        self._drain_standard_streams()
-        self.transcript.append({"worker": message})
-        return message
-
-    def _drain_standard_streams(self) -> None:
-        assert self.process.stdout is not None
-        assert self.process.stderr is not None
-        streams = {
-            self.process.stdout.fileno(): "stdout",
-            self.process.stderr.fileno(): "stderr",
-        }
-        chunks: dict[str, list[bytes]] = {name: [] for name in streams.values()}
-
-        while streams:
-            ready, _, _ = select.select(streams, [], [], 0)
-            if not ready:
-                break
-            for file_descriptor in ready:
-                chunk = os.read(file_descriptor, 64 * 1024)
-                if chunk:
-                    chunks[streams[file_descriptor]].append(chunk)
-                else:
-                    streams.pop(file_descriptor)
-
-        for name, stream_chunks in chunks.items():
-            if stream_chunks:
-                self.transcript.append({name: b"".join(stream_chunks).decode("utf-8")})
-
-    def evaluate(self, language: str, source: str) -> None:
-        self.send({"kind": "evaluate", "language": language, "source": source})
-        while self.receive() != {"kind": "completed"}:
-            pass
-
-    def finish(self) -> Transcript:
-        self.send({"kind": "shutdown"})
-        self.input.close()
-        stdout, stderr = self.process.communicate()
-        self.output.close()
-        if stdout:
-            self.transcript.append({"stdout": stdout})
-        if stderr:
-            self.transcript.append({"stderr": stderr})
-        self.transcript.append({"exit_code": self.process.returncode})
-        assert self.process.returncode == 0, stderr
         return self.transcript

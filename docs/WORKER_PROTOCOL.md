@@ -281,9 +281,11 @@ Subprocesses and descendants that write directly to retained fd 1 or fd 2 bypass
 
 The worker embeds one persistent Python `__main__` interpreter through reticulate.
 At worker startup, it sets `RETICULATE_REMAP_OUTPUT_STREAMS=1` once, before user R can initialize Python.
-Reticulate then routes Python text writes through R's console callbacks, including when user R initializes Python before the first Python cell.
+Within the worker process, reticulate then routes Python text writes through R's console callbacks, including when user R initializes Python before the first Python cell.
 Calls such as `print()`, `sys.stderr.write()`, and traceback printing therefore produce sideband `output` frames in call order.
-Writes through `sys.stdout.buffer`, `sys.stderr.buffer`, native fd 1 or fd 2, and descendants bypass that remap and use the captured standard-stream pipes.
+Writes through `sys.stdout.buffer`, `sys.stderr.buffer`, or native fd 1/2 bypass that remap and use the captured standard-stream pipes.
+A fork-only Python child inherits the remapped text streams after its sideband is disabled, so writes through those inherited `sys.stdout` and `sys.stderr` objects are discarded; buffer and direct-fd writes remain captured.
+An exec descendant that retains fd 1/2 creates fresh standard streams backed by those descriptors, so its ordinary stdout and stderr writes are captured.
 There is no relative ordering guarantee between those pipes and sideband output, as described under [Transport](#transport).
 
 The worker reuses an already initialized reticulate Python; otherwise, it honors an explicit `RETICULATE_PYTHON` path and finally selects an existing `python3` from `PATH`.
