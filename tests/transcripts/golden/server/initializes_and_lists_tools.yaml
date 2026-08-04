@@ -26,8 +26,8 @@ result:
   tools:
     - name: send
       description: >-
-        Evaluate one complete R or Python code cell, write its stdin, or poll
-        it.
+        Evaluate one complete R, Python, or SQL code cell, write its stdin, or
+        poll it.
       inputSchema:
         $schema: https://json-schema.org/draft/2020-12/schema
         additionalProperties: false
@@ -44,6 +44,13 @@ result:
             description: >-
               Complete multiline Python code evaluated in persistent state. Omit to
               write stdin or poll.
+            type:
+              - string
+              - "null"
+          sql:
+            description: >-
+              Complete DuckDB SQL evaluated in the persistent catalog. Omit to write
+              stdin or poll.
             type:
               - string
               - "null"

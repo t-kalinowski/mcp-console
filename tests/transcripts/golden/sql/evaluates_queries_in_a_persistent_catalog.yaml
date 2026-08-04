@@ -3,31 +3,22 @@
 ---
 id: 3
 send:
-  r: echo
+  sql: |
+    CREATE TABLE answers AS SELECT CAST(42 AS INTEGER) AS answer
 result:
   content:
     - type: text
-      text: |
-        zod: echo
+      text: "[done]"
   isError: false
 ---
 id: 4
 send:
-  python: echo
+  sql: |
+    SELECT answer FROM answers
 result:
   content:
     - type: text
       text: |
-        zod python: echo
-  isError: false
----
-id: 5
-send:
-  sql: echo
-result:
-  content:
-    - type: text
-      text: |
-        zod sql: echo
+        <SQL query result>
   isError: false
 ...

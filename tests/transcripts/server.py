@@ -22,7 +22,7 @@ def test_validates_send_arguments(binary: Path) -> Transcript:
         """),
         wait_ms=0,
     )
-    client.call_tool("send", r="1", python="1")
+    client.call_tool("send", r="1", python="1", sql="SELECT 1")
     client.call_tool("send", r=None)
     output = client.transcript[-1]["result"]["content"][0]["text"]
     assert output == "\n[idle]", output

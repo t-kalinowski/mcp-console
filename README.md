@@ -22,7 +22,7 @@ mcp-console sandbox -- COMMAND [ARG]...
 `mcp-console serve` runs a minimal MCP server over stdio.
 Run `mcp-console --help` or `mcp-console COMMAND --help` for command-line help.
 The server registers one `send` tool.
-Supplying exactly one of `r` or `python` evaluates one complete code cell and waits up to the optional `timeout_ms`, which defaults to 60 seconds.
+Supplying exactly one of `r`, `python`, or `sql` evaluates one complete code cell and waits up to the optional `timeout_ms`, which defaults to 60 seconds.
 When that wait expires, the call returns the newline-prefixed banner `\n[running]` while computation continues; call `send` without a code field to poll for completion.
 A call may also supply exact standard-input text with a code cell, during an evaluation, or while the worker is idle:
 
@@ -39,8 +39,8 @@ That receipt describes the runtime read, not a particular stdin payload; direct 
 Payload end is not EOF, and queued input is not an acknowledgment of consumption.
 Unread bytes may be completed by later stdin or satisfy a later worker read or evaluation.
 On macOS, managed-Python preflight happens during `serve` startup when required; the first nonempty stdin submission or evaluation still lazily starts a sandboxed embedded R worker.
-Later calls reuse the same global R state and reticulate Python interpreter.
-An infrastructure or protocol failure discards that worker and its in-memory R and Python state.
+Later calls reuse the same global R state, reticulate Python interpreter, and in-memory DuckDB catalog.
+An infrastructure or protocol failure discards that worker and its in-memory R, Python, and SQL state.
 Worker output available when the failure response is assembled remains visible; when it shares that response with the MCP tool error, the server starts the bracketed error on a new line.
 The next response after its replacement successfully starts includes the newline-delimited banner `[worker restarted: in-memory state lost]\n`, preceded by a newline when prior output does not already supply one; initial lazy startup remains silent.
 The worker runs each R cell through R's native top-level loop, captures R console output, prints each visible value, and maintains `.Last.value`.
@@ -53,21 +53,28 @@ After a Python cell calls `os.fork()`, reticulate restores the child's original 
 Native extensions that fork without running CPython's registered fork callbacks and then resume Python are unsupported.
 Fork-child text capture requires reticulate from its `main` branch or a release containing fork-aware stream restoration.
 An exec descendant that retains fd 1/2 creates fresh standard streams backed by those descriptors, so its ordinary stdout and stderr are captured.
+SQL cells lazily open one in-memory DuckDB connection through the `duckdb` and `DBI` R packages and reuse it for the worker generation.
+DuckDB extension, secret, and spill paths stay under the worker's private R temporary directory.
+The worker sends the complete SQL source out of band to a private R bridge, executes it with `DBI::dbSendQuery()`, and prints result-producing statements as R data frames.
+Statements without result columns are silent, so they return `[done]` when they produce no other output.
+DuckDB errors are normal console results and leave the worker available for later cells.
+This initial slice does not enable R environment scanning, relation registration, bounded SQL previews, or affected-row summaries.
 
 The server also collects text written directly to the worker's standard output and standard error, including direct writes by descendants that retain those descriptors.
 It retains raw bytes until the next `send` response is assembled; output produced while the worker is idle can therefore appear on a later idle poll before the server-owned `\n[idle]` banner.
 Ordering between the two standard streams and console output is best effort.
-R language failures and uncaught Python exceptions remain ordinary console results rather than MCP tool errors.
-A silent successful R or Python cell sends no sideband `output` frame, still sends `completed`, and projects to `[done]` when no other response text is pending.
+R language failures, uncaught Python exceptions, and DuckDB errors remain ordinary console results rather than MCP tool errors.
+A silent successful R, Python, or SQL cell sends no sideband `output` frame, still sends `completed`, and projects to `[done]` when no other response text is pending.
 
 Python cells require the `reticulate` R package.
+SQL cells require the `duckdb` and `DBI` R packages.
 When `RETICULATE_PYTHON` is unset or is `managed`, `mcp-console serve` runs a reticulate preflight outside the worker sandbox, where reticulate can use its normal global caches and network access to select an interpreter.
 Other configured values, including an empty value, are preserved and skip the preflight.
 The server passes the selected interpreter path to the sandboxed worker, which forces `UV_OFFLINE=1` and otherwise uses the existing sandbox policy unchanged.
 The selection is fixed during preflight; worker-side `py_require()` calls do not revise it.
 The preflight executes installed R and reticulate code, but no MCP-submitted code.
 If the preflight cannot select an interpreter, `serve` exits before accepting MCP requests.
-MCP Console does not install reticulate.
+MCP Console does not install these R packages.
 Python `input()` and `breakpoint()`/`pdb` use reticulate's R console bridge, so each read emits `input_requested` before reading and `input_received` after a successful read.
 They accept proactively queued or follow-up stdin, including repeated debugger commands.
 Reads through Python `sys.stdin` or fd 0 directly bypass the bridge and emit neither event.
@@ -82,7 +89,7 @@ Under Codex's current naming convention, the implemented tool is `mcp__console.s
 
 On macOS, `sandbox` launches the command under `/usr/bin/sandbox-exec`.
 The command can read the host filesystem, can write regular files only in a dedicated temporary directory, and cannot access the network.
-The policy also permits the device and IPC operations needed for supported R and Python workflows, including sandbox-created PTYs and Python multiprocessing semaphores.
+The policy also permits the device and IPC operations needed for supported R, Python, and SQL workflows, including sandbox-created PTYs and Python multiprocessing semaphores.
 This initial launcher waits only for the direct command.
 Background descendants are unsupported: they may outlive the launcher, which attempts to remove their dedicated temporary directory on a best-effort basis when it returns.
 Descendant supervision is intentionally deferred because it must account for process groups, session-detached children, signal forwarding, and PID reuse together.
@@ -109,9 +116,10 @@ Formatter errors remain visible but do not stop the remaining formatters or make
 See [`tests/transcripts/README.md`](tests/transcripts/README.md) for running and authoring external server transcript tests.
 The `r` suite exercises the built-in worker.
 The `python` suite exercises Python cells through reticulate in that worker.
+The `sql` suite exercises DuckDB cells through DBI in that worker.
 The `worker` suite drives `serve` through a transparent proxy, asserts the public MCP result, and records the built-in worker's sideband and standard-stream events.
 The `zod` suite uses the hidden `serve --worker PATH` development option to exercise the same protocol with an executable Python fixture.
-All four suites run on macOS, where the sandbox policy is implemented.
+These built-in-worker and protocol suites run on macOS, where the sandbox policy is implemented.
 See [`docs/WORKER_PROTOCOL.md`](docs/WORKER_PROTOCOL.md) for the exact implemented launch and message contract.
 
 ## License

@@ -2,12 +2,12 @@
 
 This document describes the worker protocol implemented by `mcp-console serve`, the built-in worker, and `tests/fixtures/zod`.
 It describes the current code, not the broader design under `design-sketches/`.
-The message enums in `src/worker_protocol.rs`, the framing in `src/sideband.rs`, the Python setup in `src/python.rs`, and the standard-stream routing in `src/worker_client.rs` are the source of truth.
+The message enums in `src/worker_protocol.rs`, the framing in `src/sideband.rs`, the language bridges in `src/python.rs`, `src/r_bridge.rs`, and `src/sql.rs`, and the standard-stream routing in `src/worker_client.rs` are the source of truth.
 
 ## Scope
 
 The current implementation provides one worker for one server process.
-It evaluates one complete R or Python cell at a time and accepts exact `stdin` text whether the worker is evaluating or idle.
+It evaluates one complete R, Python, or SQL cell at a time and accepts exact `stdin` text whether the worker is evaluating or idle.
 Evaluations run sequentially.
 
 The protocol does not yet include interrupts, request IDs, structured errors, sessions, capabilities, or protocol version negotiation.
@@ -30,7 +30,7 @@ Other inherited values, including an empty value, bypass the preflight unchanged
 The preflight completes before sideband pipes are created, receives no MCP stdin, and may use the network and write normal host caches.
 A preflight failure prevents server initialization.
 
-The worker starts lazily on the first `send` call that supplies `r`, `python`, or nonempty `stdin`.
+The worker starts lazily on the first `send` call that supplies `r`, `python`, `sql`, or nonempty `stdin`.
 On macOS, the server uses the same `SandboxedCommand` builder as the `sandbox` command.
 For `--worker PATH`, `PATH` is one program name or path, with no arguments or shell parsing, producing a launch equivalent to:
 
@@ -103,6 +103,7 @@ The complete implemented message set is:
 
 Every frame uses `kind` to select its message variant.
 Unknown fields are rejected in either direction.
+The `language` value is `r`, `python`, or `sql`.
 
 ## Handshake and evaluation
 
@@ -137,7 +138,7 @@ New code is rejected while an evaluation or its uncollected result is active.
 
 The optional MCP `timeout_ms` argument defaults to 60,000 milliseconds.
 It bounds how long that `send` call waits for the worker; it is not sent over the sideband and does not bound or stop computation.
-For a call with `r` or `python`, the evaluation wait includes lazy worker startup.
+For a call with `r`, `python`, or `sql`, the evaluation wait includes lazy worker startup.
 
 Every `input_requested` frame immediately adds `[input requested: <prompt>]` to pending MCP output, with the prompt encoded as a JSON string.
 Its outstanding state remains provisional for 10 milliseconds.
@@ -241,7 +242,7 @@ After `ready`, a sideband failure force-stops and discards the worker; a later e
 Sideband output received before that failure is retained and prepended to the tool error.
 Standard-stream text collected before an infrastructure failure is attached to its tool error when available at the response boundary; text collected later remains for the next `send` response.
 If either output path contributed text, the server starts the bracketed error on a new line.
-R parse and evaluation errors are not sideband failures: the built-in worker sends them as output followed by `completed` and remains reusable.
+R parse and evaluation errors, Python exceptions, and DuckDB errors are not sideband failures: the built-in worker sends them as output followed by `completed` and remains reusable.
 
 ## Shutdown
 
@@ -322,6 +323,22 @@ Reticulate routes Python's built-in `input()` through R's console callback, and 
 These reads produce request and receipt frames and accept proactively queued or follow-up stdin, including repeated debugger commands.
 Direct `sys.stdin` or fd-0 reads bypass the callback and produce neither frame.
 
+### SQL cells
+
+The worker stores each SQL source string in a process-lifetime private R environment and calls its evaluator with a short evaluation ID.
+The first SQL cell lazily creates one in-memory DuckDB connection through `duckdb` and `DBI`; later cells reuse that connection and its catalog for the worker generation.
+Environment scanning is disabled.
+The driver receives explicit extension, stored-secret, and spill directories beneath R's worker-private temporary directory, so it does not select or prompt for ambient DuckDB storage.
+
+The evaluator calls `DBI::dbSendQuery()`, clears the result when the cell returns, and fetches its data frame.
+If the result has columns, R data-frame printing without row names sends it through the console output callback.
+DDL and DML statements whose results have no columns produce no output and project to `[done]`.
+This slice does not report affected-row counts.
+
+The bridge catches DuckDB and DBI errors, prints an `Error: ` prefix followed by the condition message, and completes normally.
+The worker and connection remain available to later cells.
+SQL source containing NUL is rejected as a normal language error before it reaches the bridge.
+
 ## Current limits
 
 No timeout bounds managed-Python preflight, worker startup, or execution.
@@ -335,10 +352,13 @@ Standard output and standard error are decoded as UTF-8 only when a response is 
 Worker failures are reported as plain-text MCP tool errors, not structured worker events.
 Concurrent MCP `send` calls are outside the current contract.
 Python cells require an installed reticulate R package.
-MCP Console does not install reticulate.
+SQL cells require installed duckdb and DBI R packages.
+MCP Console does not install these packages.
 The default preflight must be able to resolve or provision its interpreter and initial requirements outside the sandbox.
 An explicitly configured interpreter must be initializable under the offline worker policy.
 The Python input bridge does not observe direct `sys.stdin` or fd-0 reads.
+SQL results are fetched and printed in full; bounded table previews are not implemented.
+The SQL adapter does not expose R data frames or Python objects as relations.
 The current sandbox child does not yet supervise descendants after its direct process exits, or descendants that leave its process group; capturing inherited standard streams does not change that boundary.
 
 ## Zod fixture behavior
@@ -350,7 +370,7 @@ When an R `source` is exactly `echo`, it sends two output chunks followed by `co
 zod: echo\n
 ```
 
-The Python `echo` mode returns `zod python: echo\n` and verifies that the server preserves the language tag.
+The Python and SQL `echo` modes return `zod python: echo\n` and `zod sql: echo\n`, verifying that the server preserves each language tag.
 When an R `source` is exactly `stall`, Zod creates a checkpoint in its private temporary directory and sleeps forever.
 When the source is `complete after timeout`, it pauses briefly before returning `zod: complete after timeout\n`.
 When the source is `violate protocol`, it sends an unexpected second `ready` message.

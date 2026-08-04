@@ -22,6 +22,7 @@ The `worker` suite drives the public MCP server through a transparent worker pro
 The proxy starts the built-in worker inside the server's sandbox, forwards sideband messages and standard streams, and writes parsed events to its private temporary directory for the test to read before shutdown.
 The suite asserts the public `send` result and records the wire events as YAML mappings in approximate order.
 Pending standard-output and standard-error chunks are grouped into one event without defining their relative order.
+The `r`, `python`, and `sql` suites exercise the built-in worker through the public `send` tool.
 
 Run commands from the repository root:
 

@@ -106,9 +106,9 @@ def main() -> None:
         assert set(message) == {"kind", "language", "source"}
         language = message["language"]
         source = message["source"]
-        if language == "python":
+        if language in {"python", "sql"}:
             assert source == "echo"
-            for output in ("zod python: ", f"{source}\n"):
+            for output in (f"zod {language}: ", f"{source}\n"):
                 send(writer, {"kind": "output", "data": output})
             send(writer, {"kind": "completed"})
             continue

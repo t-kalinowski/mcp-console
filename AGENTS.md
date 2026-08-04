@@ -20,7 +20,7 @@ The binary requires a subcommand.
 The `serve` command runs an MCP server over stdio.
 Clap provides command help, version output, argument parsing, and usage errors.
 The server registers only a `send` tool.
-Supplying exactly one of `r` or `python` starts one complete cell and waits for up to `timeout_ms`, which defaults to 60 seconds.
+Supplying exactly one of `r`, `python`, or `sql` starts one complete cell and waits for up to `timeout_ms`, which defaults to 60 seconds.
 If that wait expires, `send` returns the newline-prefixed banner `\n[running]` without stopping the computation; a later call without a code field polls it, and a poll while idle returns `\n[idle]`.
 Concurrent `send` calls are unsupported.
 Supplying `stdin` with a code cell, during an evaluation, or while idle queues exact UTF-8 bytes to worker fd 0 without adding a newline, inspecting, echoing, or limiting the text, or waiting for an input request.
@@ -57,6 +57,14 @@ A silent successful Python cell sends `completed` without an `output` frame and 
 Python `input()` and `breakpoint()`/`pdb` use reticulate's R console bridge, so they emit `input_requested` before a read and `input_received` after it succeeds.
 They accept proactively queued or follow-up stdin, including repeated debugger commands.
 Python `sys.stdin` and other direct fd-0 reads bypass the bridge and emit neither frame.
+SQL cells use the `duckdb` and `DBI` R packages through a private R bridge.
+The first SQL cell lazily opens one in-memory connection with environment scanning disabled, and later cells in that worker generation reuse its catalog.
+DuckDB extension, secret, and spill paths are explicit children of the worker's private R temporary directory.
+The worker stores SQL source in private R state and calls the bridge with a short evaluation ID.
+It uses `DBI::dbSendQuery()`, fetches the complete result, clears it on return, and prints results with columns as R data frames.
+DDL and DML results without columns are silent; affected-row summaries do not exist yet.
+DuckDB errors are normal language outcomes with `isError: false`, and the connection remains reusable.
+SQL result previews are not bounded yet, and R relation scanning and registration do not exist.
 Worker standard output and standard error are piped and collected continuously, including while the worker is idle.
 Each pipe reader queues raw byte chunks, and each `send` response decodes and drains complete UTF-8 prefixes from bytes already collected at its response boundary; later bytes remain for the next response.
 Without a pending restart notice, idle, running, and outstanding-input responses append the literal `\n[idle]`, `\n[running]`, or `\n[stdin needed]` banner; its leading newline is present even when no output precedes it.
@@ -74,7 +82,7 @@ The hidden `worker` command takes ownership of the sideband, discovers `R_HOME` 
 It does not self-execute or set a dynamic-loader environment variable.
 The worker command runs synchronously on the process main thread; only `serve` creates a Tokio runtime.
 The hidden development option `serve --worker PATH` replaces the built-in worker with an executable that implements the same sideband request/receipt protocol and fd-0 input contract.
-The Python fixture `tests/fixtures/zod` provides deterministic acceptance coverage for that boundary, direct fd-0 input, captured standard streams, and server-owned timeout and polling mechanics.
+The Python fixture `tests/fixtures/zod` provides deterministic acceptance coverage for R, Python, and SQL language tags at that boundary, direct fd-0 input, captured standard streams, and server-owned timeout and polling mechanics.
 An infrastructure or protocol failure is returned as a tool error, force-stops and discards that worker, and lets the next evaluation or nonempty idle stdin submission start a fresh worker with the replacement notice above.
 When MCP input closes, the server starts a one-second deadline and attempts graceful sideband shutdown without delaying it.
 If the direct sandbox process is still running when time expires, the sandbox boundary force-stops its process group and reaps that direct process.
@@ -84,7 +92,7 @@ This initial launcher waits only for the direct command.
 Background descendants are unsupported: they may outlive the launcher, which attempts to remove their dedicated temporary directory on a best-effort basis when it returns.
 Descendant supervision is intentionally deferred because it must account for process groups, session-detached children, signal forwarding, and PID reuse together.
 The sandbox command and worker are unsupported on Linux and Windows.
-The session model, SQL runtime, sidecar API, viewer, environment management, output retention, and transcript generation do not exist yet.
+The session model, SQL relation bridges, sidecar API, viewer, environment management, output retention, and transcript generation do not exist yet.
 
 ## Product direction
 
@@ -98,8 +106,7 @@ The MCP initialization identity remains `mcp-console`.
 The intended default client registration name is `console`, for example `codex mcp add console -- mcp-console serve`.
 Under Codex's current naming convention, the tools are `mcp__console.send` and `mcp__console.session`.
 The implemented R slice embeds R through `libr` and `harp`.
-The implemented runtime uses R as the host and embeds Python through reticulate.
-The planned SQL runtime uses the DuckDB R package and DBI.
+The implemented runtime uses R as the host, embeds Python through reticulate, and owns an in-memory DuckDB connection through the `duckdb` and `DBI` R packages.
 The backend for that broader runtime surface remains an open design decision.
 
 See `design-sketches/README.md` for the product overview and `design-sketches/docs/ARCHITECTURE.md` for the tentative architecture.
@@ -112,7 +119,9 @@ See `design-sketches/README.md` for the product overview and `design-sketches/do
 - `src/cell.rs` — language-neutral complete-cell type shared by the server and worker protocol.
 - `src/cli.rs` — clap command definitions and user-facing help.
 - `src/python.rs` — managed-Python preflight, worker environment, and reticulate bridge.
+- `src/r_bridge.rs` — shared private R-environment bridge used by Python and SQL adapters.
 - `src/server.rs` — MCP stdio server, `send` tool, and worker selection.
+- `src/sql.rs` — persistent DuckDB/DBI SQL bridge and result display.
 - `src/r_repl.c` — C-owned per-cell DLL-REPL iterator and long-jump boundary.
 - `src/sideband.rs` — macOS inherited-pipe JSON-lines transport.
 - `src/worker.rs` — embedded R initialization, cell dispatch, and console callbacks.
@@ -125,6 +134,7 @@ See `design-sketches/README.md` for the product overview and `design-sketches/do
 - `tests/fixtures/worker_mitm` — transparent worker proxy used to capture sideband and standard-stream events through `serve`.
 - `tests/transcripts/r.py` — public built-in R worker acceptance suite.
 - `tests/transcripts/python.py` — public reticulate Python-cell acceptance suite.
+- `tests/transcripts/sql.py` — public persistent-DuckDB acceptance suite.
 - `tests/transcripts/worker.py` — public-server acceptance plus captured built-in worker wire events.
 - `tests/transcripts/_run.py` — discovers transcript suites and compares case snapshots.
 - `tests/transcripts/_support.py` — shared transcript types and MCP stdio client.
@@ -158,7 +168,7 @@ Begin as one Cargo package and split crates only when a real boundary emerges.
   Use escape sequences such as `\n` only when the program needs that character as data, not to lay out its source.
 - Keep complete code cells separate from interactive `stdin`.
 - Keep the MCP adapter independent of interpreter implementation details.
-- Treat submitted R and Python execution as shell-class capability and place safety at the worker-process boundary.
+- Treat submitted R, Python, and SQL execution as shell-class capability and place safety at the worker-process boundary.
   The managed-Python preflight is a host-bootstrap exception: it runs before MCP input is accepted and never evaluates submitted code.
 - Update this file when a PR changes the implemented surface or repository map.
 - Before every commit, run `scripts/format` and review its changes.

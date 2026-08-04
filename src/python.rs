@@ -1,6 +1,5 @@
 #[cfg(target_os = "macos")]
 mod platform {
-    use std::ffi::c_int;
     use std::io;
     use std::path::PathBuf;
     use std::process::{Command, Stdio};
@@ -67,13 +66,7 @@ def _mcp_console_eval_cell(
 }, envir = base::new.env(parent = base::baseenv()))
 "#;
 
-    type TryEval = unsafe extern "C-unwind" fn(libr::SEXP, libr::SEXP, *mut c_int) -> libr::SEXP;
-
-    pub(crate) struct Bridge {
-        state: libr::SEXP,
-        try_eval: TryEval,
-        next_evaluation_id: u64,
-    }
+    pub(crate) struct Bridge(crate::r_bridge::Bridge);
 
     pub(crate) struct Managed {
         python: PathBuf,
@@ -87,90 +80,11 @@ def _mcp_console_eval_cell(
 
     impl Bridge {
         pub(crate) fn initialize() -> Result<Self, String> {
-            let library = libloading::os::unix::Library::this();
-            let try_eval = unsafe {
-                *library
-                    .get::<TryEval>(b"R_tryEval\0")
-                    .map_err(|error| format!("failed to load R_tryEval: {error}"))?
-            };
-            let source_length = c_int::try_from(BRIDGE_INIT.len())
-                .expect("the fixed Python bridge should fit in an R string");
-            let (evaluation_error, state, is_environment) = harp::top_level_exec(|| {
-                // SAFETY: This runs on R's main thread. The top-level boundary
-                // contains allocation failures, and R_tryEval contains errors raised
-                // while R parses and evaluates the fixed bridge source.
-                unsafe {
-                    let source = libr::Rf_protect(r_string(BRIDGE_INIT, source_length));
-                    let str2expression = libr::Rf_install(c"str2expression".as_ptr());
-                    let call = libr::Rf_protect(libr::Rf_lang2(str2expression, source));
-                    let eval = libr::Rf_install(c"eval".as_ptr());
-                    let call = libr::Rf_protect(libr::Rf_lang2(eval, call));
-                    let mut evaluation_error = 0;
-                    let state = try_eval(call, libr::R_BaseEnv, &mut evaluation_error);
-                    if evaluation_error != 0 || state.is_null() {
-                        libr::Rf_unprotect(3);
-                        return (evaluation_error, state, false);
-                    }
-                    let state = libr::Rf_protect(state);
-                    let is_environment = libr::TYPEOF(state) == libr::ENVSXP as c_int;
-                    if is_environment {
-                        libr::R_PreserveObject(state);
-                    }
-                    libr::Rf_unprotect(4);
-                    (evaluation_error, state, is_environment)
-                }
-            })
-            .map_err(|error| format!("failed to initialize the Python bridge: {error}"))?;
-            if evaluation_error != 0 {
-                return Err("Python bridge initialization failed during R evaluation".to_string());
-            }
-            if state.is_null() {
-                return Err("Python state initialization returned a null R object".to_string());
-            }
-            if !is_environment {
-                return Err(
-                    "Python state initialization did not produce an environment".to_string()
-                );
-            }
-            Ok(Self {
-                state,
-                try_eval,
-                next_evaluation_id: 1,
-            })
+            crate::r_bridge::Bridge::initialize(BRIDGE_INIT, "Python").map(Self)
         }
 
         pub(crate) fn evaluate(&mut self, source: &str) -> Result<(), String> {
-            let source_length = c_int::try_from(source.len())
-                .map_err(|_| "Python source exceeds R's maximum string size".to_string())?;
-            let evaluation_id = format!("e{}", self.next_evaluation_id);
-            self.next_evaluation_id += 1;
-            let evaluation_id_length = c_int::try_from(evaluation_id.len())
-                .expect("generated evaluation IDs should fit in an R string");
-            let result = harp::top_level_exec(|| {
-                // SAFETY: This runs on R's main thread. The outer top-level
-                // boundary contains allocation errors; R_tryEval contains errors
-                // raised while the preserved private environment calls reticulate.
-                unsafe {
-                    let source = libr::Rf_protect(r_string(source, source_length));
-                    let evaluation_id =
-                        libr::Rf_protect(r_string(&evaluation_id, evaluation_id_length));
-                    let source_symbol = libr::Rf_install(c"source".as_ptr());
-                    let evaluate_symbol = libr::Rf_install(c"evaluate".as_ptr());
-                    libr::Rf_defineVar(source_symbol, source, self.state);
-                    let call = libr::Rf_protect(libr::Rf_lang2(evaluate_symbol, evaluation_id));
-                    let mut evaluation_error = 0;
-                    (self.try_eval)(call, self.state, &mut evaluation_error);
-                    libr::Rf_defineVar(source_symbol, libr::R_NilValue, self.state);
-                    libr::Rf_unprotect(3);
-                    evaluation_error
-                }
-            });
-            let evaluation_error =
-                result.map_err(|error| format!("failed to call the Python bridge: {error}"))?;
-            if evaluation_error != 0 {
-                return Err("Python bridge failed during R evaluation".to_string());
-            }
-            Ok(())
+            self.0.evaluate(source)
         }
     }
 
@@ -227,15 +141,6 @@ def _mcp_console_eval_cell(
             ));
         }
         Ok(Some(Managed { python }))
-    }
-
-    fn r_string(value: &str, length: c_int) -> libr::SEXP {
-        // SAFETY: The caller runs under R's top-level allocation boundary and
-        // immediately protects the returned scalar string.
-        unsafe {
-            let value = libr::Rf_mkCharLenCE(value.as_ptr().cast(), length, libr::cetype_t_CE_UTF8);
-            libr::Rf_ScalarString(value)
-        }
     }
 }
 
