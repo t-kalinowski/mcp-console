@@ -18,6 +18,7 @@ An identical prefix becomes a bare `!same-as PATH` document; a different prefix 
 When accepting a handshake change, update the full snapshot before the abbreviated transcripts.
 The `help` suite records command lines and stdout in one stream with color disabled.
 It adds the exit code for failures and stderr when nonempty.
+The `worker` suite records the built-in worker's parsed sideband messages as YAML mappings, separately from its standard output and standard error.
 
 Run commands from the repository root:
 

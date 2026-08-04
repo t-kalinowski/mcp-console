@@ -39,7 +39,9 @@ A silent successful R cell sends `completed` without an `output` frame and proje
 Submitted R functions do not currently retain a source filename.
 Python cells run in the same worker through reticulate, retain `__main__` state, execute statements, and send a final expression through `sys.displayhook()`.
 Python source uses a synthetic evaluation filename, and uncaught exceptions print a Python traceback as a normal language outcome with `isError: false`.
-Reticulate remaps Python text stdout and stderr into the worker's console output before user R can initialize Python.
+At worker startup, MCP Console sets `RETICULATE_REMAP_OUTPUT_STREAMS=1` once, before user R can initialize Python.
+Reticulate then routes Python text writes, including `print()`, `sys.stderr.write()`, and tracebacks, through the R console callback as sideband `output` frames.
+Writes through `sys.stdout.buffer`, `sys.stderr.buffer`, native fd 1/2, and descendants remain on the captured standard streams.
 The worker reuses an already initialized reticulate Python, otherwise honors `RETICULATE_PYTHON`, and finally selects `python3` from `PATH` without installing Python or accessing the network.
 R and Python share objects through reticulate's `py` and `r` bridges.
 A silent successful Python cell sends `completed` without an `output` frame and projects to `[done]` when no other response text is pending.
@@ -112,8 +114,9 @@ See `design-sketches/README.md` for the product overview and `design-sketches/do
 - `tests/fixtures/zod` — executable Python sideband worker used by acceptance tests.
 - `tests/transcripts/r.py` — public built-in R worker acceptance suite.
 - `tests/transcripts/python.py` — public reticulate Python-cell acceptance suite.
+- `tests/transcripts/worker.py` — direct built-in worker sideband and standard-stream acceptance suite.
 - `tests/transcripts/_run.py` — discovers transcript suites and compares case snapshots.
-- `tests/transcripts/_support.py` — shared transcript types and MCP stdio client.
+- `tests/transcripts/_support.py` — shared transcript types and MCP/worker clients.
 - `tests/transcripts/<suite>.py` — suites of named imperative transcript cases.
 - `tests/transcripts/golden/SUITE/` — human-readable YAML 1.2 case transcripts.
 - `tests/transcripts/README.md` — transcript test usage and authoring guide.

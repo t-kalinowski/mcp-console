@@ -47,7 +47,8 @@ The worker runs each R cell through R's native top-level loop, captures R consol
 If a cell ends while an expression is incomplete, earlier complete expressions from that cell remain applied.
 Python cells execute statements in persistent `__main__` state and send a final expression through Python's display hook.
 R and Python can exchange objects through reticulate's `py` and `r` bridges.
-Python text written through `sys.stdout` and `sys.stderr`, including tracebacks, uses the same console output path as R.
+Reticulate routes Python text written through `sys.stdout` and `sys.stderr`, including tracebacks, through the same sideband console output path as R.
+Writes through `sys.stdout.buffer`, `sys.stderr.buffer`, fd 1/2 directly, and descendants remain on the captured standard streams.
 
 The server also collects text written directly to the worker's standard output and standard error, including by descendants that inherit those streams.
 It retains raw bytes until the next `send` response is assembled; output produced while the worker is idle can therefore appear on a later idle poll before the server-owned `\n[idle]` banner.
@@ -98,8 +99,9 @@ Formatter errors remain visible but do not stop the remaining formatters or make
 See [`tests/transcripts/README.md`](tests/transcripts/README.md) for running and authoring external server transcript tests.
 The `r` suite exercises the built-in worker.
 The `python` suite exercises Python cells through reticulate in that worker.
+The `worker` suite invokes the built-in worker directly and records its sideband frames separately from standard output and standard error.
 The `zod` suite uses the hidden `serve --worker PATH` development option to exercise the same protocol with an executable Python fixture.
-All three suites run on macOS, where the sandbox policy is implemented.
+All four suites run on macOS, where the sandbox policy is implemented.
 See [`docs/WORKER_PROTOCOL.md`](docs/WORKER_PROTOCOL.md) for the exact implemented launch and message contract.
 
 ## License
