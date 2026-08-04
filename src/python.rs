@@ -199,6 +199,9 @@ def _mcp_console_eval_cell(
             .args(["--vanilla", "-e", PREFLIGHT])
             .env_remove("UV_OFFLINE")
             .stdin(Stdio::null());
+        // Managed resolution intentionally runs before the sandboxed worker starts:
+        // reticulate and uv need normal host network and cache access, and no MCP
+        // input is accepted before this command completes.
         let output = command.output().map_err(|error| {
             format!(
                 "failed to run managed Python preflight with `{}`: {error}",

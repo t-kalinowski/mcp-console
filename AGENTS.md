@@ -156,7 +156,8 @@ Begin as one Cargo package and split crates only when a real boundary emerges.
   Use escape sequences such as `\n` only when the program needs that character as data, not to lay out its source.
 - Keep complete code cells separate from interactive `stdin`.
 - Keep the MCP adapter independent of interpreter implementation details.
-- Treat all runtime execution as shell-class capability and place safety at the worker-process boundary.
+- Treat submitted R and Python execution as shell-class capability and place safety at the worker-process boundary.
+  The managed-Python preflight is a host-bootstrap exception: it runs before MCP input is accepted and never evaluates submitted code.
 - Update this file when a PR changes the implemented surface or repository map.
 - Before every commit, run `scripts/format` and review its changes.
 - Run `scripts/check` before opening a PR.
