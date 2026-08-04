@@ -3,31 +3,23 @@
 ---
 id: 3
 send:
-  r: echo
+  sql: |
+    SELECT * FROM table_that_does_not_exist
 result:
   content:
     - type: text
       text: |
-        zod: echo
+        <DuckDB catalog error>
   isError: false
 ---
 id: 4
 send:
-  python: echo
+  sql: |
+    SELECT CAST(42 AS INTEGER) AS answer
 result:
   content:
     - type: text
       text: |
-        zod python: echo
-  isError: false
----
-id: 5
-send:
-  sql: echo
-result:
-  content:
-    - type: text
-      text: |
-        zod sql: echo
+        <SQL query result>
   isError: false
 ...

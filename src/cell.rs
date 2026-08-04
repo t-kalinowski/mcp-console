@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 pub(crate) enum Language {
     R,
     Python,
+    Sql,
 }
 
 pub(crate) struct Cell {

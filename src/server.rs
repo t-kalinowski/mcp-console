@@ -27,6 +27,8 @@ struct SendArguments {
     r: Option<String>,
     /// Complete multiline Python code evaluated in persistent state. Omit to write stdin or poll.
     python: Option<String>,
+    /// Complete DuckDB SQL evaluated in the persistent catalog. Omit to write stdin or poll.
+    sql: Option<String>,
     /// Exact UTF-8 text queued to worker fd 0 without adding a newline.
     stdin: Option<String>,
     /// Maximum time this call waits for an evaluation. It does not limit or stop the computation.
@@ -51,29 +53,34 @@ impl ConsoleServer {
 #[tool_router]
 impl ConsoleServer {
     #[tool(
-        description = "Evaluate one complete R or Python code cell, write its stdin, or poll it."
+        description = "Evaluate one complete R, Python, or SQL code cell, write its stdin, or poll it."
     )]
     async fn send(
         &self,
         Parameters(SendArguments {
             r,
             python,
+            sql,
             stdin,
             timeout_ms,
         }): Parameters<SendArguments>,
     ) -> Result<String, String> {
-        let cell = match (r, python) {
-            (Some(source), None) => Some(crate::cell::Cell {
+        let cell = match (r, python, sql) {
+            (Some(source), None, None) => Some(crate::cell::Cell {
                 language: crate::cell::Language::R,
                 source,
             }),
-            (None, Some(source)) => Some(crate::cell::Cell {
+            (None, Some(source), None) => Some(crate::cell::Cell {
                 language: crate::cell::Language::Python,
                 source,
             }),
-            (None, None) => None,
-            (Some(_), Some(_)) => {
-                return Err("only one of `r` or `python` may be supplied".to_string());
+            (None, None, Some(source)) => Some(crate::cell::Cell {
+                language: crate::cell::Language::Sql,
+                source,
+            }),
+            (None, None, None) => None,
+            _ => {
+                return Err("only one of `r`, `python`, or `sql` may be supplied".to_string());
             }
         };
         self.worker

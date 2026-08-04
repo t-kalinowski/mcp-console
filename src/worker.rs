@@ -47,12 +47,13 @@ mod platform {
             .set(writer.clone())
             .map_err(|_| io::Error::other("R worker sideband was already initialized"))?;
         let mut python = crate::python::Bridge::initialize()?;
+        let mut sql = crate::sql::Bridge::initialize()?;
         writer.send(&WorkerMessage::Ready)?;
 
         loop {
             match reader.receive()? {
                 ServerMessage::Evaluate { language, source } => {
-                    let result = evaluate_cell(Cell { language, source }, &mut python);
+                    let result = evaluate_cell(Cell { language, source }, &mut python, &mut sql);
 
                     if WORKER_SHUTDOWN.load(Ordering::SeqCst) {
                         return Ok(());
@@ -67,10 +68,15 @@ mod platform {
         }
     }
 
-    fn evaluate_cell(cell: Cell, python: &mut crate::python::Bridge) -> Result<(), String> {
+    fn evaluate_cell(
+        cell: Cell,
+        python: &mut crate::python::Bridge,
+        sql: &mut crate::sql::Bridge,
+    ) -> Result<(), String> {
         match cell.language {
             Language::R => evaluate_r_cell(cell.source),
             Language::Python => evaluate_python_cell(cell.source, python),
+            Language::Sql => evaluate_sql_cell(cell.source, sql),
         }
     }
 
@@ -105,6 +111,17 @@ mod platform {
         }
         EVALUATION_STARTED.store(true, Ordering::SeqCst);
         let result = python.evaluate(&source);
+        EVALUATION_STARTED.store(false, Ordering::SeqCst);
+        result
+    }
+
+    fn evaluate_sql_cell(source: String, sql: &mut crate::sql::Bridge) -> Result<(), String> {
+        if source.contains('\0') {
+            emit_output(b"Error: SQL source cannot contain NUL\n");
+            return Ok(());
+        }
+        EVALUATION_STARTED.store(true, Ordering::SeqCst);
+        let result = sql.evaluate(&source);
         EVALUATION_STARTED.store(false, Ordering::SeqCst);
         result
     }

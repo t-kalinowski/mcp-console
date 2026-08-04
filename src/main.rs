@@ -5,10 +5,14 @@ use clap::Parser;
 mod cell;
 mod cli;
 mod python;
+#[cfg(target_os = "macos")]
+mod r_bridge;
 mod sandbox;
 mod server;
 #[cfg(target_os = "macos")]
 mod sideband;
+#[cfg(target_os = "macos")]
+mod sql;
 mod worker;
 mod worker_client;
 #[cfg(target_os = "macos")]
