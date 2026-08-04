@@ -1,5 +1,6 @@
 import json
 import os
+import select
 import subprocess
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -182,8 +183,33 @@ class WorkerClient:
         frame = line.removesuffix("\n")
         message = json.loads(frame)
         assert isinstance(message, dict), message
+        self._drain_standard_streams()
         self.transcript.append({"worker": message})
         return message
+
+    def _drain_standard_streams(self) -> None:
+        assert self.process.stdout is not None
+        assert self.process.stderr is not None
+        streams = {
+            self.process.stdout.fileno(): "stdout",
+            self.process.stderr.fileno(): "stderr",
+        }
+        chunks: dict[str, list[bytes]] = {name: [] for name in streams.values()}
+
+        while streams:
+            ready, _, _ = select.select(streams, [], [], 0)
+            if not ready:
+                break
+            for file_descriptor in ready:
+                chunk = os.read(file_descriptor, 64 * 1024)
+                if chunk:
+                    chunks[streams[file_descriptor]].append(chunk)
+                else:
+                    streams.pop(file_descriptor)
+
+        for name, stream_chunks in chunks.items():
+            if stream_chunks:
+                self.transcript.append({name: b"".join(stream_chunks).decode("utf-8")})
 
     def evaluate(self, language: str, source: str) -> None:
         self.send({"kind": "evaluate", "language": language, "source": source})
@@ -195,12 +221,10 @@ class WorkerClient:
         self.input.close()
         stdout, stderr = self.process.communicate()
         self.output.close()
-        self.transcript.append(
-            {
-                "exit_code": self.process.returncode,
-                "stdout": stdout,
-                "stderr": stderr,
-            }
-        )
+        if stdout:
+            self.transcript.append({"stdout": stdout})
+        if stderr:
+            self.transcript.append({"stderr": stderr})
+        self.transcript.append({"exit_code": self.process.returncode})
         assert self.process.returncode == 0, stderr
         return self.transcript

@@ -59,11 +59,13 @@ def test_routes_python_output(binary: Path) -> Transcript:
         """)
     client.evaluate("python", python)
     transcript = client.finish()
-    assert transcript[-1] == {
-        "exit_code": 0,
-        "stdout": "buffer stdout\ndirect stdout\ndescendant stdout\n",
-        "stderr": "buffer stderr\ndirect stderr\ndescendant stderr\n",
-    }, transcript[-1]
+    assert transcript[-5:] == [
+        {"stdout": "buffer stdout\ndirect stdout\ndescendant stdout\n"},
+        {"stderr": "buffer stderr\ndirect stderr\ndescendant stderr\n"},
+        {"worker": {"kind": "completed"}},
+        {"server": {"kind": "shutdown"}},
+        {"exit_code": 0},
+    ], transcript[-5:]
     return transcript
 
 

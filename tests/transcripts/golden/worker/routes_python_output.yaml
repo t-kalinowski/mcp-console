@@ -83,6 +83,16 @@ server:
         check=True,
     )
 ---
+stdout: |
+  buffer stdout
+  direct stdout
+  descendant stdout
+---
+stderr: |
+  buffer stderr
+  direct stderr
+  descendant stderr
+---
 worker:
   kind: completed
 ---
@@ -90,12 +100,4 @@ server:
   kind: shutdown
 ---
 exit_code: 0
-stdout: |
-  buffer stdout
-  direct stdout
-  descendant stdout
-stderr: |
-  buffer stderr
-  direct stderr
-  descendant stderr
 ...
