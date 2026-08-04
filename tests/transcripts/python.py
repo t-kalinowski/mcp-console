@@ -139,6 +139,70 @@ def test_recovers_from_python_errors(binary: Path) -> Transcript:
     return client.finish()
 
 
+def test_routes_python_input(binary: Path) -> Transcript:
+    client = McpClient(binary, ("serve",))
+    client.initialize_and_list_tools()
+
+    # fmt: python
+    python = code("""
+        name = input("name> ")
+        name
+        """)
+    client.call_tool("send", python=python)
+    assert last_tool_text(client) == '[input requested: "name> "]\n[stdin needed]'
+    client.call_tool("send", stdin="Ada\n")
+    assert last_tool_text(client) == "'Ada'\n"
+
+    # fmt: python
+    python = code("""
+        color = input("color> ")
+        color
+        """)
+    client.call_tool("send", python=python, stdin="blue\n")
+    assert last_tool_text(client) == ("[input requested: \"color> \"]\n'blue'\n")
+
+    # fmt: python
+    python = code("""
+        import sys
+
+        direct = sys.stdin.readline()
+        direct
+        """)
+    client.call_tool("send", python=python, stdin="fd 0\n")
+    assert last_tool_text(client) == "'fd 0\\n'\n"
+    return client.finish()
+
+
+def test_python_debugger_input(binary: Path) -> Transcript:
+    client = McpClient(binary, ("serve",))
+    client.initialize_and_list_tools()
+
+    # fmt: python
+    python = code("""
+        import pdb
+
+        debug_value = 41
+        pdb.set_trace()
+        debug_value += 1
+        """)
+    client.call_tool("send", python=python)
+    output = last_tool_text(client)
+    assert output.count('[input requested: "(Pdb) "]') == 1, output
+    assert output.endswith("\n[stdin needed]"), output
+
+    client.call_tool("send", stdin="p debug_value\n")
+    output = last_tool_text(client)
+    assert output.count('[input requested: "(Pdb) "]') == 1, output
+    assert "41\n" in output, output
+    assert output.endswith("\n[stdin needed]"), output
+
+    client.call_tool("send", stdin="continue\n")
+    assert last_tool_text(client) == "[done]"
+    client.call_tool("send", python="debug_value")
+    assert last_tool_text(client) == "42\n"
+    return client.finish()
+
+
 def test_restarts_after_python_bridge_failure(binary: Path) -> Transcript:
     client = McpClient(binary, ("serve",))
     client.initialize_and_list_tools()

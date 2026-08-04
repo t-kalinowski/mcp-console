@@ -161,7 +161,7 @@ Output cursors and general incremental polling remain unimplemented.
 
 ### Interactive input
 
-When evaluated code calls `readline()` or enters `browser()`, the worker may send `input_requested`.
+The built-in worker sends `input_requested` when evaluated R code calls `readline()` or enters `browser()`, and when Python uses built-in `input()` or `breakpoint()`/`pdb` through reticulate's R console bridge.
 For every frame, the server appends exactly one record such as `[input requested: "name> "]` to pending MCP text.
 It encodes the prompt as a JSON string, preserving trailing spaces while escaping quotes, backslashes, newlines, and control characters.
 If the request remains outstanding, the response ends with `\n[stdin needed]`.
@@ -199,7 +199,7 @@ Each request frame produces one record, regardless of how many stdin payloads or
 It does not acknowledge a particular stdin submission, identify which bytes satisfied the read, or report bytes consumed by code that reads fd 0 directly.
 If no receipt arrives during the grace window, the request remains exposed as `\n[stdin needed]`; a partial follow-up therefore returns only `\n[stdin needed]` again rather than repeating the request record or returning `\n[running]`.
 Empty stdin writes no bytes and leaves an exposed request immediately reportable.
-Code that reads fd 0 directly can consume bundled input or input sent after a polling timeout without sending either input frame.
+Python `sys.stdin` and other code that reads fd 0 directly can consume bundled input or input sent after a polling timeout without sending either input frame.
 
 Acceptance means the bytes were queued, not that an evaluation consumed them.
 The server does not retract or drain bytes after `completed`; data already in the pipe or retained by a runtime reader may satisfy an idle background consumer, later reads, or later evaluations.
@@ -262,7 +262,7 @@ If shutdown already closed the gate, startup stops the new child and fails immed
 The built-in worker runs each complete cell through `R_ReplDLLinit()` and repeated `R_ReplDLLdo1()` calls.
 R parses and evaluates its expressions sequentially in the persistent global environment, captures console output, prints every visible value, and performs native top-level bookkeeping such as updating `.Last.value`.
 A cell that ends while R requires continuation input produces `Error: Incomplete code`; earlier complete expressions from that cell remain applied.
-A successful silent cell produces no sideband output; if no standard-stream text is pending, the MCP result is `[done]`.
+A successful silent R cell sends no `output` frame but still sends `completed`; if no other response text is pending, the server projects that completion as `[done]`.
 The CLI runs `worker` synchronously without a Tokio runtime, so R initialization and evaluation remain on the process main thread.
 
 The worker supplies cell source through `ReadConsole` before each top-level evaluation starts.
@@ -292,8 +292,10 @@ Assignments, imports, and objects remain available to later Python cells and thr
 
 An uncaught Python exception prints its traceback and completes as a normal language outcome.
 The worker remains reusable, and state changes made before the exception remain applied.
-A successful cell without output or a final expression produces no sideband output; if no standard-stream text is pending, the MCP result is `[done]`.
-Python `input()` can consume proactively queued fd-0 input but emits neither `input_requested` nor `input_received`; debugger request integration is not implemented.
+A successful Python cell without output or a final expression sends no `output` frame but still sends `completed`; if no other response text is pending, the server projects that completion as `[done]`.
+Reticulate routes Python's built-in `input()` through R's console callback, and `breakpoint()`/`pdb` uses that built-in for each debugger prompt.
+These reads produce request and receipt frames and accept proactively queued or follow-up stdin, including repeated debugger commands.
+Direct `sys.stdin` or fd-0 reads bypass the callback and produce neither frame.
 
 ## Current limits
 
@@ -307,7 +309,7 @@ Standard output and standard error are decoded as UTF-8 only when a response is 
 Worker failures are reported as plain-text MCP tool errors, not structured worker events.
 Concurrent MCP `send` calls are outside the current contract.
 Python cells require an installed reticulate R package and an embeddable Python already initialized through reticulate, selected by `RETICULATE_PYTHON`, or available as `python3` on `PATH`.
-The current Python evaluator does not report `input_requested` or `input_received`.
+The Python input bridge does not observe direct `sys.stdin` or fd-0 reads.
 The current sandbox child does not yet supervise descendants after its direct process exits, or descendants that leave its process group; capturing inherited standard streams does not change that boundary.
 
 ## Zod fixture behavior

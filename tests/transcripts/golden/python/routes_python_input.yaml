@@ -1,0 +1,58 @@
+---
+!same-as tests/transcripts/golden/server/initializes_and_lists_tools.yaml
+---
+id: 3
+send:
+  python: |
+    name = input("name> ")
+    name
+result:
+  content:
+    - type: text
+      text: |-
+        [input requested: "name> "]
+        [stdin needed]
+  isError: false
+---
+id: 4
+send:
+  stdin: |
+    Ada
+result:
+  content:
+    - type: text
+      text: |
+        'Ada'
+  isError: false
+---
+id: 5
+send:
+  python: |
+    color = input("color> ")
+    color
+  stdin: |
+    blue
+result:
+  content:
+    - type: text
+      text: |
+        [input requested: "color> "]
+        'blue'
+  isError: false
+---
+id: 6
+send:
+  python: |
+    import sys
+    
+    direct = sys.stdin.readline()
+    direct
+  stdin: |
+    fd 0
+result:
+  content:
+    - type: text
+      text: |
+        'fd 0\n'
+  isError: false
+...

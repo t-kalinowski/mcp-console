@@ -34,14 +34,18 @@ On macOS, the first nonempty stdin submission or evaluation lazily starts the bu
 The worker embeds R through `libr` and `harp`, retains global state, and feeds each complete R cell through R's DLL REPL iterator.
 R parses and evaluates its expressions sequentially, captures console output, prints visible values, and performs native top-level bookkeeping.
 Cell EOF while R requires continuation input is an error; earlier complete expressions from that cell remain applied.
-R parse, evaluation, and auto-print failures are normal language outcomes with `isError: false`; silent successful cells with no pending stream output return `[done]`.
+R parse, evaluation, and auto-print failures are normal language outcomes with `isError: false`.
+A silent successful R cell sends `completed` without an `output` frame and projects to `[done]` when no other response text is pending.
 Submitted R functions do not currently retain a source filename.
 Python cells run in the same worker through reticulate, retain `__main__` state, execute statements, and send a final expression through `sys.displayhook()`.
 Python source uses a synthetic evaluation filename, and uncaught exceptions print a Python traceback as a normal language outcome with `isError: false`.
 Reticulate remaps Python text stdout and stderr into the worker's console output before user R can initialize Python.
 The worker reuses an already initialized reticulate Python, otherwise honors `RETICULATE_PYTHON`, and finally selects `python3` from `PATH` without installing Python or accessing the network.
 R and Python share objects through reticulate's `py` and `r` bridges.
-Python `input()` can consume proactively queued fd-0 text, but it emits neither `input_requested` nor `input_received`; debugger integration is not implemented.
+A silent successful Python cell sends `completed` without an `output` frame and projects to `[done]` when no other response text is pending.
+Python `input()` and `breakpoint()`/`pdb` use reticulate's R console bridge, so they emit `input_requested` before a read and `input_received` after it succeeds.
+They accept proactively queued or follow-up stdin, including repeated debugger commands.
+Python `sys.stdin` and other direct fd-0 reads bypass the bridge and emit neither frame.
 Worker standard output and standard error are piped and collected continuously, including while the worker is idle.
 Each pipe reader queues raw byte chunks, and each `send` response decodes and drains complete UTF-8 prefixes from bytes already collected at its response boundary; later bytes remain for the next response.
 Without a pending restart notice, idle, running, and outstanding-input responses append the literal `\n[idle]`, `\n[running]`, or `\n[stdin needed]` banner; its leading newline is present even when no output precedes it.

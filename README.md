@@ -52,11 +52,14 @@ Python text written through `sys.stdout` and `sys.stderr`, including tracebacks,
 The server also collects text written directly to the worker's standard output and standard error, including by descendants that inherit those streams.
 It retains raw bytes until the next `send` response is assembled; output produced while the worker is idle can therefore appear on a later idle poll before the server-owned `\n[idle]` banner.
 Ordering between the two standard streams and console output is best effort.
-R language failures and uncaught Python exceptions remain ordinary console results rather than MCP tool errors, and a silent successful cell with no pending stream output returns `[done]`.
+R language failures and uncaught Python exceptions remain ordinary console results rather than MCP tool errors.
+A silent successful R or Python cell sends no sideband `output` frame, still sends `completed`, and projects to `[done]` when no other response text is pending.
 
 Python cells require the `reticulate` R package and an embeddable Python already initialized through reticulate, selected by `RETICULATE_PYTHON`, or available as `python3` on `PATH`.
 The worker does not install either dependency or access the network.
-Python `input()` can consume proactively queued standard input, but it does not emit input-request or input-receipt events; debugger integration has not been implemented.
+Python `input()` and `breakpoint()`/`pdb` use reticulate's R console bridge, so each read emits `input_requested` before reading and `input_received` after a successful read.
+They accept proactively queued or follow-up stdin, including repeated debugger commands.
+Reads through Python `sys.stdin` or fd 0 directly bypass the bridge and emit neither event.
 Its MCP initialization identity remains `mcp-console`.
 The intended default client registration name is `console`:
 
