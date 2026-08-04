@@ -269,7 +269,6 @@ impl McpClient {
 
     fn spawn(mut command: Command) -> Self {
         let mut server = command
-            .env("RETICULATE_PYTHON", "")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())

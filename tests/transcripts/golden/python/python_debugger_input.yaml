@@ -13,7 +13,7 @@ result:
   content:
     - type: text
       text: |-
-        > <mcp-console:python:e1>(4)<module>()
+        > <mcp-console:python:e1>(5)<module>()
         [input requested: "(Pdb) "]
         [stdin needed]
   isError: false

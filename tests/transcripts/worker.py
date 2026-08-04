@@ -2,7 +2,6 @@
 
 import json
 import os
-import shutil
 import tempfile
 import time
 from pathlib import Path
@@ -19,9 +18,6 @@ class WorkerWireClient:
         self.temporary = tempfile.TemporaryDirectory()
         root = Path(self.temporary.name)
         environment = os.environ.copy()
-        python = shutil.which("python3")
-        assert python is not None
-        environment["RETICULATE_PYTHON"] = python
         environment["TMPDIR"] = str(root)
         environment["MCP_CONSOLE_MITM_WORKER"] = str(binary)
         mitm = Path(__file__).resolve().parents[1] / "fixtures" / "worker_mitm"
