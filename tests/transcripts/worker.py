@@ -63,9 +63,6 @@ def test_routes_python_output(binary: Path) -> Transcript:
     client = WorkerWireClient(binary)
     # fmt: r
     r = code(r"""
-        python <- Sys.which("python3")
-        stopifnot(nzchar(python))
-        reticulate::use_python(python, required = TRUE)
         suppressWarnings(
           invisible(reticulate::py_run_string("initialized_from_r = True"))
         )

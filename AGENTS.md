@@ -30,7 +30,7 @@ Every `input_requested` frame immediately appends `[input requested: <JSON-quote
 Its outstanding state is provisional for up to 10 milliseconds; a matching `input_received` after a successful console read retains the request record but suppresses the `\n[stdin needed]` banner, while an unmatched request returns that marker after the grace or at the MCP deadline, whichever comes first.
 The receipt describes that runtime read, not a submitted payload or byte count, and direct fd-0 reads emit neither frame.
 New code is rejected until the running evaluation's result has been collected.
-On macOS, the first nonempty stdin submission or evaluation lazily starts the built-in worker under the same sandbox policy as the `sandbox` command.
+On macOS, managed-Python preflight happens during `serve` startup when required; the first nonempty stdin submission or evaluation still lazily starts the built-in worker under the same sandbox policy as the `sandbox` command.
 The worker embeds R through `libr` and `harp`, retains global state, and feeds each complete R cell through R's DLL REPL iterator.
 R parses and evaluates its expressions sequentially, captures console output, prints visible values, and performs native top-level bookkeeping.
 Cell EOF while R requires continuation input is an error; earlier complete expressions from that cell remain applied.
@@ -44,7 +44,12 @@ Within the worker process, reticulate then routes Python text writes, including 
 Writes through `sys.stdout.buffer`, `sys.stderr.buffer`, or native fd 1/2 bypass that remap and use the captured standard streams.
 A fork-only Python child cannot use the sideband: writes through its inherited remapped text streams are discarded, while buffer and direct-fd writes remain captured.
 An exec descendant that retains fd 1/2 creates fresh standard streams backed by those descriptors, so its ordinary stdout and stderr are captured.
-The worker reuses an already initialized reticulate Python, otherwise honors `RETICULATE_PYTHON`, and finally selects `python3` from `PATH` without installing Python or accessing the network.
+When inherited `RETICULATE_PYTHON` is absent or exactly `managed`, built-in server startup asks reticulate to resolve managed Python outside the sandbox and injects the resulting interpreter path into every worker generation.
+Other inherited values, including an empty value, are preserved and skip that preflight; custom workers also skip it.
+The preflight may access the network and write normal reticulate and uv host caches, but it runs before sideband setup and evaluates no submitted cell.
+Before initializing R, the worker forces `UV_OFFLINE=1`, overwriting any inherited value to match the sandbox's network denial.
+Reticulate reuses the preflight-selected or caller-selected interpreter.
+Because the preflight-selected interpreter is passed as a concrete path, worker-side `py_require()` calls do not revise that selection.
 R and Python share objects through reticulate's `py` and `r` bridges.
 A silent successful Python cell sends `completed` without an `output` frame and projects to `[done]` when no other response text is pending.
 Python `input()` and `breakpoint()`/`pdb` use reticulate's R console bridge, so they emit `input_requested` before a read and `input_received` after it succeeds.
@@ -104,10 +109,11 @@ See `design-sketches/README.md` for the product overview and `design-sketches/do
 - `src/main.rs` — current binary entry point.
 - `src/cell.rs` — language-neutral complete-cell type shared by the server and worker protocol.
 - `src/cli.rs` — clap command definitions and user-facing help.
+- `src/python.rs` — managed-Python preflight, worker environment, and reticulate bridge.
 - `src/server.rs` — MCP stdio server, `send` tool, and worker selection.
 - `src/r_repl.c` — C-owned per-cell DLL-REPL iterator and long-jump boundary.
 - `src/sideband.rs` — macOS inherited-pipe JSON-lines transport.
-- `src/worker.rs` — embedded R initialization, R and reticulate Python evaluation, and console callbacks.
+- `src/worker.rs` — embedded R initialization, cell dispatch, and console callbacks.
 - `src/worker_client.rs` — server-side worker launch, lifecycle, fd-0 input, and output collection.
 - `src/worker_protocol.rs` — shared sideband message definitions.
 - `src/sandbox.rs` — platform dispatch for the sandbox process launcher.
@@ -150,7 +156,8 @@ Begin as one Cargo package and split crates only when a real boundary emerges.
   Use escape sequences such as `\n` only when the program needs that character as data, not to lay out its source.
 - Keep complete code cells separate from interactive `stdin`.
 - Keep the MCP adapter independent of interpreter implementation details.
-- Treat all runtime execution as shell-class capability and place safety at the worker-process boundary.
+- Treat submitted R and Python execution as shell-class capability and place safety at the worker-process boundary.
+  The managed-Python preflight is a host-bootstrap exception: it runs before MCP input is accepted and never evaluates submitted code.
 - Update this file when a PR changes the implemented surface or repository map.
 - Before every commit, run `scripts/format` and review its changes.
 - Run `scripts/check` before opening a PR.

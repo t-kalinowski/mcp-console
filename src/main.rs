@@ -4,6 +4,7 @@ use clap::Parser;
 
 mod cell;
 mod cli;
+mod python;
 mod sandbox;
 mod server;
 #[cfg(target_os = "macos")]

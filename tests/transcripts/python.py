@@ -1,11 +1,102 @@
 #!/usr/bin/env -S uv run --script
 
+import os
+import shutil
 from pathlib import Path
 
 from _support import McpClient, Transcript, code, run_this_suite
 
 
 PLATFORMS = {"darwin"}
+
+
+def test_preserves_configured_python_environment(binary: Path) -> Transcript:
+    environment = os.environ.copy()
+    environment["RETICULATE_PYTHON"] = "configured-by-user"
+    client = McpClient(binary, ("serve",), environment)
+    client.initialize_and_list_tools()
+    # fmt: r
+    r = code(r"""
+        Sys.getenv("RETICULATE_PYTHON", unset = NA_character_)
+        """)
+    client.call_tool("send", r=r)
+    assert last_tool_text(client) == '[1] "configured-by-user"\n'
+    return client.finish()
+
+
+def test_preserves_empty_python_environment(binary: Path) -> Transcript:
+    environment = os.environ.copy()
+    environment["RETICULATE_PYTHON"] = ""
+    client = McpClient(binary, ("serve",), environment)
+    client.initialize_and_list_tools()
+    # fmt: r
+    r = code(r"""
+        Sys.getenv("RETICULATE_PYTHON", unset = NA_character_)
+        """)
+    client.call_tool("send", r=r)
+    assert last_tool_text(client) == '[1] ""\n'
+    return client.finish()
+
+
+def managed_python_transcript(binary: Path, configured: bool) -> Transcript:
+    environment = os.environ.copy()
+    if configured:
+        environment["RETICULATE_PYTHON"] = "managed"
+    else:
+        environment.pop("RETICULATE_PYTHON", None)
+    uv = shutil.which("uv")
+    assert uv is not None, "real uv is required for managed-Python tests"
+    environment.pop("RETICULATE_UV", None)
+    environment["UV_OFFLINE"] = "1"
+
+    client = McpClient(binary, ("serve",), environment)
+    client.initialize_and_list_tools()
+    # fmt: r
+    r = code(r"""
+        python <- Sys.getenv("RETICULATE_PYTHON", unset = NA_character_)
+        stopifnot(
+          !is.na(python),
+          !identical(python, "managed"),
+          file.exists(python),
+          identical(
+            normalizePath(reticulate::py_config()$python),
+            normalizePath(python)
+          )
+        )
+        """)
+    client.call_tool("send", r=r)
+    assert last_tool_text(client) == "[done]"
+    # fmt: python
+    python = code(r"""
+        40 + 2
+        """)
+    client.call_tool("send", python=python)
+    output = last_tool_text(client)
+    assert output == "42\n", repr(output)
+    return client.finish()
+
+
+def test_evaluates_with_default_managed_python(binary: Path) -> Transcript:
+    return managed_python_transcript(binary, configured=False)
+
+
+def test_evaluates_with_explicit_managed_python(binary: Path) -> Transcript:
+    return managed_python_transcript(binary, configured=True)
+
+
+def test_forces_uv_offline_in_builtin_worker(binary: Path) -> Transcript:
+    environment = os.environ.copy()
+    environment.pop("RETICULATE_PYTHON", None)
+    environment["UV_OFFLINE"] = "0"
+    client = McpClient(binary, ("serve",), environment)
+    client.initialize_and_list_tools()
+    # fmt: r
+    r = code(r"""
+        Sys.getenv("UV_OFFLINE", unset = NA_character_)
+        """)
+    client.call_tool("send", r=r)
+    assert last_tool_text(client) == '[1] "1"\n'
+    return client.finish()
 
 
 def test_evaluates_cells_in_persistent_reticulate_state(binary: Path) -> Transcript:

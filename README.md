@@ -38,7 +38,7 @@ An immediate `input_received` receipt retains the request record but suppresses 
 That receipt describes the runtime read, not a particular stdin payload; direct fd-0 reads emit no request or receipt.
 Payload end is not EOF, and queued input is not an acknowledgment of consumption.
 Unread bytes may be completed by later stdin or satisfy a later worker read or evaluation.
-On macOS, the first nonempty stdin submission or evaluation lazily starts a sandboxed embedded R worker.
+On macOS, managed-Python preflight happens during `serve` startup when required; the first nonempty stdin submission or evaluation still lazily starts a sandboxed embedded R worker.
 Later calls reuse the same global R state and reticulate Python interpreter.
 An infrastructure or protocol failure discards that worker and its in-memory R and Python state.
 Worker output available when the failure response is assembled remains visible; when it shares that response with the MCP tool error, the server starts the bracketed error on a new line.
@@ -58,8 +58,14 @@ Ordering between the two standard streams and console output is best effort.
 R language failures and uncaught Python exceptions remain ordinary console results rather than MCP tool errors.
 A silent successful R or Python cell sends no sideband `output` frame, still sends `completed`, and projects to `[done]` when no other response text is pending.
 
-Python cells require the `reticulate` R package and an embeddable Python already initialized through reticulate, selected by `RETICULATE_PYTHON`, or available as `python3` on `PATH`.
-The worker does not install either dependency or access the network.
+Python cells require the `reticulate` R package.
+When `RETICULATE_PYTHON` is unset or is `managed`, `mcp-console serve` runs a reticulate preflight outside the worker sandbox, where reticulate can use its normal global caches and network access to select an interpreter.
+Other configured values, including an empty value, are preserved and skip the preflight.
+The server passes the selected interpreter path to the sandboxed worker, which forces `UV_OFFLINE=1` and otherwise uses the existing sandbox policy unchanged.
+The selection is fixed during preflight; worker-side `py_require()` calls do not revise it.
+The preflight executes installed R and reticulate code, but no MCP-submitted code.
+If the preflight cannot select an interpreter, `serve` exits before accepting MCP requests.
+MCP Console does not install reticulate.
 Python `input()` and `breakpoint()`/`pdb` use reticulate's R console bridge, so each read emits `input_requested` before reading and `input_received` after a successful read.
 They accept proactively queued or follow-up stdin, including repeated debugger commands.
 Reads through Python `sys.stdin` or fd 0 directly bypass the bridge and emit neither event.

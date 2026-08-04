@@ -1,0 +1,33 @@
+---
+!same-as tests/transcripts/golden/server/initializes_and_lists_tools.yaml
+---
+id: 3
+send:
+  r: |
+    python <- Sys.getenv("RETICULATE_PYTHON", unset = NA_character_)
+    stopifnot(
+      !is.na(python),
+      !identical(python, "managed"),
+      file.exists(python),
+      identical(
+        normalizePath(reticulate::py_config()$python),
+        normalizePath(python)
+      )
+    )
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+id: 4
+send:
+  python: |
+    40 + 2
+result:
+  content:
+    - type: text
+      text: |
+        42
+  isError: false
+...
