@@ -47,9 +47,12 @@ The worker runs each R cell through R's native top-level loop, captures R consol
 If a cell ends while an expression is incomplete, earlier complete expressions from that cell remain applied.
 Python cells execute statements in persistent `__main__` state and send a final expression through Python's display hook.
 R and Python can exchange objects through reticulate's `py` and `r` bridges.
-Python text written through `sys.stdout` and `sys.stderr`, including tracebacks, uses the same console output path as R.
+Reticulate routes Python text written through `sys.stdout` and `sys.stderr`, including tracebacks, through the same sideband console output path as R.
+Writes through `sys.stdout.buffer`, `sys.stderr.buffer`, or fd 1/2 directly remain on the captured standard streams.
+A fork-only Python child cannot use inherited remapped text streams after its sideband is disabled; its buffer and direct-fd writes remain captured.
+An exec descendant that retains fd 1/2 creates fresh standard streams backed by those descriptors, so its ordinary stdout and stderr are captured.
 
-The server also collects text written directly to the worker's standard output and standard error, including by descendants that inherit those streams.
+The server also collects text written directly to the worker's standard output and standard error, including direct writes by descendants that retain those descriptors.
 It retains raw bytes until the next `send` response is assembled; output produced while the worker is idle can therefore appear on a later idle poll before the server-owned `\n[idle]` banner.
 Ordering between the two standard streams and console output is best effort.
 R language failures and uncaught Python exceptions remain ordinary console results rather than MCP tool errors.
@@ -98,8 +101,9 @@ Formatter errors remain visible but do not stop the remaining formatters or make
 See [`tests/transcripts/README.md`](tests/transcripts/README.md) for running and authoring external server transcript tests.
 The `r` suite exercises the built-in worker.
 The `python` suite exercises Python cells through reticulate in that worker.
+The `worker` suite drives `serve` through a transparent proxy, asserts the public MCP result, and records the built-in worker's sideband and standard-stream events.
 The `zod` suite uses the hidden `serve --worker PATH` development option to exercise the same protocol with an executable Python fixture.
-All three suites run on macOS, where the sandbox policy is implemented.
+All four suites run on macOS, where the sandbox policy is implemented.
 See [`docs/WORKER_PROTOCOL.md`](docs/WORKER_PROTOCOL.md) for the exact implemented launch and message contract.
 
 ## License

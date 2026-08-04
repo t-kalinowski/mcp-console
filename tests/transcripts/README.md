@@ -18,6 +18,10 @@ An identical prefix becomes a bare `!same-as PATH` document; a different prefix 
 When accepting a handshake change, update the full snapshot before the abbreviated transcripts.
 The `help` suite records command lines and stdout in one stream with color disabled.
 It adds the exit code for failures and stderr when nonempty.
+The `worker` suite drives the public MCP server through a transparent worker proxy.
+The proxy starts the built-in worker inside the server's sandbox, forwards sideband messages and standard streams, and writes parsed events to its private temporary directory for the test to read before shutdown.
+The suite asserts the public `send` result and records the wire events as YAML mappings in approximate order.
+Pending standard-output and standard-error chunks are grouped into one event without defining their relative order.
 
 Run commands from the repository root:
 

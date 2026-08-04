@@ -1,0 +1,198 @@
+#!/usr/bin/env -S uv run --no-cache --script
+# /// script
+# requires-python = ">=3.11"
+# ///
+
+import codecs
+import json
+import os
+import select
+import subprocess
+from pathlib import Path
+from typing import Any, BinaryIO, TextIO
+
+
+READ_FD_ENV = "MCP_CONSOLE_SIDEBAND_READ_FD"
+WRITE_FD_ENV = "MCP_CONSOLE_SIDEBAND_WRITE_FD"
+WORKER_ENV = "MCP_CONSOLE_MITM_WORKER"
+CAPTURE_NAME = "mcp-console-worker-wire.jsonl"
+BUFFER_SIZE = 64 * 1024
+
+
+def take_sideband(name: str) -> int:
+    descriptor = int(os.environ.pop(name))
+    os.set_inheritable(descriptor, False)
+    return descriptor
+
+
+def write_all(descriptor: int, data: bytes) -> None:
+    remaining = memoryview(data)
+    while remaining:
+        remaining = remaining[os.write(descriptor, remaining) :]
+
+
+def send(descriptor: int, message: dict[str, Any]) -> None:
+    frame = json.dumps(message, separators=(",", ":")).encode("utf-8")
+    write_all(descriptor, frame + b"\n")
+
+
+def record(stream: TextIO, event: dict[str, Any]) -> None:
+    stream.write(json.dumps(event, separators=(",", ":")) + "\n")
+    stream.flush()
+
+
+def close(descriptor: int) -> None:
+    if descriptor >= 0:
+        os.close(descriptor)
+
+
+def proxy(
+    server_read: int,
+    server_write: int,
+    worker_read: int,
+    worker_write: int,
+    stdout: BinaryIO,
+    stderr: BinaryIO,
+    capture: TextIO,
+) -> None:
+    streams = {
+        stdout.fileno(): ("stdout", 1),
+        stderr.fileno(): ("stderr", 2),
+    }
+    decoders = {
+        descriptor: codecs.getincrementaldecoder("utf-8")(errors="replace")
+        for descriptor in streams
+    }
+    pending: dict[str, list[str]] = {"stdout": [], "stderr": []}
+    active = {server_read, worker_read, *streams}
+    buffers = {"server": bytearray(), "worker": bytearray()}
+
+    def read_stream(descriptor: int) -> None:
+        chunk = os.read(descriptor, BUFFER_SIZE)
+        name, destination = streams[descriptor]
+        if chunk:
+            write_all(destination, chunk)
+            text = decoders[descriptor].decode(chunk)
+        else:
+            active.remove(descriptor)
+            text = decoders[descriptor].decode(b"", final=True)
+        if text:
+            pending[name].append(text)
+
+    def read_ready_streams() -> None:
+        descriptors = [descriptor for descriptor in streams if descriptor in active]
+        if not descriptors:
+            return
+        ready, _, _ = select.select(descriptors, [], [], 0)
+        for descriptor in streams:
+            if descriptor in ready:
+                read_stream(descriptor)
+
+    def flush_streams() -> None:
+        event = {
+            name: "".join(pending[name])
+            for name in ("stdout", "stderr")
+            if pending[name]
+        }
+        if event:
+            record(capture, event)
+            for name in event:
+                pending[name].clear()
+
+    def forward_frames(direction: str, destination: int) -> bool:
+        buffer = buffers[direction]
+        shutdown = False
+        while b"\n" in buffer:
+            frame, _, remainder = buffer.partition(b"\n")
+            buffers[direction] = buffer = bytearray(remainder)
+            message = json.loads(frame.decode("utf-8"))
+            assert isinstance(message, dict), message
+            if direction == "worker":
+                read_ready_streams()
+                flush_streams()
+            record(capture, {direction: message})
+            send(destination, message)
+            shutdown = shutdown or (
+                direction == "server" and message == {"kind": "shutdown"}
+            )
+        return shutdown
+
+    while worker_read in active or any(descriptor in active for descriptor in streams):
+        ready, _, _ = select.select(active, [], [])
+        for descriptor in streams:
+            if descriptor in ready:
+                read_stream(descriptor)
+
+        if worker_read in ready:
+            read_ready_streams()
+            chunk = os.read(worker_read, BUFFER_SIZE)
+            if chunk:
+                buffers["worker"].extend(chunk)
+                forward_frames("worker", server_write)
+            else:
+                active.remove(worker_read)
+                close(server_write)
+                server_write = -1
+
+        if server_read in ready:
+            chunk = os.read(server_read, BUFFER_SIZE)
+            if chunk:
+                buffers["server"].extend(chunk)
+                shutdown = forward_frames("server", worker_write)
+            else:
+                shutdown = True
+            if shutdown:
+                active.remove(server_read)
+                close(server_read)
+                server_read = -1
+                close(worker_write)
+                worker_write = -1
+
+    assert not buffers["server"], "server stopped during a sideband frame"
+    assert not buffers["worker"], "worker stopped during a sideband frame"
+    flush_streams()
+    close(server_read)
+    close(server_write)
+    close(worker_read)
+    close(worker_write)
+
+
+def main() -> None:
+    server_read = take_sideband(READ_FD_ENV)
+    server_write = take_sideband(WRITE_FD_ENV)
+    worker_read, proxy_write = os.pipe()
+    proxy_read, worker_write = os.pipe()
+    environment = os.environ.copy()
+    program = environment.pop(WORKER_ENV)
+    environment[READ_FD_ENV] = str(worker_read)
+    environment[WRITE_FD_ENV] = str(worker_write)
+    process = subprocess.Popen(
+        [program, "worker"],
+        env=environment,
+        pass_fds=(worker_read, worker_write),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    close(worker_read)
+    close(worker_write)
+    assert process.stdout is not None
+    assert process.stderr is not None
+
+    capture_path = Path(os.environ["TMPDIR"], CAPTURE_NAME)
+    with capture_path.open("w", encoding="utf-8") as capture:
+        proxy(
+            server_read,
+            server_write,
+            proxy_read,
+            proxy_write,
+            process.stdout,
+            process.stderr,
+            capture,
+        )
+    process.stdout.close()
+    process.stderr.close()
+    raise SystemExit(process.wait())
+
+
+if __name__ == "__main__":
+    main()

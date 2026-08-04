@@ -1,0 +1,97 @@
+---
+worker:
+  kind: ready
+---
+server:
+  kind: evaluate
+  language: r
+  source: |
+    python <- Sys.which("python3")
+    stopifnot(nzchar(python))
+    reticulate::use_python(python, required = TRUE)
+    suppressWarnings(
+      invisible(reticulate::py_run_string("initialized_from_r = True"))
+    )
+---
+worker:
+  kind: completed
+---
+server:
+  kind: evaluate
+  language: python
+  source: |
+    import sys
+
+    assert initialized_from_r
+    print("Python stdout")
+    sys.stderr.write("Python stderr\n")
+    raise ValueError("boom")
+---
+worker:
+  kind: output
+  data: Python stdout
+---
+worker:
+  kind: output
+  data: "\n"
+---
+worker:
+  kind: output
+  data: |
+    Python stderr
+---
+worker:
+  kind: output
+  data: |
+    Traceback (most recent call last):
+---
+worker:
+  kind: output
+  data: |2
+      File "<string>", line 36, in _mcp_console_eval_cell
+---
+worker:
+  kind: output
+  data: |2
+      File "<mcp-console:python:e1>", line 6, in <module>
+---
+worker:
+  kind: output
+  data: |
+    ValueError: boom
+---
+worker:
+  kind: completed
+---
+server:
+  kind: evaluate
+  language: python
+  source: |
+    import os
+    import subprocess
+    import sys
+
+    buffer_stdout = sys.stdout.buffer.write(b"buffer stdout\n")
+    sys.stdout.buffer.flush()
+    buffer_stderr = sys.stderr.buffer.write(b"buffer stderr\n")
+    sys.stderr.buffer.flush()
+    direct_stdout = os.write(1, b"direct stdout\n")
+    direct_stderr = os.write(2, b"direct stderr\n")
+    descendant_source = 'import sys\n\nprint("exec descendant stdout")\nsys.stderr.write("exec descendant stderr\\n")\n'
+    exec_descendant = subprocess.run(
+        [sys.executable, "-c", descendant_source],
+        check=True,
+    )
+---
+stdout: |
+  buffer stdout
+  direct stdout
+  exec descendant stdout
+stderr: |
+  buffer stderr
+  direct stderr
+  exec descendant stderr
+---
+worker:
+  kind: completed
+...
