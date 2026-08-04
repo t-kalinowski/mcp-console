@@ -5,7 +5,9 @@
 
 import argparse
 import difflib
+import os
 import runpy
+import shutil
 import sys
 from collections.abc import Callable
 from pathlib import Path
@@ -30,6 +32,10 @@ options = parser.parse_args()
 
 assert binary.is_file(), f"{binary.relative_to(root)} is missing; run scripts/test"
 assert suite_paths, "no transcript suites found"
+
+test_python = shutil.which("python3")
+assert test_python is not None, "python3 is required to run transcript tests"
+os.environ["RETICULATE_PYTHON"] = test_python
 
 TranscriptCase = Callable[[Path], Transcript]
 

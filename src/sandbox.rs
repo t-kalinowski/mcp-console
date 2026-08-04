@@ -6,6 +6,8 @@ use std::ffi::OsStr;
 #[cfg(target_os = "macos")]
 use std::os::unix::process::CommandExt as _;
 #[cfg(target_os = "macos")]
+use std::path::Path;
+#[cfg(target_os = "macos")]
 use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, ExitStatus, Stdio};
 #[cfg(target_os = "macos")]
 use std::time::Duration;
@@ -16,6 +18,9 @@ use wait_timeout::ChildExt as _;
 #[cfg(target_os = "macos")]
 #[path = "sandbox/macos.rs"]
 mod platform;
+
+#[cfg(target_os = "macos")]
+pub(crate) use platform::TemporaryDirectory;
 
 #[cfg(not(target_os = "macos"))]
 #[path = "sandbox/unsupported.rs"]
@@ -122,7 +127,18 @@ pub(crate) struct SandboxedChild {
 #[cfg(target_os = "macos")]
 impl SandboxedCommand {
     pub(crate) fn new(program: &OsStr) -> Result<Self, String> {
-        let (command, temporary_directory) = platform::sandboxed_command()?;
+        Self::new_inner(program, None)
+    }
+
+    pub(crate) fn new_with_writable_directory(
+        program: &OsStr,
+        writable_directory: &Path,
+    ) -> Result<Self, String> {
+        Self::new_inner(program, Some(writable_directory))
+    }
+
+    fn new_inner(program: &OsStr, writable_directory: Option<&Path>) -> Result<Self, String> {
+        let (command, temporary_directory) = platform::sandboxed_command(writable_directory)?;
         let temporary_directory_path = temporary_directory.path().as_os_str().to_os_string();
         let mut sandboxed = Self {
             command,

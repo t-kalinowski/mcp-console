@@ -30,7 +30,7 @@ Every `input_requested` frame immediately appends `[input requested: <JSON-quote
 Its outstanding state is provisional for up to 10 milliseconds; a matching `input_received` after a successful console read retains the request record but suppresses the `\n[stdin needed]` banner, while an unmatched request returns that marker after the grace or at the MCP deadline, whichever comes first.
 The receipt describes that runtime read, not a submitted payload or byte count, and direct fd-0 reads emit neither frame.
 New code is rejected until the running evaluation's result has been collected.
-On macOS, the first nonempty stdin submission or evaluation lazily starts the built-in worker under the same sandbox policy as the `sandbox` command.
+On macOS, managed-Python preflight happens during `serve` startup when required; the first nonempty stdin submission or evaluation still lazily starts the built-in worker under the same sandbox policy as the `sandbox` command.
 The worker embeds R through `libr` and `harp`, retains global state, and feeds each complete R cell through R's DLL REPL iterator.
 R parses and evaluates its expressions sequentially, captures console output, prints visible values, and performs native top-level bookkeeping.
 Cell EOF while R requires continuation input is an error; earlier complete expressions from that cell remain applied.
@@ -44,9 +44,12 @@ Within the worker process, reticulate then routes Python text writes, including 
 Writes through `sys.stdout.buffer`, `sys.stderr.buffer`, or native fd 1/2 bypass that remap and use the captured standard streams.
 A fork-only Python child cannot use the sideband: writes through its inherited remapped text streams are discarded, while buffer and direct-fd writes remain captured.
 An exec descendant that retains fd 1/2 creates fresh standard streams backed by those descriptors, so its ordinary stdout and stderr are captured.
-Before initializing R, the worker sets `RETICULATE_PYTHON=managed` when the variable is absent and preserves any existing value.
-It also forces `UV_OFFLINE=1`, overwriting any inherited value to match the sandbox's network denial.
-Reticulate then owns interpreter selection and provisioning; managed work remains subject to the worker sandbox's filesystem and network policy.
+When inherited `RETICULATE_PYTHON` is absent or exactly `managed`, built-in server startup asks reticulate to prepare managed Python outside the sandbox in a dedicated per-server cache.
+Other inherited values, including an empty value, are preserved and skip that preflight; custom workers also skip it.
+The preflight may access the network and write that cache, but it runs before sideband setup and evaluates no submitted cell.
+The sandbox permits regular-file writes to the cache and the worker's private temporary directory; the server attempts to remove the cache when it exits.
+Before initializing R, the worker forces `UV_OFFLINE=1`, overwriting any inherited value to match the sandbox's network denial.
+Reticulate remains in managed mode and can resolve cached `py_require()` additions, or it reuses the caller-selected interpreter.
 R and Python share objects through reticulate's `py` and `r` bridges.
 A silent successful Python cell sends `completed` without an `output` frame and projects to `[done]` when no other response text is pending.
 Python `input()` and `breakpoint()`/`pdb` use reticulate's R console bridge, so they emit `input_requested` before a read and `input_received` after it succeeds.
@@ -75,6 +78,7 @@ When MCP input closes, the server starts a one-second deadline and attempts grac
 If the direct sandbox process is still running when time expires, the sandbox boundary force-stops its process group and reaps that direct process.
 The version command prints the package name and version.
 On macOS, the sandbox command launches a subprocess under `sandbox-exec` with host filesystem reads allowed, regular-file writes limited to a dedicated per-launch temporary directory, runtime device and IPC exceptions, and network access denied.
+The built-in managed-Python worker additionally receives write access to its dedicated per-server cache.
 This initial launcher waits only for the direct command.
 Background descendants are unsupported: they may outlive the launcher, which attempts to remove their dedicated temporary directory on a best-effort basis when it returns.
 Descendant supervision is intentionally deferred because it must account for process groups, session-detached children, signal forwarding, and PID reuse together.
@@ -106,15 +110,17 @@ See `design-sketches/README.md` for the product overview and `design-sketches/do
 - `src/main.rs` — current binary entry point.
 - `src/cell.rs` — language-neutral complete-cell type shared by the server and worker protocol.
 - `src/cli.rs` — clap command definitions and user-facing help.
+- `src/python.rs` — managed-Python preflight, cache ownership, worker environment, and reticulate bridge.
 - `src/server.rs` — MCP stdio server, `send` tool, and worker selection.
 - `src/r_repl.c` — C-owned per-cell DLL-REPL iterator and long-jump boundary.
 - `src/sideband.rs` — macOS inherited-pipe JSON-lines transport.
-- `src/worker.rs` — embedded R initialization, R and reticulate Python evaluation, and console callbacks.
+- `src/worker.rs` — embedded R initialization, cell dispatch, and console callbacks.
 - `src/worker_client.rs` — server-side worker launch, lifecycle, fd-0 input, and output collection.
 - `src/worker_protocol.rs` — shared sideband message definitions.
 - `src/sandbox.rs` — platform dispatch for the sandbox process launcher.
 - `src/sandbox/` — platform implementation and macOS Seatbelt policy.
 - `tests/cli.rs` — public binary acceptance tests.
+- `tests/fixtures/uv` — deterministic managed-Python preflight fixture used by the public Python acceptance suite.
 - `tests/fixtures/zod` — executable Python sideband worker used by acceptance tests.
 - `tests/fixtures/worker_mitm` — transparent worker proxy used to capture sideband and standard-stream events through `serve`.
 - `tests/transcripts/r.py` — public built-in R worker acceptance suite.

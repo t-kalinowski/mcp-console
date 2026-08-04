@@ -2,6 +2,7 @@
 
 import os
 import shutil
+import tempfile
 from pathlib import Path
 
 from _support import McpClient, Transcript, code, run_this_suite
@@ -18,18 +19,8 @@ def configured_python_environment() -> dict[str, str]:
     return environment
 
 
-def test_configures_reticulate_python_environment(binary: Path) -> Transcript:
+def test_preserves_configured_python_environment(binary: Path) -> Transcript:
     environment = os.environ.copy()
-    environment.pop("RETICULATE_PYTHON", None)
-    client = McpClient(binary, ("serve",), environment)
-    client.initialize_and_list_tools()
-    client.call_tool(
-        "send",
-        r='Sys.getenv("RETICULATE_PYTHON", unset = NA_character_)',
-    )
-    assert last_tool_text(client) == '[1] "managed"\n'
-    transcript = client.finish()
-
     environment["RETICULATE_PYTHON"] = "configured-by-user"
     client = McpClient(binary, ("serve",), environment)
     client.initialize_and_list_tools()
@@ -38,8 +29,11 @@ def test_configures_reticulate_python_environment(binary: Path) -> Transcript:
         r='Sys.getenv("RETICULATE_PYTHON", unset = NA_character_)',
     )
     assert last_tool_text(client) == '[1] "configured-by-user"\n'
-    transcript += client.finish()
+    return client.finish()
 
+
+def test_preserves_empty_python_environment(binary: Path) -> Transcript:
+    environment = os.environ.copy()
     environment["RETICULATE_PYTHON"] = ""
     client = McpClient(binary, ("serve",), environment)
     client.initialize_and_list_tools()
@@ -48,11 +42,54 @@ def test_configures_reticulate_python_environment(binary: Path) -> Transcript:
         r='Sys.getenv("RETICULATE_PYTHON", unset = NA_character_)',
     )
     assert last_tool_text(client) == '[1] ""\n'
-    return transcript + client.finish()
+    return client.finish()
+
+
+def managed_python_transcript(binary: Path, configured: bool) -> Transcript:
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        marker = Path(temporary_directory) / "managed-python"
+        environment = os.environ.copy()
+        if configured:
+            environment["RETICULATE_PYTHON"] = "managed"
+        else:
+            environment.pop("RETICULATE_PYTHON", None)
+        environment["RETICULATE_UV"] = str(
+            Path(__file__).resolve().parents[1] / "fixtures" / "uv"
+        )
+        python = shutil.which("python3")
+        assert python is not None
+        environment["MCP_CONSOLE_TEST_PYTHON"] = python
+        environment["MCP_CONSOLE_UV_MARKER"] = str(marker)
+        environment["UV_OFFLINE"] = "1"
+
+        client = McpClient(binary, ("serve",), environment)
+        client.initialize_and_list_tools()
+        assert marker.read_text(encoding="utf-8") == "managed Python provisioned\n"
+        client.call_tool("send", r="reticulate::py_config()$ephemeral")
+        assert last_tool_text(client) == "[1] TRUE\n"
+        client.call_tool(
+            "send",
+            r='reticulate::py_require("mcp-console-test-package")',
+        )
+        assert last_tool_text(client) == "[done]"
+        client.call_tool("send", r="reticulate::py_config()$ephemeral")
+        assert last_tool_text(client) == "[1] TRUE\n"
+        client.call_tool("send", python="40 + 2")
+        output = last_tool_text(client)
+        assert output == "42\n", repr(output)
+        return client.finish()
+
+
+def test_evaluates_with_default_managed_python(binary: Path) -> Transcript:
+    return managed_python_transcript(binary, configured=False)
+
+
+def test_evaluates_with_explicit_managed_python(binary: Path) -> Transcript:
+    return managed_python_transcript(binary, configured=True)
 
 
 def test_forces_uv_offline_in_builtin_worker(binary: Path) -> Transcript:
-    environment = os.environ.copy()
+    environment = configured_python_environment()
     environment["UV_OFFLINE"] = "0"
     client = McpClient(binary, ("serve",), environment)
     client.initialize_and_list_tools()

@@ -2,7 +2,7 @@
 
 This document describes the worker protocol implemented by `mcp-console serve`, the built-in worker, and `tests/fixtures/zod`.
 It describes the current code, not the broader design under `design-sketches/`.
-The message enums in `src/worker_protocol.rs`, the framing in `src/sideband.rs`, and the standard-stream routing in `src/worker_client.rs` are the source of truth.
+The message enums in `src/worker_protocol.rs`, the framing in `src/sideband.rs`, the Python setup in `src/python.rs`, and the standard-stream routing in `src/worker_client.rs` are the source of truth.
 
 ## Scope
 
@@ -16,6 +16,20 @@ Plain `serve` selects the built-in worker.
 The hidden `serve --worker PATH` option replaces it with a development worker.
 
 ## Launch contract
+
+For the built-in worker, when inherited `RETICULATE_PYTHON` is absent or exactly `managed`, server initialization runs this preflight outside the sandbox:
+
+```text
+Rscript --vanilla -e 'Sys.setenv(RETICULATE_PYTHON = "managed"); cat(reticulate::py_config()$python)'
+```
+
+The server uses `$R_HOME/bin/Rscript` when `R_HOME` is set and otherwise selects `Rscript` from `PATH`.
+It removes inherited `UV_OFFLINE`, requires the command to return a valid interpreter path, and prepares a dedicated per-server reticulate and uv cache.
+Every worker generation receives `RETICULATE_PYTHON=managed`, `R_USER_CACHE_DIR`, `UV_CACHE_DIR`, and `UV_PYTHON_INSTALL_DIR` values that select that cache.
+Other inherited values, including an empty value, bypass the preflight unchanged; custom workers also skip it.
+The preflight completes before sideband pipes are created, receives no MCP stdin, and may use the network and write the dedicated cache.
+A preflight failure prevents server initialization.
+The sandbox permits regular-file writes to that cache as well as the worker's private temporary directory, and the server attempts to remove the cache when it exits.
 
 The worker starts lazily on the first `send` call that supplies `r`, `python`, or nonempty `stdin`.
 On macOS, the server uses the same `SandboxedCommand` builder as the `sandbox` command.
@@ -288,11 +302,10 @@ A fork-only Python child inherits the remapped text streams after its sideband i
 An exec descendant that retains fd 1/2 creates fresh standard streams backed by those descriptors, so its ordinary stdout and stderr writes are captured.
 There is no relative ordering guarantee between those pipes and sideband output, as described under [Transport](#transport).
 
-Before initializing R, the worker sets `RETICULATE_PYTHON=managed` when the variable is absent and preserves any existing value.
-It also forces `UV_OFFLINE=1`, overwriting any inherited value before user code runs.
-Reticulate then owns interpreter selection and provisioning when Python is first initialized, whether from an R or Python cell, and the worker reuses that interpreter afterward.
-Managed selection may invoke `uv`, which can use only cached or local Python and package artifacts.
-That work remains inside the worker sandbox, which denies network access and regular-file writes outside its per-launch temporary directory.
+The built-in worker receives either the managed environment and cache prepared by the preflight or the caller's existing `RETICULATE_PYTHON` value.
+Before initializing R, it forces `UV_OFFLINE=1`, overwriting any inherited value before user code runs.
+Reticulate initializes that selection on first use from R or Python and reuses it afterward.
+Managed `py_require()` additions can activate environments that uv can resolve from the prepared cache; uncached requirements fail under the offline worker policy.
 
 Each Python cell receives a synthetic filename such as `<mcp-console:python:e1>`.
 The worker stores the source in a process-lifetime private R environment and calls its evaluator with only a short evaluation ID.
@@ -309,7 +322,7 @@ Direct `sys.stdin` or fd-0 reads bypass the callback and produce neither frame.
 
 ## Current limits
 
-The current implementation has no worker startup or execution timeout, frame-size limit, stdin queue limit, or accumulated-output limit.
+The current implementation has no managed-Python preflight, worker startup, or execution timeout, frame-size limit, stdin queue limit, or accumulated-output limit.
 `timeout_ms` limits one MCP wait without terminating the worker or a blocked stdin write; only shutdown has a process deadline.
 An idle stdin-only call does not wait on an evaluation, so `timeout_ms` does not bound lazy worker startup for that call.
 The 10-millisecond input grace controls when provisional state becomes visible as `[stdin needed]`; it does not control request-record retention or limit evaluation or stdin reads.
@@ -318,9 +331,10 @@ It is a latency heuristic: scheduling can delay a receipt past the grace and exp
 Standard output and standard error are decoded as UTF-8 only when a response is assembled, with replacement for invalid sequences; arbitrary binary output is not preserved byte for byte.
 Worker failures are reported as plain-text MCP tool errors, not structured worker events.
 Concurrent MCP `send` calls are outside the current contract.
-Python cells require an installed reticulate R package and an interpreter that reticulate can initialize under the sandbox policy.
+Python cells require an installed reticulate R package.
 MCP Console does not install reticulate.
-Callers can set `RETICULATE_PYTHON` to an existing interpreter when managed selection requires access that the sandbox does not permit.
+The default preflight must be able to resolve or provision its interpreter and initial requirements outside the sandbox; later managed requirements must be available in its cache.
+An explicitly configured interpreter must be initializable under the offline worker policy.
 The Python input bridge does not observe direct `sys.stdin` or fd-0 reads.
 The current sandbox child does not yet supervise descendants after its direct process exits, or descendants that leave its process group; capturing inherited standard streams does not change that boundary.
 

@@ -1,0 +1,42 @@
+---
+!same-as tests/transcripts/golden/server/initializes_and_lists_tools.yaml
+---
+id: 3
+send:
+  r: reticulate::py_config()$ephemeral
+result:
+  content:
+    - type: text
+      text: |
+        [1] TRUE
+  isError: false
+---
+id: 4
+send:
+  r: reticulate::py_require("mcp-console-test-package")
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+id: 5
+send:
+  r: reticulate::py_config()$ephemeral
+result:
+  content:
+    - type: text
+      text: |
+        [1] TRUE
+  isError: false
+---
+id: 6
+send:
+  python: 40 + 2
+result:
+  content:
+    - type: text
+      text: |
+        42
+  isError: false
+...

@@ -1,0 +1,72 @@
+#!/usr/bin/env python3
+
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+
+arguments = sys.argv[1:]
+python = os.environ["MCP_CONSOLE_TEST_PYTHON"]
+
+if arguments == ["--version"]:
+    print("uv 0.9.0")
+elif arguments[:2] == ["python", "list"]:
+    version = subprocess.run(
+        [python, "-c", "import sys; print('.'.join(map(str, sys.version_info[:3])))"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    major, minor, patch = version.split(".", maxsplit=2)
+    architecture = os.uname().machine.replace("arm64", "aarch64")
+    print(
+        json.dumps(
+            [
+                {
+                    "key": f"cpython-{version}-macos-{architecture}-none",
+                    "version": version,
+                    "version_parts": {
+                        "major": int(major),
+                        "minor": int(minor),
+                        "patch": int(patch),
+                    },
+                    "path": python,
+                    "symlink": None,
+                    "url": None,
+                    "os": "macos",
+                    "variant": "default",
+                    "implementation": "cpython",
+                    "arch": architecture,
+                    "libc": "none",
+                }
+            ]
+        )
+    )
+elif arguments[:2] == ["tool", "run"]:
+    requirements = [
+        arguments[index + 1]
+        for index, argument in enumerate(arguments)
+        if argument == "--with"
+    ]
+    assert "numpy" in requirements
+    cache_marker = Path(os.environ["UV_CACHE_DIR"]) / "mcp-console-preflight"
+    if os.environ.get("UV_OFFLINE") == "1":
+        assert cache_marker.read_text(encoding="utf-8") == "ready\n"
+        base_environment = cache_marker.with_name("mcp-console-base-environment")
+        if "mcp-console-test-package" in requirements:
+            assert base_environment.read_text(encoding="utf-8") == "ready\n"
+        else:
+            base_environment.write_text("ready\n", encoding="utf-8")
+    else:
+        marker = Path(os.environ["MCP_CONSOLE_UV_MARKER"])
+        marker.write_text("managed Python provisioned\n", encoding="utf-8")
+        cache_marker.parent.mkdir(parents=True, exist_ok=True)
+        cache_marker.write_text("ready\n", encoding="utf-8")
+    separator = arguments.index("--")
+    command = arguments[separator + 1 :]
+    assert command[0] == "python"
+    raise SystemExit(subprocess.run([python, *command[1:]]).returncode)
+else:
+    raise SystemExit(f"unsupported fake uv command: {arguments!r}")

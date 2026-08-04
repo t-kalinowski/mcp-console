@@ -3,7 +3,7 @@ mod platform {
     use std::error::Error;
     use std::ffi::{CStr, CString, c_char, c_int, c_uchar};
     use std::io;
-    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Mutex, OnceLock};
     use std::thread;
 
@@ -18,72 +18,8 @@ mod platform {
     static WORKER_FAILURE: Mutex<Option<String>> = Mutex::new(None);
     static WORKER_SHUTDOWN: AtomicBool = AtomicBool::new(false);
     static EVALUATION_STARTED: AtomicBool = AtomicBool::new(false);
-    static NEXT_PYTHON_EVALUATION_ID: AtomicU64 = AtomicU64::new(1);
-    static R_TRY_EVAL: OnceLock<TryEval> = OnceLock::new();
-    static mut PYTHON_STATE: libr::SEXP = libr::SEXP::null();
-
-    const PYTHON_BRIDGE_INIT: &str = r#"
-base::local({
-  evaluator <- NULL
-  source <- NULL
-
-  evaluate <- function(id) {
-    if (is.null(evaluator)) {
-      private <- reticulate::py_run_string(r"---(
-import __main__ as _main
-import ast as _ast
-import builtins as _builtins
-import sys as _sys
-import traceback as _traceback
-
-
-def _mcp_console_eval_cell(
-    source,
-    filename,
-    _main=_main,
-    _parse=_ast.parse,
-    _Expr=_ast.Expr,
-    _Expression=_ast.Expression,
-    _isinstance=_builtins.isinstance,
-    _compile=_builtins.compile,
-    _exec=_builtins.exec,
-    _eval=_builtins.eval,
-    _BaseException=_builtins.BaseException,
-    _sys=_sys,
-    _print_exc=_traceback.print_exc,
-):
-    try:
-        module = _parse(source, filename=filename, mode="exec")
-        final = module.body[-1] if module.body else None
-        if _isinstance(final, _Expr):
-            module.body.pop()
-            statements = _compile(module, filename, "exec") if module.body else None
-            expression = _compile(_Expression(final.value), filename, "eval")
-        else:
-            statements = _compile(module, filename, "exec")
-            expression = None
-
-        if statements is not None:
-            _exec(statements, _main.__dict__)
-        if expression is not None:
-            _sys.displayhook(_eval(expression, _main.__dict__))
-    except _BaseException:
-        _print_exc()
-)---", local = TRUE, convert = FALSE)
-      evaluator <<- private$`_mcp_console_eval_cell`
-    }
-
-    filename <- paste0("<mcp-console:python:", id, ">")
-    invisible(evaluator(source, filename))
-  }
-
-  environment()
-}, envir = base::new.env(parent = base::baseenv()))
-"#;
-
     type ReplInit = unsafe extern "C-unwind" fn();
     type ReplDoOne = unsafe extern "C-unwind" fn() -> c_int;
-    type TryEval = unsafe extern "C-unwind" fn(libr::SEXP, libr::SEXP, *mut c_int) -> libr::SEXP;
 
     struct CellSource {
         text: String,
@@ -103,30 +39,20 @@ def _mcp_console_eval_cell(
         if unsafe { libc::pthread_main_np() } != 1 {
             return Err(io::Error::other("R worker must run on the process main thread").into());
         }
-        // The worker owns its environment and is still single-threaded. Configure
-        // reticulate before user R can initialize Python.
-        for (name, value, overwrite) in [
-            (c"RETICULATE_REMAP_OUTPUT_STREAMS", c"1", 1),
-            (c"RETICULATE_PYTHON", c"managed", 0),
-            (c"UV_OFFLINE", c"1", 1),
-        ] {
-            if unsafe { libc::setenv(name.as_ptr(), value.as_ptr(), overwrite) } != 0 {
-                return Err(io::Error::last_os_error().into());
-            }
-        }
+        crate::python::configure_worker_environment()?;
         let (mut reader, writer) = crate::sideband::connect_from_env()?;
         let r_home = harp::command::r_home_setup()?;
         initialize_r(&r_home)?;
         WORKER_WRITER
             .set(writer.clone())
             .map_err(|_| io::Error::other("R worker sideband was already initialized"))?;
-        initialize_python_bridge()?;
+        let mut python = crate::python::Bridge::initialize()?;
         writer.send(&WorkerMessage::Ready)?;
 
         loop {
             match reader.receive()? {
                 ServerMessage::Evaluate { language, source } => {
-                    let result = evaluate_cell(Cell { language, source });
+                    let result = evaluate_cell(Cell { language, source }, &mut python);
 
                     if WORKER_SHUTDOWN.load(Ordering::SeqCst) {
                         return Ok(());
@@ -141,10 +67,10 @@ def _mcp_console_eval_cell(
         }
     }
 
-    fn evaluate_cell(cell: Cell) -> Result<(), String> {
+    fn evaluate_cell(cell: Cell, python: &mut crate::python::Bridge) -> Result<(), String> {
         match cell.language {
             Language::R => evaluate_r_cell(cell.source),
-            Language::Python => evaluate_python_cell(cell.source),
+            Language::Python => evaluate_python_cell(cell.source, python),
         }
     }
 
@@ -169,108 +95,18 @@ def _mcp_console_eval_cell(
         }
     }
 
-    fn evaluate_python_cell(python: String) -> Result<(), String> {
-        if python.contains('\0') {
+    fn evaluate_python_cell(
+        source: String,
+        python: &mut crate::python::Bridge,
+    ) -> Result<(), String> {
+        if source.contains('\0') {
             emit_output(b"SyntaxError: source code string cannot contain null bytes\n");
             return Ok(());
         }
-        let evaluation_id = NEXT_PYTHON_EVALUATION_ID.fetch_add(1, Ordering::Relaxed);
-        let evaluation_id = format!("e{evaluation_id}");
-        call_python_bridge(&python, &evaluation_id)
-    }
-
-    fn initialize_python_bridge() -> Result<(), String> {
-        let source_length = c_int::try_from(PYTHON_BRIDGE_INIT.len())
-            .expect("the fixed Python bridge should fit in an R string");
-        let (evaluation_error, state, is_environment) = harp::top_level_exec(|| {
-            // SAFETY: This runs on R's main thread. The top-level boundary
-            // contains allocation failures, and R_tryEval contains errors raised
-            // while R parses and evaluates the fixed bridge source.
-            unsafe {
-                let source = libr::Rf_protect(r_string(PYTHON_BRIDGE_INIT, source_length));
-                let str2expression = libr::Rf_install(c"str2expression".as_ptr());
-                let call = libr::Rf_protect(libr::Rf_lang2(str2expression, source));
-                let eval = libr::Rf_install(c"eval".as_ptr());
-                let call = libr::Rf_protect(libr::Rf_lang2(eval, call));
-                let try_eval = R_TRY_EVAL
-                    .get()
-                    .expect("R_tryEval should be initialized before bridge setup");
-                let mut evaluation_error = 0;
-                let state = try_eval(call, libr::R_BaseEnv, &mut evaluation_error);
-                if evaluation_error != 0 || state.is_null() {
-                    libr::Rf_unprotect(3);
-                    return (evaluation_error, state, false);
-                }
-                let state = libr::Rf_protect(state);
-                let is_environment = libr::TYPEOF(state) == libr::ENVSXP as c_int;
-                if is_environment {
-                    libr::R_PreserveObject(state);
-                }
-                libr::Rf_unprotect(4);
-                (evaluation_error, state, is_environment)
-            }
-        })
-        .map_err(|error| format!("failed to initialize the Python bridge: {error}"))?;
-        if evaluation_error != 0 {
-            return Err("Python bridge initialization failed during R evaluation".to_string());
-        }
-        if state.is_null() {
-            return Err("Python state initialization returned a null R object".to_string());
-        }
-        if !is_environment {
-            return Err("Python state initialization did not produce an environment".to_string());
-        }
-        // SAFETY: The worker runs R on this process main thread. R preserves
-        // this object until process exit, and every later access is on that thread.
-        unsafe {
-            PYTHON_STATE = state;
-        }
-        Ok(())
-    }
-
-    fn call_python_bridge(source: &str, evaluation_id: &str) -> Result<(), String> {
-        let source_length = c_int::try_from(source.len())
-            .map_err(|_| "Python source exceeds R's maximum string size".to_string())?;
-        let evaluation_id_length = c_int::try_from(evaluation_id.len())
-            .expect("generated evaluation IDs should fit in an R string");
         EVALUATION_STARTED.store(true, Ordering::SeqCst);
-        let result = harp::top_level_exec(|| {
-            // SAFETY: This runs on R's main thread. The outer top-level
-            // boundary contains allocation errors; R_tryEval contains errors
-            // raised while the preserved private environment calls reticulate.
-            unsafe {
-                let source = libr::Rf_protect(r_string(source, source_length));
-                let evaluation_id = libr::Rf_protect(r_string(evaluation_id, evaluation_id_length));
-                let source_symbol = libr::Rf_install(c"source".as_ptr());
-                let evaluate_symbol = libr::Rf_install(c"evaluate".as_ptr());
-                libr::Rf_defineVar(source_symbol, source, PYTHON_STATE);
-                let call = libr::Rf_protect(libr::Rf_lang2(evaluate_symbol, evaluation_id));
-                let try_eval = R_TRY_EVAL
-                    .get()
-                    .expect("R_tryEval should be initialized before Python evaluation");
-                let mut evaluation_error = 0;
-                try_eval(call, PYTHON_STATE, &mut evaluation_error);
-                libr::Rf_defineVar(source_symbol, libr::R_NilValue, PYTHON_STATE);
-                libr::Rf_unprotect(3);
-                evaluation_error
-            }
-        });
+        let result = python.evaluate(&source);
         EVALUATION_STARTED.store(false, Ordering::SeqCst);
-        let evaluation_error =
-            result.map_err(|error| format!("failed to call the Python bridge: {error}"))?;
-        if evaluation_error != 0 {
-            return Err("Python bridge failed during R evaluation".to_string());
-        }
-        Ok(())
-    }
-
-    fn r_string(value: &str, length: c_int) -> libr::SEXP {
-        // SAFETY: The caller runs under R's top-level allocation boundary and
-        // immediately protects the returned scalar string.
-        unsafe {
-            let value = libr::Rf_mkCharLenCE(value.as_ptr().cast(), length, libr::cetype_t_CE_UTF8);
-            libr::Rf_ScalarString(value)
-        }
+        result
     }
 
     fn initialize_r(r_home: &std::path::Path) -> Result<(), Box<dyn Error>> {
@@ -321,16 +157,12 @@ def _mcp_console_eval_cell(
         let library = libloading::os::unix::Library::this();
         let init = unsafe { *library.get::<ReplInit>(b"R_ReplDLLinit\0")? };
         let do_one = unsafe { *library.get::<ReplDoOne>(b"R_ReplDLLdo1\0")? };
-        let try_eval = unsafe { *library.get::<TryEval>(b"R_tryEval\0")? };
         R_REPL_INIT
             .set(init)
             .map_err(|_| io::Error::other("R REPL was already initialized"))?;
         R_REPL_DO_ONE
             .set(do_one)
             .map_err(|_| io::Error::other("R REPL was already initialized"))?;
-        R_TRY_EVAL
-            .set(try_eval)
-            .map_err(|_| io::Error::other("R_tryEval was already initialized"))?;
         Ok(())
     }
 

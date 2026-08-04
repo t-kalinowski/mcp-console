@@ -18,6 +18,7 @@ struct ClientInner {
     evaluation: Mutex<Option<Arc<Evaluation>>>,
     output: CapturedOutput,
     shutdown_gate: Mutex<ShutdownGate>,
+    managed_python: Option<crate::python::Managed>,
 }
 
 enum WorkerState {
@@ -113,19 +114,25 @@ enum ShutdownGate {
 
 impl Client {
     pub(crate) fn new(program: PathBuf) -> Self {
-        Self::with_arguments(program, Vec::new())
+        Self::with_arguments(program, Vec::new(), None)
     }
 
     pub(crate) fn builtin() -> Result<Self, String> {
         let program = std::env::current_exe()
             .map_err(|error| format!("failed to locate the R worker executable: {error}"))?;
+        let managed_python = crate::python::preflight()?;
         Ok(Self::with_arguments(
             program,
             vec![OsString::from("worker")],
+            managed_python,
         ))
     }
 
-    fn with_arguments(program: PathBuf, arguments: Vec<OsString>) -> Self {
+    fn with_arguments(
+        program: PathBuf,
+        arguments: Vec<OsString>,
+        managed_python: Option<crate::python::Managed>,
+    ) -> Self {
         Self(Arc::new(ClientInner {
             program,
             arguments,
@@ -133,6 +140,7 @@ impl Client {
             evaluation: Mutex::new(None),
             output: CapturedOutput::new(),
             shutdown_gate: Mutex::new(ShutdownGate::Open { stop_handle: None }),
+            managed_python,
         }))
     }
 
@@ -303,6 +311,7 @@ impl Client {
             let running = platform::Worker::start(
                 &self.0.program,
                 &self.0.arguments,
+                self.0.managed_python.as_ref(),
                 self.0.output.clone(),
                 |stop_handle| self.register_stop_handle(stop_handle),
             )?;
@@ -782,13 +791,17 @@ mod platform {
         pub(super) fn start(
             program: &Path,
             arguments: &[OsString],
+            managed_python: Option<&crate::python::Managed>,
             output: super::CapturedOutput,
             on_started: impl FnOnce(StopHandle) -> Result<(), String>,
         ) -> Result<Self, String> {
             let (reader, writer, child_fds) = crate::sideband::bind()
                 .map_err(|error| format!("failed to create worker sideband: {error}"))?;
-            let mut command = crate::sandbox::SandboxedCommand::new(program.as_os_str())
-                .map_err(|error| format!("failed to prepare worker sandbox: {error}"))?;
+            let mut command = match managed_python {
+                Some(managed_python) => managed_python.sandboxed_command(program.as_os_str()),
+                None => crate::sandbox::SandboxedCommand::new(program.as_os_str()),
+            }
+            .map_err(|error| format!("failed to prepare worker sandbox: {error}"))?;
             command
                 .args(arguments)
                 .stdin(Stdio::piped())
@@ -986,6 +999,7 @@ mod platform {
         pub(super) fn start(
             _program: &Path,
             _arguments: &[OsString],
+            _managed_python: Option<&crate::python::Managed>,
             _output: super::CapturedOutput,
             _on_started: impl FnOnce(StopHandle) -> Result<(), String>,
         ) -> Result<Self, String> {

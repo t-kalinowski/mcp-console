@@ -26,6 +26,21 @@ def test_routes_send_over_sideband(binary: Path) -> Transcript:
     return client.finish()
 
 
+def test_custom_worker_skips_managed_python_preflight(binary: Path) -> Transcript:
+    zod = Path(__file__).resolve().parents[1] / "fixtures" / "zod"
+    environment = os.environ.copy()
+    environment.pop("RETICULATE_PYTHON", None)
+    environment["R_HOME"] = "/mcp-console-custom-worker-must-not-run-rscript"
+    client = McpClient(
+        binary,
+        ("serve", "--worker", str(zod)),
+        environment,
+    )
+    client.initialize_and_list_tools()
+    client.call_tool("send", python="echo")
+    return client.finish()
+
+
 def test_captures_worker_stdout(binary: Path) -> Transcript:
     zod = Path(__file__).resolve().parents[1] / "fixtures" / "zod"
     client = McpClient(
