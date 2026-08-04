@@ -44,7 +44,7 @@ Within the worker process, reticulate then routes Python text writes, including 
 Writes through `sys.stdout.buffer`, `sys.stderr.buffer`, or native fd 1/2 bypass that remap and use the captured standard streams.
 After a Python cell calls `os.fork()`, the child cannot use the sideband, so reticulate's registered CPython fork callback restores the original fd-backed text streams and ordinary stdout and stderr writes remain captured.
 Native extensions that fork without running CPython's registered fork callbacks and then resume Python are unsupported.
-Fork-child text capture requires reticulate commit `afe2221d` or a release containing it.
+Fork-child text capture requires reticulate from its `main` branch or a release containing fork-aware stream restoration.
 An exec descendant that retains fd 1/2 creates fresh standard streams backed by those descriptors, so its ordinary stdout and stderr are captured.
 The worker reuses an already initialized reticulate Python, otherwise honors `RETICULATE_PYTHON`, and finally selects `python3` from `PATH` without installing Python or accessing the network.
 R and Python share objects through reticulate's `py` and `r` bridges.

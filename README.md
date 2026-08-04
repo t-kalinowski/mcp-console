@@ -51,7 +51,7 @@ Reticulate routes Python text written through `sys.stdout` and `sys.stderr`, inc
 Writes through `sys.stdout.buffer`, `sys.stderr.buffer`, or fd 1/2 directly remain on the captured standard streams.
 After a Python cell calls `os.fork()`, reticulate restores the child's original fd-backed text streams after its sideband is disabled, so its ordinary stdout and stderr are captured too.
 Native extensions that fork without running CPython's registered fork callbacks and then resume Python are unsupported.
-Fork-child text capture requires [reticulate commit `afe2221d`](https://github.com/rstudio/reticulate/commit/afe2221ded74a7f18ab3d5e89bb0a49b1f9d3114) or a release containing it.
+Fork-child text capture requires reticulate from its `main` branch or a release containing fork-aware stream restoration.
 An exec descendant that retains fd 1/2 creates fresh standard streams backed by those descriptors, so its ordinary stdout and stderr are captured.
 
 The server also collects text written directly to the worker's standard output and standard error, including direct writes by descendants that retain those descriptors.

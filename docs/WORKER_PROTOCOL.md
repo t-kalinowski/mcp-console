@@ -287,7 +287,7 @@ Writes through `sys.stdout.buffer`, `sys.stderr.buffer`, or native fd 1/2 bypass
 When a Python cell calls `os.fork()`, reticulate's registered CPython child callback replaces its inherited remappers with their original fd-backed streams after the worker disables the child's sideband.
 Ordinary `print()` and `sys.stderr.write()` calls in that child therefore use the captured standard-stream pipes without sharing the parent-only sideband.
 Native extensions that call `fork()` without running CPython's registered fork callbacks and then resume Python are unsupported.
-This behavior requires reticulate commit `afe2221d` or a release containing it.
+This behavior requires reticulate from its `main` branch or a release containing fork-aware stream restoration.
 An exec descendant that retains fd 1/2 creates fresh standard streams backed by those descriptors, so its ordinary stdout and stderr writes are captured.
 There is no relative ordering guarantee between those pipes and sideband output, as described under [Transport](#transport).
 
