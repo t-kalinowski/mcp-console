@@ -121,6 +121,47 @@ def test_routes_python_output(binary: Path) -> Transcript:
     return client.finish()
 
 
+def test_preserves_python_output_from_fork_children(binary: Path) -> Transcript:
+    client = WorkerWireClient(binary)
+    # fmt: r
+    r = code(r"""
+        python <- Sys.which("python3")
+        stopifnot(nzchar(python))
+        reticulate::use_python(python, required = TRUE)
+        suppressWarnings(invisible(reticulate::py_run_string("fork_ready = True")))
+        """)
+    assert client.call_tool(r=r) == "[done]"
+
+    # fmt: python
+    python = code(r"""
+        import os
+        import sys
+
+        assert fork_ready
+        child = os.fork()
+        if child == 0:
+            print("fork child stdout", flush=True)
+            sys.stderr.write("fork child stderr\n")
+            sys.stderr.flush()
+            os._exit(0)
+
+        _, status = os.waitpid(child, 0)
+        assert os.waitstatus_to_exitcode(status) == 0
+        print("parent stdout")
+        parent_stderr = sys.stderr.write("parent stderr\n")
+        """)
+    expected = [
+        "fork child stdout",
+        "fork child stderr",
+        "parent stdout",
+        "parent stderr",
+    ]
+    output = client.call_tool(python=python)
+    output = client.collect_output(output, sum(len(line) + 1 for line in expected))
+    assert sorted(output.splitlines()) == sorted(expected), repr(output)
+    return client.finish()
+
+
 def test_drains_standard_streams_while_evaluating(binary: Path) -> Transcript:
     client = WorkerWireClient(binary)
     size = 4 * 1024 * 1024
