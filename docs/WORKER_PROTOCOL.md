@@ -284,7 +284,10 @@ At worker startup, it sets `RETICULATE_REMAP_OUTPUT_STREAMS=1` once, before user
 Within the worker process, reticulate then routes Python text writes through R's console callbacks, including when user R initializes Python before the first Python cell.
 Calls such as `print()`, `sys.stderr.write()`, and traceback printing therefore produce sideband `output` frames in call order.
 Writes through `sys.stdout.buffer`, `sys.stderr.buffer`, or native fd 1/2 bypass that remap and use the captured standard-stream pipes.
-A fork-only Python child inherits the remapped text streams after its sideband is disabled, so writes through those inherited `sys.stdout` and `sys.stderr` objects are discarded; buffer and direct-fd writes remain captured.
+When a Python cell calls `os.fork()`, the registered CPython child callback replaces reticulate's inherited remappers with their original fd-backed streams after the worker disables the child's sideband.
+Ordinary `print()` and `sys.stderr.write()` calls in that child therefore use the captured standard-stream pipes without sharing the parent-only sideband.
+This currently depends on reticulate's internal `OutputRemap` implementation because reticulate does not retain the context that owns the remappers.
+Native extensions that call `fork()` without running CPython's registered fork callbacks and then resume Python are unsupported.
 An exec descendant that retains fd 1/2 creates fresh standard streams backed by those descriptors, so its ordinary stdout and stderr writes are captured.
 There is no relative ordering guarantee between those pipes and sideband output, as described under [Transport](#transport).
 

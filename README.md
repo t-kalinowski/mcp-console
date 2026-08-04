@@ -49,7 +49,8 @@ Python cells execute statements in persistent `__main__` state and send a final 
 R and Python can exchange objects through reticulate's `py` and `r` bridges.
 Reticulate routes Python text written through `sys.stdout` and `sys.stderr`, including tracebacks, through the same sideband console output path as R.
 Writes through `sys.stdout.buffer`, `sys.stderr.buffer`, or fd 1/2 directly remain on the captured standard streams.
-A fork-only Python child cannot use inherited remapped text streams after its sideband is disabled; its buffer and direct-fd writes remain captured.
+After a Python cell calls `os.fork()`, the child restores the original fd-backed text streams after its sideband is disabled, so its ordinary stdout and stderr are captured too.
+Native extensions that fork without running CPython's registered fork callbacks and then resume Python are unsupported.
 An exec descendant that retains fd 1/2 creates fresh standard streams backed by those descriptors, so its ordinary stdout and stderr are captured.
 
 The server also collects text written directly to the worker's standard output and standard error, including direct writes by descendants that retain those descriptors.
