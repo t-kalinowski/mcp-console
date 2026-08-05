@@ -19,7 +19,8 @@ send:
 result:
   content:
     - type: text
-      text: |
-        <SQL query result>
+      text: |2
+         answer
+             42
   isError: false
 ...

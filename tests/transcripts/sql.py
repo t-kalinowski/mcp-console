@@ -31,7 +31,6 @@ def test_evaluates_queries_in_a_persistent_catalog(binary: Path) -> Transcript:
             SELECT answer FROM answers
             """)
         client.call_tool("send", sql=sql)
-        normalize_answer(client)
         return client.finish()
 
 
@@ -54,7 +53,6 @@ def test_recovers_from_sql_errors(binary: Path) -> Transcript:
         SELECT CAST(42 AS INTEGER) AS answer
         """)
     client.call_tool("send", sql=sql)
-    normalize_answer(client)
     return client.finish()
 
 
@@ -62,12 +60,6 @@ def last_tool_text(client: McpClient) -> str:
     result = client.transcript[-1]["result"]
     assert result.get("isError") is not True, result
     return result["content"][0]["text"]
-
-
-def normalize_answer(client: McpClient) -> None:
-    output = last_tool_text(client)
-    assert output.split() == ["answer", "42"], output
-    client.transcript[-1]["result"]["content"][0]["text"] = "<SQL query result>\n"
 
 
 def inherited_r_libraries() -> str:
