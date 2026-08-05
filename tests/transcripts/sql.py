@@ -65,7 +65,8 @@ def last_tool_text(client: McpClient) -> str:
 
 
 def normalize_answer(client: McpClient) -> None:
-    assert last_tool_text(client) == " answer\n     42\n"
+    output = last_tool_text(client)
+    assert output.split() == ["answer", "42"], output
     client.transcript[-1]["result"]["content"][0]["text"] = "<SQL query result>\n"
 
 
