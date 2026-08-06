@@ -34,9 +34,11 @@ result:
         type: object
         properties:
           r:
-            description: >-
-              Complete multiline R code evaluated in persistent state. Omit to write
-              stdin or poll.
+            description: |-
+              Complete multiline R code evaluated in persistent state. Plots drawn on the default device
+              return as PNG images when the cell completes. Size them with `console.plot.width` and
+              `console.plot.height` (inches) plus `console.plot.dpi`; keep each plot and its drawing
+              operations in one cell. Omit to write stdin or poll.
             type:
               - string
               - "null"

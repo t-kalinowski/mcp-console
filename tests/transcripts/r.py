@@ -1,11 +1,40 @@
 #!/usr/bin/env -S uv run --script
 
+import base64
+import struct
 from pathlib import Path
 
 from _support import McpClient, Transcript, code, run_this_suite
 
 
 PLATFORMS = {"darwin"}
+
+
+def assert_plot_result(
+    client: McpClient,
+    *,
+    text: str | None,
+    count: int,
+    width: int,
+    height: int,
+) -> None:
+    result = client.transcript[-1]["result"]
+    assert result.get("isError") is not True, result
+    content = result["content"]
+    images = content
+    if text is not None:
+        assert content[0] == {"type": "text", "text": text}, content
+        images = content[1:]
+    assert len(images) == count, content
+    for image in images:
+        assert image.keys() == {"type", "data", "mimeType"}, image
+        assert image["type"] == "image", image
+        assert image["mimeType"] == "image/png", image
+        data = base64.b64decode(image["data"], validate=True)
+        assert data.startswith(b"\x89PNG\r\n\x1a\n"), data[:16]
+        assert data[12:16] == b"IHDR", data[:24]
+        assert struct.unpack(">II", data[16:24]) == (width, height)
+        image["data"] = f"<{width}x{height} PNG>"
 
 
 def test_evaluates_a_complete_cell(binary: Path) -> Transcript:
@@ -35,6 +64,103 @@ def test_evaluates_a_complete_cell(binary: Path) -> Transcript:
     client.call_tool("send", r='stop("boom")')
     client.call_tool("send", r="answer")
     client.call_tool("send", r="silent <- 1")
+    return client.finish()
+
+
+def test_returns_cell_scoped_plots(binary: Path) -> Transcript:
+    client = McpClient(binary, ("serve",))
+    client.initialize_and_list_tools()
+    # fmt: r
+    r = code(r"""
+        options(
+          console.plot.width = 4,
+          console.plot.height = 3,
+          console.plot.dpi = 100
+        )
+        cat("before plots\n")
+        plot(1:3)
+        grid::grid.newpage()
+        grid::grid.lines(c(0.1, 0.9), c(0.1, 0.9))
+        cat("after plots\n")
+        """)
+    client.call_tool("send", r=r)
+    assert_plot_result(
+        client,
+        text="before plots\nafter plots\n",
+        count=2,
+        width=400,
+        height=300,
+    )
+
+    client.call_tool("send", r="lines(1:3)")
+    result = client.transcript[-1]["result"]
+    assert result.get("isError") is not True, result
+    assert len(result["content"]) == 1, result
+    assert "plot.new has not been called yet" in result["content"][0]["text"]
+    result["content"][0]["text"] = "Error: plot.new has not been called yet\n"
+
+    client.call_tool("send", r="plot(3:1)")
+    assert_plot_result(client, text=None, count=1, width=400, height=300)
+    return client.finish()
+
+
+def test_returns_plots_after_r_errors(binary: Path) -> Transcript:
+    client = McpClient(binary, ("serve",))
+    client.initialize_and_list_tools()
+    # fmt: r
+    r = code(r"""
+        plot(1:3)
+        stop("boom")
+        """)
+    client.call_tool("send", r=r)
+    result = client.transcript[-1]["result"]
+    text = result["content"][0]["text"]
+    assert "boom" in text, text
+    assert_plot_result(client, text=text, count=1, width=800, height=600)
+
+    client.call_tool("send", r="plot(3:1)")
+    assert_plot_result(client, text=None, count=1, width=800, height=600)
+    return client.finish()
+
+
+def test_leaves_explicit_plot_devices_user_controlled(binary: Path) -> Transcript:
+    client = McpClient(binary, ("serve",))
+    client.initialize_and_list_tools()
+    # fmt: r
+    r = code(r"""
+        plot(3:1)
+        explicit_directory <- file.path(Sys.getenv("TMPDIR"), "mcp-console-plots")
+        invisible(dir.create(explicit_directory, showWarnings = FALSE))
+        explicit_plot <- file.path(explicit_directory, "explicit.png")
+        grDevices::png(explicit_plot, width = 4, height = 3, units = "in", res = 100)
+        plot(1:3)
+        cat("explicit current: ", names(grDevices::dev.cur()), "\n", sep = "")
+        """)
+    client.call_tool("send", r=r)
+    result = client.transcript[-1]["result"]
+    assert result.get("isError") is not True, result
+    assert result["content"][0]["text"].startswith("explicit current: "), result
+    result["content"][0]["text"] = "explicit current: <device>\n"
+    assert_plot_result(
+        client,
+        text="explicit current: <device>\n",
+        count=1,
+        width=800,
+        height=600,
+    )
+
+    # fmt: r
+    r = code(r"""
+        invisible(grDevices::dev.off())
+        cat("explicit complete: ", file.exists(explicit_plot), "\n", sep = "")
+        unlink(explicit_directory, recursive = TRUE)
+        """)
+    client.call_tool("send", r=r)
+    result = client.transcript[-1]["result"]
+    assert result == {
+        "content": [{"type": "text", "text": "explicit complete: TRUE\n"}],
+        "isError": False,
+    }, result
     return client.finish()
 
 

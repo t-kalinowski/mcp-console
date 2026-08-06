@@ -32,12 +32,15 @@ The receipt describes that runtime read, not a submitted payload or byte count, 
 New code is rejected until the running evaluation's result has been collected.
 Worker `image` frames carry base64 data and a MIME type.
 The server preserves sideband text and image order as MCP content blocks, coalesces adjacent text, and does not add `[done]` when an image is the only output.
-The built-in worker does not emit images yet.
 On macOS, managed-Python preflight happens during `serve` startup when required; the first nonempty stdin submission or evaluation still lazily starts the built-in worker under the same sandbox policy as the `sandbox` command.
 The worker embeds R through `libr` and `harp`, retains global state, and feeds each complete R cell through R's DLL REPL iterator.
 R parses and evaluates its expressions sequentially, captures console output, prints visible values, and performs native top-level bookkeeping.
 Cell EOF while R requires continuation input is an error; earlier complete expressions from that cell remain applied.
 R parse, evaluation, and auto-print failures are normal language outcomes with `isError: false`.
+The default R graphics device opens a PNG device lazily during plotting and returns each page as `image/png` MCP content after the cell's text, including after normal R errors.
+Managed devices are closed at every cell boundary, so one plot's drawing operations must be submitted in the same cell.
+Their default dimensions are 800 by 600 pixels at 96 DPI; persistent `console.plot.width`, `console.plot.height`, and `console.plot.dpi` options configure positive finite dimensions in inches and resolution.
+Explicitly opened or selected devices remain user-owned and are neither closed nor returned by the worker.
 A silent successful R cell sends `completed` without an `output` frame and projects to `[done]` when no other response text is pending.
 Submitted R functions do not currently retain a source filename.
 Python cells run in the same worker through reticulate, retain `__main__` state, execute statements, and send a final expression through `sys.displayhook()`.
@@ -122,7 +125,8 @@ See `design-sketches/README.md` for the product overview and `design-sketches/do
 - `src/cell.rs` — language-neutral complete-cell type shared by the server and worker protocol.
 - `src/cli.rs` — clap command definitions and user-facing help.
 - `src/python.rs` — managed-Python preflight, worker environment, and reticulate bridge.
-- `src/r_bridge.rs` — shared private R-environment bridge used by Python and SQL adapters.
+- `src/r_bridge.rs` — shared private R-environment bridge used by graphics, Python, and SQL adapters.
+- `src/r_graphics.rs` — cell-scoped managed R graphics device and PNG image publication.
 - `src/server.rs` — MCP stdio server, `send` tool, and worker selection.
 - `src/sql.rs` — persistent DuckDB/DBI SQL bridge and result display.
 - `src/r_repl.c` — C-owned per-cell DLL-REPL iterator and long-jump boundary.

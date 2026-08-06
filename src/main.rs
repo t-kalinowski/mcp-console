@@ -7,6 +7,8 @@ mod cli;
 mod python;
 #[cfg(target_os = "macos")]
 mod r_bridge;
+#[cfg(target_os = "macos")]
+mod r_graphics;
 mod sandbox;
 mod server;
 #[cfg(target_os = "macos")]

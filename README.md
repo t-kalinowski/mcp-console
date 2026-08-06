@@ -45,6 +45,21 @@ Worker output available when the failure response is assembled remains visible; 
 The next response after its replacement successfully starts includes the newline-delimited banner `[worker restarted: in-memory state lost]\n`, preceded by a newline when prior output does not already supply one; initial lazy startup remains silent.
 The worker runs each R cell through R's native top-level loop, captures R console output, prints each visible value, and maintains `.Last.value`.
 If a cell ends while an expression is incomplete, earlier complete expressions from that cell remain applied.
+The default R graphics device opens lazily when a cell draws and returns each completed PNG page as an MCP image after the cell finishes, including when later code in that cell raises an R error.
+The managed device closes at the end of every cell, so all drawing operations that modify one plot must be submitted together.
+Its default size is 800 by 600 pixels at 96 DPI.
+Persistent R options control its dimensions in inches and resolution:
+
+```r
+options(
+  console.plot.width = 6,
+  console.plot.height = 4,
+  console.plot.dpi = 120
+)
+plot(1:10)
+```
+
+Opening or selecting another graphics device is explicit user control; the worker neither closes that device nor returns its output as MCP image content.
 Python cells execute statements in persistent `__main__` state and send a final expression through Python's display hook.
 R and Python can exchange objects through reticulate's `py` and `r` bridges.
 Reticulate routes Python text written through `sys.stdout` and `sys.stderr`, including tracebacks, through the same sideband console output path as R.

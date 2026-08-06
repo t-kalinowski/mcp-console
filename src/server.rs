@@ -25,7 +25,10 @@ struct ConsoleServer {
 #[derive(Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct SendArguments {
-    /// Complete multiline R code evaluated in persistent state. Omit to write stdin or poll.
+    /// Complete multiline R code evaluated in persistent state. Plots drawn on the default device
+    /// return as PNG images when the cell completes. Size them with `console.plot.width` and
+    /// `console.plot.height` (inches) plus `console.plot.dpi`; keep each plot and its drawing
+    /// operations in one cell. Omit to write stdin or poll.
     r: Option<String>,
     /// Complete multiline Python code evaluated in persistent state. Omit to write stdin or poll.
     python: Option<String>,

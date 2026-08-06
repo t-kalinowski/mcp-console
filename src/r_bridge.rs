@@ -1,4 +1,4 @@
-use std::ffi::c_int;
+use std::ffi::{CStr, c_int};
 
 type TryEval = unsafe extern "C-unwind" fn(libr::SEXP, libr::SEXP, *mut c_int) -> libr::SEXP;
 
@@ -104,6 +104,36 @@ impl Bridge {
             ));
         }
         Ok(())
+    }
+
+    pub(crate) fn call0_integer(&self, function: &CStr) -> Result<c_int, String> {
+        let result = harp::top_level_exec(|| {
+            // SAFETY: This runs on R's main thread. The outer top-level
+            // boundary contains allocation errors; R_tryEval contains errors
+            // raised while calling the private environment's fixed function.
+            unsafe {
+                let function = libr::Rf_install(function.as_ptr());
+                let call = libr::Rf_protect(libr::Rf_lang1(function));
+                let mut evaluation_error = 0;
+                let value = (self.try_eval)(call, self.state, &mut evaluation_error);
+                let value = if evaluation_error == 0 {
+                    libr::Rf_asInteger(value)
+                } else {
+                    0
+                };
+                libr::Rf_unprotect(1);
+                (evaluation_error, value)
+            }
+        });
+        let (evaluation_error, value) = result
+            .map_err(|error| format!("failed to call the {} bridge: {error}", self.language))?;
+        if evaluation_error != 0 {
+            return Err(format!(
+                "{} bridge failed during R evaluation",
+                self.language
+            ));
+        }
+        Ok(value)
     }
 }
 

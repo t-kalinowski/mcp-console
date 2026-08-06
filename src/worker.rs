@@ -46,6 +46,7 @@ mod platform {
         WORKER_WRITER
             .set(writer.clone())
             .map_err(|_| io::Error::other("R worker sideband was already initialized"))?;
+        let graphics = crate::r_graphics::Bridge::initialize()?;
         let mut python = crate::python::Bridge::initialize()?;
         let mut sql = crate::sql::Bridge::initialize()?;
         writer.send(&WorkerMessage::Ready)?;
@@ -53,7 +54,8 @@ mod platform {
         loop {
             match reader.receive()? {
                 ServerMessage::Evaluate { language, source } => {
-                    let result = evaluate_cell(Cell { language, source }, &mut python, &mut sql);
+                    let result =
+                        evaluate_cell(Cell { language, source }, &graphics, &mut python, &mut sql);
 
                     if WORKER_SHUTDOWN.load(Ordering::SeqCst) {
                         return Ok(());
@@ -70,26 +72,28 @@ mod platform {
 
     fn evaluate_cell(
         cell: Cell,
+        graphics: &crate::r_graphics::Bridge,
         python: &mut crate::python::Bridge,
         sql: &mut crate::sql::Bridge,
     ) -> Result<(), String> {
         match cell.language {
-            Language::R => evaluate_r_cell(cell.source),
+            Language::R => evaluate_r_cell(cell.source, graphics),
             Language::Python => evaluate_python_cell(cell.source, python),
             Language::Sql => evaluate_sql_cell(cell.source, sql),
         }
     }
 
-    fn evaluate_r_cell(r: String) -> Result<(), String> {
+    fn evaluate_r_cell(r: String, graphics: &crate::r_graphics::Bridge) -> Result<(), String> {
         if r.contains('\0') {
             emit_output(b"Error: R source cannot contain NUL\n");
             return Ok(());
         }
 
+        graphics.begin()?;
         set_cell_source(r);
         let status = run_repl_cell();
         clear_cell_source();
-        match status {
+        let result = match status {
             0 | 1 => Ok(()),
             2 => {
                 emit_output(b"Error: Incomplete code\n");
@@ -98,7 +102,11 @@ mod platform {
             status => Err(format!(
                 "R worker received unexpected DLL REPL status {status}"
             )),
+        };
+        for data in graphics.finish()? {
+            send_image(data)?;
         }
+        result
     }
 
     fn evaluate_python_cell(
@@ -387,6 +395,17 @@ mod platform {
             .expect("R worker sideband writer should be initialized")
             .send(&WorkerMessage::InputReceived)
             .map_err(|error| format!("R worker failed to report received input: {error}"))
+    }
+
+    fn send_image(data: String) -> Result<(), String> {
+        WORKER_WRITER
+            .get()
+            .expect("R worker sideband writer should be initialized")
+            .send(&WorkerMessage::Image {
+                data,
+                mime_type: "image/png".to_string(),
+            })
+            .map_err(|error| format!("R worker failed to send a plot image: {error}"))
     }
 
     fn read_console_stdin(buf: *mut c_uchar, buflen: c_int) -> Result<c_int, String> {

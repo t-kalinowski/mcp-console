@@ -2,7 +2,7 @@
 
 This document describes the worker protocol implemented by `mcp-console serve`, the built-in worker, and `tests/fixtures/zod`.
 It describes the current code, not the broader design under `design-sketches/`.
-The message enums in `src/worker_protocol.rs`, the framing in `src/sideband.rs`, the language bridges in `src/python.rs`, `src/r_bridge.rs`, and `src/sql.rs`, and the standard-stream routing in `src/worker_client.rs` are the source of truth.
+The message enums in `src/worker_protocol.rs`, the framing in `src/sideband.rs`, the language bridges in `src/python.rs`, `src/r_bridge.rs`, `src/r_graphics.rs`, and `src/sql.rs`, and the standard-stream routing in `src/worker_client.rs` are the source of truth.
 
 ## Scope
 
@@ -293,6 +293,19 @@ Unread fd-0 input remains available across evaluation boundaries.
 Submitted source references are not retained.
 Parse, evaluation, and print errors are returned as console text followed by `completed`, so the worker remains available even though the protocol has no structured language-error message.
 Subprocesses and descendants that write directly to retained fd 1 or fd 2 bypass the R console callbacks, but their output is still collected through the standard-stream pipes.
+
+At startup, the worker installs a managed function as R's default graphics device.
+It opens a `grDevices::png()` device lazily only when evaluated code requests the default device; a cell that does not plot performs no managed plot file operations.
+The device writes numbered PNG pages beneath the worker's private temporary directory.
+After the R cell finishes, including after a normal R language error, the worker closes every still-open managed device, reads its pages in order, base64-encodes and removes them, and sends one `image` frame per page after the cell's console output.
+It reads and removes only files in the managed page-numbering scheme; other entries in that temporary directory remain untouched.
+The server projects those frames as `image/png` MCP content before completion.
+
+Managed graphics devices are cell scoped.
+The worker closes them after every cell, so later calls cannot add layers to an earlier managed plot; one plot and all operations that modify it must be submitted in the same cell.
+The default dimensions are 800 by 600 pixels at 96 DPI.
+The persistent R options `console.plot.width`, `console.plot.height`, and `console.plot.dpi` select positive finite width and height values in inches and the resolution.
+Devices opened or selected explicitly by evaluated R code remain user-owned: the worker does not close them, read their files, or emit images for them.
 
 ### Python cells
 
