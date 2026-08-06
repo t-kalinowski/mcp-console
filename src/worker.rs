@@ -1,7 +1,7 @@
 #[cfg(target_os = "macos")]
 mod platform {
     use std::error::Error;
-    use std::ffi::{CStr, CString, c_char, c_int, c_uchar};
+    use std::ffi::{CStr, CString, c_char, c_int, c_uchar, c_void};
     use std::io;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Mutex, OnceLock};
@@ -31,6 +31,8 @@ mod platform {
             init: ReplInit,
             do_one: ReplDoOne,
             before_do_one: extern "C" fn(),
+            after_do_one: extern "C" fn(*const c_void),
+            context: *const c_void,
         ) -> c_int;
     }
 
@@ -91,7 +93,7 @@ mod platform {
 
         graphics.begin()?;
         set_cell_source(r);
-        let status = run_repl_cell();
+        let status = run_repl_cell(graphics);
         clear_cell_source();
         let result = match status {
             0 | 1 => Ok(()),
@@ -103,9 +105,11 @@ mod platform {
                 "R worker received unexpected DLL REPL status {status}"
             )),
         };
-        for data in graphics.finish()? {
-            send_image(data)?;
-        }
+        let graphics_result = graphics.finish().and_then(send_images);
+        let output_result = flush_deferred_output();
+        graphics.end();
+        graphics_result?;
+        output_result?;
         result
     }
 
@@ -191,7 +195,7 @@ mod platform {
         Ok(())
     }
 
-    fn run_repl_cell() -> c_int {
+    fn run_repl_cell(graphics: &crate::r_graphics::Bridge) -> c_int {
         let init = *R_REPL_INIT
             .get()
             .expect("R REPL should be initialized before evaluation");
@@ -201,13 +205,30 @@ mod platform {
         // SAFETY: Both function pointers are process-lifetime libR symbols with
         // the declared ABI. This main thread owns R, and the C shim contains R's
         // top-level jump so it cannot bypass a live Rust frame.
-        unsafe { mcp_r_repl_run_cell(init, do_one, before_repl_iteration) }
+        unsafe {
+            mcp_r_repl_run_cell(
+                init,
+                do_one,
+                before_repl_iteration,
+                after_repl_iteration,
+                std::ptr::from_ref(graphics).cast(),
+            )
+        }
     }
 
     extern "C" fn before_repl_iteration() {
         // R may reuse buffered source without calling Busy(0), so reset before
         // every outer DLL step. Busy(1) latches evaluation in r_busy().
         EVALUATION_STARTED.store(false, Ordering::SeqCst);
+    }
+
+    extern "C" fn after_repl_iteration(context: *const c_void) {
+        // R has returned normally to the C shim. Keep this callback limited to
+        // filesystem and sideband work so no R jump can cross this Rust frame.
+        let graphics = unsafe { &*context.cast::<crate::r_graphics::Bridge>() };
+        if let Err(error) = publish_ready_plots(graphics) {
+            record_worker_failure(error);
+        }
     }
 
     extern "C-unwind" fn r_busy(which: c_int) {
@@ -298,20 +319,29 @@ mod platform {
     }
 
     fn emit_output(bytes: &[u8]) {
-        if !crate::sideband::available_in_process() {
+        if crate::r_graphics::defer_output(bytes) {
             return;
+        }
+        if let Err(error) = send_output(bytes) {
+            record_worker_failure(error);
+        }
+    }
+
+    fn send_output(bytes: &[u8]) -> Result<(), String> {
+        if !crate::sideband::available_in_process() {
+            return Ok(());
         }
         let Some(writer) = WORKER_WRITER.get() else {
-            return;
+            return Ok(());
         };
         if WORKER_FAILURE.lock().is_ok_and(|failure| failure.is_some()) {
-            return;
+            return Ok(());
         }
-        if let Err(error) = writer.send(&WorkerMessage::Output {
-            data: String::from_utf8_lossy(bytes).into_owned(),
-        }) {
-            record_worker_failure(format!("R console output failed: {error}"));
-        }
+        writer
+            .send(&WorkerMessage::Output {
+                data: String::from_utf8_lossy(bytes).into_owned(),
+            })
+            .map_err(|error| format!("R console output failed: {error}"))
     }
 
     extern "C-unwind" fn r_write_console(buf: *const c_char, buflen: c_int, _otype: c_int) {
@@ -406,6 +436,32 @@ mod platform {
                 mime_type: "image/png".to_string(),
             })
             .map_err(|error| format!("R worker failed to send a plot image: {error}"))
+    }
+
+    fn send_images(images: Vec<String>) -> Result<(), String> {
+        for data in images {
+            send_image(data)?;
+        }
+        Ok(())
+    }
+
+    fn publish_ready_plots(graphics: &crate::r_graphics::Bridge) -> Result<(), String> {
+        if !crate::r_graphics::plot_started() {
+            return Ok(());
+        }
+        let images = graphics.take_ready()?;
+        if images.is_empty() {
+            return Ok(());
+        }
+        send_images(images)?;
+        flush_deferred_output()
+    }
+
+    fn flush_deferred_output() -> Result<(), String> {
+        for output in crate::r_graphics::take_deferred_output() {
+            send_output(&output)?;
+        }
+        Ok(())
     }
 
     fn read_console_stdin(buf: *mut c_uchar, buflen: c_int) -> Result<c_int, String> {

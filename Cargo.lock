@@ -606,6 +606,7 @@ dependencies = [
  "base64",
  "cc",
  "clap",
+ "ctor",
  "harp",
  "libc",
  "libloading",

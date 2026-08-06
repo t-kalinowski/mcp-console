@@ -117,7 +117,10 @@ impl Bridge {
                 let mut evaluation_error = 0;
                 let value = (self.try_eval)(call, self.state, &mut evaluation_error);
                 let value = if evaluation_error == 0 {
-                    libr::Rf_asInteger(value)
+                    let value = libr::Rf_protect(value);
+                    let value = libr::Rf_asInteger(value);
+                    libr::Rf_unprotect(1);
+                    value
                 } else {
                     0
                 };

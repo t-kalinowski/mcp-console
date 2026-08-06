@@ -1,5 +1,6 @@
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
@@ -70,7 +71,7 @@ base::local({
       stop("managed plot device did not expose its output path")
     }
     devices[[length(devices) + 1L]] <<- list(device = device, path = path)
-    invisible(NULL)
+    invisible(.Call("mcp_console_plot_started"))
   }
 
   begin <- function() {
@@ -98,6 +99,54 @@ base::local({
 }, envir = base::new.env(parent = base::baseenv()))
 "#;
 
+struct OutputState {
+    active: bool,
+    deferred: bool,
+    chunks: Vec<Vec<u8>>,
+}
+
+static OUTPUT_STATE: Mutex<OutputState> = Mutex::new(OutputState {
+    active: false,
+    deferred: false,
+    chunks: Vec::new(),
+});
+
+#[allow(clippy::result_large_err)]
+#[harp::register]
+pub extern "C-unwind" fn mcp_console_plot_started() -> harp::Result<libr::SEXP> {
+    let mut state = OUTPUT_STATE
+        .lock()
+        .expect("R graphics output lock should not be poisoned");
+    assert!(state.active, "managed plot should start during an R cell");
+    state.deferred = true;
+    unsafe { Ok(libr::R_NilValue) }
+}
+
+pub(crate) fn defer_output(bytes: &[u8]) -> bool {
+    let mut state = OUTPUT_STATE
+        .lock()
+        .expect("R graphics output lock should not be poisoned");
+    if !state.active || !state.deferred {
+        return false;
+    }
+    state.chunks.push(bytes.to_vec());
+    true
+}
+
+pub(crate) fn take_deferred_output() -> Vec<Vec<u8>> {
+    let mut state = OUTPUT_STATE
+        .lock()
+        .expect("R graphics output lock should not be poisoned");
+    std::mem::take(&mut state.chunks)
+}
+
+pub(crate) fn plot_started() -> bool {
+    OUTPUT_STATE
+        .lock()
+        .expect("R graphics output lock should not be poisoned")
+        .deferred
+}
+
 pub(crate) struct Bridge {
     bridge: crate::r_bridge::Bridge,
     directory: PathBuf,
@@ -111,13 +160,28 @@ impl Bridge {
     }
 
     pub(crate) fn begin(&self) -> Result<(), String> {
-        self.bridge.call0_integer(c"begin").map(|_| ())
+        self.bridge.call0_integer(c"begin")?;
+        let mut state = OUTPUT_STATE
+            .lock()
+            .expect("R graphics output lock should not be poisoned");
+        assert!(!state.active, "R graphics output cell should not be active");
+        assert!(
+            state.chunks.is_empty(),
+            "R graphics output should be empty before a cell"
+        );
+        state.active = true;
+        state.deferred = false;
+        Ok(())
     }
 
     pub(crate) fn finish(&self) -> Result<Vec<String>, String> {
         if self.bridge.call0_integer(c"finish")? == 0 {
             return Ok(Vec::new());
         }
+        self.take_ready()
+    }
+
+    pub(crate) fn take_ready(&self) -> Result<Vec<String>, String> {
         if !self.directory.try_exists().map_err(|error| {
             format!(
                 "failed to inspect managed plot directory `{}`: {error}",
@@ -159,6 +223,19 @@ impl Bridge {
             })?;
         }
         Ok(images)
+    }
+
+    pub(crate) fn end(&self) {
+        let mut state = OUTPUT_STATE
+            .lock()
+            .expect("R graphics output lock should not be poisoned");
+        assert!(state.active, "R graphics output cell should be active");
+        assert!(
+            state.chunks.is_empty(),
+            "R graphics output should be empty after a cell"
+        );
+        state.active = false;
+        state.deferred = false;
     }
 }
 

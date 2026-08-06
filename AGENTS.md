@@ -37,10 +37,13 @@ The worker embeds R through `libr` and `harp`, retains global state, and feeds e
 R parses and evaluates its expressions sequentially, captures console output, prints visible values, and performs native top-level bookkeeping.
 Cell EOF while R requires continuation input is an error; earlier complete expressions from that cell remain applied.
 R parse, evaluation, and auto-print failures are normal language outcomes with `isError: false`.
-The default R graphics device opens a PNG device lazily during plotting and returns each page as `image/png` MCP content after the cell's text, including after normal R errors.
-Managed devices are closed at every cell boundary, so one plot's drawing operations must be submitted in the same cell.
+The worker installs a worker-owned `grDevices::png()` function as R's default graphics device and opens it lazily during plotting.
+At R top-level expression boundaries, it emits finalized managed pages as `image/png` MCP content before R console text that followed those plots.
+While a managed page remains unfinished, later R console text is deferred until the next page is finalized or the cell ends.
+Cell-end cleanup closes every still-open managed device, emits its remaining pages, then emits deferred console text, including normal R errors.
+Managed devices are cell scoped, so one plot's drawing operations must be submitted in the same cell.
 Their default dimensions are 800 by 600 pixels at 96 DPI; persistent `console.plot.width`, `console.plot.height`, and `console.plot.dpi` options configure positive finite dimensions in inches and resolution.
-Explicitly opened or selected devices remain user-owned and are neither closed nor returned by the worker.
+Explicitly opened or selected devices remain user-owned: the worker does not close them, read their files, or emit images for them.
 A silent successful R cell sends `completed` without an `output` frame and projects to `[done]` when no other response text is pending.
 Submitted R functions do not currently retain a source filename.
 Python cells run in the same worker through reticulate, retain `__main__` state, execute statements, and send a final expression through `sys.displayhook()`.

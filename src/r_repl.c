@@ -3,6 +3,7 @@
 typedef void (*repl_init_fn)(void);
 typedef int (*repl_do_one_fn)(void);
 typedef void (*before_do_one_fn)(void);
+typedef void (*after_do_one_fn)(const void *context);
 
 /*
  * R errors jump to the context installed by R_ReplDLLinit(). Keep that
@@ -26,7 +27,9 @@ static int call_do_one(repl_do_one_fn do_one) {
 int mcp_r_repl_run_cell(
     repl_init_fn init,
     repl_do_one_fn do_one,
-    before_do_one_fn before_do_one
+    before_do_one_fn before_do_one,
+    after_do_one_fn after_do_one,
+    const void *context
 ) {
     int last_status = 1;
 
@@ -46,10 +49,11 @@ int mcp_r_repl_run_cell(
             returned_normally = 1;
             return 0;
         }
-
         if (status < 0) {
             return last_status;
         }
+        /* This callback runs outside do_one's R context and must not call R. */
+        after_do_one(context);
         last_status = status;
     }
 }
