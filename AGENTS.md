@@ -38,7 +38,7 @@ R parses and evaluates its expressions sequentially, captures console output, pr
 Cell EOF while R requires continuation input is an error; earlier complete expressions from that cell remain applied.
 R parse, evaluation, and auto-print failures are normal language outcomes with `isError: false`.
 The worker installs a worker-owned `grDevices::png()` function as R's default graphics device and opens it lazily during plotting.
-At R top-level expression boundaries, it emits finalized managed pages as `image/png` MCP content in page order.
+At R top-level expression boundaries, it emits finalized managed pages as `image/png` MCP content in the global finalization order reported by the managed devices' new-page and close callbacks.
 Once the first managed page opens, later R console text is deferred until cell end.
 Cell-end cleanup closes every still-open managed device, emits its remaining pages, then emits all deferred console text, including normal R errors.
 This conservative cell-level ordering does not reconstruct text emitted between individual pages.
@@ -136,6 +136,7 @@ See `design-sketches/README.md` for the product overview and `design-sketches/do
 - `src/cli.rs` — clap command definitions and user-facing help.
 - `src/python.rs` — managed-Python preflight, worker environment, and reticulate bridge.
 - `src/r_bridge.rs` — shared private R-environment bridge used by graphics, Python, and SQL adapters.
+- `src/r_graphics.c` — C-owned forwarding boundary for managed graphics-device callbacks that may long-jump.
 - `src/r_graphics.rs` — cell-scoped managed R graphics device and PNG image publication.
 - `src/server.rs` — MCP stdio server, `send` tool, and worker selection.
 - `src/sql.rs` — persistent DuckDB/DBI SQL bridge and bounded streaming Arrow previews.
