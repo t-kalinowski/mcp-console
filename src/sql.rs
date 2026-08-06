@@ -98,7 +98,24 @@ base::local({
     table <- table$Slice(0L, rows)$SelectColumns(seq_len(columns) - 1L)
     names <- sprintf("column_%02d", seq_len(columns))
     table <- table$RenameColumns(names)
-    relation <- paste0("__mcp_console_preview_", id)
+    occupied <- DBI::dbGetQuery(
+      connection,
+      paste(
+        "SELECT lower(table_name) AS name",
+        "FROM system.information_schema.tables"
+      )
+    )$name
+    occupied <- c(
+      occupied,
+      tolower(duckdb::duckdb_list_arrow(connection))
+    )
+    relation_base <- paste0("__mcp_console_preview_", id)
+    relation <- relation_base
+    suffix <- 0L
+    while (tolower(relation) %in% occupied) {
+      suffix <- suffix + 1L
+      relation <- paste0(relation_base, "_", suffix)
+    }
 
     duckdb::duckdb_register_arrow(connection, relation, table)
     tryCatch(

@@ -337,7 +337,7 @@ The first 20 rows become the candidate preview; row 21 only determines whether m
 The evaluator never counts the complete result for display.
 
 The preview selects at most 12 columns and uses the Arrow schema for the original column names and visible physical types.
-For nonempty results, the nanoarrow batch crosses into Arrow through the C Data Interface without copying its payload, then a 20-row by 12-column view becomes a private temporary DuckDB Arrow relation.
+For nonempty results, the nanoarrow batch crosses into Arrow through the C Data Interface without copying its payload, then a 20-row by 12-column view becomes a private temporary DuckDB Arrow relation whose name is checked against catalog objects and existing Arrow registrations before registration.
 DuckDB casts only the selected 20-row by 12-column preview to text and applies the 160-character limit before returning those strings to R, preserving SQL `NULL` and exact values including `BIGINT`, `DECIMAL`, lists, and structs when they fit without first converting them to lossy R data-frame columns.
 Pillar lays out that bounded text with an explicit 160-character cell limit and fixed print options, and its footer identifies selected columns that do not fit in the table body.
 Empty results still show their selected names and types followed by `[0 rows]`.

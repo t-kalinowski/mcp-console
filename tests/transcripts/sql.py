@@ -64,6 +64,33 @@ def test_recovers_from_sql_errors(binary: Path) -> Transcript:
     return client.finish()
 
 
+def test_avoids_private_preview_name_collisions(binary: Path) -> Transcript:
+    client = McpClient(binary, ("serve",))
+    client.initialize_and_list_tools()
+    sql = code(r"""
+        CREATE TABLE __mcp_console_preview_e2 AS
+        SELECT CAST(999 AS INTEGER) AS column_01
+        """)
+    client.call_tool("send", sql=sql)
+    assert last_tool_text(client) == "[done]"
+
+    sql = code(r"""
+        SELECT CAST(42 AS INTEGER) AS answer
+        """)
+    client.call_tool("send", sql=sql)
+    preview = last_tool_text(client)
+    assert "42" in preview
+    assert "999" not in preview
+
+    sql = code(r"""
+        SELECT column_01 AS catalog_value
+        FROM __mcp_console_preview_e2
+        """)
+    client.call_tool("send", sql=sql)
+    assert "999" in last_tool_text(client)
+    return client.finish()
+
+
 def test_previews_schema_and_exact_values(binary: Path) -> Transcript:
     client = McpClient(binary, ("serve",))
     client.initialize_and_list_tools()

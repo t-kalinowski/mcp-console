@@ -66,6 +66,7 @@ Query results use `DBI::dbSendQueryArrow()` and one streaming `DBI::dbFetchArrow
 The worker displays at most 20 rows and 12 columns through pillar, limits cells to 160 characters, and limits the SQL preview itself to 12 KiB; the byte limit may reduce rows or columns further.
 The 21st row determines only whether to append the omitted-row marker; the worker does not count or materialize the complete result.
 Arrow schemas keep column names and types visible for empty results, while DuckDB stringifies only the bounded displayed batch and applies the cell limit before returning text to R so `NULL`, `BIGINT`, `DECIMAL`, and nested values remain exact when they fit.
+Temporary Arrow relations use collision-checked names and are unregistered after formatting.
 DDL and DML results without columns are silent; affected-row summaries do not exist yet.
 DuckDB errors are normal language outcomes with `isError: false`, and the connection remains reusable.
 R relation scanning and registration do not exist.
