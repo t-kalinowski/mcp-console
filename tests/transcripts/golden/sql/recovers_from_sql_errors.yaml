@@ -19,8 +19,10 @@ send:
 result:
   content:
     - type: text
-      text: |2
-         answer
-             42
+      text: |
+        # A tibble: 1 × 1
+           answer
+          <int32>
+        1      42
   isError: false
 ...

@@ -329,9 +329,21 @@ The worker stores each SQL source string in a process-lifetime private R environ
 The first SQL cell lazily creates one in-memory DuckDB connection through `duckdb` and `DBI`; later cells reuse that connection and its catalog for the worker generation.
 Environment scanning is disabled.
 The driver receives explicit extension, stored-secret, and spill directories beneath R's worker-private temporary directory, so it does not select or prompt for ambient DuckDB storage.
+The bridge disables DuckDB progress output on the connection so previews contain only query results.
 
-The evaluator calls `DBI::dbSendQuery()`, clears the result when the cell returns, and fetches its data frame.
-If the result has columns, R data-frame printing without row names sends it through the console output callback.
+The evaluator calls `DBI::dbSendQueryArrow()` and renders only DuckDB results whose private return type is `QUERY_RESULT`.
+It transfers each query result to `DBI::dbFetchArrow()` with a chunk size of 21, reads its schema and at most one batch, releases the nanoarrow stream, and clears the DBI result before formatting.
+The first 20 rows become the candidate preview; row 21 only determines whether more rows exist.
+The evaluator never counts the complete result for display.
+
+The preview selects at most 12 columns and uses the Arrow schema for the original column names and visible physical types.
+For nonempty results, the nanoarrow batch crosses into Arrow through the C Data Interface without copying its payload, then a 20-row by 12-column view becomes a private temporary DuckDB Arrow relation.
+DuckDB casts only the selected 20-row by 12-column preview to text and applies the 160-character limit before returning those strings to R, preserving SQL `NULL` and exact values including `BIGINT`, `DECIMAL`, lists, and structs when they fit without first converting them to lossy R data-frame columns.
+Pillar lays out that bounded text with an explicit 160-character cell limit and fixed print options, and its footer identifies selected columns that do not fit in the table body.
+Empty results still show their selected names and types followed by `[0 rows]`.
+`[additional rows omitted]`, `[N additional columns omitted]`, and `[cell values truncated to 160 characters]` report structural omissions.
+The complete SQL preview, including its trailing newline, is limited to 12 KiB; if necessary, formatting removes candidate rows and then columns until it fits and updates the omission markers.
+
 DDL and DML statements whose results have no columns produce no output and project to `[done]`.
 This slice does not report affected-row counts.
 
@@ -342,7 +354,8 @@ SQL source containing NUL is rejected as a normal language error before it reach
 ## Current limits
 
 No timeout bounds managed-Python preflight, worker startup, or execution.
-The current implementation also has no frame-size limit, stdin queue limit, or accumulated-output limit.
+The current implementation has no general frame-size limit, stdin queue limit, or accumulated-output limit.
+The 12 KiB cap applies only to a recognized SQL query preview; arbitrary R and Python console text, worker standard streams, and text accompanying that preview remain uncapped.
 `timeout_ms` limits one MCP wait without terminating the worker or a blocked stdin write; only shutdown has a process deadline.
 An idle stdin-only call does not wait on an evaluation, so `timeout_ms` does not bound lazy worker startup for that call.
 The 10-millisecond input grace controls when provisional state becomes visible as `[stdin needed]`; it does not control request-record retention or limit evaluation or stdin reads.
@@ -352,12 +365,11 @@ Standard output and standard error are decoded as UTF-8 only when a response is 
 Worker failures are reported as plain-text MCP tool errors, not structured worker events.
 Concurrent MCP `send` calls are outside the current contract.
 Python cells require an installed reticulate R package.
-SQL cells require installed duckdb and DBI R packages.
+SQL cells require installed arrow, DBI, duckdb, nanoarrow, pillar, and tibble R packages.
 MCP Console does not install these packages.
 The default preflight must be able to resolve or provision its interpreter and initial requirements outside the sandbox.
 An explicitly configured interpreter must be initializable under the offline worker policy.
 The Python input bridge does not observe direct `sys.stdin` or fd-0 reads.
-SQL results are fetched and printed in full; bounded table previews are not implemented.
 The SQL adapter does not expose R data frames or Python objects as relations.
 The current sandbox child does not yet supervise descendants after its direct process exits, or descendants that leave its process group; capturing inherited standard streams does not change that boundary.
 
