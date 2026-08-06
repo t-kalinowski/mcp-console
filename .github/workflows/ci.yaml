@@ -30,9 +30,13 @@ jobs:
         uses: r-lib/actions/setup-r-dependencies@v2
         with:
           packages: |
+            any::arrow
             any::DBI
             any::duckdb
+            any::nanoarrow
+            any::pillar
             any::processx
+            any::tibble
             github::rstudio/reticulate
 
       - name: Install Rust

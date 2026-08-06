@@ -66,14 +66,19 @@ A silent successful Python cell sends `completed` without an `output` frame and 
 Python `input()` and `breakpoint()`/`pdb` use reticulate's R console bridge, so they emit `input_requested` before a read and `input_received` after it succeeds.
 They accept proactively queued or follow-up stdin, including repeated debugger commands.
 Python `sys.stdin` and other direct fd-0 reads bypass the bridge and emit neither frame.
-SQL cells use the `duckdb` and `DBI` R packages through a private R bridge.
+SQL cells use the `duckdb` and `DBI` R packages through a private R bridge; previews also require `nanoarrow`, `arrow`, `tibble`, and `pillar`.
 The first SQL cell lazily opens one in-memory connection with environment scanning disabled, and later cells in that worker generation reuse its catalog.
 DuckDB extension, secret, and spill paths are explicit children of the worker's private R temporary directory.
+The connection disables DuckDB progress output so previews contain only query results.
 The worker stores SQL source in private R state and calls the bridge with a short evaluation ID.
-It uses `DBI::dbSendQuery()`, fetches the complete result, clears it on return, and prints results with columns as R data frames.
+Query results use `DBI::dbSendQueryArrow()` and one streaming `DBI::dbFetchArrow()` batch of at most 21 rows.
+The worker displays at most 20 rows and 12 columns through pillar, limits cells to 160 characters, and limits the SQL preview itself to 12 KiB; the byte limit may reduce rows or columns further.
+The 21st row determines only whether to append the omitted-row marker; the worker does not count or materialize the complete result.
+Arrow schemas keep column names and types visible for empty results, while DuckDB stringifies only the bounded displayed batch and applies the cell limit before returning text to R so `NULL`, `BIGINT`, `DECIMAL`, and nested values remain exact when they fit.
+Temporary Arrow relations use collision-checked names and are unregistered after formatting.
 DDL and DML results without columns are silent; affected-row summaries do not exist yet.
 DuckDB errors are normal language outcomes with `isError: false`, and the connection remains reusable.
-SQL result previews are not bounded yet, and R relation scanning and registration do not exist.
+R relation scanning and registration do not exist.
 Worker standard output and standard error are piped and collected continuously, including while the worker is idle.
 Each pipe reader queues raw byte chunks, and each `send` response decodes and drains complete UTF-8 prefixes from bytes already collected at its response boundary; later bytes remain for the next response.
 Without a pending restart notice, idle, running, and outstanding-input responses append the literal `\n[idle]`, `\n[running]`, or `\n[stdin needed]` banner; its leading newline is present even when no output precedes it.
@@ -131,7 +136,7 @@ See `design-sketches/README.md` for the product overview and `design-sketches/do
 - `src/r_bridge.rs` — shared private R-environment bridge used by graphics, Python, and SQL adapters.
 - `src/r_graphics.rs` — cell-scoped managed R graphics device and PNG image publication.
 - `src/server.rs` — MCP stdio server, `send` tool, and worker selection.
-- `src/sql.rs` — persistent DuckDB/DBI SQL bridge and result display.
+- `src/sql.rs` — persistent DuckDB/DBI SQL bridge and bounded streaming Arrow previews.
 - `src/r_repl.c` — C-owned per-cell DLL-REPL iterator and long-jump boundary.
 - `src/sideband.rs` — macOS inherited-pipe JSON-lines transport.
 - `src/worker.rs` — embedded R initialization, cell dispatch, and console callbacks.
