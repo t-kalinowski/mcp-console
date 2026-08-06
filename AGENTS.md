@@ -44,7 +44,7 @@ Cell-end cleanup closes every still-open managed device, emits its remaining pag
 This conservative cell-level ordering does not reconstruct text emitted between individual pages.
 Managed devices are cell scoped, so one plot's drawing operations must be submitted in the same cell.
 Their default dimensions are 800 by 600 pixels at 96 DPI; persistent `console.plot.width`, `console.plot.height`, and `console.plot.dpi` options configure positive finite dimensions in inches and resolution.
-Explicitly opened or selected devices remain user-owned: the worker does not close them, read their files, or emit images for them.
+Graphics devices opened explicitly by evaluated code, such as with `grDevices::png()`, remain user-owned: the worker does not close them, read their files, or emit images for them.
 A silent successful R cell sends `completed` without an `output` frame and projects to `[done]` when no other response text is pending.
 Submitted R functions do not currently retain a source filename.
 Python cells run in the same worker through reticulate, retain `__main__` state, execute statements, and send a final expression through `sys.displayhook()`.

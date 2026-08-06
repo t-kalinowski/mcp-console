@@ -311,7 +311,7 @@ Only worker-owned default devices are cell scoped.
 The worker closes them after every cell, so later calls cannot add layers to an earlier managed plot; one plot and all operations that modify it must be submitted in the same cell.
 The default dimensions are 800 by 600 pixels at 96 DPI.
 The persistent R options `console.plot.width`, `console.plot.height`, and `console.plot.dpi` select positive finite width and height values in inches and the resolution.
-Devices opened or selected explicitly remain user-owned: the worker does not close them, read their files, or emit images for them.
+Graphics devices opened explicitly by evaluated code, such as with `grDevices::png()`, remain user-owned: the worker does not close them, read their files, or emit images for them.
 
 ### Python cells
 
