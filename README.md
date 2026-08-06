@@ -55,10 +55,13 @@ Fork-child text capture requires reticulate from its `main` branch or a release 
 An exec descendant that retains fd 1/2 creates fresh standard streams backed by those descriptors, so its ordinary stdout and stderr are captured.
 SQL cells lazily open one in-memory DuckDB connection through the `duckdb` and `DBI` R packages and reuse it for the worker generation.
 DuckDB extension, secret, and spill paths stay under the worker's private R temporary directory.
-The worker sends the complete SQL source out of band to a private R bridge, executes it with `DBI::dbSendQuery()`, and prints result-producing statements as R data frames.
+The worker sends the complete SQL source out of band to a private R bridge and executes query results through DBI's streaming Arrow API.
+It fetches at most 21 rows, uses the final row only to detect that more data exists, and renders at most 20 rows and 12 columns with 160-character cells and a 12 KiB SQL-preview limit.
+The preview shows Arrow column types, SQL `NULL`, and empty-result schemas; DuckDB converts only the bounded displayed cells to text and applies the cell limit before returning them to R, preserving values such as `BIGINT`, `DECIMAL`, lists, and structs when they fit.
+It reports omitted rows without counting the complete result and reports omitted columns explicitly; the final byte limit may reduce the displayed rows or columns further.
 Statements without result columns are silent, so they return `[done]` when they produce no other output.
 DuckDB errors are normal console results and leave the worker available for later cells.
-This initial slice does not enable R environment scanning, relation registration, bounded SQL previews, or affected-row summaries.
+This initial slice does not enable R environment scanning, relation registration, or affected-row summaries.
 
 The server also collects text written directly to the worker's standard output and standard error, including direct writes by descendants that retain those descriptors.
 It retains raw bytes until the next `send` response is assembled; output produced while the worker is idle can therefore appear on a later idle poll before the server-owned `\n[idle]` banner.
@@ -67,7 +70,7 @@ R language failures, uncaught Python exceptions, and DuckDB errors remain ordina
 A silent successful R, Python, or SQL cell sends no sideband `output` frame, still sends `completed`, and projects to `[done]` when no other response text is pending.
 
 Python cells require the `reticulate` R package.
-SQL cells require the `duckdb` and `DBI` R packages.
+SQL cells require the `arrow`, `DBI`, `duckdb`, `nanoarrow`, `pillar`, and `tibble` R packages.
 When `RETICULATE_PYTHON` is unset or is `managed`, `mcp-console serve` runs a reticulate preflight outside the worker sandbox, where reticulate can use its normal global caches and network access to select an interpreter.
 Other configured values, including an empty value, are preserved and skip the preflight.
 The server passes the selected interpreter path to the sandboxed worker, which forces `UV_OFFLINE=1` and otherwise uses the existing sandbox policy unchanged.
