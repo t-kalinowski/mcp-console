@@ -80,7 +80,7 @@ mod platform {
     ) -> Result<(), String> {
         match cell.language {
             Language::R => evaluate_r_cell(cell.source, graphics),
-            Language::Python => evaluate_python_cell(cell.source, python),
+            Language::Python => evaluate_python_cell(cell.source, graphics, python),
             Language::Sql => evaluate_sql_cell(cell.source, sql),
         }
     }
@@ -115,15 +115,22 @@ mod platform {
 
     fn evaluate_python_cell(
         source: String,
+        graphics: &crate::r_graphics::Bridge,
         python: &mut crate::python::Bridge,
     ) -> Result<(), String> {
         if source.contains('\0') {
             emit_output(b"SyntaxError: source code string cannot contain null bytes\n");
             return Ok(());
         }
+        graphics.begin()?;
         EVALUATION_STARTED.store(true, Ordering::SeqCst);
         let result = python.evaluate(&source);
         EVALUATION_STARTED.store(false, Ordering::SeqCst);
+        let graphics_result = graphics.finish().and_then(send_images);
+        let output_result = flush_deferred_output();
+        graphics.end();
+        graphics_result?;
+        output_result?;
         result
     }
 

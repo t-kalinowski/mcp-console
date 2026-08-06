@@ -44,9 +44,10 @@ result:
               - string
               - "null"
           python:
-            description: >-
-              Complete multiline Python code evaluated in persistent state. Omit to
-              write stdin or poll.
+            description: |-
+              Complete multiline Python code evaluated in persistent state. R plots invoked through
+              reticulate's `r` bridge return as PNG images under the same cell-scoped rules and R options
+              as `r`. Omit to write stdin or poll.
             type:
               - string
               - "null"

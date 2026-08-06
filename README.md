@@ -66,6 +66,7 @@ plot(1:10)
 Devices opened or selected explicitly are user-owned: the worker does not close them, read their files, or return them as MCP images.
 Python cells execute statements in persistent `__main__` state and send a final expression through Python's display hook.
 R and Python can exchange objects through reticulate's `py` and `r` bridges.
+R plots invoked from a Python cell through reticulate's `r` bridge use the same managed default device, sizing options, cell scope, and MCP image output as plots invoked from an R cell.
 Reticulate routes Python text written through `sys.stdout` and `sys.stderr`, including tracebacks, through the same sideband console output path as R.
 Writes through `sys.stdout.buffer`, `sys.stderr.buffer`, or fd 1/2 directly remain on the captured standard streams.
 After a Python cell calls `os.fork()`, reticulate restores the child's original fd-backed text streams after its sideband is disabled, so its ordinary stdout and stderr are captured too.

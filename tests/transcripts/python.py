@@ -4,7 +4,15 @@ import os
 import shutil
 from pathlib import Path
 
-from _support import McpClient, Transcript, code, run_this_suite
+from _support import (
+    McpClient,
+    Transcript,
+    assert_result_content,
+    code,
+    r_test_environment,
+    reference_plots,
+    run_this_suite,
+)
 
 
 PLATFORMS = {"darwin"}
@@ -164,6 +172,43 @@ def test_evaluates_cells_in_persistent_reticulate_state(binary: Path) -> Transcr
     assert last_tool_text(client) == "42\n"
     client.call_tool("send", python="silent = True")
     assert last_tool_text(client) == "[done]"
+    return client.finish()
+
+
+def test_returns_r_plots_from_python_bridge(binary: Path) -> Transcript:
+    environment, rscript = r_test_environment()
+    client = McpClient(binary, ("serve",), environment)
+    client.initialize_and_list_tools()
+    # fmt: r
+    r = code(r"""
+        bridge_plot <- function() {
+          plot(1:3)
+          invisible(NULL)
+        }
+        """)
+    client.call_tool("send", r=r)
+    assert last_tool_text(client) == "[done]"
+
+    expected_plot = reference_plots(
+        rscript,
+        environment,
+        r + "bridge_plot()\n",
+        width=800 / 96,
+        height=600 / 96,
+        dpi=96,
+        pages=1,
+    )
+    # fmt: python
+    python = code("""
+        print("before plot")
+        r.bridge_plot()
+        print("after plot")
+        """)
+    client.call_tool("send", python=python)
+    assert_result_content(
+        client,
+        ["before plot\n", expected_plot[0], "after plot\n"],
+    )
     return client.finish()
 
 

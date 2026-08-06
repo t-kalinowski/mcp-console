@@ -337,6 +337,8 @@ The worker stores the source in a process-lifetime private R environment and cal
 The evaluator derives the synthetic filename from that ID, so neither the source nor the bridge implementation appears in its R call expression.
 That evaluator parses the complete cell with Python's `ast` module, executes statements in `__main__.__dict__`, and sends a final expression through `sys.displayhook()`.
 Assignments, imports, and objects remain available to later Python cells and through reticulate's R/Python object bridge.
+Python cells enter the same managed graphics lifecycle as R cells.
+An R plot invoked through reticulate's `r` bridge therefore uses the managed default device, returns as MCP image content, and follows the same sizing, cell-scope, device-ownership, and output-ordering rules.
 
 An uncaught Python exception prints its traceback and completes as a normal language outcome.
 The worker remains reusable, and state changes made before the exception remain applied.
