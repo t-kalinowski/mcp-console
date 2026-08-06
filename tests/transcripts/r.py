@@ -128,11 +128,9 @@ def test_leaves_explicit_plot_devices_user_controlled(binary: Path) -> Transcrip
     client.initialize_and_list_tools()
     # fmt: r
     r = code(r"""
-        plot(3:1)
-        explicit_directory <- file.path(Sys.getenv("TMPDIR"), "mcp-console-plots")
-        invisible(dir.create(explicit_directory, showWarnings = FALSE))
-        explicit_plot <- file.path(explicit_directory, "explicit.png")
+        explicit_plot <- tempfile(fileext = ".png")
         grDevices::png(explicit_plot, width = 4, height = 3, units = "in", res = 100)
+        explicit_device <- grDevices::dev.cur()
         plot(1:3)
         cat("explicit current: ", names(grDevices::dev.cur()), "\n", sep = "")
         """)
@@ -141,24 +139,31 @@ def test_leaves_explicit_plot_devices_user_controlled(binary: Path) -> Transcrip
     assert result.get("isError") is not True, result
     assert result["content"][0]["text"].startswith("explicit current: "), result
     result["content"][0]["text"] = "explicit current: <device>\n"
-    assert_plot_result(
-        client,
-        text="explicit current: <device>\n",
-        count=1,
-        width=800,
-        height=600,
-    )
+    assert result["content"] == [
+        {"type": "text", "text": "explicit current: <device>\n"}
+    ], result
 
     # fmt: r
     r = code(r"""
-        invisible(grDevices::dev.off())
+        cat(
+          "explicit still current: ",
+          identical(grDevices::dev.cur(), explicit_device),
+          "\n",
+          sep = ""
+        )
+        invisible(grDevices::dev.off(which = explicit_device))
         cat("explicit complete: ", file.exists(explicit_plot), "\n", sep = "")
-        unlink(explicit_directory, recursive = TRUE)
+        unlink(explicit_plot)
         """)
     client.call_tool("send", r=r)
     result = client.transcript[-1]["result"]
     assert result == {
-        "content": [{"type": "text", "text": "explicit complete: TRUE\n"}],
+        "content": [
+            {
+                "type": "text",
+                "text": "explicit still current: TRUE\nexplicit complete: TRUE\n",
+            }
+        ],
         "isError": False,
     }, result
     return client.finish()
