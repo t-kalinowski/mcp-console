@@ -1,107 +1,19 @@
 #!/usr/bin/env -S uv run --script
 
-import base64
-import json
-import os
-import subprocess
-import tempfile
 from pathlib import Path
 
-from _support import McpClient, Transcript, code, run_this_suite
+from _support import (
+    McpClient,
+    Transcript,
+    assert_result_content,
+    code,
+    r_test_environment,
+    reference_plots,
+    run_this_suite,
+)
 
 
 PLATFORMS = {"darwin"}
-
-
-def r_test_environment() -> tuple[dict[str, str], Path]:
-    environment = os.environ.copy()
-    if r_home := environment.get("R_HOME"):
-        home = Path(r_home)
-    else:
-        output = subprocess.run(
-            ["R", "RHOME"],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-        home = Path(output.stdout.strip())
-        environment["R_HOME"] = str(home)
-    return environment, home / "bin" / "Rscript"
-
-
-def reference_plots(
-    rscript: Path,
-    environment: dict[str, str],
-    source: str,
-    *,
-    width: float,
-    height: float,
-    dpi: float,
-    pages: int,
-    expected_error: str | None = None,
-) -> list[bytes]:
-    with tempfile.TemporaryDirectory() as temporary:
-        directory = Path(temporary)
-        pattern = directory / "page-%06d.png"
-        error_handler = ""
-        if expected_error is not None:
-            message = json.dumps(expected_error)
-            error_handler = (
-                ", error = function(error) "
-                f"stopifnot(identical(conditionMessage(error), {message}))"
-            )
-        script = (
-            "grDevices::png(\n"
-            "  filename = commandArgs(trailingOnly = TRUE)[[1L]],\n"
-            f'  width = {width}, height = {height}, units = "in", res = {dpi}\n'
-            ")\n"
-            "tryCatch({\n"
-            f"{source}"
-            f"}}{error_handler}, finally = invisible(grDevices::dev.off()))\n"
-        )
-        subprocess.run(
-            [rscript, "--vanilla", "-", str(pattern)],
-            input=script,
-            check=True,
-            capture_output=True,
-            text=True,
-            env=environment,
-        )
-        paths = sorted(directory.glob("page-*.png"))
-        assert [path.name for path in paths] == [
-            f"page-{page:06d}.png" for page in range(1, pages + 1)
-        ], paths
-        return [path.read_bytes() for path in paths]
-
-
-def assert_result_content(
-    client: McpClient,
-    expected: list[str | bytes],
-) -> None:
-    result = client.transcript[-1]["result"]
-    assert result.get("isError") is not True, result
-    content = result["content"]
-    assert len(content) == len(expected), (
-        f"expected {len(expected)} content blocks, got "
-        f"{[item.get('type') for item in content]}"
-    )
-    page = 0
-    for item, expected_item in zip(content, expected):
-        if isinstance(expected_item, str):
-            assert item == {"type": "text", "text": expected_item}, item
-            continue
-
-        image = item
-        assert image.keys() == {"type", "data", "mimeType"}, image
-        assert image["type"] == "image", image
-        assert image["mimeType"] == "image/png", image
-        data = base64.b64decode(image["data"], validate=True)
-        assert data == expected_item, (
-            f"plot bytes differ: worker returned {len(data)} bytes, "
-            f"live Rscript returned {len(expected_item)} bytes"
-        )
-        page += 1
-        image["data"] = f"<PNG byte-identical to live Rscript page {page}>"
 
 
 def test_evaluates_a_complete_cell(binary: Path) -> Transcript:
@@ -146,11 +58,13 @@ def test_returns_cell_scoped_plots(binary: Path) -> Transcript:
           console.plot.dpi = 100
         )
         cat("before plots\n")
-        plot(1:3)
-        cat("between plots\n")
-        grid::grid.newpage()
-        grid::grid.lines(c(0.1, 0.9), c(0.1, 0.9))
-        cat("after plots\n")
+        local({
+          plot(1:3)
+          cat("after first plot\n")
+          lines(3:1, col = "red")
+          plot(3:1)
+          cat("after second plot\n")
+        })
         """)
     expected_plots = reference_plots(
         rscript,
@@ -167,9 +81,8 @@ def test_returns_cell_scoped_plots(binary: Path) -> Transcript:
         [
             "before plots\n",
             expected_plots[0],
-            "between plots\n",
             expected_plots[1],
-            "after plots\n",
+            "after first plot\nafter second plot\n",
         ],
     )
 
@@ -239,7 +152,8 @@ def test_returns_plots_after_r_errors(binary: Path) -> Transcript:
 
 
 def test_leaves_explicit_plot_devices_user_controlled(binary: Path) -> Transcript:
-    client = McpClient(binary, ("serve",))
+    environment, rscript = r_test_environment()
+    client = McpClient(binary, ("serve",), environment)
     client.initialize_and_list_tools()
     # fmt: r
     r = code(r"""
@@ -281,6 +195,52 @@ def test_leaves_explicit_plot_devices_user_controlled(binary: Path) -> Transcrip
         ],
         "isError": False,
     }, result
+
+    r = "plot(3:1)"
+    expected_plot = reference_plots(
+        rscript,
+        environment,
+        r,
+        width=800 / 96,
+        height=600 / 96,
+        dpi=96,
+        pages=1,
+    )
+    client.call_tool("send", r=r)
+    assert_result_content(client, expected_plot)
+
+    # fmt: r
+    r = code(r"""
+        first_explicit_plot <- tempfile(fileext = ".png")
+        second_explicit_plot <- tempfile(fileext = ".png")
+        grDevices::png(first_explicit_plot)
+        plot(1:3)
+        grDevices::png(second_explicit_plot)
+        plot(3:1)
+        grDevices::graphics.off()
+        cat(
+          "all explicit complete: ",
+          all(file.exists(first_explicit_plot, second_explicit_plot)),
+          "\n",
+          sep = ""
+        )
+        unlink(c(first_explicit_plot, second_explicit_plot))
+        plot(2:4)
+        """)
+    expected_plot = reference_plots(
+        rscript,
+        environment,
+        r,
+        width=800 / 96,
+        height=600 / 96,
+        dpi=96,
+        pages=1,
+    )
+    client.call_tool("send", r=r)
+    assert_result_content(
+        client,
+        ["all explicit complete: TRUE\n", expected_plot[0]],
+    )
     return client.finish()
 
 

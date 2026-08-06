@@ -453,8 +453,7 @@ mod platform {
         if images.is_empty() {
             return Ok(());
         }
-        send_images(images)?;
-        flush_deferred_output()
+        send_images(images)
     }
 
     fn flush_deferred_output() -> Result<(), String> {

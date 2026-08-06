@@ -298,10 +298,11 @@ At startup, the worker installs a managed function as R's default graphics devic
 It opens a direct `grDevices::png()` device lazily only when evaluated code requests the default device; a cell that does not plot performs no managed plot file operations.
 The device writes numbered PNG pages beneath the worker's private temporary directory.
 
-Opening a managed page creates an ordering barrier for later R console output.
-After each top-level REPL iteration, the worker reads all newly finalized managed pages in page order, base64-encodes and removes them, emits one `image` frame per page, then flushes deferred console output.
-If no page has finalized, post-plot console output remains deferred.
-At cell end, including after a normal R language error, the worker closes every still-open managed device, emits its remaining pages, flushes deferred console output, and sends `completed`.
+Opening the first managed page creates a cell-wide ordering barrier for later R console output.
+After each top-level REPL iteration, the worker reads all newly finalized managed pages in page order, base64-encodes and removes them, and emits one `image` frame per page.
+Console output produced after the first managed page remains deferred even after an earlier page is finalized.
+At cell end, including after a normal R language error, the worker closes every still-open managed device, emits its remaining pages, flushes all deferred console output, and sends `completed`.
+This conservative ordering keeps text behind every unfinished page but does not reconstruct page-specific text interleaving within the cell.
 
 It reads and removes only files in the managed page-numbering scheme; other entries in that temporary directory remain untouched.
 The server projects those frames as `image/png` MCP content before completion.

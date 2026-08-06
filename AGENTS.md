@@ -38,9 +38,10 @@ R parses and evaluates its expressions sequentially, captures console output, pr
 Cell EOF while R requires continuation input is an error; earlier complete expressions from that cell remain applied.
 R parse, evaluation, and auto-print failures are normal language outcomes with `isError: false`.
 The worker installs a worker-owned `grDevices::png()` function as R's default graphics device and opens it lazily during plotting.
-At R top-level expression boundaries, it emits finalized managed pages as `image/png` MCP content before R console text that followed those plots.
-While a managed page remains unfinished, later R console text is deferred until the next page is finalized or the cell ends.
-Cell-end cleanup closes every still-open managed device, emits its remaining pages, then emits deferred console text, including normal R errors.
+At R top-level expression boundaries, it emits finalized managed pages as `image/png` MCP content in page order.
+Once the first managed page opens, later R console text is deferred until cell end.
+Cell-end cleanup closes every still-open managed device, emits its remaining pages, then emits all deferred console text, including normal R errors.
+This conservative cell-level ordering does not reconstruct text emitted between individual pages.
 Managed devices are cell scoped, so one plot's drawing operations must be submitted in the same cell.
 Their default dimensions are 800 by 600 pixels at 96 DPI; persistent `console.plot.width`, `console.plot.height`, and `console.plot.dpi` options configure positive finite dimensions in inches and resolution.
 Explicitly opened or selected devices remain user-owned: the worker does not close them, read their files, or emit images for them.
