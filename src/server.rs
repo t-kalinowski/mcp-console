@@ -5,8 +5,10 @@ use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 
 use rmcp::{
-    ServerHandler, ServiceExt, handler::server::wrapper::Parameters, schemars, tool, tool_handler,
-    tool_router,
+    ServerHandler, ServiceExt,
+    handler::server::wrapper::Parameters,
+    model::{CallToolResult, ContentBlock},
+    schemars, tool, tool_handler, tool_router,
 };
 use serde::Deserialize;
 use tokio::io::{AsyncRead, ReadBuf};
@@ -64,7 +66,7 @@ impl ConsoleServer {
             stdin,
             timeout_ms,
         }): Parameters<SendArguments>,
-    ) -> Result<String, String> {
+    ) -> Result<CallToolResult, String> {
         let cell = match (r, python, sql) {
             (Some(source), None, None) => Some(crate::cell::Cell {
                 language: crate::cell::Language::R,
@@ -83,9 +85,25 @@ impl ConsoleServer {
                 return Err("only one of `r`, `python`, or `sql` may be supplied".to_string());
             }
         };
-        self.worker
+        let response = self
+            .worker
             .send(cell, stdin, Duration::from_millis(timeout_ms))
-            .await
+            .await;
+        let (content, is_error) = response.into_parts();
+        let content = content
+            .into_iter()
+            .map(|content| match content {
+                crate::worker_client::Content::Text(text) => ContentBlock::text(text),
+                crate::worker_client::Content::Image { data, mime_type } => {
+                    ContentBlock::image(data, mime_type)
+                }
+            })
+            .collect();
+        Ok(if is_error {
+            CallToolResult::error(content)
+        } else {
+            CallToolResult::success(content)
+        })
     }
 }
 

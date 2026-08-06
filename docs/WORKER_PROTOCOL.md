@@ -97,6 +97,7 @@ The complete implemented message set is:
 | server → worker | `{"kind":"shutdown"}` | Exit without replying. |
 | worker → server | `{"kind":"ready"}` | Startup is complete. |
 | worker → server | `{"kind":"output","data":"..."}` | Append one output text chunk. |
+| worker → server | `{"kind":"image","data":"...","mime_type":"image/png"}` | Append one base64-encoded image. |
 | worker → server | `{"kind":"input_requested","prompt":"..."}` | Report that the runtime requested input. |
 | worker → server | `{"kind":"input_received"}` | Report that the current read succeeded. |
 | worker → server | `{"kind":"completed"}` | The evaluation is complete. |
@@ -121,14 +122,15 @@ worker -> server  {"kind":"output","data":"echo\n"}
 worker -> server  {"kind":"completed"}
 ```
 
-The worker may send zero or more `output` messages.
-The server concatenates their text in arrival order.
+The worker may send zero or more `output` or `image` messages.
+The server preserves their arrival order as MCP content blocks and concatenates adjacent text chunks.
+An image frame's `data` must already be base64 encoded, and `mime_type` becomes the MCP image `mimeType`; the server passes both strings through without decoding or validation.
 `input_requested` appends one server-owned MCP request record and starts one provisional input state.
 The matching `input_received` clears that state after the runtime read succeeds without removing the record.
 Only one request may be outstanding: a second request, a receipt without a request, or completion before its receipt is a protocol failure.
 `completed` ends the sideband evaluation; collecting its MCP result permits the next one.
 
-If no sideband text or input-request record remains pending at `completed` and no standard-stream text is pending, the current MCP projection returns `[done]`.
+If no sideband content or input-request record remains pending at `completed` and no standard-stream text is pending, the current MCP projection returns `[done]`.
 That marker is produced by the server; it is not a sideband message.
 
 The protocol has no request IDs because only one evaluation can be in flight over this sideband.
@@ -149,7 +151,7 @@ A pending input request wins over the `\n[running]` banner at the deadline.
 A later `send` call without a code field polls that evaluation with its own `timeout_ms`; it may include `stdin` to queue bytes before waiting.
 Every `send` response decodes and drains complete UTF-8 prefixes from standard-stream bytes already collected when that response is assembled.
 Bytes collected after that snapshot and incomplete trailing sequences remain for the next response; standard-stream output does not itself wake a waiting call.
-Completion returns decoded standard-stream text followed by pending evaluation output, including sideband text and input-request records not already delivered at a `[stdin needed]` boundary, or `[done]` when neither produced text.
+Completion returns decoded standard-stream text followed by pending evaluation content, including sideband text, images, and input-request records not already delivered at a `[stdin needed]` boundary, or `[done]` when neither produced content.
 If evaluation instead ends in an infrastructure or protocol failure, all pending evaluation output received before the failure precedes the tool error.
 When runtime output shares that response, the server starts the bracketed error on a new line, inserting a newline only when the output does not already end with one.
 A tool error returned without runtime output or a restart notice remains bare.
@@ -229,6 +231,7 @@ New code is rejected while an evaluation or its uncollected result is active.
 | absent or idle | MCP stdin submission | idle |
 | idle | server → worker `evaluate` | evaluating |
 | evaluating | worker → server `output` | evaluating |
+| evaluating | worker → server `image` | evaluating |
 | evaluating | worker → server `input_requested` | append request record; evaluating, input provisional |
 | evaluating, input provisional | worker → server `input_received` | retain request record; evaluating |
 | evaluating, with or without input reported | MCP stdin submission | evaluating |
@@ -239,7 +242,7 @@ Malformed JSON, invalid UTF-8, an unexpected message, or sideband EOF fails the 
 There is no structured protocol error message.
 Startup failure leaves no cached worker, so a later evaluation retries startup without a replacement notice.
 After `ready`, a sideband failure force-stops and discards the worker; a later evaluation or nonempty idle stdin submission starts a fresh worker and queues the replacement notice described above for the next response.
-Sideband output received before that failure is retained and prepended to the tool error.
+Sideband content received before that failure is retained and precedes the tool error.
 Standard-stream text collected before an infrastructure failure is attached to its tool error when available at the response boundary; text collected later remains for the next `send` response.
 If either output path contributed text, the server starts the bracketed error on a new line.
 R parse and evaluation errors, Python exceptions, and DuckDB errors are not sideband failures: the built-in worker sends them as output followed by `completed` and remains reusable.
@@ -371,6 +374,7 @@ zod: echo\n
 ```
 
 The Python and SQL `echo` modes return `zod python: echo\n` and `zod sql: echo\n`, verifying that the server preserves each language tag.
+The `emit image` mode sends text, a valid one-pixel PNG image, and more text before completion, verifying ordered MCP content projection.
 When an R `source` is exactly `stall`, Zod creates a checkpoint in its private temporary directory and sleeps forever.
 When the source is `complete after timeout`, it pauses briefly before returning `zod: complete after timeout\n`.
 When the source is `violate protocol`, it sends an unexpected second `ready` message.
