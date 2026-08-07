@@ -46,10 +46,9 @@ The next response after its replacement successfully starts includes the newline
 The worker runs each R cell through R's native top-level loop, captures R console output, prints each visible value, and maintains `.Last.value`.
 If a cell ends while an expression is incomplete, earlier complete expressions from that cell remain applied.
 The worker installs a worker-owned `grDevices::png()` function as R's default graphics device and opens it lazily when a cell draws.
-Finalized managed pages are returned in the order they finish, including when a cell switches among multiple managed devices.
-Once the first managed page opens, later R console text waits until cell end so it cannot appear ahead of an unfinished page.
-At cell end, including after a normal R error, the worker closes its managed devices, returns their remaining pages as MCP images, then returns all deferred console text.
-This cell-level ordering does not reconstruct text emitted between individual pages.
+Each managed page is returned as an MCP image when its device finalizes it by opening a new page or closing.
+R console output is returned when R writes it, so text produced while a page is still open can appear before that page's image.
+At cell end, including after a normal R error, the worker closes its managed devices and returns their remaining pages.
 Managed devices are cell scoped, so all drawing operations that modify one plot must be submitted together.
 Their default size is 800 by 600 pixels at 96 DPI.
 These persistent R options control their dimensions in inches and resolution:

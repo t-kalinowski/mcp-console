@@ -1,7 +1,7 @@
 #[cfg(target_os = "macos")]
 mod platform {
     use std::error::Error;
-    use std::ffi::{CStr, CString, c_char, c_int, c_uchar, c_void};
+    use std::ffi::{CStr, CString, c_char, c_int, c_uchar};
     use std::io;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Mutex, OnceLock};
@@ -31,8 +31,6 @@ mod platform {
             init: ReplInit,
             do_one: ReplDoOne,
             before_do_one: extern "C" fn(),
-            after_do_one: extern "C" fn(*const c_void),
-            context: *const c_void,
         ) -> c_int;
     }
 
@@ -93,7 +91,7 @@ mod platform {
 
         graphics.begin()?;
         set_cell_source(r);
-        let status = run_repl_cell(graphics);
+        let status = run_repl_cell();
         clear_cell_source();
         let result = match status {
             0 | 1 => Ok(()),
@@ -105,11 +103,7 @@ mod platform {
                 "R worker received unexpected DLL REPL status {status}"
             )),
         };
-        let graphics_result = graphics.finish().and_then(send_images);
-        let output_result = flush_deferred_output();
-        graphics.end();
-        graphics_result?;
-        output_result?;
+        graphics.finish()?;
         result
     }
 
@@ -126,11 +120,7 @@ mod platform {
         EVALUATION_STARTED.store(true, Ordering::SeqCst);
         let result = python.evaluate(&source);
         EVALUATION_STARTED.store(false, Ordering::SeqCst);
-        let graphics_result = graphics.finish().and_then(send_images);
-        let output_result = flush_deferred_output();
-        graphics.end();
-        graphics_result?;
-        output_result?;
+        graphics.finish()?;
         result
     }
 
@@ -202,7 +192,7 @@ mod platform {
         Ok(())
     }
 
-    fn run_repl_cell(graphics: &crate::r_graphics::Bridge) -> c_int {
+    fn run_repl_cell() -> c_int {
         let init = *R_REPL_INIT
             .get()
             .expect("R REPL should be initialized before evaluation");
@@ -212,30 +202,13 @@ mod platform {
         // SAFETY: Both function pointers are process-lifetime libR symbols with
         // the declared ABI. This main thread owns R, and the C shim contains R's
         // top-level jump so it cannot bypass a live Rust frame.
-        unsafe {
-            mcp_r_repl_run_cell(
-                init,
-                do_one,
-                before_repl_iteration,
-                after_repl_iteration,
-                std::ptr::from_ref(graphics).cast(),
-            )
-        }
+        unsafe { mcp_r_repl_run_cell(init, do_one, before_repl_iteration) }
     }
 
     extern "C" fn before_repl_iteration() {
         // R may reuse buffered source without calling Busy(0), so reset before
         // every outer DLL step. Busy(1) latches evaluation in r_busy().
         EVALUATION_STARTED.store(false, Ordering::SeqCst);
-    }
-
-    extern "C" fn after_repl_iteration(context: *const c_void) {
-        // R has returned normally to the C shim. Keep this callback limited to
-        // filesystem and sideband work so no R jump can cross this Rust frame.
-        let graphics = unsafe { &*context.cast::<crate::r_graphics::Bridge>() };
-        if let Err(error) = publish_ready_plots(graphics) {
-            record_worker_failure(error);
-        }
     }
 
     extern "C-unwind" fn r_busy(which: c_int) {
@@ -326,9 +299,6 @@ mod platform {
     }
 
     fn emit_output(bytes: &[u8]) {
-        if crate::r_graphics::defer_output(bytes) {
-            return;
-        }
         if let Err(error) = send_output(bytes) {
             record_worker_failure(error);
         }
@@ -445,29 +415,10 @@ mod platform {
             .map_err(|error| format!("R worker failed to send a plot image: {error}"))
     }
 
-    fn send_images(images: Vec<String>) -> Result<(), String> {
-        for data in images {
-            send_image(data)?;
+    pub(crate) fn publish_plot(image: Result<String, String>) {
+        if let Err(error) = image.and_then(send_image) {
+            record_worker_failure(error);
         }
-        Ok(())
-    }
-
-    fn publish_ready_plots(graphics: &crate::r_graphics::Bridge) -> Result<(), String> {
-        if !crate::r_graphics::plot_started() {
-            return Ok(());
-        }
-        let images = graphics.take_ready()?;
-        if images.is_empty() {
-            return Ok(());
-        }
-        send_images(images)
-    }
-
-    fn flush_deferred_output() -> Result<(), String> {
-        for output in crate::r_graphics::take_deferred_output() {
-            send_output(&output)?;
-        }
-        Ok(())
     }
 
     fn read_console_stdin(buf: *mut c_uchar, buflen: c_int) -> Result<c_int, String> {
@@ -500,7 +451,7 @@ mod platform {
 }
 
 #[cfg(target_os = "macos")]
-pub(crate) use platform::run;
+pub(crate) use platform::{publish_plot, run};
 
 #[cfg(not(target_os = "macos"))]
 pub(crate) fn run() -> Result<(), Box<dyn std::error::Error>> {

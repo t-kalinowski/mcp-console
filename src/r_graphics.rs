@@ -149,18 +149,12 @@ impl ManagedDevice {
 
 struct OutputState {
     active: bool,
-    deferred: bool,
-    chunks: Vec<Vec<u8>>,
     devices: Vec<ManagedDevice>,
-    pages: Vec<PathBuf>,
 }
 
 static OUTPUT_STATE: Mutex<OutputState> = Mutex::new(OutputState {
     active: false,
-    deferred: false,
-    chunks: Vec::new(),
     devices: Vec::new(),
-    pages: Vec::new(),
 });
 
 #[allow(clippy::result_large_err)]
@@ -191,15 +185,16 @@ pub extern "C" fn mcp_console_graphics_original_close(pointer: libr::pDevDesc) -
 
 #[unsafe(no_mangle)]
 pub extern "C" fn mcp_console_graphics_did_new_page(pointer: libr::pDevDesc) {
-    let mut state = OUTPUT_STATE
-        .lock()
-        .expect("R graphics output lock should not be poisoned");
-    let index = find_device_index(&state, pointer);
-    let finalized = state.devices[index].current_page_path();
-    state.devices[index].page += 1;
-    if let Some(path) = finalized {
-        state.pages.push(path);
-    }
+    let finalized = {
+        let mut state = OUTPUT_STATE
+            .lock()
+            .expect("R graphics output lock should not be poisoned");
+        let index = find_device_index(&state, pointer);
+        let finalized = state.devices[index].current_page_path();
+        state.devices[index].page += 1;
+        finalized
+    };
+    publish(finalized);
 }
 
 #[unsafe(no_mangle)]
@@ -211,14 +206,26 @@ pub extern "C" fn mcp_console_graphics_did_close(pointer: libr::pDevDesc) {
         let index = find_device_index(&state, pointer);
         state.devices.remove(index)
     };
+    publish(device.current_page_path());
+}
 
-    if let Some(path) = device.current_page_path() {
-        OUTPUT_STATE
-            .lock()
-            .expect("R graphics output lock should not be poisoned")
-            .pages
-            .push(path);
-    }
+fn publish(path: Option<PathBuf>) {
+    let Some(path) = path else {
+        return;
+    };
+    let image = fs::read(&path)
+        .map_err(|error| format!("failed to read managed plot `{}`: {error}", path.display()))
+        .and_then(|data| {
+            fs::remove_file(&path)
+                .map_err(|error| {
+                    format!(
+                        "failed to remove managed plot `{}`: {error}",
+                        path.display()
+                    )
+                })
+                .map(|()| STANDARD.encode(data))
+        });
+    crate::worker::publish_plot(image);
 }
 
 fn find_device(state: &OutputState, pointer: libr::pDevDesc) -> &ManagedDevice {
@@ -250,7 +257,6 @@ unsafe fn register_managed_device(path: String) {
     state
         .devices
         .push(ManagedDevice::new(pointer, path, new_page, close));
-    state.deferred = true;
 }
 
 unsafe fn current_device() -> libr::pDevDesc {
@@ -311,31 +317,6 @@ unsafe fn replace_callbacks(pointer: libr::pDevDesc) -> (NewPageCallback, CloseC
     }
 }
 
-pub(crate) fn defer_output(bytes: &[u8]) -> bool {
-    let mut state = OUTPUT_STATE
-        .lock()
-        .expect("R graphics output lock should not be poisoned");
-    if !state.active || !state.deferred {
-        return false;
-    }
-    state.chunks.push(bytes.to_vec());
-    true
-}
-
-pub(crate) fn take_deferred_output() -> Vec<Vec<u8>> {
-    let mut state = OUTPUT_STATE
-        .lock()
-        .expect("R graphics output lock should not be poisoned");
-    std::mem::take(&mut state.chunks)
-}
-
-pub(crate) fn plot_started() -> bool {
-    OUTPUT_STATE
-        .lock()
-        .expect("R graphics output lock should not be poisoned")
-        .deferred
-}
-
 pub(crate) struct Bridge {
     bridge: crate::r_bridge::Bridge,
 }
@@ -353,78 +334,27 @@ impl Bridge {
             .expect("R graphics output lock should not be poisoned");
         assert!(!state.active, "R graphics output cell should not be active");
         assert!(
-            state.chunks.is_empty(),
-            "R graphics output should be empty before a cell"
-        );
-        assert!(
-            state.pages.is_empty(),
-            "R graphics page order should be empty before a cell"
-        );
-        assert!(
             state.devices.is_empty(),
             "R graphics devices should be empty before a cell"
         );
         state.active = true;
-        state.deferred = false;
         Ok(())
     }
 
-    pub(crate) fn finish(&self) -> Result<Vec<String>, String> {
-        let opened = self.bridge.call0_integer(c"finish").inspect_err(|_| {
-            let mut state = OUTPUT_STATE
-                .lock()
-                .expect("R graphics output lock should not be poisoned");
-            state.devices.clear();
-            state.pages.clear();
-        })?;
-        if opened == 0 {
-            return Ok(Vec::new());
-        }
-        self.take_ready()
-    }
-
-    pub(crate) fn take_ready(&self) -> Result<Vec<String>, String> {
-        let paths = {
-            let mut state = OUTPUT_STATE
-                .lock()
-                .expect("R graphics output lock should not be poisoned");
-            std::mem::take(&mut state.pages)
-        };
-
-        let mut images = Vec::new();
-        for path in paths {
-            let data = fs::read(&path).map_err(|error| {
-                format!("failed to read managed plot `{}`: {error}", path.display())
-            })?;
-            images.push(STANDARD.encode(data));
-            fs::remove_file(&path).map_err(|error| {
-                format!(
-                    "failed to remove managed plot `{}`: {error}",
-                    path.display()
-                )
-            })?;
-        }
-        Ok(images)
-    }
-
-    pub(crate) fn end(&self) {
+    pub(crate) fn finish(&self) -> Result<(), String> {
+        let result = self.bridge.call0_integer(c"finish").map(|_| ());
         let mut state = OUTPUT_STATE
             .lock()
             .expect("R graphics output lock should not be poisoned");
-        assert!(state.active, "R graphics output cell should be active");
-        assert!(
-            state.chunks.is_empty(),
-            "R graphics output should be empty after a cell"
-        );
-        assert!(
-            state.pages.is_empty(),
-            "R graphics page order should be empty after a cell"
-        );
-        assert!(
-            state.devices.is_empty(),
-            "R graphics devices should be empty after a cell"
-        );
+        if result.is_err() {
+            state.devices.clear();
+        } else {
+            assert!(
+                state.devices.is_empty(),
+                "R graphics devices should be empty after a cell"
+            );
+        }
         state.active = false;
-        state.deferred = false;
+        result
     }
 }

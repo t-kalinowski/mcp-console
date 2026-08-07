@@ -38,10 +38,9 @@ R parses and evaluates its expressions sequentially, captures console output, pr
 Cell EOF while R requires continuation input is an error; earlier complete expressions from that cell remain applied.
 R parse, evaluation, and auto-print failures are normal language outcomes with `isError: false`.
 The worker installs a worker-owned `grDevices::png()` function as R's default graphics device and opens it lazily during plotting.
-At R top-level expression boundaries, it emits finalized managed pages as `image/png` MCP content in the global finalization order reported by the managed devices' new-page and close callbacks.
-Once the first managed page opens, later R console text is deferred until cell end.
-Cell-end cleanup closes every still-open managed device, emits its remaining pages, then emits all deferred console text, including normal R errors.
-This conservative cell-level ordering does not reconstruct text emitted between individual pages.
+After a managed device's new-page or close callback returns normally, the worker immediately reads, removes, and emits the finalized PNG as `image/png` MCP content.
+R console text is emitted immediately rather than deferred for unfinished plots.
+Cell-end cleanup closes every still-open managed device and emits its remaining page, including after normal R errors.
 Managed devices are cell scoped, so one plot's drawing operations must be submitted in the same cell.
 Their default dimensions are 800 by 600 pixels at 96 DPI; persistent `console.plot.width`, `console.plot.height`, and `console.plot.dpi` options configure positive finite dimensions in inches and resolution.
 Graphics devices opened explicitly by evaluated code, such as with `grDevices::png()`, remain user-owned: the worker does not close them, read their files, or emit images for them.
@@ -49,7 +48,7 @@ A silent successful R cell sends `completed` without an `output` frame and proje
 Submitted R functions do not currently retain a source filename.
 Python cells run in the same worker through reticulate, retain `__main__` state, execute statements, and send a final expression through `sys.displayhook()`.
 Python source uses a synthetic evaluation filename, and uncaught exceptions print a Python traceback as a normal language outcome with `isError: false`.
-Python cells enter the same managed graphics lifecycle as R cells, so R plots invoked through reticulate's `r` bridge return as MCP images under the same sizing, cell-scope, device-ownership, and output-ordering rules.
+Python cells enter the same managed graphics lifecycle as R cells, so R plots invoked through reticulate's `r` bridge return as MCP images under the same sizing, cell-scope, device-ownership, and finalization rules.
 At worker startup, MCP Console sets `RETICULATE_REMAP_OUTPUT_STREAMS=1` once, before user R can initialize Python.
 Within the worker process, reticulate then routes Python text writes, including `print()`, `sys.stderr.write()`, and tracebacks, through the R console callback as sideband `output` frames.
 Writes through `sys.stdout.buffer`, `sys.stderr.buffer`, or native fd 1/2 bypass that remap and use the captured standard streams.
