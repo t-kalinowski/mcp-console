@@ -21,7 +21,7 @@ mcp-console sandbox -- COMMAND [ARG]...
 `mcp-console` requires a subcommand.
 `mcp-console serve` runs a minimal MCP server over stdio.
 Run `mcp-console --help` or `mcp-console COMMAND --help` for command-line help.
-The server registers one `send` tool.
+The server registers `send` and a narrow initial `session` tool.
 Supplying exactly one of `r`, `python`, or `sql` evaluates one complete code cell and waits up to the optional `timeout_ms`, which defaults to 60 seconds.
 When that wait expires, the call returns the newline-prefixed banner `\n[running]` while computation continues; call `send` without a code field to poll for completion.
 A call may also supply exact standard-input text with a code cell, during an evaluation, or while the worker is idle:
@@ -38,7 +38,20 @@ An immediate `input_received` receipt retains the request record but suppresses 
 That receipt describes the runtime read, not a particular stdin payload; direct fd-0 reads emit no request or receipt.
 Payload end is not EOF, and queued input is not an acknowledgment of consumption.
 Unread bytes may be completed by later stdin or satisfy a later worker read or evaluation.
-On macOS, managed-Python preflight happens during `serve` startup when required; the first nonempty stdin submission or evaluation still lazily starts a sandboxed embedded R worker.
+Before the worker starts, the MCP client can prepare additive Python requirements for the implicit session:
+
+```json
+{
+  "action": "prepare",
+  "requirements": { "python": ["numpy<2", "pandas"] }
+}
+```
+
+This `session` call resolves the complete initial requirement set through reticulate and uv outside the worker sandbox, then returns `[prepared]`.
+It does not import the packages or start the worker.
+Exact repeated requirements are idempotent.
+Once the worker has started, a new requirement returns `restart required` without changing the environment; runtime activation and an explicit restart action are not implemented yet.
+On macOS, the default managed-Python preflight happens during `serve` startup when required; a successful `prepare` replaces that initial selection before the first nonempty stdin submission or evaluation lazily starts the sandboxed embedded R worker.
 Later calls reuse the same global R state, reticulate Python interpreter, and in-memory DuckDB catalog.
 An infrastructure or protocol failure discards that worker and its in-memory R, Python, and SQL state.
 Worker output available when the failure response is assembled remains visible; when it shares that response with the MCP tool error, the server starts the bracketed error on a new line.
@@ -90,12 +103,17 @@ A silent successful R, Python, or SQL cell sends no sideband `output` frame, sti
 
 Python cells require the `reticulate` R package.
 SQL cells require the `arrow`, `DBI`, `duckdb`, `nanoarrow`, `pillar`, and `tibble` R packages.
-When `RETICULATE_PYTHON` is unset or is `managed`, `mcp-console serve` runs a reticulate preflight outside the worker sandbox, where reticulate can use its normal global caches and network access to select an interpreter.
-Other configured values, including an empty value, are preserved and skip the preflight.
+When `RETICULATE_PYTHON` is unset or is `managed`, `mcp-console serve` runs reticulate's uv environment resolver outside the worker sandbox with its NumPy baseline, where it can use the normal host caches and network access.
+Other configured values, including an empty value, are preserved when no requirements are prepared and skip this startup preflight.
+An explicit `session` preparation selects its resolved managed environment even when `RETICULATE_PYTHON` was configured, so a successful call guarantees that its requirements are present.
 The server passes the selected interpreter path to the sandboxed worker, which forces `UV_OFFLINE=1` and otherwise uses the existing sandbox policy unchanged.
-The selection is fixed during preflight; worker-side `py_require()` calls do not revise it.
-The preflight executes installed R and reticulate code, but no MCP-submitted code.
+The selection is fixed before worker startup; worker-side `py_require()` calls do not revise it.
+Requirement strings are passed as data rather than evaluated as R code, but reticulate and uv run outside the sandbox and package preparation may execute a source distribution's build backend there.
+The resolver does not evaluate submitted R or Python cells.
 If the preflight cannot select an interpreter, `serve` exits before accepting MCP requests.
+A failed `session` preparation is a tool error and leaves the prior requirements and interpreter selection unchanged.
+For uv tool failures, the error includes the attempted uv command and uv's stderr without reticulate's interactive `py_require()` guidance.
+Preparation has no per-call timeout; closing MCP input force-stops an in-flight resolver process group.
 MCP Console does not install these R packages.
 Python `input()` and `breakpoint()`/`pdb` use reticulate's R console bridge, so each read emits `input_requested` before reading and `input_received` after a successful read.
 They accept proactively queued or follow-up stdin, including repeated debugger commands.
@@ -107,7 +125,7 @@ The intended default client registration name is `console`:
 codex mcp add console -- mcp-console serve
 ```
 
-Under Codex's current naming convention, the implemented tool is `mcp__console.send`; the planned environment and lifecycle tool will be `mcp__console.session`.
+Under Codex's current naming convention, the implemented tools are `mcp__console.send` and `mcp__console.session`; `session` currently supports only initial Python requirement preparation for the implicit session.
 
 On macOS, `sandbox` launches the command under `/usr/bin/sandbox-exec`.
 The command can read the host filesystem, can write regular files only in a dedicated temporary directory, and cannot access the network.

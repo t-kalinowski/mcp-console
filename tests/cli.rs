@@ -142,6 +142,103 @@ exec /bin/sleep 3
 
 #[cfg(target_os = "macos")]
 #[test]
+fn stdio_console_shutdown_is_bounded_during_python_preparation() {
+    let test_directory = TestDirectory::new("python-preparation-shutdown");
+    let fake_bin = test_directory.path().join("bin");
+    let fake_rscript = fake_bin.join("Rscript");
+    let resolver_started = test_directory.path().join("resolver-started");
+    fs::create_dir(&fake_bin).expect("fake bin directory should be created");
+    fs::write(
+        &fake_rscript,
+        r#"#!/bin/sh
+/bin/sleep 3 &
+printf '%s\n' "$$" >> "$MCP_CONSOLE_RESOLVER_STARTED"
+exit 0
+"#,
+    )
+    .expect("fake Rscript should be written");
+    fs::set_permissions(&fake_rscript, fs::Permissions::from_mode(0o755))
+        .expect("fake Rscript should be executable");
+
+    let mut command = Command::new(env!("CARGO_BIN_EXE_mcp-console"));
+    command
+        .arg("serve")
+        .env("R_HOME", test_directory.path())
+        .env("RETICULATE_PYTHON", "configured-by-user")
+        .env("MCP_CONSOLE_RESOLVER_STARTED", &resolver_started);
+    let mut client = McpClient::spawn(command);
+    client.send_tool(
+        2,
+        "session",
+        json!({
+            "action": "prepare",
+            "requirements": {"python": ["py-yaml12"]}
+        }),
+    );
+
+    let started = Instant::now();
+    while !resolver_started.exists() {
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "Python resolver did not start"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let resolver_group = fs::read_to_string(&resolver_started)
+        .expect("resolver process group should be recorded")
+        .trim()
+        .parse::<libc::pid_t>()
+        .expect("resolver process group should be numeric");
+    let exited = Instant::now();
+    loop {
+        let status = Command::new("/bin/ps")
+            .args(["-o", "state=", "-p", &resolver_group.to_string()])
+            .output()
+            .expect("resolver process state should be readable");
+        let state = String::from_utf8(status.stdout).expect("process state should be UTF-8");
+        if state.trim().is_empty() || state.trim_start().starts_with('Z') {
+            break;
+        }
+        assert!(
+            exited.elapsed() < Duration::from_secs(2),
+            "Python resolver did not exit"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    client.send_tool(
+        3,
+        "session",
+        json!({
+            "action": "prepare",
+            "requirements": {"python": ["pandas"]}
+        }),
+    );
+    let tools = client.request(4, "tools/list", None);
+    assert_eq!(tools["result"]["tools"].as_array().unwrap().len(), 2);
+
+    let elapsed = client.close_within(Duration::from_secs(2));
+    assert!(
+        elapsed < Duration::from_secs(2),
+        "server shutdown took {elapsed:?}"
+    );
+    assert_eq!(unsafe { libc::killpg(resolver_group, 0) }, -1);
+    assert_eq!(
+        std::io::Error::last_os_error().raw_os_error(),
+        Some(libc::ESRCH),
+        "resolver process group outlived server shutdown"
+    );
+    assert_eq!(
+        fs::read_to_string(&resolver_started)
+            .expect("resolver starts should be recorded")
+            .lines()
+            .count(),
+        1,
+        "queued preparation started a resolver after shutdown"
+    );
+}
+
+#[cfg(target_os = "macos")]
+#[test]
 fn stdio_console_sandboxes_native_r_filesystem_processes_and_network() {
     let test_directory = TestDirectory::new("native-worker-boundary");
     let host_path = test_directory.path().join("host.txt");
@@ -344,6 +441,11 @@ impl McpClient {
 
     #[cfg(target_os = "macos")]
     fn send_console(&mut self, id: u64, arguments: Value) {
+        self.send_tool(id, "send", arguments);
+    }
+
+    #[cfg(target_os = "macos")]
+    fn send_tool(&mut self, id: u64, name: &str, arguments: Value) {
         write_message(
             self.input.as_mut().expect("stdin should be open"),
             &json!({
@@ -351,7 +453,7 @@ impl McpClient {
                 "id": id,
                 "method": "tools/call",
                 "params": {
-                    "name": "send",
+                    "name": name,
                     "arguments": arguments
                 }
             }),

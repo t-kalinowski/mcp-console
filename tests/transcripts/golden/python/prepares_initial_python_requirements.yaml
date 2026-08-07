@@ -1,0 +1,86 @@
+---
+!same-as tests/transcripts/golden/server/initializes_and_lists_tools.yaml
+---
+id: 3
+session:
+  action: prepare
+  requirements:
+    python:
+      - py-yaml12
+result:
+  content:
+    - type: text
+      text: "[prepared]"
+  isError: false
+---
+id: 4
+session:
+  action: prepare
+  requirements:
+    python:
+      - not a valid requirement !!!
+result:
+  content:
+    - type: text
+      text: |-
+        managed Python resolution failed:
+        uv command:
+        <uv> tool run --isolated --python 3.12.x --with numpy --with 'not a valid requirement !!!' --with py-yaml12 -- python -c 'import sys; f=open(sys.argv[-1], chr(119)); f.write(sys.executable); f.close();' <resolver-output>
+        uv output:
+        error: Failed to parse: `not a valid requirement !!!`
+          Caused by: Expected one of `@`, `(`, `<`, `=`, `>`, `~`, `!`, `;`, found `a`
+        not a valid requirement !!!
+            ^
+  isError: true
+---
+id: 5
+session:
+  action: prepare
+  requirements:
+    python:
+      - not a valid requirement !!!
+result:
+  content:
+    - type: text
+      text: <same Python requirement resolution error>
+  isError: true
+---
+id: 6
+session:
+  action: prepare
+  requirements:
+    python:
+      - |-
+        numpy
+        pandas
+result:
+  content:
+    - type: text
+      text: Python requirement strings must not contain NUL or line breaks
+  isError: true
+---
+id: 7
+send:
+  python: |
+    import yaml12
+
+    yaml12.__name__
+result:
+  content:
+    - type: text
+      text: |
+        'yaml12'
+  isError: false
+---
+id: 8
+session:
+  action: prepare
+  requirements:
+    python:
+      - py-yaml12
+result:
+  content:
+    - type: text
+      text: "[prepared]"
+  isError: false
+...

@@ -19,7 +19,7 @@ mcp-console sandbox [--] COMMAND [ARG]...
 The binary requires a subcommand.
 The `serve` command runs an MCP server over stdio.
 Clap provides command help, version output, argument parsing, and usage errors.
-The server registers only a `send` tool.
+The server registers `send` and `session` tools.
 Supplying exactly one of `r`, `python`, or `sql` starts one complete cell and waits for up to `timeout_ms`, which defaults to 60 seconds.
 If that wait expires, `send` returns the newline-prefixed banner `\n[running]` without stopping the computation; a later call without a code field polls it, and a poll while idle returns `\n[idle]`.
 Concurrent `send` calls are unsupported.
@@ -32,6 +32,14 @@ The receipt describes that runtime read, not a submitted payload or byte count, 
 New code is rejected until the running evaluation's result has been collected.
 Worker `image` frames carry base64 data and a MIME type.
 The server preserves sideband text and image order as MCP content blocks, coalesces adjacent text, and does not add `[done]` when an image is the only output.
+The implemented `session` surface accepts only `action = "prepare"` with one or more Python requirement strings for the implicit session.
+Requirements are exact, additive, and idempotent.
+Before the worker starts, each successful prepare resolves the complete candidate set outside the sandbox, atomically retains it in server memory, replaces any inherited Python selection with the resolved interpreter, and returns `[prepared]` without starting the worker.
+A failed resolution leaves the prior requirements and interpreter unchanged.
+For a uv tool failure, the tool error reports the exact uv command and uv's stderr while omitting reticulate's `py_require()`-oriented guidance.
+Closing MCP input cancels an in-flight explicit resolution by force-stopping its host resolver process group; startup preflight completes before MCP input is accepted and is not cancellable through that lifecycle.
+Once a worker has started, an already-retained requirement remains idempotent, while any addition returns `restart required` without changing the environment.
+Named sessions, R requirements, runtime environment layering, and explicit restart do not exist yet.
 On macOS, managed-Python preflight happens during `serve` startup when required; the first nonempty stdin submission or evaluation still lazily starts the built-in worker under the same sandbox policy as the `sandbox` command.
 The worker embeds R through `libr` and `harp`, retains global state, and feeds each complete R cell through R's DLL REPL iterator.
 R parses and evaluates its expressions sequentially, captures console output, prints visible values, and performs native top-level bookkeeping.
@@ -56,12 +64,13 @@ After a Python cell calls `os.fork()`, the child cannot use the sideband, so ret
 Native extensions that fork without running CPython's registered fork callbacks and then resume Python are unsupported.
 Fork-child text capture requires reticulate from its `main` branch or a release containing fork-aware stream restoration.
 An exec descendant that retains fd 1/2 creates fresh standard streams backed by those descriptors, so its ordinary stdout and stderr are captured.
-When inherited `RETICULATE_PYTHON` is absent or exactly `managed`, built-in server startup asks reticulate to resolve managed Python outside the sandbox and injects the resulting interpreter path into every worker generation.
-Other inherited values, including an empty value, are preserved and skip that preflight; custom workers also skip it.
-The preflight may access the network and write normal reticulate and uv host caches, but it runs before sideband setup and evaluates no submitted cell.
+When inherited `RETICULATE_PYTHON` is absent or exactly `managed`, built-in server startup calls reticulate's internal uv environment resolver with its NumPy baseline outside the sandbox and injects the resulting interpreter path into every worker generation.
+Other inherited values, including an empty value, are preserved and skip that startup preflight; a later successful explicit preparation takes precedence over them.
+Custom workers skip resolution and reject Python requirement preparation.
+Resolution may access the network, write normal reticulate and uv host caches, and execute package build backends outside the sandbox, but requirement strings remain standard-input data rather than R code and no submitted cell is evaluated.
 Before initializing R, the worker forces `UV_OFFLINE=1`, overwriting any inherited value to match the sandbox's network denial.
-Reticulate reuses the preflight-selected or caller-selected interpreter.
-Because the preflight-selected interpreter is passed as a concrete path, worker-side `py_require()` calls do not revise that selection.
+Reticulate reuses the server-resolved or caller-selected interpreter.
+Because a resolved interpreter is passed as a concrete path, worker-side `py_require()` calls do not revise that selection.
 R and Python share objects through reticulate's `py` and `r` bridges.
 A silent successful Python cell sends `completed` without an `output` frame and projects to `[done]` when no other response text is pending.
 Python `input()` and `breakpoint()`/`pdb` use reticulate's R console bridge, so they emit `input_requested` before a read and `input_received` after it succeeds.
@@ -99,7 +108,7 @@ The worker command runs synchronously on the process main thread; only `serve` c
 The hidden development option `serve --worker PATH` replaces the built-in worker with an executable that implements the same sideband request/receipt protocol and fd-0 input contract.
 The Python fixture `tests/fixtures/zod` provides deterministic acceptance coverage for R, Python, and SQL language tags at that boundary, MCP image content, direct fd-0 input, captured standard streams, and server-owned timeout and polling mechanics.
 An infrastructure or protocol failure is returned as a tool error, force-stops and discards that worker, and lets the next evaluation or nonempty idle stdin submission start a fresh worker with the replacement notice above.
-When MCP input closes, the server starts a one-second deadline and attempts graceful sideband shutdown without delaying it.
+When MCP input closes, the server cancels any active Python resolver and starts a one-second deadline for graceful sideband shutdown without delaying it.
 If the direct sandbox process is still running when time expires, the sandbox boundary force-stops its process group and reaps that direct process.
 The version command prints the package name and version.
 On macOS, the sandbox command launches a subprocess under `sandbox-exec` with host filesystem reads allowed, regular-file writes limited to a dedicated per-launch temporary directory, runtime device and IPC exceptions, and network access denied.
@@ -107,15 +116,17 @@ This initial launcher waits only for the direct command.
 Background descendants are unsupported: they may outlive the launcher, which attempts to remove their dedicated temporary directory on a best-effort basis when it returns.
 Descendant supervision is intentionally deferred because it must account for process groups, session-detached children, signal forwarding, and PID reuse together.
 The sandbox command and worker are unsupported on Linux and Windows.
-The session model, SQL relation bridges, sidecar API, viewer, environment management, output retention, and transcript generation do not exist yet.
+Named sessions, runtime requirement activation and restart, R requirement resolution, SQL relation bridges, the sidecar API, viewer, output retention, and transcript generation do not exist yet.
 
 ## Product direction
 
 MCP Console is intended to become a persistent, sandboxed R, Python, and DuckDB SQL console exposed through MCP.
-The planned public MCP surface has two tools:
+The public MCP surface has two tools:
 
 - `send` evaluates complete R, Python, or SQL cells, writes to the session's stdin stream, and polls for output.
 - `session` manages session requirements and lifecycle operations.
+
+Only initial Python requirement preparation is implemented for `session`; its broader lifecycle surface remains planned.
 
 The MCP initialization identity remains `mcp-console`.
 The intended default client registration name is `console`, for example `codex mcp add console -- mcp-console serve`.
@@ -186,7 +197,8 @@ Begin as one Cargo package and split crates only when a real boundary emerges.
 - Keep complete code cells separate from interactive `stdin`.
 - Keep the MCP adapter independent of interpreter implementation details.
 - Treat submitted R, Python, and SQL execution as shell-class capability and place safety at the worker-process boundary.
-  The managed-Python preflight is a host-bootstrap exception: it runs before MCP input is accepted and never evaluates submitted code.
+  The startup managed-Python preflight is a host-bootstrap exception that runs before MCP input is accepted.
+  Explicit Python preparation passes untrusted requirement strings to the same host resolver as newline-delimited standard input; it does not evaluate them as R code, though package build backends may execute outside the worker sandbox.
 - Update this file when a PR changes the implemented surface or repository map.
 - Before every commit, run `scripts/format` and review its changes.
 - Run `scripts/check` before opening a PR.

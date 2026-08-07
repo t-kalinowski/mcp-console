@@ -44,6 +44,29 @@ struct SendArguments {
     timeout_ms: u64,
 }
 
+#[derive(Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+enum SessionAction {
+    Prepare,
+}
+
+#[derive(Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct PythonRequirements {
+    /// One or more additive, single-line PEP 508 Python requirement strings.
+    #[schemars(length(min = 1, max = 64), inner(length(min = 1)))]
+    python: Vec<String>,
+}
+
+#[derive(Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct SessionArguments {
+    /// Session operation. Only initial environment preparation is implemented.
+    action: SessionAction,
+    /// Additive requirements for the implicit default session.
+    requirements: PythonRequirements,
+}
+
 fn default_timeout_ms() -> u64 {
     DEFAULT_TIMEOUT_MS
 }
@@ -110,6 +133,43 @@ impl ConsoleServer {
         } else {
             CallToolResult::success(content)
         })
+    }
+
+    #[tool(
+        description = "Prepare additive Python requirements for the implicit session before its worker starts."
+    )]
+    async fn session(
+        &self,
+        Parameters(SessionArguments {
+            action: SessionAction::Prepare,
+            requirements: PythonRequirements { python },
+        }): Parameters<SessionArguments>,
+    ) -> Result<CallToolResult, String> {
+        if python.is_empty() {
+            return Err("`requirements.python` must contain at least one requirement".to_string());
+        }
+        if python.len() > 64 {
+            return Err("`requirements.python` accepts at most 64 requirements".to_string());
+        }
+        if python.iter().any(String::is_empty) {
+            return Err("Python requirement strings must not be empty".to_string());
+        }
+        if python.iter().any(|requirement| {
+            requirement
+                .bytes()
+                .any(|byte| matches!(byte, b'\0' | b'\r' | b'\n'))
+        }) {
+            return Err(
+                "Python requirement strings must not contain NUL or line breaks".to_string(),
+            );
+        }
+
+        let result = self.worker.prepare_python(python).await?;
+        let text = match result {
+            crate::worker_client::PrepareResult::Prepared => "[prepared]",
+            crate::worker_client::PrepareResult::RestartRequired => "restart required",
+        };
+        Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
     }
 }
 

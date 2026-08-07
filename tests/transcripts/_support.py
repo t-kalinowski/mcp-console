@@ -161,10 +161,10 @@ class McpClient:
             and recorded_message["method"] == "tools/call"
             and isinstance(params, dict)
             and params.keys() == {"name", "arguments"}
-            and params["name"] == "send"
+            and params["name"] in {"send", "session"}
             and isinstance(params["arguments"], dict)
         ):
-            entry["send"] = params["arguments"]
+            entry[params["name"]] = params["arguments"]
         else:
             entry["input"] = recorded_message
         self.transcript.append(entry)
