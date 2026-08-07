@@ -342,7 +342,9 @@ impl Client {
             .map_err(|_| "worker lock poisoned".to_string())?;
         self.ensure_restarting()?;
         let had_runtime = !matches!(&*worker, WorkerState::Initial);
-        *worker = WorkerState::Initial;
+        if !matches!(&*worker, WorkerState::ReplacementPending) {
+            *worker = WorkerState::Initial;
+        }
         self.0
             .evaluation
             .lock()
@@ -533,7 +535,7 @@ impl Client {
             unreachable!("worker should be running");
         };
         let result = operation(running);
-        if result.is_err() {
+        if result.is_err() && self.replacement_notice_required()? {
             *worker = WorkerState::ReplacementPending;
         }
         result
@@ -607,6 +609,15 @@ impl Client {
 
     fn ensure_available(&self) -> Result<(), String> {
         self.admit().map(|_| ())
+    }
+
+    fn replacement_notice_required(&self) -> Result<bool, String> {
+        let gate = self
+            .0
+            .shutdown_gate
+            .lock()
+            .map_err(|_| "worker shutdown gate lock poisoned".to_string())?;
+        Ok(matches!(&*gate, ShutdownGate::Open { .. }))
     }
 
     fn ensure_generation(&self, expected: u64) -> Result<(), String> {

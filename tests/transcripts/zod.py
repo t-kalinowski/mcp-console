@@ -350,6 +350,30 @@ def test_restarts_after_worker_exit(binary: Path) -> Transcript:
     return client.finish()
 
 
+def test_explicit_restart_preserves_pending_restart_notice(
+    binary: Path,
+) -> Transcript:
+    zod = Path(__file__).resolve().parents[1] / "fixtures" / "zod"
+    client = McpClient(
+        binary,
+        ("serve", "--worker", str(zod)),
+    )
+    client.initialize_and_list_tools()
+    client.call_tool("send", r="exit unexpectedly")
+    assert client.transcript[-1]["result"]["isError"] is True
+
+    client.call_tool("session", action="restart")
+    assert last_tool_text(client) == "[restarted]"
+
+    client.call_tool("send", r="echo")
+    assert last_tool_text(client) == (
+        "zod: echo\n[worker restarted: in-memory state lost]\n"
+    )
+    client.call_tool("send", r="echo")
+    assert last_tool_text(client) == "zod: echo\n"
+    return client.finish()
+
+
 def test_restart_closes_worker_stdin(binary: Path) -> Transcript:
     zod = Path(__file__).resolve().parents[1] / "fixtures" / "zod"
     with tempfile.TemporaryDirectory() as temporary_directory:
