@@ -350,6 +350,198 @@ def test_restarts_after_worker_exit(binary: Path) -> Transcript:
     return client.finish()
 
 
+def test_restart_closes_worker_stdin(binary: Path) -> Transcript:
+    zod = Path(__file__).resolve().parents[1] / "fixtures" / "zod"
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        temporary_path = Path(temporary_directory)
+        environment = os.environ.copy()
+        environment["TMPDIR"] = temporary_directory
+        client = McpClient(
+            binary,
+            ("serve", "--worker", str(zod)),
+            environment,
+        )
+        client.initialize_and_list_tools()
+        client.call_tool("send", r="wait for stdin close", timeout_ms=0)
+        assert last_tool_text(client) == "\n[running]"
+        wait_for_marker(
+            temporary_path,
+            "zod-waiting-for-stdin-close",
+            client,
+        )
+
+        client.call_tool("session", action="restart")
+        assert last_tool_text(client) == "[restarted]"
+
+        client.call_tool("send", r="echo")
+        output = last_tool_text(client)
+        prefix = "zod stdin closed\n" + ("x" * LARGE_OUTPUT_SIZE)
+        assert output.startswith(prefix), "worker stdin did not close before restart"
+        assert output.endswith("zod: echo\n")
+        barrier = output.removeprefix(prefix).removesuffix("zod: echo\n")
+        assert barrier and not barrier.strip("y"), "unexpected old-worker output"
+        client.transcript[-1]["result"]["content"][0]["text"] = (
+            "zod stdin closed\n<large output>\nzod: echo\n"
+        )
+        return client.finish()
+
+
+def test_restart_force_stops_stalled_worker(binary: Path) -> Transcript:
+    zod = Path(__file__).resolve().parents[1] / "fixtures" / "zod"
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        temporary_path = Path(temporary_directory)
+        environment = os.environ.copy()
+        environment["TMPDIR"] = temporary_directory
+        environment["ZOD_REPORT_PROCESS_GROUP"] = "1"
+        client = McpClient(
+            binary,
+            ("serve", "--worker", str(zod)),
+            environment,
+        )
+        worker_group = None
+        passed = False
+        try:
+            client.initialize_and_list_tools()
+            client.call_tool("send", r="stall", timeout_ms=0)
+            assert last_tool_text(client) == "\n[running]"
+            group_marker = wait_for_marker(
+                temporary_path,
+                "zod-process-group",
+                client,
+            )
+            worker_group = read_worker_group(group_marker)
+            wait_for_marker(temporary_path, "zod-stalled", client)
+
+            restart_call = client.send(
+                {
+                    "jsonrpc": "2.0",
+                    "id": client.next_request_id,
+                    "method": "tools/call",
+                    "params": {
+                        "name": "session",
+                        "arguments": {"action": "restart"},
+                    },
+                }
+            )
+            client.next_request_id += 1
+            wait_for_process_group_exit(worker_group, client)
+            client.receive(restart_call)
+            assert last_tool_text(client) == "[restarted]"
+
+            client.call_tool("send", r="echo")
+            assert last_tool_text(client) == "zod: echo\n"
+            transcript = client.finish()
+            passed = True
+            return transcript
+        finally:
+            if not passed:
+                stop_process_group(worker_group)
+                stop_process(client.process)
+
+
+def test_restart_starts_first_worker_and_waits_until_ready(
+    binary: Path,
+) -> Transcript:
+    zod = Path(__file__).resolve().parents[1] / "fixtures" / "zod"
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        temporary_path = Path(temporary_directory)
+        startup_control = temporary_path / "zod-startup-control"
+        startup_release = temporary_path / "zod-startup-release"
+        startup_control.write_text("block", encoding="utf-8")
+        environment = os.environ.copy()
+        environment["TMPDIR"] = temporary_directory
+        environment["ZOD_STARTUP_CONTROL"] = str(startup_control)
+        environment["ZOD_STARTUP_RELEASE"] = str(startup_release)
+        environment["ZOD_REPORT_PROCESS_GROUP"] = "1"
+        client = McpClient(
+            binary,
+            ("serve", "--worker", str(zod)),
+            environment,
+        )
+        worker_group = None
+        passed = False
+        try:
+            client.initialize_and_list_tools()
+            restarted = client.send(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 3,
+                    "method": "tools/call",
+                    "params": {
+                        "name": "session",
+                        "arguments": {"action": "restart"},
+                    },
+                }
+            )
+            wait_for_marker(
+                temporary_path,
+                "zod-replacement-waiting-ready",
+                client,
+            )
+            worker_group = read_worker_group(
+                wait_for_marker(temporary_path, "zod-process-group", client)
+            )
+
+            while_restarting = client.send(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 4,
+                    "method": "tools/call",
+                    "params": {
+                        "name": "send",
+                        "arguments": {"r": "echo"},
+                    },
+                }
+            )
+            client.receive(while_restarting)
+            result = while_restarting["result"]
+            assert result["isError"] is True
+            assert result["content"][0]["text"] == "worker is restarting"
+
+            startup_release.touch()
+            client.receive(restarted)
+            assert restarted["result"]["content"][0]["text"] == "[restarted]"
+
+            after_restart = client.send(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 5,
+                    "method": "tools/call",
+                    "params": {
+                        "name": "send",
+                        "arguments": {"r": "echo"},
+                    },
+                }
+            )
+            client.receive(after_restart)
+            assert after_restart["result"]["content"][0]["text"] == "zod: echo\n"
+            transcript = client.finish()
+            passed = True
+            return transcript
+        finally:
+            if not passed:
+                stop_process_group(worker_group)
+                stop_process(client.process)
+
+
+def test_restart_discards_unread_stdin(binary: Path) -> Transcript:
+    zod = Path(__file__).resolve().parents[1] / "fixtures" / "zod"
+    client = McpClient(
+        binary,
+        ("serve", "--worker", str(zod)),
+    )
+    client.initialize_and_list_tools()
+    client.call_tool("send", stdin="stale\n")
+    assert last_tool_text(client) == "\n[idle]"
+
+    client.call_tool("session", action="restart")
+    assert last_tool_text(client) == "[restarted]"
+
+    client.call_tool("send", r="input without request", stdin="fresh\n")
+    assert last_tool_text(client) == "zod stdin: fresh\n"
+    return client.finish()
+
+
 def test_reports_restart_notice_on_next_response(binary: Path) -> Transcript:
     zod = Path(__file__).resolve().parents[1] / "fixtures" / "zod"
     with tempfile.TemporaryDirectory() as temporary_directory:
@@ -589,7 +781,19 @@ def process_group_exists(process_group: int) -> bool:
         os.killpg(process_group, 0)
     except ProcessLookupError:
         return False
+    except PermissionError:
+        return True
     return True
+
+
+def wait_for_process_group_exit(process_group: int, client: McpClient) -> None:
+    deadline = time.monotonic() + 3
+    while process_group_exists(process_group):
+        assert client.process.poll() is None, "mcp-console stopped during restart"
+        assert time.monotonic() < deadline, (
+            "restart did not enforce its shutdown deadline"
+        )
+        time.sleep(0.01)
 
 
 def stop_process_group(process_group: int | None) -> None:

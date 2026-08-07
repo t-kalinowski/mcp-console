@@ -175,6 +175,34 @@ def test_prepares_initial_python_requirements(binary: Path) -> Transcript:
     return client.finish()
 
 
+def test_restart_loses_state_and_retains_python_requirements(
+    binary: Path,
+) -> Transcript:
+    client = McpClient(binary, ("serve",))
+    client.initialize_and_list_tools()
+    client.call_tool(
+        "session",
+        action="prepare",
+        requirements={"python": ["py-yaml12"]},
+    )
+    assert last_tool_text(client) == "[prepared]"
+    client.call_tool("send", python="restart_marker = 42")
+    assert last_tool_text(client) == "[done]"
+
+    client.call_tool("session", action="restart")
+    assert last_tool_text(client) == "[restarted]"
+
+    # fmt: python
+    python = code("""
+        import yaml12
+
+        "restart_marker" in globals(), yaml12.__name__
+        """)
+    client.call_tool("send", python=python)
+    assert last_tool_text(client) == "(False, 'yaml12')\n"
+    return client.finish()
+
+
 def test_requires_restart_for_late_python_requirements(binary: Path) -> Transcript:
     client = McpClient(binary, ("serve",))
     client.initialize_and_list_tools()

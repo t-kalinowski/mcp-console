@@ -29,5 +29,26 @@ def test_validates_send_arguments(binary: Path) -> Transcript:
     return client.finish()
 
 
+def test_validates_session_arguments(binary: Path) -> Transcript:
+    client = McpClient(binary, ("serve",))
+    client.initialize_and_list_tools()
+    client.call_tool("session", action="prepare")
+    result = client.transcript[-1]["result"]
+    assert result["isError"] is True
+    assert result["content"][0]["text"] == ("`requirements` is required with `prepare`")
+
+    client.call_tool(
+        "session",
+        action="restart",
+        requirements={"python": ["py-yaml12"]},
+    )
+    result = client.transcript[-1]["result"]
+    assert result["isError"] is True
+    assert result["content"][0]["text"] == (
+        "`requirements` is not yet supported with `restart`"
+    )
+    return client.finish()
+
+
 if __name__ == "__main__":
     run_this_suite(__file__)

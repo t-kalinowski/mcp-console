@@ -36,6 +36,14 @@ It returns `[prepared]` without creating sideband pipes or starting the worker.
 New requirements after worker startup return `restart required` without changing the retained manifest or running resolver work; exact retained requirements remain idempotent.
 Custom workers reject preparation and skip managed-Python resolution.
 
+`session` with `action = "restart"` accepts no requirements in the current implementation.
+It retains the already-prepared Python environment, terminates the current worker generation, eagerly starts its replacement, and returns `[restarted]` after `ready`.
+All worker-owned R, Python, SQL, debugger, and unread-stdin state is lost.
+The implicit session exists for the server lifetime, so restart starts its first worker if none exists yet.
+Evaluations and idle stdin writes capture their admitted generation; work from the old generation is rejected rather than delivered to the replacement.
+Direct standard-stream bytes collected around the boundary remain in the shared output queue and may prefix a later `send` response from the replacement generation.
+Restart uses the same one-second stdin-close, sideband-shutdown, and process-group escalation path described below, but it reopens the lifecycle gate for the new generation instead of ending the MCP server.
+
 Each resolver process receives only requirement lines on standard input, not submitted cells or `send` stdin, and may use the network and write normal host caches.
 Requirements remain standard-input data rather than R expressions, but uv may execute source-distribution build backends in this unsandboxed resolver process.
 A preflight failure prevents server initialization.
@@ -46,7 +54,7 @@ It discards reticulate's helper command, temporary output path, hints, and R cal
 The resolver leads a dedicated process group registered with the server shutdown gate before requirement input is written.
 Closing MCP input force-stops that group and reaps `Rscript`; startup preflight finishes before MCP input is accepted and does not participate in this cancellation path.
 
-The worker starts lazily on the first `send` call that supplies `r`, `python`, `sql`, or nonempty `stdin`.
+Outside an explicit restart, the worker starts lazily on the first `send` call that supplies `r`, `python`, `sql`, or nonempty `stdin`.
 On macOS, the server uses the same `SandboxedCommand` builder as the `sandbox` command.
 For `--worker PATH`, `PATH` is one program name or path, with no arguments or shell parsing, producing a launch equivalent to:
 
@@ -253,6 +261,7 @@ New code is rejected while an evaluation or its uncollected result is active.
 | evaluating, with or without input reported | MCP stdin submission | evaluating |
 | evaluating, no provisional input | worker → server `completed` | idle |
 | starting, idle, or evaluating | server → worker `shutdown` | terminal |
+| starting, idle, or evaluating | MCP `session` restart | starting in a new generation |
 
 Malformed JSON, invalid UTF-8, an unexpected message, or sideband EOF fails the active operation.
 There is no structured protocol error message.
@@ -396,7 +405,7 @@ No timeout bounds managed-Python startup preflight, worker startup, or execution
 Python requirement preparation has no per-call timeout; MCP shutdown cancels an in-flight preparation.
 The current implementation has no general frame-size limit, stdin queue limit, or accumulated-output limit.
 The 12 KiB cap applies only to a recognized SQL query preview; arbitrary R and Python console text, worker standard streams, and text accompanying that preview remain uncapped.
-`timeout_ms` limits one MCP wait without terminating the worker or a blocked stdin write; only shutdown has a process deadline.
+`timeout_ms` limits one MCP wait without terminating the worker or a blocked stdin write; server shutdown and explicit restart use a process deadline.
 An idle stdin-only call does not wait on an evaluation, so `timeout_ms` does not bound lazy worker startup for that call.
 The 10-millisecond input grace controls when provisional state becomes visible as `[stdin needed]`; it does not control request-record retention or limit evaluation or stdin reads.
 It is a latency heuristic: scheduling can delay a receipt past the grace and expose an extra `[stdin needed]` boundary even when queued bytes subsequently satisfy the read.
@@ -411,7 +420,7 @@ The default preflight must be able to resolve or provision its interpreter and i
 An explicitly configured interpreter must be initializable under the offline worker policy.
 Python requirements are retained only in server memory, and additions cannot be activated after worker startup.
 Worker-side package requirements are not reported to the server.
-Named sessions, R requirements, explicit restart, and environment provenance do not exist.
+Named sessions, R requirements, restart with new requirements, and environment provenance do not exist.
 The Python input bridge does not observe direct `sys.stdin` or fd-0 reads.
 The SQL adapter does not expose R data frames or Python objects as relations.
 The current sandbox child does not yet supervise descendants after its direct process exits, or descendants that leave its process group; capturing inherited standard streams does not change that boundary.

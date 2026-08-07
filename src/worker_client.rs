@@ -62,6 +62,7 @@ struct CapturedOutputStream {
 }
 
 struct Evaluation {
+    generation: u64,
     state: Mutex<EvaluationState>,
     changed: tokio::sync::Notify,
 }
@@ -163,16 +164,24 @@ impl Response {
     }
 }
 
-/// Keeps the current stop handle available until shutdown closes the gate.
+/// Keeps the current stop handle available to lifecycle control.
 enum ShutdownGate {
     Open {
+        generation: u64,
         stop_handle: Option<ProcessStopHandle>,
+    },
+    Restarting {
+        generation: u64,
+        stop_handle: Option<ProcessStopHandle>,
+        deadline: Instant,
     },
     Closed {
         deadline: Instant,
+        stop_handle: Option<ProcessStopHandle>,
     },
 }
 
+#[derive(Clone)]
 enum ProcessStopHandle {
     Worker(platform::StopHandle),
     Resolver(crate::resolver::ResolverStopHandle),
@@ -217,7 +226,10 @@ impl Client {
             worker: Mutex::new(WorkerState::Initial),
             evaluation: Mutex::new(None),
             output: CapturedOutput::new(),
-            shutdown_gate: Mutex::new(ShutdownGate::Open { stop_handle: None }),
+            shutdown_gate: Mutex::new(ShutdownGate::Open {
+                generation: 0,
+                stop_handle: None,
+            }),
             python: python.map(Mutex::new),
         }))
     }
@@ -234,18 +246,14 @@ impl Client {
     }
 
     fn prepare_python_blocking(&self, requirements: Vec<String>) -> Result<PrepareResult, String> {
-        if self.shutdown_requested()? {
-            return Err("worker is shutting down".to_string());
-        }
+        self.ensure_available()?;
         let python = self.0.python.as_ref().ok_or_else(|| {
             "Python requirements are unavailable with a custom worker".to_string()
         })?;
         let mut python = python
             .lock()
             .map_err(|_| "Python environment lock poisoned".to_string())?;
-        if self.shutdown_requested()? {
-            return Err("worker is shutting down".to_string());
-        }
+        self.ensure_available()?;
         let additions = requirements.into_iter().collect::<BTreeSet<_>>();
         if additions.is_subset(&python.requirements) {
             return Ok(PrepareResult::Prepared);
@@ -289,14 +297,67 @@ impl Client {
             .lock()
             .map_err(|_| "worker shutdown gate lock poisoned".to_string())?;
         match &mut *gate {
-            ShutdownGate::Open { stop_handle } => {
+            ShutdownGate::Open { stop_handle, .. } => {
                 *stop_handle = None;
                 python.requirements = candidate;
                 python.managed = Some(managed);
                 Ok(PrepareResult::Prepared)
             }
+            ShutdownGate::Restarting { .. } => {
+                Err("managed Python resolution cancelled by restart".to_string())
+            }
             ShutdownGate::Closed { .. } => Err("managed Python resolution cancelled".to_string()),
         }
+    }
+
+    /// Replaces the current worker generation while retaining its environment.
+    pub(crate) async fn restart(&self, deadline: Instant) -> Result<(), String> {
+        let client = self.clone();
+        tokio::task::spawn_blocking(move || client.restart_blocking(deadline))
+            .await
+            .map_err(|error| format!("worker restart task failed: {error}"))?
+    }
+
+    fn restart_blocking(&self, deadline: Instant) -> Result<(), String> {
+        let stop_handle = self.begin_restart(deadline)?;
+        if let Some(stop_handle) = stop_handle
+            && let Err(error) = stop_handle.shutdown(deadline)
+        {
+            self.fail_restart(deadline)?;
+            return Err(error);
+        }
+        let result = self.replace_worker();
+        let finish = self.finish_restart();
+        match (result, finish) {
+            (Err(error), _) | (Ok(()), Err(error)) => Err(error),
+            (Ok(()), Ok(())) => Ok(()),
+        }
+    }
+
+    fn replace_worker(&self) -> Result<(), String> {
+        let mut worker = self
+            .0
+            .worker
+            .lock()
+            .map_err(|_| "worker lock poisoned".to_string())?;
+        self.ensure_restarting()?;
+        let had_runtime = !matches!(&*worker, WorkerState::Initial);
+        *worker = WorkerState::Initial;
+        self.0
+            .evaluation
+            .lock()
+            .map_err(|_| "worker evaluation lock poisoned".to_string())?
+            .take();
+
+        if let Err(error) = self.start_worker(&mut worker, |stop_handle| {
+            self.register_restart_stop_handle(stop_handle)
+        }) {
+            if had_runtime {
+                *worker = WorkerState::ReplacementPending;
+            }
+            return Err(error);
+        }
+        Ok(())
     }
 
     /// Starts one cell, supplies its stdin, or polls the cell already running.
@@ -316,10 +377,17 @@ impl Client {
         stdin: Option<String>,
         timeout: Duration,
     ) -> Result<SendResponse, SendFailure> {
+        let generation = self.admit()?;
         let evaluation = match cell {
-            Some(cell) => self.start_evaluation(cell, stdin)?,
+            Some(cell) => self.start_evaluation(cell, stdin, generation)?,
             None => match self.current_evaluation()? {
                 Some(evaluation) => {
+                    self.ensure_generation(generation)?;
+                    if evaluation.generation != generation {
+                        return Err("session restarted before the operation began"
+                            .to_string()
+                            .into());
+                    }
                     if let Some(stdin) = stdin {
                         evaluation.submit_stdin(stdin)?;
                     }
@@ -327,7 +395,7 @@ impl Client {
                 }
                 None => {
                     if let Some(stdin) = stdin {
-                        self.write_idle_stdin(stdin).await?;
+                        self.write_idle_stdin(stdin, generation).await?;
                     }
                     return Ok(SendResponse::Idle);
                 }
@@ -348,12 +416,12 @@ impl Client {
         &self,
         cell: crate::cell::Cell,
         stdin: Option<String>,
+        generation: u64,
     ) -> Result<Arc<Evaluation>, String> {
-        if self.shutdown_requested()? {
-            return Err("worker is shutting down".to_string());
-        }
+        self.ensure_generation(generation)?;
 
         let evaluation = Arc::new(Evaluation {
+            generation,
             state: Mutex::new(EvaluationState {
                 result: None,
                 output: Response::default(),
@@ -378,9 +446,7 @@ impl Client {
                 "worker is already evaluating a cell; poll without a code field".to_string(),
             );
         }
-        if self.shutdown_requested()? {
-            return Err("worker is shutting down".to_string());
-        }
+        self.ensure_generation(generation)?;
         *active = Some(evaluation.clone());
         drop(active);
 
@@ -407,18 +473,18 @@ impl Client {
             .map_err(|_| "worker evaluation lock poisoned".to_string())
     }
 
-    async fn write_idle_stdin(&self, stdin: String) -> Result<(), String> {
+    async fn write_idle_stdin(&self, stdin: String, generation: u64) -> Result<(), String> {
         if stdin.is_empty() {
             return Ok(());
         }
         let client = self.clone();
-        tokio::task::spawn_blocking(move || client.write_idle_stdin_blocking(stdin))
+        tokio::task::spawn_blocking(move || client.write_idle_stdin_blocking(stdin, generation))
             .await
             .map_err(|error| format!("worker stdin task failed: {error}"))?
     }
 
-    fn write_idle_stdin_blocking(&self, stdin: String) -> Result<(), String> {
-        self.with_worker(|worker| worker.write_stdin(stdin))
+    fn write_idle_stdin_blocking(&self, stdin: String, generation: u64) -> Result<(), String> {
+        self.with_worker(generation, |worker| worker.write_stdin(stdin))
     }
 
     fn clear_evaluation(&self, completed: &Arc<Evaluation>) -> Result<(), String> {
@@ -441,26 +507,43 @@ impl Client {
         cell: crate::cell::Cell,
         evaluation: &Evaluation,
     ) -> Result<(), String> {
-        self.with_worker(|worker| worker.evaluate(cell, evaluation))
+        self.with_worker(evaluation.generation, |worker| {
+            worker.evaluate(cell, evaluation)
+        })
     }
 
     fn with_worker<T>(
         &self,
+        generation: u64,
         operation: impl FnOnce(&mut platform::Worker) -> Result<T, String>,
     ) -> Result<T, String> {
-        if self.shutdown_requested()? {
-            return Err("worker is shutting down".to_string());
-        }
+        self.ensure_generation(generation)?;
 
         let mut worker = self
             .0
             .worker
             .lock()
             .map_err(|_| "worker lock poisoned".to_string())?;
-        if self.shutdown_requested()? {
-            return Err("worker is shutting down".to_string());
-        }
+        self.ensure_generation(generation)?;
 
+        self.start_worker(&mut worker, |stop_handle| {
+            self.register_stop_handle(stop_handle)
+        })?;
+        let WorkerState::Running(running) = &mut *worker else {
+            unreachable!("worker should be running");
+        };
+        let result = operation(running);
+        if result.is_err() {
+            *worker = WorkerState::ReplacementPending;
+        }
+        result
+    }
+
+    fn start_worker(
+        &self,
+        worker: &mut WorkerState,
+        on_started: impl FnOnce(platform::StopHandle) -> Result<(), String>,
+    ) -> Result<(), String> {
         let replacing = matches!(&*worker, WorkerState::ReplacementPending);
         if !matches!(&*worker, WorkerState::Running(_)) {
             let python = match &self.0.python {
@@ -477,21 +560,14 @@ impl Client {
                 &self.0.arguments,
                 managed_python,
                 self.0.output.clone(),
-                |stop_handle| self.register_stop_handle(stop_handle),
+                on_started,
             )?;
             *worker = WorkerState::Running(running);
             if replacing {
                 self.0.output.push_restart_notice();
             }
         }
-        let WorkerState::Running(running) = &mut *worker else {
-            unreachable!("worker should be running");
-        };
-        let result = operation(running);
-        if result.is_err() {
-            *worker = WorkerState::ReplacementPending;
-        }
-        result
+        Ok(())
     }
 
     fn attach_output(&self, result: Result<SendResponse, SendFailure>) -> Response {
@@ -516,12 +592,153 @@ impl Client {
         }
     }
 
-    fn shutdown_requested(&self) -> Result<bool, String> {
-        self.0
+    fn admit(&self) -> Result<u64, String> {
+        let gate = self
+            .0
             .shutdown_gate
             .lock()
-            .map(|gate| matches!(*gate, ShutdownGate::Closed { .. }))
-            .map_err(|_| "worker shutdown gate lock poisoned".to_string())
+            .map_err(|_| "worker shutdown gate lock poisoned".to_string())?;
+        match &*gate {
+            ShutdownGate::Open { generation, .. } => Ok(*generation),
+            ShutdownGate::Restarting { .. } => Err("worker is restarting".to_string()),
+            ShutdownGate::Closed { .. } => Err("worker is shutting down".to_string()),
+        }
+    }
+
+    fn ensure_available(&self) -> Result<(), String> {
+        self.admit().map(|_| ())
+    }
+
+    fn ensure_generation(&self, expected: u64) -> Result<(), String> {
+        let generation = self.admit()?;
+        if generation != expected {
+            return Err("session restarted before the operation began".to_string());
+        }
+        Ok(())
+    }
+
+    fn ensure_restarting(&self) -> Result<(), String> {
+        let gate = self
+            .0
+            .shutdown_gate
+            .lock()
+            .map_err(|_| "worker shutdown gate lock poisoned".to_string())?;
+        match &*gate {
+            ShutdownGate::Restarting { .. } => Ok(()),
+            ShutdownGate::Closed { .. } => Err("worker is shutting down".to_string()),
+            ShutdownGate::Open { .. } => Err("worker restart state changed".to_string()),
+        }
+    }
+
+    fn begin_restart(&self, deadline: Instant) -> Result<Option<ProcessStopHandle>, String> {
+        let mut gate = self
+            .0
+            .shutdown_gate
+            .lock()
+            .map_err(|_| "worker shutdown gate lock poisoned".to_string())?;
+        match &*gate {
+            ShutdownGate::Restarting { .. } => {
+                return Err("worker is already restarting".to_string());
+            }
+            ShutdownGate::Closed { .. } => {
+                return Err("worker is shutting down".to_string());
+            }
+            ShutdownGate::Open {
+                stop_handle: Some(ProcessStopHandle::Resolver(_)),
+                ..
+            } => return Err("Python preparation is still running".to_string()),
+            ShutdownGate::Open { .. } => {}
+        }
+
+        let ShutdownGate::Open {
+            generation,
+            stop_handle,
+        } = &*gate
+        else {
+            unreachable!("restart preconditions should leave the gate open");
+        };
+        let generation = *generation;
+        let stop_handle = stop_handle.clone();
+        *gate = ShutdownGate::Restarting {
+            generation,
+            stop_handle: stop_handle.clone(),
+            deadline,
+        };
+        Ok(stop_handle)
+    }
+
+    fn finish_restart(&self) -> Result<(), String> {
+        let mut gate = self
+            .0
+            .shutdown_gate
+            .lock()
+            .map_err(|_| "worker shutdown gate lock poisoned".to_string())?;
+        let restarting = std::mem::replace(
+            &mut *gate,
+            ShutdownGate::Closed {
+                deadline: Instant::now(),
+                stop_handle: None,
+            },
+        );
+        match restarting {
+            ShutdownGate::Restarting {
+                generation,
+                stop_handle,
+                ..
+            } => {
+                *gate = ShutdownGate::Open {
+                    generation: generation + 1,
+                    stop_handle,
+                };
+                Ok(())
+            }
+            ShutdownGate::Closed {
+                deadline,
+                stop_handle,
+            } => {
+                *gate = ShutdownGate::Closed {
+                    deadline,
+                    stop_handle,
+                };
+                Err("worker is shutting down".to_string())
+            }
+            open @ ShutdownGate::Open { .. } => {
+                *gate = open;
+                Err("worker restart state changed".to_string())
+            }
+        }
+    }
+
+    fn fail_restart(&self, deadline: Instant) -> Result<(), String> {
+        let mut gate = self
+            .0
+            .shutdown_gate
+            .lock()
+            .map_err(|_| "worker shutdown gate lock poisoned".to_string())?;
+        let restarting = std::mem::replace(
+            &mut *gate,
+            ShutdownGate::Closed {
+                deadline,
+                stop_handle: None,
+            },
+        );
+        match restarting {
+            ShutdownGate::Restarting { stop_handle, .. } => {
+                *gate = ShutdownGate::Closed {
+                    deadline,
+                    stop_handle,
+                };
+                Ok(())
+            }
+            closed @ ShutdownGate::Closed { .. } => {
+                *gate = closed;
+                Ok(())
+            }
+            open @ ShutdownGate::Open { .. } => {
+                *gate = open;
+                Err("worker restart state changed".to_string())
+            }
+        }
     }
 
     fn register_stop_handle(&self, handle: platform::StopHandle) -> Result<(), String> {
@@ -536,22 +753,44 @@ impl Client {
     }
 
     fn register_process_stop_handle(&self, handle: ProcessStopHandle) -> Result<(), String> {
-        let deadline = {
+        let (deadline, message) = {
             let mut gate = self
                 .0
                 .shutdown_gate
                 .lock()
                 .map_err(|_| "worker shutdown gate lock poisoned".to_string())?;
             match &mut *gate {
-                ShutdownGate::Open { stop_handle } => {
+                ShutdownGate::Open { stop_handle, .. } => {
                     *stop_handle = Some(handle);
                     return Ok(());
                 }
-                ShutdownGate::Closed { deadline } => *deadline,
+                ShutdownGate::Restarting { deadline, .. } => (*deadline, "worker is restarting"),
+                ShutdownGate::Closed { deadline, .. } => (*deadline, "worker is shutting down"),
             }
         };
         handle.shutdown(deadline)?;
-        Err("worker is shutting down".to_string())
+        Err(message.to_string())
+    }
+
+    fn register_restart_stop_handle(&self, handle: platform::StopHandle) -> Result<(), String> {
+        let handle = ProcessStopHandle::Worker(handle);
+        let (deadline, message) = {
+            let mut gate = self
+                .0
+                .shutdown_gate
+                .lock()
+                .map_err(|_| "worker shutdown gate lock poisoned".to_string())?;
+            match &mut *gate {
+                ShutdownGate::Restarting { stop_handle, .. } => {
+                    *stop_handle = Some(handle);
+                    return Ok(());
+                }
+                ShutdownGate::Closed { deadline, .. } => (*deadline, "worker is shutting down"),
+                ShutdownGate::Open { .. } => (Instant::now(), "worker restart state changed"),
+            }
+        };
+        handle.shutdown(deadline)?;
+        Err(message.to_string())
     }
 
     fn clear_resolver_stop_handle(&self) -> Result<(), String> {
@@ -560,7 +799,7 @@ impl Client {
             .shutdown_gate
             .lock()
             .map_err(|_| "worker shutdown gate lock poisoned".to_string())?;
-        if let ShutdownGate::Open { stop_handle } = &mut *gate
+        if let ShutdownGate::Open { stop_handle, .. } = &mut *gate
             && matches!(stop_handle, Some(ProcessStopHandle::Resolver(_)))
         {
             *stop_handle = None;
@@ -574,11 +813,24 @@ impl Client {
             .shutdown_gate
             .lock()
             .map_err(|_| "worker shutdown gate lock poisoned".to_string())?;
-        match std::mem::replace(&mut *gate, ShutdownGate::Closed { deadline }) {
-            ShutdownGate::Open { stop_handle } => Ok(stop_handle),
-            ShutdownGate::Closed { deadline } => {
-                *gate = ShutdownGate::Closed { deadline };
-                Ok(None)
+        match std::mem::replace(
+            &mut *gate,
+            ShutdownGate::Closed {
+                deadline,
+                stop_handle: None,
+            },
+        ) {
+            ShutdownGate::Open { stop_handle, .. }
+            | ShutdownGate::Restarting { stop_handle, .. } => Ok(stop_handle),
+            ShutdownGate::Closed {
+                deadline,
+                stop_handle,
+            } => {
+                *gate = ShutdownGate::Closed {
+                    deadline,
+                    stop_handle: None,
+                };
+                Ok(stop_handle)
             }
         }
     }
