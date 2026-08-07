@@ -22,16 +22,16 @@ result:
     - type: text
       text: |
         before plots
+        after first plot
     - type: image
       data: <PNG byte-identical to live Rscript page 1>
       mimeType: image/png
+    - type: text
+      text: |
+        after second plot
     - type: image
       data: <PNG byte-identical to live Rscript page 2>
       mimeType: image/png
-    - type: text
-      text: |
-        after first plot
-        after second plot
   isError: false
 ---
 id: 4

@@ -297,15 +297,10 @@ Subprocesses and descendants that write directly to retained fd 1 or fd 2 bypass
 At startup, the worker installs a managed function as R's default graphics device.
 It opens a direct `grDevices::png()` device lazily only when evaluated code requests the default device; a cell that does not plot performs no managed plot file operations.
 The device writes numbered PNG pages beneath the worker's private temporary directory.
-The worker wraps each managed device's new-page and close callbacks to record one global page-finalization sequence, which it uses instead of filesystem directory order when publishing files.
-
-Opening the first managed page creates a cell-wide ordering barrier for later R console output.
-After each top-level REPL iteration, the worker reads all newly finalized managed pages in finalization order, base64-encodes and removes them, and emits one `image` frame per page.
-Console output produced after the first managed page remains deferred even after an earlier page is finalized.
-At cell end, including after a normal R language error, the worker closes every still-open managed device, emits its remaining pages, flushes all deferred console output, and sends `completed`.
-This conservative ordering keeps text behind every unfinished page but does not reconstruct page-specific text interleaving within the cell.
-
-It reads and removes only files in the managed page-numbering scheme; other entries in that temporary directory remain untouched.
+The worker wraps each managed device's new-page and close callbacks.
+After the original callback returns normally, the worker reads, base64-encodes, removes, and emits the PNG that the callback finalized.
+R console output is emitted immediately, so text produced while a page is still open can precede that page's image.
+At cell end, including after a normal R language error, the worker closes every still-open managed device, whose close callback emits its remaining page, and then sends `completed`.
 The server projects those frames as `image/png` MCP content before completion.
 
 Only worker-owned default devices are cell scoped.
@@ -339,7 +334,7 @@ The evaluator derives the synthetic filename from that ID, so neither the source
 That evaluator parses the complete cell with Python's `ast` module, executes statements in `__main__.__dict__`, and sends a final expression through `sys.displayhook()`.
 Assignments, imports, and objects remain available to later Python cells and through reticulate's R/Python object bridge.
 Python cells enter the same managed graphics lifecycle as R cells.
-An R plot invoked through reticulate's `r` bridge therefore uses the managed default device, returns as MCP image content, and follows the same sizing, cell-scope, device-ownership, and output-ordering rules.
+An R plot invoked through reticulate's `r` bridge therefore uses the managed default device, returns as MCP image content, and follows the same sizing, cell-scope, device-ownership, and finalization rules.
 
 An uncaught Python exception prints its traceback and completes as a normal language outcome.
 The worker remains reusable, and state changes made before the exception remain applied.
