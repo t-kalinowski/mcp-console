@@ -3,6 +3,7 @@
 import os
 import re
 import shutil
+import subprocess
 import tempfile
 import threading
 import time
@@ -66,14 +67,17 @@ def managed_python_transcript(binary: Path, configured: bool) -> Transcript:
     # fmt: r
     r = code(r"""
         python <- Sys.getenv("RETICULATE_PYTHON", unset = NA_character_)
+        config <- reticulate::py_config()
+        history <- reticulate::py_require()$history
         stopifnot(
-          !is.na(python),
-          !identical(python, "managed"),
-          file.exists(python),
-          identical(
-            normalizePath(reticulate::py_config()$python),
-            normalizePath(python)
-          )
+          identical(python, "managed"),
+          file.exists(config$python),
+          isTRUE(config$ephemeral),
+          !any(vapply(
+            history,
+            function(request) identical(request$requested_from, "base"),
+            logical(1L)
+          ))
         )
         """)
     client.call_tool("send", r=r)
@@ -158,6 +162,17 @@ def test_prepares_initial_python_requirements(binary: Path) -> Transcript:
     assert result["content"][0]["text"] == (
         "Python requirement strings must not contain NUL or line breaks"
     )
+    # fmt: r
+    r = code(r"""
+        seed <- tail(reticulate::py_require()$history, 1L)[[1L]]
+        stopifnot(
+          identical(seed$requested_from, "mcp-console"),
+          identical(seed$action, "set"),
+          identical(seed$packages, c("numpy", "py-yaml12"))
+        )
+        """)
+    client.call_tool("send", r=r)
+    assert last_tool_text(client) == "[done]"
     # fmt: python
     python = code("""
         import yaml12
@@ -215,6 +230,181 @@ def test_requires_restart_for_late_python_requirements(binary: Path) -> Transcri
     assert last_tool_text(client) == "restart required"
     client.call_tool("send", python="sentinel")
     assert last_tool_text(client) == "42\n"
+    return client.finish()
+
+
+def test_layers_python_requirements_declared_by_r_packages(
+    binary: Path,
+) -> Transcript:
+    environment, rscript = r_test_environment()
+    fixture = Path(__file__).parents[1] / "fixtures" / "py_require"
+    with tempfile.TemporaryDirectory() as library:
+        subprocess.run(
+            [rscript.with_name("R"), "CMD", "INSTALL", "--library", library, fixture],
+            check=True,
+            capture_output=True,
+            text=True,
+            env=environment,
+        )
+        environment["R_LIBS"] = os.pathsep.join(
+            filter(None, (library, environment.get("R_LIBS")))
+        )
+        client = McpClient(binary, ("serve",), environment)
+        client.initialize_and_list_tools()
+        # fmt: python
+        python = code("""
+            import importlib.util
+            import sys
+
+            runtime_marker = 42
+            initial_prefix = sys.prefix
+            importlib.util.find_spec("yaml12") is None
+            """)
+        client.call_tool("send", python=python)
+        assert last_tool_text(client) == "True\n"
+
+        # fmt: r
+        r = code(r"""
+            initial_libpython <- reticulate::py_config()$libpython
+            initial_worker <- Sys.getpid()
+            """)
+        client.call_tool("send", r=r)
+        assert last_tool_text(client) == "[done]"
+
+        client.call_tool("send", r="library(mcpconsolepyrequire)")
+        assert last_tool_text(client) == "[done]"
+
+        # fmt: r
+        r = code(r"""
+            identical(reticulate::py_config()$libpython, initial_libpython) &&
+              identical(Sys.getpid(), initial_worker)
+            """)
+        client.call_tool("send", r=r)
+        assert last_tool_text(client) == "[1] TRUE\n"
+
+        # fmt: python
+        python = code("""
+            import yaml12
+
+            (runtime_marker, yaml12.__name__, sys.prefix != initial_prefix)
+            """)
+        client.call_tool("send", python=python)
+        output = last_tool_text(client)
+        assert output == "(42, 'yaml12', True)\n", repr(output)
+
+        client.call_tool("session", action="restart")
+        assert last_tool_text(client) == "[restarted]"
+
+        # fmt: python
+        python = code("""
+            import yaml12
+
+            ("runtime_marker" in globals(), yaml12.__name__)
+            """)
+        client.call_tool("send", python=python)
+        assert last_tool_text(client) == "(False, 'yaml12')\n"
+
+        client.call_tool(
+            "session",
+            action="prepare",
+            requirements={"python": ["py-yaml12"]},
+        )
+        assert last_tool_text(client) == "[prepared]"
+        return client.finish()
+
+
+def test_resolves_package_requirements_before_python_initializes(
+    binary: Path,
+) -> Transcript:
+    environment, rscript = r_test_environment()
+    fixture = Path(__file__).parents[1] / "fixtures" / "py_require"
+    with tempfile.TemporaryDirectory() as library:
+        subprocess.run(
+            [rscript.with_name("R"), "CMD", "INSTALL", "--library", library, fixture],
+            check=True,
+            capture_output=True,
+            text=True,
+            env=environment,
+        )
+        environment["R_LIBS"] = os.pathsep.join(
+            filter(None, (library, environment.get("R_LIBS")))
+        )
+        client = McpClient(binary, ("serve",), environment)
+        client.initialize_and_list_tools()
+        # fmt: r
+        r = code(r"""
+            library(mcpconsolepyrequire)
+            request <- tail(reticulate::py_require()$history, 1L)[[1L]]
+            stopifnot(
+              identical(request$requested_from, "mcpconsolepyrequire"),
+              isTRUE(request$env_is_package)
+            )
+            """)
+        client.call_tool("send", r=r)
+        assert last_tool_text(client) == "[done]"
+
+        # Replace the worker after the requirement declaration has completed,
+        # but before Python has initialized.
+        # fmt: r
+        r = code(r"""
+            tools::pskill(Sys.getpid(), signal = 9L)
+            """).removesuffix("\n")
+        client.call_tool("send", r=r)
+        assert client.transcript[-1]["result"]["isError"] is True
+
+        # fmt: r
+        r = code(r"""
+            "py-yaml12" %in% reticulate::py_require()$packages
+            """)
+        client.call_tool("send", r=r)
+        output = last_tool_text(client)
+        assert output == ("[1] TRUE\n[worker restarted: in-memory state lost]\n"), repr(
+            output
+        )
+
+        # fmt: python
+        python = code("""
+            import yaml12
+
+            yaml12.__name__
+            """)
+        client.call_tool("send", python=python)
+        assert last_tool_text(client) == "'yaml12'\n"
+        return client.finish()
+
+
+def test_does_not_checkpoint_python_requirements_from_failed_cell(
+    binary: Path,
+) -> Transcript:
+    client = McpClient(binary, ("serve",))
+    client.initialize_and_list_tools()
+    # fmt: r
+    r = code(r"""
+        invisible(reticulate::py_config())
+        invisible(reticulate::py_require("py-yaml12"))
+        stopifnot(reticulate::py_module_available("yaml12"))
+        tools::pskill(Sys.getpid(), signal = 9L)
+        """).removesuffix("\n")
+    client.call_tool("send", r=r)
+    assert client.transcript[-1]["result"]["isError"] is True
+
+    # fmt: r
+    r = code(r"""
+        "py-yaml12" %in% reticulate::py_require()$packages
+        """)
+    client.call_tool("send", r=r)
+    output = last_tool_text(client)
+    assert output == ("[1] FALSE\n[worker restarted: in-memory state lost]\n"), repr(
+        output
+    )
+
+    client.call_tool(
+        "session",
+        action="prepare",
+        requirements={"python": ["py-yaml12"]},
+    )
+    output = last_tool_text(client)
+    assert output == "restart required", repr(output)
     return client.finish()
 
 

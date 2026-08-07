@@ -5,14 +5,17 @@ id: 3
 send:
   r: |
     python <- Sys.getenv("RETICULATE_PYTHON", unset = NA_character_)
+    config <- reticulate::py_config()
+    history <- reticulate::py_require()$history
     stopifnot(
-      !is.na(python),
-      !identical(python, "managed"),
-      file.exists(python),
-      identical(
-        normalizePath(reticulate::py_config()$python),
-        normalizePath(python)
-      )
+      identical(python, "managed"),
+      file.exists(config$python),
+      isTRUE(config$ephemeral),
+      !any(vapply(
+        history,
+        function(request) identical(request$requested_from, "base"),
+        logical(1L)
+      ))
     )
 result:
   content:

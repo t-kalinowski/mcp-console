@@ -1,0 +1,52 @@
+---
+!same-as tests/transcripts/golden/server/initializes_and_lists_tools.yaml
+---
+id: 3
+send:
+  r: |
+    library(mcpconsolepyrequire)
+    request <- tail(reticulate::py_require()$history, 1L)[[1L]]
+    stopifnot(
+      identical(request$requested_from, "mcpconsolepyrequire"),
+      isTRUE(request$env_is_package)
+    )
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+id: 4
+send:
+  r: tools::pskill(Sys.getpid(), signal = 9L)
+result:
+  content:
+    - type: text
+      text: "worker sideband read failed: worker sideband closed"
+  isError: true
+---
+id: 5
+send:
+  r: |
+    "py-yaml12" %in% reticulate::py_require()$packages
+result:
+  content:
+    - type: text
+      text: |
+        [1] TRUE
+        [worker restarted: in-memory state lost]
+  isError: false
+---
+id: 6
+send:
+  python: |
+    import yaml12
+
+    yaml12.__name__
+result:
+  content:
+    - type: text
+      text: |
+        'yaml12'
+  isError: false
+...

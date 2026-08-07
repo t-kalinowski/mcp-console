@@ -37,14 +37,15 @@ Requirements are exact, additive, and idempotent.
 Before the worker starts, each successful prepare resolves the complete candidate set outside the sandbox, atomically retains it in server memory, replaces any inherited Python selection with the resolved interpreter, and returns `[prepared]` without starting the worker.
 A failed resolution leaves the prior requirements and interpreter unchanged.
 For a uv tool failure, the tool error reports a JSON manifest containing reticulate's selected Python and the complete candidate package set, followed by uv's stderr, while omitting the helper command, temporary output path, and reticulate's `py_require()`-oriented guidance.
-Closing MCP input cancels an in-flight explicit resolution by force-stopping its host resolver process group; startup preflight completes before MCP input is accepted and is not cancellable through that lifecycle.
-Once a worker has started, an already-retained requirement remains idempotent, while any addition returns `restart required` without changing the environment.
-Restart retains the prepared Python environment, loses all worker-owned in-memory state and unread stdin, eagerly starts a replacement, and returns `[restarted]` after it reports ready.
+Closing MCP input cancels an in-flight explicit or runtime resolution by force-stopping its host resolver process group; startup preflight completes before MCP input is accepted and is not cancellable through that lifecycle.
+Once a worker has started, an already-retained explicit requirement remains idempotent, while any explicit addition returns `restart required` without changing the environment.
+This restriction applies to `session` preparation; server-managed workers can layer additive requirements declared through `reticulate::py_require()` during evaluation.
+Restart retains the server's checkpointed Python environment, loses all worker-owned in-memory state and unread stdin, eagerly starts a replacement, and returns `[restarted]` after it reports ready.
 The implicit session exists for the server lifetime, so restart starts its first worker if none exists yet.
 It first queues worker-stdin closure and the sideband shutdown message without waiting behind an evaluation, then force-stops the process group and reaps the direct sandbox process at the one-second deadline if that process remains live.
 Each admitted evaluation or idle stdin write carries its worker generation, so work admitted before restart cannot reach the replacement.
 Direct standard-stream bytes collected around restart remain pending for the next `send` response and may share it with replacement output.
-Named sessions, R requirements, runtime environment layering, and restart with new requirements do not exist yet.
+Named sessions, R requirements, and restart with new requirements do not exist yet.
 On macOS, managed-Python preflight happens during `serve` startup when required; the first nonempty stdin submission or evaluation still lazily starts the built-in worker under the same sandbox policy as the `sandbox` command.
 The worker embeds R through `libr` and `harp`, retains global state, and feeds each complete R cell through R's DLL REPL iterator.
 R parses and evaluates its expressions sequentially, captures console output, prints visible values, and performs native top-level bookkeeping.
@@ -69,14 +70,21 @@ After a Python cell calls `os.fork()`, the child cannot use the sideband, so ret
 Native extensions that fork without running CPython's registered fork callbacks and then resume Python are unsupported.
 Fork-child text capture requires reticulate from its `main` branch or a release containing fork-aware stream restoration.
 An exec descendant that retains fd 1/2 creates fresh standard streams backed by those descriptors, so its ordinary stdout and stderr are captured.
-When inherited `RETICULATE_PYTHON` is absent or exactly `managed`, built-in server startup calls reticulate's internal uv environment resolver with its NumPy baseline outside the sandbox and injects the resulting interpreter path into every worker generation.
+When inherited `RETICULATE_PYTHON` is absent or exactly `managed`, built-in server startup calls reticulate's internal uv environment resolver with its NumPy baseline outside the sandbox and retains the resulting interpreter and normalized manifest for every worker generation.
 Other inherited values, including an empty value, are preserved and skip that startup preflight; a later successful explicit preparation takes precedence over them.
 Custom workers skip resolution and reject Python requirement preparation.
-Resolution may access the network, write normal reticulate and uv host caches, and execute package build backends outside the sandbox, but requirement strings remain standard-input data rather than R code and no submitted cell is evaluated.
+Resolution may access the network, write normal reticulate and uv host caches, and execute package build backends outside the sandbox, but requirement manifests remain JSON standard-input data rather than R code and no submitted cell is evaluated.
 Before initializing R, the worker forces `UV_OFFLINE=1`, overwriting any inherited value to match the sandbox's network denial.
 Reticulate reuses the server-resolved or caller-selected interpreter.
-Because a resolved interpreter is passed as a concrete path, worker-side `py_require()` calls do not revise that selection.
-Calls made by loaded R packages update only reticulate's worker-local manifest; the worker does not report them to the server, and evaluated code never implicitly starts the unsandboxed resolver.
+For a server-managed worker, MCP Console seeds reticulate's requirement manifest and intercepts only its internal `uv_get_or_create_env` binding, without wrapping `py_require()`.
+Each runtime request sends the complete proposed manifest and the worker's current `UV_*` settings except `UV_OFFLINE` to the host resolver; those settings are transient inputs and are not retained or replayed.
+If managed reticulate is loaded but Python remains uninitialized at cell end, the worker invokes that resolver once to materialize the final manifest before completing.
+After initialization, additive package requirements resolve to candidate environments outside the sandbox, and reticulate performs its exact-`libpython` check, `activate_this.py`, configuration swap, and manifest assignment.
+The worker retains every resolved candidate for the evaluation and includes reticulate's normalized manifest as an optional field on `completed`.
+The server accepts the last candidate matching that checkpoint, or the prior environment when its manifest still matches, and only then updates its retained state.
+Normal language outcomes reach this checkpoint; an infrastructure or protocol failure before `completed` leaves the prior checkpoint unchanged.
+The live Python interpreter and its state are retained during this activation.
+Evaluated R code or an R package load can therefore trigger host resolution, which may use the network, write host caches, and execute package build backends outside the worker sandbox; the structured requirements and forwarded settings are data, and the submitted cell is not evaluated by the resolver.
 R and Python share objects through reticulate's `py` and `r` bridges.
 A silent successful Python cell sends `completed` without an `output` frame and projects to `[done]` when no other response text is pending.
 Python `input()` and `breakpoint()`/`pdb` use reticulate's R console bridge, so they emit `input_requested` before a read and `input_received` after it succeeds.
@@ -122,7 +130,7 @@ This initial launcher waits only for the direct command.
 Background descendants are unsupported: they may outlive the launcher, which attempts to remove their dedicated temporary directory on a best-effort basis when it returns.
 Descendant supervision is intentionally deferred because it must account for process groups, session-detached children, signal forwarding, and PID reuse together.
 The sandbox command and worker are unsupported on Linux and Windows.
-Named sessions, activation of new runtime requirements during restart, R requirement resolution, SQL relation bridges, the sidecar API, viewer, output retention, and transcript generation do not exist yet.
+Named sessions, restart with new requirements, R requirement resolution, SQL relation bridges, the sidecar API, viewer, output retention, and transcript generation do not exist yet.
 
 ## Product direction
 
@@ -165,6 +173,7 @@ See `design-sketches/README.md` for the product overview and `design-sketches/do
 - `src/sandbox.rs` — platform dispatch for the sandbox process launcher.
 - `src/sandbox/` — platform implementation and macOS Seatbelt policy.
 - `tests/cli.rs` — public binary acceptance tests.
+- `tests/fixtures/py_require` — minimal R package that declares a Python requirement from its load hook.
 - `tests/fixtures/zod` — executable Python sideband worker used by acceptance tests.
 - `tests/fixtures/worker_mitm` — transparent worker proxy used to capture sideband, standard-stream, fd-0 closure, and worker-sideband closure events through `serve`.
 - `tests/transcripts/r.py` — public built-in R worker acceptance suite.
@@ -205,7 +214,7 @@ Begin as one Cargo package and split crates only when a real boundary emerges.
 - Keep the MCP adapter independent of interpreter implementation details.
 - Treat submitted R, Python, and SQL execution as shell-class capability and place safety at the worker-process boundary.
   The startup managed-Python preflight is a host-bootstrap exception that runs before MCP input is accepted.
-  Explicit Python preparation passes untrusted requirement strings to the same host resolver as newline-delimited standard input; it does not evaluate them as R code, though package build backends may execute outside the worker sandbox.
+  Explicit Python preparation passes untrusted requirement strings to the same host resolver in a JSON standard-input manifest; it does not evaluate them as R code, though package build backends may execute outside the worker sandbox.
 - Update this file when a PR changes the implemented surface or repository map.
 - Before every commit, run `scripts/format` and review its changes.
 - Run `scripts/check` before opening a PR.

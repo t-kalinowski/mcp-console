@@ -1,0 +1,40 @@
+---
+!same-as tests/transcripts/golden/server/initializes_and_lists_tools.yaml
+---
+id: 3
+send:
+  r: |-
+    invisible(reticulate::py_config())
+    invisible(reticulate::py_require("py-yaml12"))
+    stopifnot(reticulate::py_module_available("yaml12"))
+    tools::pskill(Sys.getpid(), signal = 9L)
+result:
+  content:
+    - type: text
+      text: "worker sideband read failed: worker sideband closed"
+  isError: true
+---
+id: 4
+send:
+  r: |
+    "py-yaml12" %in% reticulate::py_require()$packages
+result:
+  content:
+    - type: text
+      text: |
+        [1] FALSE
+        [worker restarted: in-memory state lost]
+  isError: false
+---
+id: 5
+session:
+  action: prepare
+  requirements:
+    python:
+      - py-yaml12
+result:
+  content:
+    - type: text
+      text: restart required
+  isError: false
+...

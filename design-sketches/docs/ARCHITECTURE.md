@@ -769,17 +769,14 @@ These helpers are a runtime API and should eventually receive focused documentat
 
 ## 14. Dependency architecture
 
-Each logical session owns an additive manifest:
+Each logical session owns a dependency manifest.
+The implemented Python manifest records package requirements, Python-version constraints, and an optional `exclude_newer` value.
 
-```rust
-struct EnvironmentManifest {
-    r: BTreeSet<String>,
-    python: BTreeSet<String>,
-}
-```
-
-The supervisor or a separate restricted resolver prepares requirements before code starts.
-Package download access must not require granting general network access to the arbitrary-code worker.
+The supervisor owns the host resolver for both initial preparation and supported runtime additions.
+The arbitrary-code worker remains network denied, but it can send a structured requirement manifest and worker-controlled `UV_*` settings to the supervisor for managed resolution.
+The resolver deliberately runs outside the worker sandbox, where it can access package indexes, write normal host caches, and execute package build backends.
+It receives no submitted cell source; evaluated R code or a package load hook can trigger the request through `py_require()`.
+The worker's `UV_*` settings, except `UV_OFFLINE`, apply only to the current resolution and are not retained or replayed.
 
 ### 14.1 Python
 
@@ -788,10 +785,21 @@ Requirements must be finalized before first Python initialization whenever they 
 After initialization, v1 permits additive requirements only.
 
 R packages may declare requirements by calling `py_require()` from load hooks.
-Observe the resulting public reticulate manifest without wrapping `py_require()`, so reticulate retains the originating package attribution.
-The worker should report exact additions to the supervisor, but that report must not itself run the host resolver or replace live state.
-Only newly added package requirements fit the v1 additive contract; removals and changes to Python-version or `exclude_newer` constraints must be reported as unsupported rather than silently projected as additions.
-The client can then use the explicit `session` restart path, which resolves the candidate before discarding the current runtime.
+For a server-managed worker, seed reticulate's manifest and intercept only its internal `uv_get_or_create_env` binding rather than wrapping `py_require()`.
+This retains originating-package attribution, manifest history, and reticulate's native validation and activation behavior within the live R process.
+The binding reports the complete proposed manifest to the supervisor, together with the worker's `UV_*` settings except `UV_OFFLINE`, and waits for the host resolver to return an interpreter path.
+
+If reticulate is loaded but Python remains uninitialized at cell end, the worker calls the replacement resolver to materialize the final manifest before completing.
+After initialization, each host result remains only a candidate until the evaluation completes.
+Reticulate must verify that it uses the exact live `libpython`, run the candidate's `activate_this.py`, swap its Python configuration, and update its manifest.
+The worker reports only the normalized final manifest on `completed`; the supervisor accepts the last matching candidate, or its prior environment when that manifest did not change.
+The Python interpreter and its live objects remain in place throughout a successful activation.
+Reticulate owns the live manifest during an evaluation, while the supervisor owns the last accepted checkpoint between evaluations and worker generations.
+
+Only newly added package requirements fit the v1 late-layering contract.
+Removals and changes to Python-version or `exclude_newer` constraints are unsupported after initialization rather than silently projected as additions.
+An explicit late `session prepare` still returns `restart required`.
+The implemented implicit-session restart retains the last accepted checkpoint but does not accept new requirements; activating changed constraints as part of restart remains future work.
 
 ### 14.2 R
 
@@ -800,14 +808,22 @@ The exact package-reference grammar belongs in a later `docs/DEPENDENCIES.md`.
 
 ### 14.3 Atomic public behavior
 
-For a `prepare` or `restart` session action containing requirements:
+Before worker startup, an explicit `prepare` action remains atomic:
 
 1. merge the requested additions with the current manifest;
 2. resolve and prepare the candidate environment outside the arbitrary-code worker;
-3. validate whether an existing runtime can activate it without replacement;
-4. commit the manifest and activation, or begin the requested restart, only after resolution succeeds.
+3. commit the manifest and interpreter only after resolution succeeds.
 
-If preparation fails, the existing runtime and requirement manifest remain unchanged.
+During a server-managed worker evaluation, runtime layering is atomic at `completed`:
+
+1. reticulate updates its live manifest and requests host resolution when it needs an environment;
+2. the supervisor retains every resolved candidate for that evaluation without changing its checkpoint;
+3. reticulate performs its exact-`libpython` check, activation, and configuration swap when Python is already initialized;
+4. the worker materializes an uninitialized final manifest when needed and reports the normalized manifest on `completed`;
+5. the supervisor accepts the last matching candidate or its unchanged prior environment, then updates its checkpoint.
+
+Normal language outcomes reach this boundary because their state remains live in the worker.
+An infrastructure or protocol failure before `completed` discards the evaluation's candidates and leaves the prior checkpoint unchanged.
 
 ## 15. Output architecture
 
@@ -1130,7 +1146,7 @@ Exit: one backend is selected with evidence against the criteria in `RUNTIME_BAC
 
 - retain the implemented structured cell and exact-input behavior;
 - complete the selected backend's lifecycle and capability adapter;
-- implement inspection, interrupt, explicit restart, and crash reporting;
+- implement inspection, interrupt, restart with new requirements, and crash reporting;
 - validate R stack and source semantics across supported platforms;
 - establish pinned compatibility tests for Ark/comm or `harp`/`libr` dependencies.
 

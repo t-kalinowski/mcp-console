@@ -50,8 +50,9 @@ Before the worker starts, the MCP client can prepare additive Python requirement
 This `session` call resolves the complete initial requirement set through reticulate and uv outside the worker sandbox, then returns `[prepared]`.
 It does not import the packages or start the worker.
 Exact repeated requirements are idempotent.
-Once the worker has started, a new requirement returns `restart required` without changing the environment.
-The client can explicitly replace the worker while retaining already-prepared requirements:
+Once the worker has started, a new explicit `session` requirement returns `restart required` without changing the environment.
+Server-managed workers can still layer additive requirements declared through `reticulate::py_require()` while an evaluation is running.
+The client can explicitly replace the worker while retaining the server's checkpointed Python environment:
 
 ```json
 { "action": "restart" }
@@ -119,17 +120,21 @@ SQL cells require the `arrow`, `DBI`, `duckdb`, `nanoarrow`, `pillar`, and `tibb
 When `RETICULATE_PYTHON` is unset or is `managed`, `mcp-console serve` runs reticulate's uv environment resolver outside the worker sandbox with its NumPy baseline, where it can use the normal host caches and network access.
 Other configured values, including an empty value, are preserved when no requirements are prepared and skip this startup preflight.
 An explicit `session` preparation selects its resolved managed environment even when `RETICULATE_PYTHON` was configured, so a successful call guarantees that its requirements are present.
-The server passes the selected interpreter path to the sandboxed worker, which forces `UV_OFFLINE=1` and otherwise uses the existing sandbox policy unchanged.
-The selection is fixed before worker startup.
-Calls to `reticulate::py_require()` inside the worker, including calls from loaded R packages, update only reticulate's in-process manifest; they do not update the server-owned manifest or selected environment, so newly requested modules may remain unavailable.
-Supporting those calls requires worker-to-server requirement reporting followed by an explicit session restart; evaluated code does not implicitly run the host resolver.
-Requirement strings are passed as data rather than evaluated as R code, but reticulate and uv run outside the sandbox and package preparation may execute a source distribution's build backend there.
-The resolver does not evaluate submitted R or Python cells.
+The server retains the selected interpreter and normalized manifest and applies them to each sandboxed worker; the worker forces `UV_OFFLINE=1` and otherwise uses the existing sandbox policy unchanged.
+For a server-managed worker, MCP Console seeds reticulate's requirement manifest and replaces only its internal uv environment lookup.
+It does not wrap `py_require()`, so reticulate retains caller attribution, manifest history, and activation behavior within the live R process.
+If managed reticulate is loaded but Python remains uninitialized at cell end, the worker resolves the final manifest outside the sandbox before completing.
+After Python initializes, additive package requirements resolve to candidate environments outside the sandbox; reticulate checks the exact `libpython`, runs `activate_this.py`, swaps its Python configuration, and updates its manifest while the interpreter and its existing state remain live.
+At completion, the worker reports the normalized manifest, and the server accepts the last matching candidate or its unchanged prior environment before retaining that checkpoint.
+Normal language outcomes reach this checkpoint; an infrastructure or protocol failure before completion leaves the prior checkpoint unchanged.
+Each runtime resolution uses the worker's current `UV_*` settings except `UV_OFFLINE`; those settings are not retained or replayed across worker generations.
+The requirement strings and forwarded settings are structured data rather than R code, and the resolver does not evaluate the submitted cell.
+However, evaluated R code or an R package load can request this resolution, and reticulate and uv may access the network, write normal host caches, and execute a source distribution's build backend outside the worker sandbox.
 If the preflight cannot select an interpreter, `serve` exits before accepting MCP requests.
 A failed `session` preparation is a tool error and leaves the prior requirements and interpreter selection unchanged.
 For uv tool failures, the error includes a JSON resolver-input manifest with reticulate's Python selection and the complete candidate package set, followed by uv's stderr.
 It omits reticulate's helper command, temporary output path, and interactive `py_require()` guidance.
-Preparation has no per-call timeout; closing MCP input force-stops an in-flight resolver process group.
+Resolution has no per-call timeout; closing MCP input force-stops an in-flight resolver process group.
 MCP Console does not install these R packages.
 Python `input()` and `breakpoint()`/`pdb` use reticulate's R console bridge, so each read emits `input_requested` before reading and `input_received` after a successful read.
 They accept proactively queued or follow-up stdin, including repeated debugger commands.

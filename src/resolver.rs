@@ -1,8 +1,9 @@
 #[cfg(target_os = "macos")]
 mod platform {
+    use std::collections::BTreeMap;
     use std::io::{self, Write};
     use std::os::unix::process::CommandExt as _;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
     use std::process::{Child, ChildStdin, Command, ExitStatus, Stdio};
     use std::sync::mpsc::{self, Receiver, TryRecvError};
     use std::thread;
@@ -14,15 +15,28 @@ mod platform {
 
     const PYTHON_RESOLVER: &str = r#"
 base::local({
-  requirements <- base::readLines(
+  input <- base::paste(base::readLines(
     base::file("stdin", encoding = "UTF-8"),
     warn = FALSE
-  )
-  requirements <- base::unique(c("numpy", requirements))
+  ), collapse = "\n")
+  input <- jsonlite::fromJSON(input)
+  packages <- base::unique(c("numpy", input$packages))
+  python_version <- input$python_version
+  if (!base::length(python_version)) {
+    python_version <- NULL
+  }
+  exclude_newer <- input$exclude_newer
+  if (!base::length(exclude_newer)) {
+    exclude_newer <- NULL
+  }
   messages <- utils::capture.output(
     ignored_output <- utils::capture.output(
       python <- base::try(
-        reticulate:::uv_get_or_create_env(packages = requirements),
+        reticulate:::uv_get_or_create_env(
+          packages = packages,
+          python_version = python_version,
+          exclude_newer = exclude_newer
+        ),
         silent = TRUE
       ),
       type = "output"
@@ -61,8 +75,10 @@ base::local({
 })
 "#;
 
+    #[derive(Clone)]
     pub(crate) struct ManagedPython {
         python: PathBuf,
+        requirements: crate::worker_protocol::PythonRequirementManifest,
     }
 
     #[derive(Clone)]
@@ -79,11 +95,28 @@ base::local({
     struct ResolverInput<'a> {
         python: &'a str,
         packages: Vec<&'a str>,
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        python_version: Vec<&'a str>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        exclude_newer: Option<&'a str>,
     }
 
     impl ManagedPython {
         pub(crate) fn configure_worker(&self, command: &mut crate::sandbox::SandboxedCommand) {
-            command.env("RETICULATE_PYTHON", &self.python);
+            command.env("RETICULATE_PYTHON", "managed");
+            command.env(
+                "MCP_CONSOLE_MANAGED_PYTHON",
+                serde_json::to_string(&self.requirements)
+                    .expect("managed Python requirements should serialize as JSON"),
+            );
+        }
+
+        pub(crate) fn python(&self) -> &Path {
+            &self.python
+        }
+
+        pub(crate) fn requirements(&self) -> &crate::worker_protocol::PythonRequirementManifest {
+            &self.requirements
         }
     }
 
@@ -96,20 +129,38 @@ base::local({
         {
             return Ok(None);
         }
+        let requirements = manifest_from_packages(requirements);
+        let environment = uv_environment();
+        resolve_python_manifest(requirements, environment, on_started).map(Some)
+    }
+
+    pub(crate) fn resolve_python_manifest(
+        requirements: crate::worker_protocol::PythonRequirementManifest,
+        environment: BTreeMap<String, String>,
+        on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
+    ) -> Result<ManagedPython, String> {
+        let requirements = requirements.normalized();
+        validate_environment(&environment)?;
         let rscript = std::env::var_os("R_HOME")
             .map(|r_home| PathBuf::from(r_home).join("bin/Rscript"))
             .unwrap_or_else(|| PathBuf::from("Rscript"));
         let mut command = Command::new(&rscript);
         command
             .args(["--vanilla", "-e", PYTHON_RESOLVER])
-            .env_remove("UV_OFFLINE")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .process_group(0);
+        for name in std::env::vars_os()
+            .filter_map(|(name, _)| name.into_string().ok())
+            .filter(|name| name.starts_with("UV_"))
+        {
+            command.env_remove(name);
+        }
+        command.envs(&environment).env_remove("UV_OFFLINE");
         // Managed resolution intentionally runs before the sandboxed worker starts
         // because reticulate and uv need normal host network and cache access.
-        // Explicitly prepared requirement strings are newline-delimited stdin data.
+        // Requirement manifests are JSON standard-input data, never R source.
         let mut child = command.spawn().map_err(|error| {
             format!(
                 "failed to run managed Python resolver with `{}`: {error}",
@@ -125,7 +176,7 @@ base::local({
             let _ = stop_resolver(&mut child, &rscript);
             return Err(error);
         }
-        let input = write_requirements(input, requirements);
+        let input = write_requirements(input, &requirements);
         let ResolverOutput {
             status,
             write_result,
@@ -142,16 +193,19 @@ base::local({
                     "managed Python resolution failed with {status}: {error}"
                 ))
             } else {
-                let packages = std::iter::once("numpy")
-                    .chain(
-                        requirements
-                            .iter()
-                            .map(String::as_str)
-                            .filter(|requirement| *requirement != "numpy"),
-                    )
+                let packages = requirements.packages.iter().map(String::as_str).collect();
+                let python_version = requirements
+                    .python_version
+                    .iter()
+                    .map(String::as_str)
                     .collect();
-                let input = serde_json::to_string_pretty(&ResolverInput { python, packages })
-                    .expect("resolver input strings should serialize as JSON");
+                let input = serde_json::to_string_pretty(&ResolverInput {
+                    python,
+                    packages,
+                    python_version,
+                    exclude_newer: requirements.exclude_newer.as_deref(),
+                })
+                .expect("resolver input strings should serialize as JSON");
                 Err(format!(
                     "managed Python resolution failed:\nresolver input:\n{input}\nuv output:\n{error}"
                 ))
@@ -168,22 +222,55 @@ base::local({
                 python.display()
             ));
         }
-        Ok(Some(ManagedPython { python }))
+        Ok(ManagedPython {
+            python,
+            requirements,
+        })
     }
 
     fn write_requirements(
         mut input: ChildStdin,
-        requirements: &[String],
+        requirements: &crate::worker_protocol::PythonRequirementManifest,
     ) -> Receiver<io::Result<()>> {
-        let mut bytes = requirements.join("\n").into_bytes();
-        if !bytes.is_empty() {
-            bytes.push(b'\n');
-        }
+        let bytes = serde_json::to_vec(requirements)
+            .expect("managed Python requirements should serialize as JSON");
         let (sender, receiver) = mpsc::channel();
         let _ = thread::spawn(move || {
             let _ = sender.send(input.write_all(&bytes));
         });
         receiver
+    }
+
+    fn manifest_from_packages(
+        requirements: &[String],
+    ) -> crate::worker_protocol::PythonRequirementManifest {
+        crate::worker_protocol::PythonRequirementManifest {
+            packages: std::iter::once("numpy".to_string())
+                .chain(requirements.iter().cloned())
+                .collect(),
+            python_version: Vec::new(),
+            exclude_newer: None,
+        }
+        .normalized()
+    }
+
+    fn uv_environment() -> BTreeMap<String, String> {
+        std::env::vars_os()
+            .filter_map(|(name, value)| Some((name.into_string().ok()?, value.into_string().ok()?)))
+            .filter(|(name, _)| name.starts_with("UV_") && name != "UV_OFFLINE")
+            .collect()
+    }
+
+    fn validate_environment(environment: &BTreeMap<String, String>) -> Result<(), String> {
+        if let Some(name) = environment
+            .keys()
+            .find(|name| !name.starts_with("UV_") || name.as_str() == "UV_OFFLINE")
+        {
+            return Err(format!(
+                "managed Python resolver received unsupported environment variable `{name}`"
+            ));
+        }
+        Ok(())
     }
 
     fn read_output(mut output: impl io::Read + Send + 'static) -> Receiver<io::Result<Vec<u8>>> {
@@ -306,13 +393,24 @@ base::local({
 
 #[cfg(not(target_os = "macos"))]
 mod platform {
-    pub(crate) struct ManagedPython;
+    use std::collections::BTreeMap;
+
+    #[derive(Clone)]
+    pub(crate) struct ManagedPython {
+        requirements: crate::worker_protocol::PythonRequirementManifest,
+    }
     #[derive(Clone)]
     pub(crate) struct ResolverStopHandle;
 
     impl ResolverStopHandle {
         pub(crate) fn stop(&self) -> Result<(), String> {
             Ok(())
+        }
+    }
+
+    impl ManagedPython {
+        pub(crate) fn requirements(&self) -> &crate::worker_protocol::PythonRequirementManifest {
+            &self.requirements
         }
     }
 
@@ -326,6 +424,16 @@ mod platform {
             Err("managed Python environments are supported only on macOS".to_string())
         }
     }
+
+    pub(crate) fn resolve_python_manifest(
+        _requirements: crate::worker_protocol::PythonRequirementManifest,
+        _environment: BTreeMap<String, String>,
+        _on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
+    ) -> Result<ManagedPython, String> {
+        Err("managed Python environments are supported only on macOS".to_string())
+    }
 }
 
-pub(crate) use platform::{ManagedPython, ResolverStopHandle, resolve_python};
+pub(crate) use platform::{
+    ManagedPython, ResolverStopHandle, resolve_python, resolve_python_manifest,
+};
