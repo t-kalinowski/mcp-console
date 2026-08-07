@@ -5,8 +5,10 @@ use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 
 use rmcp::{
-    ServerHandler, ServiceExt, handler::server::wrapper::Parameters, schemars, tool, tool_handler,
-    tool_router,
+    ServerHandler, ServiceExt,
+    handler::server::wrapper::Parameters,
+    model::{CallToolResult, ContentBlock},
+    schemars, tool, tool_handler, tool_router,
 };
 use serde::Deserialize;
 use tokio::io::{AsyncRead, ReadBuf};
@@ -23,9 +25,15 @@ struct ConsoleServer {
 #[derive(Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct SendArguments {
-    /// Complete multiline R code evaluated in persistent state. Omit to write stdin or poll.
+    /// Complete multiline R code evaluated in persistent state. Plots drawn on the default device
+    /// return as PNG images in MCP results. Set their size with the R options
+    /// `options(console.plot.width = ..., console.plot.height = ..., console.plot.dpi = ...)`;
+    /// width and height are in inches. Keep each plot and its drawing operations in one cell. Omit
+    /// to write stdin or poll.
     r: Option<String>,
-    /// Complete multiline Python code evaluated in persistent state. Omit to write stdin or poll.
+    /// Complete multiline Python code evaluated in persistent state. R plots invoked through
+    /// reticulate's `r` bridge return as PNG images under the same cell-scoped rules and R options
+    /// as `r`. Omit to write stdin or poll.
     python: Option<String>,
     /// Complete DuckDB SQL evaluated in the persistent catalog. Omit to write stdin or poll.
     sql: Option<String>,
@@ -64,7 +72,7 @@ impl ConsoleServer {
             stdin,
             timeout_ms,
         }): Parameters<SendArguments>,
-    ) -> Result<String, String> {
+    ) -> Result<CallToolResult, String> {
         let cell = match (r, python, sql) {
             (Some(source), None, None) => Some(crate::cell::Cell {
                 language: crate::cell::Language::R,
@@ -83,9 +91,25 @@ impl ConsoleServer {
                 return Err("only one of `r`, `python`, or `sql` may be supplied".to_string());
             }
         };
-        self.worker
+        let response = self
+            .worker
             .send(cell, stdin, Duration::from_millis(timeout_ms))
-            .await
+            .await;
+        let (content, is_error) = response.into_parts();
+        let content = content
+            .into_iter()
+            .map(|content| match content {
+                crate::worker_client::Content::Text(text) => ContentBlock::text(text),
+                crate::worker_client::Content::Image { data, mime_type } => {
+                    ContentBlock::image(data, mime_type)
+                }
+            })
+            .collect();
+        Ok(if is_error {
+            CallToolResult::error(content)
+        } else {
+            CallToolResult::success(content)
+        })
     }
 }
 

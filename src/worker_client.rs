@@ -60,9 +60,20 @@ struct Evaluation {
     changed: tokio::sync::Notify,
 }
 
+#[derive(Default)]
+pub(crate) struct Response {
+    content: Vec<Content>,
+    is_error: bool,
+}
+
+pub(crate) enum Content {
+    Text(String),
+    Image { data: String, mime_type: String },
+}
+
 struct EvaluationState {
-    result: Option<Result<String, SendFailure>>,
-    output: String,
+    result: Option<Result<Response, SendFailure>>,
+    output: Response,
     input_report_at: Option<Instant>,
     #[cfg(target_os = "macos")]
     stdin: Option<platform::StdinSender>,
@@ -71,26 +82,26 @@ struct EvaluationState {
 
 enum EvaluationWait {
     Running,
-    InputRequested(String),
-    Completed(Result<String, SendFailure>),
+    InputRequested(Response),
+    Completed(Result<Response, SendFailure>),
 }
 
 enum SendResponse {
     Idle,
     Running,
-    InputRequested(String),
-    Completed(String),
+    InputRequested(Response),
+    Completed(Response),
 }
 
 struct SendFailure {
-    output: String,
+    output: Response,
     message: String,
 }
 
 impl From<String> for SendFailure {
     fn from(message: String) -> Self {
         Self {
-            output: String::new(),
+            output: Response::default(),
             message,
         }
     }
@@ -100,6 +111,45 @@ enum EvaluationStatus {
     Waiting,
     Grace(Duration),
     Report(EvaluationWait),
+}
+
+impl Response {
+    pub(crate) fn into_parts(self) -> (Vec<Content>, bool) {
+        (self.content, self.is_error)
+    }
+
+    fn push_text(&mut self, text: impl Into<String>) {
+        let text = text.into();
+        if text.is_empty() {
+            return;
+        }
+        if let Some(Content::Text(output)) = self.content.last_mut() {
+            output.push_str(&text);
+        } else {
+            self.content.push(Content::Text(text));
+        }
+    }
+
+    fn push_image(&mut self, data: String, mime_type: String) {
+        self.content.push(Content::Image { data, mime_type });
+    }
+
+    fn extend(&mut self, other: Self) {
+        for content in other.content {
+            match content {
+                Content::Text(text) => self.push_text(text),
+                Content::Image { data, mime_type } => self.push_image(data, mime_type),
+            }
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.content.is_empty()
+    }
+
+    fn text_needs_newline(&self) -> bool {
+        !matches!(self.content.last(), Some(Content::Text(text)) if text.ends_with('\n'))
+    }
 }
 
 /// Keeps the current stop handle available until shutdown closes the gate.
@@ -150,7 +200,7 @@ impl Client {
         cell: Option<crate::cell::Cell>,
         stdin: Option<String>,
         timeout: Duration,
-    ) -> Result<String, String> {
+    ) -> Response {
         let result = self.send_inner(cell, stdin, timeout).await;
         self.attach_output(result)
     }
@@ -201,7 +251,7 @@ impl Client {
         let evaluation = Arc::new(Evaluation {
             state: Mutex::new(EvaluationState {
                 result: None,
-                output: String::new(),
+                output: Response::default(),
                 input_report_at: None,
                 #[cfg(target_os = "macos")]
                 stdin: None,
@@ -330,20 +380,24 @@ impl Client {
         result
     }
 
-    fn attach_output(&self, result: Result<SendResponse, SendFailure>) -> Result<String, String> {
-        let (mut output, restart_notice) = self.0.output.take();
+    fn attach_output(&self, result: Result<SendResponse, SendFailure>) -> Response {
+        let (captured_output, restart_notice) = self.0.output.take();
+        let mut output = Response::default();
+        output.push_text(captured_output);
         match result {
-            Ok(response) => Ok(render_response(output, response, restart_notice)),
+            Ok(response) => render_response(output, response, restart_notice),
             Err(SendFailure {
                 output: worker_output,
                 message,
             }) => {
-                output.push_str(&worker_output);
+                output.extend(worker_output);
                 if output.is_empty() && restart_notice.is_empty() {
-                    Err(message)
+                    output.push_text(message);
                 } else {
-                    Err(attach_error_output(output, message, restart_notice))
+                    attach_error_output(&mut output, message, restart_notice);
                 }
+                output.is_error = true;
+                output
             }
         }
     }
@@ -550,7 +604,17 @@ impl Evaluation {
             .state
             .lock()
             .map_err(|_| "worker evaluation state lock poisoned".to_string())?;
-        state.output.push_str(&output);
+        state.output.push_text(output);
+        Ok(())
+    }
+
+    #[cfg(target_os = "macos")]
+    fn image(&self, data: String, mime_type: String) -> Result<(), String> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| "worker evaluation state lock poisoned".to_string())?;
+        state.output.push_image(data, mime_type);
         Ok(())
     }
 
@@ -565,13 +629,12 @@ impl Evaluation {
         }
         let prompt = serde_json::to_string(&prompt)
             .map_err(|error| format!("failed to render worker input prompt: {error}"))?;
-        if !state.output.is_empty() && !state.output.ends_with('\n') {
-            state.output.push('\n');
+        if !state.output.is_empty() && state.output.text_needs_newline() {
+            state.output.push_text("\n");
         }
-        state.output.push_str("[input requested: ");
-        state.output.push_str(&prompt);
-        state.output.push(']');
-        state.output.push('\n');
+        state
+            .output
+            .push_text(format!("[input requested: {prompt}]\n"));
         state.input_report_at = Some(Instant::now() + INPUT_REQUEST_GRACE);
         self.changed.notify_one();
         Ok(())
@@ -677,19 +740,22 @@ impl Evaluation {
     }
 }
 
-fn render_response(mut output: String, response: SendResponse, restart_notice: String) -> String {
+fn render_response(
+    mut output: Response,
+    response: SendResponse,
+    restart_notice: String,
+) -> Response {
     match response {
         SendResponse::Completed(completed) => {
-            output.push_str(&completed);
+            output.extend(completed);
             append_restart_notice(&mut output, &restart_notice);
             if output.is_empty() {
-                "[done]".to_string()
-            } else {
-                output
+                output.push_text("[done]");
             }
+            output
         }
         SendResponse::InputRequested(input) => {
-            output.push_str(&input);
+            output.extend(input);
             append_input_banner(&mut output, &restart_notice);
             output
         }
@@ -704,40 +770,37 @@ fn render_response(mut output: String, response: SendResponse, restart_notice: S
     }
 }
 
-fn append_input_banner(output: &mut String, restart_notice: &str) {
-    if !append_restart_notice(output, restart_notice) && !output.ends_with('\n') {
-        output.push('\n');
+fn append_input_banner(output: &mut Response, restart_notice: &str) {
+    if !append_restart_notice(output, restart_notice) && output.text_needs_newline() {
+        output.push_text("\n");
     }
-    output.push_str("[stdin needed]");
+    output.push_text("[stdin needed]");
 }
 
-fn append_state_banner(output: &mut String, restart_notice: &str, banner: &str) {
+fn append_state_banner(output: &mut Response, restart_notice: &str, banner: &str) {
     if !append_restart_notice(output, restart_notice) {
-        output.push('\n');
+        output.push_text("\n");
     }
-    output.push_str(banner);
+    output.push_text(banner);
 }
 
-fn append_restart_notice(output: &mut String, restart_notice: &str) -> bool {
+fn append_restart_notice(output: &mut Response, restart_notice: &str) -> bool {
     if restart_notice.is_empty() {
         return false;
     }
-    if !output.ends_with('\n') {
-        output.push('\n');
+    if output.text_needs_newline() {
+        output.push_text("\n");
     }
-    output.push_str(restart_notice);
+    output.push_text(restart_notice);
     true
 }
 
-fn attach_error_output(mut output: String, error: String, restart_notice: String) -> String {
-    if !output.is_empty() && !output.ends_with('\n') {
-        output.push('\n');
+fn attach_error_output(output: &mut Response, error: String, restart_notice: String) {
+    if !output.is_empty() && output.text_needs_newline() {
+        output.push_text("\n");
     }
-    output.push('[');
-    output.push_str(&error);
-    output.push(']');
-    append_restart_notice(&mut output, &restart_notice);
-    output
+    output.push_text(format!("[{error}]"));
+    append_restart_notice(output, &restart_notice);
 }
 
 #[cfg(target_os = "macos")]
@@ -842,6 +905,9 @@ mod platform {
                 WorkerMessage::Output { data } => {
                     return Err(format!("worker emitted output before readiness: {data}"));
                 }
+                WorkerMessage::Image { .. } => {
+                    return Err("worker emitted an image before readiness".to_string());
+                }
                 _ => return Err("worker did not report readiness".to_string()),
             }
             Ok(worker)
@@ -863,6 +929,9 @@ mod platform {
             loop {
                 match self.receive()? {
                     WorkerMessage::Output { data } => evaluation.output(data)?,
+                    WorkerMessage::Image { data, mime_type } => {
+                        evaluation.image(data, mime_type)?;
+                    }
                     WorkerMessage::InputRequested { prompt } => {
                         evaluation.input_requested(prompt)?;
                     }

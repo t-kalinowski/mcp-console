@@ -13,6 +13,10 @@ from typing import Any, TextIO
 READ_FD_ENV = "MCP_CONSOLE_SIDEBAND_READ_FD"
 WRITE_FD_ENV = "MCP_CONSOLE_SIDEBAND_WRITE_FD"
 LARGE_OUTPUT_SIZE = 2 * 1024 * 1024
+PNG_1X1 = (
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42Y"
+    "AAAAASUVORK5CYII="
+)
 
 
 def open_sideband(name: str, mode: str) -> TextIO:
@@ -227,6 +231,20 @@ def main() -> None:
             continue
 
         if source == "complete silently":
+            send(writer, {"kind": "completed"})
+            continue
+
+        if source == "emit image":
+            send(writer, {"kind": "output", "data": "before image\n"})
+            send(
+                writer,
+                {
+                    "kind": "image",
+                    "data": PNG_1X1,
+                    "mime_type": "image/png",
+                },
+            )
+            send(writer, {"kind": "output", "data": "after image\n"})
             send(writer, {"kind": "completed"})
             continue
 

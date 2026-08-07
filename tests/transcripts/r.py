@@ -2,7 +2,15 @@
 
 from pathlib import Path
 
-from _support import McpClient, Transcript, code, run_this_suite
+from _support import (
+    McpClient,
+    Transcript,
+    assert_result_content,
+    code,
+    r_test_environment,
+    reference_plots,
+    run_this_suite,
+)
 
 
 PLATFORMS = {"darwin"}
@@ -35,6 +43,251 @@ def test_evaluates_a_complete_cell(binary: Path) -> Transcript:
     client.call_tool("send", r='stop("boom")')
     client.call_tool("send", r="answer")
     client.call_tool("send", r="silent <- 1")
+    return client.finish()
+
+
+def test_returns_cell_scoped_plots(binary: Path) -> Transcript:
+    environment, rscript = r_test_environment()
+    client = McpClient(binary, ("serve",), environment)
+    client.initialize_and_list_tools()
+    # fmt: r
+    r = code(r"""
+        options(
+          console.plot.width = 4,
+          console.plot.height = 3,
+          console.plot.dpi = 100
+        )
+        cat("before plots\n")
+        local({
+          plot(1:3)
+          cat("after first plot\n")
+          lines(3:1, col = "red")
+          plot(3:1)
+          cat("after second plot\n")
+        })
+        """)
+    expected_plots = reference_plots(
+        rscript,
+        environment,
+        r,
+        width=4,
+        height=3,
+        dpi=100,
+        pages=2,
+    )
+    client.call_tool("send", r=r)
+    assert_result_content(
+        client,
+        [
+            "before plots\n",
+            expected_plots[0],
+            expected_plots[1],
+            "after first plot\nafter second plot\n",
+        ],
+    )
+
+    client.call_tool("send", r="lines(1:3)")
+    result = client.transcript[-1]["result"]
+    assert result.get("isError") is not True, result
+    assert len(result["content"]) == 1, result
+    assert "plot.new has not been called yet" in result["content"][0]["text"]
+    result["content"][0]["text"] = "Error: plot.new has not been called yet\n"
+
+    r = "plot(3:1)"
+    expected_plot = reference_plots(
+        rscript,
+        environment,
+        r,
+        width=4,
+        height=3,
+        dpi=100,
+        pages=1,
+    )
+    client.call_tool("send", r=r)
+    assert_result_content(client, expected_plot)
+    return client.finish()
+
+
+def test_preserves_managed_device_plot_finalization_order(binary: Path) -> Transcript:
+    environment, rscript = r_test_environment()
+    client = McpClient(binary, ("serve",), environment)
+    client.initialize_and_list_tools()
+    # fmt: r
+    r = code(r"""
+        options(
+          console.plot.width = 4,
+          console.plot.height = 3,
+          console.plot.dpi = 100
+        )
+        local({
+          draw <- function(color, label) {
+            grid::grid.newpage(recording = FALSE)
+            grid::grid.rect(gp = grid::gpar(fill = color))
+            grid::grid.text(label)
+          }
+          draw("red", "A1")
+          device_a <- grDevices::dev.cur()
+          grDevices::dev.new()
+          draw("blue", "B1")
+          device_b <- grDevices::dev.cur()
+          grDevices::dev.set(device_a)
+          draw("green", "A2")
+          grDevices::dev.set(device_b)
+          draw("purple", "B2")
+          invisible(grDevices::dev.off())
+          grDevices::dev.set(device_a)
+          invisible(grDevices::dev.off())
+        })
+        """)
+    plots_by_filename = reference_plots(
+        rscript,
+        environment,
+        r,
+        width=4,
+        height=3,
+        dpi=100,
+        pages=4,
+    )
+    # Filename order is A1, A2, B1, B2; the devices finish A1, B1, B2, A2.
+    expected_plots = [plots_by_filename[index] for index in (0, 2, 3, 1)]
+    client.call_tool("send", r=r)
+    assert_result_content(client, expected_plots)
+    return client.finish()
+
+
+def test_returns_plots_after_r_errors(binary: Path) -> Transcript:
+    environment, rscript = r_test_environment()
+    client = McpClient(binary, ("serve",), environment)
+    client.initialize_and_list_tools()
+    # fmt: r
+    r = code(r"""
+        local({
+          plot(1:3)
+          stop("boom")
+        })
+        """)
+    expected_plot = reference_plots(
+        rscript,
+        environment,
+        r,
+        width=800 / 96,
+        height=600 / 96,
+        dpi=96,
+        pages=1,
+        expected_error="boom",
+    )
+    client.call_tool("send", r=r)
+    result = client.transcript[-1]["result"]
+    text_items = [item for item in result["content"] if item["type"] == "text"]
+    assert len(text_items) == 1 and "boom" in text_items[0]["text"], result
+    text_items[0]["text"] = "Error: boom\n"
+    assert_result_content(client, [expected_plot[0], "Error: boom\n"])
+
+    r = "plot(3:1)"
+    expected_plot = reference_plots(
+        rscript,
+        environment,
+        r,
+        width=800 / 96,
+        height=600 / 96,
+        dpi=96,
+        pages=1,
+    )
+    client.call_tool("send", r=r)
+    assert_result_content(client, expected_plot)
+    return client.finish()
+
+
+def test_leaves_explicit_plot_devices_user_controlled(binary: Path) -> Transcript:
+    environment, rscript = r_test_environment()
+    client = McpClient(binary, ("serve",), environment)
+    client.initialize_and_list_tools()
+    # fmt: r
+    r = code(r"""
+        explicit_plot <- tempfile(fileext = ".png")
+        grDevices::png(explicit_plot, width = 4, height = 3, units = "in", res = 100)
+        explicit_device <- grDevices::dev.cur()
+        plot(1:3)
+        cat("explicit current: ", names(grDevices::dev.cur()), "\n", sep = "")
+        """)
+    client.call_tool("send", r=r)
+    result = client.transcript[-1]["result"]
+    assert result.get("isError") is not True, result
+    assert result["content"][0]["text"].startswith("explicit current: "), result
+    result["content"][0]["text"] = "explicit current: <device>\n"
+    assert result["content"] == [
+        {"type": "text", "text": "explicit current: <device>\n"}
+    ], result
+
+    # fmt: r
+    r = code(r"""
+        cat(
+          "explicit still current: ",
+          identical(grDevices::dev.cur(), explicit_device),
+          "\n",
+          sep = ""
+        )
+        invisible(grDevices::dev.off(which = explicit_device))
+        cat("explicit complete: ", file.exists(explicit_plot), "\n", sep = "")
+        unlink(explicit_plot)
+        """)
+    client.call_tool("send", r=r)
+    result = client.transcript[-1]["result"]
+    assert result == {
+        "content": [
+            {
+                "type": "text",
+                "text": "explicit still current: TRUE\nexplicit complete: TRUE\n",
+            }
+        ],
+        "isError": False,
+    }, result
+
+    r = "plot(3:1)"
+    expected_plot = reference_plots(
+        rscript,
+        environment,
+        r,
+        width=800 / 96,
+        height=600 / 96,
+        dpi=96,
+        pages=1,
+    )
+    client.call_tool("send", r=r)
+    assert_result_content(client, expected_plot)
+
+    # fmt: r
+    r = code(r"""
+        first_explicit_plot <- tempfile(fileext = ".png")
+        second_explicit_plot <- tempfile(fileext = ".png")
+        grDevices::png(first_explicit_plot)
+        plot(1:3)
+        grDevices::png(second_explicit_plot)
+        plot(3:1)
+        grDevices::graphics.off()
+        cat(
+          "all explicit complete: ",
+          all(file.exists(first_explicit_plot, second_explicit_plot)),
+          "\n",
+          sep = ""
+        )
+        unlink(c(first_explicit_plot, second_explicit_plot))
+        plot(2:4)
+        """)
+    expected_plot = reference_plots(
+        rscript,
+        environment,
+        r,
+        width=800 / 96,
+        height=600 / 96,
+        dpi=96,
+        pages=1,
+    )
+    client.call_tool("send", r=r)
+    assert_result_content(
+        client,
+        ["all explicit complete: TRUE\n", expected_plot[0]],
+    )
     return client.finish()
 
 

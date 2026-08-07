@@ -14,6 +14,7 @@ pub(crate) enum ServerMessage {
 pub(crate) enum WorkerMessage {
     Ready,
     Output { data: String },
+    Image { data: String, mime_type: String },
     InputRequested { prompt: String },
     InputReceived,
     Completed,

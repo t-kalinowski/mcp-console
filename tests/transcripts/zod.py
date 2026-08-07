@@ -12,6 +12,10 @@ from _support import McpClient, Transcript, code, run_this_suite
 
 PLATFORMS = {"darwin"}
 LARGE_OUTPUT_SIZE = 2 * 1024 * 1024
+PNG_1X1 = (
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42Y"
+    "AAAAASUVORK5CYII="
+)
 
 
 def test_routes_send_over_sideband(binary: Path) -> Transcript:
@@ -24,6 +28,26 @@ def test_routes_send_over_sideband(binary: Path) -> Transcript:
     client.call_tool("send", r="echo")
     client.call_tool("send", python="echo")
     client.call_tool("send", sql="echo")
+    return client.finish()
+
+
+def test_returns_worker_images(binary: Path) -> Transcript:
+    zod = Path(__file__).resolve().parents[1] / "fixtures" / "zod"
+    client = McpClient(
+        binary,
+        ("serve", "--worker", str(zod)),
+    )
+    client.initialize_and_list_tools()
+    client.call_tool("send", r="emit image")
+    result = client.transcript[-1]["result"]
+    assert result == {
+        "content": [
+            {"type": "text", "text": "before image\n"},
+            {"type": "image", "data": PNG_1X1, "mimeType": "image/png"},
+            {"type": "text", "text": "after image\n"},
+        ],
+        "isError": False,
+    }, result
     return client.finish()
 
 

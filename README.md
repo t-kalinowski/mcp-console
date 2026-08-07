@@ -45,8 +45,28 @@ Worker output available when the failure response is assembled remains visible; 
 The next response after its replacement successfully starts includes the newline-delimited banner `[worker restarted: in-memory state lost]\n`, preceded by a newline when prior output does not already supply one; initial lazy startup remains silent.
 The worker runs each R cell through R's native top-level loop, captures R console output, prints each visible value, and maintains `.Last.value`.
 If a cell ends while an expression is incomplete, earlier complete expressions from that cell remain applied.
+The worker installs a worker-owned `grDevices::png()` function as R's default graphics device and opens it lazily when a cell draws.
+Finalized managed pages are returned in the order they finish, including when a cell switches among multiple managed devices.
+Once the first managed page opens, later R console text waits until cell end so it cannot appear ahead of an unfinished page.
+At cell end, including after a normal R error, the worker closes its managed devices, returns their remaining pages as MCP images, then returns all deferred console text.
+This cell-level ordering does not reconstruct text emitted between individual pages.
+Managed devices are cell scoped, so all drawing operations that modify one plot must be submitted together.
+Their default size is 800 by 600 pixels at 96 DPI.
+These persistent R options control their dimensions in inches and resolution:
+
+```r
+options(
+  console.plot.width = 6,
+  console.plot.height = 4,
+  console.plot.dpi = 120
+)
+plot(1:10)
+```
+
+Graphics devices opened explicitly by evaluated code, such as with `grDevices::png()`, are user-owned: the worker does not close them, read their files, or return them as MCP images.
 Python cells execute statements in persistent `__main__` state and send a final expression through Python's display hook.
 R and Python can exchange objects through reticulate's `py` and `r` bridges.
+R plots invoked from a Python cell through reticulate's `r` bridge use the same managed default device, sizing options, cell scope, and MCP image output as plots invoked from an R cell.
 Reticulate routes Python text written through `sys.stdout` and `sys.stderr`, including tracebacks, through the same sideband console output path as R.
 Writes through `sys.stdout.buffer`, `sys.stderr.buffer`, or fd 1/2 directly remain on the captured standard streams.
 After a Python cell calls `os.fork()`, reticulate restores the child's original fd-backed text streams after its sideband is disabled, so its ordinary stdout and stderr are captured too.
@@ -65,7 +85,7 @@ This initial slice does not enable R environment scanning, relation registration
 
 The server also collects text written directly to the worker's standard output and standard error, including direct writes by descendants that retain those descriptors.
 It retains raw bytes until the next `send` response is assembled; output produced while the worker is idle can therefore appear on a later idle poll before the server-owned `\n[idle]` banner.
-Ordering between the two standard streams and console output is best effort.
+Ordering among standard output, standard error, and sideband console or image output is best effort.
 R language failures, uncaught Python exceptions, and DuckDB errors remain ordinary console results rather than MCP tool errors.
 A silent successful R, Python, or SQL cell sends no sideband `output` frame, still sends `completed`, and projects to `[done]` when no other response text is pending.
 

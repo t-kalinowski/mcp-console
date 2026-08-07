@@ -1,7 +1,7 @@
 #[cfg(target_os = "macos")]
 mod platform {
     use std::error::Error;
-    use std::ffi::{CStr, CString, c_char, c_int, c_uchar};
+    use std::ffi::{CStr, CString, c_char, c_int, c_uchar, c_void};
     use std::io;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Mutex, OnceLock};
@@ -31,6 +31,8 @@ mod platform {
             init: ReplInit,
             do_one: ReplDoOne,
             before_do_one: extern "C" fn(),
+            after_do_one: extern "C" fn(*const c_void),
+            context: *const c_void,
         ) -> c_int;
     }
 
@@ -46,6 +48,7 @@ mod platform {
         WORKER_WRITER
             .set(writer.clone())
             .map_err(|_| io::Error::other("R worker sideband was already initialized"))?;
+        let graphics = crate::r_graphics::Bridge::initialize()?;
         let mut python = crate::python::Bridge::initialize()?;
         let mut sql = crate::sql::Bridge::initialize()?;
         writer.send(&WorkerMessage::Ready)?;
@@ -53,7 +56,8 @@ mod platform {
         loop {
             match reader.receive()? {
                 ServerMessage::Evaluate { language, source } => {
-                    let result = evaluate_cell(Cell { language, source }, &mut python, &mut sql);
+                    let result =
+                        evaluate_cell(Cell { language, source }, &graphics, &mut python, &mut sql);
 
                     if WORKER_SHUTDOWN.load(Ordering::SeqCst) {
                         return Ok(());
@@ -70,26 +74,28 @@ mod platform {
 
     fn evaluate_cell(
         cell: Cell,
+        graphics: &crate::r_graphics::Bridge,
         python: &mut crate::python::Bridge,
         sql: &mut crate::sql::Bridge,
     ) -> Result<(), String> {
         match cell.language {
-            Language::R => evaluate_r_cell(cell.source),
-            Language::Python => evaluate_python_cell(cell.source, python),
+            Language::R => evaluate_r_cell(cell.source, graphics),
+            Language::Python => evaluate_python_cell(cell.source, graphics, python),
             Language::Sql => evaluate_sql_cell(cell.source, sql),
         }
     }
 
-    fn evaluate_r_cell(r: String) -> Result<(), String> {
+    fn evaluate_r_cell(r: String, graphics: &crate::r_graphics::Bridge) -> Result<(), String> {
         if r.contains('\0') {
             emit_output(b"Error: R source cannot contain NUL\n");
             return Ok(());
         }
 
+        graphics.begin()?;
         set_cell_source(r);
-        let status = run_repl_cell();
+        let status = run_repl_cell(graphics);
         clear_cell_source();
-        match status {
+        let result = match status {
             0 | 1 => Ok(()),
             2 => {
                 emit_output(b"Error: Incomplete code\n");
@@ -98,20 +104,33 @@ mod platform {
             status => Err(format!(
                 "R worker received unexpected DLL REPL status {status}"
             )),
-        }
+        };
+        let graphics_result = graphics.finish().and_then(send_images);
+        let output_result = flush_deferred_output();
+        graphics.end();
+        graphics_result?;
+        output_result?;
+        result
     }
 
     fn evaluate_python_cell(
         source: String,
+        graphics: &crate::r_graphics::Bridge,
         python: &mut crate::python::Bridge,
     ) -> Result<(), String> {
         if source.contains('\0') {
             emit_output(b"SyntaxError: source code string cannot contain null bytes\n");
             return Ok(());
         }
+        graphics.begin()?;
         EVALUATION_STARTED.store(true, Ordering::SeqCst);
         let result = python.evaluate(&source);
         EVALUATION_STARTED.store(false, Ordering::SeqCst);
+        let graphics_result = graphics.finish().and_then(send_images);
+        let output_result = flush_deferred_output();
+        graphics.end();
+        graphics_result?;
+        output_result?;
         result
     }
 
@@ -183,7 +202,7 @@ mod platform {
         Ok(())
     }
 
-    fn run_repl_cell() -> c_int {
+    fn run_repl_cell(graphics: &crate::r_graphics::Bridge) -> c_int {
         let init = *R_REPL_INIT
             .get()
             .expect("R REPL should be initialized before evaluation");
@@ -193,13 +212,30 @@ mod platform {
         // SAFETY: Both function pointers are process-lifetime libR symbols with
         // the declared ABI. This main thread owns R, and the C shim contains R's
         // top-level jump so it cannot bypass a live Rust frame.
-        unsafe { mcp_r_repl_run_cell(init, do_one, before_repl_iteration) }
+        unsafe {
+            mcp_r_repl_run_cell(
+                init,
+                do_one,
+                before_repl_iteration,
+                after_repl_iteration,
+                std::ptr::from_ref(graphics).cast(),
+            )
+        }
     }
 
     extern "C" fn before_repl_iteration() {
         // R may reuse buffered source without calling Busy(0), so reset before
         // every outer DLL step. Busy(1) latches evaluation in r_busy().
         EVALUATION_STARTED.store(false, Ordering::SeqCst);
+    }
+
+    extern "C" fn after_repl_iteration(context: *const c_void) {
+        // R has returned normally to the C shim. Keep this callback limited to
+        // filesystem and sideband work so no R jump can cross this Rust frame.
+        let graphics = unsafe { &*context.cast::<crate::r_graphics::Bridge>() };
+        if let Err(error) = publish_ready_plots(graphics) {
+            record_worker_failure(error);
+        }
     }
 
     extern "C-unwind" fn r_busy(which: c_int) {
@@ -290,20 +326,29 @@ mod platform {
     }
 
     fn emit_output(bytes: &[u8]) {
-        if !crate::sideband::available_in_process() {
+        if crate::r_graphics::defer_output(bytes) {
             return;
+        }
+        if let Err(error) = send_output(bytes) {
+            record_worker_failure(error);
+        }
+    }
+
+    fn send_output(bytes: &[u8]) -> Result<(), String> {
+        if !crate::sideband::available_in_process() {
+            return Ok(());
         }
         let Some(writer) = WORKER_WRITER.get() else {
-            return;
+            return Ok(());
         };
         if WORKER_FAILURE.lock().is_ok_and(|failure| failure.is_some()) {
-            return;
+            return Ok(());
         }
-        if let Err(error) = writer.send(&WorkerMessage::Output {
-            data: String::from_utf8_lossy(bytes).into_owned(),
-        }) {
-            record_worker_failure(format!("R console output failed: {error}"));
-        }
+        writer
+            .send(&WorkerMessage::Output {
+                data: String::from_utf8_lossy(bytes).into_owned(),
+            })
+            .map_err(|error| format!("R console output failed: {error}"))
     }
 
     extern "C-unwind" fn r_write_console(buf: *const c_char, buflen: c_int, _otype: c_int) {
@@ -387,6 +432,42 @@ mod platform {
             .expect("R worker sideband writer should be initialized")
             .send(&WorkerMessage::InputReceived)
             .map_err(|error| format!("R worker failed to report received input: {error}"))
+    }
+
+    fn send_image(data: String) -> Result<(), String> {
+        WORKER_WRITER
+            .get()
+            .expect("R worker sideband writer should be initialized")
+            .send(&WorkerMessage::Image {
+                data,
+                mime_type: "image/png".to_string(),
+            })
+            .map_err(|error| format!("R worker failed to send a plot image: {error}"))
+    }
+
+    fn send_images(images: Vec<String>) -> Result<(), String> {
+        for data in images {
+            send_image(data)?;
+        }
+        Ok(())
+    }
+
+    fn publish_ready_plots(graphics: &crate::r_graphics::Bridge) -> Result<(), String> {
+        if !crate::r_graphics::plot_started() {
+            return Ok(());
+        }
+        let images = graphics.take_ready()?;
+        if images.is_empty() {
+            return Ok(());
+        }
+        send_images(images)
+    }
+
+    fn flush_deferred_output() -> Result<(), String> {
+        for output in crate::r_graphics::take_deferred_output() {
+            send_output(&output)?;
+        }
+        Ok(())
     }
 
     fn read_console_stdin(buf: *mut c_uchar, buflen: c_int) -> Result<c_int, String> {

@@ -30,15 +30,26 @@ Every `input_requested` frame immediately appends `[input requested: <JSON-quote
 Its outstanding state is provisional for up to 10 milliseconds; a matching `input_received` after a successful console read retains the request record but suppresses the `\n[stdin needed]` banner, while an unmatched request returns that marker after the grace or at the MCP deadline, whichever comes first.
 The receipt describes that runtime read, not a submitted payload or byte count, and direct fd-0 reads emit neither frame.
 New code is rejected until the running evaluation's result has been collected.
+Worker `image` frames carry base64 data and a MIME type.
+The server preserves sideband text and image order as MCP content blocks, coalesces adjacent text, and does not add `[done]` when an image is the only output.
 On macOS, managed-Python preflight happens during `serve` startup when required; the first nonempty stdin submission or evaluation still lazily starts the built-in worker under the same sandbox policy as the `sandbox` command.
 The worker embeds R through `libr` and `harp`, retains global state, and feeds each complete R cell through R's DLL REPL iterator.
 R parses and evaluates its expressions sequentially, captures console output, prints visible values, and performs native top-level bookkeeping.
 Cell EOF while R requires continuation input is an error; earlier complete expressions from that cell remain applied.
 R parse, evaluation, and auto-print failures are normal language outcomes with `isError: false`.
+The worker installs a worker-owned `grDevices::png()` function as R's default graphics device and opens it lazily during plotting.
+At R top-level expression boundaries, it emits finalized managed pages as `image/png` MCP content in the global finalization order reported by the managed devices' new-page and close callbacks.
+Once the first managed page opens, later R console text is deferred until cell end.
+Cell-end cleanup closes every still-open managed device, emits its remaining pages, then emits all deferred console text, including normal R errors.
+This conservative cell-level ordering does not reconstruct text emitted between individual pages.
+Managed devices are cell scoped, so one plot's drawing operations must be submitted in the same cell.
+Their default dimensions are 800 by 600 pixels at 96 DPI; persistent `console.plot.width`, `console.plot.height`, and `console.plot.dpi` options configure positive finite dimensions in inches and resolution.
+Graphics devices opened explicitly by evaluated code, such as with `grDevices::png()`, remain user-owned: the worker does not close them, read their files, or emit images for them.
 A silent successful R cell sends `completed` without an `output` frame and projects to `[done]` when no other response text is pending.
 Submitted R functions do not currently retain a source filename.
 Python cells run in the same worker through reticulate, retain `__main__` state, execute statements, and send a final expression through `sys.displayhook()`.
 Python source uses a synthetic evaluation filename, and uncaught exceptions print a Python traceback as a normal language outcome with `isError: false`.
+Python cells enter the same managed graphics lifecycle as R cells, so R plots invoked through reticulate's `r` bridge return as MCP images under the same sizing, cell-scope, device-ownership, and output-ordering rules.
 At worker startup, MCP Console sets `RETICULATE_REMAP_OUTPUT_STREAMS=1` once, before user R can initialize Python.
 Within the worker process, reticulate then routes Python text writes, including `print()`, `sys.stderr.write()`, and tracebacks, through the R console callback as sideband `output` frames.
 Writes through `sys.stdout.buffer`, `sys.stderr.buffer`, or native fd 1/2 bypass that remap and use the captured standard streams.
@@ -77,7 +88,7 @@ After an infrastructure failure discards a ready worker, its successfully starte
 The next response drains it exactly once, after runtime or error text, inserting a preceding newline only when needed.
 If an idle, running, or outstanding-input banner follows, the restart notice's trailing newline supplies its separator.
 Initial lazy startup and retries before a worker reaches ready are silent.
-Completion returns collected standard-stream and pending evaluation output, including sideband text and input-request records, instead of `[done]` when either produced text.
+Completion returns collected standard-stream and pending evaluation content, including sideband text, images, and input-request records, instead of `[done]` when any produced content.
 A failed evaluation likewise returns all pending evaluation output and any complete standard-stream output available at the response boundary before its infrastructure or protocol error.
 When worker output or a restart notice shares that response, the server starts the bracketed error on a new line; an error returned alone remains bare.
 Ordering between the two standard streams and sideband output is best effort; incomplete UTF-8 remains with its pipe until a later response, and invalid UTF-8 is replaced when output is rendered.
@@ -87,7 +98,7 @@ The hidden `worker` command takes ownership of the sideband, discovers `R_HOME` 
 It does not self-execute or set a dynamic-loader environment variable.
 The worker command runs synchronously on the process main thread; only `serve` creates a Tokio runtime.
 The hidden development option `serve --worker PATH` replaces the built-in worker with an executable that implements the same sideband request/receipt protocol and fd-0 input contract.
-The Python fixture `tests/fixtures/zod` provides deterministic acceptance coverage for R, Python, and SQL language tags at that boundary, direct fd-0 input, captured standard streams, and server-owned timeout and polling mechanics.
+The Python fixture `tests/fixtures/zod` provides deterministic acceptance coverage for R, Python, and SQL language tags at that boundary, MCP image content, direct fd-0 input, captured standard streams, and server-owned timeout and polling mechanics.
 An infrastructure or protocol failure is returned as a tool error, force-stops and discards that worker, and lets the next evaluation or nonempty idle stdin submission start a fresh worker with the replacement notice above.
 When MCP input closes, the server starts a one-second deadline and attempts graceful sideband shutdown without delaying it.
 If the direct sandbox process is still running when time expires, the sandbox boundary force-stops its process group and reaps that direct process.
@@ -124,7 +135,9 @@ See `design-sketches/README.md` for the product overview and `design-sketches/do
 - `src/cell.rs` — language-neutral complete-cell type shared by the server and worker protocol.
 - `src/cli.rs` — clap command definitions and user-facing help.
 - `src/python.rs` — managed-Python preflight, worker environment, and reticulate bridge.
-- `src/r_bridge.rs` — shared private R-environment bridge used by Python and SQL adapters.
+- `src/r_bridge.rs` — shared private R-environment bridge used by graphics, Python, and SQL adapters.
+- `src/r_graphics.c` — C-owned forwarding boundary for managed graphics-device callbacks that may long-jump.
+- `src/r_graphics.rs` — cell-scoped managed R graphics device and PNG image publication.
 - `src/server.rs` — MCP stdio server, `send` tool, and worker selection.
 - `src/sql.rs` — persistent DuckDB/DBI SQL bridge and bounded streaming Arrow previews.
 - `src/r_repl.c` — C-owned per-cell DLL-REPL iterator and long-jump boundary.
