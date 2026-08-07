@@ -1,0 +1,34 @@
+---
+!same-as tests/transcripts/golden/server/initializes_and_lists_tools.yaml
+---
+id: 3
+send:
+  python: sentinel = 42
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+id: 4
+session:
+  action: prepare
+  requirements:
+    python:
+      - py-yaml12
+result:
+  content:
+    - type: text
+      text: restart required
+  isError: false
+---
+id: 5
+send:
+  python: sentinel
+result:
+  content:
+    - type: text
+      text: |
+        42
+  isError: false
+...

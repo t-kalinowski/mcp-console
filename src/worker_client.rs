@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::ffi::OsString;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -18,7 +19,12 @@ struct ClientInner {
     evaluation: Mutex<Option<Arc<Evaluation>>>,
     output: CapturedOutput,
     shutdown_gate: Mutex<ShutdownGate>,
-    managed_python: Option<crate::python::Managed>,
+    python: Option<Mutex<PythonEnvironment>>,
+}
+
+struct PythonEnvironment {
+    requirements: BTreeSet<String>,
+    managed: Option<crate::python::Managed>,
 }
 
 enum WorkerState {
@@ -91,6 +97,11 @@ enum SendResponse {
     Running,
     InputRequested(Response),
     Completed(Response),
+}
+
+pub(crate) enum PrepareResult {
+    Prepared,
+    RestartRequired,
 }
 
 struct SendFailure {
@@ -170,18 +181,21 @@ impl Client {
     pub(crate) fn builtin() -> Result<Self, String> {
         let program = std::env::current_exe()
             .map_err(|error| format!("failed to locate the R worker executable: {error}"))?;
-        let managed_python = crate::python::preflight()?;
+        let managed = crate::python::preflight(&[])?;
         Ok(Self::with_arguments(
             program,
             vec![OsString::from("worker")],
-            managed_python,
+            Some(PythonEnvironment {
+                requirements: BTreeSet::new(),
+                managed,
+            }),
         ))
     }
 
     fn with_arguments(
         program: PathBuf,
         arguments: Vec<OsString>,
-        managed_python: Option<crate::python::Managed>,
+        python: Option<PythonEnvironment>,
     ) -> Self {
         Self(Arc::new(ClientInner {
             program,
@@ -190,8 +204,56 @@ impl Client {
             evaluation: Mutex::new(None),
             output: CapturedOutput::new(),
             shutdown_gate: Mutex::new(ShutdownGate::Open { stop_handle: None }),
-            managed_python,
+            python: python.map(Mutex::new),
         }))
+    }
+
+    /// Adds requirements to the managed environment before the worker starts.
+    pub(crate) async fn prepare_python(
+        &self,
+        requirements: Vec<String>,
+    ) -> Result<PrepareResult, String> {
+        let client = self.clone();
+        tokio::task::spawn_blocking(move || client.prepare_python_blocking(requirements))
+            .await
+            .map_err(|error| format!("Python preparation task failed: {error}"))?
+    }
+
+    fn prepare_python_blocking(&self, requirements: Vec<String>) -> Result<PrepareResult, String> {
+        let python = self.0.python.as_ref().ok_or_else(|| {
+            "Python requirements are unavailable with a custom worker".to_string()
+        })?;
+        let mut python = python
+            .lock()
+            .map_err(|_| "Python environment lock poisoned".to_string())?;
+        let additions = requirements.into_iter().collect::<BTreeSet<_>>();
+        if additions.is_subset(&python.requirements) {
+            return Ok(PrepareResult::Prepared);
+        }
+        let worker = match self.0.worker.try_lock() {
+            Ok(worker) => worker,
+            Err(std::sync::TryLockError::WouldBlock) => {
+                return Ok(PrepareResult::RestartRequired);
+            }
+            Err(std::sync::TryLockError::Poisoned(_)) => {
+                return Err("worker lock poisoned".to_string());
+            }
+        };
+        if !matches!(*worker, WorkerState::Initial) {
+            return Ok(PrepareResult::RestartRequired);
+        }
+
+        let candidate = python
+            .requirements
+            .union(&additions)
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        let requirements = candidate.iter().cloned().collect::<Vec<_>>();
+        let managed = crate::python::preflight(&requirements)?
+            .ok_or_else(|| "managed Python environments are supported only on macOS".to_string())?;
+        python.requirements = candidate;
+        python.managed = Some(managed);
+        Ok(PrepareResult::Prepared)
     }
 
     /// Starts one cell, supplies its stdin, or polls the cell already running.
@@ -358,10 +420,19 @@ impl Client {
 
         let replacing = matches!(&*worker, WorkerState::ReplacementPending);
         if !matches!(&*worker, WorkerState::Running(_)) {
+            let python = match &self.0.python {
+                Some(python) => Some(
+                    python
+                        .lock()
+                        .map_err(|_| "Python environment lock poisoned".to_string())?,
+                ),
+                None => None,
+            };
+            let managed_python = python.as_ref().and_then(|python| python.managed.as_ref());
             let running = platform::Worker::start(
                 &self.0.program,
                 &self.0.arguments,
-                self.0.managed_python.as_ref(),
+                managed_python,
                 self.0.output.clone(),
                 |stop_handle| self.register_stop_handle(stop_handle),
             )?;

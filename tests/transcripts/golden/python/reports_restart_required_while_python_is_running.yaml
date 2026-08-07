@@ -1,0 +1,42 @@
+---
+!same-as tests/transcripts/golden/server/initializes_and_lists_tools.yaml
+---
+id: 3
+send:
+  python: |
+    import time
+    from pathlib import Path
+
+    temporary = Path(__import__("os").environ["TMPDIR"])
+    (temporary / "python-evaluation-running").touch()
+    while not (temporary / "release-python").exists():
+        time.sleep(0.01)
+  timeout_ms: 0
+result:
+  content:
+    - type: text
+      text: |-
+
+        [running]
+  isError: false
+---
+id: 4
+session:
+  action: prepare
+  requirements:
+    python:
+      - py-yaml12
+result:
+  content:
+    - type: text
+      text: restart required
+  isError: false
+---
+id: 5
+send: {}
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+...

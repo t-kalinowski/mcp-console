@@ -1,7 +1,11 @@
 #!/usr/bin/env -S uv run --script
 
+import json
 import os
 import shutil
+import tempfile
+import threading
+import time
 from pathlib import Path
 
 from _support import (
@@ -90,6 +94,143 @@ def test_evaluates_with_default_managed_python(binary: Path) -> Transcript:
 
 def test_evaluates_with_explicit_managed_python(binary: Path) -> Transcript:
     return managed_python_transcript(binary, configured=True)
+
+
+def test_prepares_initial_python_requirements(binary: Path) -> Transcript:
+    environment = os.environ.copy()
+    environment["RETICULATE_PYTHON"] = "/mcp-console-prepare-must-replace-python"
+    client = McpClient(binary, ("serve",), environment)
+    client.initialize_and_list_tools()
+    client.call_tool(
+        "session",
+        action="prepare",
+        requirements={"python": ["py-yaml12"]},
+    )
+    assert last_tool_text(client) == "[prepared]"
+    invalid = "not a valid requirement !!!"
+    client.call_tool(
+        "session",
+        action="prepare",
+        requirements={"python": [invalid]},
+    )
+    result = client.transcript[-1]["result"]
+    assert result["isError"] is True, result
+    assert "managed Python resolution failed" in result["content"][0]["text"]
+    result["content"][0]["text"] = "<invalid Python requirement>"
+    client.call_tool(
+        "session",
+        action="prepare",
+        requirements={"python": [invalid]},
+    )
+    result = client.transcript[-1]["result"]
+    assert result["isError"] is True, result
+    assert "managed Python resolution failed" in result["content"][0]["text"]
+    result["content"][0]["text"] = "<invalid Python requirement>"
+    # fmt: python
+    python = code("""
+        import yaml12
+
+        yaml12.__name__
+        """)
+    client.call_tool("send", python=python)
+    assert last_tool_text(client) == "'yaml12'\n"
+    client.call_tool(
+        "session",
+        action="prepare",
+        requirements={"python": ["py-yaml12"]},
+    )
+    assert last_tool_text(client) == "[prepared]"
+    return client.finish()
+
+
+def test_requires_restart_for_late_python_requirements(binary: Path) -> Transcript:
+    client = McpClient(binary, ("serve",))
+    client.initialize_and_list_tools()
+    client.call_tool("send", python="sentinel = 42")
+    client.call_tool(
+        "session",
+        action="prepare",
+        requirements={"python": ["py-yaml12"]},
+    )
+    assert last_tool_text(client) == "restart required"
+    client.call_tool("send", python="sentinel")
+    assert last_tool_text(client) == "42\n"
+    return client.finish()
+
+
+def test_reports_restart_required_while_python_is_running(binary: Path) -> Transcript:
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        environment = os.environ.copy()
+        environment["TMPDIR"] = temporary_directory
+        client = McpClient(binary, ("serve",), environment)
+        client.initialize_and_list_tools()
+        # fmt: python
+        python = code("""
+            import time
+            from pathlib import Path
+
+            temporary = Path(__import__("os").environ["TMPDIR"])
+            (temporary / "python-evaluation-running").touch()
+            while not (temporary / "release-python").exists():
+                time.sleep(0.01)
+            """)
+        client.call_tool("send", python=python, timeout_ms=0)
+        assert last_tool_text(client) == "\n[running]"
+        running = wait_for_worker_file(
+            Path(temporary_directory),
+            "python-evaluation-running",
+            client,
+        )
+        release = running.parent / "release-python"
+
+        session_returned = threading.Event()
+        forced_release = threading.Event()
+
+        def release_blocked_evaluation() -> None:
+            if not session_returned.wait(2):
+                forced_release.set()
+                release.touch()
+
+        watchdog = threading.Thread(target=release_blocked_evaluation)
+        watchdog.start()
+        client.call_tool(
+            "session",
+            action="prepare",
+            requirements={"python": ["py-yaml12"]},
+        )
+        session_returned.set()
+        watchdog.join()
+        assert not forced_release.is_set(), "session waited for the running evaluation"
+        assert last_tool_text(client) == "restart required"
+
+        release.touch()
+        client.call_tool("send")
+        assert last_tool_text(client) == "[done]"
+        return client.finish()
+
+
+def test_does_not_parse_requirements_as_rscript_options(binary: Path) -> Transcript:
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        marker = Path(temporary_directory) / "host-r-code-ran"
+        expression = f"base::writeLines('executed', {json.dumps(str(marker))})"
+        environment = os.environ.copy()
+        environment["RETICULATE_PYTHON"] = "/mcp-console-prepare-must-replace-python"
+        client = McpClient(binary, ("serve",), environment)
+        client.initialize_and_list_tools()
+        client.call_tool(
+            "session",
+            action="prepare",
+            requirements={"python": ["-e", expression]},
+        )
+        result = client.transcript[-1]["result"]
+        assert result["isError"] is True, result
+        assert not marker.exists(), "requirement executed as unsandboxed R code"
+        assert "managed Python resolution failed" in result["content"][0]["text"]
+        client.transcript[-1]["session"]["requirements"]["python"][1] = (
+            "<host R expression>"
+        )
+        result["content"][0]["text"] = "<invalid Python requirement>"
+        return client.finish()
 
 
 def test_forces_uv_offline_in_builtin_worker(binary: Path) -> Transcript:
@@ -369,6 +510,20 @@ def test_restarts_after_python_bridge_failure(binary: Path) -> Transcript:
 
 def last_tool_text(client: McpClient) -> str:
     return client.transcript[-1]["result"]["content"][0]["text"]
+
+
+def wait_for_worker_file(root: Path, name: str, client: McpClient) -> Path:
+    deadline = time.monotonic() + 10
+    while True:
+        paths = list(root.glob(f"**/{name}"))
+        if paths:
+            assert len(paths) == 1, paths
+            return paths[0]
+        assert client.process.poll() is None, (
+            "mcp-console stopped before worker checkpoint"
+        )
+        assert time.monotonic() < deadline, f"worker did not create {name}"
+        time.sleep(0.01)
 
 
 if __name__ == "__main__":

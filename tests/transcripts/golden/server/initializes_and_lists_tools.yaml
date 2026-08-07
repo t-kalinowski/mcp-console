@@ -71,4 +71,41 @@ result:
             format: uint64
             minimum: 0
             default: 60000
+    - name: session
+      description: >-
+        Prepare additive Python requirements for the implicit session before its
+        worker starts.
+      inputSchema:
+        $schema: https://json-schema.org/draft/2020-12/schema
+        $defs:
+          SessionAction:
+            type: string
+            enum:
+              - prepare
+          PythonRequirements:
+            type: object
+            properties:
+              python:
+                description: One or more additive PEP 508 Python requirement strings.
+                type: array
+                items:
+                  type: string
+                  minLength: 1
+                minItems: 1
+                maxItems: 64
+            additionalProperties: false
+            required:
+              - python
+        type: object
+        properties:
+          action:
+            description: Session operation. Only initial environment preparation is implemented.
+            $ref: "#/$defs/SessionAction"
+          requirements:
+            description: Additive requirements for the implicit default session.
+            $ref: "#/$defs/PythonRequirements"
+        additionalProperties: false
+        required:
+          - action
+          - requirements
 ...

@@ -17,18 +17,29 @@ The hidden `serve --worker PATH` option replaces it with a development worker.
 
 ## Launch contract
 
-For the built-in worker, when inherited `RETICULATE_PYTHON` is absent or exactly `managed`, server initialization runs this preflight outside the sandbox:
+For the built-in worker, when inherited `RETICULATE_PYTHON` is absent or exactly `managed`, server initialization asks reticulate to resolve its baseline NumPy environment outside the sandbox.
+The resolver is equivalent to this R call and receives each requirement as a separate `Rscript` argument after the `--args` option terminator:
 
 ```text
-Rscript --vanilla -e 'Sys.setenv(RETICULATE_PYTHON = "managed"); cat(reticulate::py_config()$python)'
+reticulate:::uv_get_or_create_env(packages = unique(c("numpy", requirements)))
 ```
 
 The server uses `$R_HOME/bin/Rscript` when `R_HOME` is set and otherwise selects `Rscript` from `PATH`.
 It removes inherited `UV_OFFLINE`, allows reticulate and uv to use their normal global caches, and requires the command to return a valid interpreter path.
 Every worker generation receives that path as `RETICULATE_PYTHON`.
-Other inherited values, including an empty value, bypass the preflight unchanged; custom workers also skip it.
-The preflight completes before sideband pipes are created, receives no MCP stdin, and may use the network and write normal host caches.
+Other inherited values, including an empty value, bypass the startup preflight unchanged.
+
+Before the worker starts, `session` with `action = "prepare"` can add Python requirements to the implicit session.
+The server merges exact strings with the retained in-memory set, passes the complete candidate to the same host resolver, and commits the requirements and returned interpreter only after resolution succeeds.
+This explicit preparation takes precedence over an inherited Python selection.
+It returns `[prepared]` without creating sideband pipes or starting the worker.
+New requirements after worker startup return `restart required` without changing the retained manifest or running resolver work; exact retained requirements remain idempotent.
+Custom workers reject preparation and skip managed-Python resolution.
+
+Each resolver process receives no MCP stdin and may use the network and write normal host caches.
+Requirements remain arguments rather than R expressions, but uv may execute source-distribution build backends in this unsandboxed resolver process.
 A preflight failure prevents server initialization.
+A preparation failure is an MCP tool error and leaves the prior configuration unchanged.
 
 The worker starts lazily on the first `send` call that supplies `r`, `python`, `sql`, or nonempty `stdin`.
 On macOS, the server uses the same `SandboxedCommand` builder as the `sandbox` command.
@@ -328,7 +339,7 @@ This behavior requires reticulate from its `main` branch or a release containing
 An exec descendant that retains fd 1/2 creates fresh standard streams backed by those descriptors, so its ordinary stdout and stderr writes are captured.
 There is no relative ordering guarantee between those pipes and sideband output, as described under [Transport](#transport).
 
-The built-in worker receives either the interpreter path selected by the preflight or the caller's existing `RETICULATE_PYTHON` value.
+The built-in worker receives either the interpreter path selected by startup or explicit preparation, or the caller's existing `RETICULATE_PYTHON` value when no managed resolution occurred.
 Before initializing R, it forces `UV_OFFLINE=1`, overwriting any inherited value before user code runs.
 Reticulate initializes that selection on first use from R or Python and reuses it afterward.
 Because the preflight-selected interpreter is passed as a concrete path, worker-side `py_require()` calls do not revise that selection.
@@ -379,6 +390,7 @@ SQL source containing NUL is rejected as a normal language error before it reach
 ## Current limits
 
 No timeout bounds managed-Python preflight, worker startup, or execution.
+No timeout or cancellation bound applies to Python requirement preparation.
 The current implementation has no general frame-size limit, stdin queue limit, or accumulated-output limit.
 The 12 KiB cap applies only to a recognized SQL query preview; arbitrary R and Python console text, worker standard streams, and text accompanying that preview remain uncapped.
 `timeout_ms` limits one MCP wait without terminating the worker or a blocked stdin write; only shutdown has a process deadline.
@@ -394,6 +406,7 @@ SQL cells require installed arrow, DBI, duckdb, nanoarrow, pillar, and tibble R 
 MCP Console does not install these packages.
 The default preflight must be able to resolve or provision its interpreter and initial requirements outside the sandbox.
 An explicitly configured interpreter must be initializable under the offline worker policy.
+Python requirements are retained only in server memory, and additions cannot be activated after worker startup; named sessions, R requirements, explicit restart, and environment provenance do not exist.
 The Python input bridge does not observe direct `sys.stdin` or fd-0 reads.
 The SQL adapter does not expose R data frames or Python objects as relations.
 The current sandbox child does not yet supervise descendants after its direct process exits, or descendants that leave its process group; capturing inherited standard streams does not change that boundary.

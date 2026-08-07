@@ -4,8 +4,23 @@ mod platform {
     use std::path::PathBuf;
     use std::process::{Command, Stdio};
 
-    const PREFLIGHT: &str =
-        r#"Sys.setenv(RETICULATE_PYTHON = "managed"); cat(reticulate::py_config()$python)"#;
+    const PREFLIGHT: &str = r#"
+base::local({
+  arguments <- base::commandArgs(trailingOnly = TRUE)
+  base::stopifnot(base::identical(arguments[[1L]], "--args"))
+  requirements <- base::unique(c(
+    "numpy",
+    arguments[-1L]
+  ))
+  python <- reticulate:::uv_get_or_create_env(packages = requirements)
+  base::stopifnot(
+    base::length(python) == 1L,
+    !base::is.na(python),
+    base::nzchar(python)
+  )
+  base::cat(python)
+})
+"#;
 
     const BRIDGE_INIT: &str = r#"
 base::local({
@@ -100,8 +115,10 @@ def _mcp_console_eval_cell(
         Ok(())
     }
 
-    pub(crate) fn preflight() -> Result<Option<Managed>, String> {
-        if std::env::var_os("RETICULATE_PYTHON").is_some_and(|value| value != "managed") {
+    pub(crate) fn preflight(requirements: &[String]) -> Result<Option<Managed>, String> {
+        if requirements.is_empty()
+            && std::env::var_os("RETICULATE_PYTHON").is_some_and(|value| value != "managed")
+        {
             return Ok(None);
         }
 
@@ -111,32 +128,36 @@ def _mcp_console_eval_cell(
         let mut command = Command::new(&rscript);
         command
             .args(["--vanilla", "-e", PREFLIGHT])
+            // Requirement strings are untrusted; stop Rscript option parsing
+            // before passing them as ordinary arguments.
+            .arg("--args")
+            .args(requirements)
             .env_remove("UV_OFFLINE")
             .stdin(Stdio::null());
-        // Managed resolution intentionally runs before the sandboxed worker starts:
-        // reticulate and uv need normal host network and cache access, and no MCP
-        // input is accepted before this command completes.
+        // Managed resolution intentionally runs before the sandboxed worker starts
+        // because reticulate and uv need normal host network and cache access.
+        // Explicitly prepared requirement strings remain argv data, not R expressions.
         let output = command.output().map_err(|error| {
             format!(
-                "failed to run managed Python preflight with `{}`: {error}",
+                "failed to run managed Python resolver with `{}`: {error}",
                 rscript.display()
             )
         })?;
         if !output.status.success() {
             let error = String::from_utf8_lossy(&output.stderr);
             return Err(format!(
-                "managed Python preflight failed with {}: {}",
+                "managed Python resolution failed with {}: {}",
                 output.status,
                 error.trim()
             ));
         }
 
         let output = String::from_utf8(output.stdout)
-            .map_err(|_| "managed Python preflight returned a non-UTF-8 path".to_string())?;
+            .map_err(|_| "managed Python resolver returned a non-UTF-8 path".to_string())?;
         let python = PathBuf::from(output.trim());
         if !python.is_absolute() || !python.is_file() {
             return Err(format!(
-                "managed Python preflight returned invalid interpreter `{}`",
+                "managed Python resolver returned invalid interpreter `{}`",
                 python.display()
             ));
         }
@@ -148,8 +169,12 @@ def _mcp_console_eval_cell(
 mod platform {
     pub(crate) struct Managed;
 
-    pub(crate) fn preflight() -> Result<Option<Managed>, String> {
-        Ok(None)
+    pub(crate) fn preflight(requirements: &[String]) -> Result<Option<Managed>, String> {
+        if requirements.is_empty() {
+            Ok(None)
+        } else {
+            Err("managed Python environments are supported only on macOS".to_string())
+        }
     }
 }
 
