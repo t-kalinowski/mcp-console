@@ -15,6 +15,7 @@ from typing import Any, BinaryIO, TextIO
 READ_FD_ENV = "MCP_CONSOLE_SIDEBAND_READ_FD"
 WRITE_FD_ENV = "MCP_CONSOLE_SIDEBAND_WRITE_FD"
 WORKER_ENV = "MCP_CONSOLE_MITM_WORKER"
+CAPTURE_STDIN_CLOSE_ENV = "MCP_CONSOLE_MITM_CAPTURE_STDIN_CLOSE"
 CAPTURE_NAME = "mcp-console-worker-wire.jsonl"
 BUFFER_SIZE = 64 * 1024
 
@@ -54,6 +55,7 @@ def proxy(
     stdout: BinaryIO,
     stderr: BinaryIO,
     capture: TextIO,
+    capture_stdin_close: bool,
 ) -> None:
     streams = {
         stdout.fileno(): ("stdout", 1),
@@ -111,10 +113,12 @@ def proxy(
                 read_ready_streams()
                 flush_streams()
             record(capture, {direction: message})
+            frame_is_shutdown = direction == "server" and message == {"kind": "shutdown"}
+            if frame_is_shutdown and capture_stdin_close:
+                assert os.read(0, 1) == b"", "server stdin contained data at shutdown"
+                record(capture, {"stdin": {"closed": True}})
             send(destination, message)
-            shutdown = shutdown or (
-                direction == "server" and message == {"kind": "shutdown"}
-            )
+            shutdown = shutdown or frame_is_shutdown
         return shutdown
 
     while worker_read in active or any(descriptor in active for descriptor in streams):
@@ -164,6 +168,7 @@ def main() -> None:
     proxy_read, worker_write = os.pipe()
     environment = os.environ.copy()
     program = environment.pop(WORKER_ENV)
+    capture_stdin_close = environment.pop(CAPTURE_STDIN_CLOSE_ENV, None) == "1"
     environment[READ_FD_ENV] = str(worker_read)
     environment[WRITE_FD_ENV] = str(worker_write)
     process = subprocess.Popen(
@@ -188,6 +193,7 @@ def main() -> None:
             process.stdout,
             process.stderr,
             capture,
+            capture_stdin_close,
         )
     process.stdout.close()
     process.stderr.close()

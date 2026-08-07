@@ -1,0 +1,13 @@
+---
+worker:
+  kind: ready
+---
+server:
+  kind: shutdown
+---
+stdin:
+  closed: true
+---
+worker:
+  kind: ready
+...

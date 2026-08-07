@@ -5,21 +5,25 @@ import os
 import tempfile
 import time
 from pathlib import Path
+from typing import TextIO
 
 from _support import McpClient, Transcript, code, run_this_suite
 
 
 PLATFORMS = {"darwin"}
 CAPTURE_NAME = "mcp-console-worker-wire.jsonl"
+CAPTURE_STDIN_CLOSE_ENV = "MCP_CONSOLE_MITM_CAPTURE_STDIN_CLOSE"
 
 
 class WorkerWireClient:
-    def __init__(self, binary: Path) -> None:
+    def __init__(self, binary: Path, *, capture_stdin_close: bool = False) -> None:
         self.temporary = tempfile.TemporaryDirectory()
         root = Path(self.temporary.name)
         environment = os.environ.copy()
         environment["TMPDIR"] = str(root)
         environment["MCP_CONSOLE_MITM_WORKER"] = str(binary)
+        if capture_stdin_close:
+            environment[CAPTURE_STDIN_CLOSE_ENV] = "1"
         mitm = Path(__file__).resolve().parents[1] / "fixtures" / "worker_mitm"
         self.client = McpClient(
             binary,
@@ -34,6 +38,16 @@ class WorkerWireClient:
         assert result.get("isError") is not True, result
         return result["content"][0]["text"]
 
+    def restart(self) -> str:
+        self.client.call_tool("session", action="restart")
+        result = self.client.transcript[-1]["result"]
+        assert result.get("isError") is not True, result
+        return result["content"][0]["text"]
+
+    def open_capture(self) -> tuple[Path, TextIO]:
+        capture = self.capture_path()
+        return capture, capture.open(encoding="utf-8")
+
     def collect_output(self, output: str, expected_size: int) -> str:
         chunks = [] if output == "[done]" else [output]
         deadline = time.monotonic() + 10
@@ -47,16 +61,54 @@ class WorkerWireClient:
         return output
 
     def finish(self) -> Transcript:
-        root = Path(self.temporary.name)
-        captures = list(root.glob(f"mcp-console-tmp-*/{CAPTURE_NAME}"))
-        assert len(captures) == 1, captures
-        transcript = [
-            json.loads(line)
-            for line in captures[0].read_text(encoding="utf-8").splitlines()
-        ]
+        transcript = self.read_capture(self.capture_path())
         self.client.finish()
         self.temporary.cleanup()
         return transcript
+
+    def finish_restart(
+        self,
+        old_path: Path,
+        old_capture: TextIO,
+    ) -> Transcript:
+        transcript = self.read_open_capture(old_capture)
+        transcript.extend(self.read_capture(self.capture_path(excluding=old_path)))
+        old_capture.close()
+        self.client.finish()
+        self.temporary.cleanup()
+        return transcript
+
+    def capture_path(self, excluding: Path | None = None) -> Path:
+        root = Path(self.temporary.name)
+        captures = [
+            path
+            for path in root.glob(f"mcp-console-tmp-*/{CAPTURE_NAME}")
+            if path != excluding
+        ]
+        assert len(captures) == 1, captures
+        return captures[0]
+
+    @staticmethod
+    def read_capture(capture: Path) -> Transcript:
+        return [
+            json.loads(line)
+            for line in capture.read_text(encoding="utf-8").splitlines()
+        ]
+
+    @staticmethod
+    def read_open_capture(capture: TextIO) -> Transcript:
+        return [json.loads(line) for line in capture.read().splitlines()]
+
+
+def test_restarts_session(binary: Path) -> Transcript:
+    client = WorkerWireClient(binary, capture_stdin_close=True)
+    assert client.restart() == "[restarted]"
+    old_path, old_capture = client.open_capture()
+
+    assert client.restart() == "[restarted]"
+    transcript = client.finish_restart(old_path, old_capture)
+    assert {"stdin": {"closed": True}} in transcript
+    return transcript
 
 
 def test_routes_python_output(binary: Path) -> Transcript:
