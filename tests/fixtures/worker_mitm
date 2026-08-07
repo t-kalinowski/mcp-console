@@ -16,6 +16,9 @@ READ_FD_ENV = "MCP_CONSOLE_SIDEBAND_READ_FD"
 WRITE_FD_ENV = "MCP_CONSOLE_SIDEBAND_WRITE_FD"
 WORKER_ENV = "MCP_CONSOLE_MITM_WORKER"
 CAPTURE_STDIN_CLOSE_ENV = "MCP_CONSOLE_MITM_CAPTURE_STDIN_CLOSE"
+CAPTURE_WORKER_SIDEBAND_CLOSE_ENV = (
+    "MCP_CONSOLE_MITM_CAPTURE_WORKER_SIDEBAND_CLOSE"
+)
 CAPTURE_NAME = "mcp-console-worker-wire.jsonl"
 BUFFER_SIZE = 64 * 1024
 
@@ -56,6 +59,7 @@ def proxy(
     stderr: BinaryIO,
     capture: TextIO,
     capture_stdin_close: bool,
+    capture_worker_sideband_close: bool,
 ) -> None:
     streams = {
         stdout.fileno(): ("stdout", 1),
@@ -135,6 +139,8 @@ def proxy(
                 forward_frames("worker", server_write)
             else:
                 active.remove(worker_read)
+                if capture_worker_sideband_close:
+                    record(capture, {"worker_sideband": {"closed": True}})
                 close(server_write)
                 server_write = -1
 
@@ -169,6 +175,9 @@ def main() -> None:
     environment = os.environ.copy()
     program = environment.pop(WORKER_ENV)
     capture_stdin_close = environment.pop(CAPTURE_STDIN_CLOSE_ENV, None) == "1"
+    capture_worker_sideband_close = (
+        environment.pop(CAPTURE_WORKER_SIDEBAND_CLOSE_ENV, None) == "1"
+    )
     environment[READ_FD_ENV] = str(worker_read)
     environment[WRITE_FD_ENV] = str(worker_write)
     process = subprocess.Popen(
@@ -194,6 +203,7 @@ def main() -> None:
             process.stderr,
             capture,
             capture_stdin_close,
+            capture_worker_sideband_close,
         )
     process.stdout.close()
     process.stderr.close()

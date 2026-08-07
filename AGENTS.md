@@ -166,7 +166,7 @@ See `design-sketches/README.md` for the product overview and `design-sketches/do
 - `src/sandbox/` — platform implementation and macOS Seatbelt policy.
 - `tests/cli.rs` — public binary acceptance tests.
 - `tests/fixtures/zod` — executable Python sideband worker used by acceptance tests.
-- `tests/fixtures/worker_mitm` — transparent worker proxy used to capture sideband, standard-stream, and restart fd-0 closure events through `serve`.
+- `tests/fixtures/worker_mitm` — transparent worker proxy used to capture sideband, standard-stream, fd-0 closure, and worker-sideband closure events through `serve`.
 - `tests/transcripts/r.py` — public built-in R worker acceptance suite.
 - `tests/transcripts/python.py` — public reticulate Python-cell acceptance suite.
 - `tests/transcripts/sql.py` — public persistent-DuckDB acceptance suite.

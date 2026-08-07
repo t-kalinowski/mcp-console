@@ -6,22 +6,24 @@ server:
   kind: evaluate
   language: r
   source: |
-    restart_marker <- "old generation"
-    cat("before restart\n")
+    crash_marker <- "old generation"
+    cat("before crash\n")
 ---
 worker:
   kind: output
   data: |
-    before restart
+    before crash
 ---
 worker:
   kind: completed
 ---
 server:
-  kind: shutdown
----
-stdin:
-  closed: true
+  kind: evaluate
+  language: python
+  source: |
+    import ctypes
+
+    ctypes.string_at(0)
 ---
 worker_sideband:
   closed: true
@@ -33,13 +35,13 @@ server:
   kind: evaluate
   language: r
   source: |
-    stopifnot(!exists("restart_marker", inherits = FALSE))
-    cat("after restart\n")
+    stopifnot(!exists("crash_marker", inherits = FALSE))
+    cat("after crash\n")
 ---
 worker:
   kind: output
   data: |
-    after restart
+    after crash
 ---
 worker:
   kind: completed
