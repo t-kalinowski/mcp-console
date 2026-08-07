@@ -67,7 +67,9 @@ mod platform {
                     if let Some(message) = take_worker_failure().or_else(|| result.err()) {
                         return Err(io::Error::other(message).into());
                     }
-                    writer.send(&WorkerMessage::Completed)?;
+                    writer.send(&WorkerMessage::Completed {
+                        python_checkpoint: python.checkpoint()?,
+                    })?;
                 }
                 ServerMessage::Shutdown => return Ok(()),
                 ServerMessage::PythonResolved { .. }
@@ -96,12 +98,6 @@ mod platform {
                 "worker received an evaluation while resolving Python".to_string(),
             )),
         }
-    }
-
-    pub(crate) fn commit_python_requirements(
-        requirements: crate::worker_protocol::PythonRequirementManifest,
-    ) -> Result<(), String> {
-        send_worker_message(&WorkerMessage::PythonRequirementsCommitted { requirements })
     }
 
     fn receive_server_message() -> Result<ServerMessage, String> {
@@ -512,7 +508,7 @@ mod platform {
 }
 
 #[cfg(target_os = "macos")]
-pub(crate) use platform::{commit_python_requirements, publish_plot, resolve_python, run};
+pub(crate) use platform::{publish_plot, resolve_python, run};
 
 #[cfg(not(target_os = "macos"))]
 pub(crate) fn run() -> Result<(), Box<dyn std::error::Error>> {

@@ -65,17 +65,19 @@ After a Python cell calls `os.fork()`, the child cannot use the sideband, so ret
 Native extensions that fork without running CPython's registered fork callbacks and then resume Python are unsupported.
 Fork-child text capture requires reticulate from its `main` branch or a release containing fork-aware stream restoration.
 An exec descendant that retains fd 1/2 creates fresh standard streams backed by those descriptors, so its ordinary stdout and stderr are captured.
-When inherited `RETICULATE_PYTHON` is absent or exactly `managed`, built-in server startup calls reticulate's internal uv environment resolver with its NumPy baseline outside the sandbox and retains the resulting interpreter, manifest, and resolver `UV_*` settings for every worker generation.
+When inherited `RETICULATE_PYTHON` is absent or exactly `managed`, built-in server startup calls reticulate's internal uv environment resolver with its NumPy baseline outside the sandbox and retains the resulting interpreter and normalized manifest for every worker generation.
 Other inherited values, including an empty value, are preserved and skip that startup preflight; a later successful explicit preparation takes precedence over them.
 Custom workers skip resolution and reject Python requirement preparation.
 Resolution may access the network, write normal reticulate and uv host caches, and execute package build backends outside the sandbox, but requirement manifests remain JSON standard-input data rather than R code and no submitted cell is evaluated.
 Before initializing R, the worker forces `UV_OFFLINE=1`, overwriting any inherited value to match the sandbox's network denial.
 Reticulate reuses the server-resolved or caller-selected interpreter.
-For a server-managed worker, MCP Console seeds reticulate's requirement manifest, intercepts its internal `uv_get_or_create_env` binding, observes successful activation through its internal activation helper, and observes its internal manifest assignment without wrapping `py_require()`.
-Before Python initializes, a `py_require()` addition sends the complete proposed manifest to the server for resolution outside the sandbox.
-After initialization, additive package requirements resolve to a candidate environment outside the sandbox.
-Both worker-triggered paths use the worker's `UV_*` settings except `UV_OFFLINE`.
-Reticulate accepts that candidate only after its native exact-`libpython` check, `activate_this.py`, configuration swap, and manifest commit; only the committed manifest updates server state.
+For a server-managed worker, MCP Console seeds reticulate's requirement manifest and intercepts only its internal `uv_get_or_create_env` binding, without wrapping `py_require()`.
+Each runtime request sends the complete proposed manifest and the worker's current `UV_*` settings except `UV_OFFLINE` to the host resolver; those settings are transient inputs and are not retained or replayed.
+If managed reticulate is loaded but Python remains uninitialized at cell end, the worker invokes that resolver once to materialize the final manifest before completing.
+After initialization, additive package requirements resolve to candidate environments outside the sandbox, and reticulate performs its exact-`libpython` check, `activate_this.py`, configuration swap, and manifest assignment.
+The worker retains every resolved candidate for the evaluation and includes reticulate's normalized manifest as an optional field on `completed`.
+The server accepts the last candidate matching that checkpoint, or the prior environment when its manifest still matches, and only then updates its retained state.
+Normal language outcomes reach this checkpoint; an infrastructure or protocol failure before `completed` leaves the prior checkpoint unchanged.
 The live Python interpreter and its state are retained during this activation.
 Evaluated R code or an R package load can therefore trigger host resolution, which may use the network, write host caches, and execute package build backends outside the worker sandbox; the structured requirements and forwarded settings are data, and the submitted cell is not evaluated by the resolver.
 R and Python share objects through reticulate's `py` and `r` bridges.

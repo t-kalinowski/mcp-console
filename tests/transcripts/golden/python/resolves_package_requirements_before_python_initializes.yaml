@@ -18,6 +18,27 @@ result:
 ---
 id: 4
 send:
+  r: tools::pskill(Sys.getpid(), signal = 9L)
+result:
+  content:
+    - type: text
+      text: "worker sideband read failed: worker sideband closed"
+  isError: true
+---
+id: 5
+send:
+  r: |
+    "py-yaml12" %in% reticulate::py_require()$packages
+result:
+  content:
+    - type: text
+      text: |
+        [1] TRUE
+        [worker restarted: in-memory state lost]
+  isError: false
+---
+id: 6
+send:
   python: |
     import yaml12
 

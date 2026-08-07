@@ -48,7 +48,6 @@ impl PythonRequirementManifest {
 #[serde(deny_unknown_fields)]
 pub(crate) struct PythonResolveRequest {
     pub(crate) requirements: PythonRequirementManifest,
-    pub(crate) initialized: bool,
     pub(crate) environment: BTreeMap<String, String>,
 }
 
@@ -71,8 +70,8 @@ pub(crate) enum WorkerMessage {
     ResolvePython {
         request: PythonResolveRequest,
     },
-    PythonRequirementsCommitted {
-        requirements: PythonRequirementManifest,
+    Completed {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        python_checkpoint: Option<PythonRequirementManifest>,
     },
-    Completed,
 }

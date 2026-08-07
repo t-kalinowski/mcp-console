@@ -107,6 +107,21 @@ impl Bridge {
     }
 
     pub(crate) fn call0_integer(&self, function: &CStr) -> Result<c_int, String> {
+        self.call0(function, |value| Ok(unsafe { libr::Rf_asInteger(value) }))
+    }
+
+    pub(crate) fn call0_string(&self, function: &CStr) -> Result<Option<String>, String> {
+        self.call0(function, |value| {
+            Option::<String>::try_from(harp::object::RObject::view(value))
+                .map_err(|error| error.to_string())
+        })
+    }
+
+    fn call0<T>(
+        &self,
+        function: &CStr,
+        convert: impl FnOnce(libr::SEXP) -> Result<T, String>,
+    ) -> Result<T, String> {
         let result = harp::top_level_exec(|| {
             // SAFETY: This runs on R's main thread. The outer top-level
             // boundary contains allocation errors; R_tryEval contains errors
@@ -118,11 +133,11 @@ impl Bridge {
                 let value = (self.try_eval)(call, self.state, &mut evaluation_error);
                 let value = if evaluation_error == 0 {
                     let value = libr::Rf_protect(value);
-                    let value = libr::Rf_asInteger(value);
+                    let value = convert(value);
                     libr::Rf_unprotect(1);
-                    value
+                    Some(value)
                 } else {
-                    0
+                    None
                 };
                 libr::Rf_unprotect(1);
                 (evaluation_error, value)
@@ -136,7 +151,9 @@ impl Bridge {
                 self.language
             ));
         }
-        Ok(value)
+        value
+            .expect("successful R evaluation should return a value")
+            .map_err(|error| format!("{} bridge returned {error}", self.language))
     }
 }
 

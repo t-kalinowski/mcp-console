@@ -2,7 +2,6 @@
 
 import os
 import re
-import shlex
 import shutil
 import subprocess
 import tempfile
@@ -273,112 +272,6 @@ def test_layers_python_requirements_declared_by_r_packages(
         return client.finish()
 
 
-def test_rejects_layered_python_with_different_libpython(
-    binary: Path,
-) -> Transcript:
-    environment, rscript = r_test_environment()
-    environment.pop("R_HOME", None)
-    environment.pop("RETICULATE_PYTHON", None)
-    environment.pop("RETICULATE_UV", None)
-    with tempfile.TemporaryDirectory() as temporary:
-        binary_directory = Path(temporary) / "bin"
-        binary_directory.mkdir()
-        resolver = binary_directory / "Rscript"
-        resolver.write_text(
-            "#!/bin/sh\n"
-            'if test -n "${UV_MCP_CONSOLE_PYTHON:-}"; then\n'
-            "  /bin/cat >/dev/null\n"
-            "  /usr/bin/printf '%s\\n' \"$UV_MCP_CONSOLE_PYTHON\"\n"
-            "  exit 0\n"
-            "fi\n"
-            f'exec {shlex.quote(str(rscript))} "$@"\n',
-            encoding="utf-8",
-        )
-        resolver.chmod(0o755)
-        environment["PATH"] = os.pathsep.join(
-            (str(binary_directory), environment.get("PATH", ""))
-        )
-
-        client = McpClient(binary, ("serve",), environment)
-        client.initialize_and_list_tools()
-        client.call_tool("send", python="runtime_marker = 42")
-        assert last_tool_text(client) == "[done]"
-
-        # fmt: r
-        r = code(r"""
-            config <- reticulate::py_config()
-            initial_libpython <- config$libpython
-            fake <- file.path(tempdir(), "different-python")
-            stopifnot(
-              length(initial_libpython) == 1L,
-              file.exists(initial_libpython),
-              dir.create(fake),
-              file.create(file.path(fake, basename(initial_libpython)))
-            )
-
-            fake_python <- file.path(fake, "python")
-            fake_config <- file.path(fake, "config.txt")
-            writeLines(
-              c(
-                paste("Architecture:", config$architecture),
-                paste("Version:", config$version_string),
-                paste("VersionNumber:", config$version),
-                paste("Prefix:", config$prefix),
-                paste("ExecPrefix:", config$exec_prefix),
-                paste("BaseExecPrefix:", config$base_exec_prefix),
-                paste("PythonPath:", config$pythonpath),
-                paste("LIBPL:", fake),
-                paste("LIBDIR:", fake),
-                "SharedLibrary: 1",
-                paste("Executable:", fake_python),
-                paste("BaseExecutable:", config$base_executable),
-                paste("IsConda:", config$conda),
-                paste("NumpyPath:", config$numpy$path),
-                paste("NumpyVersion:", config$numpy$version)
-              ),
-              fake_config
-            )
-            writeLines(
-              c(
-                "#!/bin/sh",
-                paste("/bin/cat", shQuote(fake_config))
-              ),
-              fake_python
-            )
-            Sys.chmod(fake_python, mode = "0755")
-            Sys.setenv(UV_MCP_CONSOLE_PYTHON = fake_python)
-
-            rejection <- tryCatch(
-              {
-                reticulate::py_require("py-yaml12")
-                NA_character_
-              },
-              error = conditionMessage
-            )
-            reticulate::py_require("numpy")
-            stopifnot(
-              startsWith(
-                rejection,
-                "New environment does not use the same Python binary"
-              ),
-              identical(reticulate::py_config()$libpython, initial_libpython),
-              !"py-yaml12" %in% reticulate::py_require()$packages
-            )
-            """)
-        client.call_tool("send", r=r)
-        assert last_tool_text(client) == "[done]"
-
-        client.call_tool("send", python="runtime_marker")
-        assert last_tool_text(client) == "42\n"
-        client.call_tool(
-            "session",
-            action="prepare",
-            requirements={"python": ["py-yaml12"]},
-        )
-        assert last_tool_text(client) == "restart required"
-        return client.finish()
-
-
 def test_resolves_package_requirements_before_python_initializes(
     binary: Path,
 ) -> Transcript:
@@ -408,6 +301,26 @@ def test_resolves_package_requirements_before_python_initializes(
             """)
         client.call_tool("send", r=r)
         assert last_tool_text(client) == "[done]"
+
+        # Replace the worker after the requirement declaration has completed,
+        # but before Python has initialized.
+        # fmt: r
+        r = code(r"""
+            tools::pskill(Sys.getpid(), signal = 9L)
+            """).removesuffix("\n")
+        client.call_tool("send", r=r)
+        assert client.transcript[-1]["result"]["isError"] is True
+
+        # fmt: r
+        r = code(r"""
+            "py-yaml12" %in% reticulate::py_require()$packages
+            """)
+        client.call_tool("send", r=r)
+        output = last_tool_text(client)
+        assert output == ("[1] TRUE\n[worker restarted: in-memory state lost]\n"), repr(
+            output
+        )
+
         # fmt: python
         python = code("""
             import yaml12
@@ -417,6 +330,41 @@ def test_resolves_package_requirements_before_python_initializes(
         client.call_tool("send", python=python)
         assert last_tool_text(client) == "'yaml12'\n"
         return client.finish()
+
+
+def test_does_not_checkpoint_python_requirements_from_failed_cell(
+    binary: Path,
+) -> Transcript:
+    client = McpClient(binary, ("serve",))
+    client.initialize_and_list_tools()
+    # fmt: r
+    r = code(r"""
+        invisible(reticulate::py_config())
+        invisible(reticulate::py_require("py-yaml12"))
+        stopifnot(reticulate::py_module_available("yaml12"))
+        tools::pskill(Sys.getpid(), signal = 9L)
+        """).removesuffix("\n")
+    client.call_tool("send", r=r)
+    assert client.transcript[-1]["result"]["isError"] is True
+
+    # fmt: r
+    r = code(r"""
+        "py-yaml12" %in% reticulate::py_require()$packages
+        """)
+    client.call_tool("send", r=r)
+    output = last_tool_text(client)
+    assert output == ("[1] FALSE\n[worker restarted: in-memory state lost]\n"), repr(
+        output
+    )
+
+    client.call_tool(
+        "session",
+        action="prepare",
+        requirements={"python": ["py-yaml12"]},
+    )
+    output = last_tool_text(client)
+    assert output == "restart required", repr(output)
+    return client.finish()
 
 
 def test_reports_restart_required_while_python_is_running(binary: Path) -> Transcript:

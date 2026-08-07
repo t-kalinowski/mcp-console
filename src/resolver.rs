@@ -79,7 +79,6 @@ base::local({
     pub(crate) struct ManagedPython {
         python: PathBuf,
         requirements: crate::worker_protocol::PythonRequirementManifest,
-        environment: BTreeMap<String, String>,
     }
 
     #[derive(Clone)]
@@ -104,15 +103,6 @@ base::local({
 
     impl ManagedPython {
         pub(crate) fn configure_worker(&self, command: &mut crate::sandbox::SandboxedCommand) {
-            for name in std::env::vars_os()
-                .filter_map(|(name, _)| name.into_string().ok())
-                .filter(|name| name.starts_with("UV_") && name != "UV_OFFLINE")
-            {
-                command.env_remove(name);
-            }
-            for (name, value) in &self.environment {
-                command.env(name, value);
-            }
             command.env("RETICULATE_PYTHON", "managed");
             command.env(
                 "MCP_CONSOLE_MANAGED_PYTHON",
@@ -127,10 +117,6 @@ base::local({
 
         pub(crate) fn requirements(&self) -> &crate::worker_protocol::PythonRequirementManifest {
             &self.requirements
-        }
-
-        pub(crate) fn environment(&self) -> &BTreeMap<String, String> {
-            &self.environment
         }
     }
 
@@ -239,7 +225,6 @@ base::local({
         Ok(ManagedPython {
             python,
             requirements,
-            environment,
         })
     }
 
@@ -413,7 +398,6 @@ mod platform {
     #[derive(Clone)]
     pub(crate) struct ManagedPython {
         requirements: crate::worker_protocol::PythonRequirementManifest,
-        environment: BTreeMap<String, String>,
     }
     #[derive(Clone)]
     pub(crate) struct ResolverStopHandle;
@@ -427,10 +411,6 @@ mod platform {
     impl ManagedPython {
         pub(crate) fn requirements(&self) -> &crate::worker_protocol::PythonRequirementManifest {
             &self.requirements
-        }
-
-        pub(crate) fn environment(&self) -> &BTreeMap<String, String> {
-            &self.environment
         }
     }
 

@@ -30,7 +30,7 @@ reticulate:::uv_get_or_create_env(
 
 The server uses `$R_HOME/bin/Rscript` when `R_HOME` is set and otherwise selects `Rscript` from `PATH`.
 It removes inherited `UV_OFFLINE`, allows reticulate and uv to use their normal global caches, and requires the command to return a valid interpreter path.
-The server retains the result, manifest, and resolver `UV_*` settings and applies them to each server-managed worker.
+The server retains the result and normalized manifest and applies them to each server-managed worker.
 Other inherited values, including an empty value, bypass the startup preflight unchanged.
 
 Before the worker starts, `session` with `action = "prepare"` can add Python requirements to the implicit session.
@@ -42,7 +42,8 @@ This restriction does not apply to additive requirements declared through `retic
 Custom workers reject preparation and skip managed-Python resolution.
 
 Each resolver process receives only a requirement manifest on standard input, not submitted cells or `send` stdin, and may use the network and write normal host caches.
-Runtime requests also supply the worker's `UV_*` settings except `UV_OFFLINE`; the server removes its own `UV_*` settings before applying that exact set to the resolver.
+Runtime requests also supply the worker's current `UV_*` settings except `UV_OFFLINE`; the server removes its own `UV_*` settings before applying that exact set to the resolver.
+Those settings are inputs to that resolution only; the server does not retain or replay them.
 Requirements and settings remain structured data rather than R expressions, but uv may execute source-distribution build backends in this unsandboxed resolver process.
 Evaluated R code and R package load hooks can request resolution through `py_require()`, but the resolver does not evaluate their submitted source.
 A preflight failure prevents server initialization.
@@ -125,16 +126,17 @@ The complete implemented message set is:
 | worker → server | `{"kind":"image","data":"...","mime_type":"image/png"}` | Append one base64-encoded image. |
 | worker → server | `{"kind":"input_requested","prompt":"..."}` | Report that the runtime requested input. |
 | worker → server | `{"kind":"input_received"}` | Report that the current read succeeded. |
-| worker → server | `{"kind":"resolve_python","request":{"requirements":{"packages":["numpy"]},"initialized":false,"environment":{}}}` | Resolve the complete proposed reticulate manifest outside the sandbox. |
-| worker → server | `{"kind":"python_requirements_committed","requirements":{"packages":["numpy","py-yaml12"]}}` | Report that reticulate committed a resolved late manifest. |
-| worker → server | `{"kind":"completed"}` | The evaluation is complete. |
+| worker → server | `{"kind":"resolve_python","request":{"requirements":{"packages":["numpy"]},"environment":{}}}` | Resolve the complete proposed reticulate manifest outside the sandbox. |
+| worker → server | `{"kind":"completed","python_checkpoint":{"packages":["numpy","py-yaml12"]}}` | Complete the evaluation and report its normalized Python manifest. |
+| worker → server | `{"kind":"completed"}` | Complete without a managed-Python checkpoint. |
 
 Every frame uses `kind` to select its message variant.
 Unknown fields are rejected in either direction.
 The `language` value is `r`, `python`, or `sql`.
 Python manifests contain `packages` and may contain `python_version` and `exclude_newer`; empty optional fields are omitted.
-The `initialized` field records whether the worker already has a live Python interpreter.
 The `environment` object may contain only `UV_*` settings other than `UV_OFFLINE`.
+The optional `python_checkpoint` is the complete normalized manifest, not reticulate's request history.
+Custom workers, caller-configured Python workers, and server-managed workers that never load reticulate omit it.
 
 ## Handshake and evaluation
 
@@ -158,17 +160,21 @@ An image frame's `data` must already be base64 encoded, and `mime_type` becomes 
 `input_requested` appends one server-owned MCP request record and starts one provisional input state.
 The matching `input_received` clears that state after the runtime read succeeds without removing the record.
 Only one request may be outstanding: a second request, a receipt without a request, or completion before its receipt is a protocol failure.
-`completed` ends the sideband evaluation; collecting its MCP result permits the next one.
+`completed` ends the sideband evaluation.
+The server must accept its optional Python checkpoint before the MCP evaluation completes and the next cell is permitted.
 
 A server-managed worker may send `resolve_python` during an evaluation when reticulate invokes its internal `uv_get_or_create_env` binding.
 The request contains the complete proposed manifest, not a history delta.
 The server performs the resolution while the worker waits and replies with exactly one `python_resolved` or `python_resolution_failed` frame on the same sideband.
 No request ID is needed because the worker can have only one such synchronous request in flight.
-Before Python initializes, the server retains a successful complete-manifest result and reticulate initializes the returned interpreter normally.
-For a live interpreter, the returned environment is only a candidate: reticulate must pass its exact-`libpython` check, run the candidate's `activate_this.py`, swap its Python configuration, and commit its manifest.
-The active manifest assignment then sends `python_requirements_committed`, and only that frame commits the pending requirements and interpreter on the server.
+Every successful reply remains a candidate until the evaluation completes.
+If managed reticulate is loaded but Python remains uninitialized at cell end, the worker invokes the replacement resolver to materialize the final manifest before sending `completed`.
+For a live interpreter, reticulate must pass its exact-`libpython` check, run the candidate's `activate_this.py`, swap its Python configuration, and update its manifest.
 The same Python interpreter, `__main__` namespace, and existing objects remain live through a successful activation.
-A resolution or activation failure leaves the prior server selection unchanged; a pending candidate without a matching commit is discarded when the evaluation ends.
+On `completed`, the server accepts the last candidate whose normalized manifest matches `python_checkpoint`, or retains the prior environment when its manifest matches.
+Any other checkpoint is a protocol failure, and unmatched candidates are discarded.
+Normal R, Python, and SQL language outcomes reach this checkpoint because their side effects remain live in the worker.
+An infrastructure or protocol failure before `completed` leaves the prior server checkpoint unchanged.
 
 If no sideband content or input-request record remains pending at `completed` and no standard-stream text is pending, the current MCP projection returns `[done]`.
 That marker is produced by the server; it is not a sideband message.
@@ -275,11 +281,10 @@ New code is rejected while an evaluation or its uncollected result is active.
 | evaluating | worker → server `input_requested` | append request record; evaluating, input provisional |
 | evaluating, input provisional | worker → server `input_received` | retain request record; evaluating |
 | evaluating | worker → server `resolve_python` | host resolving; worker waiting |
-| host resolving | server → worker `python_resolved` | evaluating; candidate returned |
-| host resolving | server → worker `python_resolution_failed` | evaluating; prior environment unchanged |
-| evaluating, candidate returned | worker → server `python_requirements_committed` | evaluating; server commits candidate |
+| host resolving | server → worker `python_resolved` | evaluating; retain candidate |
+| host resolving | server → worker `python_resolution_failed` | evaluating; prior checkpoint unchanged |
 | evaluating, with or without input reported | MCP stdin submission | evaluating |
-| evaluating, no provisional input | worker → server `completed` | idle |
+| evaluating, no provisional input | worker → server `completed` | validate checkpoint, then idle |
 | starting, idle, or evaluating | server → worker `shutdown` | terminal |
 
 Malformed JSON, invalid UTF-8, an unexpected message, or sideband EOF fails the active operation.
@@ -290,7 +295,7 @@ After `ready`, a sideband failure force-stops and discards the worker; a later e
 Sideband content received before that failure is retained and precedes the tool error.
 Standard-stream text collected before an infrastructure failure is attached to its tool error when available at the response boundary; text collected later remains for the next `send` response.
 If either output path contributed text, the server starts the bracketed error on a new line.
-R parse and evaluation errors, Python exceptions, and DuckDB errors are not sideband failures: the built-in worker sends them as output followed by `completed` and remains reusable.
+R parse and evaluation errors, Python exceptions, and DuckDB errors are not sideband failures: the built-in worker sends them as output followed by `completed`, checkpoints any resulting manifest, and remains reusable.
 
 ## Shutdown
 
@@ -371,13 +376,16 @@ There is no relative ordering guarantee between those pipes and sideband output,
 
 The built-in worker receives either a server-managed requirement manifest selected by startup or explicit preparation, or the caller's existing `RETICULATE_PYTHON` value when no managed resolution occurred.
 Before initializing R, it forces `UV_OFFLINE=1`, overwriting any inherited value before user code runs.
-For a server-managed worker, MCP Console seeds reticulate's manifest, replaces the namespace binding for its internal `uv_get_or_create_env` function, wraps its internal activation helper to observe successful activation, and uses an active binding to observe its internal manifest assignment.
-It does not replace `py_require()`, so reticulate retains its package attribution, manifest history, compatibility check, activation, and configuration behavior.
-When `py_require()` needs an environment before Python initializes, that binding sends the complete proposed manifest to the server and returns the interpreter resolved outside the sandbox.
+For a server-managed worker, MCP Console seeds reticulate's manifest and replaces only the namespace binding for its internal `uv_get_or_create_env` function.
+It does not replace `py_require()`, so reticulate retains its package attribution, manifest history, compatibility checks, activation, and configuration behavior within the live R process.
 When Python is already initialized, only additive package requirements are supported.
 The worker sends the complete proposed manifest and its current `UV_*` settings except `UV_OFFLINE`, then waits for the server's resolver reply within the same evaluation.
-Reticulate checks that the candidate uses the exact live `libpython`, runs `activate_this.py`, swaps its configuration, and commits its manifest before the worker reports the commit to the server.
+Those settings are not retained after the resolution.
+Reticulate checks that each candidate uses the exact live `libpython`, runs `activate_this.py`, swaps its configuration, and updates its manifest.
 The interpreter is not restarted, so its `__main__` namespace and existing Python objects remain available.
+If reticulate is loaded but Python remains uninitialized at cell end, the worker calls the replacement resolver to materialize the final manifest.
+The worker then sends that normalized manifest as `completed.python_checkpoint`; it does not send reticulate's history.
+The server accepts the last candidate from the evaluation with that manifest, or its prior environment if the manifest did not change.
 An R package load hook may trigger this path while its namespace is loading.
 An explicit `session prepare` addition after worker startup still returns `restart required`; it does not use the runtime layering path.
 
@@ -444,7 +452,7 @@ MCP Console does not install these packages.
 The default preflight must be able to resolve or provision its interpreter and initial requirements outside the sandbox.
 An explicitly configured interpreter must be initializable under the offline worker policy.
 Python requirements are retained only in server memory.
-Server-managed workers can report and activate additive package requirements after startup, but an explicit late `session prepare` still requires restart.
+Server-managed workers can activate additive package requirements and checkpoint their final manifest after startup, but an explicit late `session prepare` still requires restart.
 Runtime Python version changes, `exclude_newer` changes, and non-additive package changes after initialization are not supported by the layering path.
 Named sessions, R requirements, explicit restart, and environment provenance do not exist.
 The Python input bridge does not observe direct `sys.stdin` or fd-0 reads.
@@ -454,6 +462,7 @@ The current sandbox child does not yet supervise descendants after its direct pr
 ## Zod fixture behavior
 
 Zod implements the protocol as an executable uv script requiring Python 3.11 or newer.
+As a custom worker, it omits `python_checkpoint` from every `completed` frame.
 When an R `source` is exactly `echo`, it sends two output chunks followed by `completed`:
 
 ```text

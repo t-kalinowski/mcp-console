@@ -107,13 +107,14 @@ SQL cells require the `arrow`, `DBI`, `duckdb`, `nanoarrow`, `pillar`, and `tibb
 When `RETICULATE_PYTHON` is unset or is `managed`, `mcp-console serve` runs reticulate's uv environment resolver outside the worker sandbox with its NumPy baseline, where it can use the normal host caches and network access.
 Other configured values, including an empty value, are preserved when no requirements are prepared and skip this startup preflight.
 An explicit `session` preparation selects its resolved managed environment even when `RETICULATE_PYTHON` was configured, so a successful call guarantees that its requirements are present.
-The server retains the selected interpreter, manifest, and resolver `UV_*` settings and applies them to each sandboxed worker; the worker forces `UV_OFFLINE=1` and otherwise uses the existing sandbox policy unchanged.
-For a server-managed worker, MCP Console seeds reticulate's requirement manifest, replaces its internal uv environment lookup, observes successful activation through its internal activation helper, and observes its internal manifest assignment.
-It does not wrap `py_require()`, so reticulate retains the original caller attribution and activation behavior.
-Before Python initializes, `py_require()` additions cause the complete proposed manifest to be resolved by the server outside the sandbox.
-After Python initializes, additive package requirements resolve to a candidate environment outside the sandbox; reticulate then checks that it uses the exact same `libpython`, runs its `activate_this.py`, swaps its Python configuration, and commits its manifest.
-Only that committed manifest updates the server-owned requirements and interpreter selection, and the running interpreter and its Python state remain live throughout the activation.
-Each runtime resolution uses the worker's `UV_*` settings except `UV_OFFLINE`, which cannot be forwarded from the network-denied worker to the host resolver.
+The server retains the selected interpreter and normalized manifest and applies them to each sandboxed worker; the worker forces `UV_OFFLINE=1` and otherwise uses the existing sandbox policy unchanged.
+For a server-managed worker, MCP Console seeds reticulate's requirement manifest and replaces only its internal uv environment lookup.
+It does not wrap `py_require()`, so reticulate retains caller attribution, manifest history, and activation behavior within the live R process.
+If managed reticulate is loaded but Python remains uninitialized at cell end, the worker resolves the final manifest outside the sandbox before completing.
+After Python initializes, additive package requirements resolve to candidate environments outside the sandbox; reticulate checks the exact `libpython`, runs `activate_this.py`, swaps its Python configuration, and updates its manifest while the interpreter and its existing state remain live.
+At completion, the worker reports the normalized manifest, and the server accepts the last matching candidate or its unchanged prior environment before retaining that checkpoint.
+Normal language outcomes reach this checkpoint; an infrastructure or protocol failure before completion leaves the prior checkpoint unchanged.
+Each runtime resolution uses the worker's current `UV_*` settings except `UV_OFFLINE`; those settings are not retained or replayed across worker generations.
 The requirement strings and forwarded settings are structured data rather than R code, and the resolver does not evaluate the submitted cell.
 However, evaluated R code or an R package load can request this resolution, and reticulate and uv may access the network, write normal host caches, and execute a source distribution's build backend outside the worker sandbox.
 If the preflight cannot select an interpreter, `serve` exits before accepting MCP requests.
