@@ -112,6 +112,7 @@ Requirement strings are passed as data rather than evaluated as R code, but reti
 The resolver does not evaluate submitted R or Python cells.
 If the preflight cannot select an interpreter, `serve` exits before accepting MCP requests.
 A failed `session` preparation is a tool error and leaves the prior requirements and interpreter selection unchanged.
+For uv tool failures, the error includes the attempted uv command and uv's stderr without reticulate's interactive `py_require()` guidance.
 Preparation has no per-call timeout; closing MCP input force-stops an in-flight resolver process group.
 MCP Console does not install these R packages.
 Python `input()` and `breakpoint()`/`pdb` use reticulate's R console bridge, so each read emits `input_requested` before reading and `input_received` after a successful read.

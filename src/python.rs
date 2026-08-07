@@ -16,7 +16,29 @@ base::local({
   requirements <- base::readLines(input, warn = FALSE)
   base::close(input)
   requirements <- base::unique(c("numpy", requirements))
-  python <- reticulate:::uv_get_or_create_env(packages = requirements)
+  messages <- utils::capture.output(
+    ignored_output <- utils::capture.output(
+      python <- base::try(
+        reticulate:::uv_get_or_create_env(packages = requirements),
+        silent = TRUE
+      ),
+      type = "output"
+    ),
+    type = "message"
+  )
+  if (base::inherits(python, "try-error")) {
+    command <- messages[
+      base::grepl(" tool run --isolated ", messages, fixed = TRUE)
+    ]
+    uv_error <- base::any(base::startsWith(messages, "uv error code: "))
+    if (uv_error && base::length(command)) {
+      base::cat(command[[1L]], "\n", sep = "")
+    } else {
+      error <- base::attr(python, "condition")
+      base::writeLines(base::conditionMessage(error), con = base::stderr())
+    }
+    base::quit(save = "no", status = 1L, runLast = FALSE)
+  }
   base::stopifnot(
     base::length(python) == 1L,
     !base::is.na(python),
@@ -145,6 +167,7 @@ def _mcp_console_eval_cell(
         command
             .args(["--vanilla", "-e", PREFLIGHT])
             .env_remove("UV_OFFLINE")
+            .env("_RETICULATE_DEBUG_UV_", "1")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -175,12 +198,19 @@ def _mcp_console_eval_cell(
             stderr,
         } = wait_for_resolver(&mut child, cancellation, input, stdout, stderr, &rscript)?;
         if !status.success() {
+            let command = String::from_utf8_lossy(&stdout);
             let error = String::from_utf8_lossy(&stderr);
-            return Err(format!(
-                "managed Python resolution failed with {}: {}",
-                status,
-                error.trim()
-            ));
+            let command = command.trim();
+            let error = error.trim();
+            return if command.is_empty() {
+                Err(format!(
+                    "managed Python resolution failed with {status}: {error}"
+                ))
+            } else {
+                Err(format!(
+                    "managed Python resolution failed:\nuv command:\n{command}\nuv output:\n{error}"
+                ))
+            };
         }
         write_result.map_err(|error| format!("failed to write Python requirements: {error}"))?;
 

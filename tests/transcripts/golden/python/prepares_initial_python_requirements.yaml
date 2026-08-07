@@ -23,20 +23,14 @@ result:
   content:
     - type: text
       text: |-
-        managed Python resolution failed with exit status: 1: error: Failed to parse: `not a valid requirement !!!`
+        managed Python resolution failed:
+        uv command:
+        <uv> tool run --isolated --python 3.12.x --with numpy --with 'not a valid requirement !!!' --with py-yaml12 -- python -c 'import sys; f=open(sys.argv[-1], chr(119)); f.write(sys.executable); f.close();' <resolver-output>
+        uv output:
+        error: Failed to parse: `not a valid requirement !!!`
           Caused by: Expected one of `@`, `(`, `<`, `=`, `>`, `~`, `!`, `;`, found `a`
         not a valid requirement !!!
             ^
-        uv error code: 2
-        -- Current requirements -------------------------------------------------
-         Python:   3.12.x (reticulate default)
-         Packages: numpy, not a valid requirement !!!, py-yaml12
-        -------------------------------------------------------------------------
-        Hint: If you are temporarily offline, try setting `Sys.setenv(UV_OFFLINE=1)`.
-        Error in reticulate:::uv_get_or_create_env(packages = requirements) :
-          Call `py_require()` to remove or replace conflicting requirements.
-        Calls: <Anonymous> ... eval.parent -> eval -> eval -> eval -> eval -> <Anonymous>
-        Execution halted
   isError: true
 ---
 id: 5

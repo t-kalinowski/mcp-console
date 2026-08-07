@@ -40,6 +40,8 @@ Each resolver process receives only requirement lines on standard input, not sub
 Requirements remain standard-input data rather than R expressions, but uv may execute source-distribution build backends in this unsandboxed resolver process.
 A preflight failure prevents server initialization.
 A preparation failure is an MCP tool error and leaves the prior configuration unchanged.
+For a uv tool failure, `Rscript` enables reticulate's uv debug output, captures its message stream, and sends only the reported tool-run command on stdout; uv's inherited stderr remains separate.
+The server labels both in the tool error and discards reticulate's requirements summary, hints, and R call information.
 The resolver leads a dedicated process group registered with the server shutdown gate before requirement input is written.
 Closing MCP input force-stops that group and reaps `Rscript`; startup preflight finishes before MCP input is accepted and does not participate in this cancellation path.
 

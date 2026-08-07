@@ -109,6 +109,39 @@ def test_prepares_initial_python_requirements(binary: Path) -> Transcript:
     )
     assert last_tool_text(client) == "[prepared]"
     invalid = "not a valid requirement !!!"
+
+    def normalize_resolution_error(error: str) -> str:
+        error, executable = re.subn(
+            r"(?m)^(uv command:\n).+(?= tool run --isolated )",
+            r"\1<uv>",
+            error,
+            count=1,
+        )
+        error, python_patch = re.subn(
+            r"(?m)^(<uv> tool run .* --python \d+\.\d+)\.\d+(?= )",
+            r"\1.x",
+            error,
+            count=1,
+        )
+        error, output_path = re.subn(
+            r"(?m)^(<uv> tool run .+?) (?:(?:'[^']*')|(?:\"[^\"]*\")|\S+)$",
+            r"\1 <resolver-output>",
+            error,
+            count=1,
+        )
+        error, uv_indentation = re.subn(
+            rf"(?m)^(?P<indent> *)({re.escape(invalid)})\n(?P=indent)(?P<caret> +\^)$",
+            lambda match: f"{match.group(2)}\n{match.group('caret')}",
+            error,
+        )
+        assert (executable, python_patch, output_path, uv_indentation) == (
+            1,
+            1,
+            1,
+            1,
+        ), error
+        return "\n".join(line.rstrip() for line in error.splitlines())
+
     client.call_tool(
         "session",
         action="prepare",
@@ -117,22 +150,8 @@ def test_prepares_initial_python_requirements(binary: Path) -> Transcript:
     result = client.transcript[-1]["result"]
     assert result["isError"] is True, result
     resolution_error = result["content"][0]["text"]
-    assert "managed Python resolution failed" in resolution_error
-    recorded_error, substitutions = re.subn(
-        r"(?m)^( Python:\s+\d+\.\d+)\.\d+ \(reticulate default\)$",
-        r"\1.x (reticulate default)",
-        resolution_error,
-    )
-    assert substitutions == 1, resolution_error
-    recorded_error, substitutions = re.subn(
-        rf"(?m)^(?P<indent> *)({re.escape(invalid)})\n(?P=indent)(?P<caret> +\^)$",
-        lambda match: f"{match.group(2)}\n{match.group('caret')}",
-        recorded_error,
-    )
-    assert substitutions == 1, resolution_error
-    result["content"][0]["text"] = "\n".join(
-        line.rstrip() for line in recorded_error.splitlines()
-    )
+    recorded_error = normalize_resolution_error(resolution_error)
+    result["content"][0]["text"] = recorded_error
     client.call_tool(
         "session",
         action="prepare",
@@ -140,7 +159,7 @@ def test_prepares_initial_python_requirements(binary: Path) -> Transcript:
     )
     result = client.transcript[-1]["result"]
     assert result["isError"] is True, result
-    assert result["content"][0]["text"] == resolution_error
+    assert normalize_resolution_error(result["content"][0]["text"]) == recorded_error
     result["content"][0]["text"] = "<same Python requirement resolution error>"
     client.call_tool(
         "session",

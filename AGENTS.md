@@ -36,6 +36,7 @@ The implemented `session` surface accepts only `action = "prepare"` with one or 
 Requirements are exact, additive, and idempotent.
 Before the worker starts, each successful prepare resolves the complete candidate set outside the sandbox, atomically retains it in server memory, replaces any inherited Python selection with the resolved interpreter, and returns `[prepared]` without starting the worker.
 A failed resolution leaves the prior requirements and interpreter unchanged.
+For a uv tool failure, the tool error reports the exact uv command and uv's stderr while omitting reticulate's `py_require()`-oriented guidance.
 Closing MCP input cancels an in-flight explicit resolution by force-stopping its host resolver process group; startup preflight completes before MCP input is accepted and is not cancellable through that lifecycle.
 Once a worker has started, an already-retained requirement remains idempotent, while any addition returns `restart required` without changing the environment.
 Named sessions, R requirements, runtime environment layering, and explicit restart do not exist yet.
