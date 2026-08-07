@@ -83,6 +83,21 @@ result:
 ---
 id: 7
 send:
+  r: |
+    seed <- tail(reticulate::py_require()$history, 1L)[[1L]]
+    stopifnot(
+      identical(seed$requested_from, "mcp-console"),
+      identical(seed$action, "set"),
+      identical(seed$packages, c("numpy", "py-yaml12"))
+    )
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+id: 8
+send:
   python: |
     import yaml12
 
@@ -94,7 +109,7 @@ result:
         'yaml12'
   isError: false
 ---
-id: 8
+id: 9
 session:
   action: prepare
   requirements:

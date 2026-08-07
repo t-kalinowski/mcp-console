@@ -778,8 +778,10 @@ struct EnvironmentManifest {
 }
 ```
 
-The supervisor or a separate restricted resolver prepares requirements before code starts.
-Package download access must not require granting general network access to the arbitrary-code worker.
+The supervisor owns the host resolver for both initial preparation and supported runtime additions.
+The arbitrary-code worker remains network denied, but it can send a structured requirement manifest and worker-controlled `UV_*` settings to the supervisor for managed resolution.
+The resolver deliberately runs outside the worker sandbox, where it can access package indexes, write normal host caches, and execute package build backends.
+It receives no submitted cell source; evaluated R code or a package load hook can trigger the request through `py_require()`.
 
 ### 14.1 Python
 
@@ -788,10 +790,19 @@ Requirements must be finalized before first Python initialization whenever they 
 After initialization, v1 permits additive requirements only.
 
 R packages may declare requirements by calling `py_require()` from load hooks.
-Observe the resulting public reticulate manifest without wrapping `py_require()`, so reticulate retains the originating package attribution.
-The worker should report exact additions to the supervisor, but that report must not itself run the host resolver or replace live state.
-Only newly added package requirements fit the v1 additive contract; removals and changes to Python-version or `exclude_newer` constraints must be reported as unsupported rather than silently projected as additions.
-The client can then use the explicit `session` restart path, which resolves the candidate before discarding the current runtime.
+For a server-managed worker, seed reticulate's manifest, intercept its internal `uv_get_or_create_env` binding, observe successful activation through its internal activation helper, and observe its internal manifest assignment rather than wrapping `py_require()`.
+This retains originating-package attribution and reticulate's native validation and activation behavior.
+The binding reports the complete proposed manifest to the supervisor, together with the worker's `UV_*` settings except `UV_OFFLINE`, and waits for the host resolver to return an interpreter path.
+
+Before Python initializes, the supervisor resolves the complete manifest outside the sandbox and reticulate initializes the returned interpreter normally.
+After initialization, the host result is only a candidate.
+Reticulate must verify that it uses the exact live `libpython`, run the candidate's `activate_this.py`, swap its Python configuration, and commit its manifest.
+The worker then reports that committed manifest, and only this report commits the pending candidate in supervisor state.
+The Python interpreter and its live objects remain in place throughout a successful activation.
+
+Only newly added package requirements fit the v1 late-layering contract.
+Removals and changes to Python-version or `exclude_newer` constraints are unsupported after initialization rather than silently projected as additions.
+An explicit late `session prepare` still returns `restart required`; the explicit restart action remains future work.
 
 ### 14.2 R
 
@@ -800,14 +811,20 @@ The exact package-reference grammar belongs in a later `docs/DEPENDENCIES.md`.
 
 ### 14.3 Atomic public behavior
 
-For a `prepare` or `restart` session action containing requirements:
+Before worker startup, an explicit `prepare` action remains atomic:
 
 1. merge the requested additions with the current manifest;
 2. resolve and prepare the candidate environment outside the arbitrary-code worker;
-3. validate whether an existing runtime can activate it without replacement;
-4. commit the manifest and activation, or begin the requested restart, only after resolution succeeds.
+3. commit the manifest and interpreter only after resolution succeeds.
 
-If preparation fails, the existing runtime and requirement manifest remain unchanged.
+During a server-managed worker evaluation, runtime layering is atomic across the sideband exchange:
+
+1. reticulate constructs the complete proposed manifest and requests host resolution;
+2. the supervisor resolves a candidate without changing its retained manifest or interpreter;
+3. reticulate performs its exact-`libpython` check, activation, configuration swap, and manifest assignment;
+4. the worker reports the committed manifest and the supervisor commits the matching pending candidate.
+
+If resolution or activation fails, the pending candidate is discarded and the existing runtime and server manifest remain unchanged.
 
 ## 15. Output architecture
 

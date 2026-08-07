@@ -1,0 +1,76 @@
+---
+!same-as tests/transcripts/golden/server/initializes_and_lists_tools.yaml
+---
+id: 3
+send:
+  python: |
+    import importlib.util
+    import sys
+
+    runtime_marker = 42
+    initial_prefix = sys.prefix
+    importlib.util.find_spec("yaml12") is None
+result:
+  content:
+    - type: text
+      text: |
+        True
+  isError: false
+---
+id: 4
+send:
+  r: |
+    initial_libpython <- reticulate::py_config()$libpython
+    initial_worker <- Sys.getpid()
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+id: 5
+send:
+  r: library(mcpconsolepyrequire)
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+id: 6
+send:
+  r: |
+    identical(reticulate::py_config()$libpython, initial_libpython) &&
+      identical(Sys.getpid(), initial_worker)
+result:
+  content:
+    - type: text
+      text: |
+        [1] TRUE
+  isError: false
+---
+id: 7
+send:
+  python: |
+    import yaml12
+
+    (runtime_marker, yaml12.__name__, sys.prefix != initial_prefix)
+result:
+  content:
+    - type: text
+      text: |
+        (42, 'yaml12', True)
+  isError: false
+---
+id: 8
+session:
+  action: prepare
+  requirements:
+    python:
+      - py-yaml12
+result:
+  content:
+    - type: text
+      text: "[prepared]"
+  isError: false
+...

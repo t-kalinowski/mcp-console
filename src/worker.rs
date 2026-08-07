@@ -11,6 +11,7 @@ mod platform {
     use crate::worker_protocol::{ServerMessage, WorkerMessage};
 
     static R_MAIN_ARGS: OnceLock<Vec<CString>> = OnceLock::new();
+    static WORKER_READER: OnceLock<Mutex<crate::sideband::Reader>> = OnceLock::new();
     static WORKER_WRITER: OnceLock<crate::sideband::Writer> = OnceLock::new();
     static R_REPL_INIT: OnceLock<ReplInit> = OnceLock::new();
     static R_REPL_DO_ONE: OnceLock<ReplDoOne> = OnceLock::new();
@@ -40,9 +41,12 @@ mod platform {
             return Err(io::Error::other("R worker must run on the process main thread").into());
         }
         crate::python::configure_worker_environment()?;
-        let (mut reader, writer) = crate::sideband::connect_from_env()?;
+        let (reader, writer) = crate::sideband::connect_from_env()?;
         let r_home = harp::command::r_home_setup()?;
         initialize_r(&r_home)?;
+        WORKER_READER
+            .set(Mutex::new(reader))
+            .map_err(|_| io::Error::other("R worker sideband was already initialized"))?;
         WORKER_WRITER
             .set(writer.clone())
             .map_err(|_| io::Error::other("R worker sideband was already initialized"))?;
@@ -52,7 +56,7 @@ mod platform {
         writer.send(&WorkerMessage::Ready)?;
 
         loop {
-            match reader.receive()? {
+            match receive_server_message()? {
                 ServerMessage::Evaluate { language, source } => {
                     let result =
                         evaluate_cell(Cell { language, source }, &graphics, &mut python, &mut sql);
@@ -66,8 +70,65 @@ mod platform {
                     writer.send(&WorkerMessage::Completed)?;
                 }
                 ServerMessage::Shutdown => return Ok(()),
+                ServerMessage::PythonResolved { .. }
+                | ServerMessage::PythonResolutionFailed { .. } => {
+                    return Err(io::Error::other(
+                        "worker received an unexpected Python resolver response",
+                    )
+                    .into());
+                }
             }
         }
+    }
+
+    pub(crate) fn resolve_python(
+        request: crate::worker_protocol::PythonResolveRequest,
+    ) -> Result<String, String> {
+        send_worker_message(&WorkerMessage::ResolvePython { request })?;
+        match receive_server_message().map_err(infrastructure_failure)? {
+            ServerMessage::PythonResolved { python } => Ok(python),
+            ServerMessage::PythonResolutionFailed { message } => Err(message),
+            ServerMessage::Shutdown => {
+                WORKER_SHUTDOWN.store(true, Ordering::SeqCst);
+                Err("worker is shutting down".to_string())
+            }
+            ServerMessage::Evaluate { .. } => Err(infrastructure_failure(
+                "worker received an evaluation while resolving Python".to_string(),
+            )),
+        }
+    }
+
+    pub(crate) fn commit_python_requirements(
+        requirements: crate::worker_protocol::PythonRequirementManifest,
+    ) -> Result<(), String> {
+        send_worker_message(&WorkerMessage::PythonRequirementsCommitted { requirements })
+    }
+
+    fn receive_server_message() -> Result<ServerMessage, String> {
+        WORKER_READER
+            .get()
+            .ok_or_else(|| "R worker sideband reader is not initialized".to_string())?
+            .lock()
+            .map_err(|_| "R worker sideband reader lock poisoned".to_string())?
+            .receive()
+            .map_err(|error| format!("worker sideband read failed: {error}"))
+    }
+
+    fn send_worker_message(message: &WorkerMessage) -> Result<(), String> {
+        if !crate::sideband::available_in_process() {
+            return Err("managed Python resolution is unavailable in a fork child".to_string());
+        }
+        WORKER_WRITER
+            .get()
+            .ok_or_else(|| "R worker sideband writer is not initialized".to_string())?
+            .send(message)
+            .map_err(|error| format!("worker sideband write failed: {error}"))
+            .map_err(infrastructure_failure)
+    }
+
+    fn infrastructure_failure(message: String) -> String {
+        record_worker_failure(message.clone());
+        message
     }
 
     fn evaluate_cell(
@@ -451,7 +512,7 @@ mod platform {
 }
 
 #[cfg(target_os = "macos")]
-pub(crate) use platform::{publish_plot, run};
+pub(crate) use platform::{commit_python_requirements, publish_plot, resolve_python, run};
 
 #[cfg(not(target_os = "macos"))]
 pub(crate) fn run() -> Result<(), Box<dyn std::error::Error>> {

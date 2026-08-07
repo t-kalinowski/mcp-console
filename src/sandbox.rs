@@ -160,6 +160,11 @@ impl SandboxedCommand {
         self
     }
 
+    pub(crate) fn env_remove(&mut self, key: impl AsRef<OsStr>) -> &mut Self {
+        self.command.env_remove(key);
+        self
+    }
+
     pub(crate) fn stdin(&mut self, configuration: Stdio) -> &mut Self {
         self.command.stdin(configuration);
         self

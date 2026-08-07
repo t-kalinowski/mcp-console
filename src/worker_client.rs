@@ -166,25 +166,17 @@ impl Response {
 /// Keeps the current stop handle available until shutdown closes the gate.
 enum ShutdownGate {
     Open {
-        stop_handle: Option<ProcessStopHandle>,
+        worker: Option<platform::StopHandle>,
+        resolver: Option<crate::resolver::ResolverStopHandle>,
     },
     Closed {
         deadline: Instant,
     },
 }
 
-enum ProcessStopHandle {
-    Worker(platform::StopHandle),
-    Resolver(crate::resolver::ResolverStopHandle),
-}
-
-impl ProcessStopHandle {
-    fn shutdown(&self, deadline: Instant) -> Result<(), String> {
-        match self {
-            Self::Worker(handle) => handle.shutdown(deadline),
-            Self::Resolver(handle) => handle.stop(),
-        }
-    }
+struct ProcessStopHandles {
+    worker: Option<platform::StopHandle>,
+    resolver: Option<crate::resolver::ResolverStopHandle>,
 }
 
 impl Client {
@@ -217,7 +209,10 @@ impl Client {
             worker: Mutex::new(WorkerState::Initial),
             evaluation: Mutex::new(None),
             output: CapturedOutput::new(),
-            shutdown_gate: Mutex::new(ShutdownGate::Open { stop_handle: None }),
+            shutdown_gate: Mutex::new(ShutdownGate::Open {
+                worker: None,
+                resolver: None,
+            }),
             python: python.map(Mutex::new),
         }))
     }
@@ -289,8 +284,8 @@ impl Client {
             .lock()
             .map_err(|_| "worker shutdown gate lock poisoned".to_string())?;
         match &mut *gate {
-            ShutdownGate::Open { stop_handle } => {
-                *stop_handle = None;
+            ShutdownGate::Open { resolver, .. } => {
+                *resolver = None;
                 python.requirements = candidate;
                 python.managed = Some(managed);
                 Ok(PrepareResult::Prepared)
@@ -441,7 +436,79 @@ impl Client {
         cell: crate::cell::Cell,
         evaluation: &Evaluation,
     ) -> Result<(), String> {
-        self.with_worker(|worker| worker.evaluate(cell, evaluation))
+        let resolver = self.clone();
+        let committer = self.clone();
+        self.with_worker(|worker| {
+            worker.evaluate(
+                cell,
+                evaluation,
+                move |request| resolver.resolve_runtime_python(request),
+                move |managed| committer.commit_runtime_python(managed),
+            )
+        })
+    }
+
+    fn resolve_runtime_python(
+        &self,
+        request: crate::worker_protocol::PythonResolveRequest,
+    ) -> Result<crate::resolver::ManagedPython, String> {
+        if self.shutdown_requested()? {
+            return Err("worker is shutting down".to_string());
+        }
+        let python = self.0.python.as_ref().ok_or_else(|| {
+            "Python requirements are unavailable with a custom worker".to_string()
+        })?;
+        let python = python
+            .lock()
+            .map_err(|_| "Python environment lock poisoned".to_string())?;
+        let current = python.managed.as_ref().ok_or_else(|| {
+            "runtime Python requirements require a server-managed interpreter".to_string()
+        })?;
+        let requirements = request.requirements.normalized();
+        validate_additive_manifest(current.requirements(), &requirements, request.initialized)?;
+        if current.requirements() == &requirements && current.environment() == &request.environment
+        {
+            return Ok(current.clone());
+        }
+
+        let managed = match crate::resolver::resolve_python_manifest(
+            requirements,
+            request.environment,
+            |handle| self.register_resolver_stop_handle(handle),
+        ) {
+            Ok(managed) => managed,
+            Err(error) => {
+                self.clear_resolver_stop_handle()?;
+                return Err(error);
+            }
+        };
+        let mut gate = self
+            .0
+            .shutdown_gate
+            .lock()
+            .map_err(|_| "worker shutdown gate lock poisoned".to_string())?;
+        match &mut *gate {
+            ShutdownGate::Open { resolver, .. } => {
+                *resolver = None;
+                Ok(managed)
+            }
+            ShutdownGate::Closed { .. } => Err("managed Python resolution cancelled".to_string()),
+        }
+    }
+
+    fn commit_runtime_python(&self, managed: crate::resolver::ManagedPython) -> Result<(), String> {
+        if self.shutdown_requested()? {
+            return Err("worker is shutting down".to_string());
+        }
+        let python = self.0.python.as_ref().ok_or_else(|| {
+            "Python requirements are unavailable with a custom worker".to_string()
+        })?;
+        let mut python = python
+            .lock()
+            .map_err(|_| "Python environment lock poisoned".to_string())?;
+        python.requirements = managed.requirements().packages.iter().cloned().collect();
+        python.managed = Some(managed);
+        Ok(())
     }
 
     fn with_worker<T>(
@@ -525,17 +592,6 @@ impl Client {
     }
 
     fn register_stop_handle(&self, handle: platform::StopHandle) -> Result<(), String> {
-        self.register_process_stop_handle(ProcessStopHandle::Worker(handle))
-    }
-
-    fn register_resolver_stop_handle(
-        &self,
-        handle: crate::resolver::ResolverStopHandle,
-    ) -> Result<(), String> {
-        self.register_process_stop_handle(ProcessStopHandle::Resolver(handle))
-    }
-
-    fn register_process_stop_handle(&self, handle: ProcessStopHandle) -> Result<(), String> {
         let deadline = {
             let mut gate = self
                 .0
@@ -543,8 +599,8 @@ impl Client {
                 .lock()
                 .map_err(|_| "worker shutdown gate lock poisoned".to_string())?;
             match &mut *gate {
-                ShutdownGate::Open { stop_handle } => {
-                    *stop_handle = Some(handle);
+                ShutdownGate::Open { worker, .. } => {
+                    *worker = Some(handle.clone());
                     return Ok(());
                 }
                 ShutdownGate::Closed { deadline } => *deadline,
@@ -554,28 +610,50 @@ impl Client {
         Err("worker is shutting down".to_string())
     }
 
+    fn register_resolver_stop_handle(
+        &self,
+        handle: crate::resolver::ResolverStopHandle,
+    ) -> Result<(), String> {
+        {
+            let mut gate = self
+                .0
+                .shutdown_gate
+                .lock()
+                .map_err(|_| "worker shutdown gate lock poisoned".to_string())?;
+            match &mut *gate {
+                ShutdownGate::Open { resolver, .. } => {
+                    *resolver = Some(handle.clone());
+                    return Ok(());
+                }
+                ShutdownGate::Closed { .. } => {}
+            }
+        }
+        handle.stop()?;
+        Err("worker is shutting down".to_string())
+    }
+
     fn clear_resolver_stop_handle(&self) -> Result<(), String> {
         let mut gate = self
             .0
             .shutdown_gate
             .lock()
             .map_err(|_| "worker shutdown gate lock poisoned".to_string())?;
-        if let ShutdownGate::Open { stop_handle } = &mut *gate
-            && matches!(stop_handle, Some(ProcessStopHandle::Resolver(_)))
-        {
-            *stop_handle = None;
+        if let ShutdownGate::Open { resolver, .. } = &mut *gate {
+            *resolver = None;
         }
         Ok(())
     }
 
-    fn close_shutdown_gate(&self, deadline: Instant) -> Result<Option<ProcessStopHandle>, String> {
+    fn close_shutdown_gate(&self, deadline: Instant) -> Result<Option<ProcessStopHandles>, String> {
         let mut gate = self
             .0
             .shutdown_gate
             .lock()
             .map_err(|_| "worker shutdown gate lock poisoned".to_string())?;
         match std::mem::replace(&mut *gate, ShutdownGate::Closed { deadline }) {
-            ShutdownGate::Open { stop_handle } => Ok(stop_handle),
+            ShutdownGate::Open { worker, resolver } => {
+                Ok(Some(ProcessStopHandles { worker, resolver }))
+            }
             ShutdownGate::Closed { deadline } => {
                 *gate = ShutdownGate::Closed { deadline };
                 Ok(None)
@@ -585,13 +663,48 @@ impl Client {
 
     /// Stops and reaps active worker and resolver process groups.
     pub(crate) async fn shutdown(&self, deadline: Instant) -> Result<(), String> {
-        let Some(stop_handle) = self.close_shutdown_gate(deadline)? else {
+        let Some(stop_handles) = self.close_shutdown_gate(deadline)? else {
             return Ok(());
         };
-        tokio::task::spawn_blocking(move || stop_handle.shutdown(deadline))
-            .await
-            .map_err(|error| format!("process shutdown task failed: {error}"))?
+        tokio::task::spawn_blocking(move || {
+            let resolver = stop_handles
+                .resolver
+                .map_or(Ok(()), |resolver| resolver.stop());
+            let worker = stop_handles
+                .worker
+                .map_or(Ok(()), |worker| worker.shutdown(deadline));
+            resolver.and(worker)
+        })
+        .await
+        .map_err(|error| format!("process shutdown task failed: {error}"))?
     }
+}
+
+fn validate_additive_manifest(
+    current: &crate::worker_protocol::PythonRequirementManifest,
+    candidate: &crate::worker_protocol::PythonRequirementManifest,
+    initialized: bool,
+) -> Result<(), String> {
+    let current_packages = current.packages.iter().collect::<BTreeSet<_>>();
+    let candidate_packages = candidate.packages.iter().collect::<BTreeSet<_>>();
+    let current_python = current.python_version.iter().collect::<BTreeSet<_>>();
+    let candidate_python = candidate.python_version.iter().collect::<BTreeSet<_>>();
+    if !current_packages.is_subset(&candidate_packages)
+        || !current_python.is_subset(&candidate_python)
+        || current
+            .exclude_newer
+            .as_ref()
+            .is_some_and(|current| candidate.exclude_newer.as_ref() != Some(current))
+        || initialized
+            && (current_python != candidate_python
+                || current.exclude_newer != candidate.exclude_newer)
+    {
+        return Err(
+            "runtime Python requirements can add packages but cannot revise the prepared manifest"
+                .to_string(),
+        );
+    }
+    Ok(())
 }
 
 #[cfg(target_os = "macos")]
@@ -1054,6 +1167,11 @@ mod platform {
             &mut self,
             cell: crate::cell::Cell,
             evaluation: &super::Evaluation,
+            mut resolve_python: impl FnMut(
+                crate::worker_protocol::PythonResolveRequest,
+            )
+                -> Result<crate::resolver::ManagedPython, String>,
+            mut commit_python: impl FnMut(crate::resolver::ManagedPython) -> Result<(), String>,
         ) -> Result<(), String> {
             let crate::cell::Cell { language, source } = cell;
             self.stop_handle
@@ -1061,6 +1179,7 @@ mod platform {
                 .send(&ServerMessage::Evaluate { language, source })
                 .map_err(|error| format!("worker sideband write failed: {error}"))?;
             evaluation.attach_writer(self.stop_handle.stdin.clone())?;
+            let mut pending_python = None;
 
             loop {
                 match self.receive()? {
@@ -1072,6 +1191,49 @@ mod platform {
                         evaluation.input_requested(prompt)?;
                     }
                     WorkerMessage::InputReceived => evaluation.input_received()?,
+                    WorkerMessage::ResolvePython { request } => {
+                        pending_python = None;
+                        let initialized = request.initialized;
+                        match resolve_python(request) {
+                            Ok(managed) => {
+                                let python = managed.python().to_string_lossy().into_owned();
+                                if initialized {
+                                    pending_python = Some(managed);
+                                } else {
+                                    commit_python(managed)?;
+                                }
+                                self.stop_handle
+                                    .writer
+                                    .send(&ServerMessage::PythonResolved { python })
+                                    .map_err(|error| {
+                                        format!("worker sideband write failed: {error}")
+                                    })?;
+                            }
+                            Err(message) => {
+                                self.stop_handle
+                                    .writer
+                                    .send(&ServerMessage::PythonResolutionFailed { message })
+                                    .map_err(|error| {
+                                        format!("worker sideband write failed: {error}")
+                                    })?;
+                            }
+                        }
+                    }
+                    WorkerMessage::PythonRequirementsCommitted { requirements } => {
+                        let Some(managed) = pending_python.take() else {
+                            return Err(
+                                "worker committed Python requirements without a pending candidate"
+                                    .to_string(),
+                            );
+                        };
+                        if managed.requirements() != &requirements.normalized() {
+                            return Err(
+                                "worker committed Python requirements that differ from the resolved candidate"
+                                    .to_string(),
+                            );
+                        }
+                        commit_python(managed)?;
+                    }
                     WorkerMessage::Completed => {
                         evaluation.input_complete()?;
                         return Ok(());
@@ -1215,6 +1377,10 @@ mod platform {
             &mut self,
             cell: crate::cell::Cell,
             _evaluation: &super::Evaluation,
+            _resolve_python: impl FnMut(
+                crate::worker_protocol::PythonResolveRequest,
+            ) -> Result<crate::resolver::ManagedPython, String>,
+            _commit_python: impl FnMut(crate::resolver::ManagedPython) -> Result<(), String>,
         ) -> Result<(), String> {
             let crate::cell::Cell { language, source } = cell;
             let _ = (language, source);
