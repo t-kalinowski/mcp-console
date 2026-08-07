@@ -53,7 +53,7 @@ enum SessionAction {
 #[derive(Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct PythonRequirements {
-    /// One or more additive PEP 508 Python requirement strings.
+    /// One or more additive, single-line PEP 508 Python requirement strings.
     #[schemars(length(min = 1, max = 64), inner(length(min = 1)))]
     python: Vec<String>,
 }
@@ -153,6 +153,15 @@ impl ConsoleServer {
         }
         if python.iter().any(String::is_empty) {
             return Err("Python requirement strings must not be empty".to_string());
+        }
+        if python.iter().any(|requirement| {
+            requirement
+                .bytes()
+                .any(|byte| matches!(byte, b'\0' | b'\r' | b'\n'))
+        }) {
+            return Err(
+                "Python requirement strings must not contain NUL or line breaks".to_string(),
+            );
         }
 
         let result = self.worker.prepare_python(python).await?;

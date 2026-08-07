@@ -66,7 +66,7 @@ An exec descendant that retains fd 1/2 creates fresh standard streams backed by 
 When inherited `RETICULATE_PYTHON` is absent or exactly `managed`, built-in server startup calls reticulate's internal uv environment resolver with its NumPy baseline outside the sandbox and injects the resulting interpreter path into every worker generation.
 Other inherited values, including an empty value, are preserved and skip that startup preflight; a later successful explicit preparation takes precedence over them.
 Custom workers skip resolution and reject Python requirement preparation.
-Resolution may access the network, write normal reticulate and uv host caches, and execute package build backends outside the sandbox, but requirement strings remain arguments rather than R code and no submitted cell is evaluated.
+Resolution may access the network, write normal reticulate and uv host caches, and execute package build backends outside the sandbox, but requirement strings remain standard-input data rather than R code and no submitted cell is evaluated.
 Before initializing R, the worker forces `UV_OFFLINE=1`, overwriting any inherited value to match the sandbox's network denial.
 Reticulate reuses the preflight-selected or caller-selected interpreter.
 Because the preflight-selected interpreter is passed as a concrete path, worker-side `py_require()` calls do not revise that selection.
@@ -197,7 +197,7 @@ Begin as one Cargo package and split crates only when a real boundary emerges.
 - Keep the MCP adapter independent of interpreter implementation details.
 - Treat submitted R, Python, and SQL execution as shell-class capability and place safety at the worker-process boundary.
   The startup managed-Python preflight is a host-bootstrap exception that runs before MCP input is accepted.
-  Explicit Python preparation passes untrusted requirement strings to the same host resolver as arguments after an option terminator; it does not evaluate them as R code, though package build backends may execute outside the worker sandbox.
+  Explicit Python preparation passes untrusted requirement strings to the same host resolver as newline-delimited standard input; it does not evaluate them as R code, though package build backends may execute outside the worker sandbox.
 - Update this file when a PR changes the implemented surface or repository map.
 - Before every commit, run `scripts/format` and review its changes.
 - Run `scripts/check` before opening a PR.

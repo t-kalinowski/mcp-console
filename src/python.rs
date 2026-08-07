@@ -1,24 +1,22 @@
 #[cfg(target_os = "macos")]
 mod platform {
-    use std::io;
+    use std::io::{self, Write};
     use std::path::PathBuf;
     use std::process::{Command, Stdio};
 
     const PREFLIGHT: &str = r#"
 base::local({
-  arguments <- base::commandArgs(trailingOnly = TRUE)
-  base::stopifnot(base::identical(arguments[[1L]], "--args"))
-  requirements <- base::unique(c(
-    "numpy",
-    arguments[-1L]
-  ))
+  input <- base::file("stdin", open = "r", encoding = "UTF-8")
+  requirements <- base::readLines(input, warn = FALSE)
+  base::close(input)
+  requirements <- base::unique(c("numpy", requirements))
   python <- reticulate:::uv_get_or_create_env(packages = requirements)
   base::stopifnot(
     base::length(python) == 1L,
     !base::is.na(python),
     base::nzchar(python)
   )
-  base::cat(python)
+  base::cat(python, "\n", sep = "")
 })
 "#;
 
@@ -128,18 +126,28 @@ def _mcp_console_eval_cell(
         let mut command = Command::new(&rscript);
         command
             .args(["--vanilla", "-e", PREFLIGHT])
-            // Requirement strings are untrusted; stop Rscript option parsing
-            // before passing them as ordinary arguments.
-            .arg("--args")
-            .args(requirements)
             .env_remove("UV_OFFLINE")
-            .stdin(Stdio::null());
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
         // Managed resolution intentionally runs before the sandboxed worker starts
         // because reticulate and uv need normal host network and cache access.
-        // Explicitly prepared requirement strings remain argv data, not R expressions.
-        let output = command.output().map_err(|error| {
+        // Explicitly prepared requirement strings are newline-delimited stdin data.
+        let mut child = command.spawn().map_err(|error| {
             format!(
                 "failed to run managed Python resolver with `{}`: {error}",
+                rscript.display()
+            )
+        })?;
+        let write_result = {
+            let mut input = child.stdin.take().expect("resolver stdin is piped");
+            requirements
+                .iter()
+                .try_for_each(|requirement| writeln!(input, "{requirement}"))
+        };
+        let output = child.wait_with_output().map_err(|error| {
+            format!(
+                "failed to collect managed Python resolver output from `{}`: {error}",
                 rscript.display()
             )
         })?;
@@ -151,6 +159,7 @@ def _mcp_console_eval_cell(
                 error.trim()
             ));
         }
+        write_result.map_err(|error| format!("failed to write Python requirements: {error}"))?;
 
         let output = String::from_utf8(output.stdout)
             .map_err(|_| "managed Python resolver returned a non-UTF-8 path".to_string())?;

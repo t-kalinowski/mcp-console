@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 import shutil
 import tempfile
 import threading
@@ -115,8 +116,17 @@ def test_prepares_initial_python_requirements(binary: Path) -> Transcript:
     )
     result = client.transcript[-1]["result"]
     assert result["isError"] is True, result
-    assert "managed Python resolution failed" in result["content"][0]["text"]
-    result["content"][0]["text"] = "<invalid Python requirement>"
+    resolution_error = result["content"][0]["text"]
+    assert "managed Python resolution failed" in resolution_error
+    recorded_error, substitutions = re.subn(
+        r"(?m)^( Python:\s+\d+\.\d+)\.\d+ \(reticulate default\)$",
+        r"\1.x (reticulate default)",
+        resolution_error,
+    )
+    assert substitutions == 1, resolution_error
+    result["content"][0]["text"] = "\n".join(
+        line.rstrip() for line in recorded_error.splitlines()
+    )
     client.call_tool(
         "session",
         action="prepare",
@@ -124,8 +134,18 @@ def test_prepares_initial_python_requirements(binary: Path) -> Transcript:
     )
     result = client.transcript[-1]["result"]
     assert result["isError"] is True, result
-    assert "managed Python resolution failed" in result["content"][0]["text"]
-    result["content"][0]["text"] = "<invalid Python requirement>"
+    assert result["content"][0]["text"] == resolution_error
+    result["content"][0]["text"] = "<same Python requirement resolution error>"
+    client.call_tool(
+        "session",
+        action="prepare",
+        requirements={"python": ["numpy\npandas"]},
+    )
+    result = client.transcript[-1]["result"]
+    assert result["isError"] is True, result
+    assert result["content"][0]["text"] == (
+        "Python requirement strings must not contain NUL or line breaks"
+    )
     # fmt: python
     python = code("""
         import yaml12
@@ -166,6 +186,8 @@ def test_reports_restart_required_while_python_is_running(binary: Path) -> Trans
         client.initialize_and_list_tools()
         # fmt: python
         python = code("""
+            runtime_generation_marker = "original runtime retained"
+
             import time
             from pathlib import Path
 
@@ -206,6 +228,8 @@ def test_reports_restart_required_while_python_is_running(binary: Path) -> Trans
         release.touch()
         client.call_tool("send")
         assert last_tool_text(client) == "[done]"
+        client.call_tool("send", python="runtime_generation_marker")
+        assert last_tool_text(client) == "'original runtime retained'\n"
         return client.finish()
 
 

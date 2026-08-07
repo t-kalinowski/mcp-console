@@ -18,7 +18,7 @@ The hidden `serve --worker PATH` option replaces it with a development worker.
 ## Launch contract
 
 For the built-in worker, when inherited `RETICULATE_PYTHON` is absent or exactly `managed`, server initialization asks reticulate to resolve its baseline NumPy environment outside the sandbox.
-The resolver is equivalent to this R call and receives each requirement as a separate `Rscript` argument after the `--args` option terminator:
+The resolver is equivalent to this R call and receives each requirement as one UTF-8 line on `Rscript` standard input:
 
 ```text
 reticulate:::uv_get_or_create_env(packages = unique(c("numpy", requirements)))
@@ -36,8 +36,8 @@ It returns `[prepared]` without creating sideband pipes or starting the worker.
 New requirements after worker startup return `restart required` without changing the retained manifest or running resolver work; exact retained requirements remain idempotent.
 Custom workers reject preparation and skip managed-Python resolution.
 
-Each resolver process receives no MCP stdin and may use the network and write normal host caches.
-Requirements remain arguments rather than R expressions, but uv may execute source-distribution build backends in this unsandboxed resolver process.
+Each resolver process receives only requirement lines on standard input, not submitted cells or `send` stdin, and may use the network and write normal host caches.
+Requirements remain standard-input data rather than R expressions, but uv may execute source-distribution build backends in this unsandboxed resolver process.
 A preflight failure prevents server initialization.
 A preparation failure is an MCP tool error and leaves the prior configuration unchanged.
 

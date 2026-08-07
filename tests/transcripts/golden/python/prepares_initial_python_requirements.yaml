@@ -22,7 +22,21 @@ session:
 result:
   content:
     - type: text
-      text: <invalid Python requirement>
+      text: |-
+        managed Python resolution failed with exit status: 1: error: Failed to parse: `not a valid requirement !!!`
+          Caused by: Expected one of `@`, `(`, `<`, `=`, `>`, `~`, `!`, `;`, found `a`
+        not a valid requirement !!!
+            ^
+        uv error code: 2
+        -- Current requirements -------------------------------------------------
+         Python:   3.12.x (reticulate default)
+         Packages: numpy, not a valid requirement !!!, py-yaml12
+        -------------------------------------------------------------------------
+        Hint: If you are temporarily offline, try setting `Sys.setenv(UV_OFFLINE=1)`.
+        Error in reticulate:::uv_get_or_create_env(packages = requirements) :
+          Call `py_require()` to remove or replace conflicting requirements.
+        Calls: <Anonymous> ... eval.parent -> eval -> eval -> eval -> eval -> <Anonymous>
+        Execution halted
   isError: true
 ---
 id: 5
@@ -34,10 +48,24 @@ session:
 result:
   content:
     - type: text
-      text: <invalid Python requirement>
+      text: <same Python requirement resolution error>
   isError: true
 ---
 id: 6
+session:
+  action: prepare
+  requirements:
+    python:
+      - |-
+        numpy
+        pandas
+result:
+  content:
+    - type: text
+      text: Python requirement strings must not contain NUL or line breaks
+  isError: true
+---
+id: 7
 send:
   python: |
     import yaml12
@@ -50,7 +78,7 @@ result:
         'yaml12'
   isError: false
 ---
-id: 7
+id: 8
 session:
   action: prepare
   requirements:

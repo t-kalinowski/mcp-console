@@ -4,6 +4,8 @@
 id: 3
 send:
   python: |
+    runtime_generation_marker = "original runtime retained"
+
     import time
     from pathlib import Path
 
@@ -38,5 +40,15 @@ result:
   content:
     - type: text
       text: "[done]"
+  isError: false
+---
+id: 6
+send:
+  python: runtime_generation_marker
+result:
+  content:
+    - type: text
+      text: |
+        'original runtime retained'
   isError: false
 ...

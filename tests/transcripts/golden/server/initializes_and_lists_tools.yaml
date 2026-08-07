@@ -86,7 +86,7 @@ result:
             type: object
             properties:
               python:
-                description: One or more additive PEP 508 Python requirement strings.
+                description: One or more additive, single-line PEP 508 Python requirement strings.
                 type: array
                 items:
                   type: string
