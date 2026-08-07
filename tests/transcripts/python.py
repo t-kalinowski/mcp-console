@@ -124,6 +124,12 @@ def test_prepares_initial_python_requirements(binary: Path) -> Transcript:
         resolution_error,
     )
     assert substitutions == 1, resolution_error
+    recorded_error, substitutions = re.subn(
+        rf"(?m)^(?P<indent> *)({re.escape(invalid)})\n(?P=indent)(?P<caret> +\^)$",
+        lambda match: f"{match.group(2)}\n{match.group('caret')}",
+        recorded_error,
+    )
+    assert substitutions == 1, resolution_error
     result["content"][0]["text"] = "\n".join(
         line.rstrip() for line in recorded_error.splitlines()
     )

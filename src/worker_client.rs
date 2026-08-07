@@ -166,11 +166,25 @@ impl Response {
 /// Keeps the current stop handle available until shutdown closes the gate.
 enum ShutdownGate {
     Open {
-        stop_handle: Option<platform::StopHandle>,
+        stop_handle: Option<ProcessStopHandle>,
     },
     Closed {
         deadline: Instant,
     },
+}
+
+enum ProcessStopHandle {
+    Worker(platform::StopHandle),
+    Resolver(crate::python::ResolverStopHandle),
+}
+
+impl ProcessStopHandle {
+    fn shutdown(&self, deadline: Instant) -> Result<(), String> {
+        match self {
+            Self::Worker(handle) => handle.shutdown(deadline),
+            Self::Resolver(handle) => handle.stop(),
+        }
+    }
 }
 
 impl Client {
@@ -181,7 +195,7 @@ impl Client {
     pub(crate) fn builtin() -> Result<Self, String> {
         let program = std::env::current_exe()
             .map_err(|error| format!("failed to locate the R worker executable: {error}"))?;
-        let managed = crate::python::preflight(&[])?;
+        let managed = crate::python::preflight(&[], |_| Ok(()))?;
         Ok(Self::with_arguments(
             program,
             vec![OsString::from("worker")],
@@ -220,12 +234,18 @@ impl Client {
     }
 
     fn prepare_python_blocking(&self, requirements: Vec<String>) -> Result<PrepareResult, String> {
+        if self.shutdown_requested()? {
+            return Err("worker is shutting down".to_string());
+        }
         let python = self.0.python.as_ref().ok_or_else(|| {
             "Python requirements are unavailable with a custom worker".to_string()
         })?;
         let mut python = python
             .lock()
             .map_err(|_| "Python environment lock poisoned".to_string())?;
+        if self.shutdown_requested()? {
+            return Err("worker is shutting down".to_string());
+        }
         let additions = requirements.into_iter().collect::<BTreeSet<_>>();
         if additions.is_subset(&python.requirements) {
             return Ok(PrepareResult::Prepared);
@@ -249,11 +269,34 @@ impl Client {
             .cloned()
             .collect::<BTreeSet<_>>();
         let requirements = candidate.iter().cloned().collect::<Vec<_>>();
-        let managed = crate::python::preflight(&requirements)?
-            .ok_or_else(|| "managed Python environments are supported only on macOS".to_string())?;
-        python.requirements = candidate;
-        python.managed = Some(managed);
-        Ok(PrepareResult::Prepared)
+        let managed = match crate::python::preflight(&requirements, |handle| {
+            self.register_resolver_stop_handle(handle)
+        }) {
+            Ok(Some(managed)) => managed,
+            Ok(None) => {
+                self.clear_resolver_stop_handle()?;
+                return Err("managed Python environments are supported only on macOS".to_string());
+            }
+            Err(error) => {
+                self.clear_resolver_stop_handle()?;
+                return Err(error);
+            }
+        };
+
+        let mut gate = self
+            .0
+            .shutdown_gate
+            .lock()
+            .map_err(|_| "worker shutdown gate lock poisoned".to_string())?;
+        match &mut *gate {
+            ShutdownGate::Open { stop_handle } => {
+                *stop_handle = None;
+                python.requirements = candidate;
+                python.managed = Some(managed);
+                Ok(PrepareResult::Prepared)
+            }
+            ShutdownGate::Closed { .. } => Err("managed Python resolution cancelled".to_string()),
+        }
     }
 
     /// Starts one cell, supplies its stdin, or polls the cell already running.
@@ -482,6 +525,17 @@ impl Client {
     }
 
     fn register_stop_handle(&self, handle: platform::StopHandle) -> Result<(), String> {
+        self.register_process_stop_handle(ProcessStopHandle::Worker(handle))
+    }
+
+    fn register_resolver_stop_handle(
+        &self,
+        handle: crate::python::ResolverStopHandle,
+    ) -> Result<(), String> {
+        self.register_process_stop_handle(ProcessStopHandle::Resolver(handle))
+    }
+
+    fn register_process_stop_handle(&self, handle: ProcessStopHandle) -> Result<(), String> {
         let deadline = {
             let mut gate = self
                 .0
@@ -500,10 +554,21 @@ impl Client {
         Err("worker is shutting down".to_string())
     }
 
-    fn close_shutdown_gate(
-        &self,
-        deadline: Instant,
-    ) -> Result<Option<platform::StopHandle>, String> {
+    fn clear_resolver_stop_handle(&self) -> Result<(), String> {
+        let mut gate = self
+            .0
+            .shutdown_gate
+            .lock()
+            .map_err(|_| "worker shutdown gate lock poisoned".to_string())?;
+        if let ShutdownGate::Open { stop_handle } = &mut *gate
+            && matches!(stop_handle, Some(ProcessStopHandle::Resolver(_)))
+        {
+            *stop_handle = None;
+        }
+        Ok(())
+    }
+
+    fn close_shutdown_gate(&self, deadline: Instant) -> Result<Option<ProcessStopHandle>, String> {
         let mut gate = self
             .0
             .shutdown_gate
@@ -518,14 +583,14 @@ impl Client {
         }
     }
 
-    /// Stops and reaps the worker, including one blocked in an evaluation.
+    /// Stops and reaps active worker and resolver process groups.
     pub(crate) async fn shutdown(&self, deadline: Instant) -> Result<(), String> {
         let Some(stop_handle) = self.close_shutdown_gate(deadline)? else {
             return Ok(());
         };
         tokio::task::spawn_blocking(move || stop_handle.shutdown(deadline))
             .await
-            .map_err(|error| format!("worker shutdown task failed: {error}"))?
+            .map_err(|error| format!("process shutdown task failed: {error}"))?
     }
 }
 

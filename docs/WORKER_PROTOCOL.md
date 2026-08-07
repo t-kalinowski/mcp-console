@@ -40,6 +40,8 @@ Each resolver process receives only requirement lines on standard input, not sub
 Requirements remain standard-input data rather than R expressions, but uv may execute source-distribution build backends in this unsandboxed resolver process.
 A preflight failure prevents server initialization.
 A preparation failure is an MCP tool error and leaves the prior configuration unchanged.
+The resolver leads a dedicated process group registered with the server shutdown gate before requirement input is written.
+Closing MCP input force-stops that group and reaps `Rscript`; startup preflight finishes before MCP input is accepted and does not participate in this cancellation path.
 
 The worker starts lazily on the first `send` call that supplies `r`, `python`, `sql`, or nonempty `stdin`.
 On macOS, the server uses the same `SandboxedCommand` builder as the `sandbox` command.
@@ -262,6 +264,7 @@ R parse and evaluation errors, Python exceptions, and DuckDB errors are not side
 
 The server begins shutdown when MCP input closes or RMCP releases its transport.
 At that moment it fixes a deadline one second in the future and closes the client's shutdown gate.
+If Python preparation is active, shutdown force-stops the resolver process group and reaps its direct `Rscript` process.
 It then attempts to send:
 
 ```json
@@ -384,8 +387,8 @@ SQL source containing NUL is rejected as a normal language error before it reach
 
 ## Current limits
 
-No timeout bounds managed-Python preflight, worker startup, or execution.
-No timeout or cancellation bound applies to Python requirement preparation.
+No timeout bounds managed-Python startup preflight, worker startup, or execution.
+Python requirement preparation has no per-call timeout; MCP shutdown cancels an in-flight preparation.
 The current implementation has no general frame-size limit, stdin queue limit, or accumulated-output limit.
 The 12 KiB cap applies only to a recognized SQL query preview; arbitrary R and Python console text, worker standard streams, and text accompanying that preview remain uncapped.
 `timeout_ms` limits one MCP wait without terminating the worker or a blocked stdin write; only shutdown has a process deadline.
