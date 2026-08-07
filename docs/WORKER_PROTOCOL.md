@@ -40,8 +40,9 @@ Each resolver process receives only requirement lines on standard input, not sub
 Requirements remain standard-input data rather than R expressions, but uv may execute source-distribution build backends in this unsandboxed resolver process.
 A preflight failure prevents server initialization.
 A preparation failure is an MCP tool error and leaves the prior configuration unchanged.
-For a uv tool failure, `Rscript` enables reticulate's uv debug output, captures its message stream, and sends only the reported tool-run command on stdout; uv's inherited stderr remains separate.
-The server labels both in the tool error and discards reticulate's requirements summary, hints, and R call information.
+For a uv tool failure, `Rscript` captures reticulate's message stream and sends its selected Python version on stdout; uv's inherited stderr remains separate.
+The server combines that selection with the complete candidate package set it submitted and renders them as a JSON resolver-input manifest before uv's stderr.
+It discards reticulate's helper command, temporary output path, hints, and R call information.
 The resolver leads a dedicated process group registered with the server shutdown gate before requirement input is written.
 Closing MCP input force-stops that group and reaps `Rscript`; startup preflight finishes before MCP input is accepted and does not participate in this cancellation path.
 
@@ -343,6 +344,8 @@ The built-in worker receives either the interpreter path selected by startup or 
 Before initializing R, it forces `UV_OFFLINE=1`, overwriting any inherited value before user code runs.
 Reticulate initializes that selection on first use from R or Python and reuses it afterward.
 Because a resolved interpreter is passed as a concrete path, worker-side `py_require()` calls do not revise that selection.
+This includes calls made from an R package's load hooks: reticulate records them only in its worker-local manifest, while the server neither observes nor resolves them, so requested modules may remain unavailable.
+A future implementation must report those additions over the worker protocol and require an explicit `session` restart before host resolution changes the environment; evaluated code must not implicitly start the unsandboxed resolver.
 
 Each Python cell receives a synthetic filename such as `<mcp-console:python:e1>`.
 The worker stores the source in a process-lifetime private R environment and calls its evaluator with only a short evaluation ID.
@@ -406,7 +409,9 @@ SQL cells require installed arrow, DBI, duckdb, nanoarrow, pillar, and tibble R 
 MCP Console does not install these packages.
 The default preflight must be able to resolve or provision its interpreter and initial requirements outside the sandbox.
 An explicitly configured interpreter must be initializable under the offline worker policy.
-Python requirements are retained only in server memory, and additions cannot be activated after worker startup; named sessions, R requirements, explicit restart, and environment provenance do not exist.
+Python requirements are retained only in server memory, and additions cannot be activated after worker startup.
+Worker-side package requirements are not reported to the server.
+Named sessions, R requirements, explicit restart, and environment provenance do not exist.
 The Python input bridge does not observe direct `sys.stdin` or fd-0 reads.
 The SQL adapter does not expose R data frames or Python objects as relations.
 The current sandbox child does not yet supervise descendants after its direct process exits, or descendants that leave its process group; capturing inherited standard streams does not change that boundary.

@@ -9,6 +9,7 @@ mod python;
 mod r_bridge;
 #[cfg(target_os = "macos")]
 mod r_graphics;
+mod resolver;
 mod sandbox;
 mod server;
 #[cfg(target_os = "macos")]

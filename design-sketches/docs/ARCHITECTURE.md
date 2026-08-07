@@ -787,6 +787,12 @@ Use reticulate's managed environment and `py_require()` semantics where practica
 Requirements must be finalized before first Python initialization whenever they constrain interpreter choice.
 After initialization, v1 permits additive requirements only.
 
+R packages may declare requirements by calling `py_require()` from load hooks.
+Observe the resulting public reticulate manifest without wrapping `py_require()`, so reticulate retains the originating package attribution.
+The worker should report exact additions to the supervisor, but that report must not itself run the host resolver or replace live state.
+Only newly added package requirements fit the v1 additive contract; removals and changes to Python-version or `exclude_newer` constraints must be reported as unsupported rather than silently projected as additions.
+The client can then use the explicit `session` restart path, which resolves the candidate before discarding the current runtime.
+
 ### 14.2 R
 
 Use a configured R resolver and library cache with equivalent additive behavior.

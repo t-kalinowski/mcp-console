@@ -1,6 +1,5 @@
 #!/usr/bin/env -S uv run --script
 
-import json
 import os
 import re
 import shutil
@@ -97,6 +96,24 @@ def test_evaluates_with_explicit_managed_python(binary: Path) -> Transcript:
     return managed_python_transcript(binary, configured=True)
 
 
+def normalize_resolution_error(error: str, invalid: str | None = None) -> str:
+    error, python_patch = re.subn(
+        r'(?m)^(  "python": "\d+\.\d+)\.\d+( \(reticulate default\)",)$',
+        r"\1.x\2",
+        error,
+        count=1,
+    )
+    assert python_patch == 1, error
+    if invalid is not None:
+        error, uv_indentation = re.subn(
+            rf"(?m)^(?P<indent> *)({re.escape(invalid)})\n(?P=indent)(?P<caret> +\^)$",
+            lambda match: f"{match.group(2)}\n{match.group('caret')}",
+            error,
+        )
+        assert uv_indentation == 1, error
+    return "\n".join(line.rstrip() for line in error.splitlines())
+
+
 def test_prepares_initial_python_requirements(binary: Path) -> Transcript:
     environment = os.environ.copy()
     environment["RETICULATE_PYTHON"] = "/mcp-console-prepare-must-replace-python"
@@ -110,38 +127,6 @@ def test_prepares_initial_python_requirements(binary: Path) -> Transcript:
     assert last_tool_text(client) == "[prepared]"
     invalid = "not a valid requirement !!!"
 
-    def normalize_resolution_error(error: str) -> str:
-        error, executable = re.subn(
-            r"(?m)^(uv command:\n).+(?= tool run --isolated )",
-            r"\1<uv>",
-            error,
-            count=1,
-        )
-        error, python_patch = re.subn(
-            r"(?m)^(<uv> tool run .* --python \d+\.\d+)\.\d+(?= )",
-            r"\1.x",
-            error,
-            count=1,
-        )
-        error, output_path = re.subn(
-            r"(?m)^(<uv> tool run .+?) (?:(?:'[^']*')|(?:\"[^\"]*\")|\S+)$",
-            r"\1 <resolver-output>",
-            error,
-            count=1,
-        )
-        error, uv_indentation = re.subn(
-            rf"(?m)^(?P<indent> *)({re.escape(invalid)})\n(?P=indent)(?P<caret> +\^)$",
-            lambda match: f"{match.group(2)}\n{match.group('caret')}",
-            error,
-        )
-        assert (executable, python_patch, output_path, uv_indentation) == (
-            1,
-            1,
-            1,
-            1,
-        ), error
-        return "\n".join(line.rstrip() for line in error.splitlines())
-
     client.call_tool(
         "session",
         action="prepare",
@@ -150,7 +135,7 @@ def test_prepares_initial_python_requirements(binary: Path) -> Transcript:
     result = client.transcript[-1]["result"]
     assert result["isError"] is True, result
     resolution_error = result["content"][0]["text"]
-    recorded_error = normalize_resolution_error(resolution_error)
+    recorded_error = normalize_resolution_error(resolution_error, invalid)
     result["content"][0]["text"] = recorded_error
     client.call_tool(
         "session",
@@ -159,8 +144,10 @@ def test_prepares_initial_python_requirements(binary: Path) -> Transcript:
     )
     result = client.transcript[-1]["result"]
     assert result["isError"] is True, result
-    assert normalize_resolution_error(result["content"][0]["text"]) == recorded_error
-    result["content"][0]["text"] = "<same Python requirement resolution error>"
+    result["content"][0]["text"] = normalize_resolution_error(
+        result["content"][0]["text"], invalid
+    )
+    assert result["content"][0]["text"] == recorded_error
     client.call_tool(
         "session",
         action="prepare",
@@ -261,9 +248,12 @@ def test_reports_restart_required_while_python_is_running(binary: Path) -> Trans
 def test_does_not_parse_requirements_as_rscript_options(binary: Path) -> Transcript:
     with tempfile.TemporaryDirectory() as temporary_directory:
         marker = Path(temporary_directory) / "host-r-code-ran"
-        expression = f"base::writeLines('executed', {json.dumps(str(marker))})"
+        expression = (
+            "base::writeLines('executed', base::Sys.getenv('MCP_CONSOLE_HOST_MARKER'))"
+        )
         environment = os.environ.copy()
         environment["RETICULATE_PYTHON"] = "/mcp-console-prepare-must-replace-python"
+        environment["MCP_CONSOLE_HOST_MARKER"] = str(marker)
         client = McpClient(binary, ("serve",), environment)
         client.initialize_and_list_tools()
         client.call_tool(
@@ -275,10 +265,9 @@ def test_does_not_parse_requirements_as_rscript_options(binary: Path) -> Transcr
         assert result["isError"] is True, result
         assert not marker.exists(), "requirement executed as unsandboxed R code"
         assert "managed Python resolution failed" in result["content"][0]["text"]
-        client.transcript[-1]["session"]["requirements"]["python"][1] = (
-            "<host R expression>"
+        result["content"][0]["text"] = normalize_resolution_error(
+            result["content"][0]["text"]
         )
-        result["content"][0]["text"] = "<invalid Python requirement>"
         return client.finish()
 
 

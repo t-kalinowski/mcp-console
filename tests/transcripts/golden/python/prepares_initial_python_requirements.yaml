@@ -24,8 +24,15 @@ result:
     - type: text
       text: |-
         managed Python resolution failed:
-        uv command:
-        <uv> tool run --isolated --python 3.12.x --with numpy --with 'not a valid requirement !!!' --with py-yaml12 -- python -c 'import sys; f=open(sys.argv[-1], chr(119)); f.write(sys.executable); f.close();' <resolver-output>
+        resolver input:
+        {
+          "python": "3.12.x (reticulate default)",
+          "packages": [
+            "numpy",
+            "not a valid requirement !!!",
+            "py-yaml12"
+          ]
+        }
         uv output:
         error: Failed to parse: `not a valid requirement !!!`
           Caused by: Expected one of `@`, `(`, `<`, `=`, `>`, `~`, `!`, `;`, found `a`
@@ -42,7 +49,22 @@ session:
 result:
   content:
     - type: text
-      text: <same Python requirement resolution error>
+      text: |-
+        managed Python resolution failed:
+        resolver input:
+        {
+          "python": "3.12.x (reticulate default)",
+          "packages": [
+            "numpy",
+            "not a valid requirement !!!",
+            "py-yaml12"
+          ]
+        }
+        uv output:
+        error: Failed to parse: `not a valid requirement !!!`
+          Caused by: Expected one of `@`, `(`, `<`, `=`, `>`, `~`, `!`, `;`, found `a`
+        not a valid requirement !!!
+            ^
   isError: true
 ---
 id: 6

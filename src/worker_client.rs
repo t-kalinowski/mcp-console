@@ -24,7 +24,7 @@ struct ClientInner {
 
 struct PythonEnvironment {
     requirements: BTreeSet<String>,
-    managed: Option<crate::python::Managed>,
+    managed: Option<crate::resolver::ManagedPython>,
 }
 
 enum WorkerState {
@@ -175,7 +175,7 @@ enum ShutdownGate {
 
 enum ProcessStopHandle {
     Worker(platform::StopHandle),
-    Resolver(crate::python::ResolverStopHandle),
+    Resolver(crate::resolver::ResolverStopHandle),
 }
 
 impl ProcessStopHandle {
@@ -195,7 +195,7 @@ impl Client {
     pub(crate) fn builtin() -> Result<Self, String> {
         let program = std::env::current_exe()
             .map_err(|error| format!("failed to locate the R worker executable: {error}"))?;
-        let managed = crate::python::preflight(&[], |_| Ok(()))?;
+        let managed = crate::resolver::resolve_python(&[], |_| Ok(()))?;
         Ok(Self::with_arguments(
             program,
             vec![OsString::from("worker")],
@@ -269,7 +269,7 @@ impl Client {
             .cloned()
             .collect::<BTreeSet<_>>();
         let requirements = candidate.iter().cloned().collect::<Vec<_>>();
-        let managed = match crate::python::preflight(&requirements, |handle| {
+        let managed = match crate::resolver::resolve_python(&requirements, |handle| {
             self.register_resolver_stop_handle(handle)
         }) {
             Ok(Some(managed)) => managed,
@@ -530,7 +530,7 @@ impl Client {
 
     fn register_resolver_stop_handle(
         &self,
-        handle: crate::python::ResolverStopHandle,
+        handle: crate::resolver::ResolverStopHandle,
     ) -> Result<(), String> {
         self.register_process_stop_handle(ProcessStopHandle::Resolver(handle))
     }
@@ -990,7 +990,7 @@ mod platform {
         pub(super) fn start(
             program: &Path,
             arguments: &[OsString],
-            managed_python: Option<&crate::python::Managed>,
+            managed_python: Option<&crate::resolver::ManagedPython>,
             output: super::CapturedOutput,
             on_started: impl FnOnce(StopHandle) -> Result<(), String>,
         ) -> Result<Self, String> {
@@ -1204,7 +1204,7 @@ mod platform {
         pub(super) fn start(
             _program: &Path,
             _arguments: &[OsString],
-            _managed_python: Option<&crate::python::Managed>,
+            _managed_python: Option<&crate::resolver::ManagedPython>,
             _output: super::CapturedOutput,
             _on_started: impl FnOnce(StopHandle) -> Result<(), String>,
         ) -> Result<Self, String> {
