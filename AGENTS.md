@@ -36,7 +36,7 @@ The implemented `session` surface accepts only `action = "prepare"` with one or 
 Requirements are exact, additive, and idempotent.
 Before the worker starts, each successful prepare resolves the complete candidate set outside the sandbox, atomically retains it in server memory, replaces any inherited Python selection with the resolved interpreter, and returns `[prepared]` without starting the worker.
 A failed resolution leaves the prior requirements and interpreter unchanged.
-For a uv tool failure, the tool error reports the exact uv command and uv's stderr while omitting reticulate's `py_require()`-oriented guidance.
+For a uv tool failure, the tool error reports a JSON manifest containing reticulate's selected Python and the complete candidate package set, followed by uv's stderr, while omitting the helper command, temporary output path, and reticulate's `py_require()`-oriented guidance.
 Closing MCP input cancels an in-flight explicit resolution by force-stopping its host resolver process group; startup preflight completes before MCP input is accepted and is not cancellable through that lifecycle.
 Once a worker has started, an already-retained requirement remains idempotent, while any addition returns `restart required` without changing the environment.
 Named sessions, R requirements, runtime environment layering, and explicit restart do not exist yet.
@@ -71,6 +71,7 @@ Resolution may access the network, write normal reticulate and uv host caches, a
 Before initializing R, the worker forces `UV_OFFLINE=1`, overwriting any inherited value to match the sandbox's network denial.
 Reticulate reuses the server-resolved or caller-selected interpreter.
 Because a resolved interpreter is passed as a concrete path, worker-side `py_require()` calls do not revise that selection.
+Calls made by loaded R packages update only reticulate's worker-local manifest; the worker does not report them to the server, and evaluated code never implicitly starts the unsandboxed resolver.
 R and Python share objects through reticulate's `py` and `r` bridges.
 A silent successful Python cell sends `completed` without an `output` frame and projects to `[done]` when no other response text is pending.
 Python `input()` and `breakpoint()`/`pdb` use reticulate's R console bridge, so they emit `input_requested` before a read and `input_received` after it succeeds.
@@ -144,7 +145,8 @@ See `design-sketches/README.md` for the product overview and `design-sketches/do
 - `src/main.rs` — current binary entry point.
 - `src/cell.rs` — language-neutral complete-cell type shared by the server and worker protocol.
 - `src/cli.rs` — clap command definitions and user-facing help.
-- `src/python.rs` — managed-Python preflight, worker environment, and reticulate bridge.
+- `src/python.rs` — worker environment and reticulate bridge.
+- `src/resolver.rs` — managed-Python host resolution and resolver process lifecycle.
 - `src/r_bridge.rs` — shared private R-environment bridge used by graphics, Python, and SQL adapters.
 - `src/r_graphics.c` — C-owned forwarding boundary for managed graphics-device callbacks that may long-jump.
 - `src/r_graphics.rs` — cell-scoped managed R graphics device and PNG image publication.

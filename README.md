@@ -107,12 +107,15 @@ When `RETICULATE_PYTHON` is unset or is `managed`, `mcp-console serve` runs reti
 Other configured values, including an empty value, are preserved when no requirements are prepared and skip this startup preflight.
 An explicit `session` preparation selects its resolved managed environment even when `RETICULATE_PYTHON` was configured, so a successful call guarantees that its requirements are present.
 The server passes the selected interpreter path to the sandboxed worker, which forces `UV_OFFLINE=1` and otherwise uses the existing sandbox policy unchanged.
-The selection is fixed before worker startup; worker-side `py_require()` calls do not revise it.
+The selection is fixed before worker startup.
+Calls to `reticulate::py_require()` inside the worker, including calls from loaded R packages, update only reticulate's in-process manifest; they do not update the server-owned manifest or selected environment, so newly requested modules may remain unavailable.
+Supporting those calls requires worker-to-server requirement reporting followed by an explicit session restart; evaluated code does not implicitly run the host resolver.
 Requirement strings are passed as data rather than evaluated as R code, but reticulate and uv run outside the sandbox and package preparation may execute a source distribution's build backend there.
 The resolver does not evaluate submitted R or Python cells.
 If the preflight cannot select an interpreter, `serve` exits before accepting MCP requests.
 A failed `session` preparation is a tool error and leaves the prior requirements and interpreter selection unchanged.
-For uv tool failures, the error includes the attempted uv command and uv's stderr without reticulate's interactive `py_require()` guidance.
+For uv tool failures, the error includes a JSON resolver-input manifest with reticulate's Python selection and the complete candidate package set, followed by uv's stderr.
+It omits reticulate's helper command, temporary output path, and interactive `py_require()` guidance.
 Preparation has no per-call timeout; closing MCP input force-stops an in-flight resolver process group.
 MCP Console does not install these R packages.
 Python `input()` and `breakpoint()`/`pdb` use reticulate's R console bridge, so each read emits `input_requested` before reading and `input_received` after a successful read.
