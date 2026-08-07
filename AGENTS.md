@@ -67,8 +67,8 @@ Other inherited values, including an empty value, are preserved and skip that st
 Custom workers skip resolution and reject Python requirement preparation.
 Resolution may access the network, write normal reticulate and uv host caches, and execute package build backends outside the sandbox, but requirement strings remain standard-input data rather than R code and no submitted cell is evaluated.
 Before initializing R, the worker forces `UV_OFFLINE=1`, overwriting any inherited value to match the sandbox's network denial.
-Reticulate reuses the preflight-selected or caller-selected interpreter.
-Because the preflight-selected interpreter is passed as a concrete path, worker-side `py_require()` calls do not revise that selection.
+Reticulate reuses the server-resolved or caller-selected interpreter.
+Because a resolved interpreter is passed as a concrete path, worker-side `py_require()` calls do not revise that selection.
 R and Python share objects through reticulate's `py` and `r` bridges.
 A silent successful Python cell sends `completed` without an `output` frame and projects to `[done]` when no other response text is pending.
 Python `input()` and `breakpoint()`/`pdb` use reticulate's R console bridge, so they emit `input_requested` before a read and `input_received` after it succeeds.

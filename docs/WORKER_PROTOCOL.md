@@ -337,7 +337,7 @@ There is no relative ordering guarantee between those pipes and sideband output,
 The built-in worker receives either the interpreter path selected by startup or explicit preparation, or the caller's existing `RETICULATE_PYTHON` value when no managed resolution occurred.
 Before initializing R, it forces `UV_OFFLINE=1`, overwriting any inherited value before user code runs.
 Reticulate initializes that selection on first use from R or Python and reuses it afterward.
-Because the preflight-selected interpreter is passed as a concrete path, worker-side `py_require()` calls do not revise that selection.
+Because a resolved interpreter is passed as a concrete path, worker-side `py_require()` calls do not revise that selection.
 
 Each Python cell receives a synthetic filename such as `<mcp-console:python:e1>`.
 The worker stores the source in a process-lifetime private R environment and calls its evaluator with only a short evaluation ID.
