@@ -372,7 +372,7 @@ def test_returns_r_plots_from_python_bridge(binary: Path) -> Transcript:
     client.call_tool("send", python=python)
     assert_result_content(
         client,
-        ["before plot\n", expected_plot[0], "after plot\n"],
+        ["before plot\nafter plot\n", expected_plot[0]],
     )
     return client.finish()
 

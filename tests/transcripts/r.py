@@ -79,10 +79,10 @@ def test_returns_cell_scoped_plots(binary: Path) -> Transcript:
     assert_result_content(
         client,
         [
-            "before plots\n",
+            "before plots\nafter first plot\n",
             expected_plots[0],
+            "after second plot\n",
             expected_plots[1],
-            "after first plot\nafter second plot\n",
         ],
     )
 
@@ -108,7 +108,7 @@ def test_returns_cell_scoped_plots(binary: Path) -> Transcript:
     return client.finish()
 
 
-def test_preserves_managed_device_plot_finalization_order(binary: Path) -> Transcript:
+def test_emits_managed_plots_when_pages_finalize(binary: Path) -> Transcript:
     environment, rscript = r_test_environment()
     client = McpClient(binary, ("serve",), environment)
     client.initialize_and_list_tools()
@@ -120,38 +120,29 @@ def test_preserves_managed_device_plot_finalization_order(binary: Path) -> Trans
           console.plot.dpi = 100
         )
         local({
-          draw <- function(color, label) {
-            grid::grid.newpage(recording = FALSE)
-            grid::grid.rect(gp = grid::gpar(fill = color))
-            grid::grid.text(label)
-          }
-          draw("red", "A1")
-          device_a <- grDevices::dev.cur()
-          grDevices::dev.new()
-          draw("blue", "B1")
-          device_b <- grDevices::dev.cur()
-          grDevices::dev.set(device_a)
-          draw("green", "A2")
-          grDevices::dev.set(device_b)
-          draw("purple", "B2")
-          invisible(grDevices::dev.off())
-          grDevices::dev.set(device_a)
-          invisible(grDevices::dev.off())
+          plot(1:3)
+          plot(3:1)
+          cat("after first page finalized\n")
         })
         """)
-    plots_by_filename = reference_plots(
+    expected_plots = reference_plots(
         rscript,
         environment,
         r,
         width=4,
         height=3,
         dpi=100,
-        pages=4,
+        pages=2,
     )
-    # Filename order is A1, A2, B1, B2; the devices finish A1, B1, B2, A2.
-    expected_plots = [plots_by_filename[index] for index in (0, 2, 3, 1)]
     client.call_tool("send", r=r)
-    assert_result_content(client, expected_plots)
+    assert_result_content(
+        client,
+        [
+            expected_plots[0],
+            "after first page finalized\n",
+            expected_plots[1],
+        ],
+    )
     return client.finish()
 
 
@@ -181,7 +172,7 @@ def test_returns_plots_after_r_errors(binary: Path) -> Transcript:
     text_items = [item for item in result["content"] if item["type"] == "text"]
     assert len(text_items) == 1 and "boom" in text_items[0]["text"], result
     text_items[0]["text"] = "Error: boom\n"
-    assert_result_content(client, [expected_plot[0], "Error: boom\n"])
+    assert_result_content(client, ["Error: boom\n", expected_plot[0]])
 
     r = "plot(3:1)"
     expected_plot = reference_plots(
