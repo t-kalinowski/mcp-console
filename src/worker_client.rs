@@ -23,7 +23,6 @@ struct ClientInner {
 }
 
 struct PythonEnvironment {
-    requirements: BTreeSet<String>,
     managed: Option<crate::resolver::ManagedPython>,
 }
 
@@ -166,25 +165,17 @@ impl Response {
 /// Keeps the current stop handle available until shutdown closes the gate.
 enum ShutdownGate {
     Open {
-        stop_handle: Option<ProcessStopHandle>,
+        worker: Option<platform::StopHandle>,
+        resolver: Option<crate::resolver::ResolverStopHandle>,
     },
     Closed {
         deadline: Instant,
     },
 }
 
-enum ProcessStopHandle {
-    Worker(platform::StopHandle),
-    Resolver(crate::resolver::ResolverStopHandle),
-}
-
-impl ProcessStopHandle {
-    fn shutdown(&self, deadline: Instant) -> Result<(), String> {
-        match self {
-            Self::Worker(handle) => handle.shutdown(deadline),
-            Self::Resolver(handle) => handle.stop(),
-        }
-    }
+struct ProcessStopHandles {
+    worker: Option<platform::StopHandle>,
+    resolver: Option<crate::resolver::ResolverStopHandle>,
 }
 
 impl Client {
@@ -199,10 +190,7 @@ impl Client {
         Ok(Self::with_arguments(
             program,
             vec![OsString::from("worker")],
-            Some(PythonEnvironment {
-                requirements: BTreeSet::new(),
-                managed,
-            }),
+            Some(PythonEnvironment { managed }),
         ))
     }
 
@@ -217,7 +205,10 @@ impl Client {
             worker: Mutex::new(WorkerState::Initial),
             evaluation: Mutex::new(None),
             output: CapturedOutput::new(),
-            shutdown_gate: Mutex::new(ShutdownGate::Open { stop_handle: None }),
+            shutdown_gate: Mutex::new(ShutdownGate::Open {
+                worker: None,
+                resolver: None,
+            }),
             python: python.map(Mutex::new),
         }))
     }
@@ -247,7 +238,12 @@ impl Client {
             return Err("worker is shutting down".to_string());
         }
         let additions = requirements.into_iter().collect::<BTreeSet<_>>();
-        if additions.is_subset(&python.requirements) {
+        let current = python
+            .managed
+            .as_ref()
+            .map(|managed| managed.requirements().packages.iter().cloned().collect())
+            .unwrap_or_default();
+        if additions.is_subset(&current) {
             return Ok(PrepareResult::Prepared);
         }
         let worker = match self.0.worker.try_lock() {
@@ -263,11 +259,7 @@ impl Client {
             return Ok(PrepareResult::RestartRequired);
         }
 
-        let candidate = python
-            .requirements
-            .union(&additions)
-            .cloned()
-            .collect::<BTreeSet<_>>();
+        let candidate = current.union(&additions).cloned().collect::<BTreeSet<_>>();
         let requirements = candidate.iter().cloned().collect::<Vec<_>>();
         let managed = match crate::resolver::resolve_python(&requirements, |handle| {
             self.register_resolver_stop_handle(handle)
@@ -289,9 +281,8 @@ impl Client {
             .lock()
             .map_err(|_| "worker shutdown gate lock poisoned".to_string())?;
         match &mut *gate {
-            ShutdownGate::Open { stop_handle } => {
-                *stop_handle = None;
-                python.requirements = candidate;
+            ShutdownGate::Open { resolver, .. } => {
+                *resolver = None;
                 python.managed = Some(managed);
                 Ok(PrepareResult::Prepared)
             }
@@ -441,7 +432,107 @@ impl Client {
         cell: crate::cell::Cell,
         evaluation: &Evaluation,
     ) -> Result<(), String> {
-        self.with_worker(|worker| worker.evaluate(cell, evaluation))
+        let resolver = self.clone();
+        let checkpointer = self.clone();
+        self.with_worker(|worker| {
+            worker.evaluate(
+                cell,
+                evaluation,
+                move |request| resolver.resolve_runtime_python(request),
+                move |checkpoint, candidates| {
+                    checkpointer.checkpoint_runtime_python(checkpoint, candidates)
+                },
+            )
+        })
+    }
+
+    fn resolve_runtime_python(
+        &self,
+        request: crate::worker_protocol::PythonResolveRequest,
+    ) -> Result<crate::resolver::ManagedPython, String> {
+        if self.shutdown_requested()? {
+            return Err("worker is shutting down".to_string());
+        }
+        let python = self.0.python.as_ref().ok_or_else(|| {
+            "Python requirements are unavailable with a custom worker".to_string()
+        })?;
+        let current = python
+            .lock()
+            .map_err(|_| "Python environment lock poisoned".to_string())?
+            .managed
+            .clone()
+            .ok_or_else(|| {
+                "runtime Python requirements require a server-managed interpreter".to_string()
+            })?;
+        let requirements = request.requirements.normalized();
+        if current.requirements() == &requirements {
+            return Ok(current);
+        }
+
+        let managed = match crate::resolver::resolve_python_manifest(
+            requirements,
+            request.environment,
+            |handle| self.register_resolver_stop_handle(handle),
+        ) {
+            Ok(managed) => managed,
+            Err(error) => {
+                self.clear_resolver_stop_handle()?;
+                return Err(error);
+            }
+        };
+        let mut gate = self
+            .0
+            .shutdown_gate
+            .lock()
+            .map_err(|_| "worker shutdown gate lock poisoned".to_string())?;
+        match &mut *gate {
+            ShutdownGate::Open { resolver, .. } => {
+                *resolver = None;
+                Ok(managed)
+            }
+            ShutdownGate::Closed { .. } => Err("managed Python resolution cancelled".to_string()),
+        }
+    }
+
+    fn checkpoint_runtime_python(
+        &self,
+        checkpoint: Option<crate::worker_protocol::PythonRequirementManifest>,
+        candidates: Vec<crate::resolver::ManagedPython>,
+    ) -> Result<(), String> {
+        if self.shutdown_requested()? {
+            return Err("worker is shutting down".to_string());
+        }
+        let Some(checkpoint) = checkpoint else {
+            return if candidates.is_empty() {
+                Ok(())
+            } else {
+                Err("worker resolved Python without reporting a checkpoint".to_string())
+            };
+        };
+        let python = self
+            .0
+            .python
+            .as_ref()
+            .ok_or_else(|| "custom worker reported a managed Python checkpoint".to_string())?;
+        let requirements = checkpoint.normalized();
+        let mut python = python
+            .lock()
+            .map_err(|_| "Python environment lock poisoned".to_string())?;
+        let managed = candidates
+            .into_iter()
+            .rev()
+            .find(|candidate| candidate.requirements() == &requirements)
+            .or_else(|| {
+                python
+                    .managed
+                    .clone()
+                    .filter(|current| current.requirements() == &requirements)
+            })
+            .ok_or_else(|| {
+                "worker checkpoint does not match a resolved Python environment".to_string()
+            })?;
+        python.managed = Some(managed);
+        Ok(())
     }
 
     fn with_worker<T>(
@@ -525,17 +616,6 @@ impl Client {
     }
 
     fn register_stop_handle(&self, handle: platform::StopHandle) -> Result<(), String> {
-        self.register_process_stop_handle(ProcessStopHandle::Worker(handle))
-    }
-
-    fn register_resolver_stop_handle(
-        &self,
-        handle: crate::resolver::ResolverStopHandle,
-    ) -> Result<(), String> {
-        self.register_process_stop_handle(ProcessStopHandle::Resolver(handle))
-    }
-
-    fn register_process_stop_handle(&self, handle: ProcessStopHandle) -> Result<(), String> {
         let deadline = {
             let mut gate = self
                 .0
@@ -543,8 +623,8 @@ impl Client {
                 .lock()
                 .map_err(|_| "worker shutdown gate lock poisoned".to_string())?;
             match &mut *gate {
-                ShutdownGate::Open { stop_handle } => {
-                    *stop_handle = Some(handle);
+                ShutdownGate::Open { worker, .. } => {
+                    *worker = Some(handle.clone());
                     return Ok(());
                 }
                 ShutdownGate::Closed { deadline } => *deadline,
@@ -554,28 +634,50 @@ impl Client {
         Err("worker is shutting down".to_string())
     }
 
+    fn register_resolver_stop_handle(
+        &self,
+        handle: crate::resolver::ResolverStopHandle,
+    ) -> Result<(), String> {
+        {
+            let mut gate = self
+                .0
+                .shutdown_gate
+                .lock()
+                .map_err(|_| "worker shutdown gate lock poisoned".to_string())?;
+            match &mut *gate {
+                ShutdownGate::Open { resolver, .. } => {
+                    *resolver = Some(handle.clone());
+                    return Ok(());
+                }
+                ShutdownGate::Closed { .. } => {}
+            }
+        }
+        handle.stop()?;
+        Err("worker is shutting down".to_string())
+    }
+
     fn clear_resolver_stop_handle(&self) -> Result<(), String> {
         let mut gate = self
             .0
             .shutdown_gate
             .lock()
             .map_err(|_| "worker shutdown gate lock poisoned".to_string())?;
-        if let ShutdownGate::Open { stop_handle } = &mut *gate
-            && matches!(stop_handle, Some(ProcessStopHandle::Resolver(_)))
-        {
-            *stop_handle = None;
+        if let ShutdownGate::Open { resolver, .. } = &mut *gate {
+            *resolver = None;
         }
         Ok(())
     }
 
-    fn close_shutdown_gate(&self, deadline: Instant) -> Result<Option<ProcessStopHandle>, String> {
+    fn close_shutdown_gate(&self, deadline: Instant) -> Result<Option<ProcessStopHandles>, String> {
         let mut gate = self
             .0
             .shutdown_gate
             .lock()
             .map_err(|_| "worker shutdown gate lock poisoned".to_string())?;
         match std::mem::replace(&mut *gate, ShutdownGate::Closed { deadline }) {
-            ShutdownGate::Open { stop_handle } => Ok(stop_handle),
+            ShutdownGate::Open { worker, resolver } => {
+                Ok(Some(ProcessStopHandles { worker, resolver }))
+            }
             ShutdownGate::Closed { deadline } => {
                 *gate = ShutdownGate::Closed { deadline };
                 Ok(None)
@@ -585,12 +687,20 @@ impl Client {
 
     /// Stops and reaps active worker and resolver process groups.
     pub(crate) async fn shutdown(&self, deadline: Instant) -> Result<(), String> {
-        let Some(stop_handle) = self.close_shutdown_gate(deadline)? else {
+        let Some(stop_handles) = self.close_shutdown_gate(deadline)? else {
             return Ok(());
         };
-        tokio::task::spawn_blocking(move || stop_handle.shutdown(deadline))
-            .await
-            .map_err(|error| format!("process shutdown task failed: {error}"))?
+        tokio::task::spawn_blocking(move || {
+            let resolver = stop_handles
+                .resolver
+                .map_or(Ok(()), |resolver| resolver.stop());
+            let worker = stop_handles
+                .worker
+                .map_or(Ok(()), |worker| worker.shutdown(deadline));
+            resolver.and(worker)
+        })
+        .await
+        .map_err(|error| format!("process shutdown task failed: {error}"))?
     }
 }
 
@@ -1054,6 +1164,14 @@ mod platform {
             &mut self,
             cell: crate::cell::Cell,
             evaluation: &super::Evaluation,
+            mut resolve_python: impl FnMut(
+                crate::worker_protocol::PythonResolveRequest,
+            )
+                -> Result<crate::resolver::ManagedPython, String>,
+            mut checkpoint_python: impl FnMut(
+                Option<crate::worker_protocol::PythonRequirementManifest>,
+                Vec<crate::resolver::ManagedPython>,
+            ) -> Result<(), String>,
         ) -> Result<(), String> {
             let crate::cell::Cell { language, source } = cell;
             self.stop_handle
@@ -1061,6 +1179,7 @@ mod platform {
                 .send(&ServerMessage::Evaluate { language, source })
                 .map_err(|error| format!("worker sideband write failed: {error}"))?;
             evaluation.attach_writer(self.stop_handle.stdin.clone())?;
+            let mut python_candidates = Vec::new();
 
             loop {
                 match self.receive()? {
@@ -1072,8 +1191,29 @@ mod platform {
                         evaluation.input_requested(prompt)?;
                     }
                     WorkerMessage::InputReceived => evaluation.input_received()?,
-                    WorkerMessage::Completed => {
+                    WorkerMessage::ResolvePython { request } => match resolve_python(request) {
+                        Ok(managed) => {
+                            let python = managed.python().to_string_lossy().into_owned();
+                            self.stop_handle
+                                .writer
+                                .send(&ServerMessage::PythonResolved { python })
+                                .map_err(|error| {
+                                    format!("worker sideband write failed: {error}")
+                                })?;
+                            python_candidates.push(managed);
+                        }
+                        Err(message) => {
+                            self.stop_handle
+                                .writer
+                                .send(&ServerMessage::PythonResolutionFailed { message })
+                                .map_err(|error| {
+                                    format!("worker sideband write failed: {error}")
+                                })?;
+                        }
+                    },
+                    WorkerMessage::Completed { python_checkpoint } => {
                         evaluation.input_complete()?;
+                        checkpoint_python(python_checkpoint, python_candidates)?;
                         return Ok(());
                     }
                     WorkerMessage::Ready => {
@@ -1215,6 +1355,13 @@ mod platform {
             &mut self,
             cell: crate::cell::Cell,
             _evaluation: &super::Evaluation,
+            _resolve_python: impl FnMut(
+                crate::worker_protocol::PythonResolveRequest,
+            ) -> Result<crate::resolver::ManagedPython, String>,
+            _checkpoint_python: impl FnMut(
+                Option<crate::worker_protocol::PythonRequirementManifest>,
+                Vec<crate::resolver::ManagedPython>,
+            ) -> Result<(), String>,
         ) -> Result<(), String> {
             let crate::cell::Cell { language, source } = cell;
             let _ = (language, source);

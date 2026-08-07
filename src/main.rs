@@ -18,7 +18,6 @@ mod sideband;
 mod sql;
 mod worker;
 mod worker_client;
-#[cfg(target_os = "macos")]
 mod worker_protocol;
 
 fn main() -> ExitCode {
