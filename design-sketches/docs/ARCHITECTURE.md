@@ -798,7 +798,8 @@ Reticulate owns the live manifest during an evaluation, while the supervisor own
 
 Only newly added package requirements fit the v1 late-layering contract.
 Removals and changes to Python-version or `exclude_newer` constraints are unsupported after initialization rather than silently projected as additions.
-An explicit late `session prepare` still returns `restart required`; the explicit restart action remains future work.
+An explicit late `session prepare` still returns `restart required`.
+The implemented implicit-session restart retains the last accepted checkpoint but does not accept new requirements; activating changed constraints as part of restart remains future work.
 
 ### 14.2 R
 
@@ -1145,7 +1146,7 @@ Exit: one backend is selected with evidence against the criteria in `RUNTIME_BAC
 
 - retain the implemented structured cell and exact-input behavior;
 - complete the selected backend's lifecycle and capability adapter;
-- implement inspection, interrupt, explicit restart, and crash reporting;
+- implement inspection, interrupt, restart with new requirements, and crash reporting;
 - validate R stack and source semantics across supported platforms;
 - establish pinned compatibility tests for Ark/comm or `harp`/`libr` dependencies.
 

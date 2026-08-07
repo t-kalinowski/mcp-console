@@ -384,6 +384,25 @@ def test_reports_r_worker_restart_with_idle_stdin(binary: Path) -> Transcript:
     return client.finish()
 
 
+def test_restart_while_r_waits_for_input(binary: Path) -> Transcript:
+    client = McpClient(binary, ("serve",))
+    client.initialize_and_list_tools()
+    # fmt: r
+    r = code(r"""
+        restart_marker <- TRUE
+        readline("restart> ")
+        """)
+    client.call_tool("send", r=r)
+    assert last_tool_text(client) == ('[input requested: "restart> "]\n[stdin needed]')
+
+    client.call_tool("session", action="restart")
+    assert last_tool_text(client) == "[restarted]"
+
+    client.call_tool("send", r='exists("restart_marker", inherits = FALSE)')
+    assert last_tool_text(client) == "[1] FALSE\n"
+    return client.finish()
+
+
 def test_browser_input(binary: Path) -> Transcript:
     client = McpClient(binary, ("serve",))
     client.initialize_and_list_tools()

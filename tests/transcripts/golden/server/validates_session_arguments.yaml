@@ -1,0 +1,24 @@
+---
+!same-as tests/transcripts/golden/server/initializes_and_lists_tools.yaml
+---
+id: 3
+session:
+  action: prepare
+result:
+  content:
+    - type: text
+      text: "`requirements` is required with `prepare`"
+  isError: true
+---
+id: 4
+session:
+  action: restart
+  requirements:
+    python:
+      - py-yaml12
+result:
+  content:
+    - type: text
+      text: "`requirements` is not yet supported with `restart`"
+  isError: true
+...

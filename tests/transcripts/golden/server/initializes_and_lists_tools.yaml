@@ -73,8 +73,10 @@ result:
             default: 60000
     - name: session
       description: >-
-        Prepare additive Python requirements for the implicit session before its
-        worker starts.
+        Prepare additive Python requirements before the implicit session starts,
+        or restart its worker while retaining prepared requirements. Restart
+        starts a worker if none exists and loses all in-memory R, Python, and
+        SQL state.
       inputSchema:
         $schema: https://json-schema.org/draft/2020-12/schema
         $defs:
@@ -82,6 +84,7 @@ result:
             type: string
             enum:
               - prepare
+              - restart
           PythonRequirements:
             type: object
             properties:
@@ -99,13 +102,16 @@ result:
         type: object
         properties:
           action:
-            description: Session operation. Only initial environment preparation is implemented.
+            description: >-
+              Prepare Python requirements or restart the implicit session, starting it
+              if needed.
             $ref: "#/$defs/SessionAction"
           requirements:
-            description: Additive requirements for the implicit default session.
-            $ref: "#/$defs/PythonRequirements"
+            description: Additive requirements for prepare. Omit for restart.
+            anyOf:
+              - $ref: "#/$defs/PythonRequirements"
+              - type: "null"
         additionalProperties: false
         required:
           - action
-          - requirements
 ...

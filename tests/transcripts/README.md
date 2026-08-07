@@ -20,6 +20,8 @@ The `help` suite records command lines and stdout in one stream with color disab
 It adds the exit code for failures and stderr when nonempty.
 The `worker` suite drives the public MCP server through a transparent worker proxy.
 The proxy starts the built-in worker inside the server's sandbox, forwards sideband messages and standard streams, and writes parsed events to its private temporary directory for the test to read before shutdown.
+The restart case keeps the old generation's capture descriptor open across sandbox cleanup and records the sideband shutdown frame, worker-stdin EOF, and worker-sideband EOF.
+The crash-recovery case does the same across an unexpected worker exit and records the observed worker-sideband EOF before the replacement starts.
 The suite asserts the public `send` result and records the wire events as YAML mappings in approximate order.
 Pending standard-output and standard-error chunks are grouped into one event without defining their relative order.
 The `r`, `python`, and `sql` suites exercise the built-in worker through the public `send` tool.

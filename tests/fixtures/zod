@@ -86,12 +86,12 @@ def main() -> None:
     reader = open_sideband(READ_FD_ENV, "r")
     writer = open_sideband(WRITE_FD_ENV, "w")
     temporary = Path(os.environ["TMPDIR"])
-    configure_startup(temporary)
     if os.environ.get("ZOD_REPORT_PROCESS_GROUP") == "1":
         (temporary / "zod-process-group").write_text(
             str(os.getpgrp()),
             encoding="utf-8",
         )
+    configure_startup(temporary)
     send(writer, {"kind": "ready"})
 
     if os.environ.get("ZOD_BLOCK_SIDEBAND_WRITE") == "1":
@@ -167,6 +167,13 @@ def main() -> None:
                     "data": f"zod stdin: {stdin}\n",
                 },
             )
+            send(writer, {"kind": "completed"})
+            continue
+
+        if source == "wait for stdin close":
+            (temporary / "zod-waiting-for-stdin-close").touch()
+            assert os.read(0, 1) == b"", "Zod received input instead of stdin EOF"
+            emit_large_output(1, b"zod stdin closed\n")
             send(writer, {"kind": "completed"})
             continue
 

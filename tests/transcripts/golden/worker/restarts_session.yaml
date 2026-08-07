@@ -1,0 +1,46 @@
+---
+worker:
+  kind: ready
+---
+server:
+  kind: evaluate
+  language: r
+  source: |
+    restart_marker <- "old generation"
+    cat("before restart\n")
+---
+worker:
+  kind: output
+  data: |
+    before restart
+---
+worker:
+  kind: completed
+---
+server:
+  kind: shutdown
+---
+stdin:
+  closed: true
+---
+worker_sideband:
+  closed: true
+---
+worker:
+  kind: ready
+---
+server:
+  kind: evaluate
+  language: r
+  source: |
+    stopifnot(!exists("restart_marker", inherits = FALSE))
+    cat("after restart\n")
+---
+worker:
+  kind: output
+  data: |
+    after restart
+---
+worker:
+  kind: completed
+...

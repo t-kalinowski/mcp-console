@@ -5,21 +5,37 @@ import os
 import tempfile
 import time
 from pathlib import Path
+from typing import TextIO
 
 from _support import McpClient, Transcript, code, run_this_suite
 
 
 PLATFORMS = {"darwin"}
 CAPTURE_NAME = "mcp-console-worker-wire.jsonl"
+CAPTURE_STDIN_CLOSE_ENV = "MCP_CONSOLE_MITM_CAPTURE_STDIN_CLOSE"
+CAPTURE_WORKER_SIDEBAND_CLOSE_ENV = "MCP_CONSOLE_MITM_CAPTURE_WORKER_SIDEBAND_CLOSE"
 
 
 class WorkerWireClient:
-    def __init__(self, binary: Path) -> None:
+    def __init__(
+        self,
+        binary: Path,
+        *,
+        capture_stdin_close: bool = False,
+        capture_worker_sideband_close: bool = False,
+        disable_r_segv_handler: bool = False,
+    ) -> None:
         self.temporary = tempfile.TemporaryDirectory()
         root = Path(self.temporary.name)
         environment = os.environ.copy()
         environment["TMPDIR"] = str(root)
         environment["MCP_CONSOLE_MITM_WORKER"] = str(binary)
+        if capture_stdin_close:
+            environment[CAPTURE_STDIN_CLOSE_ENV] = "1"
+        if capture_worker_sideband_close:
+            environment[CAPTURE_WORKER_SIDEBAND_CLOSE_ENV] = "1"
+        if disable_r_segv_handler:
+            environment["R_NO_SEGV_HANDLER"] = "1"
         mitm = Path(__file__).resolve().parents[1] / "fixtures" / "worker_mitm"
         self.client = McpClient(
             binary,
@@ -34,6 +50,16 @@ class WorkerWireClient:
         assert result.get("isError") is not True, result
         return result["content"][0]["text"]
 
+    def restart(self) -> str:
+        self.client.call_tool("session", action="restart")
+        result = self.client.transcript[-1]["result"]
+        assert result.get("isError") is not True, result
+        return result["content"][0]["text"]
+
+    def open_capture(self) -> tuple[Path, TextIO]:
+        capture = self.capture_path()
+        return capture, capture.open(encoding="utf-8")
+
     def collect_output(self, output: str, expected_size: int) -> str:
         chunks = [] if output == "[done]" else [output]
         deadline = time.monotonic() + 10
@@ -47,16 +73,113 @@ class WorkerWireClient:
         return output
 
     def finish(self) -> Transcript:
-        root = Path(self.temporary.name)
-        captures = list(root.glob(f"mcp-console-tmp-*/{CAPTURE_NAME}"))
-        assert len(captures) == 1, captures
-        transcript = [
-            json.loads(line)
-            for line in captures[0].read_text(encoding="utf-8").splitlines()
-        ]
+        transcript = self.read_capture(self.capture_path())
         self.client.finish()
         self.temporary.cleanup()
         return transcript
+
+    def finish_replacement(
+        self,
+        old_path: Path,
+        old_capture: TextIO,
+    ) -> Transcript:
+        transcript = self.read_open_capture(old_capture)
+        transcript.extend(self.read_capture(self.capture_path(excluding=old_path)))
+        old_capture.close()
+        self.client.finish()
+        self.temporary.cleanup()
+        return transcript
+
+    def capture_path(self, excluding: Path | None = None) -> Path:
+        root = Path(self.temporary.name)
+        captures = [
+            path
+            for path in root.glob(f"mcp-console-tmp-*/{CAPTURE_NAME}")
+            if path != excluding
+        ]
+        assert len(captures) == 1, captures
+        return captures[0]
+
+    @staticmethod
+    def read_capture(capture: Path) -> Transcript:
+        return [
+            json.loads(line)
+            for line in capture.read_text(encoding="utf-8").splitlines()
+        ]
+
+    @staticmethod
+    def read_open_capture(capture: TextIO) -> Transcript:
+        return [json.loads(line) for line in capture.read().splitlines()]
+
+
+def test_restarts_session(binary: Path) -> Transcript:
+    client = WorkerWireClient(
+        binary,
+        capture_stdin_close=True,
+        capture_worker_sideband_close=True,
+    )
+    # fmt: r
+    before_restart = code(r"""
+        restart_marker <- "old generation"
+        cat("before restart\n")
+        """)
+    assert client.call_tool(r=before_restart) == "before restart\n"
+    old_path, old_capture = client.open_capture()
+
+    assert client.restart() == "[restarted]"
+    # fmt: r
+    after_restart = code(r"""
+        stopifnot(!exists("restart_marker", inherits = FALSE))
+        cat("after restart\n")
+        """)
+    assert client.call_tool(r=after_restart) == "after restart\n"
+
+    transcript = client.finish_replacement(old_path, old_capture)
+    assert {"stdin": {"closed": True}} in transcript
+    assert {"worker_sideband": {"closed": True}} in transcript
+    return transcript
+
+
+def test_recovers_after_worker_segfault(binary: Path) -> Transcript:
+    # Disable R's fatal-signal UI so the native fault terminates the worker directly.
+    client = WorkerWireClient(
+        binary,
+        capture_worker_sideband_close=True,
+        disable_r_segv_handler=True,
+    )
+    # fmt: r
+    before_crash = code(r"""
+        crash_marker <- "old generation"
+        cat("before crash\n")
+        """)
+    assert client.call_tool(r=before_crash) == "before crash\n"
+    old_path, old_capture = client.open_capture()
+
+    # fmt: python
+    crash = code(r"""
+        import ctypes
+
+        ctypes.string_at(0)
+        """)
+    client.client.call_tool("send", python=crash)
+    result = client.client.transcript[-1]["result"]
+    assert result["isError"] is True, result
+    assert result["content"][0]["text"] == (
+        "worker sideband read failed: worker sideband closed"
+    )
+
+    # fmt: r
+    after_crash = code(r"""
+        stopifnot(!exists("crash_marker", inherits = FALSE))
+        cat("after crash\n")
+        """)
+    assert client.call_tool(r=after_crash) == (
+        "after crash\n[worker restarted: in-memory state lost]\n"
+    )
+
+    transcript = client.finish_replacement(old_path, old_capture)
+    assert {"worker_sideband": {"closed": True}} in transcript
+    return transcript
 
 
 def test_routes_python_output(binary: Path) -> Transcript:

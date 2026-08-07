@@ -1,0 +1,42 @@
+---
+!same-as tests/transcripts/golden/server/initializes_and_lists_tools.yaml
+---
+id: 3
+send:
+  r: exit unexpectedly
+result:
+  content:
+    - type: text
+      text: "worker sideband read failed: worker sideband closed"
+  isError: true
+---
+id: 4
+session:
+  action: restart
+result:
+  content:
+    - type: text
+      text: "[restarted]"
+  isError: false
+---
+id: 5
+send:
+  r: echo
+result:
+  content:
+    - type: text
+      text: |
+        zod: echo
+        [worker restarted: in-memory state lost]
+  isError: false
+---
+id: 6
+send:
+  r: echo
+result:
+  content:
+    - type: text
+      text: |
+        zod: echo
+  isError: false
+...

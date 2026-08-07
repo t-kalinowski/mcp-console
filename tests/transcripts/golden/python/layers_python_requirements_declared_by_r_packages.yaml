@@ -64,6 +64,28 @@ result:
 ---
 id: 8
 session:
+  action: restart
+result:
+  content:
+    - type: text
+      text: "[restarted]"
+  isError: false
+---
+id: 9
+send:
+  python: |
+    import yaml12
+
+    ("runtime_marker" in globals(), yaml12.__name__)
+result:
+  content:
+    - type: text
+      text: |
+        (False, 'yaml12')
+  isError: false
+---
+id: 10
+session:
   action: prepare
   requirements:
     python:

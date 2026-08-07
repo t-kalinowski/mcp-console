@@ -1,0 +1,36 @@
+---
+!same-as tests/transcripts/golden/server/initializes_and_lists_tools.yaml
+---
+id: 3
+send:
+  r: wait for stdin close
+  timeout_ms: 0
+result:
+  content:
+    - type: text
+      text: |-
+
+        [running]
+  isError: false
+---
+id: 4
+session:
+  action: restart
+result:
+  content:
+    - type: text
+      text: "[restarted]"
+  isError: false
+---
+id: 5
+send:
+  r: echo
+result:
+  content:
+    - type: text
+      text: |
+        zod stdin closed
+        <large output>
+        zod: echo
+  isError: false
+...
