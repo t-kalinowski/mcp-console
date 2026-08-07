@@ -102,10 +102,22 @@ class WorkerWireClient:
 
 def test_restarts_session(binary: Path) -> Transcript:
     client = WorkerWireClient(binary, capture_stdin_close=True)
-    assert client.restart() == "[restarted]"
+    # fmt: r
+    before_restart = code(r"""
+        restart_marker <- "old generation"
+        cat("before restart\n")
+        """)
+    assert client.call_tool(r=before_restart) == "before restart\n"
     old_path, old_capture = client.open_capture()
 
     assert client.restart() == "[restarted]"
+    # fmt: r
+    after_restart = code(r"""
+        stopifnot(!exists("restart_marker", inherits = FALSE))
+        cat("after restart\n")
+        """)
+    assert client.call_tool(r=after_restart) == "after restart\n"
+
     transcript = client.finish_restart(old_path, old_capture)
     assert {"stdin": {"closed": True}} in transcript
     return transcript
