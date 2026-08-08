@@ -80,7 +80,7 @@ def test_records_tool_calls_and_images(binary: Path) -> Transcript:
         client.call_tool("missing")
         missing_error = client.transcript[-1]["error"]
 
-        sessions = list((workspace / ".console" / "sessions").iterdir())
+        sessions = list((workspace / ".mcp-console" / "sessions").iterdir())
         assert len(sessions) == 1, sessions
         session = sessions[0]
         journal_text = (session / "internal" / "events.jsonl").read_text(
@@ -172,21 +172,42 @@ def test_records_tool_calls_and_images(binary: Path) -> Transcript:
         assert events[9]["error"] == missing_error, events[9]
 
         image_path = session / events[3]["result"]["content"][1]["path"]
-        assert image_path.read_bytes() == base64.b64decode(PNG_1X1), image_path
+        image_bytes = image_path.read_bytes()
+        assert image_bytes == base64.b64decode(PNG_1X1), image_path
         transcript = client.finish()
 
+        normalized_journal = journal_text.replace(
+            json.dumps(events[0]["working_directory"], ensure_ascii=False),
+            json.dumps("<workspace>"),
+        ).replace(
+            json.dumps(run_id),
+            json.dumps("<run ID>"),
+        )
         for event in events:
             assert event["at"].endswith("Z"), event
             datetime.fromisoformat(event["at"])
+            normalized_journal = normalized_journal.replace(
+                json.dumps(event["at"]),
+                json.dumps("<UTC timestamp>"),
+            )
             event["at"] = "<UTC timestamp>"
             event["run_id"] = "<run ID>"
         events[0]["working_directory"] = "<workspace>"
+        assert normalized_journal.endswith("\n"), normalized_journal
+        from yaml12 import Yaml
+
         transcript.append({"journal": events})
         transcript.append(
             {
-                "artifact": {
-                    "path": "artifacts/call-000001-image-000001.png",
-                    "data": "<byte-identical decoded PNG>",
+                "produced session": {
+                    "root": ".mcp-console/sessions/<run ID>",
+                    "files": {
+                        "internal/events.jsonl": normalized_journal,
+                        "artifacts/call-000001-image-000001.png": Yaml(
+                            base64.b64encode(image_bytes).decode("ascii"),
+                            tag="tag:yaml.org,2002:binary",
+                        ),
+                    },
                 }
             }
         )
@@ -203,7 +224,7 @@ def test_stops_after_transcript_failure(binary: Path) -> Transcript:
             current_directory=workspace,
         )
         client.initialize_and_list_tools()
-        session = next((workspace / ".console" / "sessions").iterdir())
+        session = next((workspace / ".mcp-console" / "sessions").iterdir())
         artifacts = session / "artifacts"
         artifacts.rmdir()
         artifacts.write_text("not a directory", encoding="utf-8")
@@ -279,7 +300,7 @@ def test_flushes_calls_and_keeps_unpolled_images(binary: Path) -> Transcript:
             "zod-evaluation-started",
             client,
         )
-        session = next((workspace / ".console" / "sessions").iterdir())
+        session = next((workspace / ".mcp-console" / "sessions").iterdir())
         journal = session / "internal" / "events.jsonl"
         before_release = [
             json.loads(line)

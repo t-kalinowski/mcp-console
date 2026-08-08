@@ -1,5 +1,5 @@
 /target
-.console
+.mcp-console
 __pycache__/
 .codex
 .claude

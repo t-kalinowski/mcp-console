@@ -19,7 +19,7 @@ send:
 result:
   content:
     - type: text
-      text: "<leading newline>[running]"
+      text: <leading newline>[running]
   isError: false
 ---
 id: 5
@@ -43,7 +43,7 @@ live journal:
   unpolled image:
     event: artifact_created
     path: artifacts/call-000002-image-000001.png
-    data: "<byte-identical decoded PNG>"
+    data: <byte-identical decoded PNG>
   later poll result:
     content:
       - type: image

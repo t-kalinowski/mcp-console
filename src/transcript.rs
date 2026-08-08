@@ -50,7 +50,7 @@ impl Transcript {
             started_at.format("%Y%m%dT%H%M%S%.9fZ"),
             std::process::id()
         );
-        let sessions = working_directory.join(".console/sessions");
+        let sessions = working_directory.join(".mcp-console/sessions");
         let directory = sessions.join(&run_id);
         fs::create_dir_all(&sessions)
             .map_err(|error| format!("failed to create {}: {error}", sessions.display()))?;

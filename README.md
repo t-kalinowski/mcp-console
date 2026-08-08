@@ -22,7 +22,7 @@ mcp-console sandbox -- COMMAND [ARG]...
 `mcp-console serve` runs a minimal MCP server over stdio.
 Run `mcp-console --help` or `mcp-console COMMAND --help` for command-line help.
 The server registers `send` and a narrow initial `session` tool.
-Each `serve` process creates a run-specific record under `.console/sessions/<UTC-start>-<pid>/` in its initial working directory.
+Each `serve` process creates a run-specific record under `.mcp-console/sessions/<UTC-start>-<pid>/` in its initial working directory.
 It appends `session_started`, `tool_call`, `artifact_created`, and `tool_result` events to `internal/events.jsonl` for each ordinary, non-task `send` or `session` call, including timestamps, request and call IDs, exact arguments, ordered text and image blocks, and tool errors.
 Image bytes are decoded and flushed under `artifacts/` as soon as the worker publishes them, including images from an evaluation that is never polled again.
 The JSONL result refers to each image's relative artifact path while the MCP response remains unchanged.

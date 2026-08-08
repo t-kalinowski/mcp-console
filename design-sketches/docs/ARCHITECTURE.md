@@ -896,12 +896,12 @@ The transcript links to the same files.
 
 ### 16.1 Directory layout
 
-The implemented journal-only slice creates one run-specific directory at `.console/sessions/<UTC-start>-<pid>/`, with `artifacts/` and `internal/events.jsonl` beneath it.
+The implemented journal-only slice creates one run-specific directory at `.mcp-console/sessions/<UTC-start>-<pid>/`, with `artifacts/` and `internal/events.jsonl` beneath it.
 Its journal records MCP tool calls and results plus image artifacts when worker frames arrive; it does not yet implement the complete evaluation-event vocabulary below.
 The generated transcript and named-session design will replace that temporary run identity with the planned layout below:
 
 ```text
-.console/sessions/default/
+.mcp-console/sessions/default/
 ├── transcript.qmd
 ├── environment.json
 ├── outputs/
