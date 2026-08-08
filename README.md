@@ -22,6 +22,14 @@ mcp-console sandbox -- COMMAND [ARG]...
 `mcp-console serve` runs a minimal MCP server over stdio.
 Run `mcp-console --help` or `mcp-console COMMAND --help` for command-line help.
 The server registers `send` and a narrow initial `session` tool.
+Each `serve` process creates a run-specific record under `.mcp-console/sessions/<UTC-start>-<pid>/` in its initial working directory.
+It appends `session_started`, `tool_call`, `artifact_created`, and `tool_result` events to `internal/events.jsonl` for each ordinary, non-task `send` or `session` call, including timestamps, request and call IDs, exact arguments, ordered text and image blocks, and tool errors.
+Image bytes are decoded and flushed under `artifacts/` as soon as the worker publishes them, including images from an evaluation that is never polled again.
+The JSONL result refers to each image's relative artifact path while the MCP response remains unchanged.
+The result record captures server assembly, not delivery; cancellation or disconnection may suppress the response.
+Recording is mandatory: startup fails if the run record cannot be created, and a recording failure rejects later tool calls rather than append after a potentially partial record.
+Submitted source, stdin, and tool-result output are recorded without redaction.
+Complete evaluation-output spools and the generated Quarto projection described in the design sketches are not yet implemented.
 Supplying exactly one of `r`, `python`, or `sql` evaluates one complete code cell and waits up to the optional `timeout_ms`, which defaults to 60 seconds.
 When that wait expires, the call returns the newline-prefixed banner `\n[running]` while computation continues; call `send` without a code field to poll for completion.
 A call may also supply exact standard-input text with a code cell, during an evaluation, or while the worker is idle:
