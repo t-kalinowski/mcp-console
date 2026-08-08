@@ -20,6 +20,15 @@ The binary requires a subcommand.
 The `serve` command runs an MCP server over stdio.
 Clap provides command help, version output, argument parsing, and usage errors.
 The server registers `send` and `session` tools.
+Each `serve` process creates a run-specific directory under `.console/sessions/` in its initial working directory.
+It appends schema-versioned `session_started`, `tool_call`, `artifact_created`, and `tool_result` records for ordinary, non-task tool calls to `internal/events.jsonl`.
+Tool records preserve timestamps, MCP request IDs, normalized parsed call parameters, final results or errors, and content-block order.
+`tool_result` records server assembly, not delivery; cancellation or disconnection may suppress the response.
+Image blocks remain in MCP results and are also decoded byte-for-byte under the run's `artifacts/` directory as soon as the worker publishes them, including when the evaluation is never polled again; the journal replaces their base64 data with relative paths.
+Journal writes are flushed before a tool begins and after its result is assembled.
+Startup fails when the run record cannot be created, and any later recording failure makes the journal terminal and rejects subsequent tool calls.
+Submitted source, stdin, and tool-result output are recorded without redaction.
+Generated Quarto transcripts and complete output spools do not exist yet.
 Supplying exactly one of `r`, `python`, or `sql` starts one complete cell and waits for up to `timeout_ms`, which defaults to 60 seconds.
 If that wait expires, `send` returns the newline-prefixed banner `\n[running]` without stopping the computation; a later call without a code field polls it, and a poll while idle returns `\n[idle]`.
 Concurrent `send` calls are unsupported.
@@ -130,7 +139,7 @@ This initial launcher waits only for the direct command.
 Background descendants are unsupported: they may outlive the launcher, which attempts to remove their dedicated temporary directory on a best-effort basis when it returns.
 Descendant supervision is intentionally deferred because it must account for process groups, session-detached children, signal forwarding, and PID reuse together.
 The sandbox command and worker are unsupported on Linux and Windows.
-Named sessions, restart with new requirements, R requirement resolution, SQL relation bridges, the sidecar API, viewer, output retention, and transcript generation do not exist yet.
+Named sessions, restart with new requirements, R requirement resolution, SQL relation bridges, the sidecar API, viewer, complete output retention, and generated Quarto transcripts do not exist yet.
 
 ## Product direction
 
@@ -165,6 +174,7 @@ See `design-sketches/README.md` for the product overview and `design-sketches/do
 - `src/r_graphics.rs` — cell-scoped managed R graphics device and PNG image publication.
 - `src/server.rs` — MCP stdio server, `send` tool, and worker selection.
 - `src/sql.rs` — persistent DuckDB/DBI SQL bridge and bounded streaming Arrow previews.
+- `src/transcript.rs` — append-only MCP tool journal and image artifact persistence.
 - `src/r_repl.c` — C-owned per-cell DLL-REPL iterator and long-jump boundary.
 - `src/sideband.rs` — macOS inherited-pipe JSON-lines transport.
 - `src/worker.rs` — embedded R initialization, cell dispatch, and console callbacks.

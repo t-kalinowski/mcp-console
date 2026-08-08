@@ -362,7 +362,7 @@ model-fit  running  python  18s
 ```text
 default  generation=1  input_required  r
 requirements: r=2 python=1
-transcript: .mcp-console/sessions/default/transcript.qmd
+transcript: .console/sessions/default/transcript.qmd
 ```
 
 `prepare` resolves and adds requirements.
@@ -505,7 +505,7 @@ The implementation should distinguish three output classes.
 All explicit stream output is appended to a per-evaluation file, for example:
 
 ```text
-.mcp-console/sessions/default/outputs/e0017.log
+.console/sessions/default/outputs/e0017.log
 ```
 
 Each MCP reply considers only bytes produced since the previous sealed reply for that evaluation.
@@ -529,7 +529,7 @@ Loading partition 2...
 Loading partition 98...
 Loading partition 99...
 
-[truncated: .mcp-console/sessions/default/outputs/e0017.log]
+[truncated: .console/sessions/default/outputs/e0017.log]
 [running]
 ```
 
@@ -571,7 +571,7 @@ Plots and binary outputs are written to the session artifact directory.
 The text response reports a relative path:
 
 ```text
-Plot saved: .mcp-console/sessions/default/artifacts/e0021-plot-1.png
+Plot saved: .console/sessions/default/artifacts/e0021-plot-1.png
 ```
 
 Viewing the file is delegated to the host agent's ordinary file or image capabilities.
@@ -595,7 +595,7 @@ Tests should assert hard bounds and semantic markers, not incidental table glyph
 Each session exposes:
 
 ```text
-.mcp-console/sessions/<session>/transcript.qmd
+.console/sessions/<session>/transcript.qmd
 ```
 
 The transcript is generated at stable boundaries and contains:

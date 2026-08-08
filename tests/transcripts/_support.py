@@ -127,10 +127,18 @@ class McpClient:
         binary: Path,
         arguments: tuple[str, ...] = (),
         environment: dict[str, str] | None = None,
+        current_directory: Path | None = None,
     ) -> None:
+        self.temporary_directory = (
+            tempfile.TemporaryDirectory() if current_directory is None else None
+        )
+        if current_directory is None:
+            assert self.temporary_directory is not None
+            current_directory = Path(self.temporary_directory.name)
         process = subprocess.Popen(
             [binary, *arguments],
             env=environment,
+            cwd=current_directory,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,

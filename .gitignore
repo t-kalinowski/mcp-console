@@ -1,4 +1,5 @@
 /target
+.console
 __pycache__/
 .codex
 .claude
