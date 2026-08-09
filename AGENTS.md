@@ -21,6 +21,7 @@ The `serve` command runs an MCP server over stdio.
 Clap provides command help, version output, argument parsing, and usage errors.
 The server registers `send` and `session` tools.
 Each `serve` process creates a run-specific directory under `.mcp-console/sessions/` in its initial working directory.
+On Unix, newly created record directories use mode `0700`, and journal and artifact files use mode `0600`.
 It appends schema-versioned `session_started`, `tool_call`, `artifact_created`, and `tool_result` records for ordinary, non-task tool calls to `internal/events.jsonl`.
 Tool records preserve timestamps, MCP request IDs, normalized parsed call parameters, final results or errors, and content-block order.
 `tool_result` records server assembly, not delivery; cancellation or disconnection may suppress the response.

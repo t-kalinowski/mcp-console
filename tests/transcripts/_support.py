@@ -128,6 +128,7 @@ class McpClient:
         arguments: tuple[str, ...] = (),
         environment: dict[str, str] | None = None,
         current_directory: Path | None = None,
+        umask: int = -1,
     ) -> None:
         self.temporary_directory = (
             tempfile.TemporaryDirectory() if current_directory is None else None
@@ -144,6 +145,7 @@ class McpClient:
             stderr=subprocess.PIPE,
             text=True,
             encoding="utf-8",
+            umask=umask,
         )
         assert process.stdin is not None
         assert process.stdout is not None

@@ -62,6 +62,7 @@ def test_records_tool_calls_and_images(binary: Path) -> Transcript:
             binary,
             ("serve", "--worker", str(zod)),
             current_directory=workspace,
+            umask=0,
         )
         client.initialize_and_list_tools()
         client.call_tool("send", r="emit image")
@@ -174,6 +175,22 @@ def test_records_tool_calls_and_images(binary: Path) -> Transcript:
         image_path = session / events[3]["result"]["content"][1]["path"]
         image_bytes = image_path.read_bytes()
         assert image_bytes == base64.b64decode(PNG_1X1), image_path
+        directory_modes = {
+            path.relative_to(workspace).as_posix(): path.stat().st_mode & 0o777
+            for path in (
+                workspace / ".mcp-console",
+                workspace / ".mcp-console" / "sessions",
+                session,
+                session / "artifacts",
+                session / "internal",
+            )
+        }
+        assert set(directory_modes.values()) == {0o700}, directory_modes
+        file_modes = {
+            path.relative_to(workspace).as_posix(): path.stat().st_mode & 0o777
+            for path in (session / "internal" / "events.jsonl", image_path)
+        }
+        assert set(file_modes.values()) == {0o600}, file_modes
         transcript = client.finish()
 
         normalized_journal = journal_text.replace(

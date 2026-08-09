@@ -1,5 +1,7 @@
-use std::fs::{self, File, OpenOptions};
+use std::fs::{DirBuilder, File, OpenOptions};
 use std::io::{BufWriter, Write};
+#[cfg(unix)]
+use std::os::unix::fs::{DirBuilderExt as _, OpenOptionsExt as _};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -52,24 +54,21 @@ impl Transcript {
         );
         let sessions = working_directory.join(".mcp-console/sessions");
         let directory = sessions.join(&run_id);
-        fs::create_dir_all(&sessions)
+        create_private_directory(&sessions, true)
             .map_err(|error| format!("failed to create {}: {error}", sessions.display()))?;
-        fs::create_dir(&directory)
+        create_private_directory(&directory, false)
             .map_err(|error| format!("failed to create {}: {error}", directory.display()))?;
-        fs::create_dir(directory.join("artifacts")).map_err(|error| {
+        create_private_directory(&directory.join("artifacts"), false).map_err(|error| {
             format!(
                 "failed to create {}: {error}",
                 directory.join("artifacts").display()
             )
         })?;
         let internal = directory.join("internal");
-        fs::create_dir(&internal)
+        create_private_directory(&internal, false)
             .map_err(|error| format!("failed to create {}: {error}", internal.display()))?;
         let journal = internal.join("events.jsonl");
-        let writer = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&journal)
+        let writer = create_private_file(&journal)
             .map(BufWriter::new)
             .map_err(|error| format!("failed to create {}: {error}", journal.display()))?;
 
@@ -350,11 +349,24 @@ fn image_extension(mime_type: &str) -> &'static str {
     }
 }
 
+fn create_private_directory(path: &Path, recursive: bool) -> std::io::Result<()> {
+    let mut builder = DirBuilder::new();
+    builder.recursive(recursive);
+    #[cfg(unix)]
+    builder.mode(0o700);
+    builder.create(path)
+}
+
+fn create_private_file(path: &Path) -> std::io::Result<File> {
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    options.mode(0o600);
+    options.open(path)
+}
+
 fn write_new(path: &Path, bytes: &[u8]) -> Result<(), String> {
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(path)
+    let mut file = create_private_file(path)
         .map_err(|error| format!("failed to create {}: {error}", path.display()))?;
     file.write_all(bytes)
         .and_then(|()| file.flush())
