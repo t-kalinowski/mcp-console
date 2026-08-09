@@ -97,7 +97,8 @@ The connection disables DuckDB progress output so previews contain only query re
 The worker stores SQL source in private R state and calls the bridge with a short evaluation ID.
 The bridge sends queries through a zero-argument closure enclosed by R's global environment, so DuckDB searches the persistent R session rather than the private bridge environment.
 An unqualified catalog table or view takes precedence over a same-named R binding; otherwise DuckDB can scan a data frame in the R global environment, and an SQL view over that name observes later rebinding.
-The bridge installs `sql_connection()` in the R global environment as a borrowed reference to the same worker-owned connection; callers must not disconnect it.
+The bridge installs only `sql_connection()` in a worker-owned `tools:mcp-console` environment at search position 2, so clearing R's global environment does not remove it and a same-named global binding still takes precedence.
+It returns a borrowed reference to the same worker-owned connection; callers must not disconnect it.
 Established DuckDB, DBI, and dplyr interfaces can use that connection, and lazy dplyr relations observe later catalog changes until collection.
 Prepared queries retain scanned data frames until their DBI results are cleared.
 Query results use `DBI::dbSendQueryArrow()` and one streaming `DBI::dbFetchArrow()` batch of at most 21 rows.

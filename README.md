@@ -110,7 +110,8 @@ DuckDB errors are normal console results and leave the worker available for late
 DuckDB first resolves unqualified relation names in its persistent catalog.
 When no catalog table or view matches, it can scan a data frame bound in the persistent R global environment.
 An SQL view over a scanned name observes later changes to that R binding.
-R code can call `sql_connection()` to borrow the worker-owned DBI connection for established DuckDB, DBI, and dplyr interfaces; callers must not disconnect it.
+R code can call `sql_connection()` to borrow the worker-owned DBI connection for established DuckDB, DBI, and dplyr interfaces.
+The helper remains available after clearing the global R workspace with `rm(list = ls())`; callers must not disconnect the returned connection.
 For example, `dplyr::tbl(sql_connection(), "answers")` creates a lazy relation that observes later catalog changes until it is collected.
 These paths avoid an eager snapshot transfer, but do not promise end-to-end zero-copy behavior: DuckDB converts R values during execution, and collecting a lazy relation materializes its result in R.
 Automatic Python relation sharing and affected-row summaries do not exist yet.

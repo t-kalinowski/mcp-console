@@ -44,7 +44,13 @@ base::local({
     ensure_connection()
     connection
   }
-  assign("sql_connection", sql_connection, envir = globalenv())
+  tools <- base::attach(
+    NULL,
+    pos = 2L,
+    name = "tools:mcp-console",
+    warn.conflicts = FALSE
+  )
+  base::assign("sql_connection", sql_connection, envir = tools)
 
   ensure_printer <- function() {
     if (printer_ready) {

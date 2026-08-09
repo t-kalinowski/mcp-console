@@ -185,6 +185,31 @@ def test_exposes_catalog_as_lazy_r_relations(binary: Path) -> Transcript:
     return client.finish()
 
 
+def test_keeps_connection_helper_after_clearing_r_workspace(
+    binary: Path,
+) -> Transcript:
+    client = McpClient(binary, ("serve",))
+    client.initialize_and_list_tools()
+    sql = code(r"""
+        CREATE TABLE retained_values AS
+        SELECT * FROM (VALUES ('a', 2), ('b', 5)) AS values(label, value)
+        """)
+    client.call_tool("send", sql=sql)
+    assert last_tool_text(client) == "[done]"
+
+    r = code(r"""
+        rm(list = ls())
+        values <- DBI::dbGetQuery(
+          sql_connection(),
+          "SELECT label, value FROM retained_values ORDER BY label"
+        )
+        writeLines(paste(values$label, values$value, sep = ":"))
+        """)
+    client.call_tool("send", r=r)
+    assert last_tool_text(client) == "a:2\nb:5\n"
+    return client.finish()
+
+
 def test_recovers_from_sql_errors(binary: Path) -> Transcript:
     client = McpClient(binary, ("serve",))
     client.initialize_and_list_tools()

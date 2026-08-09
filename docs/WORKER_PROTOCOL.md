@@ -427,7 +427,8 @@ An unqualified catalog table or view takes precedence over an R binding with the
 When the catalog has no match, DuckDB can scan a data frame bound in the R global environment; an SQL view over that name observes a later rebinding when it is queried.
 A prepared query retains the data frame it scanned until its DBI result is cleared.
 
-The bridge installs `sql_connection()` in R's global environment.
+The bridge installs only `sql_connection()` in a worker-owned `tools:mcp-console` environment at search position 2.
+Clearing R's global environment with `rm(list = ls())` does not remove the helper, while a same-named global binding still takes precedence through normal R lookup.
 It returns a borrowed reference to the same worker-owned DBI connection, allowing established DuckDB, DBI, and dplyr interfaces to use the persistent catalog.
 Callers must not disconnect it, and objects that use it remain tied to the current worker generation.
 Existing functions such as `duckdb::duckdb_register()` and `duckdb::duckdb_register_arrow()` can register relations on it; the worker adds no separate registration API.
