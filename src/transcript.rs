@@ -43,9 +43,7 @@ impl Transcript {
     pub(crate) fn create() -> Result<Self, String> {
         let working_directory = std::env::current_dir()
             .map_err(|error| format!("failed to find the current working directory: {error}"))?;
-        let working_directory_text = working_directory
-            .to_str()
-            .ok_or_else(|| "current working directory is not valid UTF-8".to_string())?;
+        let working_directory_text = working_directory.to_string_lossy();
         let started_at = Utc::now();
         let run_id = format!(
             "{}-{}",
