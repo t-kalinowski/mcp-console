@@ -134,7 +134,8 @@ If the preflight cannot select an interpreter, `serve` exits before accepting MC
 A failed `session` preparation is a tool error and leaves the prior requirements and interpreter selection unchanged.
 For uv tool failures, the error includes a JSON resolver-input manifest with reticulate's Python selection and the complete candidate package set, followed by uv's stderr.
 It omits reticulate's helper command, temporary output path, and interactive `py_require()` guidance.
-Resolution has no per-call timeout; closing MCP input force-stops an in-flight resolver process group.
+Resolution has no per-call timeout.
+When its direct `Rscript` process exits, MCP Console stops any remaining in-group descendants before collecting resolver output; closing MCP input force-stops an in-flight resolver group.
 MCP Console does not install these R packages.
 Python `input()` and `breakpoint()`/`pdb` use reticulate's R console bridge, so each read emits `input_requested` before reading and `input_received` after a successful read.
 They accept proactively queued or follow-up stdin, including repeated debugger commands.
