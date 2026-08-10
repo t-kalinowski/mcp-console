@@ -89,7 +89,10 @@ result:
             type: object
             properties:
               r:
-                description: One or more additive, single-line R package references accepted by IR.
+                description: |-
+                  One or more additive, single-line R package references accepted by IR.
+                  Installing a local reference can execute package-controlled code from the referenced host
+                  path; use only trusted local packages.
                 type: array
                 items:
                   type: string
@@ -113,7 +116,11 @@ result:
               starting it if needed.
             $ref: "#/$defs/SessionAction"
           requirements:
-            description: Additive requirements for prepare. Omit for restart.
+            description: |-
+              Additive requirements for prepare.
+              Resolution runs outside the worker sandbox.
+              Package installation or build code may execute on the host.
+              Omit for restart.
             anyOf:
               - $ref: "#/$defs/Requirements"
               - type: "null"

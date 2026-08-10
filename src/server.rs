@@ -55,6 +55,8 @@ enum SessionAction {
 #[serde(deny_unknown_fields)]
 struct Requirements {
     /// One or more additive, single-line R package references accepted by IR.
+    /// Installing a local reference can execute package-controlled code from the referenced host
+    /// path; use only trusted local packages.
     #[serde(default)]
     #[schemars(length(max = 64), inner(length(min = 1)))]
     r: Vec<String>,
@@ -69,7 +71,10 @@ struct Requirements {
 struct SessionArguments {
     /// Prepare R or Python requirements or restart the implicit session, starting it if needed.
     action: SessionAction,
-    /// Additive requirements for prepare. Omit for restart.
+    /// Additive requirements for prepare.
+    /// Resolution runs outside the worker sandbox.
+    /// Package installation or build code may execute on the host.
+    /// Omit for restart.
     requirements: Option<Requirements>,
 }
 

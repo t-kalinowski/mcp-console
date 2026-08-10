@@ -33,8 +33,8 @@ Property descriptions:
 
 - `action`: `Session operation: list, status, prepare, interrupt, restart, or close.`
 - `session`: `Target session; defaults to default.`
-- `requirements`: `Additive package requirements, valid with prepare or restart.`
-- `requirements.r`: `R package requirement strings.`
+- `requirements`: `Additive package requirements, valid with prepare or restart. Resolution runs outside the worker sandbox, where package installation or build code may execute on the host.`
+- `requirements.r`: `R package requirement strings. Installing a local reference can execute package-controlled code from the referenced host path; use only trusted local packages.`
 - `requirements.python`: `PEP 508 Python requirement strings.`
 
 ## Inclusion rule

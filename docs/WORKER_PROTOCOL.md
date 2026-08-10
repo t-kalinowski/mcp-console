@@ -53,6 +53,8 @@ Restart uses the same one-second stdin-close, sideband-shutdown, and process-gro
 
 The IR resolver receives R package references as process arguments and the Python resolver receives only a requirement manifest on standard input; neither receives submitted cells or `send` stdin.
 Both may use the network, write normal host caches, and execute package installation or build code outside the sandbox.
+IR currently accepts local package references.
+Installing them may run package-controlled hooks and build code with the resolver's host permissions; the server does not restrict those references.
 Runtime requests also supply the worker's current `UV_*` settings except `UV_OFFLINE`; the server removes its own `UV_*` settings before applying that exact set to the resolver.
 Those settings are inputs to that resolution only; the server does not retain or replay them.
 Requirements and settings remain data rather than evaluated cell source; the IR invocation uses a constant R expression that does not contain requirement text.

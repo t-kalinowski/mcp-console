@@ -50,6 +50,9 @@ Before the worker starts, the MCP client can prepare additive R and Python requi
 }
 ```
 
+Requirement resolution is host-code execution: package installation or build hooks run outside the worker sandbox.
+Use only trusted requirements; installing a local R package can execute package-controlled code from the referenced host path with the server's permissions.
+
 This `session` call resolves each complete initial requirement set outside the worker sandbox, using IR for R and reticulate with uv for Python, then returns `[prepared]`.
 When both languages are supplied, it retains the new configuration only after both resolutions succeed.
 It does not load the packages or start the worker.
