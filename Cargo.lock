@@ -606,6 +606,7 @@ dependencies = [
  "anyhow",
  "base64",
  "cc",
+ "chrono",
  "clap",
  "ctor",
  "harp",

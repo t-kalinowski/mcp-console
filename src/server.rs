@@ -5,10 +5,12 @@ use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 
 use rmcp::{
-    ServerHandler, ServiceExt,
-    handler::server::wrapper::Parameters,
-    model::{CallToolResult, ContentBlock},
-    schemars, tool, tool_handler, tool_router,
+    RoleServer, ServerHandler, ServiceExt,
+    handler::server::{common::Extension, tool::ToolCallContext, wrapper::Parameters},
+    model::{CallToolRequestParams, CallToolResult, ContentBlock, ErrorData},
+    schemars,
+    service::RequestContext,
+    tool, tool_handler, tool_router,
 };
 use serde::Deserialize;
 use tokio::io::{AsyncRead, ReadBuf};
@@ -20,6 +22,7 @@ const DEFAULT_TIMEOUT_MS: u64 = 60_000;
 #[derive(Clone)]
 struct ConsoleServer {
     worker: crate::worker_client::Client,
+    transcript: crate::transcript::Transcript,
 }
 
 #[derive(Deserialize, schemars::JsonSchema)]
@@ -75,11 +78,12 @@ fn default_timeout_ms() -> u64 {
 
 impl ConsoleServer {
     fn new(worker: Option<PathBuf>) -> Result<Self, String> {
+        let transcript = crate::transcript::Transcript::create()?;
         let worker = match worker {
             Some(program) => crate::worker_client::Client::new(program),
             None => crate::worker_client::Client::builtin()?,
         };
-        Ok(Self { worker })
+        Ok(Self { worker, transcript })
     }
 }
 
@@ -90,6 +94,7 @@ impl ConsoleServer {
     )]
     async fn send(
         &self,
+        Extension(call): Extension<crate::transcript::Call>,
         Parameters(SendArguments {
             r,
             python,
@@ -118,18 +123,31 @@ impl ConsoleServer {
         };
         let response = self
             .worker
-            .send(cell, stdin, Duration::from_millis(timeout_ms))
+            .send(
+                cell,
+                stdin,
+                Duration::from_millis(timeout_ms),
+                self.transcript.clone(),
+                call.id(),
+            )
             .await;
         let (content, is_error) = response.into_parts();
+        let mut result_images = Vec::new();
         let content = content
             .into_iter()
             .map(|content| match content {
                 crate::worker_client::Content::Text(text) => ContentBlock::text(text),
-                crate::worker_client::Content::Image { data, mime_type } => {
+                crate::worker_client::Content::Image {
+                    data,
+                    mime_type,
+                    artifact,
+                } => {
+                    result_images.push(artifact);
                     ContentBlock::image(data, mime_type)
                 }
             })
             .collect();
+        call.record_result_images(result_images)?;
         Ok(if is_error {
             CallToolResult::error(content)
         } else {
@@ -193,7 +211,46 @@ fn validate_python_requirements(python: &[String]) -> Result<(), String> {
 }
 
 #[tool_handler(name = "mcp-console")]
-impl ServerHandler for ConsoleServer {}
+impl ServerHandler for ConsoleServer {
+    async fn call_tool(
+        &self,
+        request: CallToolRequestParams,
+        mut context: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let transcript = self.transcript.clone();
+        let request_id = context.id.clone();
+        let request_meta = context.meta.clone();
+        let (request, call) = tokio::task::spawn_blocking(move || {
+            let call = transcript.begin(&request_id, &request_meta, &request);
+            (request, call)
+        })
+        .await
+        .map_err(|error| {
+            ErrorData::internal_error(format!("transcript task failed: {error}"), None)
+        })?;
+        let call = call.map_err(|error| ErrorData::internal_error(error, None))?;
+        context.extensions.insert(call.clone());
+        let result = Self::tool_router()
+            .call(ToolCallContext::new(self, request, context))
+            .await;
+        let transcript = self.transcript.clone();
+        let (result, recording) = tokio::task::spawn_blocking(move || {
+            let recording = transcript.finish(call, &result);
+            (result, recording)
+        })
+        .await
+        .map_err(|error| {
+            ErrorData::internal_error(format!("transcript task failed: {error}"), None)
+        })?;
+        recording.map_err(|error| {
+            ErrorData::internal_error(
+                format!("tool call completed but transcript recording failed: {error}"),
+                None,
+            )
+        })?;
+        result
+    }
+}
 
 /// Runs the MCP stdio server and owns the selected worker.
 ///
