@@ -74,9 +74,9 @@ result:
     - name: session
       description: >-
         Prepare additive Python requirements before the implicit session starts,
-        or restart its worker while retaining prepared requirements. Restart
-        starts a worker if none exists and loses all in-memory R, Python, and
-        SQL state.
+        or restart its worker with retained and optional new requirements.
+        Restart starts a worker if none exists and loses all in-memory R,
+        Python, and SQL state.
       inputSchema:
         $schema: https://json-schema.org/draft/2020-12/schema
         $defs:
@@ -107,7 +107,7 @@ result:
               if needed.
             $ref: "#/$defs/SessionAction"
           requirements:
-            description: Additive requirements for prepare. Omit for restart.
+            description: Additive requirements for prepare or restart. Omit to restart unchanged.
             anyOf:
               - $ref: "#/$defs/PythonRequirements"
               - type: "null"

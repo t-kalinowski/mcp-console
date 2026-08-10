@@ -27,28 +27,28 @@ def test_preserves_configured_python_environment(binary: Path) -> Transcript:
     environment = os.environ.copy()
     environment["RETICULATE_PYTHON"] = "configured-by-user"
     client = McpClient(binary, ("serve",), environment)
-    client.initialize_and_list_tools()
+    client._initialize_and_list_tools()
     # fmt: r
     r = code(r"""
         Sys.getenv("RETICULATE_PYTHON", unset = NA_character_)
         """)
-    client.call_tool("send", r=r)
+    client.send(r=r)
     assert last_tool_text(client) == '[1] "configured-by-user"\n'
-    return client.finish()
+    return client._finish()
 
 
 def test_preserves_empty_python_environment(binary: Path) -> Transcript:
     environment = os.environ.copy()
     environment["RETICULATE_PYTHON"] = ""
     client = McpClient(binary, ("serve",), environment)
-    client.initialize_and_list_tools()
+    client._initialize_and_list_tools()
     # fmt: r
     r = code(r"""
         Sys.getenv("RETICULATE_PYTHON", unset = NA_character_)
         """)
-    client.call_tool("send", r=r)
+    client.send(r=r)
     assert last_tool_text(client) == '[1] ""\n'
-    return client.finish()
+    return client._finish()
 
 
 def managed_python_transcript(binary: Path, configured: bool) -> Transcript:
@@ -63,7 +63,7 @@ def managed_python_transcript(binary: Path, configured: bool) -> Transcript:
     environment["UV_OFFLINE"] = "1"
 
     client = McpClient(binary, ("serve",), environment)
-    client.initialize_and_list_tools()
+    client._initialize_and_list_tools()
     # fmt: r
     r = code(r"""
         python <- Sys.getenv("RETICULATE_PYTHON", unset = NA_character_)
@@ -80,16 +80,16 @@ def managed_python_transcript(binary: Path, configured: bool) -> Transcript:
           ))
         )
         """)
-    client.call_tool("send", r=r)
+    client.send(r=r)
     assert last_tool_text(client) == "[done]"
     # fmt: python
     python = code(r"""
         40 + 2
         """)
-    client.call_tool("send", python=python)
+    client.send(python=python)
     output = last_tool_text(client)
     assert output == "42\n", repr(output)
-    return client.finish()
+    return client._finish()
 
 
 def test_evaluates_with_default_managed_python(binary: Path) -> Transcript:
@@ -122,17 +122,15 @@ def test_prepares_initial_python_requirements(binary: Path) -> Transcript:
     environment = os.environ.copy()
     environment["RETICULATE_PYTHON"] = "/mcp-console-prepare-must-replace-python"
     client = McpClient(binary, ("serve",), environment)
-    client.initialize_and_list_tools()
-    client.call_tool(
-        "session",
+    client._initialize_and_list_tools()
+    client.session(
         action="prepare",
         requirements={"python": ["py-yaml12"]},
     )
     assert last_tool_text(client) == "[prepared]"
     invalid = "not a valid requirement !!!"
 
-    client.call_tool(
-        "session",
+    client.session(
         action="prepare",
         requirements={"python": [invalid]},
     )
@@ -141,8 +139,7 @@ def test_prepares_initial_python_requirements(binary: Path) -> Transcript:
     resolution_error = result["content"][0]["text"]
     recorded_error = normalize_resolution_error(resolution_error, invalid)
     result["content"][0]["text"] = recorded_error
-    client.call_tool(
-        "session",
+    client.session(
         action="prepare",
         requirements={"python": [invalid]},
     )
@@ -152,8 +149,7 @@ def test_prepares_initial_python_requirements(binary: Path) -> Transcript:
         result["content"][0]["text"], invalid
     )
     assert result["content"][0]["text"] == recorded_error
-    client.call_tool(
-        "session",
+    client.session(
         action="prepare",
         requirements={"python": ["numpy\npandas"]},
     )
@@ -171,7 +167,7 @@ def test_prepares_initial_python_requirements(binary: Path) -> Transcript:
           identical(seed$packages, c("numpy", "py-yaml12"))
         )
         """)
-    client.call_tool("send", r=r)
+    client.send(r=r)
     assert last_tool_text(client) == "[done]"
     # fmt: python
     python = code("""
@@ -179,32 +175,50 @@ def test_prepares_initial_python_requirements(binary: Path) -> Transcript:
 
         yaml12.__name__
         """)
-    client.call_tool("send", python=python)
+    client.send(python=python)
     assert last_tool_text(client) == "'yaml12'\n"
-    client.call_tool(
-        "session",
+    client.session(
         action="prepare",
         requirements={"python": ["py-yaml12"]},
     )
     assert last_tool_text(client) == "[prepared]"
-    return client.finish()
+    return client._finish()
+
+
+def test_prepares_explicit_numpy_requirement(binary: Path) -> Transcript:
+    configured = "/mcp-console-prepare-must-replace-python"
+    environment = os.environ.copy()
+    environment["RETICULATE_PYTHON"] = configured
+    client = McpClient(binary, ("serve",), environment)
+    client._initialize_and_list_tools()
+    client.session(
+        action="prepare",
+        requirements={"python": ["numpy"]},
+    )
+    assert last_tool_text(client) == "[prepared]"
+    # fmt: r
+    r = code(rf"""
+        stopifnot(Sys.getenv("RETICULATE_PYTHON") != "{configured}")
+        """)
+    client.send(r=r)
+    assert last_tool_text(client) == "[done]"
+    return client._finish()
 
 
 def test_restart_loses_state_and_retains_python_requirements(
     binary: Path,
 ) -> Transcript:
     client = McpClient(binary, ("serve",))
-    client.initialize_and_list_tools()
-    client.call_tool(
-        "session",
+    client._initialize_and_list_tools()
+    client.session(
         action="prepare",
         requirements={"python": ["py-yaml12"]},
     )
     assert last_tool_text(client) == "[prepared]"
-    client.call_tool("send", python="restart_marker = 42")
+    client.send(python="restart_marker = 42")
     assert last_tool_text(client) == "[done]"
 
-    client.call_tool("session", action="restart")
+    client.session(action="restart")
     assert last_tool_text(client) == "[restarted]"
 
     # fmt: python
@@ -213,24 +227,59 @@ def test_restart_loses_state_and_retains_python_requirements(
 
         "restart_marker" in globals(), yaml12.__name__
         """)
-    client.call_tool("send", python=python)
+    client.send(python=python)
     assert last_tool_text(client) == "(False, 'yaml12')\n"
-    return client.finish()
+    return client._finish()
 
 
 def test_requires_restart_for_late_python_requirements(binary: Path) -> Transcript:
     client = McpClient(binary, ("serve",))
-    client.initialize_and_list_tools()
-    client.call_tool("send", python="sentinel = 42")
-    client.call_tool(
-        "session",
+    client._initialize_and_list_tools()
+    client.send(python="sentinel = 42")
+    client.session(
         action="prepare",
         requirements={"python": ["py-yaml12"]},
     )
     assert last_tool_text(client) == "restart required"
-    client.call_tool("send", python="sentinel")
+    client.send(python="sentinel")
     assert last_tool_text(client) == "42\n"
-    return client.finish()
+
+    client.session(
+        action="restart",
+        requirements={"python": ["py-yaml12"]},
+    )
+    assert last_tool_text(client) == "[restarted]"
+    # fmt: python
+    python = code("""
+        import yaml12
+
+        "sentinel" in globals(), yaml12.__name__
+        """)
+    client.send(python=python)
+    assert last_tool_text(client) == "(False, 'yaml12')\n"
+    return client._finish()
+
+
+def test_failed_restart_requirements_preserve_worker(binary: Path) -> Transcript:
+    client = McpClient(binary, ("serve",))
+    client._initialize_and_list_tools()
+    client.send(python="restart_marker = 42")
+    assert last_tool_text(client) == "[done]"
+    invalid = "not a valid requirement !!!"
+
+    client.session(
+        action="restart",
+        requirements={"python": [invalid]},
+    )
+    result = client.transcript[-1]["result"]
+    assert result["isError"] is True, result
+    result["content"][0]["text"] = normalize_resolution_error(
+        result["content"][0]["text"], invalid
+    )
+
+    client.send(python="restart_marker")
+    assert last_tool_text(client) == "42\n"
+    return client._finish()
 
 
 def test_layers_python_requirements_declared_by_r_packages(
@@ -250,7 +299,7 @@ def test_layers_python_requirements_declared_by_r_packages(
             filter(None, (library, environment.get("R_LIBS")))
         )
         client = McpClient(binary, ("serve",), environment)
-        client.initialize_and_list_tools()
+        client._initialize_and_list_tools()
         # fmt: python
         python = code("""
             import importlib.util
@@ -260,7 +309,7 @@ def test_layers_python_requirements_declared_by_r_packages(
             initial_prefix = sys.prefix
             importlib.util.find_spec("yaml12") is None
             """)
-        client.call_tool("send", python=python)
+        client.send(python=python)
         assert last_tool_text(client) == "True\n"
 
         # fmt: r
@@ -268,10 +317,10 @@ def test_layers_python_requirements_declared_by_r_packages(
             initial_libpython <- reticulate::py_config()$libpython
             initial_worker <- Sys.getpid()
             """)
-        client.call_tool("send", r=r)
+        client.send(r=r)
         assert last_tool_text(client) == "[done]"
 
-        client.call_tool("send", r="library(mcpconsolepyrequire)")
+        client.send(r="library(mcpconsolepyrequire)")
         assert last_tool_text(client) == "[done]"
 
         # fmt: r
@@ -279,7 +328,7 @@ def test_layers_python_requirements_declared_by_r_packages(
             identical(reticulate::py_config()$libpython, initial_libpython) &&
               identical(Sys.getpid(), initial_worker)
             """)
-        client.call_tool("send", r=r)
+        client.send(r=r)
         assert last_tool_text(client) == "[1] TRUE\n"
 
         # fmt: python
@@ -288,11 +337,11 @@ def test_layers_python_requirements_declared_by_r_packages(
 
             (runtime_marker, yaml12.__name__, sys.prefix != initial_prefix)
             """)
-        client.call_tool("send", python=python)
+        client.send(python=python)
         output = last_tool_text(client)
         assert output == "(42, 'yaml12', True)\n", repr(output)
 
-        client.call_tool("session", action="restart")
+        client.session(action="restart")
         assert last_tool_text(client) == "[restarted]"
 
         # fmt: python
@@ -301,16 +350,15 @@ def test_layers_python_requirements_declared_by_r_packages(
 
             ("runtime_marker" in globals(), yaml12.__name__)
             """)
-        client.call_tool("send", python=python)
+        client.send(python=python)
         assert last_tool_text(client) == "(False, 'yaml12')\n"
 
-        client.call_tool(
-            "session",
+        client.session(
             action="prepare",
             requirements={"python": ["py-yaml12"]},
         )
         assert last_tool_text(client) == "[prepared]"
-        return client.finish()
+        return client._finish()
 
 
 def test_resolves_package_requirements_before_python_initializes(
@@ -330,7 +378,7 @@ def test_resolves_package_requirements_before_python_initializes(
             filter(None, (library, environment.get("R_LIBS")))
         )
         client = McpClient(binary, ("serve",), environment)
-        client.initialize_and_list_tools()
+        client._initialize_and_list_tools()
         # fmt: r
         r = code(r"""
             library(mcpconsolepyrequire)
@@ -340,7 +388,7 @@ def test_resolves_package_requirements_before_python_initializes(
               isTRUE(request$env_is_package)
             )
             """)
-        client.call_tool("send", r=r)
+        client.send(r=r)
         assert last_tool_text(client) == "[done]"
 
         # Replace the worker after the requirement declaration has completed,
@@ -349,14 +397,14 @@ def test_resolves_package_requirements_before_python_initializes(
         r = code(r"""
             tools::pskill(Sys.getpid(), signal = 9L)
             """).removesuffix("\n")
-        client.call_tool("send", r=r)
+        client.send(r=r)
         assert client.transcript[-1]["result"]["isError"] is True
 
         # fmt: r
         r = code(r"""
             "py-yaml12" %in% reticulate::py_require()$packages
             """)
-        client.call_tool("send", r=r)
+        client.send(r=r)
         output = last_tool_text(client)
         assert output == ("[1] TRUE\n[worker restarted: in-memory state lost]\n"), repr(
             output
@@ -368,16 +416,16 @@ def test_resolves_package_requirements_before_python_initializes(
 
             yaml12.__name__
             """)
-        client.call_tool("send", python=python)
+        client.send(python=python)
         assert last_tool_text(client) == "'yaml12'\n"
-        return client.finish()
+        return client._finish()
 
 
 def test_does_not_checkpoint_python_requirements_from_failed_cell(
     binary: Path,
 ) -> Transcript:
     client = McpClient(binary, ("serve",))
-    client.initialize_and_list_tools()
+    client._initialize_and_list_tools()
     # fmt: r
     r = code(r"""
         invisible(reticulate::py_config())
@@ -385,27 +433,26 @@ def test_does_not_checkpoint_python_requirements_from_failed_cell(
         stopifnot(reticulate::py_module_available("yaml12"))
         tools::pskill(Sys.getpid(), signal = 9L)
         """).removesuffix("\n")
-    client.call_tool("send", r=r)
+    client.send(r=r)
     assert client.transcript[-1]["result"]["isError"] is True
 
     # fmt: r
     r = code(r"""
         "py-yaml12" %in% reticulate::py_require()$packages
         """)
-    client.call_tool("send", r=r)
+    client.send(r=r)
     output = last_tool_text(client)
     assert output == ("[1] FALSE\n[worker restarted: in-memory state lost]\n"), repr(
         output
     )
 
-    client.call_tool(
-        "session",
+    client.session(
         action="prepare",
         requirements={"python": ["py-yaml12"]},
     )
     output = last_tool_text(client)
     assert output == "restart required", repr(output)
-    return client.finish()
+    return client._finish()
 
 
 def test_reports_restart_required_while_python_is_running(binary: Path) -> Transcript:
@@ -413,7 +460,7 @@ def test_reports_restart_required_while_python_is_running(binary: Path) -> Trans
         environment = os.environ.copy()
         environment["TMPDIR"] = temporary_directory
         client = McpClient(binary, ("serve",), environment)
-        client.initialize_and_list_tools()
+        client._initialize_and_list_tools()
         # fmt: python
         python = code("""
             runtime_generation_marker = "original runtime retained"
@@ -426,7 +473,7 @@ def test_reports_restart_required_while_python_is_running(binary: Path) -> Trans
             while not (temporary / "release-python").exists():
                 time.sleep(0.01)
             """)
-        client.call_tool("send", python=python, timeout_ms=0)
+        client.send(python=python, timeout_ms=0)
         assert last_tool_text(client) == "\n[running]"
         running = wait_for_worker_file(
             Path(temporary_directory),
@@ -445,8 +492,7 @@ def test_reports_restart_required_while_python_is_running(binary: Path) -> Trans
 
         watchdog = threading.Thread(target=release_blocked_evaluation)
         watchdog.start()
-        client.call_tool(
-            "session",
+        client.session(
             action="prepare",
             requirements={"python": ["py-yaml12"]},
         )
@@ -456,11 +502,11 @@ def test_reports_restart_required_while_python_is_running(binary: Path) -> Trans
         assert last_tool_text(client) == "restart required"
 
         release.touch()
-        client.call_tool("send")
+        client.send()
         assert last_tool_text(client) == "[done]"
-        client.call_tool("send", python="runtime_generation_marker")
+        client.send(python="runtime_generation_marker")
         assert last_tool_text(client) == "'original runtime retained'\n"
-        return client.finish()
+        return client._finish()
 
 
 def test_does_not_parse_requirements_as_rscript_options(binary: Path) -> Transcript:
@@ -473,9 +519,8 @@ def test_does_not_parse_requirements_as_rscript_options(binary: Path) -> Transcr
         environment["RETICULATE_PYTHON"] = "/mcp-console-prepare-must-replace-python"
         environment["MCP_CONSOLE_HOST_MARKER"] = str(marker)
         client = McpClient(binary, ("serve",), environment)
-        client.initialize_and_list_tools()
-        client.call_tool(
-            "session",
+        client._initialize_and_list_tools()
+        client.session(
             action="prepare",
             requirements={"python": ["-e", expression]},
         )
@@ -486,7 +531,7 @@ def test_does_not_parse_requirements_as_rscript_options(binary: Path) -> Transcr
         result["content"][0]["text"] = normalize_resolution_error(
             result["content"][0]["text"]
         )
-        return client.finish()
+        return client._finish()
 
 
 def test_forces_uv_offline_in_builtin_worker(binary: Path) -> Transcript:
@@ -494,19 +539,19 @@ def test_forces_uv_offline_in_builtin_worker(binary: Path) -> Transcript:
     environment.pop("RETICULATE_PYTHON", None)
     environment["UV_OFFLINE"] = "0"
     client = McpClient(binary, ("serve",), environment)
-    client.initialize_and_list_tools()
+    client._initialize_and_list_tools()
     # fmt: r
     r = code(r"""
         Sys.getenv("UV_OFFLINE", unset = NA_character_)
         """)
-    client.call_tool("send", r=r)
+    client.send(r=r)
     assert last_tool_text(client) == '[1] "1"\n'
-    return client.finish()
+    return client._finish()
 
 
 def test_evaluates_cells_in_persistent_reticulate_state(binary: Path) -> Transcript:
     client = McpClient(binary, ("serve",))
-    client.initialize_and_list_tools()
+    client._initialize_and_list_tools()
     # fmt: r
     r = code(r"""
         from_r <- 40L
@@ -516,14 +561,14 @@ def test_evaluates_cells_in_persistent_reticulate_state(binary: Path) -> Transcr
           any(grepl(marker, calls, fixed = TRUE))
         }
         """)
-    client.call_tool("send", r=r)
+    client.send(r=r)
     # fmt: python
     python = code("""
         answer = r.from_r + 1
         print("from Python")
         answer + 1
         """)
-    client.call_tool("send", python=python)
+    client.send(python=python)
     output = last_tool_text(client)
     assert output == "from Python\n42\n", repr(output)
     # fmt: python
@@ -531,18 +576,18 @@ def test_evaluates_cells_in_persistent_reticulate_state(binary: Path) -> Transcr
         1
         2
         """)
-    client.call_tool("send", python=python)
+    client.send(python=python)
     assert last_tool_text(client) == "2\n"
-    client.call_tool("send", python="answer")
+    client.send(python="answer")
     assert last_tool_text(client) == "41\n"
-    client.call_tool("send", r="reticulate::py$answer")
+    client.send(r="reticulate::py$answer")
     assert last_tool_text(client) == "[1] 41\n"
     # fmt: python
     python = code("""
         unique_python_source_marker = r.python_source_visible()
         unique_python_source_marker
         """)
-    client.call_tool("send", python=python)
+    client.send(python=python)
     output = last_tool_text(client)
     assert output == "False\n", repr(output)
     # fmt: r
@@ -552,8 +597,8 @@ def test_evaluates_cells_in_persistent_reticulate_state(binary: Path) -> Transcr
         .mcp_console_python_filename <- "user filename"
         is.null <- function(...) FALSE
         """)
-    client.call_tool("send", r=r)
-    client.call_tool("send", python="answer + 1")
+    client.send(r=r)
+    client.send(python="answer + 1")
     assert last_tool_text(client) == "42\n"
     # fmt: python
     python = code("""
@@ -563,19 +608,19 @@ def test_evaluates_cells_in_persistent_reticulate_state(binary: Path) -> Transcr
         isinstance = "user isinstance"
         BaseException = "user BaseException"
         """)
-    client.call_tool("send", python=python)
+    client.send(python=python)
     assert last_tool_text(client) == "[done]"
-    client.call_tool("send", python="answer + 1")
+    client.send(python="answer + 1")
     assert last_tool_text(client) == "42\n"
-    client.call_tool("send", python="silent = True")
+    client.send(python="silent = True")
     assert last_tool_text(client) == "[done]"
-    return client.finish()
+    return client._finish()
 
 
 def test_returns_r_plots_from_python_bridge(binary: Path) -> Transcript:
     environment, rscript = r_test_environment()
     client = McpClient(binary, ("serve",), environment)
-    client.initialize_and_list_tools()
+    client._initialize_and_list_tools()
     # fmt: r
     r = code(r"""
         bridge_plot <- function() {
@@ -583,7 +628,7 @@ def test_returns_r_plots_from_python_bridge(binary: Path) -> Transcript:
           invisible(NULL)
         }
         """)
-    client.call_tool("send", r=r)
+    client.send(r=r)
     assert last_tool_text(client) == "[done]"
 
     expected_plot = reference_plots(
@@ -601,17 +646,17 @@ def test_returns_r_plots_from_python_bridge(binary: Path) -> Transcript:
         r.bridge_plot()
         print("after plot")
         """)
-    client.call_tool("send", python=python)
+    client.send(python=python)
     assert_result_content(
         client,
         ["before plot\nafter plot\n", expected_plot[0]],
     )
-    return client.finish()
+    return client._finish()
 
 
 def test_runs_async_python_explicitly(binary: Path) -> Transcript:
     client = McpClient(binary, ("serve",))
-    client.initialize_and_list_tools()
+    client._initialize_and_list_tools()
     # fmt: python
     python = code("""
         import asyncio
@@ -621,16 +666,16 @@ def test_runs_async_python_explicitly(binary: Path) -> Transcript:
             await asyncio.sleep(0)
             return 42
         """)
-    client.call_tool("send", python=python)
+    client.send(python=python)
     assert last_tool_text(client) == "[done]"
-    client.call_tool("send", python="asyncio.run(answer())")
+    client.send(python="asyncio.run(answer())")
     assert last_tool_text(client) == "42\n"
-    return client.finish()
+    return client._finish()
 
 
 def test_recovers_from_python_errors(binary: Path) -> Transcript:
     client = McpClient(binary, ("serve",))
-    client.initialize_and_list_tools()
+    client._initialize_and_list_tools()
     # fmt: python
     python = code("""
         answer = 41
@@ -642,7 +687,7 @@ def test_recovers_from_python_errors(binary: Path) -> Transcript:
 
         fail()
         """)
-    client.call_tool("send", python=python)
+    client.send(python=python)
     output = last_tool_text(client)
     assert client.transcript[-1]["result"]["isError"] is False
     assert output.startswith("Traceback (most recent call last):\n")
@@ -654,36 +699,36 @@ def test_recovers_from_python_errors(binary: Path) -> Transcript:
         compile_partial = 9
         await missing()
         """)
-    client.call_tool("send", python=python)
+    client.send(python=python)
     output = last_tool_text(client)
     assert output.startswith("Traceback (most recent call last):\n")
     assert "<mcp-console:python:" in output
     assert output.endswith("SyntaxError: 'await' outside function\n")
-    client.call_tool("send", python='"compile_partial" in globals()')
+    client.send(python='"compile_partial" in globals()')
     assert last_tool_text(client) == "False\n"
 
-    client.call_tool("send", python="nul_state = 42\0")
+    client.send(python="nul_state = 42\0")
     output = last_tool_text(client)
     assert client.transcript[-1]["result"]["isError"] is False
     assert "SyntaxError" in output
     assert "null bytes" in output
-    client.call_tool("send", python="answer")
+    client.send(python="answer")
     assert last_tool_text(client) == "41\n"
-    return client.finish()
+    return client._finish()
 
 
 def test_routes_python_input(binary: Path) -> Transcript:
     client = McpClient(binary, ("serve",))
-    client.initialize_and_list_tools()
+    client._initialize_and_list_tools()
 
     # fmt: python
     python = code("""
         name = input("name> ")
         name
         """)
-    client.call_tool("send", python=python)
+    client.send(python=python)
     assert last_tool_text(client) == '[input requested: "name> "]\n[stdin needed]'
-    client.call_tool("send", stdin="Ada\n")
+    client.send(stdin="Ada\n")
     assert last_tool_text(client) == "'Ada'\n"
 
     # fmt: python
@@ -691,7 +736,7 @@ def test_routes_python_input(binary: Path) -> Transcript:
         color = input("color> ")
         color
         """)
-    client.call_tool("send", python=python, stdin="blue\n")
+    client.send(python=python, stdin="blue\n")
     assert last_tool_text(client) == ("[input requested: \"color> \"]\n'blue'\n")
 
     # fmt: python
@@ -701,14 +746,14 @@ def test_routes_python_input(binary: Path) -> Transcript:
         direct = sys.stdin.readline()
         direct
         """)
-    client.call_tool("send", python=python, stdin="fd 0\n")
+    client.send(python=python, stdin="fd 0\n")
     assert last_tool_text(client) == "'fd 0\\n'\n"
-    return client.finish()
+    return client._finish()
 
 
 def test_python_debugger_input(binary: Path) -> Transcript:
     client = McpClient(binary, ("serve",))
-    client.initialize_and_list_tools()
+    client._initialize_and_list_tools()
 
     # fmt: python
     python = code("""
@@ -718,34 +763,34 @@ def test_python_debugger_input(binary: Path) -> Transcript:
         pdb.set_trace()
         debug_value += 1
         """)
-    client.call_tool("send", python=python)
+    client.send(python=python)
     output = last_tool_text(client)
     assert output.count('[input requested: "(Pdb) "]') == 1, output
     assert output.endswith("\n[stdin needed]"), output
 
-    client.call_tool("send", stdin="p debug_value\n")
+    client.send(stdin="p debug_value\n")
     output = last_tool_text(client)
     assert output.count('[input requested: "(Pdb) "]') == 1, output
     assert "41\n" in output, output
     assert output.endswith("\n[stdin needed]"), output
 
-    client.call_tool("send", stdin="continue\n")
+    client.send(stdin="continue\n")
     assert last_tool_text(client) == "[done]"
-    client.call_tool("send", python="debug_value")
+    client.send(python="debug_value")
     assert last_tool_text(client) == "42\n"
-    return client.finish()
+    return client._finish()
 
 
 def test_restarts_after_python_bridge_failure(binary: Path) -> Transcript:
     client = McpClient(binary, ("serve",))
-    client.initialize_and_list_tools()
+    client._initialize_and_list_tools()
     # fmt: r
     r = code(r"""
         python_worker_marker <- TRUE
         Sys.setenv(RETICULATE_PYTHON = "/mcp-console-missing-python")
         """)
-    client.call_tool("send", r=r)
-    client.call_tool("send", python="6 * 7")
+    client.send(r=r)
+    client.send(python="6 * 7")
     result = client.transcript[-1]["result"]
     assert result["isError"] is True
     assert result["content"][0]["text"] == (
@@ -755,13 +800,13 @@ def test_restarts_after_python_bridge_failure(binary: Path) -> Transcript:
         "(/mcp-console-missing-python) does not exist\n"
         "[worker sideband read failed: worker sideband closed]"
     )
-    client.call_tool("send", r='exists("python_worker_marker", inherits = FALSE)')
+    client.send(r='exists("python_worker_marker", inherits = FALSE)')
     assert last_tool_text(client) == (
         "[1] FALSE\n[worker restarted: in-memory state lost]\n"
     )
-    client.call_tool("send", python="6 * 7")
+    client.send(python="6 * 7")
     assert last_tool_text(client) == "42\n"
-    return client.finish()
+    return client._finish()
 
 
 def last_tool_text(client: McpClient) -> str:

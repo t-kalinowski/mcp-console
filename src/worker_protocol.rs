@@ -15,7 +15,7 @@ pub(crate) enum ServerMessage {
     Shutdown,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct PythonRequirementManifest {
     pub(crate) packages: Vec<String>,

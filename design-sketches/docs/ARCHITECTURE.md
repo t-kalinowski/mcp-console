@@ -799,7 +799,7 @@ Reticulate owns the live manifest during an evaluation, while the supervisor own
 Only newly added package requirements fit the v1 late-layering contract.
 Removals and changes to Python-version or `exclude_newer` constraints are unsupported after initialization rather than silently projected as additions.
 An explicit late `session prepare` still returns `restart required`.
-The implemented implicit-session restart retains the last accepted checkpoint but does not accept new requirements; activating changed constraints as part of restart remains future work.
+The implemented implicit-session restart can merge additive requirements into the last accepted checkpoint before replacing the worker.
 
 ### 14.2 R
 
@@ -813,6 +813,13 @@ Before worker startup, an explicit `prepare` action remains atomic:
 1. merge the requested additions with the current manifest;
 2. resolve and prepare the candidate environment outside the arbitrary-code worker;
 3. commit the manifest and interpreter only after resolution succeeds.
+
+An explicit `restart` with requirements is atomic until the worker replacement boundary:
+
+1. merge additions into the complete checkpointed manifest;
+2. resolve the candidate outside the arbitrary-code worker while the current worker remains intact;
+3. leave the current worker, manifest, and interpreter unchanged if resolution fails;
+4. after resolution succeeds, commit the candidate and replace the worker.
 
 During a server-managed worker evaluation, runtime layering is atomic at `completed`:
 
@@ -1146,7 +1153,7 @@ Exit: one backend is selected with evidence against the criteria in `RUNTIME_BAC
 
 - retain the implemented structured cell and exact-input behavior;
 - complete the selected backend's lifecycle and capability adapter;
-- implement inspection, interrupt, restart with new requirements, and crash reporting;
+- implement inspection, interrupt, and crash reporting;
 - validate R stack and source semantics across supported platforms;
 - establish pinned compatibility tests for Ark/comm or `harp`/`libr` dependencies.
 

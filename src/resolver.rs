@@ -133,8 +133,7 @@ base::local({
             return Ok(None);
         }
         let requirements = manifest_from_packages(requirements);
-        let environment = uv_environment();
-        resolve_python_manifest(requirements, environment, on_started).map(Some)
+        resolve_python_host(requirements, on_started).map(Some)
     }
 
     pub(crate) fn resolve_python_manifest(
@@ -230,6 +229,13 @@ base::local({
             python,
             requirements,
         })
+    }
+
+    pub(crate) fn resolve_python_host(
+        requirements: crate::worker_protocol::PythonRequirementManifest,
+        on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
+    ) -> Result<ManagedPython, String> {
+        resolve_python_manifest(requirements, uv_environment(), on_started)
     }
 
     fn write_requirements(
@@ -456,8 +462,15 @@ mod platform {
     ) -> Result<ManagedPython, String> {
         Err("managed Python environments are supported only on macOS".to_string())
     }
+
+    pub(crate) fn resolve_python_host(
+        requirements: crate::worker_protocol::PythonRequirementManifest,
+        on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
+    ) -> Result<ManagedPython, String> {
+        resolve_python_manifest(requirements, BTreeMap::new(), on_started)
+    }
 }
 
 pub(crate) use platform::{
-    ManagedPython, ResolverStopHandle, resolve_python, resolve_python_manifest,
+    ManagedPython, ResolverStopHandle, resolve_python, resolve_python_host, resolve_python_manifest,
 };

@@ -19,18 +19,18 @@ def test_evaluates_queries_in_a_persistent_catalog(binary: Path) -> Transcript:
         environment["R_LIBS"] = inherited_r_libraries()
         environment["RETICULATE_PYTHON"] = sys.executable
         client = McpClient(binary, ("serve",), environment)
-        client.initialize_and_list_tools()
+        client._initialize_and_list_tools()
         sql = code(r"""
             CREATE TABLE answers AS SELECT CAST(42 AS INTEGER) AS answer
             """)
-        client.call_tool("send", sql=sql)
+        client.send(sql=sql)
         output = last_tool_text(client)
         assert output == "[done]", output
 
         sql = code(r"""
             INSERT INTO answers VALUES (7)
             """)
-        client.call_tool("send", sql=sql)
+        client.send(sql=sql)
         output = last_tool_text(client)
         assert output == "[done]", output
 
@@ -38,17 +38,17 @@ def test_evaluates_queries_in_a_persistent_catalog(binary: Path) -> Transcript:
             SELECT answer FROM answers
             ORDER BY answer DESC
             """)
-        client.call_tool("send", sql=sql)
-        return client.finish()
+        client.send(sql=sql)
+        return client._finish()
 
 
 def test_recovers_from_sql_errors(binary: Path) -> Transcript:
     client = McpClient(binary, ("serve",))
-    client.initialize_and_list_tools()
+    client._initialize_and_list_tools()
     sql = code(r"""
         SELECT * FROM table_that_does_not_exist
         """)
-    client.call_tool("send", sql=sql)
+    client.send(sql=sql)
     result = client.transcript[-1]["result"]
     assert result.get("isError") is not True, result
     output = result["content"][0]["text"]
@@ -60,24 +60,24 @@ def test_recovers_from_sql_errors(binary: Path) -> Transcript:
     sql = code(r"""
         SELECT CAST(42 AS INTEGER) AS answer
         """)
-    client.call_tool("send", sql=sql)
-    return client.finish()
+    client.send(sql=sql)
+    return client._finish()
 
 
 def test_avoids_private_preview_name_collisions(binary: Path) -> Transcript:
     client = McpClient(binary, ("serve",))
-    client.initialize_and_list_tools()
+    client._initialize_and_list_tools()
     sql = code(r"""
         CREATE TABLE __mcp_console_preview_e2 AS
         SELECT CAST(999 AS INTEGER) AS column_01
         """)
-    client.call_tool("send", sql=sql)
+    client.send(sql=sql)
     assert last_tool_text(client) == "[done]"
 
     sql = code(r"""
         SELECT CAST(42 AS INTEGER) AS answer
         """)
-    client.call_tool("send", sql=sql)
+    client.send(sql=sql)
     preview = last_tool_text(client)
     assert "42" in preview
     assert "999" not in preview
@@ -86,14 +86,14 @@ def test_avoids_private_preview_name_collisions(binary: Path) -> Transcript:
         SELECT column_01 AS catalog_value
         FROM __mcp_console_preview_e2
         """)
-    client.call_tool("send", sql=sql)
+    client.send(sql=sql)
     assert "999" in last_tool_text(client)
-    return client.finish()
+    return client._finish()
 
 
 def test_previews_schema_and_exact_values(binary: Path) -> Transcript:
     client = McpClient(binary, ("serve",))
-    client.initialize_and_list_tools()
+    client._initialize_and_list_tools()
     r = code(r"""
         invisible(options(
           width = 20L,
@@ -114,7 +114,7 @@ def test_previews_schema_and_exact_values(binary: Path) -> Transcript:
           pillar.subtle = TRUE
         ))
         """)
-    client.call_tool("send", r=r)
+    client.send(r=r)
     assert last_tool_text(client) == "[done]"
 
     sql = code(r"""
@@ -128,7 +128,7 @@ def test_previews_schema_and_exact_values(binary: Path) -> Transcript:
           CAST([1, NULL, 3] AS INTEGER[]) AS items,
           {'name': 'Ada', 'active': true} AS person
         """)
-    client.call_tool("send", sql=sql)
+    client.send(sql=sql)
     values = last_tool_text(client)
 
     sql = code(r"""
@@ -146,7 +146,7 @@ def test_previews_schema_and_exact_values(binary: Path) -> Transcript:
           11 AS column_name_11_is_deliberately_long,
           12 AS column_name_12_is_deliberately_long
         """)
-    client.call_tool("send", sql=sql)
+    client.send(sql=sql)
     long_names = last_tool_text(client)
 
     sql = code(r"""
@@ -156,9 +156,9 @@ def test_previews_schema_and_exact_values(binary: Path) -> Transcript:
           CAST(NULL AS VARCHAR[]) AS tags
         WHERE FALSE
         """)
-    client.call_tool("send", sql=sql)
+    client.send(sql=sql)
     empty = last_tool_text(client)
-    transcript = client.finish()
+    transcript = client._finish()
 
     assert "missing" in values
     assert "<int64>" in values
@@ -182,7 +182,7 @@ def test_bounds_query_previews_without_materializing_results(
     binary: Path,
 ) -> Transcript:
     client = McpClient(binary, ("serve",))
-    client.initialize_and_list_tools()
+    client._initialize_and_list_tools()
     sql = code(r"""
         SELECT
           repeat('a', 1000) AS c01,
@@ -201,7 +201,7 @@ def test_bounds_query_previews_without_materializing_results(
           repeat('n', 1000) AS c14
         FROM range(21)
         """)
-    client.call_tool("send", sql=sql)
+    client.send(sql=sql)
     wide = last_tool_text(client)
 
     sql = code(r"""
@@ -209,9 +209,9 @@ def test_bounds_query_previews_without_materializing_results(
         FROM range(1000000000000) AS values(value)
         WHERE value % 97 = 0
         """)
-    client.call_tool("send", sql=sql, timeout_ms=1000)
+    client.send(sql=sql, timeout_ms=1000)
     large = last_tool_text(client)
-    transcript = client.finish()
+    transcript = client._finish()
 
     assert len(wide.encode("utf-8")) <= 12 * 1024
     assert "[additional rows omitted]" in wide
@@ -226,7 +226,7 @@ def test_bounds_query_previews_without_materializing_results(
 
 def test_keeps_repeated_previews_deterministic(binary: Path) -> Transcript:
     client = McpClient(binary, ("serve",))
-    client.initialize_and_list_tools()
+    client._initialize_and_list_tools()
     sql = code(r"""
         CREATE VIEW wide_values AS SELECT
           repeat('😀漢é', 2000) AS c01,
@@ -244,7 +244,7 @@ def test_keeps_repeated_previews_deterministic(binary: Path) -> Transcript:
           repeat('extra', 2000) AS c13
         FROM range(21)
         """)
-    client.call_tool("send", sql=sql)
+    client.send(sql=sql)
     assert last_tool_text(client) == "[done]"
 
     sql = code(r"""
@@ -252,9 +252,9 @@ def test_keeps_repeated_previews_deterministic(binary: Path) -> Transcript:
         """)
     outputs = []
     for _ in range(3):
-        client.call_tool("send", sql=sql)
+        client.send(sql=sql)
         outputs.append(last_tool_text(client))
-    transcript = client.finish()
+    transcript = client._finish()
 
     assert outputs[0] == outputs[1] == outputs[2]
     assert len(outputs[0].encode("utf-8")) <= 12 * 1024

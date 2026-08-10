@@ -64,7 +64,7 @@ struct PythonRequirements {
 struct SessionArguments {
     /// Prepare Python requirements or restart the implicit session, starting it if needed.
     action: SessionAction,
-    /// Additive requirements for prepare. Omit for restart.
+    /// Additive requirements for prepare or restart. Omit to restart unchanged.
     requirements: Option<PythonRequirements>,
 }
 
@@ -137,7 +137,7 @@ impl ConsoleServer {
     }
 
     #[tool(
-        description = "Prepare additive Python requirements before the implicit session starts, or restart its worker while retaining prepared requirements. Restart starts a worker if none exists and loses all in-memory R, Python, and SQL state."
+        description = "Prepare additive Python requirements before the implicit session starts, or restart its worker with retained and optional new requirements. Restart starts a worker if none exists and loses all in-memory R, Python, and SQL state."
     )]
     async fn session(
         &self,
@@ -158,12 +158,14 @@ impl ConsoleServer {
                 }
             }
             SessionAction::Restart => {
-                if requirements.is_some() {
-                    return Err("`requirements` is not yet supported with `restart`".to_string());
-                }
-                self.worker
-                    .restart(Instant::now() + WORKER_SHUTDOWN_GRACE)
-                    .await?;
+                let python = match requirements {
+                    Some(requirements) => {
+                        validate_python_requirements(&requirements.python)?;
+                        requirements.python
+                    }
+                    None => Vec::new(),
+                };
+                self.worker.restart(python, WORKER_SHUTDOWN_GRACE).await?;
                 "[restarted]"
             }
         };

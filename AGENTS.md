@@ -32,7 +32,7 @@ The receipt describes that runtime read, not a submitted payload or byte count, 
 New code is rejected until the running evaluation's result has been collected.
 Worker `image` frames carry base64 data and a MIME type.
 The server preserves sideband text and image order as MCP content blocks, coalesces adjacent text, and does not add `[done]` when an image is the only output.
-The implemented `session` surface accepts `action = "prepare"` with one or more Python requirement strings or `action = "restart"` without requirements for the implicit session.
+The implemented `session` surface accepts `action = "prepare"` with one or more Python requirement strings or `action = "restart"` with optional Python requirement strings for the implicit session.
 Requirements are exact, additive, and idempotent.
 Before the worker starts, each successful prepare resolves the complete candidate set outside the sandbox, atomically retains it in server memory, replaces any inherited Python selection with the resolved interpreter, and returns `[prepared]` without starting the worker.
 A failed resolution leaves the prior requirements and interpreter unchanged.
@@ -41,12 +41,14 @@ The direct resolver process defines its process-group lifetime: after `Rscript` 
 Closing MCP input cancels an in-flight explicit or runtime resolution by force-stopping its host resolver process group; startup preflight completes before MCP input is accepted and is not cancellable through that lifecycle.
 Once a worker has started, an already-retained explicit requirement remains idempotent, while any explicit addition returns `restart required` without changing the environment.
 This restriction applies to `session` preparation; server-managed workers can layer additive requirements declared through `reticulate::py_require()` during evaluation.
-Restart retains the server's checkpointed Python environment, loses all worker-owned in-memory state and unread stdin, eagerly starts a replacement, and returns `[restarted]` after it reports ready.
+Restart merges any supplied additions into the complete checkpointed Python manifest and resolves the candidate before terminating the current worker.
+A failed restart resolution leaves the current worker, its in-memory state, requirements, and interpreter unchanged.
+After successful resolution, restart retains the candidate environment, loses all worker-owned in-memory state and unread stdin, eagerly starts a replacement, and returns `[restarted]` after it reports ready.
 The implicit session exists for the server lifetime, so restart starts its first worker if none exists yet.
 It first queues worker-stdin closure and the sideband shutdown message without waiting behind an evaluation, then force-stops the process group and reaps the direct sandbox process at the one-second deadline if that process remains live.
-Each admitted evaluation or idle stdin write carries its worker generation, so work admitted before restart cannot reach the replacement.
-Direct standard-stream bytes collected around restart remain pending for the next `send` response and may share it with replacement output.
-Named sessions, R requirements, and restart with new requirements do not exist yet.
+Each admitted evaluation or idle stdin write remains associated with its worker, so work admitted before restart cannot reach the replacement.
+Direct standard-stream bytes already collected from the old worker remain pending for the next `send` response and may share it with replacement output.
+Named sessions and R requirements do not exist yet.
 On macOS, managed-Python preflight happens during `serve` startup when required; the first nonempty stdin submission or evaluation still lazily starts the built-in worker under the same sandbox policy as the `sandbox` command.
 The worker embeds R through `libr` and `harp`, retains global state, and feeds each complete R cell through R's DLL REPL iterator.
 R parses and evaluates its expressions sequentially, captures console output, prints visible values, and performs native top-level bookkeeping.
@@ -131,7 +133,7 @@ This initial launcher waits only for the direct command.
 Background descendants are unsupported: they may outlive the launcher, which attempts to remove their dedicated temporary directory on a best-effort basis when it returns.
 Descendant supervision is intentionally deferred because it must account for process groups, session-detached children, signal forwarding, and PID reuse together.
 The sandbox command and worker are unsupported on Linux and Windows.
-Named sessions, restart with new requirements, R requirement resolution, SQL relation bridges, the sidecar API, viewer, output retention, and transcript generation do not exist yet.
+Named sessions, R requirement resolution, SQL relation bridges, the sidecar API, viewer, output retention, and transcript generation do not exist yet.
 
 ## Product direction
 
@@ -141,7 +143,7 @@ The public MCP surface has two tools:
 - `send` evaluates complete R, Python, or SQL cells, writes to the session's stdin stream, and polls for output.
 - `session` manages session requirements and lifecycle operations.
 
-Initial Python requirement preparation and explicit restart are implemented for `session`; its broader lifecycle surface remains planned.
+Initial Python requirement preparation and explicit restart with optional additions are implemented for `session`; its broader lifecycle surface remains planned.
 
 The MCP initialization identity remains `mcp-console`.
 The intended default client registration name is `console`, for example `codex mcp add console -- mcp-console serve`.

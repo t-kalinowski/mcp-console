@@ -14,11 +14,10 @@ id: 4
 session:
   action: restart
   requirements:
-    python:
-      - py-yaml12
+    python: []
 result:
   content:
     - type: text
-      text: "`requirements` is not yet supported with `restart`"
+      text: "`requirements.python` must contain at least one requirement"
   isError: true
 ...

@@ -43,7 +43,7 @@ Use `--update` only to accept an intentional transcript change.
 A suite may set `PLATFORMS = {"darwin"}` to restrict execution and snapshot updates to those `sys.platform` values.
 Restricted cases remain visible under `scripts/test --list` and are skipped on other platforms.
 
-Server cases create an `McpClient`, perform the session, and return `client.finish()`.
+Server cases create an `McpClient`, perform the session, and return `client._finish()`.
 Other cases may invoke the binary directly and return their transcript entries.
 
 Each suite is also directly runnable:

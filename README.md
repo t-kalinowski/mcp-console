@@ -52,19 +52,24 @@ It does not import the packages or start the worker.
 Exact repeated requirements are idempotent.
 Once the worker has started, a new explicit `session` requirement returns `restart required` without changing the environment.
 Server-managed workers can still layer additive requirements declared through `reticulate::py_require()` while an evaluation is running.
-The client can explicitly replace the worker while retaining the server's checkpointed Python environment:
+The client can explicitly replace the worker and add requirements in the same call:
 
 ```json
-{ "action": "restart" }
+{
+  "action": "restart",
+  "requirements": { "python": ["py-yaml12"] }
+}
 ```
 
+The client can omit `requirements` to retain the current Python checkpoint unchanged.
+When requirements are supplied, the server resolves the complete merged candidate before stopping the current worker.
+A resolution failure leaves the current worker, its in-memory state, and its environment unchanged.
 Restart returns `[restarted]` after the replacement reports ready.
 It loses all in-memory R, Python, SQL, debugger, and unread-stdin state.
 The implicit session exists for the server lifetime, so restart starts its first worker if none exists yet.
 The server closes worker stdin and sends the sideband shutdown message, then force-stops the worker process group and reaps the direct sandbox process if that process has not exited after one second.
-Code and idle stdin admitted before the generation boundary cannot run in the replacement.
-Direct standard-output and standard-error bytes collected around the boundary retain the existing next-`send` behavior and may appear with output from the replacement.
-Supplying new requirements with `restart` is not implemented yet.
+Code and idle stdin remain associated with the worker that admitted them and cannot run in the replacement.
+Standard-output and standard-error bytes already collected from the old worker are retained and may appear in a later `send`, including with replacement output.
 On macOS, the default managed-Python preflight happens during `serve` startup when required; a successful `prepare` replaces that initial selection before the first nonempty stdin submission or evaluation lazily starts the sandboxed embedded R worker.
 Later calls reuse the same global R state, reticulate Python interpreter, and in-memory DuckDB catalog.
 An infrastructure or protocol failure discards that worker and its in-memory R, Python, and SQL state.
@@ -147,7 +152,7 @@ The intended default client registration name is `console`:
 codex mcp add console -- mcp-console serve
 ```
 
-Under Codex's current naming convention, the implemented tools are `mcp__console.send` and `mcp__console.session`; `session` supports initial Python requirement preparation and explicit restart for the implicit session.
+Under Codex's current naming convention, the implemented tools are `mcp__console.send` and `mcp__console.session`; `session` supports initial Python requirement preparation and explicit restart with optional additive Python requirements for the implicit session.
 
 On macOS, `sandbox` launches the command under `/usr/bin/sandbox-exec`.
 The command can read the host filesystem, can write regular files only in a dedicated temporary directory, and cannot access the network.
