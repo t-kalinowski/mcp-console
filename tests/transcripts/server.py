@@ -37,6 +37,29 @@ def test_validates_session_arguments(binary: Path) -> Transcript:
     assert result["isError"] is True
     assert result["content"][0]["text"] == ("`requirements` is required with `prepare`")
 
+    client.call_tool("session", action="prepare", requirements={})
+    result = client.transcript[-1]["result"]
+    assert result["isError"] is True
+    assert result["content"][0]["text"] == (
+        "at least one of `requirements.r` or `requirements.python` is required"
+    )
+
+    client.call_tool("session", action="prepare", requirements={"r": [""]})
+    result = client.transcript[-1]["result"]
+    assert result["isError"] is True
+    assert result["content"][0]["text"] == "R requirement strings must not be empty"
+
+    client.call_tool(
+        "session",
+        action="prepare",
+        requirements={"r": ["cli\ndplyr"]},
+    )
+    result = client.transcript[-1]["result"]
+    assert result["isError"] is True
+    assert result["content"][0]["text"] == (
+        "R requirement strings must not contain NUL or line breaks"
+    )
+
     client.call_tool(
         "session",
         action="restart",

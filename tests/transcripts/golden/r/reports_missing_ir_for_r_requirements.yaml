@@ -1,0 +1,15 @@
+---
+!same-as tests/transcripts/golden/server/initializes_and_lists_tools.yaml
+---
+id: 3
+session:
+  action: prepare
+  requirements:
+    r:
+      - cli
+result:
+  content:
+    - type: text
+      text: R requirements require the `ir` command on PATH
+  isError: true
+...

@@ -12,6 +12,42 @@ result:
 ---
 id: 4
 session:
+  action: prepare
+  requirements: {}
+result:
+  content:
+    - type: text
+      text: at least one of `requirements.r` or `requirements.python` is required
+  isError: true
+---
+id: 5
+session:
+  action: prepare
+  requirements:
+    r:
+      - ""
+result:
+  content:
+    - type: text
+      text: R requirement strings must not be empty
+  isError: true
+---
+id: 6
+session:
+  action: prepare
+  requirements:
+    r:
+      - |-
+        cli
+        dplyr
+result:
+  content:
+    - type: text
+      text: R requirement strings must not contain NUL or line breaks
+  isError: true
+---
+id: 7
+session:
   action: restart
   requirements:
     python:

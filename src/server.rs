@@ -53,19 +53,24 @@ enum SessionAction {
 
 #[derive(Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
-struct PythonRequirements {
+struct Requirements {
+    /// One or more additive, single-line R package references accepted by IR.
+    #[serde(default)]
+    #[schemars(length(max = 64), inner(length(min = 1)))]
+    r: Vec<String>,
     /// One or more additive, single-line PEP 508 Python requirement strings.
-    #[schemars(length(min = 1, max = 64), inner(length(min = 1)))]
+    #[serde(default)]
+    #[schemars(length(max = 64), inner(length(min = 1)))]
     python: Vec<String>,
 }
 
 #[derive(Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct SessionArguments {
-    /// Prepare Python requirements or restart the implicit session, starting it if needed.
+    /// Prepare R or Python requirements or restart the implicit session, starting it if needed.
     action: SessionAction,
     /// Additive requirements for prepare. Omit for restart.
-    requirements: Option<PythonRequirements>,
+    requirements: Option<Requirements>,
 }
 
 fn default_timeout_ms() -> u64 {
@@ -137,7 +142,7 @@ impl ConsoleServer {
     }
 
     #[tool(
-        description = "Prepare additive Python requirements before the implicit session starts, or restart its worker while retaining prepared requirements. Restart starts a worker if none exists and loses all in-memory R, Python, and SQL state."
+        description = "Prepare additive R or Python requirements before the implicit session starts, or restart its worker while retaining prepared requirements. Restart starts a worker if none exists and loses all in-memory R, Python, and SQL state."
     )]
     async fn session(
         &self,
@@ -148,11 +153,22 @@ impl ConsoleServer {
     ) -> Result<CallToolResult, String> {
         let text = match action {
             SessionAction::Prepare => {
-                let Some(PythonRequirements { python }) = requirements else {
+                let Some(Requirements { r, python }) = requirements else {
                     return Err("`requirements` is required with `prepare`".to_string());
                 };
+                if r.is_empty() && python.is_empty() {
+                    return Err(
+                        "at least one of `requirements.r` or `requirements.python` is required"
+                            .to_string(),
+                    );
+                }
+                validate_r_requirements(&r)?;
                 validate_python_requirements(&python)?;
-                match self.worker.prepare_python(python).await? {
+                match self
+                    .worker
+                    .prepare(crate::worker_client::Requirements { r, python })
+                    .await?
+                {
                     crate::worker_client::PrepareResult::Prepared => "[prepared]",
                     crate::worker_client::PrepareResult::RestartRequired => "restart required",
                 }
@@ -171,22 +187,38 @@ impl ConsoleServer {
     }
 }
 
+fn validate_r_requirements(r: &[String]) -> Result<(), String> {
+    validate_requirements(r, "r", "R")
+}
+
 fn validate_python_requirements(python: &[String]) -> Result<(), String> {
-    if python.is_empty() {
-        return Err("`requirements.python` must contain at least one requirement".to_string());
+    validate_requirements(python, "python", "Python")
+}
+
+fn validate_requirements(
+    requirements: &[String],
+    field: &str,
+    language: &str,
+) -> Result<(), String> {
+    if requirements.len() > 64 {
+        return Err(format!(
+            "`requirements.{field}` accepts at most 64 requirements"
+        ));
     }
-    if python.len() > 64 {
-        return Err("`requirements.python` accepts at most 64 requirements".to_string());
+    if requirements
+        .iter()
+        .any(|requirement| requirement.trim().is_empty())
+    {
+        return Err(format!("{language} requirement strings must not be empty"));
     }
-    if python.iter().any(String::is_empty) {
-        return Err("Python requirement strings must not be empty".to_string());
-    }
-    if python.iter().any(|requirement| {
+    if requirements.iter().any(|requirement| {
         requirement
             .bytes()
             .any(|byte| matches!(byte, b'\0' | b'\r' | b'\n'))
     }) {
-        return Err("Python requirement strings must not contain NUL or line breaks".to_string());
+        return Err(format!(
+            "{language} requirement strings must not contain NUL or line breaks"
+        ));
     }
     Ok(())
 }

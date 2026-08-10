@@ -1,0 +1,108 @@
+---
+!same-as tests/transcripts/golden/server/initializes_and_lists_tools.yaml
+---
+id: 3
+session:
+  action: prepare
+  requirements:
+    r:
+      - mcpconsolerrequire
+result:
+  content:
+    - type: text
+      text: "[prepared]"
+  isError: false
+---
+id: 4
+session:
+  action: prepare
+  requirements:
+    r:
+      - missing-package
+result:
+  content:
+    - type: text
+      text: "R package resolution failed with exit status: 1: fake IR failure"
+  isError: true
+---
+id: 5
+session:
+  action: prepare
+  requirements:
+    r:
+      - atomic-candidate
+    python:
+      - not a valid requirement !!!
+result:
+  content:
+    - type: text
+      text: managed Python resolution failed after candidate R resolution
+  isError: true
+---
+id: 6
+send:
+  r: |
+    stopifnot(
+      normalizePath(.libPaths()[[1L]]) ==
+        normalizePath(Sys.getenv("MCP_CONSOLE_IR_LIBRARY")),
+      normalizePath(.libPaths()[[2L]]) ==
+        normalizePath(Sys.getenv("MCP_CONSOLE_AMBIENT_R_LIBRARY"))
+    )
+    mcpconsolerrequire::answer()
+result:
+  content:
+    - type: text
+      text: |
+        [1] 42
+  isError: false
+---
+id: 7
+session:
+  action: prepare
+  requirements:
+    r:
+      - mcpconsolerrequire
+result:
+  content:
+    - type: text
+      text: "[prepared]"
+  isError: false
+---
+id: 8
+session:
+  action: prepare
+  requirements:
+    r:
+      - another-package
+result:
+  content:
+    - type: text
+      text: restart required
+  isError: false
+---
+id: 9
+session:
+  action: restart
+result:
+  content:
+    - type: text
+      text: "[restarted]"
+  isError: false
+---
+id: 10
+send:
+  r: |
+    stopifnot(
+      normalizePath(.libPaths()[[1L]]) ==
+        normalizePath(Sys.getenv("MCP_CONSOLE_IR_LIBRARY")),
+      normalizePath(.libPaths()[[2L]]) ==
+        normalizePath(Sys.getenv("MCP_CONSOLE_AMBIENT_R_LIBRARY"))
+    )
+    mcpconsolerrequire::answer()
+result:
+  content:
+    - type: text
+      text: |
+        [1] 42
+  isError: false
+...

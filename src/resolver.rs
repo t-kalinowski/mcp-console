@@ -2,6 +2,7 @@
 mod platform {
     use std::collections::BTreeMap;
     use std::io::{self, Write};
+    use std::os::unix::fs::PermissionsExt as _;
     use std::os::unix::process::CommandExt as _;
     use std::path::{Path, PathBuf};
     use std::process::{Child, ChildStdin, Command, ExitStatus, Stdio};
@@ -12,6 +13,14 @@ mod platform {
     use serde::Serialize;
 
     const CANCEL_POLL_INTERVAL: Duration = Duration::from_millis(10);
+
+    const R_LIBRARY_RESOLVER: &str = r#"
+base::cat(base::normalizePath(
+  base::.libPaths()[[1L]],
+  winslash = "/",
+  mustWork = TRUE
+))
+"#;
 
     const PYTHON_RESOLVER: &str = r#"
 base::local({
@@ -82,6 +91,13 @@ base::local({
     }
 
     #[derive(Clone)]
+    pub(crate) struct ManagedR {
+        library: PathBuf,
+        r_libs: std::ffi::OsString,
+        requirements: Vec<String>,
+    }
+
+    #[derive(Clone)]
     pub(crate) struct ResolverStopHandle(mpsc::Sender<()>);
 
     struct ResolverOutput {
@@ -120,6 +136,125 @@ base::local({
         }
     }
 
+    impl ManagedR {
+        pub(crate) fn configure_worker(
+            &self,
+            command: &mut crate::sandbox::SandboxedCommand,
+        ) -> Result<(), String> {
+            if !self.library.is_dir() {
+                return Err(format!(
+                    "resolved R library `{}` no longer exists",
+                    self.library.display()
+                ));
+            }
+            command.env("R_LIBS", &self.r_libs);
+            Ok(())
+        }
+
+        pub(crate) fn requirements(&self) -> &[String] {
+            &self.requirements
+        }
+    }
+
+    pub(crate) fn find_ir() -> Option<PathBuf> {
+        let path = std::env::var_os("PATH")?;
+        let current = std::env::current_dir().ok()?;
+        std::env::split_paths(&path).find_map(|directory| {
+            let candidate = directory.join("ir");
+            let candidate = if candidate.is_absolute() {
+                candidate
+            } else {
+                current.join(candidate)
+            };
+            let metadata = candidate.metadata().ok()?;
+            (metadata.is_file() && metadata.permissions().mode() & 0o111 != 0).then_some(candidate)
+        })
+    }
+
+    pub(crate) fn resolve_r(
+        ir: &Path,
+        requirements: Vec<String>,
+        on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
+    ) -> Result<ManagedR, String> {
+        let rscript = rscript();
+        let mut command = Command::new(ir);
+        command.arg("run").arg("--rscript").arg(&rscript);
+        for requirement in &requirements {
+            command.arg("--with").arg(requirement);
+        }
+        command
+            .args(["--isolated", "--vanilla", "-e", R_LIBRARY_RESOLVER])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .process_group(0);
+        // IR resolves and installs packages with normal host cache and network
+        // access. Requirement strings are process arguments, never R source.
+        let mut child = command.spawn().map_err(|error| {
+            format!(
+                "failed to run R package resolver with `{}`: {error}",
+                ir.display()
+            )
+        })?;
+        let stdout = read_output(child.stdout.take().expect("resolver stdout is piped"));
+        let stderr = read_output(child.stderr.take().expect("resolver stderr is piped"));
+        let (cancel, cancellation) = mpsc::channel();
+        let stop_handle = ResolverStopHandle(cancel);
+        if let Err(error) = on_started(stop_handle.clone()) {
+            let _ = stop_resolver(&mut child, ir, "R package");
+            return Err(error);
+        }
+        let ResolverOutput {
+            status,
+            stdout,
+            stderr,
+            ..
+        } = wait_for_resolver(
+            &mut child,
+            cancellation,
+            completed_write(),
+            stdout,
+            stderr,
+            ir,
+            "R package",
+        )?;
+        if !status.success() {
+            let stdout = String::from_utf8_lossy(&stdout);
+            let stderr = String::from_utf8_lossy(&stderr);
+            let detail = if stderr.trim().is_empty() {
+                stdout.trim()
+            } else {
+                stderr.trim()
+            };
+            return Err(format!(
+                "R package resolution failed with {status}: {detail}"
+            ));
+        }
+
+        let output = String::from_utf8(stdout)
+            .map_err(|_| "R package resolver returned a non-UTF-8 path".to_string())?;
+        let library = PathBuf::from(output);
+        if !library.is_absolute() || !library.is_dir() {
+            return Err(format!(
+                "R package resolver returned invalid library `{}`",
+                library.display()
+            ));
+        }
+        let mut libraries = vec![library.clone()];
+        if let Some(inherited) = std::env::var_os("R_LIBS") {
+            libraries.extend(
+                std::env::split_paths(&inherited).filter(|path| !path.as_os_str().is_empty()),
+            );
+        }
+        let r_libs = std::env::join_paths(libraries)
+            .map_err(|error| format!("failed to construct R library path: {error}"))?;
+        Ok(ManagedR {
+            library,
+            r_libs,
+            requirements,
+        })
+    }
+
     pub(crate) fn resolve_python(
         requirements: &[String],
         on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
@@ -141,9 +276,7 @@ base::local({
     ) -> Result<ManagedPython, String> {
         let requirements = requirements.normalized();
         validate_environment(&environment)?;
-        let rscript = std::env::var_os("R_HOME")
-            .map(|r_home| PathBuf::from(r_home).join("bin/Rscript"))
-            .unwrap_or_else(|| PathBuf::from("Rscript"));
+        let rscript = rscript();
         let mut command = Command::new(&rscript);
         command
             .args(["--vanilla", "-e", PYTHON_RESOLVER])
@@ -173,7 +306,7 @@ base::local({
         let (cancel, cancellation) = mpsc::channel();
         let stop_handle = ResolverStopHandle(cancel);
         if let Err(error) = on_started(stop_handle.clone()) {
-            let _ = stop_resolver(&mut child, &rscript);
+            let _ = stop_resolver(&mut child, &rscript, "managed Python");
             return Err(error);
         }
         let input = write_requirements(input, &requirements);
@@ -182,7 +315,15 @@ base::local({
             write_result,
             stdout,
             stderr,
-        } = wait_for_resolver(&mut child, cancellation, input, stdout, stderr, &rscript)?;
+        } = wait_for_resolver(
+            &mut child,
+            cancellation,
+            input,
+            stdout,
+            stderr,
+            &rscript,
+            "managed Python",
+        )?;
         if !status.success() {
             let python = String::from_utf8_lossy(&stdout);
             let error = String::from_utf8_lossy(&stderr);
@@ -241,6 +382,20 @@ base::local({
         receiver
     }
 
+    fn completed_write() -> Receiver<io::Result<()>> {
+        let (sender, receiver) = mpsc::channel();
+        sender
+            .send(Ok(()))
+            .expect("resolver completion receiver should be available");
+        receiver
+    }
+
+    fn rscript() -> PathBuf {
+        std::env::var_os("R_HOME")
+            .map(|r_home| PathBuf::from(r_home).join("bin/Rscript"))
+            .unwrap_or_else(|| PathBuf::from("Rscript"))
+    }
+
     fn manifest_from_packages(
         requirements: &[String],
     ) -> crate::worker_protocol::PythonRequirementManifest {
@@ -288,7 +443,8 @@ base::local({
         output: &mut Option<io::Result<T>>,
         name: &str,
         child: &mut Child,
-        rscript: &std::path::Path,
+        program: &std::path::Path,
+        kind: &str,
     ) -> Result<(), String> {
         if output.is_some() {
             return Ok(());
@@ -297,8 +453,8 @@ base::local({
             Ok(result) => *output = Some(result),
             Err(TryRecvError::Empty) => {}
             Err(TryRecvError::Disconnected) => {
-                let _ = stop_resolver(child, rscript);
-                return Err(format!("managed Python resolver {name} task stopped"));
+                let _ = stop_resolver(child, program, kind);
+                return Err(format!("{kind} resolver {name} task stopped"));
             }
         }
         Ok(())
@@ -310,7 +466,8 @@ base::local({
         input: Receiver<io::Result<()>>,
         stdout: Receiver<io::Result<Vec<u8>>>,
         stderr: Receiver<io::Result<Vec<u8>>>,
-        rscript: &std::path::Path,
+        program: &std::path::Path,
+        kind: &str,
     ) -> Result<ResolverOutput, String> {
         let mut input_result = None;
         let mut stdout_output = None;
@@ -318,14 +475,35 @@ base::local({
         loop {
             match cancellation.try_recv() {
                 Ok(()) => {
-                    stop_resolver(child, rscript)?;
-                    return Err("managed Python resolution cancelled".to_string());
+                    stop_resolver(child, program, kind)?;
+                    return Err(format!("{kind} resolution cancelled"));
                 }
                 Err(TryRecvError::Empty | TryRecvError::Disconnected) => {}
             }
-            receive_result(&input, &mut input_result, "stdin writer", child, rscript)?;
-            receive_result(&stdout, &mut stdout_output, "stdout reader", child, rscript)?;
-            receive_result(&stderr, &mut stderr_output, "stderr reader", child, rscript)?;
+            receive_result(
+                &input,
+                &mut input_result,
+                "stdin writer",
+                child,
+                program,
+                kind,
+            )?;
+            receive_result(
+                &stdout,
+                &mut stdout_output,
+                "stdout reader",
+                child,
+                program,
+                kind,
+            )?;
+            receive_result(
+                &stderr,
+                &mut stderr_output,
+                "stderr reader",
+                child,
+                program,
+                kind,
+            )?;
             if input_result.is_none() || stdout_output.is_none() || stderr_output.is_none() {
                 thread::sleep(CANCEL_POLL_INTERVAL);
                 continue;
@@ -333,10 +511,10 @@ base::local({
             let status = match child.try_wait() {
                 Ok(status) => status,
                 Err(error) => {
-                    let _ = stop_resolver(child, rscript);
+                    let _ = stop_resolver(child, program, kind);
                     return Err(format!(
-                        "failed to collect managed Python resolver output from `{}`: {error}",
-                        rscript.display()
+                        "failed to collect {kind} resolver output from `{}`: {error}",
+                        program.display()
                     ));
                 }
             };
@@ -365,7 +543,11 @@ base::local({
         }
     }
 
-    fn stop_resolver(child: &mut Child, rscript: &std::path::Path) -> Result<(), String> {
+    fn stop_resolver(
+        child: &mut Child,
+        program: &std::path::Path,
+        kind: &str,
+    ) -> Result<(), String> {
         // SAFETY: `process_group(0)` made the resolver PID its process-group ID.
         let result = unsafe { libc::killpg(child.id() as libc::pid_t, libc::SIGKILL) };
         if result < 0 {
@@ -373,19 +555,19 @@ base::local({
             return match child.try_wait() {
                 Ok(Some(_)) => Ok(()),
                 Ok(None) => Err(format!(
-                    "failed to stop managed Python resolver `{}`: {kill_error}",
-                    rscript.display()
+                    "failed to stop {kind} resolver `{}`: {kill_error}",
+                    program.display()
                 )),
                 Err(wait_error) => Err(format!(
-                    "failed to stop managed Python resolver `{}`: {kill_error}; additionally failed to read its status: {wait_error}",
-                    rscript.display()
+                    "failed to stop {kind} resolver `{}`: {kill_error}; additionally failed to read its status: {wait_error}",
+                    program.display()
                 )),
             };
         }
         child.wait().map(|_| ()).map_err(|error| {
             format!(
-                "failed to reap managed Python resolver `{}`: {error}",
-                rscript.display()
+                "failed to reap {kind} resolver `{}`: {error}",
+                program.display()
             )
         })
     }
@@ -400,6 +582,8 @@ mod platform {
         requirements: crate::worker_protocol::PythonRequirementManifest,
     }
     #[derive(Clone)]
+    pub(crate) struct ManagedR;
+    #[derive(Clone)]
     pub(crate) struct ResolverStopHandle;
 
     impl ResolverStopHandle {
@@ -412,6 +596,24 @@ mod platform {
         pub(crate) fn requirements(&self) -> &crate::worker_protocol::PythonRequirementManifest {
             &self.requirements
         }
+    }
+
+    impl ManagedR {
+        pub(crate) fn requirements(&self) -> &[String] {
+            &[]
+        }
+    }
+
+    pub(crate) fn find_ir() -> Option<std::path::PathBuf> {
+        None
+    }
+
+    pub(crate) fn resolve_r(
+        _ir: &std::path::Path,
+        _requirements: Vec<String>,
+        _on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
+    ) -> Result<ManagedR, String> {
+        Err("managed R libraries are supported only on macOS".to_string())
     }
 
     pub(crate) fn resolve_python(
@@ -435,5 +637,6 @@ mod platform {
 }
 
 pub(crate) use platform::{
-    ManagedPython, ResolverStopHandle, resolve_python, resolve_python_manifest,
+    ManagedPython, ManagedR, ResolverStopHandle, find_ir, resolve_python, resolve_python_manifest,
+    resolve_r,
 };

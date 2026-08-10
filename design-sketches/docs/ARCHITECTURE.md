@@ -803,7 +803,11 @@ The implemented implicit-session restart retains the last accepted checkpoint bu
 
 ### 14.2 R
 
-Use a configured R resolver and library cache with equivalent additive behavior.
+The implemented implicit session uses IR for explicit pre-start R requirements.
+The supervisor runs `ir run` outside the worker sandbox with the same Rscript selection as the worker and one `--with` argument per exact requirement.
+It validates IR's returned library and prepends it to inherited `R_LIBS` before each worker generation initializes R.
+The prepared library persists across explicit restart and crash replacement.
+Additions after the worker starts still require a future restart-with-requirements path; the live worker does not mutate `.libPaths()`.
 The exact package-reference grammar belongs in a later `docs/DEPENDENCIES.md`.
 
 ### 14.3 Atomic public behavior
@@ -812,7 +816,7 @@ Before worker startup, an explicit `prepare` action remains atomic:
 
 1. merge the requested additions with the current manifest;
 2. resolve and prepare the candidate environment outside the arbitrary-code worker;
-3. commit the manifest and interpreter only after resolution succeeds.
+3. commit the R library, Python interpreter, and manifests only after every requested resolution succeeds.
 
 During a server-managed worker evaluation, runtime layering is atomic at `completed`:
 

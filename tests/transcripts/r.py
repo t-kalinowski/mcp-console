@@ -1,5 +1,8 @@
 #!/usr/bin/env -S uv run --script
 
+import os
+import subprocess
+import tempfile
 from pathlib import Path
 
 from _support import (
@@ -44,6 +47,186 @@ def test_evaluates_a_complete_cell(binary: Path) -> Transcript:
     client.call_tool("send", r="answer")
     client.call_tool("send", r="silent <- 1")
     return client.finish()
+
+
+def test_prepares_initial_r_requirements(binary: Path) -> Transcript:
+    environment, rscript = r_test_environment()
+    fixture = Path(__file__).parents[1] / "fixtures" / "r_require"
+    with tempfile.TemporaryDirectory() as temporary:
+        directory = Path(temporary)
+        library = directory / "library"
+        library.mkdir()
+        subprocess.run(
+            [rscript.with_name("R"), "CMD", "INSTALL", "--library", library, fixture],
+            check=True,
+            capture_output=True,
+            text=True,
+            env=environment,
+        )
+
+        ambient_library = directory / "ambient-library"
+        ambient_library.mkdir()
+        candidate_library = directory / "candidate-library"
+        candidate_library.mkdir()
+        environment["R_LIBS"] = os.pathsep.join(
+            filter(None, (str(ambient_library), environment.get("R_LIBS")))
+        )
+        fake_bin = directory / "bin"
+        fake_bin.mkdir()
+        ir = fake_bin / "ir"
+        ir.write_text(
+            code(r"""
+                #!/bin/sh
+                set -eu
+
+                {
+                  printf '%s\n' ---
+                  printf '%s\n' "$@"
+                } >> "$MCP_CONSOLE_IR_INVOCATION"
+                library=$MCP_CONSOLE_IR_LIBRARY
+                for argument in "$@"; do
+                  if [ "$argument" = missing-package ]; then
+                    printf '%s\n' 'fake IR failure' >&2
+                    exit 1
+                  fi
+                  if [ "$argument" = atomic-candidate ]; then
+                    library=$MCP_CONSOLE_IR_CANDIDATE_LIBRARY
+                  fi
+                done
+                printf '%s' "$library"
+                """),
+            encoding="utf-8",
+        )
+        ir.chmod(0o755)
+        invocation = directory / "ir-invocation"
+        environment["PATH"] = os.pathsep.join(
+            (str(fake_bin), environment.get("PATH", ""))
+        )
+        environment["MCP_CONSOLE_IR_INVOCATION"] = str(invocation)
+        environment["MCP_CONSOLE_IR_LIBRARY"] = str(library)
+        environment["MCP_CONSOLE_IR_CANDIDATE_LIBRARY"] = str(candidate_library)
+        environment["MCP_CONSOLE_AMBIENT_R_LIBRARY"] = str(ambient_library)
+
+        client = McpClient(binary, ("serve",), environment)
+        client.initialize_and_list_tools()
+        client.call_tool(
+            "session",
+            action="prepare",
+            requirements={"r": ["mcpconsolerrequire"]},
+        )
+        assert last_tool_text(client) == "[prepared]"
+        client.call_tool(
+            "session",
+            action="prepare",
+            requirements={"r": ["missing-package"]},
+        )
+        result = client.transcript[-1]["result"]
+        assert result["isError"] is True, result
+        assert result["content"] == [
+            {
+                "type": "text",
+                "text": (
+                    "R package resolution failed with exit status: 1: fake IR failure"
+                ),
+            }
+        ]
+        invalid_python = "not a valid requirement !!!"
+        client.call_tool(
+            "session",
+            action="prepare",
+            requirements={
+                "r": ["atomic-candidate"],
+                "python": [invalid_python],
+            },
+        )
+        result = client.transcript[-1]["result"]
+        assert result["isError"] is True, result
+        error = result["content"][0]["text"]
+        assert "managed Python resolution failed" in error, error
+        assert invalid_python in error, error
+        result["content"][0]["text"] = (
+            "managed Python resolution failed after candidate R resolution"
+        )
+        # fmt: r
+        r = code(r"""
+            stopifnot(
+              normalizePath(.libPaths()[[1L]]) ==
+                normalizePath(Sys.getenv("MCP_CONSOLE_IR_LIBRARY")),
+              normalizePath(.libPaths()[[2L]]) ==
+                normalizePath(Sys.getenv("MCP_CONSOLE_AMBIENT_R_LIBRARY"))
+            )
+            mcpconsolerrequire::answer()
+            """)
+        client.call_tool("send", r=r)
+        assert last_tool_text(client) == "[1] 42\n"
+
+        client.call_tool(
+            "session",
+            action="prepare",
+            requirements={"r": ["mcpconsolerrequire"]},
+        )
+        assert last_tool_text(client) == "[prepared]"
+        client.call_tool(
+            "session",
+            action="prepare",
+            requirements={"r": ["another-package"]},
+        )
+        assert last_tool_text(client) == "restart required"
+
+        client.call_tool("session", action="restart")
+        assert last_tool_text(client) == "[restarted]"
+        client.call_tool("send", r=r)
+        assert last_tool_text(client) == "[1] 42\n"
+        transcript = client.finish()
+
+        invocations = invocation.read_text(encoding="utf-8").split("---\n")[1:]
+        assert len(invocations) == 3
+        arguments = invocations[0].splitlines()
+        assert arguments[:5] == [
+            "run",
+            "--rscript",
+            str(rscript),
+            "--with",
+            "mcpconsolerrequire",
+        ]
+        assert arguments[5:8] == ["--isolated", "--vanilla", "-e"]
+        failed_arguments = invocations[1].splitlines()
+        assert failed_arguments[3:7] == [
+            "--with",
+            "mcpconsolerrequire",
+            "--with",
+            "missing-package",
+        ]
+        atomic_arguments = invocations[2].splitlines()
+        assert atomic_arguments[3:7] == [
+            "--with",
+            "atomic-candidate",
+            "--with",
+            "mcpconsolerrequire",
+        ]
+        return transcript
+
+
+def test_reports_missing_ir_for_r_requirements(binary: Path) -> Transcript:
+    environment, _ = r_test_environment()
+    with tempfile.TemporaryDirectory() as empty_path:
+        environment["PATH"] = empty_path
+        client = McpClient(binary, ("serve",), environment)
+        client.initialize_and_list_tools()
+        client.call_tool(
+            "session",
+            action="prepare",
+            requirements={"r": ["cli"]},
+        )
+        result = client.transcript[-1]["result"]
+        assert result["isError"] is True, result
+        assert result["content"] == [
+            {
+                "type": "text",
+                "text": "R requirements require the `ir` command on PATH",
+            }
+        ]
+        return client.finish()
 
 
 def test_returns_cell_scoped_plots(binary: Path) -> Transcript:
