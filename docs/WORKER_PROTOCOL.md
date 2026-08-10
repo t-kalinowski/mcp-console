@@ -166,7 +166,9 @@ worker -> server  {"kind":"completed"}
 
 The worker may send zero or more `output` or `image` messages.
 The server preserves their arrival order as MCP content blocks and concatenates adjacent text chunks.
-An image frame's `data` must already be base64 encoded, and `mime_type` becomes the MCP image `mimeType`; the server passes both strings through without decoding or validation.
+An image frame's `data` must be valid base64.
+The recorder decodes it byte-for-byte into an artifact, while the MCP image retains the original string.
+The frame's `mime_type` becomes the MCP image `mimeType` unchanged; only `image/png` receives a format-specific `.png` artifact suffix, and other MIME types use `.bin`.
 `input_requested` appends one server-owned MCP request record and starts one provisional input state.
 The matching `input_received` clears that state after the runtime read succeeds without removing the record.
 Only one request may be outstanding: a second request, a receipt without a request, or completion before its receipt is a protocol failure.
