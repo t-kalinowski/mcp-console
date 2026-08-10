@@ -12,13 +12,60 @@ result:
 ---
 id: 4
 session:
-  action: restart
-  requirements:
-    python:
-      - py-yaml12
+  action: prepare
+  requirements: {}
 result:
   content:
     - type: text
-      text: "`requirements` is not yet supported with `restart`"
+      text: at least one of `requirements.r` or `requirements.python` is required
+  isError: true
+---
+id: 5
+session:
+  action: prepare
+  requirements:
+    r:
+      - ""
+result:
+  content:
+    - type: text
+      text: R requirement strings must not be empty
+  isError: true
+---
+id: 6
+session:
+  action: prepare
+  requirements:
+    r:
+      - |-
+        cli
+        dplyr
+result:
+  content:
+    - type: text
+      text: R requirement strings must not contain NUL or line breaks
+  isError: true
+---
+id: 7
+session:
+  action: restart
+  requirements:
+    python: []
+result:
+  content:
+    - type: text
+      text: "`requirements.python` must contain at least one requirement"
+  isError: true
+---
+id: 8
+session:
+  action: restart
+  requirements:
+    r:
+      - cli
+result:
+  content:
+    - type: text
+      text: "`requirements.r` is not supported with `restart`"
   isError: true
 ...
