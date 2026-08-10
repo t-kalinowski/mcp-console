@@ -1,0 +1,28 @@
+---
+!same-as tests/transcripts/golden/server/initializes_and_lists_tools.yaml
+---
+id: 3
+send:
+  r: |
+    values <- data.frame(origin = "r")
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+id: 4
+send:
+  sql: |
+    CREATE TABLE values AS SELECT 'sql' AS origin;
+    SELECT origin FROM values
+result:
+  content:
+    - type: text
+      text: |
+        # A tibble: 1 × 1
+          origin  
+          <string>
+        1 "sql"   
+  isError: false
+...

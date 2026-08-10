@@ -111,10 +111,16 @@ Python `input()` and `breakpoint()`/`pdb` use reticulate's R console bridge, so 
 They accept proactively queued or follow-up stdin, including repeated debugger commands.
 Python `sys.stdin` and other direct fd-0 reads bypass the bridge and emit neither frame.
 SQL cells use the `duckdb` and `DBI` R packages through a private R bridge; previews also require `nanoarrow`, `arrow`, `tibble`, and `pillar`.
-The first SQL cell lazily opens one in-memory connection with environment scanning disabled, and later cells in that worker generation reuse its catalog.
+The first SQL cell or call to `sql_connection()` lazily opens one in-memory connection with environment scanning enabled, and later operations in that worker generation reuse its catalog.
 DuckDB extension, secret, and spill paths are explicit children of the worker's private R temporary directory.
 The connection disables DuckDB progress output so previews contain only query results.
 The worker stores SQL source in private R state and calls the bridge with a short evaluation ID.
+The bridge sends queries through a zero-argument closure enclosed by R's global environment, so DuckDB searches the persistent R session rather than the private bridge environment.
+An unqualified catalog table or view takes precedence over a same-named R binding; otherwise DuckDB can scan a data frame in the R global environment, and an SQL view over that name observes later rebinding.
+The bridge installs only `sql_connection()` in a worker-owned `tools:mcp-console` environment at search position 2, so clearing R's global environment does not remove it and a same-named global binding still takes precedence.
+It returns a borrowed reference to the same worker-owned connection; callers must not disconnect it.
+Established DuckDB, DBI, and dplyr interfaces can use that connection, and lazy dplyr relations observe later catalog changes until collection.
+Prepared queries retain scanned data frames until their DBI results are cleared.
 Query results use `DBI::dbSendQueryArrow()` and one streaming `DBI::dbFetchArrow()` batch of at most 21 rows.
 The worker displays at most 20 rows and 12 columns through pillar, limits cells to 160 characters, and limits the SQL preview itself to 12 KiB; the byte limit may reduce rows or columns further.
 The 21st row determines only whether to append the omitted-row marker; the worker does not count or materialize the complete result.
@@ -122,7 +128,7 @@ Arrow schemas keep column names and types visible for empty results, while DuckD
 Temporary Arrow relations use collision-checked names and are unregistered after formatting.
 DDL and DML results without columns are silent; affected-row summaries do not exist yet.
 DuckDB errors are normal language outcomes with `isError: false`, and the connection remains reusable.
-R relation scanning and registration do not exist.
+Automatic Python relation sharing and a separate relation-registration API do not exist.
 Worker standard output and standard error are piped and collected continuously, including while the worker is idle.
 Each pipe reader queues raw byte chunks, and each `send` response decodes and drains complete UTF-8 prefixes from bytes already collected at its response boundary; later bytes remain for the next response.
 Without a pending restart notice, idle, running, and outstanding-input responses append the literal `\n[idle]`, `\n[running]`, or `\n[stdin needed]` banner; its leading newline is present even when no output precedes it.
@@ -150,7 +156,7 @@ This initial launcher waits only for the direct command.
 Background descendants are unsupported: they may outlive the launcher, which attempts to remove their dedicated temporary directory on a best-effort basis when it returns.
 Descendant supervision is intentionally deferred because it must account for process groups, session-detached children, signal forwarding, and PID reuse together.
 The sandbox command and worker are unsupported on Linux and Windows.
-Named sessions, restart with new requirements, R requirement resolution, SQL relation bridges, the sidecar API, viewer, complete output retention, and generated Quarto transcripts do not exist yet.
+Named sessions, restart with new requirements, R requirement resolution, Python relation sharing, the sidecar API, viewer, complete output retention, and generated Quarto transcripts do not exist yet.
 
 ## Product direction
 

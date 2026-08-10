@@ -255,10 +255,11 @@ impl TranscriptState {
         mime_type: &str,
     ) -> Result<Artifact, String> {
         let artifact_id = self.next_artifact_id + 1;
-        let filename = format!(
-            "call-{call_id:06}-image-{artifact_id:06}.{}",
-            image_extension(mime_type)
-        );
+        let extension = match mime_type {
+            "image/png" => "png",
+            _ => "bin",
+        };
+        let filename = format!("call-{call_id:06}-image-{artifact_id:06}.{extension}");
         let relative_path = format!("artifacts/{filename}");
         write_new(&self.directory.join(&relative_path), bytes)?;
         self.append(
@@ -334,17 +335,6 @@ impl TranscriptState {
 
 fn timestamp(at: DateTime<Utc>) -> String {
     at.to_rfc3339_opts(SecondsFormat::Nanos, true)
-}
-
-fn image_extension(mime_type: &str) -> &'static str {
-    match mime_type {
-        "image/gif" => "gif",
-        "image/jpeg" => "jpg",
-        "image/png" => "png",
-        "image/svg+xml" => "svg",
-        "image/webp" => "webp",
-        _ => "bin",
-    }
 }
 
 fn create_private_directory(path: &Path, recursive: bool) -> std::io::Result<()> {

@@ -4,6 +4,7 @@ import os
 import subprocess
 import tempfile
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from pathlib import Path
 from textwrap import dedent
 from typing import Any
@@ -11,6 +12,14 @@ from typing import Any
 
 TranscriptEntry = dict[str, Any]
 Transcript = list[TranscriptEntry]
+YamlStream = list[Any]
+
+
+@dataclass(frozen=True)
+class TranscriptWithCompanion:
+    transcript: Transcript
+    companion_name: str
+    companion: YamlStream
 
 
 def code(source: str) -> str:
