@@ -52,14 +52,26 @@ def test_prepares_initial_r_requirements(binary: Path) -> Transcript:
     initial_r = "local::tests/fixtures/r_require?reinstall"
     candidate_r = "local::tests/fixtures/r_require_candidate?reinstall"
     with tempfile.TemporaryDirectory() as temporary:
-        ambient_library = Path(temporary) / "ambient-library"
+        workspace = Path(temporary)
+        fixture_link = workspace / "tests" / "fixtures"
+        fixture_link.parent.mkdir()
+        fixture_link.symlink_to(
+            Path(__file__).resolve().parents[1] / "fixtures",
+            target_is_directory=True,
+        )
+        ambient_library = workspace / "ambient-library"
         ambient_library.mkdir()
         environment["R_LIBS"] = os.pathsep.join(
             filter(None, (str(ambient_library), environment.get("R_LIBS")))
         )
         environment["MCP_CONSOLE_AMBIENT_R_LIBRARY"] = str(ambient_library)
 
-        client = McpClient(binary, ("serve",), environment)
+        client = McpClient(
+            binary,
+            ("serve",),
+            environment,
+            current_directory=workspace,
+        )
         client.initialize_and_list_tools()
         client.call_tool(
             "session",

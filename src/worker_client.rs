@@ -65,6 +65,8 @@ struct Evaluation {
     generation: u64,
     state: Mutex<EvaluationState>,
     changed: tokio::sync::Notify,
+    transcript: crate::transcript::Transcript,
+    call_id: u64,
 }
 
 #[derive(Default)]
@@ -75,7 +77,11 @@ pub(crate) struct Response {
 
 pub(crate) enum Content {
     Text(String),
-    Image { data: String, mime_type: String },
+    Image {
+        data: String,
+        mime_type: String,
+        artifact: crate::transcript::Artifact,
+    },
 }
 
 struct EvaluationState {
@@ -147,15 +153,28 @@ impl Response {
         }
     }
 
-    fn push_image(&mut self, data: String, mime_type: String) {
-        self.content.push(Content::Image { data, mime_type });
+    fn push_image(
+        &mut self,
+        data: String,
+        mime_type: String,
+        artifact: crate::transcript::Artifact,
+    ) {
+        self.content.push(Content::Image {
+            data,
+            mime_type,
+            artifact,
+        });
     }
 
     fn extend(&mut self, other: Self) {
         for content in other.content {
             match content {
                 Content::Text(text) => self.push_text(text),
-                Content::Image { data, mime_type } => self.push_image(data, mime_type),
+                Content::Image {
+                    data,
+                    mime_type,
+                    artifact,
+                } => self.push_image(data, mime_type, artifact),
             }
         }
     }
@@ -396,8 +415,12 @@ impl Client {
         cell: Option<crate::cell::Cell>,
         stdin: Option<String>,
         timeout: Duration,
+        transcript: crate::transcript::Transcript,
+        call_id: u64,
     ) -> Response {
-        let result = self.send_inner(cell, stdin, timeout).await;
+        let result = self
+            .send_inner(cell, stdin, timeout, transcript, call_id)
+            .await;
         self.attach_output(result)
     }
 
@@ -406,10 +429,12 @@ impl Client {
         cell: Option<crate::cell::Cell>,
         stdin: Option<String>,
         timeout: Duration,
+        transcript: crate::transcript::Transcript,
+        call_id: u64,
     ) -> Result<SendResponse, SendFailure> {
         let generation = self.admit()?;
         let evaluation = match cell {
-            Some(cell) => self.start_evaluation(cell, stdin, generation)?,
+            Some(cell) => self.start_evaluation(cell, stdin, generation, transcript, call_id)?,
             None => match self.current_evaluation()? {
                 Some(evaluation) => {
                     self.ensure_generation(generation)?;
@@ -447,6 +472,8 @@ impl Client {
         cell: crate::cell::Cell,
         stdin: Option<String>,
         generation: u64,
+        transcript: crate::transcript::Transcript,
+        call_id: u64,
     ) -> Result<Arc<Evaluation>, String> {
         self.ensure_generation(generation)?;
 
@@ -461,6 +488,8 @@ impl Client {
                 pending_stdin: Vec::new(),
             }),
             changed: tokio::sync::Notify::new(),
+            transcript,
+            call_id,
         });
         if let Some(stdin) = stdin {
             evaluation.submit_stdin(stdin)?;
@@ -1225,11 +1254,14 @@ impl Evaluation {
 
     #[cfg(target_os = "macos")]
     fn image(&self, data: String, mime_type: String) -> Result<(), String> {
+        let artifact = self
+            .transcript
+            .persist_image(self.call_id, &data, &mime_type)?;
         let mut state = self
             .state
             .lock()
             .map_err(|_| "worker evaluation state lock poisoned".to_string())?;
-        state.output.push_image(data, mime_type);
+        state.output.push_image(data, mime_type, artifact);
         Ok(())
     }
 
