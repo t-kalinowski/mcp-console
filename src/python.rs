@@ -291,10 +291,15 @@ def _mcp_console_eval_cell(
             set_environment(name, value, overwrite)?;
         }
 
-        let matplotlib_config = std::env::temp_dir().join("matplotlib");
-        let matplotlib_config = CString::new(matplotlib_config.as_os_str().as_bytes())
-            .expect("temporary directory should not contain NUL");
-        set_environment(c"MPLCONFIGDIR", &matplotlib_config, false)?;
+        for (name, directory) in [
+            (c"MPLCONFIGDIR", "matplotlib"),
+            (c"XDG_CACHE_HOME", "cache"),
+        ] {
+            let directory = std::env::temp_dir().join(directory);
+            let directory = CString::new(directory.as_os_str().as_bytes())
+                .expect("temporary directory should not contain NUL");
+            set_environment(name, &directory, true)?;
+        }
         Ok(())
     }
 

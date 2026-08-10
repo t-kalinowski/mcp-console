@@ -67,7 +67,8 @@ At Python cell end, the worker renders each open `matplotlib.pyplot` figure in m
 Pyplot-managed figures are cell scoped, so one plot's drawing operations must be submitted in the same cell.
 Figures closed before cell end and figures not registered with `pyplot` are not captured.
 Matplotlib rendering failures print a Python traceback as a normal language outcome; cell-end cleanup still closes all pyplot-managed figures and leaves the worker available.
-Unless inherited values configure them, the worker sets Matplotlib's backend to Agg and its writable configuration directory under the worker's private temporary directory before Python initializes.
+Unless an inherited value configures it, the worker sets Matplotlib's backend to Agg.
+Before Python initializes, it forces Matplotlib's configuration and XDG cache directories under the worker's private temporary directory so font discovery can write within the sandbox.
 Matplotlib remains optional and capture activates only after `matplotlib.pyplot` has been loaded.
 At worker startup, MCP Console sets `RETICULATE_REMAP_OUTPUT_STREAMS=1` once, before user R can initialize Python.
 Within the worker process, reticulate then routes Python text writes, including `print()`, `sys.stderr.write()`, and tracebacks, through the R console callback as sideband `output` frames.

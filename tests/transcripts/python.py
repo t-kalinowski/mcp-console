@@ -611,8 +611,23 @@ def test_returns_r_plots_from_python_bridge(binary: Path) -> Transcript:
 
 def test_returns_matplotlib_plots(binary: Path) -> Transcript:
     with tempfile.TemporaryDirectory() as temporary_directory:
+        temporary = Path(temporary_directory)
+        fontconfig = temporary / "fonts.conf"
+        fontconfig.write_text(
+            code(r"""
+                <?xml version="1.0"?>
+                <!DOCTYPE fontconfig SYSTEM "urn:fontconfig:fonts.dtd">
+                <fontconfig>
+                  <cachedir prefix="xdg">mcp-console-test</cachedir>
+                </fontconfig>
+                """),
+            encoding="utf-8",
+        )
         environment = os.environ.copy()
         environment["TMPDIR"] = temporary_directory
+        environment["FONTCONFIG_FILE"] = str(fontconfig)
+        environment["MPLCONFIGDIR"] = str(temporary / "host-matplotlib")
+        environment["XDG_CACHE_HOME"] = str(temporary / "host-cache")
         client = McpClient(binary, ("serve",), environment)
         client.initialize_and_list_tools()
         client.call_tool(
