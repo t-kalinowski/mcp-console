@@ -18,6 +18,35 @@ PLATFORMS = {"darwin"}
 REQUIRED_COMMANDS = {"ir"}
 
 
+def test_prepares_and_uses_cran_packages(binary: Path) -> Transcript:
+    environment, _ = r_test_environment()
+    environment["RETICULATE_PYTHON"] = ""
+    client = McpClient(binary, ("serve",), environment)
+    client.initialize_and_list_tools()
+    client.call_tool(
+        "session",
+        action="prepare",
+        requirements={"r": ["cli", "dplyr"]},
+    )
+    assert last_tool_text(client) == "[prepared]"
+
+    # fmt: r
+    r = code(r"""
+        stopifnot(
+          identical(dirname(find.package("cli")), .libPaths()[[1L]]),
+          identical(dirname(find.package("dplyr")), .libPaths()[[1L]])
+        )
+        result <- dplyr::summarise(
+          data.frame(value = c(40L, 2L)),
+          answer = sum(.data$value)
+        )
+        cli::format_inline("answer: {result$answer}")
+        """)
+    client.call_tool("send", r=r)
+    assert last_tool_text(client) == '[1] "answer: 42"\n'
+    return client.finish()
+
+
 def test_prepares_initial_r_requirements(binary: Path) -> Transcript:
     environment, _ = r_test_environment()
     initial_r = "local::tests/fixtures/r_require?reinstall"

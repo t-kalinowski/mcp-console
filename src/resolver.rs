@@ -3,7 +3,6 @@ mod platform {
     use std::collections::BTreeMap;
     use std::io::{self, Write};
     use std::mem::MaybeUninit;
-    use std::os::unix::fs::PermissionsExt as _;
     use std::os::unix::process::CommandExt as _;
     use std::path::{Path, PathBuf};
     use std::process::{Child, ChildStdin, Command, ExitStatus, Stdio};
@@ -159,28 +158,13 @@ base::local({
         }
     }
 
-    pub(crate) fn find_ir() -> Option<PathBuf> {
-        let path = std::env::var_os("PATH")?;
-        let current = std::env::current_dir().ok()?;
-        std::env::split_paths(&path).find_map(|directory| {
-            let candidate = directory.join("ir");
-            let candidate = if candidate.is_absolute() {
-                candidate
-            } else {
-                current.join(candidate)
-            };
-            let metadata = candidate.metadata().ok()?;
-            (metadata.is_file() && metadata.permissions().mode() & 0o111 != 0).then_some(candidate)
-        })
-    }
-
     pub(crate) fn resolve_r(
-        ir: &Path,
         requirements: Vec<String>,
         on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
     ) -> Result<ManagedR, String> {
+        let program = Path::new("ir");
         let rscript = rscript();
-        let mut command = Command::new(ir);
+        let mut command = Command::new(program);
         command.arg("run").arg("--rscript").arg(&rscript);
         for requirement in &requirements {
             command.arg("--with").arg(requirement);
@@ -196,7 +180,7 @@ base::local({
         let mut child = command.spawn().map_err(|error| {
             format!(
                 "failed to run R package resolver with `{}`: {error}",
-                ir.display()
+                program.display()
             )
         })?;
         let stdout = read_output(child.stdout.take().expect("resolver stdout is piped"));
@@ -204,7 +188,7 @@ base::local({
         let (events, event_receiver) = mpsc::channel();
         let stop_handle = ResolverStopHandle(events.clone());
         if let Err(error) = on_started(stop_handle) {
-            let _ = stop_resolver(&mut child, ir, "R package");
+            let _ = stop_resolver(&mut child, program, "R package");
             return Err(error);
         }
         watch_resolver_exit(child.id(), events);
@@ -219,7 +203,7 @@ base::local({
             completed_write(),
             stdout,
             stderr,
-            ir,
+            program,
             "R package",
         )?;
         if !status.success() {
@@ -605,12 +589,7 @@ mod platform {
         }
     }
 
-    pub(crate) fn find_ir() -> Option<std::path::PathBuf> {
-        None
-    }
-
     pub(crate) fn resolve_r(
-        _ir: &std::path::Path,
         _requirements: Vec<String>,
         _on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
     ) -> Result<ManagedR, String> {
@@ -638,6 +617,5 @@ mod platform {
 }
 
 pub(crate) use platform::{
-    ManagedPython, ManagedR, ResolverStopHandle, find_ir, resolve_python, resolve_python_manifest,
-    resolve_r,
+    ManagedPython, ManagedR, ResolverStopHandle, resolve_python, resolve_python_manifest, resolve_r,
 };

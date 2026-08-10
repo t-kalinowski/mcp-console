@@ -24,12 +24,7 @@ struct ClientInner {
 
 struct Environment {
     python: Option<crate::resolver::ManagedPython>,
-    r: REnvironment,
-}
-
-struct REnvironment {
-    ir: Option<PathBuf>,
-    managed: Option<crate::resolver::ManagedR>,
+    r: Option<crate::resolver::ManagedR>,
 }
 
 enum WorkerState {
@@ -226,13 +221,7 @@ impl Client {
         Ok(Self::with_arguments(
             program,
             vec![OsString::from("worker")],
-            Some(Environment {
-                python,
-                r: REnvironment {
-                    ir: crate::resolver::find_ir(),
-                    managed: None,
-                },
-            }),
+            Some(Environment { python, r: None }),
         ))
     }
 
@@ -287,7 +276,6 @@ impl Client {
             .unwrap_or_default();
         let current_r = environment
             .r
-            .managed
             .as_ref()
             .map(|managed| managed.requirements().iter().cloned().collect())
             .unwrap_or_default();
@@ -313,14 +301,9 @@ impl Client {
             .collect::<Vec<_>>();
         let r_requirements = current_r.union(&r_additions).cloned().collect::<Vec<_>>();
 
-        let mut managed_r = environment.r.managed.clone();
+        let mut managed_r = environment.r.clone();
         if !r_additions.is_subset(&current_r) {
-            let ir = environment
-                .r
-                .ir
-                .as_ref()
-                .ok_or_else(|| "R requirements require the `ir` command on PATH".to_string())?;
-            let result = crate::resolver::resolve_r(ir, r_requirements, |handle| {
+            let result = crate::resolver::resolve_r(r_requirements, |handle| {
                 self.register_resolver_stop_handle(handle)
             });
             self.clear_resolver_stop_handle(None)?;
@@ -347,7 +330,7 @@ impl Client {
             ShutdownGate::Open { resolver, .. } => {
                 *resolver = None;
                 environment.python = managed_python;
-                environment.r.managed = managed_r;
+                environment.r = managed_r;
                 Ok(PrepareResult::Prepared)
             }
             ShutdownGate::Restarting { .. } => {
@@ -712,7 +695,7 @@ impl Client {
                 .and_then(|environment| environment.python.as_ref());
             let managed_r = environment
                 .as_ref()
-                .and_then(|environment| environment.r.managed.as_ref());
+                .and_then(|environment| environment.r.as_ref());
             let running = platform::Worker::start(
                 &self.0.program,
                 &self.0.arguments,
