@@ -60,6 +60,8 @@ For a uv tool failure, `Rscript` captures reticulate's message stream and sends 
 The server combines that selection with the complete candidate package set it submitted and renders them as a JSON resolver-input manifest before uv's stderr.
 It discards reticulate's helper command, temporary output path, hints, and R call information.
 The resolver leads a dedicated process group registered with the server shutdown gate before requirement input is written.
+The server waits for either lifecycle cancellation or a non-reaping notification that the direct `Rscript` process exited.
+Direct-process exit ends the resolver-group lifetime: the server force-stops any remaining in-group descendants, reaps `Rscript`, and then collects the resolver's standard streams.
 Closing MCP input force-stops an active explicit or runtime resolver group and reaps `Rscript`; startup preflight finishes before MCP input is accepted and does not participate in this cancellation path.
 
 Outside an explicit restart, the worker starts lazily on the first `send` call that supplies `r`, `python`, `sql`, or nonempty `stdin`.

@@ -37,6 +37,7 @@ Requirements are exact, additive, and idempotent.
 Before the worker starts, each successful prepare resolves the complete candidate set outside the sandbox, atomically retains it in server memory, replaces any inherited Python selection with the resolved interpreter, and returns `[prepared]` without starting the worker.
 A failed resolution leaves the prior requirements and interpreter unchanged.
 For a uv tool failure, the tool error reports a JSON manifest containing reticulate's selected Python and the complete candidate package set, followed by uv's stderr, while omitting the helper command, temporary output path, and reticulate's `py_require()`-oriented guidance.
+The direct resolver process defines its process-group lifetime: after `Rscript` exits, the server force-stops any remaining in-group descendants before reaping it and collecting its standard streams.
 Closing MCP input cancels an in-flight explicit or runtime resolution by force-stopping its host resolver process group; startup preflight completes before MCP input is accepted and is not cancellable through that lifecycle.
 Once a worker has started, an already-retained explicit requirement remains idempotent, while any explicit addition returns `restart required` without changing the environment.
 This restriction applies to `session` preparation; server-managed workers can layer additive requirements declared through `reticulate::py_require()` during evaluation.
