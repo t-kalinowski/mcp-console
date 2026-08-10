@@ -5,6 +5,7 @@ Each `test_` function in a suite is a transcript case.
 The runner passes the built binary path to each case.
 Each case returns a `Transcript`: an ordered list of transcript entries.
 The runner serializes each entry as one document in the matching YAML 1.2 stream under `golden/SUITE/CASE.yaml`.
+A case may return `TranscriptWithCompanion` to place a separate YAML stream at `golden/SUITE/CASE.NAME.yaml`.
 The runner compares YAML 1.2 values, so equivalent scalar spellings and layouts are accepted.
 Server cases record each JSON-RPC client message and any matching response as one YAML document.
 They omit the invariant `jsonrpc: "2.0"` field and show a request-response `id` once at the document root when present.
@@ -25,7 +26,7 @@ The crash-recovery case does the same across an unexpected worker exit and recor
 The suite asserts the public `send` result and records the wire events as YAML mappings in approximate order.
 Pending standard-output and standard-error chunks are grouped into one event without defining their relative order.
 The `r`, `python`, and `sql` suites exercise the built-in worker through the public `send` tool.
-The Zod recording case includes the normalized literal `events.jsonl` and binary image in its golden so the produced on-disk layout and journal format remain directly reviewable.
+The Zod recording case projects `events.jsonl` into a readable YAML sequence in `records_tool_calls_and_images.events.yaml`, followed by the produced session root and file list.
 
 Run commands from the repository root:
 
@@ -43,6 +44,7 @@ A suite selector runs every case in that file; a `SUITE::CASE` selector runs one
 Use `--update` only to accept an intentional transcript change.
 A suite may set `PLATFORMS = {"darwin"}` to restrict execution and snapshot updates to those `sys.platform` values.
 Restricted cases remain visible under `scripts/test --list` and are skipped on other platforms.
+A suite may set `REQUIRED_COMMANDS = {"ir"}` to skip when a required executable is not on `PATH`.
 
 Server cases create an `McpClient`, perform the session, and return `client._finish()`.
 Other cases may invoke the binary directly and return their transcript entries.

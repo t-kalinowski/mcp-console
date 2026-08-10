@@ -798,12 +798,18 @@ Reticulate owns the live manifest during an evaluation, while the supervisor own
 
 Only newly added package requirements fit the v1 late-layering contract.
 Removals and changes to Python-version or `exclude_newer` constraints are unsupported after initialization rather than silently projected as additions.
-An explicit late `session prepare` still returns `restart required`.
-The implemented implicit-session restart can merge additive requirements into the last accepted checkpoint before replacing the worker.
+An explicit late `session prepare` still returns `[restart required]`.
+The implemented implicit-session restart can merge additive Python requirements into the last accepted checkpoint before replacing the worker.
 
 ### 14.2 R
 
-Use a configured R resolver and library cache with equivalent additive behavior.
+The implemented implicit session uses IR for explicit pre-start R requirements.
+The supervisor runs `ir run` outside the worker sandbox with the same Rscript selection as the worker and one `--with` argument per exact requirement.
+It validates IR's returned library and prepends it to inherited `R_LIBS` before each worker generation initializes R.
+The prepared library persists across explicit restart and crash replacement.
+R additions after the worker starts still require a future restart-with-R-requirements path; the live worker does not mutate `.libPaths()`.
+IR currently has no option to reject local package references before `pak` and `renv` process them.
+A future restricted mode should use an upstream IR policy rather than duplicate its reference grammar in MCP Console; rejecting local references would not sandbox other source-package build code.
 The exact package-reference grammar belongs in a later `docs/DEPENDENCIES.md`.
 
 ### 14.3 Atomic public behavior
@@ -812,7 +818,7 @@ Before worker startup, an explicit `prepare` action remains atomic:
 
 1. merge the requested additions with the current manifest;
 2. resolve and prepare the candidate environment outside the arbitrary-code worker;
-3. commit the manifest and interpreter only after resolution succeeds.
+3. commit the R library, Python interpreter, and manifests only after every requested resolution succeeds.
 
 An explicit `restart` with requirements is atomic until the worker replacement boundary:
 

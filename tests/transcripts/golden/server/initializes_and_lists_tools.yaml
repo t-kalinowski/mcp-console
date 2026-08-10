@@ -73,10 +73,10 @@ result:
             default: 60000
     - name: session
       description: >-
-        Prepare additive Python requirements before the implicit session starts,
-        or restart its worker with retained and optional new requirements.
-        Restart starts a worker if none exists and loses all in-memory R,
-        Python, and SQL state.
+        Prepare additive R or Python requirements before the implicit session
+        starts, or restart its worker with retained requirements and optional
+        new Python requirements. Restart starts a worker if none exists and
+        loses all in-memory R, Python, and SQL state.
       inputSchema:
         $schema: https://json-schema.org/draft/2020-12/schema
         $defs:
@@ -85,31 +85,47 @@ result:
             enum:
               - prepare
               - restart
-          PythonRequirements:
+          Requirements:
             type: object
             properties:
-              python:
-                description: One or more additive, single-line PEP 508 Python requirement strings.
+              r:
+                description: |-
+                  One or more additive, single-line R package references accepted by IR for prepare.
+                  Installing a local reference can execute package-controlled code from the referenced host
+                  path; use only trusted local packages.
                 type: array
                 items:
                   type: string
                   minLength: 1
-                minItems: 1
                 maxItems: 64
+                default: []
+              python:
+                description: >-
+                  One or more additive, single-line PEP 508 Python requirement strings for
+                  prepare or restart.
+                type: array
+                items:
+                  type: string
+                  minLength: 1
+                maxItems: 64
+                default: []
             additionalProperties: false
-            required:
-              - python
         type: object
         properties:
           action:
             description: >-
-              Prepare Python requirements or restart the implicit session, starting it
-              if needed.
+              Prepare R or Python requirements or restart the implicit session,
+              starting it if needed.
             $ref: "#/$defs/SessionAction"
           requirements:
-            description: Additive requirements for prepare or restart. Omit to restart unchanged.
+            description: |-
+              Additive R or Python requirements for prepare.
+              Restart accepts only Python requirements.
+              Resolution runs outside the worker sandbox.
+              Package installation or build code may execute on the host.
+              Omit to restart unchanged.
             anyOf:
-              - $ref: "#/$defs/PythonRequirements"
+              - $ref: "#/$defs/Requirements"
               - type: "null"
         additionalProperties: false
         required:

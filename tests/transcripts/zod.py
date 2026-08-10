@@ -10,7 +10,13 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from _support import McpClient, Transcript, code, run_this_suite
+from _support import (
+    McpClient,
+    Transcript,
+    TranscriptWithCompanion,
+    code,
+    run_this_suite,
+)
 
 
 PLATFORMS = {"darwin"}
@@ -54,7 +60,7 @@ def test_returns_worker_images(binary: Path) -> Transcript:
     return client._finish()
 
 
-def test_records_tool_calls_and_images(binary: Path) -> Transcript:
+def test_records_tool_calls_and_images(binary: Path) -> TranscriptWithCompanion:
     zod = Path(__file__).resolve().parents[1] / "fixtures" / "zod"
     with tempfile.TemporaryDirectory() as temporary_directory:
         workspace = Path(temporary_directory)
@@ -192,42 +198,30 @@ def test_records_tool_calls_and_images(binary: Path) -> Transcript:
         assert set(file_modes.values()) == {0o600}, file_modes
         transcript = client._finish()
 
-        normalized_journal = journal_text.replace(
-            json.dumps(events[0]["working_directory"], ensure_ascii=False),
-            json.dumps("<workspace>"),
-        ).replace(
-            json.dumps(run_id),
-            json.dumps("<run ID>"),
-        )
         for event in events:
             assert event["at"].endswith("Z"), event
             datetime.fromisoformat(event["at"])
-            normalized_journal = normalized_journal.replace(
-                json.dumps(event["at"]),
-                json.dumps("<UTC timestamp>"),
-            )
             event["at"] = "<UTC timestamp>"
             event["run_id"] = "<run ID>"
         events[0]["working_directory"] = "<workspace>"
-        assert normalized_journal.endswith("\n"), normalized_journal
-        from yaml12 import Yaml
+        assert journal_text.endswith("\n"), journal_text
 
-        transcript.append({"journal": events})
-        transcript.append(
-            {
-                "produced session": {
-                    "root": ".mcp-console/sessions/<run ID>",
-                    "files": {
-                        "internal/events.jsonl": normalized_journal,
-                        "artifacts/call-000001-image-000001.png": Yaml(
-                            base64.b64encode(image_bytes).decode("ascii"),
-                            tag="tag:yaml.org,2002:binary",
-                        ),
-                    },
-                }
-            }
+        return TranscriptWithCompanion(
+            transcript=transcript,
+            companion_name="events",
+            companion=[
+                events,
+                {
+                    "produced session": {
+                        "root": ".mcp-console/sessions/<run ID>",
+                        "files": [
+                            "internal/events.jsonl",
+                            "artifacts/call-000001-image-000001.png",
+                        ],
+                    }
+                },
+            ],
         )
-        return transcript
 
 
 def test_stops_after_transcript_failure(binary: Path) -> Transcript:

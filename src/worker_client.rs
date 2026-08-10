@@ -19,11 +19,12 @@ struct ClientInner {
     evaluation: Mutex<Option<ActiveEvaluation>>,
     output: CapturedOutput,
     lifecycle: Mutex<LifecycleControl>,
-    python: Option<Mutex<PythonEnvironment>>,
+    environment: Option<Mutex<Environment>>,
 }
 
-struct PythonEnvironment {
-    managed: Option<crate::resolver::ManagedPython>,
+struct Environment {
+    python: Option<crate::resolver::ManagedPython>,
+    r: Option<crate::resolver::ManagedR>,
 }
 
 enum WorkerState {
@@ -113,6 +114,11 @@ enum SendResponse {
 pub(crate) enum PrepareResult {
     Prepared,
     RestartRequired,
+}
+
+pub(crate) struct Requirements {
+    pub(crate) python: Vec<String>,
+    pub(crate) r: Vec<String>,
 }
 
 struct SendFailure {
@@ -284,18 +290,18 @@ impl Client {
     pub(crate) fn builtin() -> Result<Self, String> {
         let program = std::env::current_exe()
             .map_err(|error| format!("failed to locate the R worker executable: {error}"))?;
-        let managed = crate::resolver::resolve_python(&[], |_| Ok(()))?;
+        let python = crate::resolver::resolve_python(&[], |_| Ok(()))?;
         Ok(Self::with_arguments(
             program,
             vec![OsString::from("worker")],
-            Some(PythonEnvironment { managed }),
+            Some(Environment { python, r: None }),
         ))
     }
 
     fn with_arguments(
         program: PathBuf,
         arguments: Vec<OsString>,
-        python: Option<PythonEnvironment>,
+        environment: Option<Environment>,
     ) -> Self {
         Self(Arc::new(ClientInner {
             program,
@@ -304,34 +310,43 @@ impl Client {
             evaluation: Mutex::new(None),
             output: CapturedOutput::new(),
             lifecycle: Mutex::new(LifecycleControl::new()),
-            python: python.map(Mutex::new),
+            environment: environment.map(Mutex::new),
         }))
     }
 
     /// Adds requirements to the managed environment before the worker starts.
-    pub(crate) async fn prepare_python(
+    pub(crate) async fn prepare(
         &self,
-        requirements: Vec<String>,
+        requirements: Requirements,
     ) -> Result<PrepareResult, String> {
         let client = self.clone();
-        tokio::task::spawn_blocking(move || client.prepare_python_blocking(requirements))
+        tokio::task::spawn_blocking(move || client.prepare_blocking(requirements))
             .await
-            .map_err(|error| format!("Python preparation task failed: {error}"))?
+            .map_err(|error| format!("requirement preparation task failed: {error}"))?
     }
 
-    fn prepare_python_blocking(&self, requirements: Vec<String>) -> Result<PrepareResult, String> {
+    fn prepare_blocking(&self, requirements: Requirements) -> Result<PrepareResult, String> {
         let generation = self.admit()?;
-        let python = self.0.python.as_ref().ok_or_else(|| {
-            "Python requirements are unavailable with a custom worker".to_string()
-        })?;
-        let mut python = python
+        let environment = self
+            .0
+            .environment
+            .as_ref()
+            .ok_or_else(|| "requirements are unavailable with a custom worker".to_string())?;
+        let mut environment = environment
             .lock()
-            .map_err(|_| "Python environment lock poisoned".to_string())?;
+            .map_err(|_| "worker environment lock poisoned".to_string())?;
         self.ensure_generation(&generation)?;
-        let Some(candidate) = merge_python_requirements(python.managed.as_ref(), requirements)
-        else {
+        let python_candidate =
+            merge_python_requirements(environment.python.as_ref(), requirements.python);
+        let r_additions = requirements.r.into_iter().collect::<BTreeSet<_>>();
+        let current_r = environment
+            .r
+            .as_ref()
+            .map(|managed| managed.requirements().iter().cloned().collect())
+            .unwrap_or_default();
+        if python_candidate.is_none() && r_additions.is_subset(&current_r) {
             return Ok(PrepareResult::Prepared);
-        };
+        }
         let worker = match self.0.worker.try_lock() {
             Ok(worker) => worker,
             Err(std::sync::TryLockError::WouldBlock) => {
@@ -345,15 +360,25 @@ impl Client {
             return Ok(PrepareResult::RestartRequired);
         }
 
-        let managed = match crate::resolver::resolve_python_host(candidate, |handle| {
-            self.register_resolver_stop_handle(&generation, handle)
-        }) {
-            Ok(managed) => managed,
-            Err(error) => {
-                self.clear_resolver_stop_handle(&generation)?;
-                return Err(error);
-            }
-        };
+        let r_requirements = current_r.union(&r_additions).cloned().collect::<Vec<_>>();
+
+        let mut managed_r = environment.r.clone();
+        if !r_additions.is_subset(&current_r) {
+            let result = crate::resolver::resolve_r(r_requirements, |handle| {
+                self.register_resolver_stop_handle(&generation, handle)
+            });
+            self.clear_resolver_stop_handle(&generation)?;
+            managed_r = Some(result?);
+        }
+
+        let mut managed_python = environment.python.clone();
+        if let Some(candidate) = python_candidate {
+            let result = crate::resolver::resolve_python_host(candidate, |handle| {
+                self.register_resolver_stop_handle(&generation, handle)
+            });
+            self.clear_resolver_stop_handle(&generation)?;
+            managed_python = Some(result?);
+        }
 
         let mut lifecycle = self
             .0
@@ -363,7 +388,8 @@ impl Client {
         match lifecycle.state {
             LifecycleState::Ready if lifecycle.generation.is(&generation) => {
                 lifecycle.processes.resolver = None;
-                python.managed = Some(managed);
+                environment.python = managed_python;
+                environment.r = managed_r;
                 Ok(PrepareResult::Prepared)
             }
             LifecycleState::Ready => {
@@ -410,16 +436,16 @@ impl Client {
         grace: Duration,
     ) -> Result<(ProcessStopHandles, Instant), String> {
         let generation = self.admit()?;
-        let python = self.0.python.as_ref().ok_or_else(|| {
+        let environment = self.0.environment.as_ref().ok_or_else(|| {
             "Python requirements are unavailable with a custom worker".to_string()
         })?;
-        let mut python = python
+        let mut environment = environment
             .lock()
-            .map_err(|_| "Python environment lock poisoned".to_string())?;
+            .map_err(|_| "worker environment lock poisoned".to_string())?;
         self.ensure_generation(&generation)?;
-        let Some(candidate) = merge_python_requirements(python.managed.as_ref(), requirements)
+        let Some(candidate) = merge_python_requirements(environment.python.as_ref(), requirements)
         else {
-            drop(python);
+            drop(environment);
             return self.begin_restart(grace);
         };
 
@@ -434,7 +460,7 @@ impl Client {
         };
 
         let restart = self.begin_restart_after_resolution(&generation, grace)?;
-        python.managed = Some(managed);
+        environment.python = Some(managed);
         Ok(restart)
     }
 
@@ -663,14 +689,14 @@ impl Client {
         request: crate::worker_protocol::PythonResolveRequest,
     ) -> Result<crate::resolver::ManagedPython, String> {
         self.ensure_generation(&generation)?;
-        let python = self.0.python.as_ref().ok_or_else(|| {
+        let environment = self.0.environment.as_ref().ok_or_else(|| {
             "Python requirements are unavailable with a custom worker".to_string()
         })?;
         // Keep the environment locked while the host resolver owns the one lifecycle slot.
-        let python = python
+        let environment = environment
             .lock()
-            .map_err(|_| "Python environment lock poisoned".to_string())?;
-        let current = python.managed.clone().ok_or_else(|| {
+            .map_err(|_| "worker environment lock poisoned".to_string())?;
+        let current = environment.python.clone().ok_or_else(|| {
             "runtime Python requirements require a server-managed interpreter".to_string()
         })?;
         let requirements = request.requirements.normalized();
@@ -709,22 +735,22 @@ impl Client {
                 Err("worker resolved Python without reporting a checkpoint".to_string())
             };
         };
-        let python = self
+        let environment = self
             .0
-            .python
+            .environment
             .as_ref()
             .ok_or_else(|| "custom worker reported a managed Python checkpoint".to_string())?;
         let requirements = checkpoint.normalized();
-        let mut python = python
+        let mut environment = environment
             .lock()
-            .map_err(|_| "Python environment lock poisoned".to_string())?;
+            .map_err(|_| "worker environment lock poisoned".to_string())?;
         let managed = candidates
             .into_iter()
             .rev()
             .find(|candidate| candidate.requirements() == &requirements)
             .or_else(|| {
-                python
-                    .managed
+                environment
+                    .python
                     .clone()
                     .filter(|current| current.requirements() == &requirements)
             })
@@ -738,7 +764,7 @@ impl Client {
             .map_err(|_| "worker lifecycle lock poisoned".to_string())?;
         match lifecycle.state {
             LifecycleState::Ready if lifecycle.generation.is(&generation) => {
-                python.managed = Some(managed);
+                environment.python = Some(managed);
                 Ok(())
             }
             LifecycleState::Ready => {
@@ -783,19 +809,25 @@ impl Client {
     ) -> Result<(), String> {
         let replacing = matches!(&*worker, WorkerState::ReplacementPending);
         if !matches!(&*worker, WorkerState::Running(_)) {
-            let python = match &self.0.python {
-                Some(python) => Some(
-                    python
+            let environment = match &self.0.environment {
+                Some(environment) => Some(
+                    environment
                         .lock()
-                        .map_err(|_| "Python environment lock poisoned".to_string())?,
+                        .map_err(|_| "worker environment lock poisoned".to_string())?,
                 ),
                 None => None,
             };
-            let managed_python = python.as_ref().and_then(|python| python.managed.as_ref());
+            let managed_python = environment
+                .as_ref()
+                .and_then(|environment| environment.python.as_ref());
+            let managed_r = environment
+                .as_ref()
+                .and_then(|environment| environment.r.as_ref());
             let running = platform::Worker::start(
                 &self.0.program,
                 &self.0.arguments,
                 managed_python,
+                managed_r,
                 self.0.output.clone(),
                 on_started,
             )?;
@@ -889,7 +921,7 @@ impl Client {
                 if lifecycle.processes.worker.is_none()
                     && lifecycle.processes.resolver.is_some() =>
             {
-                return Err("Python preparation is still running".to_string());
+                return Err("requirement preparation is still running".to_string());
             }
             LifecycleState::Ready => {}
         }
@@ -1473,6 +1505,7 @@ mod platform {
             program: &Path,
             arguments: &[OsString],
             managed_python: Option<&crate::resolver::ManagedPython>,
+            managed_r: Option<&crate::resolver::ManagedR>,
             output: super::CapturedOutput,
             on_started: impl FnOnce(StopHandle) -> Result<(), String>,
         ) -> Result<Self, String> {
@@ -1482,6 +1515,9 @@ mod platform {
                 .map_err(|error| format!("failed to prepare worker sandbox: {error}"))?;
             if let Some(managed_python) = managed_python {
                 managed_python.configure_worker(&mut command);
+            }
+            if let Some(managed_r) = managed_r {
+                managed_r.configure_worker(&mut command)?;
             }
             command
                 .args(arguments)
@@ -1717,6 +1753,7 @@ mod platform {
             _program: &Path,
             _arguments: &[OsString],
             _managed_python: Option<&crate::resolver::ManagedPython>,
+            _managed_r: Option<&crate::resolver::ManagedR>,
             _output: super::CapturedOutput,
             _on_started: impl FnOnce(StopHandle) -> Result<(), String>,
         ) -> Result<Self, String> {

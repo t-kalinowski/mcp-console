@@ -1,0 +1,7 @@
+Package: mcpconsolerrequirecandidate
+Title: MCP Console R Requirement Candidate Fixture
+Version: 0.0.0.9000
+Authors@R: person("MCP Console", role = c("aut", "cre"), email = "fixture@example.com")
+Description: Provides a distinct candidate for atomic requirement preparation tests.
+License: MIT
+Encoding: UTF-8

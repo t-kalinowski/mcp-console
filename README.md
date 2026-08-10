@@ -47,21 +47,30 @@ An immediate `input_received` receipt retains the request record but suppresses 
 That receipt describes the runtime read, not a particular stdin payload; direct fd-0 reads emit no request or receipt.
 Payload end is not EOF, and queued input is not an acknowledgment of consumption.
 Unread bytes may be completed by later stdin or satisfy a later worker read or evaluation.
-Before the worker starts, the MCP client can prepare additive Python requirements for the implicit session:
+Before the worker starts, the MCP client can prepare additive R and Python requirements for the implicit session:
 
 ```json
 {
   "action": "prepare",
-  "requirements": { "python": ["numpy<2", "pandas"] }
+  "requirements": {
+    "r": ["dplyr", "tidyr"],
+    "python": ["numpy<2", "pandas"]
+  }
 }
 ```
 
-This `session` call resolves the complete initial requirement set through reticulate and uv outside the worker sandbox, then returns `[prepared]`.
-It does not import the packages or start the worker.
+Requirement resolution is host-code execution: package installation or build hooks run outside the worker sandbox.
+Use only trusted requirements; installing a local R package can execute package-controlled code from the referenced host path with the server's permissions.
+
+This `session` call resolves each complete initial requirement set outside the worker sandbox, using IR for R and reticulate with uv for Python, then returns `[prepared]`.
+When both languages are supplied, it retains the new configuration only after both resolutions succeed.
+It does not load the packages or start the worker.
+R preparation requires an executable `ir` on `PATH`.
+The server runs IR with the same Rscript selection as the worker and prepends the returned library to the worker's inherited `R_LIBS`, leaving its other R libraries available.
 Exact repeated requirements are idempotent.
-Once the worker has started, a new explicit `session` requirement returns `restart required` without changing the environment.
+Once the worker has started, a new explicit `session` requirement returns `[restart required]` without changing the environment.
 Server-managed workers can still layer additive requirements declared through `reticulate::py_require()` while an evaluation is running.
-The client can explicitly replace the worker and add requirements in the same call:
+The client can explicitly replace the worker, retain the prepared R library, and add Python requirements in the same call:
 
 ```json
 {
@@ -113,7 +122,7 @@ After a Python cell calls `os.fork()`, reticulate restores the child's original 
 Native extensions that fork without running CPython's registered fork callbacks and then resume Python are unsupported.
 Fork-child text capture requires reticulate from its `main` branch or a release containing fork-aware stream restoration.
 An exec descendant that retains fd 1/2 creates fresh standard streams backed by those descriptors, so its ordinary stdout and stderr are captured.
-SQL cells lazily open one in-memory DuckDB connection through the `duckdb` and `DBI` R packages and reuse it for the worker generation.
+SQL cells and `sql_connection()` lazily open one in-memory DuckDB connection through the `duckdb` and `DBI` R packages and reuse it for the worker generation.
 DuckDB extension, secret, and spill paths stay under the worker's private R temporary directory.
 The worker sends the complete SQL source out of band to a private R bridge and executes query results through DBI's streaming Arrow API.
 It fetches at most 21 rows, uses the final row only to detect that more data exists, and renders at most 20 rows and 12 columns with 160-character cells and a 12 KiB SQL-preview limit.
@@ -121,7 +130,14 @@ The preview shows Arrow column types, SQL `NULL`, and empty-result schemas; Duck
 It reports omitted rows without counting the complete result and reports omitted columns explicitly; the final byte limit may reduce the displayed rows or columns further.
 Statements without result columns are silent, so they return `[done]` when they produce no other output.
 DuckDB errors are normal console results and leave the worker available for later cells.
-This initial slice does not enable R environment scanning, relation registration, or affected-row summaries.
+DuckDB first resolves unqualified relation names in its persistent catalog.
+When no catalog table or view matches, it can scan a data frame bound in the persistent R global environment.
+An SQL view over a scanned name observes later changes to that R binding.
+R code can call `sql_connection()` to borrow the worker-owned DBI connection for established DuckDB, DBI, and dplyr interfaces.
+The helper remains available after clearing the global R workspace with `rm(list = ls())`; callers must not disconnect the returned connection.
+For example, `dplyr::tbl(sql_connection(), "answers")` creates a lazy relation that observes later catalog changes until it is collected.
+These paths avoid an eager snapshot transfer, but do not promise end-to-end zero-copy behavior: DuckDB converts R values during execution, and collecting a lazy relation materializes its result in R.
+Automatic Python relation sharing and affected-row summaries do not exist yet.
 
 The server also collects text written directly to the worker's standard output and standard error, including direct writes by descendants that retain those descriptors.
 It retains raw bytes until the next `send` response is assembled; output produced while the worker is idle can therefore appear on a later idle poll before the server-owned `\n[idle]` banner.
@@ -131,6 +147,11 @@ A silent successful R, Python, or SQL cell sends no sideband `output` frame, sti
 
 Python cells require the `reticulate` R package.
 SQL cells require the `arrow`, `DBI`, `duckdb`, `nanoarrow`, `pillar`, and `tibble` R packages.
+Lazy dplyr relations created from `sql_connection()` additionally require `dplyr` and `dbplyr`.
+MCP Console does not automatically install these R runtime dependencies.
+Explicit R preparation runs `ir run` outside the sandbox with the requested package references as command arguments and a constant expression that prints the resolved library path.
+IR may access the network, write its normal host caches, and execute package installation code.
+If IR is absent, resolution fails, or its returned library is invalid, the `session` call is a tool error and leaves the prior configuration unchanged.
 When `RETICULATE_PYTHON` is unset or is `managed`, `mcp-console serve` runs reticulate's uv environment resolver outside the worker sandbox with its NumPy baseline, where it can use the normal host caches and network access.
 Other configured values, including an empty value, are preserved when no requirements are prepared and skip this startup preflight.
 An explicit `session` preparation selects its resolved managed environment even when `RETICULATE_PYTHON` was configured, so a successful call guarantees that its requirements are present.
@@ -145,12 +166,11 @@ Each runtime resolution uses the worker's current `UV_*` settings except `UV_OFF
 The requirement strings and forwarded settings are structured data rather than R code, and the resolver does not evaluate the submitted cell.
 However, evaluated R code or an R package load can request this resolution, and reticulate and uv may access the network, write normal host caches, and execute a source distribution's build backend outside the worker sandbox.
 If the preflight cannot select an interpreter, `serve` exits before accepting MCP requests.
-A failed `session` preparation is a tool error and leaves the prior requirements and interpreter selection unchanged.
+A failed Python resolution is a tool error and leaves the prior configuration unchanged.
 For uv tool failures, the error includes a JSON resolver-input manifest with reticulate's Python selection and the complete candidate package set, followed by uv's stderr.
 It omits reticulate's helper command, temporary output path, and interactive `py_require()` guidance.
 Resolution has no per-call timeout.
-When its direct `Rscript` process exits, MCP Console stops any remaining in-group descendants before collecting resolver output; closing MCP input force-stops an in-flight resolver group.
-MCP Console does not install these R packages.
+When its direct resolver process exits, MCP Console stops any remaining in-group descendants before collecting resolver output; closing MCP input force-stops an in-flight resolver group.
 Python `input()` and `breakpoint()`/`pdb` use reticulate's R console bridge, so each read emits `input_requested` before reading and `input_received` after a successful read.
 They accept proactively queued or follow-up stdin, including repeated debugger commands.
 Reads through Python `sys.stdin` or fd 0 directly bypass the bridge and emit neither event.
@@ -161,7 +181,7 @@ The intended default client registration name is `console`:
 codex mcp add console -- mcp-console serve
 ```
 
-Under Codex's current naming convention, the implemented tools are `mcp__console.send` and `mcp__console.session`; `session` supports initial Python requirement preparation and explicit restart with optional additive Python requirements for the implicit session.
+Under Codex's current naming convention, the implemented tools are `mcp__console.send` and `mcp__console.session`; `session` supports initial R and Python requirement preparation and explicit restart with optional additive Python requirements for the implicit session.
 
 On macOS, `sandbox` launches the command under `/usr/bin/sandbox-exec`.
 The command can read the host filesystem, can write regular files only in a dedicated temporary directory, and cannot access the network.

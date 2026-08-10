@@ -42,6 +42,174 @@ def test_evaluates_queries_in_a_persistent_catalog(binary: Path) -> Transcript:
         return client._finish()
 
 
+def test_queries_r_data_frames(binary: Path) -> Transcript:
+    client = McpClient(binary, ("serve",))
+    client._initialize_and_list_tools()
+    r = code(r"""
+        measurements <- data.frame(
+          label = c("a", "b"),
+          value = c(2L, 5L)
+        )
+        """)
+    client.send(r=r)
+    assert last_tool_text(client) == "[done]"
+
+    sql = code(r"""
+        SELECT label, value * 10 AS scaled
+        FROM measurements
+        ORDER BY label
+        """)
+    client.send(sql=sql)
+    preview = last_tool_text(client)
+    assert '"a"' in preview and "20" in preview
+    assert '"b"' in preview and "50" in preview
+    return client._finish()
+
+
+def test_sql_views_follow_rebound_r_data_frames(binary: Path) -> Transcript:
+    client = McpClient(binary, ("serve",))
+    client._initialize_and_list_tools()
+    r = code(r"""
+        measurements <- data.frame(value = 2L)
+        """)
+    client.send(r=r)
+    assert last_tool_text(client) == "[done]"
+
+    sql = code(r"""
+        CREATE VIEW live_measurements AS
+        SELECT value FROM measurements
+        """)
+    client.send(sql=sql)
+    assert last_tool_text(client) == "[done]"
+
+    r = code(r"""
+        measurements <- data.frame(value = 7L)
+        """)
+    client.send(r=r)
+    assert last_tool_text(client) == "[done]"
+
+    sql = code(r"""
+        SELECT value FROM live_measurements
+        """)
+    client.send(sql=sql)
+    preview = last_tool_text(client)
+    assert preview.splitlines()[-1].split() == ["1", "7"]
+    return client._finish()
+
+
+def test_prefers_catalog_relations_over_r_data_frames(binary: Path) -> Transcript:
+    client = McpClient(binary, ("serve",))
+    client._initialize_and_list_tools()
+    r = code(r"""
+        values <- data.frame(origin = "r")
+        """)
+    client.send(r=r)
+    assert last_tool_text(client) == "[done]"
+
+    sql = code(r"""
+        CREATE TABLE values AS SELECT 'sql' AS origin;
+        SELECT origin FROM values
+        """)
+    client.send(sql=sql)
+    preview = last_tool_text(client)
+    assert '"sql"' in preview
+    assert '"r"' not in preview
+    return client._finish()
+
+
+def test_scans_r_bindings_named_like_bridge_state(binary: Path) -> Transcript:
+    client = McpClient(binary, ("serve",))
+    client._initialize_and_list_tools()
+    r = code(r"""
+        connection <- data.frame(name = "connection")
+        source <- data.frame(name = "source")
+        """)
+    client.send(r=r)
+    assert last_tool_text(client) == "[done]"
+
+    sql = code(r"""
+        SELECT name FROM connection
+        UNION ALL
+        SELECT name FROM source
+        ORDER BY name
+        """)
+    client.send(sql=sql)
+    preview = last_tool_text(client)
+    assert '"connection"' in preview
+    assert '"source"' in preview
+    return client._finish()
+
+
+def test_exposes_catalog_as_lazy_r_relations(binary: Path) -> Transcript:
+    client = McpClient(binary, ("serve",))
+    client._initialize_and_list_tools()
+    sql = code(r"""
+        CREATE TABLE sql_values AS
+        SELECT * FROM (VALUES ('a', 2), ('b', 5)) AS values(label, value);
+        CREATE VIEW live_sql_values AS SELECT * FROM sql_values
+        """)
+    client.send(sql=sql)
+    assert last_tool_text(client) == "[done]"
+
+    r = code(r"""
+        connection <- sql_connection()
+        table_values <- dplyr::tbl(connection, "sql_values")
+        lazy_values <- dplyr::tbl(connection, "live_sql_values") |>
+          dplyr::mutate(doubled = value * 2L)
+        cat(
+          "same connection: ", identical(connection, sql_connection()), "\n",
+          "lazy table: ", inherits(table_values, "tbl_lazy"), "\n",
+          "lazy view: ", inherits(lazy_values, "tbl_lazy"), "\n",
+          sep = ""
+        )
+        """)
+    client.send(r=r)
+    assert last_tool_text(client) == (
+        "same connection: TRUE\nlazy table: TRUE\nlazy view: TRUE\n"
+    )
+
+    sql = code(r"""
+        INSERT INTO sql_values VALUES ('c', 11)
+        """)
+    client.send(sql=sql)
+    assert last_tool_text(client) == "[done]"
+
+    r = code(r"""
+        values <- lazy_values |>
+          dplyr::arrange(label) |>
+          dplyr::collect()
+        writeLines(paste(values$label, values$value, values$doubled, sep = ":"))
+        """)
+    client.send(r=r)
+    assert last_tool_text(client) == "a:2:4\nb:5:10\nc:11:22\n"
+    return client._finish()
+
+
+def test_keeps_connection_helper_after_clearing_r_workspace(
+    binary: Path,
+) -> Transcript:
+    client = McpClient(binary, ("serve",))
+    client._initialize_and_list_tools()
+    sql = code(r"""
+        CREATE TABLE retained_values AS
+        SELECT * FROM (VALUES ('a', 2), ('b', 5)) AS values(label, value)
+        """)
+    client.send(sql=sql)
+    assert last_tool_text(client) == "[done]"
+
+    r = code(r"""
+        rm(list = ls())
+        values <- DBI::dbGetQuery(
+          sql_connection(),
+          "SELECT label, value FROM retained_values ORDER BY label"
+        )
+        writeLines(paste(values$label, values$value, sep = ":"))
+        """)
+    client.send(r=r)
+    assert last_tool_text(client) == "a:2\nb:5\n"
+    return client._finish()
+
+
 def test_recovers_from_sql_errors(binary: Path) -> Transcript:
     client = McpClient(binary, ("serve",))
     client._initialize_and_list_tools()

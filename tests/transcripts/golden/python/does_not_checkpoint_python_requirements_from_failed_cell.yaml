@@ -35,6 +35,6 @@ session:
 result:
   content:
     - type: text
-      text: restart required
+      text: "[restart required]"
   isError: false
 ...
