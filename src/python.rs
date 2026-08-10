@@ -150,14 +150,10 @@ import __main__ as _main
 import ast as _ast
 import base64 as _base64
 import builtins as _builtins
-import hashlib as _hashlib
 import io as _io
 import logging as _logging
 import sys as _sys
 import traceback as _traceback
-
-
-_plot_hashes = {}
 
 
 class _McpConsoleMatplotlibLogFilter(_logging.Filter):
@@ -175,10 +171,7 @@ _logging.getLogger("matplotlib.font_manager").addFilter(
 def _mcp_console_collect_plots(
     _BaseException=_builtins.BaseException,
     _base64=_base64,
-    _hashlib=_hashlib,
-    _id=_builtins.id,
     _io=_io,
-    _plot_hashes=_plot_hashes,
     _print_exc=_traceback.print_exc,
     _sys=_sys,
 ):
@@ -187,33 +180,27 @@ def _mcp_console_collect_plots(
         return ()
 
     numbers = sorted(pyplot.get_fignums())
-    for stale in set(_plot_hashes) - set(numbers):
-        del _plot_hashes[stale]
     if not numbers:
         return ()
 
-    current = pyplot.gcf().number
     images = []
-    for number in numbers:
+    try:
+        for number in numbers:
+            try:
+                if number not in pyplot.get_fignums():
+                    continue
+                figure = pyplot.figure(number)
+                output = _io.BytesIO()
+                figure.savefig(output, format="png")
+                data = output.getvalue()
+                images.append(_base64.b64encode(data).decode("ascii"))
+            except _BaseException:
+                _print_exc()
+    finally:
         try:
-            figure = pyplot.figure(number)
-            output = _io.BytesIO()
-            figure.savefig(output, format="png")
-            data = output.getvalue()
-            digest = _hashlib.sha256(data).digest()
-            state = (_id(figure), digest)
-            if _plot_hashes.get(number) == state:
-                continue
-            _plot_hashes[number] = state
-            images.append(_base64.b64encode(data).decode("ascii"))
+            pyplot.close("all")
         except _BaseException:
             _print_exc()
-
-    try:
-        if current in pyplot.get_fignums():
-            pyplot.figure(current)
-    except _BaseException:
-        _print_exc()
     return images
 
 

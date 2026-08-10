@@ -646,8 +646,44 @@ def test_returns_matplotlib_plots(binary: Path) -> Transcript:
             image_reference="live matplotlib savefig {page}",
         )
 
-        client.call_tool("send", python="40 + 2")
-        assert last_tool_text(client) == "42\n"
+        # fmt: python
+        python = code("""
+            axes.plot([1, 3], [2, 0])
+            plt.get_fignums()
+            """)
+        client.call_tool("send", python=python)
+        assert last_tool_text(client) == "[]\n"
+
+        # fmt: python
+        python = code("""
+            error_figure, error_axes = plt.subplots()
+            error_axes.plot([1, 2], [2, 1])
+            error_reference = Path(os.environ["TMPDIR"]) / "matplotlib-error-reference.png"
+            error_figure.savefig(error_reference, format="png")
+            raise ValueError("cell failed")
+            """)
+        client.call_tool("send", python=python)
+        result = client.transcript[-1]["result"]
+        assert result["isError"] is False, result
+        output = result["content"][0]["text"]
+        assert output.startswith("Traceback (most recent call last):\n"), output
+        assert output.endswith("ValueError: cell failed\n"), output
+        result["content"][0]["text"] = (
+            "<python traceback ending in ValueError: cell failed>\n"
+        )
+        error_reference = wait_for_worker_file(
+            Path(temporary_directory),
+            "matplotlib-error-reference.png",
+            client,
+        )
+        assert_result_content(
+            client,
+            [result["content"][0]["text"], error_reference.read_bytes()],
+            image_reference="live error-cell matplotlib savefig {page}",
+        )
+
+        client.call_tool("send", python="plt.get_fignums()")
+        assert last_tool_text(client) == "[]\n"
 
         # fmt: python
         python = code("""
@@ -655,40 +691,35 @@ def test_returns_matplotlib_plots(binary: Path) -> Transcript:
                 raise RuntimeError("plot render failed")
 
 
-            axes.plot([1, 3], [2, 0])
-            updated_reference = Path(os.environ["TMPDIR"]) / "matplotlib-updated-reference.png"
-            figure.savefig(updated_reference, format="png")
             failed_figure = plt.figure()
             failed_figure.savefig = fail_plot_capture
+            figure, axes = plt.subplots()
+            axes.plot([1, 3], [2, 0])
+            second_reference = Path(os.environ["TMPDIR"]) / "matplotlib-second-reference.png"
+            figure.savefig(second_reference, format="png")
             """)
         client.call_tool("send", python=python)
         result = client.transcript[-1]["result"]
         assert result["isError"] is False, result
         output = result["content"][0]["text"]
         assert output.startswith("Traceback (most recent call last):\n"), output
-        assert "in _mcp_console_collect_plots\n" in output, output
         assert output.endswith("RuntimeError: plot render failed\n"), output
         result["content"][0]["text"] = (
             "<matplotlib render traceback ending in RuntimeError: plot render failed>\n"
         )
-        updated_reference = wait_for_worker_file(
+        second_reference = wait_for_worker_file(
             Path(temporary_directory),
-            "matplotlib-updated-reference.png",
+            "matplotlib-second-reference.png",
             client,
         )
         assert_result_content(
             client,
-            [result["content"][0]["text"], updated_reference.read_bytes()],
-            image_reference="live updated matplotlib savefig {page}",
+            [result["content"][0]["text"], second_reference.read_bytes()],
+            image_reference="live second matplotlib savefig {page}",
         )
 
-        # fmt: python
-        python = code("""
-            plt.close("all")
-            6 * 7
-            """)
-        client.call_tool("send", python=python)
-        assert last_tool_text(client) == "42\n"
+        client.call_tool("send", python="plt.get_fignums()")
+        assert last_tool_text(client) == "[]\n"
         return client.finish()
 
 

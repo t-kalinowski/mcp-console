@@ -93,8 +93,8 @@ Graphics devices opened explicitly by evaluated code, such as with `grDevices::p
 Python cells execute statements in persistent `__main__` state and send a final expression through Python's display hook.
 R and Python can exchange objects through reticulate's `py` and `r` bridges.
 R plots invoked from a Python cell through reticulate's `r` bridge use the same managed default device, sizing options, cell scope, and MCP image output as plots invoked from an R cell.
-At the end of each Python cell, new or changed open figures managed by `matplotlib.pyplot` are rendered in memory and returned as PNG images; `plt.show()` is not required.
-The figures remain open for later Python cells, and unchanged figures are not returned again.
+At the end of each Python cell, open figures managed by `matplotlib.pyplot` are rendered in memory, returned as PNG images, and closed; `plt.show()` is not required.
+These figures are cell scoped, so one plot's drawing operations must be submitted together.
 Figures closed before cell end and figures not registered with `pyplot` are not captured.
 Unless inherited settings select otherwise, the worker uses Matplotlib's noninteractive Agg backend and keeps its writable configuration under the worker's private temporary directory.
 Reticulate routes Python text written through `sys.stdout` and `sys.stderr`, including tracebacks, through the same sideband console output path as R.

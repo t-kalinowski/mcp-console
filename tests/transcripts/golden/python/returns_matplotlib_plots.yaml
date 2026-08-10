@@ -28,51 +28,80 @@ send:
 result:
   content:
     - type: image
-      data: "<PNG byte-identical to live matplotlib savefig 1>"
+      data: <PNG byte-identical to live matplotlib savefig 1>
       mimeType: image/png
   isError: false
 ---
 id: 5
 send:
-  python: 40 + 2
+  python: |
+    axes.plot([1, 3], [2, 0])
+    plt.get_fignums()
 result:
   content:
     - type: text
       text: |
-        42
+        []
   isError: false
 ---
 id: 6
+send:
+  python: |
+    error_figure, error_axes = plt.subplots()
+    error_axes.plot([1, 2], [2, 1])
+    error_reference = Path(os.environ["TMPDIR"]) / "matplotlib-error-reference.png"
+    error_figure.savefig(error_reference, format="png")
+    raise ValueError("cell failed")
+result:
+  content:
+    - type: text
+      text: |
+        <python traceback ending in ValueError: cell failed>
+    - type: image
+      data: <PNG byte-identical to live error-cell matplotlib savefig 1>
+      mimeType: image/png
+  isError: false
+---
+id: 7
+send:
+  python: plt.get_fignums()
+result:
+  content:
+    - type: text
+      text: |
+        []
+  isError: false
+---
+id: 8
 send:
   python: |
     def fail_plot_capture(*args, **kwargs):
         raise RuntimeError("plot render failed")
 
 
-    axes.plot([1, 3], [2, 0])
-    updated_reference = Path(os.environ["TMPDIR"]) / "matplotlib-updated-reference.png"
-    figure.savefig(updated_reference, format="png")
     failed_figure = plt.figure()
     failed_figure.savefig = fail_plot_capture
+    figure, axes = plt.subplots()
+    axes.plot([1, 3], [2, 0])
+    second_reference = Path(os.environ["TMPDIR"]) / "matplotlib-second-reference.png"
+    figure.savefig(second_reference, format="png")
 result:
   content:
     - type: text
       text: |
         <matplotlib render traceback ending in RuntimeError: plot render failed>
     - type: image
-      data: "<PNG byte-identical to live updated matplotlib savefig 1>"
+      data: <PNG byte-identical to live second matplotlib savefig 1>
       mimeType: image/png
   isError: false
 ---
-id: 7
+id: 9
 send:
-  python: |
-    plt.close("all")
-    6 * 7
+  python: plt.get_fignums()
 result:
   content:
     - type: text
       text: |
-        42
+        []
   isError: false
 ...
