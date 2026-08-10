@@ -317,13 +317,13 @@ Package download access does not imply general network access for user code.
       "requirements": {
         "type": "object",
         "additionalProperties": false,
-        "description": "Additive package requirements, valid with prepare or restart.",
+        "description": "Additive package requirements, valid with prepare or restart. Resolution runs outside the worker sandbox, where package installation or build code may execute on the host.",
         "properties": {
           "r": {
             "type": "array",
             "items": { "type": "string", "minLength": 1 },
             "maxItems": 64,
-            "description": "R package requirement strings."
+            "description": "R package requirement strings. Installing a local reference can execute package-controlled code from the referenced host path; use only trusted local packages."
           },
           "python": {
             "type": "array",
@@ -369,7 +369,7 @@ transcript: .mcp-console/sessions/default/transcript.qmd
 For a missing session it creates a configured logical session without starting a worker.
 The first code cell or nonempty stdin submission starts the runtime.
 For an existing session it never replaces the runtime implicitly.
-If activation requires replacement, it returns `restart required` and makes no change.
+If activation requires replacement, it returns `[restart required]` and makes no change.
 
 ```json
 {

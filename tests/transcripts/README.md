@@ -44,6 +44,7 @@ A suite selector runs every case in that file; a `SUITE::CASE` selector runs one
 Use `--update` only to accept an intentional transcript change.
 A suite may set `PLATFORMS = {"darwin"}` to restrict execution and snapshot updates to those `sys.platform` values.
 Restricted cases remain visible under `scripts/test --list` and are skipped on other platforms.
+A suite may set `REQUIRED_COMMANDS = {"ir"}` to skip when a required executable is not on `PATH`.
 
 Server cases create an `McpClient`, perform the session, and return `client.finish()`.
 Other cases may invoke the binary directly and return their transcript entries.

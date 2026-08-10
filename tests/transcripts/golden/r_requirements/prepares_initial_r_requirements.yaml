@@ -1,0 +1,164 @@
+---
+!same-as tests/transcripts/golden/server/initializes_and_lists_tools.yaml
+---
+id: 3
+session:
+  action: prepare
+  requirements:
+    r:
+      - local::tests/fixtures/r_require?reinstall
+result:
+  content:
+    - type: text
+      text: "[prepared]"
+  isError: false
+---
+id: 4
+session:
+  action: prepare
+  requirements:
+    r:
+      - not a valid requirement !!!
+result:
+  content:
+    - type: text
+      text: |-
+        R package resolution failed with exit status: 1: Error:
+        ! error in pak subprocess
+        Caused by error in `get_remote_types(refs)`:
+        ! Cannot parse package: not a valid requirement !!!.
+        ℹ See `?pkgdepends::pkg_refs()` for supported package sources.
+        ---
+        Backtrace:
+        1. global ir_resolve_main()
+        2. global ir_resolve_refs(refs_in)
+        3. pak::pkg_deps(refs, dependencies = dependencies, upgrade = TRUE)
+        4. pak:::remote(function(...) { …
+        5. err$throw(res$error)
+        ---
+        Subprocess backtrace:
+         1. base::withCallingHandlers(cli_message = function(msg) { …
+         2. get("pkg_deps_internal", asNamespace("pak"))(...)
+         3. pak:::pkg_deps_internal2(pkg, upgrade, dependencies)
+         4. pkgdepends::new_pkg_deps(pkg, config = config)
+         5. pkg_deps$new(refs, ...)
+         6. local initialize(...)
+         7. pkg_plan$new(refs, config, remote_types)
+         8. local initialize(...)
+         9. pkgdepends:::pkgplan_init(self, private, refs, config, remote_types, lockfile)
+        10. pkgdepends::parse_pkg_refs(refs)
+        11. pkgdepends:::get_remote_types(refs)
+        12. base::throw(pkg_error("Cannot parse package{?s}: {.pkg {refs[bad]}}.", …
+        13. | base::signalCondition(cond)
+        14. global (function (e) …
+        Execution halted
+        ir: dependency resolution failed
+  isError: true
+---
+id: 5
+session:
+  action: prepare
+  requirements:
+    r:
+      - local::tests/fixtures/r_require_candidate?reinstall
+    python:
+      - not a valid requirement !!!
+result:
+  content:
+    - type: text
+      text: |-
+        managed Python resolution failed:
+        resolver input:
+        {
+          "python": "3.12.x (reticulate default)",
+          "packages": [
+            "numpy",
+            "not a valid requirement !!!"
+          ]
+        }
+        uv output:
+        error: Failed to parse: `not a valid requirement !!!`
+          Caused by: Expected one of `@`, `(`, `<`, `=`, `>`, `~`, `!`, `;`, found `a`
+        not a valid requirement !!!
+            ^
+  isError: true
+---
+id: 6
+send:
+  r: |
+    stopifnot(
+      identical(
+        dirname(find.package("mcpconsolerrequire")),
+        .libPaths()[[1L]]
+      ),
+      !requireNamespace(
+        "mcpconsolerrequirecandidate",
+        quietly = TRUE
+      ),
+      normalizePath(.libPaths()[[2L]]) ==
+        normalizePath(Sys.getenv("MCP_CONSOLE_AMBIENT_R_LIBRARY"))
+    )
+    mcpconsolerrequire::answer()
+result:
+  content:
+    - type: text
+      text: |
+        [1] 42
+  isError: false
+---
+id: 7
+session:
+  action: prepare
+  requirements:
+    r:
+      - local::tests/fixtures/r_require?reinstall
+result:
+  content:
+    - type: text
+      text: "[prepared]"
+  isError: false
+---
+id: 8
+session:
+  action: prepare
+  requirements:
+    r:
+      - local::tests/fixtures/r_require_candidate?reinstall
+result:
+  content:
+    - type: text
+      text: "[restart required]"
+  isError: false
+---
+id: 9
+session:
+  action: restart
+result:
+  content:
+    - type: text
+      text: "[restarted]"
+  isError: false
+---
+id: 10
+send:
+  r: |
+    stopifnot(
+      identical(
+        dirname(find.package("mcpconsolerrequire")),
+        .libPaths()[[1L]]
+      ),
+      !requireNamespace(
+        "mcpconsolerrequirecandidate",
+        quietly = TRUE
+      ),
+      normalizePath(.libPaths()[[2L]]) ==
+        normalizePath(Sys.getenv("MCP_CONSOLE_AMBIENT_R_LIBRARY"))
+    )
+    mcpconsolerrequire::answer()
+result:
+  content:
+    - type: text
+      text: |
+        [1] 42
+  isError: false
+...

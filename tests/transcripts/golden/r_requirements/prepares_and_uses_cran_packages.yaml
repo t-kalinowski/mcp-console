@@ -1,0 +1,35 @@
+---
+!same-as tests/transcripts/golden/server/initializes_and_lists_tools.yaml
+---
+id: 3
+session:
+  action: prepare
+  requirements:
+    r:
+      - cli
+      - dplyr
+result:
+  content:
+    - type: text
+      text: "[prepared]"
+  isError: false
+---
+id: 4
+send:
+  r: |
+    stopifnot(
+      identical(dirname(find.package("cli")), .libPaths()[[1L]]),
+      identical(dirname(find.package("dplyr")), .libPaths()[[1L]])
+    )
+    result <- dplyr::summarise(
+      data.frame(value = c(40L, 2L)),
+      answer = sum(.data$value)
+    )
+    cli::format_inline("answer: {result$answer}")
+result:
+  content:
+    - type: text
+      text: |
+        [1] "answer: 42"
+  isError: false
+...

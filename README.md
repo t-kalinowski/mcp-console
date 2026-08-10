@@ -47,21 +47,30 @@ An immediate `input_received` receipt retains the request record but suppresses 
 That receipt describes the runtime read, not a particular stdin payload; direct fd-0 reads emit no request or receipt.
 Payload end is not EOF, and queued input is not an acknowledgment of consumption.
 Unread bytes may be completed by later stdin or satisfy a later worker read or evaluation.
-Before the worker starts, the MCP client can prepare additive Python requirements for the implicit session:
+Before the worker starts, the MCP client can prepare additive R and Python requirements for the implicit session:
 
 ```json
 {
   "action": "prepare",
-  "requirements": { "python": ["numpy<2", "pandas"] }
+  "requirements": {
+    "r": ["dplyr", "tidyr"],
+    "python": ["numpy<2", "pandas"]
+  }
 }
 ```
 
-This `session` call resolves the complete initial requirement set through reticulate and uv outside the worker sandbox, then returns `[prepared]`.
-It does not import the packages or start the worker.
+Requirement resolution is host-code execution: package installation or build hooks run outside the worker sandbox.
+Use only trusted requirements; installing a local R package can execute package-controlled code from the referenced host path with the server's permissions.
+
+This `session` call resolves each complete initial requirement set outside the worker sandbox, using IR for R and reticulate with uv for Python, then returns `[prepared]`.
+When both languages are supplied, it retains the new configuration only after both resolutions succeed.
+It does not load the packages or start the worker.
+R preparation requires an executable `ir` on `PATH`.
+The server runs IR with the same Rscript selection as the worker and prepends the returned library to the worker's inherited `R_LIBS`, leaving its other R libraries available.
 Exact repeated requirements are idempotent.
-Once the worker has started, a new explicit `session` requirement returns `restart required` without changing the environment.
+Once the worker has started, a new explicit `session` requirement returns `[restart required]` without changing the environment.
 Server-managed workers can still layer additive requirements declared through `reticulate::py_require()` while an evaluation is running.
-The client can explicitly replace the worker while retaining the server's checkpointed Python environment:
+The client can explicitly replace the worker while retaining the prepared R library and the server's checkpointed Python environment:
 
 ```json
 { "action": "restart" }
@@ -134,6 +143,10 @@ A silent successful R, Python, or SQL cell sends no sideband `output` frame, sti
 Python cells require the `reticulate` R package.
 SQL cells require the `arrow`, `DBI`, `duckdb`, `nanoarrow`, `pillar`, and `tibble` R packages.
 Lazy dplyr relations created from `sql_connection()` additionally require `dplyr` and `dbplyr`.
+MCP Console does not automatically install these R runtime dependencies.
+Explicit R preparation runs `ir run` outside the sandbox with the requested package references as command arguments and a constant expression that prints the resolved library path.
+IR may access the network, write its normal host caches, and execute package installation code.
+If IR is absent, resolution fails, or its returned library is invalid, the `session` call is a tool error and leaves the prior configuration unchanged.
 When `RETICULATE_PYTHON` is unset or is `managed`, `mcp-console serve` runs reticulate's uv environment resolver outside the worker sandbox with its NumPy baseline, where it can use the normal host caches and network access.
 Other configured values, including an empty value, are preserved when no requirements are prepared and skip this startup preflight.
 An explicit `session` preparation selects its resolved managed environment even when `RETICULATE_PYTHON` was configured, so a successful call guarantees that its requirements are present.
@@ -148,12 +161,11 @@ Each runtime resolution uses the worker's current `UV_*` settings except `UV_OFF
 The requirement strings and forwarded settings are structured data rather than R code, and the resolver does not evaluate the submitted cell.
 However, evaluated R code or an R package load can request this resolution, and reticulate and uv may access the network, write normal host caches, and execute a source distribution's build backend outside the worker sandbox.
 If the preflight cannot select an interpreter, `serve` exits before accepting MCP requests.
-A failed `session` preparation is a tool error and leaves the prior requirements and interpreter selection unchanged.
+A failed Python resolution is a tool error and leaves the prior configuration unchanged.
 For uv tool failures, the error includes a JSON resolver-input manifest with reticulate's Python selection and the complete candidate package set, followed by uv's stderr.
 It omits reticulate's helper command, temporary output path, and interactive `py_require()` guidance.
 Resolution has no per-call timeout.
-When its direct `Rscript` process exits, MCP Console stops any remaining in-group descendants before collecting resolver output; closing MCP input force-stops an in-flight resolver group.
-MCP Console does not install these R packages.
+When its direct resolver process exits, MCP Console stops any remaining in-group descendants before collecting resolver output; closing MCP input force-stops an in-flight resolver group.
 Python `input()` and `breakpoint()`/`pdb` use reticulate's R console bridge, so each read emits `input_requested` before reading and `input_received` after a successful read.
 They accept proactively queued or follow-up stdin, including repeated debugger commands.
 Reads through Python `sys.stdin` or fd 0 directly bypass the bridge and emit neither event.
@@ -164,7 +176,7 @@ The intended default client registration name is `console`:
 codex mcp add console -- mcp-console serve
 ```
 
-Under Codex's current naming convention, the implemented tools are `mcp__console.send` and `mcp__console.session`; `session` supports initial Python requirement preparation and explicit restart for the implicit session.
+Under Codex's current naming convention, the implemented tools are `mcp__console.send` and `mcp__console.session`; `session` supports initial R and Python requirement preparation and explicit restart for the implicit session.
 
 On macOS, `sandbox` launches the command under `/usr/bin/sandbox-exec`.
 The command can read the host filesystem, can write regular files only in a dedicated temporary directory, and cannot access the network.

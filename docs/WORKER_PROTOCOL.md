@@ -33,36 +33,42 @@ It removes inherited `UV_OFFLINE`, allows reticulate and uv to use their normal 
 The server retains the result and normalized manifest and applies them to each server-managed worker.
 Other inherited values, including an empty value, bypass the startup preflight unchanged.
 
-Before the worker starts, `session` with `action = "prepare"` can add Python requirements to the implicit session.
-The server merges exact strings with the retained in-memory set, passes the complete candidate to the same host resolver, and commits the requirements and returned interpreter only after resolution succeeds.
-This explicit preparation takes precedence over an inherited Python selection.
+Before the worker starts, `session` with `action = "prepare"` can add R or Python requirements to the implicit session.
+The server merges exact strings with each retained in-memory set and resolves the complete candidates outside the sandbox.
+R requirements invoke `ir` through `PATH`; the server runs `ir run` with the same Rscript selection as the worker, one `--with` argument per requirement, and a constant expression that prints the resolved library path.
+Python requirements use the host resolver described above and take precedence over an inherited Python selection.
+The server commits both candidates together only after every requested resolution succeeds.
 It returns `[prepared]` without creating sideband pipes or starting the worker.
-New explicit `session` requirements after worker startup return `restart required` without changing the retained manifest or running resolver work; exact retained requirements remain idempotent.
+New explicit `session` requirements after worker startup return `[restart required]` without changing the retained configuration or running resolver work; exact retained requirements remain idempotent.
 This restriction does not apply to additive requirements declared through `reticulate::py_require()` inside a server-managed worker.
-Custom workers reject preparation and skip managed-Python resolution.
+Custom workers reject preparation and skip managed resolution.
 
 `session` with `action = "restart"` accepts no requirements in the current implementation.
-It retains the server's checkpointed Python environment, terminates the current worker generation, eagerly starts its replacement, and returns `[restarted]` after `ready`.
+It retains the prepared R library and the server's checkpointed Python environment, terminates the current worker generation, eagerly starts its replacement, and returns `[restarted]` after `ready`.
 All worker-owned R, Python, SQL, debugger, and unread-stdin state is lost.
 The implicit session exists for the server lifetime, so restart starts its first worker if none exists yet.
 Evaluations and idle stdin writes capture their admitted generation; work from the old generation is rejected rather than delivered to the replacement.
 Direct standard-stream bytes collected around the boundary remain in the shared output queue and may prefix a later `send` response from the replacement generation.
 Restart uses the same one-second stdin-close, sideband-shutdown, and process-group escalation path described below, but it reopens the lifecycle gate for the new generation instead of ending the MCP server.
 
-Each resolver process receives only a requirement manifest on standard input, not submitted cells or `send` stdin, and may use the network and write normal host caches.
+The IR resolver receives R package references as process arguments and the Python resolver receives only a requirement manifest on standard input; neither receives submitted cells or `send` stdin.
+Both may use the network, write normal host caches, and execute package installation or build code outside the sandbox.
+IR currently accepts local package references.
+Installing them may run package-controlled hooks and build code with the resolver's host permissions; the server does not restrict those references.
 Runtime requests also supply the worker's current `UV_*` settings except `UV_OFFLINE`; the server removes its own `UV_*` settings before applying that exact set to the resolver.
 Those settings are inputs to that resolution only; the server does not retain or replay them.
-Requirements and settings remain structured data rather than R expressions, but uv may execute source-distribution build backends in this unsandboxed resolver process.
+Requirements and settings remain data rather than evaluated cell source; the IR invocation uses a constant R expression that does not contain requirement text.
 Evaluated R code and R package load hooks can request resolution through `py_require()`, but the resolver does not evaluate their submitted source.
 A preflight failure prevents server initialization.
 A preparation failure is an MCP tool error and leaves the prior configuration unchanged.
 For a uv tool failure, `Rscript` captures reticulate's message stream and sends its selected Python version on stdout; uv's inherited stderr remains separate.
 The server combines that selection with the complete candidate package set it submitted and renders them as a JSON resolver-input manifest before uv's stderr.
 It discards reticulate's helper command, temporary output path, hints, and R call information.
-The resolver leads a dedicated process group registered with the server shutdown gate before requirement input is written.
-The server waits for either lifecycle cancellation or a non-reaping notification that the direct `Rscript` process exited.
-Direct-process exit ends the resolver-group lifetime: the server force-stops any remaining in-group descendants, reaps `Rscript`, and then collects the resolver's standard streams.
-Closing MCP input force-stops an active explicit or runtime resolver group and reaps `Rscript`; startup preflight finishes before MCP input is accepted and does not participate in this cancellation path.
+Each resolver leads a dedicated process group.
+Immediately after launch, the server registers its stop handle with the shutdown gate.
+The server waits for either lifecycle cancellation or a non-reaping notification that the direct resolver process exited.
+Direct-process exit ends the resolver group's lifetime: the server force-stops any remaining in-group descendants, reaps the direct process, and then collects the resolver's standard streams.
+Closing MCP input force-stops an active explicit or runtime resolver group and reaps its direct process; startup preflight finishes before MCP input is accepted and does not participate in this cancellation path.
 
 Outside an explicit restart, the worker starts lazily on the first `send` call that supplies `r`, `python`, `sql`, or nonempty `stdin`.
 On macOS, the server uses the same `SandboxedCommand` builder as the `sandbox` command.
@@ -75,6 +81,8 @@ For `--worker PATH`, `PATH` is one program name or path, with no arguments or sh
 The built-in path launches `mcp-console worker`.
 Inside the sandbox, the worker takes ownership of the sideband, discovers `R_HOME` through the selected R executable, and initializes R through `libr` and `harp`.
 Harp opens `R_HOME/lib/libR.dylib` by its absolute path, so the worker does not self-execute or set a dynamic-loader environment variable.
+When R requirements were prepared, the server prepends the validated IR library to inherited `R_LIBS` before this initialization.
+R then places that library first in `.libPaths()` while retaining its remaining user, site, and base libraries.
 
 The server launches the sandboxed worker with piped standard input, standard output, and standard error.
 Sideband frames carry control and managed output; interactive input bytes travel through the worker's fd 0, while the server drains fd 1 and fd 2 continuously.
@@ -400,7 +408,7 @@ If reticulate is loaded but Python remains uninitialized at cell end, the worker
 The worker then sends that normalized manifest as `completed.python_checkpoint`; it does not send reticulate's history.
 The server accepts the last candidate from the evaluation with that manifest, or its prior environment if the manifest did not change.
 An R package load hook may trigger this path while its namespace is loading.
-An explicit `session prepare` addition after worker startup still returns `restart required`; it does not use the runtime layering path.
+An explicit `session prepare` addition after worker startup still returns `[restart required]`; it does not use the runtime layering path.
 
 Each Python cell receives a synthetic filename such as `<mcp-console:python:e1>`.
 The worker stores the source in a process-lifetime private R environment and calls its evaluator with only a short evaluation ID.
@@ -462,7 +470,7 @@ SQL source containing NUL is rejected as a normal language error before it reach
 ## Current limits
 
 No timeout bounds managed-Python startup preflight, worker startup, host resolution, or execution.
-Python requirement resolution has no per-call timeout; MCP shutdown cancels an in-flight explicit or runtime resolution.
+R and Python requirement resolution have no per-call timeout; MCP shutdown cancels an in-flight explicit or runtime resolution.
 The current implementation has no general frame-size limit, stdin queue limit, or accumulated-output limit.
 The 12 KiB cap applies only to a recognized SQL query preview; arbitrary R and Python console text, worker standard streams, and text accompanying that preview remain uncapped.
 `timeout_ms` limits one MCP wait without terminating the worker or a blocked stdin write; server shutdown and explicit restart use a process deadline.
@@ -476,13 +484,13 @@ Concurrent MCP `send` calls are outside the current contract.
 Python cells require an installed reticulate R package.
 SQL cells require installed arrow, DBI, duckdb, nanoarrow, pillar, and tibble R packages.
 Lazy dplyr relations created from `sql_connection()` additionally require dplyr and dbplyr.
-MCP Console does not install these packages.
+MCP Console does not automatically install these runtime packages.
 The default preflight must be able to resolve or provision its interpreter and initial requirements outside the sandbox.
 An explicitly configured interpreter must be initializable under the offline worker policy.
-Python requirements are retained only in server memory.
+R requirements, the selected IR library, and Python requirements are retained only in server memory.
 Server-managed workers can activate additive package requirements and checkpoint their final manifest after startup, but an explicit late `session prepare` still requires restart.
 Runtime Python version changes, `exclude_newer` changes, and non-additive package changes after initialization are not supported by the layering path.
-Named sessions, R requirements, restart with new requirements, and environment provenance do not exist.
+Named sessions, runtime R requirement additions, restart with new requirements, and environment provenance do not exist.
 The Python input bridge does not observe direct `sys.stdin` or fd-0 reads.
 The SQL adapter does not expose Python objects as relations or provide a separate registration API.
 The current sandbox child does not yet supervise descendants after its direct process exits, or descendants that leave its process group; capturing inherited standard streams does not change that boundary.

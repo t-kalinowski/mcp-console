@@ -1,7 +1,6 @@
 #!/usr/bin/env -S uv run --script
 
 import os
-import re
 import shutil
 import subprocess
 import tempfile
@@ -14,6 +13,7 @@ from _support import (
     Transcript,
     assert_result_content,
     code,
+    normalize_python_resolution_error,
     r_test_environment,
     reference_plots,
     run_this_suite,
@@ -100,24 +100,6 @@ def test_evaluates_with_explicit_managed_python(binary: Path) -> Transcript:
     return managed_python_transcript(binary, configured=True)
 
 
-def normalize_resolution_error(error: str, invalid: str | None = None) -> str:
-    error, python_patch = re.subn(
-        r'(?m)^(  "python": "\d+\.\d+)\.\d+( \(reticulate default\)",)$',
-        r"\1.x\2",
-        error,
-        count=1,
-    )
-    assert python_patch == 1, error
-    if invalid is not None:
-        error, uv_indentation = re.subn(
-            rf"(?m)^(?P<indent> *)({re.escape(invalid)})\n(?P=indent)(?P<caret> +\^)$",
-            lambda match: f"{match.group(2)}\n{match.group('caret')}",
-            error,
-        )
-        assert uv_indentation == 1, error
-    return "\n".join(line.rstrip() for line in error.splitlines())
-
-
 def test_prepares_initial_python_requirements(binary: Path) -> Transcript:
     environment = os.environ.copy()
     environment["RETICULATE_PYTHON"] = "/mcp-console-prepare-must-replace-python"
@@ -139,7 +121,7 @@ def test_prepares_initial_python_requirements(binary: Path) -> Transcript:
     result = client.transcript[-1]["result"]
     assert result["isError"] is True, result
     resolution_error = result["content"][0]["text"]
-    recorded_error = normalize_resolution_error(resolution_error, invalid)
+    recorded_error = normalize_python_resolution_error(resolution_error, invalid)
     result["content"][0]["text"] = recorded_error
     client.call_tool(
         "session",
@@ -148,7 +130,7 @@ def test_prepares_initial_python_requirements(binary: Path) -> Transcript:
     )
     result = client.transcript[-1]["result"]
     assert result["isError"] is True, result
-    result["content"][0]["text"] = normalize_resolution_error(
+    result["content"][0]["text"] = normalize_python_resolution_error(
         result["content"][0]["text"], invalid
     )
     assert result["content"][0]["text"] == recorded_error
@@ -227,7 +209,7 @@ def test_requires_restart_for_late_python_requirements(binary: Path) -> Transcri
         action="prepare",
         requirements={"python": ["py-yaml12"]},
     )
-    assert last_tool_text(client) == "restart required"
+    assert last_tool_text(client) == "[restart required]"
     client.call_tool("send", python="sentinel")
     assert last_tool_text(client) == "42\n"
     return client.finish()
@@ -404,7 +386,7 @@ def test_does_not_checkpoint_python_requirements_from_failed_cell(
         requirements={"python": ["py-yaml12"]},
     )
     output = last_tool_text(client)
-    assert output == "restart required", repr(output)
+    assert output == "[restart required]", repr(output)
     return client.finish()
 
 
@@ -453,7 +435,7 @@ def test_reports_restart_required_while_python_is_running(binary: Path) -> Trans
         session_returned.set()
         watchdog.join()
         assert not forced_release.is_set(), "session waited for the running evaluation"
-        assert last_tool_text(client) == "restart required"
+        assert last_tool_text(client) == "[restart required]"
 
         release.touch()
         client.call_tool("send")
@@ -483,7 +465,7 @@ def test_does_not_parse_requirements_as_rscript_options(binary: Path) -> Transcr
         assert result["isError"] is True, result
         assert not marker.exists(), "requirement executed as unsandboxed R code"
         assert "managed Python resolution failed" in result["content"][0]["text"]
-        result["content"][0]["text"] = normalize_resolution_error(
+        result["content"][0]["text"] = normalize_python_resolution_error(
             result["content"][0]["text"]
         )
         return client.finish()
