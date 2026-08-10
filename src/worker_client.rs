@@ -18,7 +18,7 @@ struct ClientInner {
     worker: Mutex<WorkerState>,
     evaluation: Mutex<Option<ActiveEvaluation>>,
     output: CapturedOutput,
-    lifecycle: Mutex<LifecycleState>,
+    lifecycle: Mutex<LifecycleControl>,
     python: Option<Mutex<PythonEnvironment>>,
 }
 
@@ -202,39 +202,37 @@ impl WorkerGeneration {
 }
 
 /// Owns admission and process cancellation for the implicit session.
-struct LifecycleState {
-    phase: LifecyclePhase,
+struct LifecycleControl {
+    state: LifecycleState,
     generation: WorkerGeneration,
     processes: ProcessStopHandles,
-    deadline: Option<Instant>,
 }
 
-impl LifecycleState {
+impl LifecycleControl {
     fn new() -> Self {
         Self {
-            phase: LifecyclePhase::Ready,
+            state: LifecycleState::Ready,
             generation: WorkerGeneration::new(),
             processes: ProcessStopHandles::default(),
-            deadline: None,
         }
     }
 
     fn start_restart(&mut self, grace: Duration) -> (ProcessStopHandles, Instant) {
         let deadline = Instant::now() + grace;
         let stop_handles = self.processes.clone();
-        self.phase = LifecyclePhase::Restarting;
+        self.state = LifecycleState::Restarting { deadline };
         self.generation = WorkerGeneration::new();
         self.processes.resolver = None;
-        self.deadline = Some(deadline);
         (stop_handles, deadline)
     }
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
-enum LifecyclePhase {
+/// Carries a deadline only while processes are being stopped.
+enum LifecycleState {
     Ready,
-    Restarting,
-    Closed,
+    Restarting { deadline: Instant },
+    ShuttingDown { deadline: Instant },
 }
 
 #[derive(Clone, Default)]
@@ -305,7 +303,7 @@ impl Client {
             worker: Mutex::new(WorkerState::Initial),
             evaluation: Mutex::new(None),
             output: CapturedOutput::new(),
-            lifecycle: Mutex::new(LifecycleState::new()),
+            lifecycle: Mutex::new(LifecycleControl::new()),
             python: python.map(Mutex::new),
         }))
     }
@@ -362,17 +360,17 @@ impl Client {
             .lifecycle
             .lock()
             .map_err(|_| "worker lifecycle lock poisoned".to_string())?;
-        match lifecycle.phase {
-            LifecyclePhase::Ready if lifecycle.generation.is(&generation) => {
+        match lifecycle.state {
+            LifecycleState::Ready if lifecycle.generation.is(&generation) => {
                 lifecycle.processes.resolver = None;
                 python.managed = Some(managed);
                 Ok(PrepareResult::Prepared)
             }
-            LifecyclePhase::Ready => {
+            LifecycleState::Ready => {
                 Err("session restarted before the operation began".to_string())
             }
-            LifecyclePhase::Restarting => Err("worker is restarting".to_string()),
-            LifecyclePhase::Closed => Err("worker is shutting down".to_string()),
+            LifecycleState::Restarting { .. } => Err("worker is restarting".to_string()),
+            LifecycleState::ShuttingDown { .. } => Err("worker is shutting down".to_string()),
         }
     }
 
@@ -738,16 +736,16 @@ impl Client {
             .lifecycle
             .lock()
             .map_err(|_| "worker lifecycle lock poisoned".to_string())?;
-        match lifecycle.phase {
-            LifecyclePhase::Ready if lifecycle.generation.is(&generation) => {
+        match lifecycle.state {
+            LifecycleState::Ready if lifecycle.generation.is(&generation) => {
                 python.managed = Some(managed);
                 Ok(())
             }
-            LifecyclePhase::Ready => {
+            LifecycleState::Ready => {
                 Err("session restarted before the operation began".to_string())
             }
-            LifecyclePhase::Restarting => Err("worker is restarting".to_string()),
-            LifecyclePhase::Closed => Err("worker is shutting down".to_string()),
+            LifecycleState::Restarting { .. } => Err("worker is restarting".to_string()),
+            LifecycleState::ShuttingDown { .. } => Err("worker is shutting down".to_string()),
         }
     }
 
@@ -837,10 +835,10 @@ impl Client {
             .lifecycle
             .lock()
             .map_err(|_| "worker lifecycle lock poisoned".to_string())?;
-        match lifecycle.phase {
-            LifecyclePhase::Ready => Ok(lifecycle.generation.clone()),
-            LifecyclePhase::Restarting => Err("worker is restarting".to_string()),
-            LifecyclePhase::Closed => Err("worker is shutting down".to_string()),
+        match lifecycle.state {
+            LifecycleState::Ready => Ok(lifecycle.generation.clone()),
+            LifecycleState::Restarting { .. } => Err("worker is restarting".to_string()),
+            LifecycleState::ShuttingDown { .. } => Err("worker is shutting down".to_string()),
         }
     }
 
@@ -850,7 +848,7 @@ impl Client {
             .lifecycle
             .lock()
             .map_err(|_| "worker lifecycle lock poisoned".to_string())?;
-        Ok(lifecycle.phase == LifecyclePhase::Ready && lifecycle.generation.is(expected))
+        Ok(lifecycle.state == LifecycleState::Ready && lifecycle.generation.is(expected))
     }
 
     fn ensure_generation(&self, expected: &WorkerGeneration) -> Result<(), String> {
@@ -867,10 +865,10 @@ impl Client {
             .lifecycle
             .lock()
             .map_err(|_| "worker lifecycle lock poisoned".to_string())?;
-        match lifecycle.phase {
-            LifecyclePhase::Restarting => Ok(()),
-            LifecyclePhase::Closed => Err("worker is shutting down".to_string()),
-            LifecyclePhase::Ready => Err("worker restart state changed".to_string()),
+        match lifecycle.state {
+            LifecycleState::Restarting { .. } => Ok(()),
+            LifecycleState::ShuttingDown { .. } => Err("worker is shutting down".to_string()),
+            LifecycleState::Ready => Err("worker restart state changed".to_string()),
         }
     }
 
@@ -880,20 +878,20 @@ impl Client {
             .lifecycle
             .lock()
             .map_err(|_| "worker lifecycle lock poisoned".to_string())?;
-        match lifecycle.phase {
-            LifecyclePhase::Restarting => {
+        match lifecycle.state {
+            LifecycleState::Restarting { .. } => {
                 return Err("worker is already restarting".to_string());
             }
-            LifecyclePhase::Closed => {
+            LifecycleState::ShuttingDown { .. } => {
                 return Err("worker is shutting down".to_string());
             }
-            LifecyclePhase::Ready
+            LifecycleState::Ready
                 if lifecycle.processes.worker.is_none()
                     && lifecycle.processes.resolver.is_some() =>
             {
                 return Err("Python preparation is still running".to_string());
             }
-            LifecyclePhase::Ready => {}
+            LifecycleState::Ready => {}
         }
         Ok(lifecycle.start_restart(grace))
     }
@@ -908,15 +906,15 @@ impl Client {
             .lifecycle
             .lock()
             .map_err(|_| "worker lifecycle lock poisoned".to_string())?;
-        match lifecycle.phase {
-            LifecyclePhase::Ready if lifecycle.generation.is(expected) => {}
-            LifecyclePhase::Ready => {
+        match lifecycle.state {
+            LifecycleState::Ready if lifecycle.generation.is(expected) => {}
+            LifecycleState::Ready => {
                 return Err("session restarted before the operation began".to_string());
             }
-            LifecyclePhase::Restarting => {
+            LifecycleState::Restarting { .. } => {
                 return Err("worker is restarting".to_string());
             }
-            LifecyclePhase::Closed => {
+            LifecycleState::ShuttingDown { .. } => {
                 return Err("worker is shutting down".to_string());
             }
         }
@@ -930,14 +928,13 @@ impl Client {
             .lifecycle
             .lock()
             .map_err(|_| "worker lifecycle lock poisoned".to_string())?;
-        match lifecycle.phase {
-            LifecyclePhase::Restarting => {
-                lifecycle.phase = LifecyclePhase::Ready;
-                lifecycle.deadline = None;
+        match lifecycle.state {
+            LifecycleState::Restarting { .. } => {
+                lifecycle.state = LifecycleState::Ready;
                 Ok(())
             }
-            LifecyclePhase::Closed => Err("worker is shutting down".to_string()),
-            LifecyclePhase::Ready => Err("worker restart state changed".to_string()),
+            LifecycleState::ShuttingDown { .. } => Err("worker is shutting down".to_string()),
+            LifecycleState::Ready => Err("worker restart state changed".to_string()),
         }
     }
 
@@ -947,14 +944,13 @@ impl Client {
             .lifecycle
             .lock()
             .map_err(|_| "worker lifecycle lock poisoned".to_string())?;
-        match lifecycle.phase {
-            LifecyclePhase::Restarting => {
-                lifecycle.phase = LifecyclePhase::Closed;
-                lifecycle.deadline = Some(deadline);
+        match lifecycle.state {
+            LifecycleState::Restarting { .. } => {
+                lifecycle.state = LifecycleState::ShuttingDown { deadline };
                 Ok(())
             }
-            LifecyclePhase::Closed => Ok(()),
-            LifecyclePhase::Ready => Err("worker restart state changed".to_string()),
+            LifecycleState::ShuttingDown { .. } => Ok(()),
+            LifecycleState::Ready => Err("worker restart state changed".to_string()),
         }
     }
 
@@ -969,27 +965,17 @@ impl Client {
                 .lifecycle
                 .lock()
                 .map_err(|_| "worker lifecycle lock poisoned".to_string())?;
-            match lifecycle.phase {
-                LifecyclePhase::Ready if lifecycle.generation.is(expected) => {
+            match lifecycle.state {
+                LifecycleState::Ready if lifecycle.generation.is(expected) => {
                     lifecycle.processes.worker = Some(handle.clone());
                     return Ok(());
                 }
-                LifecyclePhase::Ready => (
+                LifecycleState::Ready => (
                     Instant::now(),
                     "session restarted before the operation began",
                 ),
-                LifecyclePhase::Restarting => (
-                    lifecycle
-                        .deadline
-                        .expect("restarting lifecycle should have a deadline"),
-                    "worker is restarting",
-                ),
-                LifecyclePhase::Closed => (
-                    lifecycle
-                        .deadline
-                        .expect("closed lifecycle should have a deadline"),
-                    "worker is shutting down",
-                ),
+                LifecycleState::Restarting { deadline } => (deadline, "worker is restarting"),
+                LifecycleState::ShuttingDown { deadline } => (deadline, "worker is shutting down"),
             }
         };
         handle.shutdown(deadline)?;
@@ -1003,18 +989,13 @@ impl Client {
                 .lifecycle
                 .lock()
                 .map_err(|_| "worker lifecycle lock poisoned".to_string())?;
-            match lifecycle.phase {
-                LifecyclePhase::Restarting => {
+            match lifecycle.state {
+                LifecycleState::Restarting { .. } => {
                     lifecycle.processes.worker = Some(handle.clone());
                     return Ok(());
                 }
-                LifecyclePhase::Closed => (
-                    lifecycle
-                        .deadline
-                        .expect("closed lifecycle should have a deadline"),
-                    "worker is shutting down",
-                ),
-                LifecyclePhase::Ready => (Instant::now(), "worker restart state changed"),
+                LifecycleState::ShuttingDown { deadline } => (deadline, "worker is shutting down"),
+                LifecycleState::Ready => (Instant::now(), "worker restart state changed"),
             }
         };
         handle.shutdown(deadline)?;
@@ -1032,14 +1013,14 @@ impl Client {
                 .lifecycle
                 .lock()
                 .map_err(|_| "worker lifecycle lock poisoned".to_string())?;
-            match lifecycle.phase {
-                LifecyclePhase::Ready if lifecycle.generation.is(expected) => {
+            match lifecycle.state {
+                LifecycleState::Ready if lifecycle.generation.is(expected) => {
                     lifecycle.processes.resolver = Some(handle.clone());
                     return Ok(());
                 }
-                LifecyclePhase::Ready => "session restarted before the operation began",
-                LifecyclePhase::Restarting => "worker is restarting",
-                LifecyclePhase::Closed => "worker is shutting down",
+                LifecycleState::Ready => "session restarted before the operation began",
+                LifecycleState::Restarting { .. } => "worker is restarting",
+                LifecycleState::ShuttingDown { .. } => "worker is shutting down",
             }
         };
         handle.stop()?;
@@ -1052,8 +1033,8 @@ impl Client {
             .lifecycle
             .lock()
             .map_err(|_| "worker lifecycle lock poisoned".to_string())?;
-        if (lifecycle.phase == LifecyclePhase::Ready && lifecycle.generation.is(expected))
-            || lifecycle.phase == LifecyclePhase::Closed
+        if (lifecycle.state == LifecycleState::Ready && lifecycle.generation.is(expected))
+            || matches!(lifecycle.state, LifecycleState::ShuttingDown { .. })
         {
             lifecycle.processes.resolver = None;
         }
@@ -1066,9 +1047,8 @@ impl Client {
             .lifecycle
             .lock()
             .map_err(|_| "worker lifecycle lock poisoned".to_string())?;
-        if lifecycle.phase != LifecyclePhase::Closed {
-            lifecycle.phase = LifecyclePhase::Closed;
-            lifecycle.deadline = Some(deadline);
+        if !matches!(lifecycle.state, LifecycleState::ShuttingDown { .. }) {
+            lifecycle.state = LifecycleState::ShuttingDown { deadline };
         }
         let handles = std::mem::take(&mut lifecycle.processes);
         Ok((handles.worker.is_some() || handles.resolver.is_some()).then_some(handles))
