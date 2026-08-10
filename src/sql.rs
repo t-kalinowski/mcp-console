@@ -8,6 +8,50 @@ base::local({
   cell_width <- 160L
   response_bytes <- 12L * 1024L
 
+  bridge <- environment()
+  send_query_arrow <- eval(
+    bquote(
+      function() DBI::dbSendQueryArrow(
+        .(bridge)$connection,
+        .(bridge)$source
+      )
+    ),
+    envir = globalenv()
+  )
+
+  ensure_connection <- function() {
+    if (!is.null(connection)) {
+      return(invisible(connection))
+    }
+
+    storage <- file.path(tempdir(), "mcp-console-duckdb")
+    connection <<- DBI::dbConnect(
+      duckdb::duckdb(
+        dbdir = ":memory:",
+        config = list(
+          extension_directory = file.path(storage, "extensions"),
+          secret_directory = file.path(storage, "stored-secrets"),
+          temp_directory = file.path(storage, "spill")
+        ),
+        environment_scan = TRUE
+      )
+    )
+    DBI::dbExecute(connection, "SET enable_progress_bar = false")
+    invisible(connection)
+  }
+
+  sql_connection <- function() {
+    ensure_connection()
+    connection
+  }
+  tools <- base::attach(
+    NULL,
+    pos = 2L,
+    name = "tools:mcp-console",
+    warn.conflicts = FALSE
+  )
+  base::assign("sql_connection", sql_connection, envir = tools)
+
   ensure_printer <- function() {
     if (printer_ready) {
       return(invisible(NULL))
@@ -59,7 +103,7 @@ base::local({
   }
 
   fetch_query <- function() {
-    result <- DBI::dbSendQueryArrow(connection, source)
+    result <- send_query_arrow()
     tryCatch(
       {
         if (result@stmt_lst$return_type != "QUERY_RESULT") {
@@ -295,21 +339,7 @@ base::local({
   evaluate <- function(id) {
     tryCatch(
       {
-        if (is.null(connection)) {
-          storage <- file.path(tempdir(), "mcp-console-duckdb")
-          connection <<- DBI::dbConnect(
-            duckdb::duckdb(
-              dbdir = ":memory:",
-              config = list(
-                extension_directory = file.path(storage, "extensions"),
-                secret_directory = file.path(storage, "stored-secrets"),
-                temp_directory = file.path(storage, "spill")
-              ),
-              environment_scan = FALSE
-            )
-          )
-          DBI::dbExecute(connection, "SET enable_progress_bar = false")
-        }
+        ensure_connection()
 
         preview <- fetch_query()
         if (!is.null(preview)) {
