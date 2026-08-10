@@ -63,6 +63,11 @@ Submitted R functions do not currently retain a source filename.
 Python cells run in the same worker through reticulate, retain `__main__` state, execute statements, and send a final expression through `sys.displayhook()`.
 Python source uses a synthetic evaluation filename, and uncaught exceptions print a Python traceback as a normal language outcome with `isError: false`.
 Python cells enter the same managed graphics lifecycle as R cells, so R plots invoked through reticulate's `r` bridge return as MCP images under the same sizing, cell-scope, device-ownership, and finalization rules.
+At Python cell end, the worker renders each new or changed open `matplotlib.pyplot` figure in memory and emits it as `image/png`; `plt.show()` is not required, figures remain open, and unchanged figures are not re-emitted.
+Figures closed before cell end and figures not registered with `pyplot` are not captured.
+Matplotlib rendering failures print a Python traceback as a normal language outcome and leave the worker available.
+Unless inherited values configure them, the worker sets Matplotlib's backend to Agg and its writable configuration directory under the worker's private temporary directory before Python initializes.
+Matplotlib remains optional and capture activates only after `matplotlib.pyplot` has been loaded.
 At worker startup, MCP Console sets `RETICULATE_REMAP_OUTPUT_STREAMS=1` once, before user R can initialize Python.
 Within the worker process, reticulate then routes Python text writes, including `print()`, `sys.stderr.write()`, and tracebacks, through the R console callback as sideband `output` frames.
 Writes through `sys.stdout.buffer`, `sys.stderr.buffer`, or native fd 1/2 bypass that remap and use the captured standard streams.

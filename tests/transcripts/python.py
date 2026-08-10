@@ -609,6 +609,89 @@ def test_returns_r_plots_from_python_bridge(binary: Path) -> Transcript:
     return client.finish()
 
 
+def test_returns_matplotlib_plots(binary: Path) -> Transcript:
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        environment = os.environ.copy()
+        environment["TMPDIR"] = temporary_directory
+        client = McpClient(binary, ("serve",), environment)
+        client.initialize_and_list_tools()
+        client.call_tool(
+            "session",
+            action="prepare",
+            requirements={"python": ["matplotlib"]},
+        )
+        assert last_tool_text(client) == "[prepared]"
+
+        # fmt: python
+        python = code("""
+            import os
+            from pathlib import Path
+
+            import matplotlib.pyplot as plt
+
+            figure, axes = plt.subplots()
+            axes.plot([1, 2, 3], [3, 1, 2])
+            reference = Path(os.environ["TMPDIR"]) / "matplotlib-reference.png"
+            figure.savefig(reference, format="png")
+            """)
+        client.call_tool("send", python=python)
+        reference = wait_for_worker_file(
+            Path(temporary_directory),
+            "matplotlib-reference.png",
+            client,
+        )
+        assert_result_content(
+            client,
+            [reference.read_bytes()],
+            image_reference="live matplotlib savefig {page}",
+        )
+
+        client.call_tool("send", python="40 + 2")
+        assert last_tool_text(client) == "42\n"
+
+        # fmt: python
+        python = code("""
+            def fail_plot_capture(*args, **kwargs):
+                raise RuntimeError("plot render failed")
+
+
+            axes.plot([1, 3], [2, 0])
+            updated_reference = Path(os.environ["TMPDIR"]) / "matplotlib-updated-reference.png"
+            figure.savefig(updated_reference, format="png")
+            failed_figure = plt.figure()
+            failed_figure.savefig = fail_plot_capture
+            """)
+        client.call_tool("send", python=python)
+        result = client.transcript[-1]["result"]
+        assert result["isError"] is False, result
+        output = result["content"][0]["text"]
+        assert output.startswith("Traceback (most recent call last):\n"), output
+        assert "in _mcp_console_collect_plots\n" in output, output
+        assert output.endswith("RuntimeError: plot render failed\n"), output
+        result["content"][0]["text"] = (
+            "<matplotlib render traceback ending in RuntimeError: plot render failed>\n"
+        )
+        updated_reference = wait_for_worker_file(
+            Path(temporary_directory),
+            "matplotlib-updated-reference.png",
+            client,
+        )
+        assert_result_content(
+            client,
+            [result["content"][0]["text"], updated_reference.read_bytes()],
+            image_reference="live updated matplotlib savefig {page}",
+        )
+
+        # fmt: python
+        python = code("""
+            plt.close("all")
+            6 * 7
+            """)
+        client.call_tool("send", python=python)
+        assert last_tool_text(client) == "42\n"
+        return client.finish()
+
+
 def test_runs_async_python_explicitly(binary: Path) -> Transcript:
     client = McpClient(binary, ("serve",))
     client.initialize_and_list_tools()

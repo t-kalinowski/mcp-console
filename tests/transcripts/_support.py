@@ -88,6 +88,8 @@ def reference_plots(
 def assert_result_content(
     client: "McpClient",
     expected: list[str | bytes],
+    *,
+    image_reference: str = "live Rscript page {page}",
 ) -> None:
     result = client.transcript[-1]["result"]
     assert result.get("isError") is not True, result
@@ -107,12 +109,13 @@ def assert_result_content(
         assert image["type"] == "image", image
         assert image["mimeType"] == "image/png", image
         data = base64.b64decode(image["data"], validate=True)
+        reference = image_reference.format(page=page + 1)
         assert data == expected_item, (
             f"plot bytes differ: worker returned {len(data)} bytes, "
-            f"live Rscript returned {len(expected_item)} bytes"
+            f"{reference} returned {len(expected_item)} bytes"
         )
         page += 1
-        image["data"] = f"<PNG byte-identical to live Rscript page {page}>"
+        image["data"] = f"<PNG byte-identical to {reference}>"
 
 
 def run_this_suite(suite_path: str) -> None:

@@ -45,9 +45,10 @@ result:
               - "null"
           python:
             description: |-
-              Complete multiline Python code evaluated in persistent state. R plots invoked through
-              reticulate's `r` bridge return as PNG images under the same cell-scoped rules and R options
-              as `r`. Omit to write stdin or poll.
+              Complete multiline Python code evaluated in persistent state. New or changed open figures
+              managed by `matplotlib.pyplot` return as PNG images at cell end without requiring `show()`.
+              R plots invoked through reticulate's `r` bridge return under the same cell-scoped rules and
+              R options as `r`. Omit to write stdin or poll.
             type:
               - string
               - "null"

@@ -93,6 +93,10 @@ Graphics devices opened explicitly by evaluated code, such as with `grDevices::p
 Python cells execute statements in persistent `__main__` state and send a final expression through Python's display hook.
 R and Python can exchange objects through reticulate's `py` and `r` bridges.
 R plots invoked from a Python cell through reticulate's `r` bridge use the same managed default device, sizing options, cell scope, and MCP image output as plots invoked from an R cell.
+At the end of each Python cell, new or changed open figures managed by `matplotlib.pyplot` are rendered in memory and returned as PNG images; `plt.show()` is not required.
+The figures remain open for later Python cells, and unchanged figures are not returned again.
+Figures closed before cell end and figures not registered with `pyplot` are not captured.
+Unless inherited settings select otherwise, the worker uses Matplotlib's noninteractive Agg backend and keeps its writable configuration under the worker's private temporary directory.
 Reticulate routes Python text written through `sys.stdout` and `sys.stderr`, including tracebacks, through the same sideband console output path as R.
 Writes through `sys.stdout.buffer`, `sys.stderr.buffer`, or fd 1/2 directly remain on the captured standard streams.
 After a Python cell calls `os.fork()`, reticulate restores the child's original fd-backed text streams after its sideband is disabled, so its ordinary stdout and stderr are captured too.
@@ -116,6 +120,7 @@ R language failures, uncaught Python exceptions, and DuckDB errors remain ordina
 A silent successful R, Python, or SQL cell sends no sideband `output` frame, still sends `completed`, and projects to `[done]` when no other response text is pending.
 
 Python cells require the `reticulate` R package.
+Matplotlib figure capture requires the Python `matplotlib` package; prepare it before the worker starts when it is not already available.
 SQL cells require the `arrow`, `DBI`, `duckdb`, `nanoarrow`, `pillar`, and `tibble` R packages.
 When `RETICULATE_PYTHON` is unset or is `managed`, `mcp-console serve` runs reticulate's uv environment resolver outside the worker sandbox with its NumPy baseline, where it can use the normal host caches and network access.
 Other configured values, including an empty value, are preserved when no requirements are prepared and skip this startup preflight.

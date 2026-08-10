@@ -1,6 +1,8 @@
 #[cfg(target_os = "macos")]
 mod platform {
+    use std::ffi::{CStr, CString};
     use std::io;
+    use std::os::unix::ffi::OsStrExt as _;
 
     use libr::SEXP;
 
@@ -146,9 +148,73 @@ base::local({
       private <- reticulate::py_run_string(r"---(
 import __main__ as _main
 import ast as _ast
+import base64 as _base64
 import builtins as _builtins
+import hashlib as _hashlib
+import io as _io
+import logging as _logging
 import sys as _sys
 import traceback as _traceback
+
+
+_plot_hashes = {}
+
+
+class _McpConsoleMatplotlibLogFilter(_logging.Filter):
+    def filter(self, record):
+        return record.getMessage() != (
+            "Matplotlib is building the font cache; this may take a moment."
+        )
+
+
+_logging.getLogger("matplotlib.font_manager").addFilter(
+    _McpConsoleMatplotlibLogFilter()
+)
+
+
+def _mcp_console_collect_plots(
+    _BaseException=_builtins.BaseException,
+    _base64=_base64,
+    _hashlib=_hashlib,
+    _id=_builtins.id,
+    _io=_io,
+    _plot_hashes=_plot_hashes,
+    _print_exc=_traceback.print_exc,
+    _sys=_sys,
+):
+    pyplot = _sys.modules.get("matplotlib.pyplot")
+    if pyplot is None:
+        return ()
+
+    numbers = sorted(pyplot.get_fignums())
+    for stale in set(_plot_hashes) - set(numbers):
+        del _plot_hashes[stale]
+    if not numbers:
+        return ()
+
+    current = pyplot.gcf().number
+    images = []
+    for number in numbers:
+        try:
+            figure = pyplot.figure(number)
+            output = _io.BytesIO()
+            figure.savefig(output, format="png")
+            data = output.getvalue()
+            digest = _hashlib.sha256(data).digest()
+            state = (_id(figure), digest)
+            if _plot_hashes.get(number) == state:
+                continue
+            _plot_hashes[number] = state
+            images.append(_base64.b64encode(data).decode("ascii"))
+        except _BaseException:
+            _print_exc()
+
+    try:
+        if current in pyplot.get_fignums():
+            pyplot.figure(current)
+    except _BaseException:
+        _print_exc()
+    return images
 
 
 def _mcp_console_eval_cell(
@@ -163,6 +229,7 @@ def _mcp_console_eval_cell(
     _exec=_builtins.exec,
     _eval=_builtins.eval,
     _BaseException=_builtins.BaseException,
+    _collect_plots=_mcp_console_collect_plots,
     _sys=_sys,
     _print_exc=_traceback.print_exc,
 ):
@@ -183,12 +250,21 @@ def _mcp_console_eval_cell(
             _sys.displayhook(_eval(expression, _main.__dict__))
     except _BaseException:
         _print_exc()
+    try:
+        return _collect_plots()
+    except _BaseException:
+        _print_exc()
+        return ()
 )---", local = TRUE, convert = FALSE)
       evaluator <<- private$`_mcp_console_eval_cell`
     }
 
     filename <- paste0("<mcp-console:python:", id, ">")
-    invisible(evaluator(source, filename))
+    images <- reticulate::py_to_r(evaluator(source, filename))
+    for (image in images) {
+      invisible(.Call("mcp_console_publish_python_plot", image))
+    }
+    invisible()
   }
 
   environment()
@@ -220,15 +296,34 @@ def _mcp_console_eval_cell(
     }
 
     pub(crate) fn configure_worker_environment() -> io::Result<()> {
-        for (name, value) in [
-            (c"RETICULATE_REMAP_OUTPUT_STREAMS", c"1"),
-            (c"UV_OFFLINE", c"1"),
+        for (name, value, overwrite) in [
+            (c"RETICULATE_REMAP_OUTPUT_STREAMS", c"1", true),
+            (c"UV_OFFLINE", c"1", true),
+            (c"MPLBACKEND", c"agg", false),
         ] {
-            if unsafe { libc::setenv(name.as_ptr(), value.as_ptr(), 1) } != 0 {
-                return Err(io::Error::last_os_error());
-            }
+            set_environment(name, value, overwrite)?;
+        }
+
+        let matplotlib_config = std::env::temp_dir().join("matplotlib");
+        let matplotlib_config = CString::new(matplotlib_config.as_os_str().as_bytes())
+            .expect("temporary directory should not contain NUL");
+        set_environment(c"MPLCONFIGDIR", &matplotlib_config, false)?;
+        Ok(())
+    }
+
+    fn set_environment(name: &CStr, value: &CStr, overwrite: bool) -> io::Result<()> {
+        if unsafe { libc::setenv(name.as_ptr(), value.as_ptr(), overwrite.into()) } != 0 {
+            return Err(io::Error::last_os_error());
         }
         Ok(())
+    }
+
+    #[allow(clippy::result_large_err)]
+    #[harp::register]
+    pub extern "C-unwind" fn mcp_console_publish_python_plot(data: SEXP) -> harp::Result<SEXP> {
+        let data = String::try_from(harp::object::RObject::view(data))?;
+        crate::worker::publish_plot(Ok(data));
+        unsafe { Ok(libr::R_NilValue) }
     }
 
     #[allow(clippy::result_large_err)]
