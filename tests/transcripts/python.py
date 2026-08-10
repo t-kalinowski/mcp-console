@@ -655,19 +655,105 @@ def test_returns_matplotlib_plots(binary: Path) -> Transcript:
             "matplotlib-reference.png",
             client,
         )
+        assert reference.is_file()
+        assert last_tool_text(client) == "[done]"
+
+        # fmt: python
+        python = code("""
+            shown_figure, shown_axes = plt.subplots()
+            shown_axes.plot([1, 2, 3], [1, 3, 2])
+            shown_reference = Path(os.environ["TMPDIR"]) / "matplotlib-shown-reference.png"
+            shown_figure.savefig(shown_reference, format="png")
+            print("before show")
+            plt.show()
+            print("after show")
+            """)
+        client.call_tool("send", python=python)
+        shown_reference = wait_for_worker_file(
+            Path(temporary_directory),
+            "matplotlib-shown-reference.png",
+            client,
+        )
         assert_result_content(
             client,
-            [reference.read_bytes()],
-            image_reference="live matplotlib savefig {page}",
+            ["before show\n", shown_reference.read_bytes(), "after show\n"],
+            image_reference="live shown matplotlib savefig {page}",
+        )
+
+        # fmt: python
+        python = code("""
+            displayed_figure, displayed_axes = plt.subplots()
+            displayed_axes.plot([1, 2, 3], [2, 3, 1])
+            displayed_reference = Path(os.environ["TMPDIR"]) / "matplotlib-displayed-reference.png"
+            displayed_figure.savefig(displayed_reference, format="png")
+            displayed_figure
+            """)
+        client.call_tool("send", python=python)
+        displayed_reference = wait_for_worker_file(
+            Path(temporary_directory),
+            "matplotlib-displayed-reference.png",
+            client,
+        )
+        assert_result_content(
+            client,
+            [displayed_reference.read_bytes()],
+            image_reference="live displayed matplotlib savefig {page}",
+        )
+
+        # fmt: python
+        python = code("""
+            container_figure, container_axes = plt.subplots()
+            container = container_axes.errorbar([1, 2], [2, 1], yerr=[0.2, 0.3], fmt="none")
+            container_reference = Path(os.environ["TMPDIR"]) / "matplotlib-container-reference.png"
+            container_figure.savefig(container_reference, format="png")
+            container
+            """)
+        client.call_tool("send", python=python)
+        container_reference = wait_for_worker_file(
+            Path(temporary_directory),
+            "matplotlib-container-reference.png",
+            client,
+        )
+        assert_result_content(
+            client,
+            [container_reference.read_bytes()],
+            image_reference="live container matplotlib savefig {page}",
+        )
+
+        # fmt: python
+        python = code("""
+            root_figure = plt.figure()
+            subfigure = root_figure.subfigures(1, 1)
+            subfigure_axes = subfigure.subplots()
+            subfigure_axes.plot([1, 2], [1, 2])
+            subfigure_reference = Path(os.environ["TMPDIR"]) / "matplotlib-subfigure-reference.png"
+            root_figure.savefig(subfigure_reference, format="png")
+            subfigure_axes
+            """)
+        client.call_tool("send", python=python)
+        subfigure_reference = wait_for_worker_file(
+            Path(temporary_directory),
+            "matplotlib-subfigure-reference.png",
+            client,
+        )
+        assert_result_content(
+            client,
+            [subfigure_reference.read_bytes()],
+            image_reference="live subfigure matplotlib savefig {page}",
         )
 
         # fmt: python
         python = code("""
             axes.plot([1, 3], [2, 0])
-            plt.get_fignums()
+            figure
             """)
         client.call_tool("send", python=python)
-        assert last_tool_text(client) == "[]\n"
+        output = last_tool_text(client)
+        assert output.startswith("<Figure size "), output
+        assert output.endswith(" with 1 Axes>\n"), output
+        client.transcript[-1]["result"]["content"][0]["text"] = (
+            "<retained closed matplotlib figure>\n"
+        )
 
         # fmt: python
         python = code("""
@@ -691,11 +777,8 @@ def test_returns_matplotlib_plots(binary: Path) -> Transcript:
             "matplotlib-error-reference.png",
             client,
         )
-        assert_result_content(
-            client,
-            [result["content"][0]["text"], error_reference.read_bytes()],
-            image_reference="live error-cell matplotlib savefig {page}",
-        )
+        assert error_reference.is_file()
+        assert_result_content(client, [result["content"][0]["text"]])
 
         client.call_tool("send", python="plt.get_fignums()")
         assert last_tool_text(client) == "[]\n"
@@ -712,6 +795,7 @@ def test_returns_matplotlib_plots(binary: Path) -> Transcript:
             axes.plot([1, 3], [2, 0])
             second_reference = Path(os.environ["TMPDIR"]) / "matplotlib-second-reference.png"
             figure.savefig(second_reference, format="png")
+            plt.show()
             """)
         client.call_tool("send", python=python)
         result = client.transcript[-1]["result"]

@@ -12,6 +12,13 @@ base::local({
   managed <- Sys.getenv("MCP_CONSOLE_MANAGED_PYTHON", unset = NA_character_)
   source <- NULL
 
+  publish_images <- function(images) {
+    for (image in images) {
+      invisible(.Call("mcp_console_publish_python_plot", image))
+    }
+    invisible()
+  }
+
   manifest <- function(packages, python_version, exclude_newer) {
     list(
       packages = I(sort(unique(packages %||% character()))),
@@ -168,40 +175,127 @@ _logging.getLogger("matplotlib.font_manager").addFilter(
 )
 
 
-def _mcp_console_collect_plots(
+_mcp_console_matplotlib_images = []
+_mcp_console_matplotlib_displayed = []
+
+
+def _mcp_console_render_plots(
+    figures,
     _BaseException=_builtins.BaseException,
     _base64=_base64,
+    _displayed=_mcp_console_matplotlib_displayed,
     _io=_io,
+    _print_exc=_traceback.print_exc,
+):
+    images = []
+    for figure in figures:
+        if any(displayed is figure for displayed in _displayed):
+            continue
+        _displayed.append(figure)
+        try:
+            output = _io.BytesIO()
+            figure.savefig(output, format="png")
+            data = output.getvalue()
+            images.append(_base64.b64encode(data).decode("ascii"))
+        except _BaseException:
+            _print_exc()
+    return images
+
+
+def _mcp_console_matplotlib_figures(
+    value,
+    _displayed=_mcp_console_matplotlib_displayed,
+    _isinstance=_builtins.isinstance,
+    _list=_builtins.list,
+    _sys=_sys,
+    _tuple=_builtins.tuple,
+):
+    artist = _sys.modules.get("matplotlib.artist")
+    container = _sys.modules.get("matplotlib.container")
+    artist_type = getattr(artist, "Artist", ())
+    container_type = getattr(container, "Container", ())
+    if not artist_type and not container_type:
+        return ()
+
+    figures = []
+    identities = set()
+
+    def append_figure(candidate):
+        if artist_type and _isinstance(candidate, artist_type):
+            figure = candidate.get_figure()
+            while figure is not None and not hasattr(figure, "savefig"):
+                figure = figure.get_figure()
+            if figure is not None and id(figure) not in identities:
+                identities.add(id(figure))
+                figures.append(figure)
+            return
+        if container_type and _isinstance(candidate, container_type):
+            for item in candidate.get_children():
+                append_figure(item)
+
+    if (
+        artist_type and _isinstance(value, artist_type)
+        or container_type and _isinstance(value, container_type)
+    ):
+        append_figure(value)
+    elif _isinstance(value, (_list, _tuple)):
+        if not value:
+            return ()
+        append_figure(value[0])
+        if len(value) > 1:
+            append_figure(value[-1])
+    else:
+        append_figure(value)
+
+    pyplot = _sys.modules.get("matplotlib.pyplot")
+    managed = set()
+    if pyplot is not None:
+        for number in pyplot.get_fignums():
+            managed.add(id(pyplot.figure(number)))
+    return [
+        figure
+        for figure in figures
+        if id(figure) in managed
+        or any(displayed is figure for displayed in _displayed)
+    ]
+
+
+def _mcp_console_matplotlib_show(
+    *args,
+    _BaseException=_builtins.BaseException,
+    _print_exc=_traceback.print_exc,
+    _render=_mcp_console_render_plots,
+    _sys=_sys,
+    **kwargs,
+):
+    pyplot = _sys.modules["matplotlib.pyplot"]
+    figures = []
+    for number in sorted(pyplot.get_fignums()):
+        try:
+            figures.append(pyplot.figure(number))
+        except _BaseException:
+            _print_exc()
+    images = _render(figures)
+    try:
+        pyplot.close("all")
+    except _BaseException:
+        _print_exc()
+    return tuple(images)
+
+
+def _mcp_console_finish_plots(
+    _BaseException=_builtins.BaseException,
+    _images=_mcp_console_matplotlib_images,
     _print_exc=_traceback.print_exc,
     _sys=_sys,
 ):
     pyplot = _sys.modules.get("matplotlib.pyplot")
-    if pyplot is None:
-        return ()
-
-    numbers = sorted(pyplot.get_fignums())
-    if not numbers:
-        return ()
-
-    images = []
-    try:
-        for number in numbers:
-            try:
-                if number not in pyplot.get_fignums():
-                    continue
-                figure = pyplot.figure(number)
-                output = _io.BytesIO()
-                figure.savefig(output, format="png")
-                data = output.getvalue()
-                images.append(_base64.b64encode(data).decode("ascii"))
-            except _BaseException:
-                _print_exc()
-    finally:
+    if pyplot is not None:
         try:
             pyplot.close("all")
         except _BaseException:
             _print_exc()
-    return images
+    return tuple(_images)
 
 
 def _mcp_console_eval_cell(
@@ -216,10 +310,17 @@ def _mcp_console_eval_cell(
     _exec=_builtins.exec,
     _eval=_builtins.eval,
     _BaseException=_builtins.BaseException,
-    _collect_plots=_mcp_console_collect_plots,
+    _builtins_module=_builtins,
+    _displayed=_mcp_console_matplotlib_displayed,
+    _figures=_mcp_console_matplotlib_figures,
+    _finish_plots=_mcp_console_finish_plots,
+    _images=_mcp_console_matplotlib_images,
+    _render=_mcp_console_render_plots,
     _sys=_sys,
     _print_exc=_traceback.print_exc,
 ):
+    _images.clear()
+    _displayed.clear()
     try:
         module = _parse(source, filename=filename, mode="exec")
         final = module.body[-1] if module.body else None
@@ -234,23 +335,35 @@ def _mcp_console_eval_cell(
         if statements is not None:
             _exec(statements, _main.__dict__)
         if expression is not None:
-            _sys.displayhook(_eval(expression, _main.__dict__))
+            value = _eval(expression, _main.__dict__)
+            figures = _figures(value)
+            if figures:
+                _builtins_module._ = value
+                _images.extend(_render(figures))
+            else:
+                _sys.displayhook(value)
     except _BaseException:
         _print_exc()
     try:
-        return _collect_plots()
+        return _finish_plots()
     except _BaseException:
         _print_exc()
         return ()
 )---", local = TRUE, convert = FALSE)
+      reticulate::py_register_load_hook("matplotlib.pyplot", function() {
+        pyplot <- reticulate::import("matplotlib.pyplot", convert = FALSE)
+        pyplot$show <- function(...) {
+          images <- reticulate::py_to_r(private$`_mcp_console_matplotlib_show`())
+          publish_images(images)
+          reticulate::py_none()
+        }
+      })
       evaluator <<- private$`_mcp_console_eval_cell`
     }
 
     filename <- paste0("<mcp-console:python:", id, ">")
     images <- reticulate::py_to_r(evaluator(source, filename))
-    for (image in images) {
-      invisible(.Call("mcp_console_publish_python_plot", image))
-    }
+    publish_images(images)
     invisible()
   }
 

@@ -27,24 +27,93 @@ send:
     figure.savefig(reference, format="png")
 result:
   content:
-    - type: image
-      data: <PNG byte-identical to live matplotlib savefig 1>
-      mimeType: image/png
+    - type: text
+      text: "[done]"
   isError: false
 ---
 id: 5
 send:
   python: |
-    axes.plot([1, 3], [2, 0])
-    plt.get_fignums()
+    shown_figure, shown_axes = plt.subplots()
+    shown_axes.plot([1, 2, 3], [1, 3, 2])
+    shown_reference = Path(os.environ["TMPDIR"]) / "matplotlib-shown-reference.png"
+    shown_figure.savefig(shown_reference, format="png")
+    print("before show")
+    plt.show()
+    print("after show")
 result:
   content:
     - type: text
       text: |
-        []
+        before show
+    - type: image
+      data: <PNG byte-identical to live shown matplotlib savefig 1>
+      mimeType: image/png
+    - type: text
+      text: |
+        after show
   isError: false
 ---
 id: 6
+send:
+  python: |
+    displayed_figure, displayed_axes = plt.subplots()
+    displayed_axes.plot([1, 2, 3], [2, 3, 1])
+    displayed_reference = Path(os.environ["TMPDIR"]) / "matplotlib-displayed-reference.png"
+    displayed_figure.savefig(displayed_reference, format="png")
+    displayed_figure
+result:
+  content:
+    - type: image
+      data: <PNG byte-identical to live displayed matplotlib savefig 1>
+      mimeType: image/png
+  isError: false
+---
+id: 7
+send:
+  python: |
+    container_figure, container_axes = plt.subplots()
+    container = container_axes.errorbar([1, 2], [2, 1], yerr=[0.2, 0.3], fmt="none")
+    container_reference = Path(os.environ["TMPDIR"]) / "matplotlib-container-reference.png"
+    container_figure.savefig(container_reference, format="png")
+    container
+result:
+  content:
+    - type: image
+      data: <PNG byte-identical to live container matplotlib savefig 1>
+      mimeType: image/png
+  isError: false
+---
+id: 8
+send:
+  python: |
+    root_figure = plt.figure()
+    subfigure = root_figure.subfigures(1, 1)
+    subfigure_axes = subfigure.subplots()
+    subfigure_axes.plot([1, 2], [1, 2])
+    subfigure_reference = Path(os.environ["TMPDIR"]) / "matplotlib-subfigure-reference.png"
+    root_figure.savefig(subfigure_reference, format="png")
+    subfigure_axes
+result:
+  content:
+    - type: image
+      data: <PNG byte-identical to live subfigure matplotlib savefig 1>
+      mimeType: image/png
+  isError: false
+---
+id: 9
+send:
+  python: |
+    axes.plot([1, 3], [2, 0])
+    figure
+result:
+  content:
+    - type: text
+      text: |
+        <retained closed matplotlib figure>
+  isError: false
+---
+id: 10
 send:
   python: |
     error_figure, error_axes = plt.subplots()
@@ -57,12 +126,9 @@ result:
     - type: text
       text: |
         <python traceback ending in ValueError: cell failed>
-    - type: image
-      data: <PNG byte-identical to live error-cell matplotlib savefig 1>
-      mimeType: image/png
   isError: false
 ---
-id: 7
+id: 11
 send:
   python: plt.get_fignums()
 result:
@@ -72,7 +138,7 @@ result:
         []
   isError: false
 ---
-id: 8
+id: 12
 send:
   python: |
     def fail_plot_capture(*args, **kwargs):
@@ -85,6 +151,7 @@ send:
     axes.plot([1, 3], [2, 0])
     second_reference = Path(os.environ["TMPDIR"]) / "matplotlib-second-reference.png"
     figure.savefig(second_reference, format="png")
+    plt.show()
 result:
   content:
     - type: text
@@ -95,7 +162,7 @@ result:
       mimeType: image/png
   isError: false
 ---
-id: 9
+id: 13
 send:
   python: plt.get_fignums()
 result:
