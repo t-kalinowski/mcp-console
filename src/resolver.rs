@@ -2,17 +2,15 @@
 mod platform {
     use std::collections::BTreeMap;
     use std::io::{self, Write};
+    use std::mem::MaybeUninit;
     use std::os::unix::fs::PermissionsExt as _;
     use std::os::unix::process::CommandExt as _;
     use std::path::{Path, PathBuf};
     use std::process::{Child, ChildStdin, Command, ExitStatus, Stdio};
-    use std::sync::mpsc::{self, Receiver, TryRecvError};
+    use std::sync::mpsc::{self, Receiver, Sender};
     use std::thread;
-    use std::time::Duration;
 
     use serde::Serialize;
-
-    const CANCEL_POLL_INTERVAL: Duration = Duration::from_millis(10);
 
     const R_LIBRARY_RESOLVER: &str = r#"
 base::cat(base::normalizePath(
@@ -98,7 +96,12 @@ base::local({
     }
 
     #[derive(Clone)]
-    pub(crate) struct ResolverStopHandle(mpsc::Sender<()>);
+    pub(crate) struct ResolverStopHandle(Sender<ResolverEvent>);
+
+    enum ResolverEvent {
+        Cancel,
+        Exited(io::Result<()>),
+    }
 
     struct ResolverOutput {
         status: ExitStatus,
@@ -198,12 +201,13 @@ base::local({
         })?;
         let stdout = read_output(child.stdout.take().expect("resolver stdout is piped"));
         let stderr = read_output(child.stderr.take().expect("resolver stderr is piped"));
-        let (cancel, cancellation) = mpsc::channel();
-        let stop_handle = ResolverStopHandle(cancel);
-        if let Err(error) = on_started(stop_handle.clone()) {
+        let (events, event_receiver) = mpsc::channel();
+        let stop_handle = ResolverStopHandle(events.clone());
+        if let Err(error) = on_started(stop_handle) {
             let _ = stop_resolver(&mut child, ir, "R package");
             return Err(error);
         }
+        watch_resolver_exit(child.id(), events);
         let ResolverOutput {
             status,
             stdout,
@@ -211,7 +215,7 @@ base::local({
             ..
         } = wait_for_resolver(
             &mut child,
-            cancellation,
+            event_receiver,
             completed_write(),
             stdout,
             stderr,
@@ -303,12 +307,13 @@ base::local({
         let stdout = read_output(child.stdout.take().expect("resolver stdout is piped"));
         let stderr = read_output(child.stderr.take().expect("resolver stderr is piped"));
         let input = child.stdin.take().expect("resolver stdin is piped");
-        let (cancel, cancellation) = mpsc::channel();
-        let stop_handle = ResolverStopHandle(cancel);
-        if let Err(error) = on_started(stop_handle.clone()) {
+        let (events, event_receiver) = mpsc::channel();
+        let stop_handle = ResolverStopHandle(events.clone());
+        if let Err(error) = on_started(stop_handle) {
             let _ = stop_resolver(&mut child, &rscript, "managed Python");
             return Err(error);
         }
+        watch_resolver_exit(child.id(), events);
         let input = write_requirements(input, &requirements);
         let ResolverOutput {
             status,
@@ -317,7 +322,7 @@ base::local({
             stderr,
         } = wait_for_resolver(
             &mut child,
-            cancellation,
+            event_receiver,
             input,
             stdout,
             stderr,
@@ -438,122 +443,118 @@ base::local({
         receiver
     }
 
+    fn watch_resolver_exit(pid: u32, events: Sender<ResolverEvent>) {
+        let _ = thread::spawn(move || {
+            let result = loop {
+                let mut status = MaybeUninit::<libc::siginfo_t>::uninit();
+                // SAFETY: `status` points to writable storage and `pid` identifies
+                // the direct child. `WNOWAIT` leaves its status for `Child::wait`.
+                let result = unsafe {
+                    libc::waitid(
+                        libc::P_PID,
+                        pid as libc::id_t,
+                        status.as_mut_ptr(),
+                        libc::WEXITED | libc::WNOWAIT,
+                    )
+                };
+                if result == 0 {
+                    break Ok(());
+                }
+                let error = io::Error::last_os_error();
+                if error.kind() != io::ErrorKind::Interrupted {
+                    break Err(error);
+                }
+            };
+            let _ = events.send(ResolverEvent::Exited(result));
+        });
+    }
+
     fn receive_result<T>(
-        receiver: &Receiver<io::Result<T>>,
-        output: &mut Option<io::Result<T>>,
+        receiver: Receiver<io::Result<T>>,
         name: &str,
-        child: &mut Child,
-        program: &std::path::Path,
         kind: &str,
-    ) -> Result<(), String> {
-        if output.is_some() {
-            return Ok(());
-        }
-        match receiver.try_recv() {
-            Ok(result) => *output = Some(result),
-            Err(TryRecvError::Empty) => {}
-            Err(TryRecvError::Disconnected) => {
+    ) -> Result<io::Result<T>, String> {
+        receiver
+            .recv()
+            .map_err(|_| format!("{kind} resolver {name} task stopped"))
+    }
+
+    fn wait_for_resolver_exit(
+        child: &mut Child,
+        events: Receiver<ResolverEvent>,
+        program: &Path,
+        kind: &str,
+    ) -> Result<ExitStatus, String> {
+        match events.recv() {
+            Ok(ResolverEvent::Cancel) => {
+                stop_resolver(child, program, kind)?;
+                Err(format!("{kind} resolution cancelled"))
+            }
+            Ok(ResolverEvent::Exited(Ok(()))) => stop_resolver(child, program, kind),
+            Ok(ResolverEvent::Exited(Err(error))) => {
                 let _ = stop_resolver(child, program, kind);
-                return Err(format!("{kind} resolver {name} task stopped"));
+                Err(format!(
+                    "failed to wait for {kind} resolver `{}`: {error}",
+                    program.display()
+                ))
+            }
+            Err(_) => {
+                let _ = stop_resolver(child, program, kind);
+                Err(format!("{kind} resolver exit task stopped"))
             }
         }
-        Ok(())
     }
 
     fn wait_for_resolver(
         child: &mut Child,
-        cancellation: Receiver<()>,
+        events: Receiver<ResolverEvent>,
         input: Receiver<io::Result<()>>,
         stdout: Receiver<io::Result<Vec<u8>>>,
         stderr: Receiver<io::Result<Vec<u8>>>,
-        program: &std::path::Path,
+        program: &Path,
         kind: &str,
     ) -> Result<ResolverOutput, String> {
-        let mut input_result = None;
-        let mut stdout_output = None;
-        let mut stderr_output = None;
-        loop {
-            match cancellation.try_recv() {
-                Ok(()) => {
-                    stop_resolver(child, program, kind)?;
-                    return Err(format!("{kind} resolution cancelled"));
-                }
-                Err(TryRecvError::Empty | TryRecvError::Disconnected) => {}
-            }
-            receive_result(
-                &input,
-                &mut input_result,
-                "stdin writer",
-                child,
-                program,
-                kind,
-            )?;
-            receive_result(
-                &stdout,
-                &mut stdout_output,
-                "stdout reader",
-                child,
-                program,
-                kind,
-            )?;
-            receive_result(
-                &stderr,
-                &mut stderr_output,
-                "stderr reader",
-                child,
-                program,
-                kind,
-            )?;
-            if input_result.is_none() || stdout_output.is_none() || stderr_output.is_none() {
-                thread::sleep(CANCEL_POLL_INTERVAL);
-                continue;
-            }
-            let status = match child.try_wait() {
-                Ok(status) => status,
-                Err(error) => {
-                    let _ = stop_resolver(child, program, kind);
-                    return Err(format!(
-                        "failed to collect {kind} resolver output from `{}`: {error}",
-                        program.display()
-                    ));
-                }
-            };
-            if let Some(status) = status {
-                let stdout = stdout_output
-                    .expect("resolver stdout is available")
-                    .map_err(|error| format!("failed to read resolver stdout: {error}"))?;
-                let stderr = stderr_output
-                    .expect("resolver stderr is available")
-                    .map_err(|error| format!("failed to read resolver stderr: {error}"))?;
-                return Ok(ResolverOutput {
-                    status,
-                    write_result: input_result.expect("resolver stdin result is available"),
-                    stdout,
-                    stderr,
-                });
-            }
-            thread::sleep(CANCEL_POLL_INTERVAL);
-        }
+        let status = wait_for_resolver_exit(child, events, program, kind)?;
+        let write_result = receive_result(input, "stdin writer", kind)?;
+        let stdout = receive_result(stdout, "stdout reader", kind)?
+            .map_err(|error| format!("failed to read resolver stdout: {error}"))?;
+        let stderr = receive_result(stderr, "stderr reader", kind)?
+            .map_err(|error| format!("failed to read resolver stderr: {error}"))?;
+        Ok(ResolverOutput {
+            status,
+            write_result,
+            stdout,
+            stderr,
+        })
     }
 
     impl ResolverStopHandle {
         pub(crate) fn stop(&self) -> Result<(), String> {
-            let _ = self.0.send(());
+            let _ = self.0.send(ResolverEvent::Cancel);
             Ok(())
         }
     }
 
-    fn stop_resolver(
-        child: &mut Child,
-        program: &std::path::Path,
-        kind: &str,
-    ) -> Result<(), String> {
+    fn stop_resolver(child: &mut Child, program: &Path, kind: &str) -> Result<ExitStatus, String> {
         // SAFETY: `process_group(0)` made the resolver PID its process-group ID.
         let result = unsafe { libc::killpg(child.id() as libc::pid_t, libc::SIGKILL) };
         if result < 0 {
             let kill_error = io::Error::last_os_error();
             return match child.try_wait() {
-                Ok(Some(_)) => Ok(()),
+                // macOS reports EPERM when only the unreaped group leader remains.
+                // ESRCH likewise means there is no remaining group to stop.
+                Ok(Some(status))
+                    if matches!(
+                        kill_error.raw_os_error(),
+                        Some(libc::EPERM) | Some(libc::ESRCH)
+                    ) =>
+                {
+                    Ok(status)
+                }
+                Ok(Some(_)) => Err(format!(
+                    "failed to stop {kind} resolver `{}`: {kill_error}",
+                    program.display()
+                )),
                 Ok(None) => Err(format!(
                     "failed to stop {kind} resolver `{}`: {kill_error}",
                     program.display()
@@ -564,7 +565,7 @@ base::local({
                 )),
             };
         }
-        child.wait().map(|_| ()).map_err(|error| {
+        child.wait().map_err(|error| {
             format!(
                 "failed to reap {kind} resolver `{}`: {error}",
                 program.display()

@@ -142,6 +142,87 @@ exec /bin/sleep 3
 
 #[cfg(target_os = "macos")]
 #[test]
+fn stdio_console_stops_resolver_descendants_when_leader_exits() {
+    let test_directory = TestDirectory::new("python-resolver-descendant-cleanup");
+    let fake_bin = test_directory.path().join("bin");
+    let fake_rscript = fake_bin.join("Rscript");
+    let fake_python = test_directory.path().join("python");
+    let resolver_started = test_directory.path().join("resolver-started");
+    fs::create_dir(&fake_bin).expect("fake bin directory should be created");
+    fs::write(&fake_python, "").expect("fake Python should be written");
+    fs::write(
+        &fake_rscript,
+        r#"#!/bin/sh
+/bin/cat >/dev/null
+/bin/sleep 30 &
+printf '%s\n' "$$" > "$MCP_CONSOLE_RESOLVER_STARTED"
+printf '%s\n' "$MCP_CONSOLE_TEST_PYTHON"
+exit 0
+"#,
+    )
+    .expect("fake Rscript should be written");
+    fs::set_permissions(&fake_rscript, fs::Permissions::from_mode(0o755))
+        .expect("fake Rscript should be executable");
+
+    let mut command = Command::new(env!("CARGO_BIN_EXE_mcp-console"));
+    command
+        .arg("serve")
+        .env("R_HOME", test_directory.path())
+        .env("RETICULATE_PYTHON", "configured-by-user")
+        .env("MCP_CONSOLE_RESOLVER_STARTED", &resolver_started)
+        .env("MCP_CONSOLE_TEST_PYTHON", &fake_python);
+    let mut client = McpClient::spawn(command);
+    client.send_tool(
+        2,
+        "session",
+        json!({
+            "action": "prepare",
+            "requirements": {"python": ["py-yaml12"]}
+        }),
+    );
+
+    let started = Instant::now();
+    while !resolver_started.exists() {
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "Python resolver did not start"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let resolver_group = fs::read_to_string(&resolver_started)
+        .expect("resolver process group should be recorded")
+        .trim()
+        .parse::<libc::pid_t>()
+        .expect("resolver process group should be numeric");
+    let stopped = Instant::now();
+    let group_stopped = loop {
+        if unsafe { libc::killpg(resolver_group, 0) } < 0
+            && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
+        {
+            break true;
+        }
+        if stopped.elapsed() >= Duration::from_secs(2) {
+            break false;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    if !group_stopped {
+        // SAFETY: the fake resolver recorded its dedicated process-group ID.
+        let _ = unsafe { libc::killpg(resolver_group, libc::SIGKILL) };
+    }
+    assert!(
+        group_stopped,
+        "resolver process group outlived its direct process"
+    );
+
+    let response = read_message(&mut client.output);
+    assert_eq!(response["id"], 2);
+    assert_eq!(response["result"]["isError"], false, "{response}");
+    assert_eq!(response_text(&response), "[prepared]");
+}
+
+#[cfg(target_os = "macos")]
+#[test]
 fn stdio_console_shutdown_is_bounded_during_python_preparation() {
     let test_directory = TestDirectory::new("python-preparation-shutdown");
     let fake_bin = test_directory.path().join("bin");
@@ -151,9 +232,8 @@ fn stdio_console_shutdown_is_bounded_during_python_preparation() {
     fs::write(
         &fake_rscript,
         r#"#!/bin/sh
-/bin/sleep 3 &
 printf '%s\n' "$$" >> "$MCP_CONSOLE_RESOLVER_STARTED"
-exit 0
+exec /bin/sleep 3
 "#,
     )
     .expect("fake Rscript should be written");
@@ -189,22 +269,6 @@ exit 0
         .trim()
         .parse::<libc::pid_t>()
         .expect("resolver process group should be numeric");
-    let exited = Instant::now();
-    loop {
-        let status = Command::new("/bin/ps")
-            .args(["-o", "state=", "-p", &resolver_group.to_string()])
-            .output()
-            .expect("resolver process state should be readable");
-        let state = String::from_utf8(status.stdout).expect("process state should be UTF-8");
-        if state.trim().is_empty() || state.trim_start().starts_with('Z') {
-            break;
-        }
-        assert!(
-            exited.elapsed() < Duration::from_secs(2),
-            "Python resolver did not exit"
-        );
-        std::thread::sleep(Duration::from_millis(10));
-    }
     client.send_tool(
         3,
         "session",

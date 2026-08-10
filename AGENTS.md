@@ -38,7 +38,8 @@ Before the worker starts, each successful prepare resolves the complete candidat
 R requirements use `ir run` from `PATH` with the worker's Rscript and become the first worker `R_LIBS` entry; Python requirements use reticulate and uv and replace any inherited Python selection with the resolved interpreter.
 A failed resolution leaves the prior requirements, R library, and interpreter unchanged.
 For a uv tool failure, the tool error reports a JSON manifest containing reticulate's selected Python and the complete candidate package set, followed by uv's stderr, while omitting the helper command, temporary output path, and reticulate's `py_require()`-oriented guidance.
-Closing MCP input cancels an in-flight explicit or runtime resolution by force-stopping its host resolver process group; managed-Python startup preflight completes before MCP input is accepted and is not cancellable through that lifecycle.
+The direct resolver process defines its process-group lifetime: after it exits, the server force-stops any remaining in-group descendants before reaping it and collecting its standard streams.
+Closing MCP input cancels an in-flight explicit or runtime resolution by force-stopping its host resolver process group; startup preflight completes before MCP input is accepted and is not cancellable through that lifecycle.
 Once a worker has started, an already-retained explicit requirement remains idempotent, while any explicit addition returns `restart required` without changing the environment.
 This restriction applies to `session` preparation; server-managed workers can layer additive requirements declared through `reticulate::py_require()` during evaluation.
 Restart retains the prepared R library and the server's checkpointed Python environment, loses all worker-owned in-memory state and unread stdin, eagerly starts a replacement, and returns `[restarted]` after it reports ready.
