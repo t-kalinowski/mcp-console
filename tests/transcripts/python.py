@@ -656,9 +656,8 @@ def test_returns_matplotlib_plots(binary: Path) -> Transcript:
         environment["MPLCONFIGDIR"] = str(temporary / "host-matplotlib")
         environment["XDG_CACHE_HOME"] = str(temporary / "host-cache")
         client = McpClient(binary, ("serve",), environment)
-        client.initialize_and_list_tools()
-        client.call_tool(
-            "session",
+        client._initialize_and_list_tools()
+        client.session(
             action="prepare",
             requirements={"python": ["matplotlib"]},
         )
@@ -681,7 +680,7 @@ def test_returns_matplotlib_plots(binary: Path) -> Transcript:
             reference = Path(os.environ["TMPDIR"]) / "matplotlib-reference.png"
             figure.savefig(reference, format="png")
             """)
-        client.call_tool("send", python=python)
+        client.send(python=python)
         reference = wait_for_worker_file(
             Path(temporary_directory),
             "matplotlib-reference.png",
@@ -709,7 +708,7 @@ def test_returns_matplotlib_plots(binary: Path) -> Transcript:
             print("after show")
             shown_figure
             """)
-        client.call_tool("send", python=python)
+        client.send(python=python)
         shown_reference = wait_for_worker_file(
             Path(temporary_directory),
             "matplotlib-shown-reference.png",
@@ -737,7 +736,7 @@ def test_returns_matplotlib_plots(binary: Path) -> Transcript:
             plt.close(closed_figure)
             plt.get_fignums()
             """)
-        client.call_tool("send", python=python)
+        client.send(python=python)
         closed_reference = wait_for_worker_file(
             Path(temporary_directory),
             "matplotlib-closed-reference.png",
@@ -751,7 +750,7 @@ def test_returns_matplotlib_plots(binary: Path) -> Transcript:
             axes.plot([1, 3], [2, 0])
             plt.get_fignums()
             """)
-        client.call_tool("send", python=python)
+        client.send(python=python)
         assert last_tool_text(client) == "[]\n"
 
         # fmt: python
@@ -762,7 +761,7 @@ def test_returns_matplotlib_plots(binary: Path) -> Transcript:
             error_figure.savefig(error_reference, format="png")
             raise ValueError("cell failed")
             """)
-        client.call_tool("send", python=python)
+        client.send(python=python)
         result = client.transcript[-1]["result"]
         assert result["isError"] is False, result
         output = result["content"][0]["text"]
@@ -782,7 +781,7 @@ def test_returns_matplotlib_plots(binary: Path) -> Transcript:
             image_reference="live error-cell matplotlib savefig {page}",
         )
 
-        client.call_tool("send", python="plt.get_fignums()")
+        client.send(python="plt.get_fignums()")
         assert last_tool_text(client) == "[]\n"
 
         # fmt: python
@@ -798,7 +797,7 @@ def test_returns_matplotlib_plots(binary: Path) -> Transcript:
             second_reference = Path(os.environ["TMPDIR"]) / "matplotlib-second-reference.png"
             figure.savefig(second_reference, format="png")
             """)
-        client.call_tool("send", python=python)
+        client.send(python=python)
         result = client.transcript[-1]["result"]
         assert result["isError"] is False, result
         output = result["content"][0]["text"]
@@ -818,9 +817,9 @@ def test_returns_matplotlib_plots(binary: Path) -> Transcript:
             image_reference="live second matplotlib savefig {page}",
         )
 
-        client.call_tool("send", python="plt.get_fignums()")
+        client.send(python="plt.get_fignums()")
         assert last_tool_text(client) == "[]\n"
-        return client.finish()
+        return client._finish()
 
 
 def test_runs_async_python_explicitly(binary: Path) -> Transcript:
