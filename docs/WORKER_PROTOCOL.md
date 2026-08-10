@@ -174,7 +174,9 @@ worker -> server  {"kind":"completed"}
 
 The worker may send zero or more `output` or `image` messages.
 The server preserves their arrival order as MCP content blocks and concatenates adjacent text chunks.
-An image frame's `data` must already be base64 encoded, and `mime_type` becomes the MCP image `mimeType`; the server passes both strings through without decoding or validation.
+An image frame's `data` must be valid base64.
+The recorder decodes it byte-for-byte into an artifact, while the MCP image retains the original string.
+The frame's `mime_type` becomes the MCP image `mimeType` unchanged; only `image/png` receives a format-specific `.png` artifact suffix, and other MIME types use `.bin`.
 `input_requested` appends one server-owned MCP request record and starts one provisional input state.
 The matching `input_received` clears that state after the runtime read succeeds without removing the record.
 Only one request may be outstanding: a second request, a receipt without a request, or completion before its receipt is a protocol failure.
@@ -426,10 +428,24 @@ Direct `sys.stdin` or fd-0 reads bypass the callback and produce neither frame.
 ### SQL cells
 
 The worker stores each SQL source string in a process-lifetime private R environment and calls its evaluator with a short evaluation ID.
-The first SQL cell lazily creates one in-memory DuckDB connection through `duckdb` and `DBI`; later cells reuse that connection and its catalog for the worker generation.
-Environment scanning is disabled.
+The first SQL cell or call to `sql_connection()` lazily creates one in-memory DuckDB connection through `duckdb` and `DBI`; later operations reuse that connection and its catalog for the worker generation.
+Environment scanning is enabled.
 The driver receives explicit extension, stored-secret, and spill directories beneath R's worker-private temporary directory, so it does not select or prompt for ambient DuckDB storage.
 The bridge disables DuckDB progress output on the connection so previews contain only query results.
+
+The private bridge sends each query through a zero-argument closure enclosed by R's global environment.
+DuckDB therefore searches the persistent R session environment rather than the private environment that holds the bridge's `connection` and `source` state.
+An unqualified catalog table or view takes precedence over an R binding with the same name.
+When the catalog has no match, DuckDB can scan a data frame bound in the R global environment; an SQL view over that name observes a later rebinding when it is queried.
+A prepared query retains the data frame it scanned until its DBI result is cleared.
+
+The bridge installs only `sql_connection()` in a worker-owned `tools:mcp-console` environment at search position 2.
+Clearing R's global environment with `rm(list = ls())` does not remove the helper, while a same-named global binding still takes precedence through normal R lookup.
+It returns a borrowed reference to the same worker-owned DBI connection, allowing established DuckDB, DBI, and dplyr interfaces to use the persistent catalog.
+Callers must not disconnect it, and objects that use it remain tied to the current worker generation.
+Existing functions such as `duckdb::duckdb_register()` and `duckdb::duckdb_register_arrow()` can register relations on it; the worker adds no separate registration API.
+A dplyr relation created with `dplyr::tbl(sql_connection(), name)` remains lazy and observes later catalog changes until collection.
+Neither direction promises end-to-end zero-copy transfer: DuckDB converts R values during query execution, and collecting a lazy relation materializes its result in R.
 
 The evaluator calls `DBI::dbSendQueryArrow()` and renders only DuckDB results whose private return type is `QUERY_RESULT`.
 It transfers each query result to `DBI::dbFetchArrow()` with a chunk size of 21, reads its schema and at most one batch, releases the nanoarrow stream, and clears the DBI result before formatting.
@@ -467,6 +483,7 @@ Worker failures are reported as plain-text MCP tool errors, not structured worke
 Concurrent MCP `send` calls are outside the current contract.
 Python cells require an installed reticulate R package.
 SQL cells require installed arrow, DBI, duckdb, nanoarrow, pillar, and tibble R packages.
+Lazy dplyr relations created from `sql_connection()` additionally require dplyr and dbplyr.
 MCP Console does not automatically install these runtime packages.
 The default preflight must be able to resolve or provision its interpreter and initial requirements outside the sandbox.
 An explicitly configured interpreter must be initializable under the offline worker policy.
@@ -475,7 +492,7 @@ Server-managed workers can activate additive package requirements and checkpoint
 Runtime Python version changes, `exclude_newer` changes, and non-additive package changes after initialization are not supported by the layering path.
 Named sessions, runtime R requirement additions, restart with new requirements, and environment provenance do not exist.
 The Python input bridge does not observe direct `sys.stdin` or fd-0 reads.
-The SQL adapter does not expose R data frames or Python objects as relations.
+The SQL adapter does not expose Python objects as relations or provide a separate registration API.
 The current sandbox child does not yet supervise descendants after its direct process exits, or descendants that leave its process group; capturing inherited standard streams does not change that boundary.
 
 ## Zod fixture behavior

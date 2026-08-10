@@ -40,6 +40,8 @@ jobs:
           packages: |
             any::arrow
             any::DBI
+            any::dbplyr
+            any::dplyr
             any::duckdb
             any::nanoarrow
             any::pillar

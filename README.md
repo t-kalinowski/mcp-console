@@ -117,7 +117,7 @@ After a Python cell calls `os.fork()`, reticulate restores the child's original 
 Native extensions that fork without running CPython's registered fork callbacks and then resume Python are unsupported.
 Fork-child text capture requires reticulate from its `main` branch or a release containing fork-aware stream restoration.
 An exec descendant that retains fd 1/2 creates fresh standard streams backed by those descriptors, so its ordinary stdout and stderr are captured.
-SQL cells lazily open one in-memory DuckDB connection through the `duckdb` and `DBI` R packages and reuse it for the worker generation.
+SQL cells and `sql_connection()` lazily open one in-memory DuckDB connection through the `duckdb` and `DBI` R packages and reuse it for the worker generation.
 DuckDB extension, secret, and spill paths stay under the worker's private R temporary directory.
 The worker sends the complete SQL source out of band to a private R bridge and executes query results through DBI's streaming Arrow API.
 It fetches at most 21 rows, uses the final row only to detect that more data exists, and renders at most 20 rows and 12 columns with 160-character cells and a 12 KiB SQL-preview limit.
@@ -125,7 +125,14 @@ The preview shows Arrow column types, SQL `NULL`, and empty-result schemas; Duck
 It reports omitted rows without counting the complete result and reports omitted columns explicitly; the final byte limit may reduce the displayed rows or columns further.
 Statements without result columns are silent, so they return `[done]` when they produce no other output.
 DuckDB errors are normal console results and leave the worker available for later cells.
-This initial slice does not enable R environment scanning, relation registration, or affected-row summaries.
+DuckDB first resolves unqualified relation names in its persistent catalog.
+When no catalog table or view matches, it can scan a data frame bound in the persistent R global environment.
+An SQL view over a scanned name observes later changes to that R binding.
+R code can call `sql_connection()` to borrow the worker-owned DBI connection for established DuckDB, DBI, and dplyr interfaces.
+The helper remains available after clearing the global R workspace with `rm(list = ls())`; callers must not disconnect the returned connection.
+For example, `dplyr::tbl(sql_connection(), "answers")` creates a lazy relation that observes later catalog changes until it is collected.
+These paths avoid an eager snapshot transfer, but do not promise end-to-end zero-copy behavior: DuckDB converts R values during execution, and collecting a lazy relation materializes its result in R.
+Automatic Python relation sharing and affected-row summaries do not exist yet.
 
 The server also collects text written directly to the worker's standard output and standard error, including direct writes by descendants that retain those descriptors.
 It retains raw bytes until the next `send` response is assembled; output produced while the worker is idle can therefore appear on a later idle poll before the server-owned `\n[idle]` banner.
@@ -135,7 +142,8 @@ A silent successful R, Python, or SQL cell sends no sideband `output` frame, sti
 
 Python cells require the `reticulate` R package.
 SQL cells require the `arrow`, `DBI`, `duckdb`, `nanoarrow`, `pillar`, and `tibble` R packages.
-MCP Console does not automatically install its own R runtime dependencies.
+Lazy dplyr relations created from `sql_connection()` additionally require `dplyr` and `dbplyr`.
+MCP Console does not automatically install these R runtime dependencies.
 Explicit R preparation runs `ir run` outside the sandbox with the requested package references as command arguments and a constant expression that prints the resolved library path.
 IR may access the network, write its normal host caches, and execute package installation code.
 If IR is absent, resolution fails, or its returned library is invalid, the `session` call is a tool error and leaves the prior configuration unchanged.
