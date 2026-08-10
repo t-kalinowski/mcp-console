@@ -31,4 +31,29 @@ result:
       text: |
         42
   isError: false
+---
+id: 6
+session:
+  action: restart
+  requirements:
+    python:
+      - py-yaml12
+result:
+  content:
+    - type: text
+      text: "[restarted]"
+  isError: false
+---
+id: 7
+send:
+  python: |
+    import yaml12
+
+    "sentinel" in globals(), yaml12.__name__
+result:
+  content:
+    - type: text
+      text: |
+        (False, 'yaml12')
+  isError: false
 ...

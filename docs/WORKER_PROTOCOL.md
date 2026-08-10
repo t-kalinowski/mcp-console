@@ -41,15 +41,23 @@ The server commits both candidates together only after every requested resolutio
 It returns `[prepared]` without creating sideband pipes or starting the worker.
 New explicit `session` requirements after worker startup return `[restart required]` without changing the retained configuration or running resolver work; exact retained requirements remain idempotent.
 This restriction does not apply to additive requirements declared through `reticulate::py_require()` inside a server-managed worker.
-Custom workers reject preparation and skip managed resolution.
+Custom workers reject preparation and restart requests that include requirements, and skip managed resolution.
 
-`session` with `action = "restart"` accepts no requirements in the current implementation.
-It retains the prepared R library and the server's checkpointed Python environment, terminates the current worker generation, eagerly starts its replacement, and returns `[restarted]` after `ready`.
+`session` with `action = "restart"` may include additive Python requirements or omit them to retain the current manifest.
+The server merges additions into its complete Python checkpoint and resolves the candidate before terminating the current worker.
+A resolution failure leaves the current worker and environment unchanged.
+After successful resolution, the server retains the prepared R library and candidate Python environment, terminates the current worker generation, eagerly starts its replacement, and returns `[restarted]` after `ready`.
 All worker-owned R, Python, SQL, debugger, and unread-stdin state is lost.
 The implicit session exists for the server lifetime, so restart starts its first worker if none exists yet.
-Evaluations and idle stdin writes capture their admitted generation; work from the old generation is rejected rather than delivered to the replacement.
-Direct standard-stream bytes collected around the boundary remain in the shared output queue and may prefix a later `send` response from the replacement generation.
-Restart uses the same one-second stdin-close, sideband-shutdown, and process-group escalation path described below, but it reopens the lifecycle gate for the new generation instead of ending the MCP server.
+After any requirement resolution succeeds, restart starts the same one-second stdin-close, sideband-shutdown, and process-group escalation path described below.
+It reopens the lifecycle for the new worker instead of ending the MCP server.
+
+Two boundary details apply:
+
+- Evaluations and idle stdin writes stay associated with the worker that admitted them.
+  Work from the old worker is rejected rather than delivered to the replacement.
+- Standard-output and standard-error bytes already collected from the old worker are retained.
+  A later `send` after restart may return those bytes, including alongside output from the replacement.
 
 The IR resolver receives R package references as process arguments and the Python resolver receives only a requirement manifest on standard input; neither receives submitted cells or `send` stdin.
 Both may use the network, write normal host caches, and execute package installation or build code outside the sandbox.
@@ -64,10 +72,9 @@ A preparation failure is an MCP tool error and leaves the prior configuration un
 For a uv tool failure, `Rscript` captures reticulate's message stream and sends its selected Python version on stdout; uv's inherited stderr remains separate.
 The server combines that selection with the complete candidate package set it submitted and renders them as a JSON resolver-input manifest before uv's stderr.
 It discards reticulate's helper command, temporary output path, hints, and R call information.
-Each resolver leads a dedicated process group.
-Immediately after launch, the server registers its stop handle with the shutdown gate.
+Each resolver leads a dedicated process group registered with the server lifecycle control before requirement input is written.
 The server waits for either lifecycle cancellation or a non-reaping notification that the direct resolver process exited.
-Direct-process exit ends the resolver group's lifetime: the server force-stops any remaining in-group descendants, reaps the direct process, and then collects the resolver's standard streams.
+Direct-process exit ends the resolver-group lifetime: the server force-stops any remaining in-group descendants, reaps the direct process, and then collects the resolver's standard streams.
 Closing MCP input force-stops an active explicit or runtime resolver group and reaps its direct process; startup preflight finishes before MCP input is accepted and does not participate in this cancellation path.
 
 Outside an explicit restart, the worker starts lazily on the first `send` call that supplies `r`, `python`, `sql`, or nonempty `stdin`.
@@ -321,7 +328,7 @@ R parse and evaluation errors, Python exceptions, and DuckDB errors are not side
 ## Shutdown
 
 The server begins shutdown when MCP input closes or RMCP releases its transport.
-At that moment it fixes a deadline one second in the future and closes the client's shutdown gate.
+At that moment it fixes a deadline one second in the future and closes the client lifecycle.
 If explicit preparation or a worker-triggered Python resolution is active, shutdown force-stops the resolver process group and reaps its direct `Rscript` process.
 It then attempts to send:
 
@@ -490,7 +497,7 @@ An explicitly configured interpreter must be initializable under the offline wor
 R requirements, the selected IR library, and Python requirements are retained only in server memory.
 Server-managed workers can activate additive package requirements and checkpoint their final manifest after startup, but an explicit late `session prepare` still requires restart.
 Runtime Python version changes, `exclude_newer` changes, and non-additive package changes after initialization are not supported by the layering path.
-Named sessions, runtime R requirement additions, restart with new requirements, and environment provenance do not exist.
+Named sessions, post-startup R requirement additions, and environment provenance do not exist.
 The Python input bridge does not observe direct `sys.stdin` or fd-0 reads.
 The SQL adapter does not expose Python objects as relations or provide a separate registration API.
 The current sandbox child does not yet supervise descendants after its direct process exits, or descendants that leave its process group; capturing inherited standard streams does not change that boundary.

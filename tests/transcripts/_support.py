@@ -13,6 +13,7 @@ from typing import Any
 
 TranscriptEntry = dict[str, Any]
 Transcript = list[TranscriptEntry]
+ToolResult = dict[str, Any]
 YamlStream = list[Any]
 
 
@@ -184,9 +185,15 @@ class McpClient:
         self.stdout = process.stdout
         self.stderr = process.stderr
         self.transcript: Transcript = []
-        self.next_request_id = 1
+        self._next_request_id = 1
 
-    def send(self, message: dict[str, Any]) -> TranscriptEntry:
+    def send(self, **arguments: Any) -> ToolResult:
+        return self._call_tool("send", **arguments)
+
+    def session(self, **arguments: Any) -> ToolResult:
+        return self._call_tool("session", **arguments)
+
+    def _send_message(self, message: dict[str, Any]) -> TranscriptEntry:
         recorded_message = message.copy()
         assert recorded_message.pop("jsonrpc", None) == "2.0", message
 
@@ -210,7 +217,7 @@ class McpClient:
         self.stdin.flush()
         return entry
 
-    def receive(self, entry: TranscriptEntry) -> None:
+    def _receive(self, entry: TranscriptEntry) -> None:
         line = self.stdout.readline()
         assert line, "mcp-console stopped before replying"
         message = json.loads(line)
@@ -220,20 +227,24 @@ class McpClient:
         assert entry.keys().isdisjoint(message), message
         entry.update(message)
 
-    def request(self, method: str, **params: Any) -> None:
+    def _start_request(self, method: str, **params: Any) -> TranscriptEntry:
         message: dict[str, Any] = {
             "jsonrpc": "2.0",
-            "id": self.next_request_id,
+            "id": self._next_request_id,
             "method": method,
         }
-        self.next_request_id += 1
+        self._next_request_id += 1
         if params:
             message["params"] = params
 
-        entry = self.send(message)
-        self.receive(entry)
+        return self._send_message(message)
 
-    def notify(self, method: str, **params: Any) -> None:
+    def _request(self, method: str, **params: Any) -> TranscriptEntry:
+        entry = self._start_request(method, **params)
+        self._receive(entry)
+        return entry
+
+    def _notify(self, method: str, **params: Any) -> None:
         message: dict[str, Any] = {
             "jsonrpc": "2.0",
             "method": method,
@@ -241,10 +252,10 @@ class McpClient:
         if params:
             message["params"] = params
 
-        self.send(message)
+        self._send_message(message)
 
-    def initialize_and_list_tools(self) -> None:
-        self.request(
+    def _initialize_and_list_tools(self) -> None:
+        self._request(
             "initialize",
             protocolVersion="2025-11-25",
             capabilities={},
@@ -253,17 +264,30 @@ class McpClient:
                 "version": "1.0.0",
             },
         )
-        self.notify("notifications/initialized")
-        self.request("tools/list")
+        self._notify("notifications/initialized")
+        self._request("tools/list")
 
-    def call_tool(self, name: str, **arguments: Any) -> None:
-        self.request(
+    def _start_tool_call(self, name: str, **arguments: Any) -> TranscriptEntry:
+        return self._start_request(
             "tools/call",
             name=name,
             arguments=arguments,
         )
 
-    def finish(self) -> Transcript:
+    def _call_tool(self, name: str, **arguments: Any) -> ToolResult:
+        entry = self._start_tool_call(name, **arguments)
+        self._receive(entry)
+        result = entry["result"]
+        assert isinstance(result, dict), result
+        return result
+
+    def _start_send(self, **arguments: Any) -> TranscriptEntry:
+        return self._start_tool_call("send", **arguments)
+
+    def _start_session(self, **arguments: Any) -> TranscriptEntry:
+        return self._start_tool_call("session", **arguments)
+
+    def _finish(self) -> Transcript:
         self.stdin.close()
         with ThreadPoolExecutor(max_workers=2) as executor:
             stdout = executor.submit(self.stdout.read)

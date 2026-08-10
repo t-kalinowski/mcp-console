@@ -18,7 +18,7 @@ PLATFORMS = {"darwin"}
 
 def test_evaluates_a_complete_cell(binary: Path) -> Transcript:
     client = McpClient(binary, ("serve",))
-    client.initialize_and_list_tools()
+    client._initialize_and_list_tools()
     # fmt: r
     r = code(r"""
         answer <- 40
@@ -27,7 +27,7 @@ def test_evaluates_a_complete_cell(binary: Path) -> Transcript:
         cat("done\n")
         invisible(99)
         """)
-    client.call_tool("send", r=r)
+    client.send(r=r)
 
     # fmt: r
     r = code(r"""
@@ -39,17 +39,17 @@ def test_evaluates_a_complete_cell(binary: Path) -> Transcript:
           c(0.125, 0.375, 0.375, 0.125)
         )
         """)
-    client.call_tool("send", r=r)
-    client.call_tool("send", r='stop("boom")')
-    client.call_tool("send", r="answer")
-    client.call_tool("send", r="silent <- 1")
-    return client.finish()
+    client.send(r=r)
+    client.send(r='stop("boom")')
+    client.send(r="answer")
+    client.send(r="silent <- 1")
+    return client._finish()
 
 
 def test_returns_cell_scoped_plots(binary: Path) -> Transcript:
     environment, rscript = r_test_environment()
     client = McpClient(binary, ("serve",), environment)
-    client.initialize_and_list_tools()
+    client._initialize_and_list_tools()
     # fmt: r
     r = code(r"""
         options(
@@ -75,7 +75,7 @@ def test_returns_cell_scoped_plots(binary: Path) -> Transcript:
         dpi=100,
         pages=2,
     )
-    client.call_tool("send", r=r)
+    client.send(r=r)
     assert_result_content(
         client,
         [
@@ -86,7 +86,7 @@ def test_returns_cell_scoped_plots(binary: Path) -> Transcript:
         ],
     )
 
-    client.call_tool("send", r="lines(1:3)")
+    client.send(r="lines(1:3)")
     result = client.transcript[-1]["result"]
     assert result.get("isError") is not True, result
     assert len(result["content"]) == 1, result
@@ -103,15 +103,15 @@ def test_returns_cell_scoped_plots(binary: Path) -> Transcript:
         dpi=100,
         pages=1,
     )
-    client.call_tool("send", r=r)
+    client.send(r=r)
     assert_result_content(client, expected_plot)
-    return client.finish()
+    return client._finish()
 
 
 def test_emits_managed_plots_when_pages_finalize(binary: Path) -> Transcript:
     environment, rscript = r_test_environment()
     client = McpClient(binary, ("serve",), environment)
-    client.initialize_and_list_tools()
+    client._initialize_and_list_tools()
     # fmt: r
     r = code(r"""
         options(
@@ -134,7 +134,7 @@ def test_emits_managed_plots_when_pages_finalize(binary: Path) -> Transcript:
         dpi=100,
         pages=2,
     )
-    client.call_tool("send", r=r)
+    client.send(r=r)
     assert_result_content(
         client,
         [
@@ -143,13 +143,13 @@ def test_emits_managed_plots_when_pages_finalize(binary: Path) -> Transcript:
             expected_plots[1],
         ],
     )
-    return client.finish()
+    return client._finish()
 
 
 def test_returns_plots_after_r_errors(binary: Path) -> Transcript:
     environment, rscript = r_test_environment()
     client = McpClient(binary, ("serve",), environment)
-    client.initialize_and_list_tools()
+    client._initialize_and_list_tools()
     # fmt: r
     r = code(r"""
         local({
@@ -167,7 +167,7 @@ def test_returns_plots_after_r_errors(binary: Path) -> Transcript:
         pages=1,
         expected_error="boom",
     )
-    client.call_tool("send", r=r)
+    client.send(r=r)
     result = client.transcript[-1]["result"]
     text_items = [item for item in result["content"] if item["type"] == "text"]
     assert len(text_items) == 1 and "boom" in text_items[0]["text"], result
@@ -184,15 +184,15 @@ def test_returns_plots_after_r_errors(binary: Path) -> Transcript:
         dpi=96,
         pages=1,
     )
-    client.call_tool("send", r=r)
+    client.send(r=r)
     assert_result_content(client, expected_plot)
-    return client.finish()
+    return client._finish()
 
 
 def test_leaves_explicit_plot_devices_user_controlled(binary: Path) -> Transcript:
     environment, rscript = r_test_environment()
     client = McpClient(binary, ("serve",), environment)
-    client.initialize_and_list_tools()
+    client._initialize_and_list_tools()
     # fmt: r
     r = code(r"""
         explicit_plot <- tempfile(fileext = ".png")
@@ -201,7 +201,7 @@ def test_leaves_explicit_plot_devices_user_controlled(binary: Path) -> Transcrip
         plot(1:3)
         cat("explicit current: ", names(grDevices::dev.cur()), "\n", sep = "")
         """)
-    client.call_tool("send", r=r)
+    client.send(r=r)
     result = client.transcript[-1]["result"]
     assert result.get("isError") is not True, result
     assert result["content"][0]["text"].startswith("explicit current: "), result
@@ -222,7 +222,7 @@ def test_leaves_explicit_plot_devices_user_controlled(binary: Path) -> Transcrip
         cat("explicit complete: ", file.exists(explicit_plot), "\n", sep = "")
         unlink(explicit_plot)
         """)
-    client.call_tool("send", r=r)
+    client.send(r=r)
     result = client.transcript[-1]["result"]
     assert result == {
         "content": [
@@ -244,7 +244,7 @@ def test_leaves_explicit_plot_devices_user_controlled(binary: Path) -> Transcrip
         dpi=96,
         pages=1,
     )
-    client.call_tool("send", r=r)
+    client.send(r=r)
     assert_result_content(client, expected_plot)
 
     # fmt: r
@@ -274,44 +274,44 @@ def test_leaves_explicit_plot_devices_user_controlled(binary: Path) -> Transcrip
         dpi=96,
         pages=1,
     )
-    client.call_tool("send", r=r)
+    client.send(r=r)
     assert_result_content(
         client,
         ["all explicit complete: TRUE\n", expected_plot[0]],
     )
-    return client.finish()
+    return client._finish()
 
 
 def test_evaluates_source_without_final_newline(binary: Path) -> Transcript:
     client = McpClient(binary, ("serve",))
-    client.initialize_and_list_tools()
+    client._initialize_and_list_tools()
     # fmt: r
     r = code(r"""
         answer <- 40
         answer + 2
         """).removesuffix("\n")
     assert not r.endswith("\n")
-    client.call_tool("send", r=r)
+    client.send(r=r)
     assert last_tool_text(client) == "[1] 42\n"
-    return client.finish()
+    return client._finish()
 
 
 def test_recoverable_language_errors(binary: Path) -> Transcript:
     client = McpClient(binary, ("serve",))
-    client.initialize_and_list_tools()
-    client.call_tool("send", r="answer <- 41")
+    client._initialize_and_list_tools()
+    client.send(r="answer <- 41")
     # fmt: r
     r = code(r"""
         g <- function() stop("boom")
         f <- function() g()
         f()
         """)
-    client.call_tool("send", r=r)
+    client.send(r=r)
     # fmt: r
     r = code(r"""
         traceback()
         """)
-    client.call_tool("send", r=r)
+    client.send(r=r)
     # Trigger an error after evaluation while R auto-prints the visible result.
     # fmt: r
     r = code(r"""
@@ -320,22 +320,22 @@ def test_recoverable_language_errors(binary: Path) -> Transcript:
         }
         structure(1, class = "auto_print_failure")
         """)
-    client.call_tool("send", r=r)
-    client.call_tool("send", r="answer")
-    return client.finish()
+    client.send(r=r)
+    client.send(r="answer")
+    return client._finish()
 
 
 def test_restarts_after_r_worker_segfault(binary: Path) -> Transcript:
     client = McpClient(binary, ("serve",))
-    client.initialize_and_list_tools()
-    client.call_tool("send", r="r_worker_marker <- TRUE")
+    client._initialize_and_list_tools()
+    client.send(r="r_worker_marker <- TRUE")
 
     # Ask R's fatal-signal handler to abort after reporting the crash.
     # fmt: r
     r = code(r"""
         tools::pskill(Sys.getpid(), signal = 11L)
         """)
-    client.call_tool("send", r=r, stdin="1\n")
+    client.send(r=r, stdin="1\n")
     result = client.transcript[-1]["result"]
     assert result["isError"] is True
     fatal_output = result["content"][0]["text"]
@@ -345,28 +345,28 @@ def test_restarts_after_r_worker_segfault(binary: Path) -> Transcript:
         "[worker sideband read failed: worker sideband closed]"
     )
 
-    client.call_tool("send", r='exists("r_worker_marker", inherits = FALSE)')
+    client.send(r='exists("r_worker_marker", inherits = FALSE)')
     assert last_tool_text(client) == (
         "[1] FALSE\n[worker restarted: in-memory state lost]\n"
     )
-    client.call_tool("send", r="1 + 1")
+    client.send(r="1 + 1")
     assert last_tool_text(client) == "[1] 2\n"
-    return client.finish()
+    return client._finish()
 
 
 def test_reports_r_worker_restart_with_idle_stdin(binary: Path) -> Transcript:
     client = McpClient(binary, ("serve",))
-    client.initialize_and_list_tools()
-    client.call_tool("send", r="invisible(NULL)")
+    client._initialize_and_list_tools()
+    client.send(r="invisible(NULL)")
 
     # fmt: r
     r = code(r"""
         tools::pskill(Sys.getpid(), signal = 9L)
         """).removesuffix("\n")
-    client.call_tool("send", r=r)
+    client.send(r=r)
     assert client.transcript[-1]["result"]["isError"] is True
 
-    client.call_tool("send", stdin="replacement\n")
+    client.send(stdin="replacement\n")
     assert last_tool_text(client) == (
         "\n[worker restarted: in-memory state lost]\n[idle]"
     )
@@ -379,33 +379,33 @@ def test_reports_r_worker_restart_with_idle_stdin(binary: Path) -> Transcript:
           readLines(connection, n = 1)
         })
         """)
-    client.call_tool("send", r=direct_stdin)
+    client.send(r=direct_stdin)
     assert last_tool_text(client) == '[1] "replacement"\n'
-    return client.finish()
+    return client._finish()
 
 
 def test_restart_while_r_waits_for_input(binary: Path) -> Transcript:
     client = McpClient(binary, ("serve",))
-    client.initialize_and_list_tools()
+    client._initialize_and_list_tools()
     # fmt: r
     r = code(r"""
         restart_marker <- TRUE
         readline("restart> ")
         """)
-    client.call_tool("send", r=r)
+    client.send(r=r)
     assert last_tool_text(client) == ('[input requested: "restart> "]\n[stdin needed]')
 
-    client.call_tool("session", action="restart")
+    client.session(action="restart")
     assert last_tool_text(client) == "[restarted]"
 
-    client.call_tool("send", r='exists("restart_marker", inherits = FALSE)')
+    client.send(r='exists("restart_marker", inherits = FALSE)')
     assert last_tool_text(client) == "[1] FALSE\n"
-    return client.finish()
+    return client._finish()
 
 
 def test_browser_input(binary: Path) -> Transcript:
     client = McpClient(binary, ("serve",))
-    client.initialize_and_list_tools()
+    client._initialize_and_list_tools()
     # fmt: r
     r = code(r"""
         step <- function() {
@@ -417,46 +417,46 @@ def test_browser_input(binary: Path) -> Transcript:
         }
         step()
         """)
-    client.call_tool("send", r=r)
+    client.send(r=r)
     output = last_tool_text(client)
     assert output.count('[input requested: "Browse[1]> "]') == 1, output
     assert output.endswith("\n[stdin needed]"), output
-    client.call_tool("send", r="1")
+    client.send(r="1")
     assert client.transcript[-1]["result"]["isError"] is True
-    client.call_tool("send", stdin="n\nn\nn\n")
+    client.send(stdin="n\nn\nn\n")
     output = last_tool_text(client)
     assert output.count('[input requested: "Browse[1]> "]') == 3, output
     assert output.endswith("\n[stdin needed]"), output
     assert "n" not in output.splitlines(), output
-    client.call_tool("send", stdin="c\n")
+    client.send(stdin="c\n")
     output = last_tool_text(client)
     assert output == "[1] 3\n", output
-    return client.finish()
+    return client._finish()
 
 
 def test_times_out_and_polls_running_evaluation(binary: Path) -> Transcript:
     client = McpClient(binary, ("serve",))
-    client.initialize_and_list_tools()
-    client.call_tool("send", r="invisible(NULL)")
+    client._initialize_and_list_tools()
+    client.send(r="invisible(NULL)")
     # fmt: r
     r = code(r"""
         Sys.sleep(0.25)
         answer <- 42
         answer
         """)
-    client.call_tool("send", r=r, timeout_ms=10)
+    client.send(r=r, timeout_ms=10)
     output = client.transcript[-1]["result"]["content"][0]["text"]
     assert output == "\n[running]", output
-    client.call_tool("send", timeout_ms=3_000)
+    client.send(timeout_ms=3_000)
     output = client.transcript[-1]["result"]["content"][0]["text"]
     assert output == "[1] 42\n", output
-    client.call_tool("send", r="answer + 1")
-    return client.finish()
+    client.send(r="answer + 1")
+    return client._finish()
 
 
 def test_routes_idle_and_timed_out_stdin(binary: Path) -> Transcript:
     client = McpClient(binary, ("serve",))
-    client.initialize_and_list_tools()
+    client._initialize_and_list_tools()
 
     # fmt: r
     direct_stdin = code(r"""
@@ -467,9 +467,9 @@ def test_routes_idle_and_timed_out_stdin(binary: Path) -> Transcript:
         })
         """)
 
-    client.call_tool("send", stdin="cold fd 0\n")
+    client.send(stdin="cold fd 0\n")
     assert last_tool_text(client) == "\n[idle]"
-    client.call_tool("send", r=direct_stdin)
+    client.send(r=direct_stdin)
     assert last_tool_text(client) == '[1] "cold fd 0"\n'
 
     # fmt: r
@@ -482,22 +482,22 @@ def test_routes_idle_and_timed_out_stdin(binary: Path) -> Transcript:
         })
         paste(prompted, direct, sep = "|")
         """)
-    client.call_tool("send", r=r, stdin="café\n", timeout_ms=50)
+    client.send(r=r, stdin="café\n", timeout_ms=50)
     assert last_tool_text(client) == "\n[running]"
-    client.call_tool("send", timeout_ms=0)
+    client.send(timeout_ms=0)
     assert last_tool_text(client) == "\n[running]"
-    client.call_tool("send", stdin="timed out ", timeout_ms=50)
+    client.send(stdin="timed out ", timeout_ms=50)
     assert last_tool_text(client) == "\n[running]"
-    client.call_tool("send", stdin="fd 0\n", timeout_ms=3_000)
+    client.send(stdin="fd 0\n", timeout_ms=3_000)
     assert last_tool_text(client) == (
         '[input requested: "bundled> "]\n[1] "café|timed out fd 0"\n'
     )
-    return client.finish()
+    return client._finish()
 
 
 def test_routes_combined_and_followup_stdin(binary: Path) -> Transcript:
     client = McpClient(binary, ("serve",))
-    client.initialize_and_list_tools()
+    client._initialize_and_list_tools()
 
     # fmt: r
     r = code(r"""
@@ -505,7 +505,7 @@ def test_routes_combined_and_followup_stdin(binary: Path) -> Transcript:
         second <- readline("second> ")
         cat(paste(first, second, sep = "|"), "\n", sep = "")
         """)
-    client.call_tool("send", r=r, stdin="Ada\nLovelace\n")
+    client.send(r=r, stdin="Ada\nLovelace\n")
     output = last_tool_text(client)
     assert output == (
         '[input requested: "first> "]\n[input requested: "second> "]\nAda|Lovelace\n'
@@ -521,21 +521,21 @@ def test_routes_combined_and_followup_stdin(binary: Path) -> Transcript:
         prompted <- readline("after> ")
         cat(paste(direct, prompted, sep = "|"), "\n", sep = "")
         """)
-    client.call_tool("send", r=r, stdin="direct\n", timeout_ms=1_000)
+    client.send(r=r, stdin="direct\n", timeout_ms=1_000)
     output = last_tool_text(client)
     assert output == '[input requested: "after> "]\n[stdin needed]', output
-    client.call_tool("send", stdin="callback\n")
+    client.send(stdin="callback\n")
     assert last_tool_text(client) == "direct|callback\n"
 
     # fmt: r
     r = code(r"""
         paste("color", readline("color> "))
         """)
-    client.call_tool("send", r=r)
+    client.send(r=r)
     assert last_tool_text(client) == '[input requested: "color> "]\n[stdin needed]'
-    client.call_tool("send", stdin="bl", timeout_ms=50)
+    client.send(stdin="bl", timeout_ms=50)
     assert last_tool_text(client) == "\n[stdin needed]"
-    client.call_tool("send", stdin="ue\n")
+    client.send(stdin="ue\n")
     assert last_tool_text(client) == '[1] "color blue"\n'
 
     # fmt: r
@@ -543,16 +543,16 @@ def test_routes_combined_and_followup_stdin(binary: Path) -> Transcript:
         prompt <- paste0('quoted "prompt"', "\n", "> ")
         invisible(readline(prompt))
         """)
-    client.call_tool("send", r=r, stdin="accepted\n")
+    client.send(r=r, stdin="accepted\n")
     output = last_tool_text(client)
     assert output == '[input requested: "quoted \\"prompt\\"\\n> "]\n', output
     assert "accepted" not in output
-    return client.finish()
+    return client._finish()
 
 
 def test_preserves_fd0_order_between_readers(binary: Path) -> Transcript:
     client = McpClient(binary, ("serve",))
-    client.initialize_and_list_tools()
+    client._initialize_and_list_tools()
 
     # fmt: r
     r = code(r"""
@@ -564,38 +564,37 @@ def test_preserves_fd0_order_between_readers(binary: Path) -> Transcript:
         })
         cat(paste(prompted, direct, sep = "|"), "\n", sep = "")
         """)
-    client.call_tool(
-        "send",
+    client.send(
         r=r,
         stdin="callback\ndirect\n",
         timeout_ms=1_000,
     )
     output = last_tool_text(client)
     assert output == '[input requested: "callback> "]\ncallback|direct\n', output
-    return client.finish()
+    return client._finish()
 
 
 def test_preserves_utf8_across_console_reads(binary: Path) -> Transcript:
     client = McpClient(binary, ("serve",))
-    client.initialize_and_list_tools()
+    client._initialize_and_list_tools()
 
     # fmt: r
     r = code(r"""
         value <- readline("long> ")
         cat(paste(nchar(value, type = "bytes"), endsWith(value, "é")), "\n", sep = "")
         """)
-    client.call_tool("send", r=r, stdin=("x" * 4_094) + "é\n")
+    client.send(r=r, stdin=("x" * 4_094) + "é\n")
     client.transcript[-1]["send"]["stdin"] = "<long stdin ending in UTF-8>"
     output = last_tool_text(client)
     assert output == (
         '[input requested: "long> "]\n[input requested: "long> "]\n4096 TRUE\n'
     ), output
-    return client.finish()
+    return client._finish()
 
 
 def test_keeps_stdin_open_after_partial_payload(binary: Path) -> Transcript:
     client = McpClient(binary, ("serve",))
-    client.initialize_and_list_tools()
+    client._initialize_and_list_tools()
 
     # fmt: r
     r = code(r"""
@@ -603,20 +602,20 @@ def test_keeps_stdin_open_after_partial_payload(binary: Path) -> Transcript:
         value <- readline("partial> ")
         value
         """)
-    client.call_tool("send", r=r, stdin="without newline", timeout_ms=1_000)
+    client.send(r=r, stdin="without newline", timeout_ms=1_000)
     output = last_tool_text(client)
     assert output == 'before\n[input requested: "partial> "]\n[stdin needed]', output
 
-    client.call_tool("send", stdin="\n")
+    client.send(stdin="\n")
     assert last_tool_text(client) == '[1] "without newline"\n'
 
     # fmt: r
     r = code(r"""
         readline("next> ")
         """)
-    client.call_tool("send", r=r, stdin="next\n")
+    client.send(r=r, stdin="next\n")
     assert last_tool_text(client) == '[input requested: "next> "]\n[1] "next"\n'
-    return client.finish()
+    return client._finish()
 
 
 def last_tool_text(client: McpClient) -> str:
@@ -629,27 +628,27 @@ def test_applies_complete_expressions_before_incomplete_source(
     binary: Path,
 ) -> Transcript:
     client = McpClient(binary, ("serve",))
-    client.initialize_and_list_tools()
+    client._initialize_and_list_tools()
     # fmt: r
     r = code(r"""
         answer <- 42
         answer + (
         """)
-    client.call_tool("send", r=r)
-    client.call_tool("send", r="answer")
+    client.send(r=r)
+    client.send(r="answer")
     # fmt: r
     r = code(r"""
         answer <- 43
         )
         """)
-    client.call_tool("send", r=r)
-    client.call_tool("send", r="answer")
-    return client.finish()
+    client.send(r=r)
+    client.send(r="answer")
+    return client._finish()
 
 
 def test_runs_native_top_level_bookkeeping(binary: Path) -> Transcript:
     client = McpClient(binary, ("serve",))
-    client.initialize_and_list_tools()
+    client._initialize_and_list_tools()
     # fmt: r
     r = code(r"""
         invisible(addTaskCallback(
@@ -668,20 +667,20 @@ def test_runs_native_top_level_bookkeeping(binary: Path) -> Transcript:
         ))
         mcp_console_callback_probe <- 42
         """)
-    client.call_tool("send", r=r)
+    client.send(r=r)
     # fmt: r
     r = code(r"""
         warning("careful", call. = FALSE)
         invisible(42)
         cat("last value: ", identical(base::.Last.value, 42), "\n", sep = "")
         """)
-    client.call_tool("send", r=r)
-    return client.finish()
+    client.send(r=r)
+    return client._finish()
 
 
 def test_preserves_native_stack_and_last_value_binding(binary: Path) -> Transcript:
     client = McpClient(binary, ("serve",))
-    client.initialize_and_list_tools()
+    client._initialize_and_list_tools()
     # fmt: r
     r = code(r"""
         user_calls <- function() {
@@ -702,8 +701,8 @@ def test_preserves_native_stack_and_last_value_binding(binary: Path) -> Transcri
           sep = ""
         )
         """)
-    client.call_tool("send", r=r)
-    return client.finish()
+    client.send(r=r)
+    return client._finish()
 
 
 if __name__ == "__main__":

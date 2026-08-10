@@ -46,7 +46,7 @@ A suite may set `PLATFORMS = {"darwin"}` to restrict execution and snapshot upda
 Restricted cases remain visible under `scripts/test --list` and are skipped on other platforms.
 A suite may set `REQUIRED_COMMANDS = {"ir"}` to skip when a required executable is not on `PATH`.
 
-Server cases create an `McpClient`, perform the session, and return `client.finish()`.
+Server cases create an `McpClient`, perform the session, and return `client._finish()`.
 Other cases may invoke the binary directly and return their transcript entries.
 
 Each suite is also directly runnable:

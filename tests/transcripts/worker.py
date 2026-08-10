@@ -7,13 +7,18 @@ import time
 from pathlib import Path
 from typing import TextIO
 
-from _support import McpClient, Transcript, code, run_this_suite
+from _support import McpClient, ToolResult, Transcript, code, run_this_suite
 
 
 PLATFORMS = {"darwin"}
 CAPTURE_NAME = "mcp-console-worker-wire.jsonl"
 CAPTURE_STDIN_CLOSE_ENV = "MCP_CONSOLE_MITM_CAPTURE_STDIN_CLOSE"
 CAPTURE_WORKER_SIDEBAND_CLOSE_ENV = "MCP_CONSOLE_MITM_CAPTURE_WORKER_SIDEBAND_CLOSE"
+
+
+def _tool_text(result: ToolResult) -> str:
+    assert result.get("isError") is not True, result
+    return result["content"][0]["text"]
 
 
 class WorkerWireClient:
@@ -25,8 +30,8 @@ class WorkerWireClient:
         capture_worker_sideband_close: bool = False,
         disable_r_segv_handler: bool = False,
     ) -> None:
-        self.temporary = tempfile.TemporaryDirectory()
-        root = Path(self.temporary.name)
+        self._temporary = tempfile.TemporaryDirectory()
+        root = Path(self._temporary.name)
         environment = os.environ.copy()
         environment["TMPDIR"] = str(root)
         environment["MCP_CONSOLE_MITM_WORKER"] = str(binary)
@@ -37,61 +42,55 @@ class WorkerWireClient:
         if disable_r_segv_handler:
             environment["R_NO_SEGV_HANDLER"] = "1"
         mitm = Path(__file__).resolve().parents[1] / "fixtures" / "worker_mitm"
-        self.client = McpClient(
+        self._client = McpClient(
             binary,
             ("serve", "--worker", str(mitm)),
             environment,
         )
-        self.client.initialize_and_list_tools()
+        self._client._initialize_and_list_tools()
 
-    def call_tool(self, **arguments: object) -> str:
-        self.client.call_tool("send", **arguments)
-        result = self.client.transcript[-1]["result"]
-        assert result.get("isError") is not True, result
-        return result["content"][0]["text"]
+    def send(self, **arguments: object) -> ToolResult:
+        return self._client.send(**arguments)
 
-    def restart(self) -> str:
-        self.client.call_tool("session", action="restart")
-        result = self.client.transcript[-1]["result"]
-        assert result.get("isError") is not True, result
-        return result["content"][0]["text"]
+    def session(self, **arguments: object) -> ToolResult:
+        return self._client.session(**arguments)
 
-    def open_capture(self) -> tuple[Path, TextIO]:
-        capture = self.capture_path()
+    def _open_capture(self) -> tuple[Path, TextIO]:
+        capture = self._capture_path()
         return capture, capture.open(encoding="utf-8")
 
-    def collect_output(self, output: str, expected_size: int) -> str:
+    def _collect_output(self, output: str, expected_size: int) -> str:
         chunks = [] if output == "[done]" else [output]
         deadline = time.monotonic() + 10
         while sum(map(len, chunks)) < expected_size:
             assert time.monotonic() < deadline, sum(map(len, chunks))
-            polled = self.call_tool()
+            polled = _tool_text(self.send())
             assert polled.endswith("\n[idle]"), repr(polled)
             chunks.append(polled.removesuffix("\n[idle]"))
         output = "".join(chunks)
         assert len(output) == expected_size, len(output)
         return output
 
-    def finish(self) -> Transcript:
-        transcript = self.read_capture(self.capture_path())
-        self.client.finish()
-        self.temporary.cleanup()
+    def _finish(self) -> Transcript:
+        transcript = self._read_capture(self._capture_path())
+        self._client._finish()
+        self._temporary.cleanup()
         return transcript
 
-    def finish_replacement(
+    def _finish_replacement(
         self,
         old_path: Path,
         old_capture: TextIO,
     ) -> Transcript:
-        transcript = self.read_open_capture(old_capture)
-        transcript.extend(self.read_capture(self.capture_path(excluding=old_path)))
+        transcript = self._read_open_capture(old_capture)
+        transcript.extend(self._read_capture(self._capture_path(excluding=old_path)))
         old_capture.close()
-        self.client.finish()
-        self.temporary.cleanup()
+        self._client._finish()
+        self._temporary.cleanup()
         return transcript
 
-    def capture_path(self, excluding: Path | None = None) -> Path:
-        root = Path(self.temporary.name)
+    def _capture_path(self, excluding: Path | None = None) -> Path:
+        root = Path(self._temporary.name)
         captures = [
             path
             for path in root.glob(f"mcp-console-tmp-*/{CAPTURE_NAME}")
@@ -101,14 +100,14 @@ class WorkerWireClient:
         return captures[0]
 
     @staticmethod
-    def read_capture(capture: Path) -> Transcript:
+    def _read_capture(capture: Path) -> Transcript:
         return [
             json.loads(line)
             for line in capture.read_text(encoding="utf-8").splitlines()
         ]
 
     @staticmethod
-    def read_open_capture(capture: TextIO) -> Transcript:
+    def _read_open_capture(capture: TextIO) -> Transcript:
         return [json.loads(line) for line in capture.read().splitlines()]
 
 
@@ -123,18 +122,18 @@ def test_restarts_session(binary: Path) -> Transcript:
         restart_marker <- "old generation"
         cat("before restart\n")
         """)
-    assert client.call_tool(r=before_restart) == "before restart\n"
-    old_path, old_capture = client.open_capture()
+    assert _tool_text(client.send(r=before_restart)) == "before restart\n"
+    old_path, old_capture = client._open_capture()
 
-    assert client.restart() == "[restarted]"
+    assert _tool_text(client.session(action="restart")) == "[restarted]"
     # fmt: r
     after_restart = code(r"""
         stopifnot(!exists("restart_marker", inherits = FALSE))
         cat("after restart\n")
         """)
-    assert client.call_tool(r=after_restart) == "after restart\n"
+    assert _tool_text(client.send(r=after_restart)) == "after restart\n"
 
-    transcript = client.finish_replacement(old_path, old_capture)
+    transcript = client._finish_replacement(old_path, old_capture)
     assert {"stdin": {"closed": True}} in transcript
     assert {"worker_sideband": {"closed": True}} in transcript
     return transcript
@@ -152,8 +151,8 @@ def test_recovers_after_worker_segfault(binary: Path) -> Transcript:
         crash_marker <- "old generation"
         cat("before crash\n")
         """)
-    assert client.call_tool(r=before_crash) == "before crash\n"
-    old_path, old_capture = client.open_capture()
+    assert _tool_text(client.send(r=before_crash)) == "before crash\n"
+    old_path, old_capture = client._open_capture()
 
     # fmt: python
     crash = code(r"""
@@ -161,8 +160,7 @@ def test_recovers_after_worker_segfault(binary: Path) -> Transcript:
 
         ctypes.string_at(0)
         """)
-    client.client.call_tool("send", python=crash)
-    result = client.client.transcript[-1]["result"]
+    result = client.send(python=crash)
     assert result["isError"] is True, result
     assert result["content"][0]["text"] == (
         "worker sideband read failed: worker sideband closed"
@@ -173,11 +171,11 @@ def test_recovers_after_worker_segfault(binary: Path) -> Transcript:
         stopifnot(!exists("crash_marker", inherits = FALSE))
         cat("after crash\n")
         """)
-    assert client.call_tool(r=after_crash) == (
+    assert _tool_text(client.send(r=after_crash)) == (
         "after crash\n[worker restarted: in-memory state lost]\n"
     )
 
-    transcript = client.finish_replacement(old_path, old_capture)
+    transcript = client._finish_replacement(old_path, old_capture)
     assert {"worker_sideband": {"closed": True}} in transcript
     return transcript
 
@@ -190,7 +188,7 @@ def test_routes_python_output(binary: Path) -> Transcript:
           invisible(reticulate::py_run_string("initialized_from_r = True"))
         )
         """)
-    assert client.call_tool(r=r) == "[done]"
+    assert _tool_text(client.send(r=r)) == "[done]"
 
     # fmt: python
     python = code(r"""
@@ -201,7 +199,7 @@ def test_routes_python_output(binary: Path) -> Transcript:
         sys.stderr.write("Python stderr\n")
         raise ValueError("boom")
         """)
-    output = client.call_tool(python=python)
+    output = _tool_text(client.send(python=python))
     assert output.startswith("Python stdout\nPython stderr\nTraceback"), output
     assert output.endswith("ValueError: boom\n"), output
 
@@ -238,10 +236,10 @@ def test_routes_python_output(binary: Path) -> Transcript:
         "exec descendant stdout",
         "exec descendant stderr",
     ]
-    output = client.call_tool(python=python)
-    output = client.collect_output(output, sum(len(line) + 1 for line in expected))
+    output = _tool_text(client.send(python=python))
+    output = client._collect_output(output, sum(len(line) + 1 for line in expected))
     assert sorted(output.splitlines()) == sorted(expected), repr(output)
-    return client.finish()
+    return client._finish()
 
 
 def test_preserves_python_output_from_fork_children(binary: Path) -> Transcript:
@@ -253,7 +251,7 @@ def test_preserves_python_output_from_fork_children(binary: Path) -> Transcript:
         reticulate::use_python(python, required = TRUE)
         suppressWarnings(invisible(reticulate::py_run_string("fork_ready = True")))
         """)
-    assert client.call_tool(r=r) == "[done]"
+    assert _tool_text(client.send(r=r)) == "[done]"
 
     # fmt: python
     python = code(r"""
@@ -279,10 +277,10 @@ def test_preserves_python_output_from_fork_children(binary: Path) -> Transcript:
         "parent stdout",
         "parent stderr",
     ]
-    output = client.call_tool(python=python)
-    output = client.collect_output(output, sum(len(line) + 1 for line in expected))
+    output = _tool_text(client.send(python=python))
+    output = client._collect_output(output, sum(len(line) + 1 for line in expected))
     assert sorted(output.splitlines()) == sorted(expected), repr(output)
-    return client.finish()
+    return client._finish()
 
 
 def test_drains_standard_streams_while_evaluating(binary: Path) -> Transcript:
@@ -302,12 +300,12 @@ def test_drains_standard_streams_while_evaluating(binary: Path) -> Transcript:
         write_all(1, b"x" * {size})
         write_all(2, b"y" * {size})
         """)
-    output = client.call_tool(python=python)
-    output = client.collect_output(output, 2 * size)
+    output = _tool_text(client.send(python=python))
+    output = client._collect_output(output, 2 * size)
     assert output.count("x") == size
     assert output.count("y") == size
 
-    transcript = client.finish()
+    transcript = client._finish()
     assert transcript[-2] == {"stdout": "x" * size, "stderr": "y" * size}
     assert transcript[-1] == {"worker": {"kind": "completed"}}
     transcript[-2]["stdout"] = f"<{size} bytes>"

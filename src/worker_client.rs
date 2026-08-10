@@ -16,9 +16,9 @@ struct ClientInner {
     program: PathBuf,
     arguments: Vec<OsString>,
     worker: Mutex<WorkerState>,
-    evaluation: Mutex<Option<Arc<Evaluation>>>,
+    evaluation: Mutex<Option<ActiveEvaluation>>,
     output: CapturedOutput,
-    shutdown_gate: Mutex<ShutdownGate>,
+    lifecycle: Mutex<LifecycleControl>,
     environment: Option<Mutex<Environment>>,
 }
 
@@ -62,11 +62,16 @@ struct CapturedOutputStream {
 }
 
 struct Evaluation {
-    generation: u64,
     state: Mutex<EvaluationState>,
     changed: tokio::sync::Notify,
     transcript: crate::transcript::Transcript,
     call_id: u64,
+}
+
+#[derive(Clone)]
+struct ActiveEvaluation {
+    generation: WorkerGeneration,
+    evaluation: Arc<Evaluation>,
 }
 
 #[derive(Default)]
@@ -188,27 +193,55 @@ impl Response {
     }
 }
 
-/// Keeps the current stop handle available to lifecycle control.
-enum ShutdownGate {
-    Open {
-        generation: u64,
-        worker: Option<platform::StopHandle>,
-        resolver: Option<crate::resolver::ResolverStopHandle>,
-    },
-    Restarting {
-        generation: u64,
-        worker: Option<platform::StopHandle>,
-        resolver: Option<crate::resolver::ResolverStopHandle>,
-        deadline: Instant,
-    },
-    Closed {
-        deadline: Instant,
-        worker: Option<platform::StopHandle>,
-        resolver: Option<crate::resolver::ResolverStopHandle>,
-    },
+/// Identifies work admitted against one worker without exposing an epoch counter.
+#[derive(Clone)]
+struct WorkerGeneration(Arc<()>);
+
+impl WorkerGeneration {
+    fn new() -> Self {
+        Self(Arc::new(()))
+    }
+
+    fn is(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
 }
 
-#[derive(Clone)]
+/// Owns admission and process cancellation for the implicit session.
+struct LifecycleControl {
+    state: LifecycleState,
+    generation: WorkerGeneration,
+    processes: ProcessStopHandles,
+}
+
+impl LifecycleControl {
+    fn new() -> Self {
+        Self {
+            state: LifecycleState::Ready,
+            generation: WorkerGeneration::new(),
+            processes: ProcessStopHandles::default(),
+        }
+    }
+
+    fn start_restart(&mut self, grace: Duration) -> (ProcessStopHandles, Instant) {
+        let deadline = Instant::now() + grace;
+        let stop_handles = self.processes.clone();
+        self.state = LifecycleState::Restarting { deadline };
+        self.generation = WorkerGeneration::new();
+        self.processes.resolver = None;
+        (stop_handles, deadline)
+    }
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+/// Carries a deadline only while processes are being stopped.
+enum LifecycleState {
+    Ready,
+    Restarting { deadline: Instant },
+    ShuttingDown { deadline: Instant },
+}
+
+#[derive(Clone, Default)]
 struct ProcessStopHandles {
     worker: Option<platform::StopHandle>,
     resolver: Option<crate::resolver::ResolverStopHandle>,
@@ -226,6 +259,27 @@ impl ProcessStopHandles {
             .map_or(Ok(()), |handle| handle.shutdown(deadline));
         resolver.and(worker)
     }
+}
+
+fn merge_python_requirements(
+    current: Option<&crate::resolver::ManagedPython>,
+    additions: Vec<String>,
+) -> Option<crate::worker_protocol::PythonRequirementManifest> {
+    let retained = current
+        .map(|managed| managed.requirements().packages.iter().cloned().collect())
+        .unwrap_or_default();
+    let mut candidate = current
+        .map(|managed| managed.requirements().clone())
+        .unwrap_or_else(|| crate::worker_protocol::PythonRequirementManifest {
+            packages: vec!["numpy".to_string()],
+            ..Default::default()
+        });
+    let additions = additions.into_iter().collect::<BTreeSet<_>>();
+    if additions.is_subset(&retained) {
+        return None;
+    }
+    candidate.packages.extend(additions);
+    Some(candidate.normalized())
 }
 
 impl Client {
@@ -255,11 +309,7 @@ impl Client {
             worker: Mutex::new(WorkerState::Initial),
             evaluation: Mutex::new(None),
             output: CapturedOutput::new(),
-            shutdown_gate: Mutex::new(ShutdownGate::Open {
-                generation: 0,
-                worker: None,
-                resolver: None,
-            }),
+            lifecycle: Mutex::new(LifecycleControl::new()),
             environment: environment.map(Mutex::new),
         }))
     }
@@ -276,7 +326,7 @@ impl Client {
     }
 
     fn prepare_blocking(&self, requirements: Requirements) -> Result<PrepareResult, String> {
-        self.ensure_available()?;
+        let generation = self.admit()?;
         let environment = self
             .0
             .environment
@@ -285,20 +335,16 @@ impl Client {
         let mut environment = environment
             .lock()
             .map_err(|_| "worker environment lock poisoned".to_string())?;
-        self.ensure_available()?;
-        let python_additions = requirements.python.into_iter().collect::<BTreeSet<_>>();
+        self.ensure_generation(&generation)?;
+        let python_candidate =
+            merge_python_requirements(environment.python.as_ref(), requirements.python);
         let r_additions = requirements.r.into_iter().collect::<BTreeSet<_>>();
-        let current_python = environment
-            .python
-            .as_ref()
-            .map(|managed| managed.requirements().packages.iter().cloned().collect())
-            .unwrap_or_default();
         let current_r = environment
             .r
             .as_ref()
             .map(|managed| managed.requirements().iter().cloned().collect())
             .unwrap_or_default();
-        if python_additions.is_subset(&current_python) && r_additions.is_subset(&current_r) {
+        if python_candidate.is_none() && r_additions.is_subset(&current_r) {
             return Ok(PrepareResult::Prepared);
         }
         let worker = match self.0.worker.try_lock() {
@@ -314,61 +360,64 @@ impl Client {
             return Ok(PrepareResult::RestartRequired);
         }
 
-        let python_requirements = current_python
-            .union(&python_additions)
-            .cloned()
-            .collect::<Vec<_>>();
         let r_requirements = current_r.union(&r_additions).cloned().collect::<Vec<_>>();
 
         let mut managed_r = environment.r.clone();
         if !r_additions.is_subset(&current_r) {
             let result = crate::resolver::resolve_r(r_requirements, |handle| {
-                self.register_resolver_stop_handle(handle)
+                self.register_resolver_stop_handle(&generation, handle)
             });
-            self.clear_resolver_stop_handle(None)?;
+            self.clear_resolver_stop_handle(&generation)?;
             managed_r = Some(result?);
         }
 
         let mut managed_python = environment.python.clone();
-        if !python_additions.is_subset(&current_python) {
-            let result = crate::resolver::resolve_python(&python_requirements, |handle| {
-                self.register_resolver_stop_handle(handle)
+        if let Some(candidate) = python_candidate {
+            let result = crate::resolver::resolve_python_host(candidate, |handle| {
+                self.register_resolver_stop_handle(&generation, handle)
             });
-            self.clear_resolver_stop_handle(None)?;
-            managed_python = Some(result?.ok_or_else(|| {
-                "managed Python environments are supported only on macOS".to_string()
-            })?);
+            self.clear_resolver_stop_handle(&generation)?;
+            managed_python = Some(result?);
         }
 
-        let mut gate = self
+        let mut lifecycle = self
             .0
-            .shutdown_gate
+            .lifecycle
             .lock()
-            .map_err(|_| "worker shutdown gate lock poisoned".to_string())?;
-        match &mut *gate {
-            ShutdownGate::Open { resolver, .. } => {
-                *resolver = None;
+            .map_err(|_| "worker lifecycle lock poisoned".to_string())?;
+        match lifecycle.state {
+            LifecycleState::Ready if lifecycle.generation.is(&generation) => {
+                lifecycle.processes.resolver = None;
                 environment.python = managed_python;
                 environment.r = managed_r;
                 Ok(PrepareResult::Prepared)
             }
-            ShutdownGate::Restarting { .. } => {
-                Err("requirement preparation cancelled by restart".to_string())
+            LifecycleState::Ready => {
+                Err("session restarted before the operation began".to_string())
             }
-            ShutdownGate::Closed { .. } => Err("requirement preparation cancelled".to_string()),
+            LifecycleState::Restarting { .. } => Err("worker is restarting".to_string()),
+            LifecycleState::ShuttingDown { .. } => Err("worker is shutting down".to_string()),
         }
     }
 
-    /// Replaces the current worker generation while retaining its environment.
-    pub(crate) async fn restart(&self, deadline: Instant) -> Result<(), String> {
+    /// Replaces the current worker, optionally adding Python requirements first.
+    pub(crate) async fn restart(
+        &self,
+        requirements: Vec<String>,
+        grace: Duration,
+    ) -> Result<(), String> {
         let client = self.clone();
-        tokio::task::spawn_blocking(move || client.restart_blocking(deadline))
+        tokio::task::spawn_blocking(move || client.restart_blocking(requirements, grace))
             .await
             .map_err(|error| format!("worker restart task failed: {error}"))?
     }
 
-    fn restart_blocking(&self, deadline: Instant) -> Result<(), String> {
-        let stop_handles = self.begin_restart(deadline)?;
+    fn restart_blocking(&self, requirements: Vec<String>, grace: Duration) -> Result<(), String> {
+        let (stop_handles, deadline) = if requirements.is_empty() {
+            self.begin_restart(grace)?
+        } else {
+            self.resolve_and_begin_restart(requirements, grace)?
+        };
         if let Err(error) = stop_handles.shutdown(deadline) {
             self.fail_restart(deadline)?;
             return Err(error);
@@ -379,6 +428,40 @@ impl Client {
             (Err(error), _) | (Ok(()), Err(error)) => Err(error),
             (Ok(()), Ok(())) => Ok(()),
         }
+    }
+
+    fn resolve_and_begin_restart(
+        &self,
+        requirements: Vec<String>,
+        grace: Duration,
+    ) -> Result<(ProcessStopHandles, Instant), String> {
+        let generation = self.admit()?;
+        let environment = self.0.environment.as_ref().ok_or_else(|| {
+            "Python requirements are unavailable with a custom worker".to_string()
+        })?;
+        let mut environment = environment
+            .lock()
+            .map_err(|_| "worker environment lock poisoned".to_string())?;
+        self.ensure_generation(&generation)?;
+        let Some(candidate) = merge_python_requirements(environment.python.as_ref(), requirements)
+        else {
+            drop(environment);
+            return self.begin_restart(grace);
+        };
+
+        let managed = match crate::resolver::resolve_python_host(candidate, |handle| {
+            self.register_resolver_stop_handle(&generation, handle)
+        }) {
+            Ok(managed) => managed,
+            Err(error) => {
+                self.clear_resolver_stop_handle(&generation)?;
+                return Err(error);
+            }
+        };
+
+        let restart = self.begin_restart_after_resolution(&generation, grace)?;
+        environment.python = Some(managed);
+        Ok(restart)
     }
 
     fn replace_worker(&self) -> Result<(), String> {
@@ -436,17 +519,17 @@ impl Client {
         let evaluation = match cell {
             Some(cell) => self.start_evaluation(cell, stdin, generation, transcript, call_id)?,
             None => match self.current_evaluation()? {
-                Some(evaluation) => {
-                    self.ensure_generation(generation)?;
-                    if evaluation.generation != generation {
+                Some(active) => {
+                    self.ensure_generation(&generation)?;
+                    if !active.generation.is(&generation) {
                         return Err("session restarted before the operation began"
                             .to_string()
                             .into());
                     }
                     if let Some(stdin) = stdin {
-                        evaluation.submit_stdin(stdin)?;
+                        active.evaluation.submit_stdin(stdin)?;
                     }
-                    evaluation
+                    active.evaluation
                 }
                 None => {
                     if let Some(stdin) = stdin {
@@ -471,14 +554,13 @@ impl Client {
         &self,
         cell: crate::cell::Cell,
         stdin: Option<String>,
-        generation: u64,
+        generation: WorkerGeneration,
         transcript: crate::transcript::Transcript,
         call_id: u64,
     ) -> Result<Arc<Evaluation>, String> {
-        self.ensure_generation(generation)?;
+        self.ensure_generation(&generation)?;
 
         let evaluation = Arc::new(Evaluation {
-            generation,
             state: Mutex::new(EvaluationState {
                 result: None,
                 output: Response::default(),
@@ -505,15 +587,19 @@ impl Client {
                 "worker is already evaluating a cell; poll without a code field".to_string(),
             );
         }
-        self.ensure_generation(generation)?;
-        *active = Some(evaluation.clone());
+        self.ensure_generation(&generation)?;
+        *active = Some(ActiveEvaluation {
+            generation: generation.clone(),
+            evaluation: evaluation.clone(),
+        });
         drop(active);
 
         let client = self.clone();
         let running = evaluation.clone();
         let evaluator = evaluation.clone();
-        let evaluation_task =
-            tokio::task::spawn_blocking(move || client.evaluate_blocking(cell, &evaluator));
+        let evaluation_task = tokio::task::spawn_blocking(move || {
+            client.evaluate_blocking(cell, &evaluator, generation)
+        });
         let _completion_task = tokio::spawn(async move {
             let result = evaluation_task
                 .await
@@ -524,7 +610,7 @@ impl Client {
         Ok(evaluation)
     }
 
-    fn current_evaluation(&self) -> Result<Option<Arc<Evaluation>>, String> {
+    fn current_evaluation(&self) -> Result<Option<ActiveEvaluation>, String> {
         self.0
             .evaluation
             .lock()
@@ -532,7 +618,11 @@ impl Client {
             .map_err(|_| "worker evaluation lock poisoned".to_string())
     }
 
-    async fn write_idle_stdin(&self, stdin: String, generation: u64) -> Result<(), String> {
+    async fn write_idle_stdin(
+        &self,
+        stdin: String,
+        generation: WorkerGeneration,
+    ) -> Result<(), String> {
         if stdin.is_empty() {
             return Ok(());
         }
@@ -542,8 +632,12 @@ impl Client {
             .map_err(|error| format!("worker stdin task failed: {error}"))?
     }
 
-    fn write_idle_stdin_blocking(&self, stdin: String, generation: u64) -> Result<(), String> {
-        self.with_worker(generation, |worker| worker.write_stdin(stdin))
+    fn write_idle_stdin_blocking(
+        &self,
+        stdin: String,
+        generation: WorkerGeneration,
+    ) -> Result<(), String> {
+        self.with_worker(&generation, |worker| worker.write_stdin(stdin))
     }
 
     fn clear_evaluation(&self, completed: &Arc<Evaluation>) -> Result<(), String> {
@@ -554,7 +648,7 @@ impl Client {
             .map_err(|_| "worker evaluation lock poisoned".to_string())?;
         if active
             .as_ref()
-            .is_some_and(|active| Arc::ptr_eq(active, completed))
+            .is_some_and(|active| Arc::ptr_eq(&active.evaluation, completed))
         {
             *active = None;
         }
@@ -565,17 +659,25 @@ impl Client {
         &self,
         cell: crate::cell::Cell,
         evaluation: &Evaluation,
+        generation: WorkerGeneration,
     ) -> Result<(), String> {
-        let generation = evaluation.generation;
         let resolver = self.clone();
         let checkpointer = self.clone();
-        self.with_worker(evaluation.generation, |worker| {
+        let resolver_generation = generation.clone();
+        let checkpoint_generation = generation.clone();
+        self.with_worker(&generation, |worker| {
             worker.evaluate(
                 cell,
                 evaluation,
-                move |request| resolver.resolve_runtime_python(generation, request),
+                move |request| {
+                    resolver.resolve_runtime_python(resolver_generation.clone(), request)
+                },
                 move |checkpoint, candidates| {
-                    checkpointer.checkpoint_runtime_python(generation, checkpoint, candidates)
+                    checkpointer.checkpoint_runtime_python(
+                        checkpoint_generation.clone(),
+                        checkpoint,
+                        candidates,
+                    )
                 },
             )
         })
@@ -583,50 +685,49 @@ impl Client {
 
     fn resolve_runtime_python(
         &self,
-        generation: u64,
+        generation: WorkerGeneration,
         request: crate::worker_protocol::PythonResolveRequest,
     ) -> Result<crate::resolver::ManagedPython, String> {
-        self.ensure_generation(generation)?;
+        self.ensure_generation(&generation)?;
         let environment = self.0.environment.as_ref().ok_or_else(|| {
             "Python requirements are unavailable with a custom worker".to_string()
         })?;
-        let current = environment
+        // Keep the environment locked while the host resolver owns the one lifecycle slot.
+        let environment = environment
             .lock()
-            .map_err(|_| "worker environment lock poisoned".to_string())?
-            .python
-            .clone()
-            .ok_or_else(|| {
-                "runtime Python requirements require a server-managed interpreter".to_string()
-            })?;
+            .map_err(|_| "worker environment lock poisoned".to_string())?;
+        let current = environment.python.clone().ok_or_else(|| {
+            "runtime Python requirements require a server-managed interpreter".to_string()
+        })?;
         let requirements = request.requirements.normalized();
         if current.requirements() == &requirements {
-            self.ensure_generation(generation)?;
+            self.ensure_generation(&generation)?;
             return Ok(current);
         }
 
         let managed = match crate::resolver::resolve_python_manifest(
             requirements,
             request.environment,
-            |handle| self.register_runtime_resolver_stop_handle(generation, handle),
+            |handle| self.register_resolver_stop_handle(&generation, handle),
         ) {
             Ok(managed) => managed,
             Err(error) => {
-                self.clear_resolver_stop_handle(Some(generation))?;
+                self.clear_resolver_stop_handle(&generation)?;
                 return Err(error);
             }
         };
-        self.clear_resolver_stop_handle(Some(generation))?;
-        self.ensure_generation(generation)?;
+        self.clear_resolver_stop_handle(&generation)?;
+        self.ensure_generation(&generation)?;
         Ok(managed)
     }
 
     fn checkpoint_runtime_python(
         &self,
-        generation: u64,
+        generation: WorkerGeneration,
         checkpoint: Option<crate::worker_protocol::PythonRequirementManifest>,
         candidates: Vec<crate::resolver::ManagedPython>,
     ) -> Result<(), String> {
-        self.ensure_generation(generation)?;
+        self.ensure_generation(&generation)?;
         let Some(checkpoint) = checkpoint else {
             return if candidates.is_empty() {
                 Ok(())
@@ -656,30 +757,27 @@ impl Client {
             .ok_or_else(|| {
                 "worker checkpoint does not match a resolved Python environment".to_string()
             })?;
-        let gate = self
+        let lifecycle = self
             .0
-            .shutdown_gate
+            .lifecycle
             .lock()
-            .map_err(|_| "worker shutdown gate lock poisoned".to_string())?;
-        match &*gate {
-            ShutdownGate::Open {
-                generation: current,
-                ..
-            } if *current == generation => {
+            .map_err(|_| "worker lifecycle lock poisoned".to_string())?;
+        match lifecycle.state {
+            LifecycleState::Ready if lifecycle.generation.is(&generation) => {
                 environment.python = Some(managed);
                 Ok(())
             }
-            ShutdownGate::Open { .. } => {
+            LifecycleState::Ready => {
                 Err("session restarted before the operation began".to_string())
             }
-            ShutdownGate::Restarting { .. } => Err("worker is restarting".to_string()),
-            ShutdownGate::Closed { .. } => Err("worker is shutting down".to_string()),
+            LifecycleState::Restarting { .. } => Err("worker is restarting".to_string()),
+            LifecycleState::ShuttingDown { .. } => Err("worker is shutting down".to_string()),
         }
     }
 
     fn with_worker<T>(
         &self,
-        generation: u64,
+        generation: &WorkerGeneration,
         operation: impl FnOnce(&mut platform::Worker) -> Result<T, String>,
     ) -> Result<T, String> {
         self.ensure_generation(generation)?;
@@ -692,13 +790,13 @@ impl Client {
         self.ensure_generation(generation)?;
 
         self.start_worker(&mut worker, |stop_handle| {
-            self.register_stop_handle(stop_handle)
+            self.register_stop_handle(generation, stop_handle)
         })?;
         let WorkerState::Running(running) = &mut *worker else {
             unreachable!("worker should be running");
         };
         let result = operation(running);
-        if result.is_err() && self.replacement_notice_required()? {
+        if result.is_err() && self.generation_is_ready(generation)? {
             *worker = WorkerState::ReplacementPending;
         }
         result
@@ -763,190 +861,153 @@ impl Client {
         }
     }
 
-    fn admit(&self) -> Result<u64, String> {
-        let gate = self
+    fn admit(&self) -> Result<WorkerGeneration, String> {
+        let lifecycle = self
             .0
-            .shutdown_gate
+            .lifecycle
             .lock()
-            .map_err(|_| "worker shutdown gate lock poisoned".to_string())?;
-        match &*gate {
-            ShutdownGate::Open { generation, .. } => Ok(*generation),
-            ShutdownGate::Restarting { .. } => Err("worker is restarting".to_string()),
-            ShutdownGate::Closed { .. } => Err("worker is shutting down".to_string()),
+            .map_err(|_| "worker lifecycle lock poisoned".to_string())?;
+        match lifecycle.state {
+            LifecycleState::Ready => Ok(lifecycle.generation.clone()),
+            LifecycleState::Restarting { .. } => Err("worker is restarting".to_string()),
+            LifecycleState::ShuttingDown { .. } => Err("worker is shutting down".to_string()),
         }
     }
 
-    fn ensure_available(&self) -> Result<(), String> {
-        self.admit().map(|_| ())
-    }
-
-    fn replacement_notice_required(&self) -> Result<bool, String> {
-        let gate = self
+    fn generation_is_ready(&self, expected: &WorkerGeneration) -> Result<bool, String> {
+        let lifecycle = self
             .0
-            .shutdown_gate
+            .lifecycle
             .lock()
-            .map_err(|_| "worker shutdown gate lock poisoned".to_string())?;
-        Ok(matches!(&*gate, ShutdownGate::Open { .. }))
+            .map_err(|_| "worker lifecycle lock poisoned".to_string())?;
+        Ok(lifecycle.state == LifecycleState::Ready && lifecycle.generation.is(expected))
     }
 
-    fn ensure_generation(&self, expected: u64) -> Result<(), String> {
+    fn ensure_generation(&self, expected: &WorkerGeneration) -> Result<(), String> {
         let generation = self.admit()?;
-        if generation != expected {
+        if !generation.is(expected) {
             return Err("session restarted before the operation began".to_string());
         }
         Ok(())
     }
 
     fn ensure_restarting(&self) -> Result<(), String> {
-        let gate = self
+        let lifecycle = self
             .0
-            .shutdown_gate
+            .lifecycle
             .lock()
-            .map_err(|_| "worker shutdown gate lock poisoned".to_string())?;
-        match &*gate {
-            ShutdownGate::Restarting { .. } => Ok(()),
-            ShutdownGate::Closed { .. } => Err("worker is shutting down".to_string()),
-            ShutdownGate::Open { .. } => Err("worker restart state changed".to_string()),
+            .map_err(|_| "worker lifecycle lock poisoned".to_string())?;
+        match lifecycle.state {
+            LifecycleState::Restarting { .. } => Ok(()),
+            LifecycleState::ShuttingDown { .. } => Err("worker is shutting down".to_string()),
+            LifecycleState::Ready => Err("worker restart state changed".to_string()),
         }
     }
 
-    fn begin_restart(&self, deadline: Instant) -> Result<ProcessStopHandles, String> {
-        let mut gate = self
+    fn begin_restart(&self, grace: Duration) -> Result<(ProcessStopHandles, Instant), String> {
+        let mut lifecycle = self
             .0
-            .shutdown_gate
+            .lifecycle
             .lock()
-            .map_err(|_| "worker shutdown gate lock poisoned".to_string())?;
-        match &*gate {
-            ShutdownGate::Restarting { .. } => {
+            .map_err(|_| "worker lifecycle lock poisoned".to_string())?;
+        match lifecycle.state {
+            LifecycleState::Restarting { .. } => {
                 return Err("worker is already restarting".to_string());
             }
-            ShutdownGate::Closed { .. } => {
+            LifecycleState::ShuttingDown { .. } => {
                 return Err("worker is shutting down".to_string());
             }
-            ShutdownGate::Open {
-                worker: None,
-                resolver: Some(_),
-                ..
-            } => return Err("requirement preparation is still running".to_string()),
-            ShutdownGate::Open { .. } => {}
+            LifecycleState::Ready
+                if lifecycle.processes.worker.is_none()
+                    && lifecycle.processes.resolver.is_some() =>
+            {
+                return Err("requirement preparation is still running".to_string());
+            }
+            LifecycleState::Ready => {}
         }
+        Ok(lifecycle.start_restart(grace))
+    }
 
-        let ShutdownGate::Open {
-            generation,
-            worker,
-            resolver,
-        } = &*gate
-        else {
-            unreachable!("restart preconditions should leave the gate open");
-        };
-        let generation = *generation;
-        let stop_handles = ProcessStopHandles {
-            worker: worker.clone(),
-            resolver: resolver.clone(),
-        };
-        *gate = ShutdownGate::Restarting {
-            generation,
-            worker: stop_handles.worker.clone(),
-            resolver: stop_handles.resolver.clone(),
-            deadline,
-        };
-        Ok(stop_handles)
+    fn begin_restart_after_resolution(
+        &self,
+        expected: &WorkerGeneration,
+        grace: Duration,
+    ) -> Result<(ProcessStopHandles, Instant), String> {
+        let mut lifecycle = self
+            .0
+            .lifecycle
+            .lock()
+            .map_err(|_| "worker lifecycle lock poisoned".to_string())?;
+        match lifecycle.state {
+            LifecycleState::Ready if lifecycle.generation.is(expected) => {}
+            LifecycleState::Ready => {
+                return Err("session restarted before the operation began".to_string());
+            }
+            LifecycleState::Restarting { .. } => {
+                return Err("worker is restarting".to_string());
+            }
+            LifecycleState::ShuttingDown { .. } => {
+                return Err("worker is shutting down".to_string());
+            }
+        }
+        lifecycle.processes.resolver = None;
+        Ok(lifecycle.start_restart(grace))
     }
 
     fn finish_restart(&self) -> Result<(), String> {
-        let mut gate = self
+        let mut lifecycle = self
             .0
-            .shutdown_gate
+            .lifecycle
             .lock()
-            .map_err(|_| "worker shutdown gate lock poisoned".to_string())?;
-        let restarting = std::mem::replace(
-            &mut *gate,
-            ShutdownGate::Closed {
-                deadline: Instant::now(),
-                worker: None,
-                resolver: None,
-            },
-        );
-        match restarting {
-            ShutdownGate::Restarting {
-                generation, worker, ..
-            } => {
-                *gate = ShutdownGate::Open {
-                    generation: generation + 1,
-                    worker,
-                    resolver: None,
-                };
+            .map_err(|_| "worker lifecycle lock poisoned".to_string())?;
+        match lifecycle.state {
+            LifecycleState::Restarting { .. } => {
+                lifecycle.state = LifecycleState::Ready;
                 Ok(())
             }
-            ShutdownGate::Closed {
-                deadline,
-                worker,
-                resolver,
-            } => {
-                *gate = ShutdownGate::Closed {
-                    deadline,
-                    worker,
-                    resolver,
-                };
-                Err("worker is shutting down".to_string())
-            }
-            open @ ShutdownGate::Open { .. } => {
-                *gate = open;
-                Err("worker restart state changed".to_string())
-            }
+            LifecycleState::ShuttingDown { .. } => Err("worker is shutting down".to_string()),
+            LifecycleState::Ready => Err("worker restart state changed".to_string()),
         }
     }
 
     fn fail_restart(&self, deadline: Instant) -> Result<(), String> {
-        let mut gate = self
+        let mut lifecycle = self
             .0
-            .shutdown_gate
+            .lifecycle
             .lock()
-            .map_err(|_| "worker shutdown gate lock poisoned".to_string())?;
-        let restarting = std::mem::replace(
-            &mut *gate,
-            ShutdownGate::Closed {
-                deadline,
-                worker: None,
-                resolver: None,
-            },
-        );
-        match restarting {
-            ShutdownGate::Restarting {
-                worker, resolver, ..
-            } => {
-                *gate = ShutdownGate::Closed {
-                    deadline,
-                    worker,
-                    resolver,
-                };
+            .map_err(|_| "worker lifecycle lock poisoned".to_string())?;
+        match lifecycle.state {
+            LifecycleState::Restarting { .. } => {
+                lifecycle.state = LifecycleState::ShuttingDown { deadline };
                 Ok(())
             }
-            closed @ ShutdownGate::Closed { .. } => {
-                *gate = closed;
-                Ok(())
-            }
-            open @ ShutdownGate::Open { .. } => {
-                *gate = open;
-                Err("worker restart state changed".to_string())
-            }
+            LifecycleState::ShuttingDown { .. } => Ok(()),
+            LifecycleState::Ready => Err("worker restart state changed".to_string()),
         }
     }
 
-    fn register_stop_handle(&self, handle: platform::StopHandle) -> Result<(), String> {
+    fn register_stop_handle(
+        &self,
+        expected: &WorkerGeneration,
+        handle: platform::StopHandle,
+    ) -> Result<(), String> {
         let (deadline, message) = {
-            let mut gate = self
+            let mut lifecycle = self
                 .0
-                .shutdown_gate
+                .lifecycle
                 .lock()
-                .map_err(|_| "worker shutdown gate lock poisoned".to_string())?;
-            match &mut *gate {
-                ShutdownGate::Open { worker, .. } => {
-                    *worker = Some(handle.clone());
+                .map_err(|_| "worker lifecycle lock poisoned".to_string())?;
+            match lifecycle.state {
+                LifecycleState::Ready if lifecycle.generation.is(expected) => {
+                    lifecycle.processes.worker = Some(handle.clone());
                     return Ok(());
                 }
-                ShutdownGate::Restarting { deadline, .. } => (*deadline, "worker is restarting"),
-                ShutdownGate::Closed { deadline, .. } => (*deadline, "worker is shutting down"),
+                LifecycleState::Ready => (
+                    Instant::now(),
+                    "session restarted before the operation began",
+                ),
+                LifecycleState::Restarting { deadline } => (deadline, "worker is restarting"),
+                LifecycleState::ShuttingDown { deadline } => (deadline, "worker is shutting down"),
             }
         };
         handle.shutdown(deadline)?;
@@ -955,18 +1016,18 @@ impl Client {
 
     fn register_restart_stop_handle(&self, handle: platform::StopHandle) -> Result<(), String> {
         let (deadline, message) = {
-            let mut gate = self
+            let mut lifecycle = self
                 .0
-                .shutdown_gate
+                .lifecycle
                 .lock()
-                .map_err(|_| "worker shutdown gate lock poisoned".to_string())?;
-            match &mut *gate {
-                ShutdownGate::Restarting { worker, .. } => {
-                    *worker = Some(handle.clone());
+                .map_err(|_| "worker lifecycle lock poisoned".to_string())?;
+            match lifecycle.state {
+                LifecycleState::Restarting { .. } => {
+                    lifecycle.processes.worker = Some(handle.clone());
                     return Ok(());
                 }
-                ShutdownGate::Closed { deadline, .. } => (*deadline, "worker is shutting down"),
-                ShutdownGate::Open { .. } => (Instant::now(), "worker restart state changed"),
+                LifecycleState::ShuttingDown { deadline } => (deadline, "worker is shutting down"),
+                LifecycleState::Ready => (Instant::now(), "worker restart state changed"),
             }
         };
         handle.shutdown(deadline)?;
@@ -975,117 +1036,59 @@ impl Client {
 
     fn register_resolver_stop_handle(
         &self,
-        handle: crate::resolver::ResolverStopHandle,
-    ) -> Result<(), String> {
-        self.register_resolver_stop_handle_for(None, handle)
-    }
-
-    fn register_runtime_resolver_stop_handle(
-        &self,
-        generation: u64,
-        handle: crate::resolver::ResolverStopHandle,
-    ) -> Result<(), String> {
-        self.register_resolver_stop_handle_for(Some(generation), handle)
-    }
-
-    fn register_resolver_stop_handle_for(
-        &self,
-        expected_generation: Option<u64>,
+        expected: &WorkerGeneration,
         handle: crate::resolver::ResolverStopHandle,
     ) -> Result<(), String> {
         let message = {
-            let mut gate = self
+            let mut lifecycle = self
                 .0
-                .shutdown_gate
+                .lifecycle
                 .lock()
-                .map_err(|_| "worker shutdown gate lock poisoned".to_string())?;
-            match &mut *gate {
-                ShutdownGate::Open {
-                    generation,
-                    resolver,
-                    ..
-                } if expected_generation.is_none_or(|expected| expected == *generation) => {
-                    *resolver = Some(handle.clone());
+                .map_err(|_| "worker lifecycle lock poisoned".to_string())?;
+            match lifecycle.state {
+                LifecycleState::Ready if lifecycle.generation.is(expected) => {
+                    lifecycle.processes.resolver = Some(handle.clone());
                     return Ok(());
                 }
-                ShutdownGate::Open { .. } => "session restarted before the operation began",
-                ShutdownGate::Restarting { .. } => "worker is restarting",
-                ShutdownGate::Closed { .. } => "worker is shutting down",
+                LifecycleState::Ready => "session restarted before the operation began",
+                LifecycleState::Restarting { .. } => "worker is restarting",
+                LifecycleState::ShuttingDown { .. } => "worker is shutting down",
             }
         };
         handle.stop()?;
         Err(message.to_string())
     }
 
-    fn clear_resolver_stop_handle(&self, expected_generation: Option<u64>) -> Result<(), String> {
-        let mut gate = self
+    fn clear_resolver_stop_handle(&self, expected: &WorkerGeneration) -> Result<(), String> {
+        let mut lifecycle = self
             .0
-            .shutdown_gate
+            .lifecycle
             .lock()
-            .map_err(|_| "worker shutdown gate lock poisoned".to_string())?;
-        match &mut *gate {
-            ShutdownGate::Open {
-                generation,
-                resolver,
-                ..
-            }
-            | ShutdownGate::Restarting {
-                generation,
-                resolver,
-                ..
-            } if expected_generation.is_none_or(|expected| expected == *generation) => {
-                *resolver = None;
-            }
-            ShutdownGate::Closed { resolver, .. } => {
-                *resolver = None;
-            }
-            ShutdownGate::Open { .. } | ShutdownGate::Restarting { .. } => {}
+            .map_err(|_| "worker lifecycle lock poisoned".to_string())?;
+        if (lifecycle.state == LifecycleState::Ready && lifecycle.generation.is(expected))
+            || matches!(lifecycle.state, LifecycleState::ShuttingDown { .. })
+        {
+            lifecycle.processes.resolver = None;
         }
         Ok(())
     }
 
-    fn close_shutdown_gate(&self, deadline: Instant) -> Result<Option<ProcessStopHandles>, String> {
-        let mut gate = self
+    fn close_lifecycle(&self, deadline: Instant) -> Result<Option<ProcessStopHandles>, String> {
+        let mut lifecycle = self
             .0
-            .shutdown_gate
+            .lifecycle
             .lock()
-            .map_err(|_| "worker shutdown gate lock poisoned".to_string())?;
-        match std::mem::replace(
-            &mut *gate,
-            ShutdownGate::Closed {
-                deadline,
-                worker: None,
-                resolver: None,
-            },
-        ) {
-            ShutdownGate::Open {
-                worker, resolver, ..
-            }
-            | ShutdownGate::Restarting {
-                worker, resolver, ..
-            } => {
-                let handles = ProcessStopHandles { worker, resolver };
-                Ok((handles.worker.is_some() || handles.resolver.is_some()).then_some(handles))
-            }
-            ShutdownGate::Closed {
-                deadline,
-                worker,
-                resolver,
-            } => {
-                *gate = ShutdownGate::Closed {
-                    deadline,
-                    worker: None,
-                    resolver: None,
-                };
-                let handles = ProcessStopHandles { worker, resolver };
-                Ok((handles.worker.is_some() || handles.resolver.is_some()).then_some(handles))
-            }
+            .map_err(|_| "worker lifecycle lock poisoned".to_string())?;
+        if !matches!(lifecycle.state, LifecycleState::ShuttingDown { .. }) {
+            lifecycle.state = LifecycleState::ShuttingDown { deadline };
         }
+        let handles = std::mem::take(&mut lifecycle.processes);
+        Ok((handles.worker.is_some() || handles.resolver.is_some()).then_some(handles))
     }
 
     /// Stops and reaps active worker and resolver process groups.
     pub(crate) async fn shutdown(&self, deadline: Instant) -> Result<(), String> {
-        let Some(stop_handles) = self.close_shutdown_gate(deadline)? else {
+        let Some(stop_handles) = self.close_lifecycle(deadline)? else {
             return Ok(());
         };
         tokio::task::spawn_blocking(move || {

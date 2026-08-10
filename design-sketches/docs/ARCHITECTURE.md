@@ -799,7 +799,7 @@ Reticulate owns the live manifest during an evaluation, while the supervisor own
 Only newly added package requirements fit the v1 late-layering contract.
 Removals and changes to Python-version or `exclude_newer` constraints are unsupported after initialization rather than silently projected as additions.
 An explicit late `session prepare` still returns `[restart required]`.
-The implemented implicit-session restart retains the last accepted checkpoint but does not accept new requirements; activating changed constraints as part of restart remains future work.
+The implemented implicit-session restart can merge additive Python requirements into the last accepted checkpoint before replacing the worker.
 
 ### 14.2 R
 
@@ -807,7 +807,7 @@ The implemented implicit session uses IR for explicit pre-start R requirements.
 The supervisor runs `ir run` outside the worker sandbox with the same Rscript selection as the worker and one `--with` argument per exact requirement.
 It validates IR's returned library and prepends it to inherited `R_LIBS` before each worker generation initializes R.
 The prepared library persists across explicit restart and crash replacement.
-Additions after the worker starts still require a future restart-with-requirements path; the live worker does not mutate `.libPaths()`.
+R additions after the worker starts still require a future restart-with-R-requirements path; the live worker does not mutate `.libPaths()`.
 IR currently has no option to reject local package references before `pak` and `renv` process them.
 A future restricted mode should use an upstream IR policy rather than duplicate its reference grammar in MCP Console; rejecting local references would not sandbox other source-package build code.
 The exact package-reference grammar belongs in a later `docs/DEPENDENCIES.md`.
@@ -819,6 +819,13 @@ Before worker startup, an explicit `prepare` action remains atomic:
 1. merge the requested additions with the current manifest;
 2. resolve and prepare the candidate environment outside the arbitrary-code worker;
 3. commit the R library, Python interpreter, and manifests only after every requested resolution succeeds.
+
+An explicit `restart` with requirements is atomic until the worker replacement boundary:
+
+1. merge additions into the complete checkpointed manifest;
+2. resolve the candidate outside the arbitrary-code worker while the current worker remains intact;
+3. leave the current worker, manifest, and interpreter unchanged if resolution fails;
+4. after resolution succeeds, commit the candidate and replace the worker.
 
 During a server-managed worker evaluation, runtime layering is atomic at `completed`:
 
@@ -1157,7 +1164,7 @@ Exit: one backend is selected with evidence against the criteria in `RUNTIME_BAC
 
 - retain the implemented structured cell and exact-input behavior;
 - complete the selected backend's lifecycle and capability adapter;
-- implement inspection, interrupt, restart with new requirements, and crash reporting;
+- implement inspection, interrupt, and crash reporting;
 - validate R stack and source semantics across supported platforms;
 - establish pinned compatibility tests for Ark/comm or `harp`/`libr` dependencies.
 

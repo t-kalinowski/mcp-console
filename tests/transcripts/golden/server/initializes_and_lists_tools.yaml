@@ -74,9 +74,9 @@ result:
     - name: session
       description: >-
         Prepare additive R or Python requirements before the implicit session
-        starts, or restart its worker while retaining prepared requirements.
-        Restart starts a worker if none exists and loses all in-memory R,
-        Python, and SQL state.
+        starts, or restart its worker with retained requirements and optional
+        new Python requirements. Restart starts a worker if none exists and
+        loses all in-memory R, Python, and SQL state.
       inputSchema:
         $schema: https://json-schema.org/draft/2020-12/schema
         $defs:
@@ -90,7 +90,7 @@ result:
             properties:
               r:
                 description: |-
-                  One or more additive, single-line R package references accepted by IR.
+                  One or more additive, single-line R package references accepted by IR for prepare.
                   Installing a local reference can execute package-controlled code from the referenced host
                   path; use only trusted local packages.
                 type: array
@@ -100,7 +100,9 @@ result:
                 maxItems: 64
                 default: []
               python:
-                description: One or more additive, single-line PEP 508 Python requirement strings.
+                description: >-
+                  One or more additive, single-line PEP 508 Python requirement strings for
+                  prepare or restart.
                 type: array
                 items:
                   type: string
@@ -117,10 +119,11 @@ result:
             $ref: "#/$defs/SessionAction"
           requirements:
             description: |-
-              Additive requirements for prepare.
+              Additive R or Python requirements for prepare.
+              Restart accepts only Python requirements.
               Resolution runs outside the worker sandbox.
               Package installation or build code may execute on the host.
-              Omit for restart.
+              Omit to restart unchanged.
             anyOf:
               - $ref: "#/$defs/Requirements"
               - type: "null"

@@ -22,9 +22,8 @@ def test_prepares_and_uses_cran_packages(binary: Path) -> Transcript:
     environment, _ = r_test_environment()
     environment["RETICULATE_PYTHON"] = ""
     client = McpClient(binary, ("serve",), environment)
-    client.initialize_and_list_tools()
-    client.call_tool(
-        "session",
+    client._initialize_and_list_tools()
+    client.session(
         action="prepare",
         requirements={"r": ["cli", "dplyr"]},
     )
@@ -42,9 +41,9 @@ def test_prepares_and_uses_cran_packages(binary: Path) -> Transcript:
         )
         cli::format_inline("answer: {result$answer}")
         """)
-    client.call_tool("send", r=r)
+    client.send(r=r)
     assert last_tool_text(client) == '[1] "answer: 42"\n'
-    return client.finish()
+    return client._finish()
 
 
 def test_prepares_initial_r_requirements(binary: Path) -> Transcript:
@@ -72,17 +71,15 @@ def test_prepares_initial_r_requirements(binary: Path) -> Transcript:
             environment,
             current_directory=workspace,
         )
-        client.initialize_and_list_tools()
-        client.call_tool(
-            "session",
+        client._initialize_and_list_tools()
+        client.session(
             action="prepare",
             requirements={"r": [initial_r]},
         )
         assert last_tool_text(client) == "[prepared]"
 
         invalid_r = "not a valid requirement !!!"
-        client.call_tool(
-            "session",
+        client.session(
             action="prepare",
             requirements={"r": [invalid_r]},
         )
@@ -101,8 +98,7 @@ def test_prepares_initial_r_requirements(binary: Path) -> Transcript:
         )
 
         invalid_python = "not a valid requirement !!!"
-        client.call_tool(
-            "session",
+        client.session(
             action="prepare",
             requirements={
                 "r": [candidate_r],
@@ -131,27 +127,25 @@ def test_prepares_initial_r_requirements(binary: Path) -> Transcript:
             )
             mcpconsolerrequire::answer()
             """)
-        client.call_tool("send", r=r)
+        client.send(r=r)
         assert last_tool_text(client) == "[1] 42\n"
 
-        client.call_tool(
-            "session",
+        client.session(
             action="prepare",
             requirements={"r": [initial_r]},
         )
         assert last_tool_text(client) == "[prepared]"
-        client.call_tool(
-            "session",
+        client.session(
             action="prepare",
             requirements={"r": [candidate_r]},
         )
         assert last_tool_text(client) == "[restart required]"
 
-        client.call_tool("session", action="restart")
+        client.session(action="restart")
         assert last_tool_text(client) == "[restarted]"
-        client.call_tool("send", r=r)
+        client.send(r=r)
         assert last_tool_text(client) == "[1] 42\n"
-        return client.finish()
+        return client._finish()
 
 
 def last_tool_text(client: McpClient) -> str:

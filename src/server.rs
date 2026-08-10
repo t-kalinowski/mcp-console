@@ -57,13 +57,13 @@ enum SessionAction {
 #[derive(Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct Requirements {
-    /// One or more additive, single-line R package references accepted by IR.
+    /// One or more additive, single-line R package references accepted by IR for prepare.
     /// Installing a local reference can execute package-controlled code from the referenced host
     /// path; use only trusted local packages.
     #[serde(default)]
     #[schemars(length(max = 64), inner(length(min = 1)))]
     r: Vec<String>,
-    /// One or more additive, single-line PEP 508 Python requirement strings.
+    /// One or more additive, single-line PEP 508 Python requirement strings for prepare or restart.
     #[serde(default)]
     #[schemars(length(max = 64), inner(length(min = 1)))]
     python: Vec<String>,
@@ -74,10 +74,11 @@ struct Requirements {
 struct SessionArguments {
     /// Prepare R or Python requirements or restart the implicit session, starting it if needed.
     action: SessionAction,
-    /// Additive requirements for prepare.
+    /// Additive R or Python requirements for prepare.
+    /// Restart accepts only Python requirements.
     /// Resolution runs outside the worker sandbox.
     /// Package installation or build code may execute on the host.
-    /// Omit for restart.
+    /// Omit to restart unchanged.
     requirements: Option<Requirements>,
 }
 
@@ -165,7 +166,7 @@ impl ConsoleServer {
     }
 
     #[tool(
-        description = "Prepare additive R or Python requirements before the implicit session starts, or restart its worker while retaining prepared requirements. Restart starts a worker if none exists and loses all in-memory R, Python, and SQL state."
+        description = "Prepare additive R or Python requirements before the implicit session starts, or restart its worker with retained requirements and optional new Python requirements. Restart starts a worker if none exists and loses all in-memory R, Python, and SQL state."
     )]
     async fn session(
         &self,
@@ -197,12 +198,25 @@ impl ConsoleServer {
                 }
             }
             SessionAction::Restart => {
-                if requirements.is_some() {
-                    return Err("`requirements` is not yet supported with `restart`".to_string());
-                }
-                self.worker
-                    .restart(Instant::now() + WORKER_SHUTDOWN_GRACE)
-                    .await?;
+                let python = match requirements {
+                    Some(Requirements { r, python }) => {
+                        if !r.is_empty() {
+                            return Err(
+                                "`requirements.r` is not supported with `restart`".to_string()
+                            );
+                        }
+                        if python.is_empty() {
+                            return Err(
+                                "`requirements.python` must contain at least one requirement"
+                                    .to_string(),
+                            );
+                        }
+                        validate_python_requirements(&python)?;
+                        python
+                    }
+                    None => Vec::new(),
+                };
+                self.worker.restart(python, WORKER_SHUTDOWN_GRACE).await?;
                 "[restarted]"
             }
         };
