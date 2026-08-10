@@ -10,7 +10,7 @@ import sys
 from collections.abc import Callable
 from pathlib import Path
 
-from _support import Transcript
+from _support import Transcript, TranscriptWithCompanion, YamlStream
 from yaml12 import Yaml, format_yaml, read_yaml
 
 
@@ -31,7 +31,7 @@ options = parser.parse_args()
 assert binary.is_file(), f"{binary.relative_to(root)} is missing; run scripts/test"
 assert suite_paths, "no transcript suites found"
 
-TranscriptCase = Callable[[Path], Transcript]
+TranscriptCase = Callable[[Path], Transcript | TranscriptWithCompanion]
 
 
 def load_suite(
@@ -64,6 +64,35 @@ def identical(left: object, right: object) -> bool:
             for left_item, right_item in zip(left, right)
         )
     return left == right
+
+
+def check_golden(golden: Path, actual: YamlStream, case: str) -> None:
+    actual_text = format_yaml(actual, multi=True)
+
+    if options.update:
+        golden.parent.mkdir(parents=True, exist_ok=True)
+        golden.write_text(actual_text, encoding="utf-8")
+        print(f"updated {golden.relative_to(root)}")
+        return
+    if not golden.exists():
+        raise SystemExit(
+            f"{golden.relative_to(root)} is missing; run scripts/test --update {case}"
+        )
+
+    expected = read_yaml(golden, multi=True)
+    if not identical(actual, expected):
+        expected_text = format_yaml(expected, multi=True)
+        sys.stderr.writelines(
+            difflib.unified_diff(
+                expected_text.splitlines(keepends=True),
+                actual_text.splitlines(keepends=True),
+                fromfile=str(golden.relative_to(root)),
+                tofile="actual",
+            )
+        )
+        raise SystemExit(f"{case} differs from its golden snapshot")
+
+    print(f"{golden.relative_to(root)}: ok")
 
 
 suites = {path.stem: path for path in suite_paths}
@@ -111,7 +140,17 @@ for suite_name, selected_case_names in selected_suites.items():
 
     for case_name, record_transcript in selected_cases:
         golden = directory / "golden" / suite_name / f"{case_name}.yaml"
-        actual = record_transcript(binary)
+        case = f"{suite_name}::{case_name}"
+        recorded = record_transcript(binary)
+        if isinstance(recorded, TranscriptWithCompanion):
+            actual = recorded.transcript
+            companion = (
+                golden.with_suffix(f".{recorded.companion_name}.yaml"),
+                recorded.companion,
+            )
+        else:
+            actual = recorded
+            companion = None
         if golden != root / initialization_reference:
             reference = read_yaml(root / initialization_reference, multi=True)
             assert reference, f"{initialization_reference} contains no documents"
@@ -120,31 +159,6 @@ for suite_name, selected_case_names in selected_suites.items():
                     Yaml(initialization_reference, tag="!same-as"),
                     *actual[len(reference) :],
                 ]
-        transcript_text = format_yaml(actual, multi=True)
-
-        if options.update:
-            golden.parent.mkdir(parents=True, exist_ok=True)
-            golden.write_text(transcript_text, encoding="utf-8")
-            print(f"updated {golden.relative_to(root)}")
-        elif not golden.exists():
-            raise SystemExit(
-                f"{golden.relative_to(root)} is missing; "
-                f"run scripts/test --update {suite_name}::{case_name}"
-            )
-        else:
-            expected = read_yaml(golden, multi=True)
-            if not identical(actual, expected):
-                expected_text = format_yaml(expected, multi=True)
-                sys.stderr.writelines(
-                    difflib.unified_diff(
-                        expected_text.splitlines(keepends=True),
-                        transcript_text.splitlines(keepends=True),
-                        fromfile=str(golden.relative_to(root)),
-                        tofile="actual",
-                    )
-                )
-                raise SystemExit(
-                    f"{suite_name}::{case_name} differs from its golden snapshot"
-                )
-
-            print(f"{golden.relative_to(root)}: ok")
+        check_golden(golden, actual, case)
+        if companion is not None:
+            check_golden(*companion, case)
