@@ -6,6 +6,7 @@
 import argparse
 import difflib
 import runpy
+import shutil
 import sys
 from collections.abc import Callable
 from pathlib import Path
@@ -36,7 +37,7 @@ TranscriptCase = Callable[[Path], Transcript]
 
 def load_suite(
     suite_path: Path,
-) -> tuple[dict[str, TranscriptCase], set[str] | None]:
+) -> tuple[dict[str, TranscriptCase], set[str] | None, set[str]]:
     namespace = runpy.run_path(str(suite_path))
     cases = {
         name.removeprefix("test_"): value
@@ -48,7 +49,11 @@ def load_suite(
     assert platforms is None or isinstance(platforms, set), (
         f"{suite_path.relative_to(root)} PLATFORMS must be a set"
     )
-    return cases, platforms
+    required_commands = namespace.get("REQUIRED_COMMANDS", set())
+    assert isinstance(required_commands, set) and all(
+        isinstance(command, str) and command for command in required_commands
+    ), f"{suite_path.relative_to(root)} REQUIRED_COMMANDS must be a set of names"
+    return cases, platforms, required_commands
 
 
 def identical(left: object, right: object) -> bool:
@@ -70,7 +75,7 @@ suites = {path.stem: path for path in suite_paths}
 
 if options.list_tests:
     for suite_name, suite_path in suites.items():
-        cases, _ = load_suite(suite_path)
+        cases, _, _ = load_suite(suite_path)
         for case_name in cases:
             print(f"{suite_name}::{case_name}")
     raise SystemExit
@@ -93,7 +98,7 @@ else:
 
 for suite_name, selected_case_names in selected_suites.items():
     suite_path = suites[suite_name]
-    cases, platforms = load_suite(suite_path)
+    cases, platforms, required_commands = load_suite(suite_path)
 
     if selected_case_names is None:
         selected_cases = cases.items()
@@ -107,6 +112,13 @@ for suite_name, selected_case_names in selected_suites.items():
 
     if platforms is not None and sys.platform not in platforms:
         print(f"{suite_name}: skipped on {sys.platform}")
+        continue
+
+    missing_commands = sorted(
+        command for command in required_commands if shutil.which(command) is None
+    )
+    if missing_commands:
+        print(f"{suite_name}: skipped; missing {', '.join(missing_commands)} on PATH")
         continue
 
     for case_name, record_transcript in selected_cases:

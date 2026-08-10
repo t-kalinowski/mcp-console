@@ -369,7 +369,7 @@ transcript: .mcp-console/sessions/default/transcript.qmd
 For a missing session it creates a configured logical session without starting a worker.
 The first code cell or nonempty stdin submission starts the runtime.
 For an existing session it never replaces the runtime implicitly.
-If activation requires replacement, it returns `restart required` and makes no change.
+If activation requires replacement, it returns `[restart required]` and makes no change.
 
 ```json
 {

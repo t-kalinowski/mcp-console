@@ -39,7 +39,7 @@ R requirements use an executable `ir` discovered on `PATH`; the server invokes `
 Python requirements use the host resolver described above and take precedence over an inherited Python selection.
 The server commits both candidates together only after every requested resolution succeeds.
 It returns `[prepared]` without creating sideband pipes or starting the worker.
-New explicit `session` requirements after worker startup return `restart required` without changing the retained configuration or running resolver work; exact retained requirements remain idempotent.
+New explicit `session` requirements after worker startup return `[restart required]` without changing the retained configuration or running resolver work; exact retained requirements remain idempotent.
 This restriction does not apply to additive requirements declared through `reticulate::py_require()` inside a server-managed worker.
 Custom workers reject preparation and skip managed resolution.
 
@@ -404,7 +404,7 @@ If reticulate is loaded but Python remains uninitialized at cell end, the worker
 The worker then sends that normalized manifest as `completed.python_checkpoint`; it does not send reticulate's history.
 The server accepts the last candidate from the evaluation with that manifest, or its prior environment if the manifest did not change.
 An R package load hook may trigger this path while its namespace is loading.
-An explicit `session prepare` addition after worker startup still returns `restart required`; it does not use the runtime layering path.
+An explicit `session prepare` addition after worker startup still returns `[restart required]`; it does not use the runtime layering path.
 
 Each Python cell receives a synthetic filename such as `<mcp-console:python:e1>`.
 The worker stores the source in a process-lifetime private R environment and calls its evaluator with only a short evaluation ID.

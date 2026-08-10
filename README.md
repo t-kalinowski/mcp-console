@@ -56,7 +56,7 @@ It does not load the packages or start the worker.
 R preparation requires an executable `ir` on `PATH`.
 The server runs IR with the same Rscript selection as the worker and prepends the returned library to the worker's inherited `R_LIBS`, leaving its other R libraries available.
 Exact repeated requirements are idempotent.
-Once the worker has started, a new explicit `session` requirement returns `restart required` without changing the environment.
+Once the worker has started, a new explicit `session` requirement returns `[restart required]` without changing the environment.
 Server-managed workers can still layer additive requirements declared through `reticulate::py_require()` while an evaluation is running.
 The client can explicitly replace the worker while retaining the prepared R library and the server's checkpointed Python environment:
 

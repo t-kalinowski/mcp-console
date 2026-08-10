@@ -798,7 +798,7 @@ Reticulate owns the live manifest during an evaluation, while the supervisor own
 
 Only newly added package requirements fit the v1 late-layering contract.
 Removals and changes to Python-version or `exclude_newer` constraints are unsupported after initialization rather than silently projected as additions.
-An explicit late `session prepare` still returns `restart required`.
+An explicit late `session prepare` still returns `[restart required]`.
 The implemented implicit-session restart retains the last accepted checkpoint but does not accept new requirements; activating changed constraints as part of restart remains future work.
 
 ### 14.2 R

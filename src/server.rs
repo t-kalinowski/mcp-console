@@ -170,7 +170,7 @@ impl ConsoleServer {
                     .await?
                 {
                     crate::worker_client::PrepareResult::Prepared => "[prepared]",
-                    crate::worker_client::PrepareResult::RestartRequired => "restart required",
+                    crate::worker_client::PrepareResult::RestartRequired => "[restart required]",
                 }
             }
             SessionAction::Restart => {

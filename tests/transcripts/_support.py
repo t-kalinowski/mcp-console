@@ -1,6 +1,7 @@
 import base64
 import json
 import os
+import re
 import subprocess
 import tempfile
 from concurrent.futures import ThreadPoolExecutor
@@ -15,6 +16,24 @@ Transcript = list[TranscriptEntry]
 
 def code(source: str) -> str:
     return dedent(source).removeprefix("\n")
+
+
+def normalize_python_resolution_error(error: str, invalid: str | None = None) -> str:
+    error, python_patch = re.subn(
+        r'(?m)^(  "python": "\d+\.\d+)\.\d+( \(reticulate default\)",)$',
+        r"\1.x\2",
+        error,
+        count=1,
+    )
+    assert python_patch == 1, error
+    if invalid is not None:
+        error, uv_indentation = re.subn(
+            rf"(?m)^(?P<indent> *)({re.escape(invalid)})\n(?P=indent)(?P<caret> +\^)$",
+            lambda match: f"{match.group(2)}\n{match.group('caret')}",
+            error,
+        )
+        assert uv_indentation == 1, error
+    return "\n".join(line.rstrip() for line in error.splitlines())
 
 
 def r_test_environment() -> tuple[dict[str, str], Path]:

@@ -40,7 +40,7 @@ A failed resolution leaves the prior requirements, R library, and interpreter un
 For a uv tool failure, the tool error reports a JSON manifest containing reticulate's selected Python and the complete candidate package set, followed by uv's stderr, while omitting the helper command, temporary output path, and reticulate's `py_require()`-oriented guidance.
 The direct resolver process defines its process-group lifetime: after it exits, the server force-stops any remaining in-group descendants before reaping it and collecting its standard streams.
 Closing MCP input cancels an in-flight explicit or runtime resolution by force-stopping its host resolver process group; startup preflight completes before MCP input is accepted and is not cancellable through that lifecycle.
-Once a worker has started, an already-retained explicit requirement remains idempotent, while any explicit addition returns `restart required` without changing the environment.
+Once a worker has started, an already-retained explicit requirement remains idempotent, while any explicit addition returns `[restart required]` without changing the environment.
 This restriction applies to `session` preparation; server-managed workers can layer additive requirements declared through `reticulate::py_require()` during evaluation.
 Restart retains the prepared R library and the server's checkpointed Python environment, loses all worker-owned in-memory state and unread stdin, eagerly starts a replacement, and returns `[restarted]` after it reports ready.
 The implicit session exists for the server lifetime, so restart starts its first worker if none exists yet.
@@ -176,10 +176,12 @@ See `design-sketches/README.md` for the product overview and `design-sketches/do
 - `src/sandbox/` — platform implementation and macOS Seatbelt policy.
 - `tests/cli.rs` — public binary acceptance tests.
 - `tests/fixtures/py_require` — minimal R package that declares a Python requirement from its load hook.
-- `tests/fixtures/r_require` — minimal R package used to verify IR-backed library preparation.
+- `tests/fixtures/r_require` — local R package installed through IR for initial requirement coverage.
+- `tests/fixtures/r_require_candidate` — distinct local R package used to verify atomic preparation.
 - `tests/fixtures/zod` — executable Python sideband worker used by acceptance tests.
 - `tests/fixtures/worker_mitm` — transparent worker proxy used to capture sideband, standard-stream, fd-0 closure, and worker-sideband closure events through `serve`.
 - `tests/transcripts/r.py` — public built-in R worker acceptance suite.
+- `tests/transcripts/r_requirements.py` — real-IR R requirement preparation and failure suite.
 - `tests/transcripts/python.py` — public reticulate Python-cell acceptance suite.
 - `tests/transcripts/sql.py` — public persistent-DuckDB acceptance suite.
 - `tests/transcripts/worker.py` — public-server acceptance plus captured built-in worker wire events.
