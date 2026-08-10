@@ -162,8 +162,68 @@ base::local({
         requirements: Vec<String>,
         on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
     ) -> Result<ManagedR, String> {
+        let (events, event_receiver) = mpsc::channel();
+        let mut on_started = Some(on_started);
+        let rscript = match std::env::var("R_HOME") {
+            Ok(r_home) => PathBuf::from(r_home).join("bin/Rscript"),
+            Err(_) => {
+                let program = Path::new("R");
+                let mut command = Command::new(program);
+                command
+                    .arg("RHOME")
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::piped())
+                    .process_group(0);
+                let mut child = command.spawn().map_err(|error| {
+                    format!(
+                        "failed to discover the worker R home with `{}`: {error}",
+                        program.display()
+                    )
+                })?;
+                let stdout = read_output(child.stdout.take().expect("R stdout is piped"));
+                let stderr = read_output(child.stderr.take().expect("R stderr is piped"));
+                let stop_handle = ResolverStopHandle(events.clone());
+                if let Err(error) = on_started
+                    .take()
+                    .expect("resolver start callback should be available")(
+                    stop_handle
+                ) {
+                    let _ = stop_resolver(&mut child, program, "worker R home");
+                    return Err(error);
+                }
+                watch_resolver_exit(child.id(), events.clone());
+                let ResolverOutput {
+                    status,
+                    stdout,
+                    stderr,
+                    ..
+                } = wait_for_resolver(
+                    &mut child,
+                    &event_receiver,
+                    completed_write(),
+                    stdout,
+                    stderr,
+                    program,
+                    "worker R home",
+                )?;
+                if !status.success() {
+                    let stderr = String::from_utf8_lossy(&stderr);
+                    return Err(format!(
+                        "worker R home discovery failed with {status}: {}",
+                        stderr.trim()
+                    ));
+                }
+                let r_home = String::from_utf8(stdout)
+                    .map_err(|error| format!("worker R returned a non-UTF-8 home path: {error}"))?;
+                let r_home = r_home.trim();
+                if r_home.is_empty() {
+                    return Err("worker R returned an empty home path".to_string());
+                }
+                PathBuf::from(r_home).join("bin/Rscript")
+            }
+        };
         let program = Path::new("ir");
-        let rscript = rscript();
         let mut command = Command::new(program);
         command.arg("run").arg("--rscript").arg(&rscript);
         for requirement in &requirements {
@@ -185,11 +245,12 @@ base::local({
         })?;
         let stdout = read_output(child.stdout.take().expect("resolver stdout is piped"));
         let stderr = read_output(child.stderr.take().expect("resolver stderr is piped"));
-        let (events, event_receiver) = mpsc::channel();
-        let stop_handle = ResolverStopHandle(events.clone());
-        if let Err(error) = on_started(stop_handle) {
-            let _ = stop_resolver(&mut child, program, "R package");
-            return Err(error);
+        if let Some(on_started) = on_started.take() {
+            let stop_handle = ResolverStopHandle(events.clone());
+            if let Err(error) = on_started(stop_handle) {
+                let _ = stop_resolver(&mut child, program, "R package");
+                return Err(error);
+            }
         }
         watch_resolver_exit(child.id(), events);
         let ResolverOutput {
@@ -199,7 +260,7 @@ base::local({
             ..
         } = wait_for_resolver(
             &mut child,
-            event_receiver,
+            &event_receiver,
             completed_write(),
             stdout,
             stderr,
@@ -264,7 +325,7 @@ base::local({
     ) -> Result<ManagedPython, String> {
         let requirements = requirements.normalized();
         validate_environment(&environment)?;
-        let rscript = rscript();
+        let rscript = python_resolver_rscript();
         let mut command = Command::new(&rscript);
         command
             .args(["--vanilla", "-e", PYTHON_RESOLVER])
@@ -306,7 +367,7 @@ base::local({
             stderr,
         } = wait_for_resolver(
             &mut child,
-            event_receiver,
+            &event_receiver,
             input,
             stdout,
             stderr,
@@ -379,7 +440,7 @@ base::local({
         receiver
     }
 
-    fn rscript() -> PathBuf {
+    fn python_resolver_rscript() -> PathBuf {
         std::env::var_os("R_HOME")
             .map(|r_home| PathBuf::from(r_home).join("bin/Rscript"))
             .unwrap_or_else(|| PathBuf::from("Rscript"))
@@ -465,7 +526,7 @@ base::local({
 
     fn wait_for_resolver_exit(
         child: &mut Child,
-        events: Receiver<ResolverEvent>,
+        events: &Receiver<ResolverEvent>,
         program: &Path,
         kind: &str,
     ) -> Result<ExitStatus, String> {
@@ -491,7 +552,7 @@ base::local({
 
     fn wait_for_resolver(
         child: &mut Child,
-        events: Receiver<ResolverEvent>,
+        events: &Receiver<ResolverEvent>,
         input: Receiver<io::Result<()>>,
         stdout: Receiver<io::Result<Vec<u8>>>,
         stderr: Receiver<io::Result<Vec<u8>>>,

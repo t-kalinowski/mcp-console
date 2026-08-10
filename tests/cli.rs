@@ -109,6 +109,185 @@ printf '%s\n' "$MCP_CONSOLE_REAL_R_HOME"
 
 #[cfg(target_os = "macos")]
 #[test]
+fn stdio_console_uses_worker_r_installation_for_r_preparation() {
+    match Command::new("ir")
+        .arg("--version")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+    {
+        Ok(status) => assert!(status.success(), "ir --version failed with {status}"),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            eprintln!("skipping R preparation selection test: ir is not on PATH");
+            return;
+        }
+        Err(error) => panic!("failed to check ir: {error}"),
+    }
+
+    let r_home_output = Command::new("R")
+        .arg("RHOME")
+        .env_remove("R_HOME")
+        .output()
+        .expect("test R should be discoverable");
+    assert!(r_home_output.status.success());
+    let real_r_home = String::from_utf8(r_home_output.stdout)
+        .expect("test R home should be valid UTF-8")
+        .trim()
+        .to_string();
+    let real_r = Path::new(&real_r_home).join("bin/R");
+    assert!(
+        real_r.is_file(),
+        "test R should exist at {}",
+        real_r.display()
+    );
+
+    let test_directory = TestDirectory::new("r-preparation-r-installation");
+    let fake_bin = test_directory.path().join("bin");
+    let fake_r = fake_bin.join("R");
+    let fake_rscript = fake_bin.join("Rscript");
+    let wrong_rscript_used = test_directory.path().join("wrong-rscript-used");
+    fs::create_dir(&fake_bin).expect("fake bin directory should be created");
+    fs::write(
+        &fake_r,
+        r#"#!/bin/sh
+exec "$MCP_CONSOLE_REAL_R" "$@"
+"#,
+    )
+    .expect("fake R should be written");
+    fs::write(
+        &fake_rscript,
+        r#"#!/bin/sh
+printf used > "$MCP_CONSOLE_WRONG_RSCRIPT_USED"
+exit 99
+"#,
+    )
+    .expect("fake Rscript should be written");
+    fs::set_permissions(&fake_r, fs::Permissions::from_mode(0o755))
+        .expect("fake R should be executable");
+    fs::set_permissions(&fake_rscript, fs::Permissions::from_mode(0o755))
+        .expect("fake Rscript should be executable");
+    let path = std::env::join_paths(std::iter::once(fake_bin).chain(std::env::split_paths(
+        &std::env::var_os("PATH").unwrap_or_default(),
+    )))
+    .expect("test PATH should be valid");
+
+    let mut command = Command::new(env!("CARGO_BIN_EXE_mcp-console"));
+    command
+        .arg("serve")
+        .env_remove("R_HOME")
+        .env("RETICULATE_PYTHON", "")
+        .env("PATH", path)
+        .env("MCP_CONSOLE_REAL_R", &real_r)
+        .env("MCP_CONSOLE_REAL_R_HOME", &real_r_home)
+        .env("MCP_CONSOLE_WRONG_RSCRIPT_USED", &wrong_rscript_used);
+    let mut client = McpClient::spawn(command);
+    let response = client.request(
+        2,
+        "tools/call",
+        Some(json!({
+            "name": "session",
+            "arguments": {
+                "action": "prepare",
+                "requirements": {"r": ["cli"]}
+            }
+        })),
+    );
+    assert_eq!(response["result"]["isError"], false, "{response}");
+    assert_eq!(response_text(&response), "[prepared]");
+
+    assert_eq!(
+        client.call_console(
+            3,
+            json!({"r": r#"
+stopifnot(
+  normalizePath(R.home()) ==
+    normalizePath(Sys.getenv("MCP_CONSOLE_REAL_R_HOME")),
+  identical(dirname(find.package("cli")), .libPaths()[[1L]])
+)
+as.character(cli::format_inline("ready"))
+"#})
+        ),
+        "[1] \"ready\"\n"
+    );
+    assert!(
+        !wrong_rscript_used.exists(),
+        "R preparation used the unrelated Rscript on PATH"
+    );
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn stdio_console_shutdown_is_bounded_during_r_preparation_discovery() {
+    let test_directory = TestDirectory::new("r-preparation-discovery-shutdown");
+    let fake_bin = test_directory.path().join("bin");
+    let fake_r = fake_bin.join("R");
+    let resolver_started = test_directory.path().join("resolver-started");
+    fs::create_dir(&fake_bin).expect("fake bin directory should be created");
+    fs::write(
+        &fake_r,
+        r#"#!/bin/sh
+printf '%s\n' "$$" > "$MCP_CONSOLE_RESOLVER_STARTED"
+exec /bin/sleep 4
+"#,
+    )
+    .expect("fake R should be written");
+    fs::set_permissions(&fake_r, fs::Permissions::from_mode(0o755))
+        .expect("fake R should be executable");
+    let path = std::env::join_paths(std::iter::once(fake_bin).chain(std::env::split_paths(
+        &std::env::var_os("PATH").unwrap_or_default(),
+    )))
+    .expect("test PATH should be valid");
+
+    let mut command = Command::new(env!("CARGO_BIN_EXE_mcp-console"));
+    command
+        .arg("serve")
+        .env_remove("R_HOME")
+        .env("RETICULATE_PYTHON", "")
+        .env("PATH", path)
+        .env("MCP_CONSOLE_RESOLVER_STARTED", &resolver_started);
+    let mut client = McpClient::spawn(command);
+    client.send_tool(
+        2,
+        "session",
+        json!({
+            "action": "prepare",
+            "requirements": {"r": ["cli"]}
+        }),
+    );
+
+    let started = Instant::now();
+    while !resolver_started.exists() {
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "worker R discovery did not start"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let resolver_group = fs::read_to_string(&resolver_started)
+        .expect("resolver process group should be recorded")
+        .trim()
+        .parse::<libc::pid_t>()
+        .expect("resolver process group should be numeric");
+
+    let elapsed = client.close_within(Duration::from_secs(6));
+    assert!(
+        elapsed < Duration::from_secs(2),
+        "server shutdown took {elapsed:?}"
+    );
+    let group_stopped = unsafe { libc::killpg(resolver_group, 0) } < 0
+        && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH);
+    if !group_stopped {
+        // SAFETY: the fake resolver recorded its dedicated process-group ID.
+        let _ = unsafe { libc::killpg(resolver_group, libc::SIGKILL) };
+    }
+    assert!(
+        group_stopped,
+        "worker R discovery process group outlived server shutdown"
+    );
+}
+
+#[cfg(target_os = "macos")]
+#[test]
 fn stdio_console_shutdown_is_bounded_during_r_discovery() {
     let test_directory = TestDirectory::new("native-worker-r-discovery-shutdown");
     let fake_bin = test_directory.path().join("bin");
