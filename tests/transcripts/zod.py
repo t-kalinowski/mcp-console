@@ -1,10 +1,13 @@
 #!/usr/bin/env -S uv run --script
 
+import base64
+import json
 import os
 import signal
 import subprocess
 import tempfile
 import time
+from datetime import datetime
 from pathlib import Path
 
 from _support import McpClient, Transcript, code, run_this_suite
@@ -49,6 +52,382 @@ def test_returns_worker_images(binary: Path) -> Transcript:
         "isError": False,
     }, result
     return client._finish()
+
+
+def test_records_tool_calls_and_images(binary: Path) -> Transcript:
+    zod = Path(__file__).resolve().parents[1] / "fixtures" / "zod"
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        workspace = Path(temporary_directory)
+        client = McpClient(
+            binary,
+            ("serve", "--worker", str(zod)),
+            current_directory=workspace,
+            umask=0,
+        )
+        client._initialize_and_list_tools()
+        client.send(r="emit image")
+        client._request(
+            "tools/call",
+            name="send",
+            arguments={"r": "1", "python": "1"},
+            _meta={"progressToken": "record-me"},
+        )
+        client.session(
+            action="prepare",
+            requirements={"python": ["transcript-fixture"]},
+        )
+        session_result = client.transcript[-1]["result"]
+        client._request("tools/call", name="missing", arguments={})
+        missing_error = client.transcript[-1]["error"]
+
+        sessions = list((workspace / ".mcp-console" / "sessions").iterdir())
+        assert len(sessions) == 1, sessions
+        session = sessions[0]
+        journal_text = (session / "internal" / "events.jsonl").read_text(
+            encoding="utf-8"
+        )
+        assert PNG_1X1 not in journal_text, journal_text
+        events = [json.loads(line) for line in journal_text.splitlines()]
+        assert [event["event"] for event in events] == [
+            "session_started",
+            "tool_call",
+            "artifact_created",
+            "tool_result",
+            "tool_call",
+            "tool_result",
+            "tool_call",
+            "tool_result",
+            "tool_call",
+            "tool_result",
+        ], events
+        run_id = events[0]["run_id"]
+        assert run_id
+        assert session.name == run_id, (session, run_id)
+        assert events[0]["session"] == "default", events[0]
+        assert Path(events[0]["working_directory"]).samefile(workspace), events[0]
+        assert all(event["run_id"] == run_id for event in events), events
+        assert all(event["schema_version"] == 1 for event in events), events
+        assert [event["sequence"] for event in events] == list(range(1, 11)), events
+        assert events[1]["call_id"] == events[2]["call_id"] == 1, events
+        assert events[1]["request_id"] == 3, events[1]
+        assert events[1]["request"] == {
+            "name": "send",
+            "arguments": {"r": "emit image"},
+        }, events[1]
+        assert {
+            key: events[2][key]
+            for key in ("artifact_id", "call_id", "path", "mime_type", "bytes")
+        } == {
+            "artifact_id": 1,
+            "call_id": 1,
+            "path": "artifacts/call-000001-image-000001.png",
+            "mime_type": "image/png",
+            "bytes": len(base64.b64decode(PNG_1X1)),
+        }, events[2]
+        assert events[3]["result"] == {
+            "content": [
+                {"type": "text", "text": "before image\n"},
+                {
+                    "type": "image",
+                    "artifactId": 1,
+                    "path": "artifacts/call-000001-image-000001.png",
+                    "mimeType": "image/png",
+                },
+                {"type": "text", "text": "after image\n"},
+            ],
+            "isError": False,
+        }, events[3]
+        assert events[4]["call_id"] == events[5]["call_id"] == 2, events
+        assert events[4]["request_id"] == 4, events[4]
+        assert events[4]["request"] == {
+            "name": "send",
+            "arguments": {"r": "1", "python": "1"},
+            "_meta": {"progressToken": "record-me"},
+        }, events[4]
+        assert events[5]["result"] == {
+            "content": [
+                {
+                    "type": "text",
+                    "text": "only one of `r`, `python`, or `sql` may be supplied",
+                }
+            ],
+            "isError": True,
+        }, events[5]
+        assert events[6]["call_id"] == events[7]["call_id"] == 3, events
+        assert events[6]["request_id"] == 5, events[6]
+        assert events[6]["request"] == {
+            "name": "session",
+            "arguments": {
+                "action": "prepare",
+                "requirements": {"python": ["transcript-fixture"]},
+            },
+        }, events[6]
+        assert events[7]["result"] == session_result, events[7]
+        assert events[8]["call_id"] == events[9]["call_id"] == 4, events
+        assert events[8]["request_id"] == 6, events[8]
+        assert events[8]["request"] == {
+            "name": "missing",
+            "arguments": {},
+        }, events[8]
+        assert events[9]["error"] == missing_error, events[9]
+
+        image_path = session / events[3]["result"]["content"][1]["path"]
+        image_bytes = image_path.read_bytes()
+        assert image_bytes == base64.b64decode(PNG_1X1), image_path
+        directory_modes = {
+            path.relative_to(workspace).as_posix(): path.stat().st_mode & 0o777
+            for path in (
+                workspace / ".mcp-console",
+                workspace / ".mcp-console" / "sessions",
+                session,
+                session / "artifacts",
+                session / "internal",
+            )
+        }
+        assert set(directory_modes.values()) == {0o700}, directory_modes
+        file_modes = {
+            path.relative_to(workspace).as_posix(): path.stat().st_mode & 0o777
+            for path in (session / "internal" / "events.jsonl", image_path)
+        }
+        assert set(file_modes.values()) == {0o600}, file_modes
+        transcript = client._finish()
+
+        normalized_journal = journal_text.replace(
+            json.dumps(events[0]["working_directory"], ensure_ascii=False),
+            json.dumps("<workspace>"),
+        ).replace(
+            json.dumps(run_id),
+            json.dumps("<run ID>"),
+        )
+        for event in events:
+            assert event["at"].endswith("Z"), event
+            datetime.fromisoformat(event["at"])
+            normalized_journal = normalized_journal.replace(
+                json.dumps(event["at"]),
+                json.dumps("<UTC timestamp>"),
+            )
+            event["at"] = "<UTC timestamp>"
+            event["run_id"] = "<run ID>"
+        events[0]["working_directory"] = "<workspace>"
+        assert normalized_journal.endswith("\n"), normalized_journal
+        from yaml12 import Yaml
+
+        transcript.append({"journal": events})
+        transcript.append(
+            {
+                "produced session": {
+                    "root": ".mcp-console/sessions/<run ID>",
+                    "files": {
+                        "internal/events.jsonl": normalized_journal,
+                        "artifacts/call-000001-image-000001.png": Yaml(
+                            base64.b64encode(image_bytes).decode("ascii"),
+                            tag="tag:yaml.org,2002:binary",
+                        ),
+                    },
+                }
+            }
+        )
+        return transcript
+
+
+def test_stops_after_transcript_failure(binary: Path) -> Transcript:
+    zod = Path(__file__).resolve().parents[1] / "fixtures" / "zod"
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        workspace = Path(temporary_directory)
+        client = McpClient(
+            binary,
+            ("serve", "--worker", str(zod)),
+            current_directory=workspace,
+        )
+        client._initialize_and_list_tools()
+        session = next((workspace / ".mcp-console" / "sessions").iterdir())
+        artifacts = session / "artifacts"
+        artifacts.rmdir()
+        artifacts.write_text("not a directory", encoding="utf-8")
+
+        client._request(
+            "tools/call",
+            name="send",
+            arguments={"r": "emit image"},
+        )
+        first_error = client.transcript[-1]["error"]
+        assert first_error["code"] == -32603, first_error
+        assert "transcript recording failed" in first_error["message"], first_error
+        assert "failed to create" in first_error["message"], first_error
+
+        journal = session / "internal" / "events.jsonl"
+        journal_after_failure = journal.read_text(encoding="utf-8")
+        events = [json.loads(line) for line in journal_after_failure.splitlines()]
+        assert [event["event"] for event in events] == [
+            "session_started",
+            "tool_call",
+        ], events
+        assert journal_after_failure.endswith("\n"), journal_after_failure
+
+        client._request(
+            "tools/call",
+            name="send",
+            arguments={"r": "echo"},
+        )
+        second_error = client.transcript[-1]["error"]
+        assert second_error["code"] == -32603, second_error
+        assert "transcript is unavailable" in second_error["message"], second_error
+        assert journal.read_text(encoding="utf-8") == journal_after_failure
+
+        first_error["message"] = "<artifact persistence failed>"
+        second_error["message"] = "<transcript unavailable after recording failure>"
+        transcript = client._finish()
+        transcript.append(
+            {
+                "journal after failure": [event["event"] for event in events],
+                "complete final line": True,
+                "post-failure append": False,
+            }
+        )
+        return transcript
+
+
+def test_flushes_calls_and_keeps_unpolled_images(binary: Path) -> Transcript:
+    zod = Path(__file__).resolve().parents[1] / "fixtures" / "zod"
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        temporary = Path(temporary_directory)
+        workspace = temporary / "workspace"
+        workspace.mkdir()
+        environment = os.environ.copy()
+        environment["TMPDIR"] = temporary_directory
+        client = McpClient(
+            binary,
+            ("serve", "--worker", str(zod)),
+            environment,
+            current_directory=workspace,
+        )
+        client._initialize_and_list_tools()
+
+        waiting = client._start_send(
+            r="complete after release",
+            timeout_ms=3_000,
+        )
+        started = wait_for_marker(
+            temporary,
+            "zod-evaluation-started",
+            client,
+        )
+        session = next((workspace / ".mcp-console" / "sessions").iterdir())
+        journal = session / "internal" / "events.jsonl"
+        before_release = [
+            json.loads(line)
+            for line in journal.read_text(encoding="utf-8").splitlines()
+        ]
+        assert [event["event"] for event in before_release] == [
+            "session_started",
+            "tool_call",
+        ], before_release
+
+        (started.parent / "zod-release-evaluation").touch()
+        client._receive(waiting)
+        after_release = [
+            json.loads(line)
+            for line in journal.read_text(encoding="utf-8").splitlines()
+        ]
+        assert [event["event"] for event in after_release] == [
+            "session_started",
+            "tool_call",
+            "tool_result",
+        ], after_release
+
+        client.send(
+            r="emit image before completion",
+            timeout_ms=0,
+        )
+        assert client.transcript[-1]["result"] == {
+            "content": [{"type": "text", "text": "\n[running]"}],
+            "isError": False,
+        }, client.transcript[-1]
+        client.transcript[-1]["result"]["content"][0]["text"] = (
+            "<leading newline>[running]"
+        )
+        image_started = wait_for_marker(
+            temporary,
+            "zod-image-evaluation-started",
+            client,
+        )
+        (image_started.parent / "zod-release-image").touch()
+        wait_for_marker(temporary, "zod-image-processed", client)
+
+        final_events = [
+            json.loads(line)
+            for line in journal.read_text(encoding="utf-8").splitlines()
+        ]
+        assert [event["event"] for event in final_events] == [
+            "session_started",
+            "tool_call",
+            "tool_result",
+            "tool_call",
+            "tool_result",
+            "artifact_created",
+        ], final_events
+        artifact = final_events[-1]
+        assert {
+            key: artifact[key]
+            for key in ("artifact_id", "call_id", "path", "mime_type", "bytes")
+        } == {
+            "artifact_id": 1,
+            "call_id": 2,
+            "path": "artifacts/call-000002-image-000001.png",
+            "mime_type": "image/png",
+            "bytes": len(base64.b64decode(PNG_1X1)),
+        }, artifact
+        image_path = session / artifact["path"]
+        assert image_path.read_bytes() == base64.b64decode(PNG_1X1), image_path
+
+        (image_started.parent / "zod-release-image-completion").touch()
+        client.send(timeout_ms=3_000)
+        poll_result = client.transcript[-1]["result"]
+        assert poll_result == {
+            "content": [{"type": "image", "data": PNG_1X1, "mimeType": "image/png"}],
+            "isError": False,
+        }, poll_result
+        polled_events = [
+            json.loads(line)
+            for line in journal.read_text(encoding="utf-8").splitlines()
+        ]
+        assert [event["event"] for event in polled_events[-2:]] == [
+            "tool_call",
+            "tool_result",
+        ], polled_events
+        assert polled_events[-1]["call_id"] == 3, polled_events[-1]
+        assert polled_events[-1]["result"] == {
+            "content": [
+                {
+                    "type": "image",
+                    "mimeType": "image/png",
+                    "artifactId": artifact["artifact_id"],
+                    "path": artifact["path"],
+                }
+            ],
+            "isError": False,
+        }, polled_events[-1]
+
+        transcript = client._finish()
+        transcript.append(
+            {
+                "live journal": {
+                    "while first call was running": [
+                        event["event"] for event in before_release
+                    ],
+                    "after first call completed": [
+                        event["event"] for event in after_release
+                    ],
+                    "unpolled image": {
+                        "event": artifact["event"],
+                        "path": artifact["path"],
+                        "data": "<byte-identical decoded PNG>",
+                    },
+                    "later poll result": polled_events[-1]["result"],
+                }
+            }
+        )
+        return transcript
 
 
 def test_custom_worker_skips_managed_python_preflight(binary: Path) -> Transcript:

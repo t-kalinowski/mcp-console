@@ -1,32 +1,29 @@
-#[cfg(target_os = "macos")]
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
 #[cfg(target_os = "macos")]
 use std::net::TcpListener;
 #[cfg(target_os = "macos")]
 use std::os::unix::fs::PermissionsExt;
-#[cfg(target_os = "macos")]
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::time::{Duration, Instant};
-#[cfg(target_os = "macos")]
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde_json::{Value, json};
 
-#[cfg(target_os = "macos")]
 struct TestDirectory(PathBuf);
 
-#[cfg(target_os = "macos")]
 impl TestDirectory {
     fn new(name: &str) -> Self {
+        static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(0);
         let unique = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .expect("system clock should be after the Unix epoch")
             .as_nanos();
+        let sequence = NEXT_DIRECTORY.fetch_add(1, Ordering::Relaxed);
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("target/sandbox-tests")
-            .join(format!("{name}-{}-{unique}", std::process::id()));
+            .join(format!("{name}-{}-{unique}-{sequence}", std::process::id()));
         fs::create_dir_all(&path).expect("test directory should be created");
         Self(path)
     }
@@ -36,7 +33,6 @@ impl TestDirectory {
     }
 }
 
-#[cfg(target_os = "macos")]
 impl Drop for TestDirectory {
     fn drop(&mut self) {
         fs::remove_dir_all(&self.0).expect("test directory should be removed");
@@ -419,6 +415,7 @@ struct McpClient {
     input: Option<std::process::ChildStdin>,
     output: BufReader<std::process::ChildStdout>,
     closed: bool,
+    _working_directory: Option<TestDirectory>,
 }
 
 impl McpClient {
@@ -429,6 +426,13 @@ impl McpClient {
     }
 
     fn spawn(mut command: Command) -> Self {
+        let working_directory = if command.get_current_dir().is_none() {
+            let directory = TestDirectory::new("mcp-server");
+            command.current_dir(directory.path());
+            Some(directory)
+        } else {
+            None
+        };
         let mut server = command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -442,6 +446,7 @@ impl McpClient {
             input: Some(input),
             output,
             closed: false,
+            _working_directory: working_directory,
         };
 
         let initialize = client.request(
