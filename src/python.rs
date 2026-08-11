@@ -3,6 +3,7 @@ mod platform {
     use std::ffi::{CStr, CString};
     use std::io;
     use std::os::unix::ffi::OsStrExt as _;
+    use std::path::{Path, PathBuf};
 
     use libr::SEXP;
 
@@ -282,6 +283,14 @@ def _mcp_console_eval_cell(
     }
 
     pub(crate) fn configure_worker_environment() -> io::Result<()> {
+        // Preserve the selected host configuration before redirecting all
+        // Matplotlib writes to the worker's private directory.
+        if let Some(config) = inherited_matplotlibrc() {
+            let config = CString::new(config.as_os_str().as_bytes())
+                .expect("Matplotlib configuration path should not contain NUL");
+            set_environment(c"MATPLOTLIBRC", &config, true)?;
+        }
+
         for (name, value, overwrite) in [
             (c"RETICULATE_REMAP_OUTPUT_STREAMS", c"1", true),
             (c"UV_OFFLINE", c"1", true),
@@ -300,6 +309,31 @@ def _mcp_console_eval_cell(
             set_environment(name, &directory, true)?;
         }
         Ok(())
+    }
+
+    fn inherited_matplotlibrc() -> Option<PathBuf> {
+        if let Some(config) = std::env::var_os("MATPLOTLIBRC").filter(|path| !path.is_empty()) {
+            let config = PathBuf::from(config);
+            if let Some(config) =
+                regular_file(&config).or_else(|| regular_file(&config.join("matplotlibrc")))
+            {
+                return Some(config);
+            }
+        }
+
+        let config_directory = match std::env::var_os("MPLCONFIGDIR") {
+            Some(directory) if !directory.is_empty() => PathBuf::from(directory),
+            Some(_) | None => {
+                PathBuf::from(std::env::var_os("HOME").filter(|home| !home.is_empty())?)
+                    .join(".matplotlib")
+            }
+        };
+        regular_file(&config_directory.join("matplotlibrc"))
+    }
+
+    fn regular_file(path: &Path) -> Option<PathBuf> {
+        let path = path.canonicalize().ok()?;
+        path.is_file().then_some(path)
     }
 
     fn set_environment(name: &CStr, value: &CStr, overwrite: bool) -> io::Result<()> {

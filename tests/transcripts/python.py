@@ -667,13 +667,19 @@ def test_returns_matplotlib_plots(binary: Path) -> Transcript:
                 """),
             encoding="utf-8",
         )
+        host_matplotlib = temporary / "host-matplotlib"
+        host_matplotlib.mkdir()
+        host_matplotlibrc = host_matplotlib / "matplotlibrc"
+        host_matplotlibrc.write_text("lines.linewidth: 7.25\n", encoding="utf-8")
         environment = os.environ.copy()
         environment["TMPDIR"] = temporary_directory
         environment["FONTCONFIG_FILE"] = str(fontconfig)
-        environment["MPLCONFIGDIR"] = str(temporary / "host-matplotlib")
+        environment["MPLCONFIGDIR"] = str(host_matplotlib)
         environment["XDG_CACHE_HOME"] = str(temporary / "host-cache")
+        environment["MCP_CONSOLE_TEST_MATPLOTLIBRC"] = str(host_matplotlibrc)
         environment["MCP_CONSOLE_TEST_SYSTEM_PROFILER"] = system_profiler
         environment["PATH"] = os.pathsep.join((str(probe.parent), path))
+        environment.pop("MATPLOTLIBRC", None)
         environment.pop("MPL_IGNORE_SYSTEM_FONTS", None)
         client = McpClient(
             binary,
@@ -696,7 +702,14 @@ def test_returns_matplotlib_plots(binary: Path) -> Transcript:
             for cache in Path(os.environ["MPLCONFIGDIR"]).glob("fontlist-v*.json"):
                 cache.unlink()
 
+            import matplotlib
             import matplotlib.pyplot as plt
+
+            assert (
+                Path(matplotlib.matplotlib_fname()).resolve()
+                == Path(os.environ["MCP_CONSOLE_TEST_MATPLOTLIBRC"]).resolve()
+            )
+            assert matplotlib.rcParams["lines.linewidth"] == 7.25
 
             later_figure, later_axes = plt.subplots(num=20)
             later_axes.plot([1, 2, 3], [1, 2, 1])
@@ -862,12 +875,19 @@ def test_returns_matplotlib_plots(binary: Path) -> Transcript:
         assert len(persistent_caches) == 1, persistent_caches
         assert persistent_caches[0].stat().st_mode & 0o777 == 0o600
         assert persistent_caches[0].parent.stat().st_mode & 0o777 == 0o700
+        explicit_matplotlib = temporary / "explicit-matplotlib"
+        explicit_matplotlib.mkdir()
+        explicit_matplotlibrc = explicit_matplotlib / "matplotlibrc"
+        explicit_matplotlibrc.write_text("lines.linewidth: 8.25\n", encoding="utf-8")
+        second_environment = environment.copy()
+        second_environment["MATPLOTLIBRC"] = str(explicit_matplotlibrc)
+        second_environment["MCP_CONSOLE_TEST_MATPLOTLIBRC"] = str(explicit_matplotlibrc)
         second_workspace = temporary / "workspace-two"
         second_workspace.mkdir()
         client = McpClient(
             binary,
             ("serve",),
-            environment,
+            second_environment,
             current_directory=second_workspace,
         )
         client._initialize_and_list_tools()
@@ -885,13 +905,127 @@ def test_returns_matplotlib_plots(binary: Path) -> Transcript:
             invalid_cache = Path(os.environ["MPLCONFIGDIR"]) / "fontlist-v999.json"
             invalid_cache_was_seeded = invalid_cache.exists()
 
+            import matplotlib
             import matplotlib.font_manager
 
-            (marker.exists(), invalid_cache_was_seeded)
+            config = Path(matplotlib.matplotlib_fname())
+            try:
+                with config.open("a", encoding="utf-8"):
+                    pass
+            except PermissionError:
+                config_read_only = True
+            else:
+                config_read_only = False
+
+            try:
+                config.with_name("worker-payload").write_text("payload", encoding="utf-8")
+            except PermissionError:
+                config_directory_read_only = True
+            else:
+                config_directory_read_only = False
+
+            private_probe = Path(os.environ["MPLCONFIGDIR"]) / "config-write-probe"
+            private_probe.write_text("ok", encoding="utf-8")
+
+            (
+                config.resolve() == Path(os.environ["MCP_CONSOLE_TEST_MATPLOTLIBRC"]).resolve(),
+                matplotlib.rcParams["lines.linewidth"],
+                config_read_only,
+                config_directory_read_only,
+                private_probe.read_text(encoding="utf-8") == "ok",
+                marker.exists(),
+                invalid_cache_was_seeded,
+            )
             """)
         client.send(python=python)
         output = last_tool_text(client)
-        assert output == "(False, False)\n", repr(output)
+        assert output == "(True, 8.25, True, True, True, False, False)\n", repr(output)
+        transcript.extend(client._finish())
+        assert (
+            explicit_matplotlibrc.read_text(encoding="utf-8")
+            == "lines.linewidth: 8.25\n"
+        )
+        assert not (explicit_matplotlib / "worker-payload").exists()
+        assert not list(explicit_matplotlib.glob("fontlist-v*.json"))
+        assert (
+            host_matplotlibrc.read_text(encoding="utf-8") == "lines.linewidth: 7.25\n"
+        )
+        assert not list(host_matplotlib.glob("fontlist-v*.json"))
+
+        default_home = temporary / "default-home"
+        default_matplotlib = default_home / ".matplotlib"
+        default_matplotlib.mkdir(parents=True)
+        default_matplotlibrc = default_matplotlib / "matplotlibrc"
+        default_matplotlibrc.write_text("lines.linewidth: 9.25\n", encoding="utf-8")
+        r_environment, rscript = r_test_environment()
+        # fmt: r
+        source = code(r"""
+            writeLines(.libPaths())
+            """)
+        r_libraries = subprocess.run(
+            [rscript, "--vanilla", "-e", source],
+            check=True,
+            capture_output=True,
+            text=True,
+            env=r_environment,
+        ).stdout.splitlines()
+        uv = shutil.which("uv")
+        assert uv is not None, "real uv is required for managed-Python tests"
+        uv_cache = subprocess.run(
+            [uv, "cache", "dir"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        uv_python = subprocess.run(
+            [uv, "python", "dir"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        default_environment = environment.copy()
+        default_environment["HOME"] = str(default_home)
+        default_environment["R_LIBS_USER"] = os.pathsep.join(r_libraries)
+        default_environment["RETICULATE_UV"] = uv
+        default_environment["UV_CACHE_DIR"] = uv_cache
+        default_environment["UV_PYTHON_INSTALL_DIR"] = uv_python
+        default_environment["MCP_CONSOLE_TEST_MATPLOTLIBRC"] = str(default_matplotlibrc)
+        default_environment.pop("MATPLOTLIBRC", None)
+        default_environment.pop("MPLCONFIGDIR", None)
+        default_workspace = temporary / "workspace-default-config"
+        default_workspace.mkdir()
+        client = McpClient(
+            binary,
+            ("serve",),
+            default_environment,
+            current_directory=default_workspace,
+        )
+        client._initialize_and_list_tools()
+        client.session(
+            action="prepare",
+            requirements={"python": ["matplotlib"]},
+        )
+        assert last_tool_text(client) == "[prepared]"
+        # fmt: python
+        python = code("""
+            import os
+            from pathlib import Path
+
+            marker = Path(os.environ["TMPDIR"]) / "mcp-console-font-discovery"
+
+            import matplotlib
+            import matplotlib.font_manager
+
+            (
+                Path(matplotlib.matplotlib_fname()).resolve()
+                == Path(os.environ["MCP_CONSOLE_TEST_MATPLOTLIBRC"]).resolve(),
+                matplotlib.rcParams["lines.linewidth"],
+                marker.exists(),
+            )
+            """)
+        client.send(python=python)
+        output = last_tool_text(client)
+        assert output == "(True, 9.25, False)\n", repr(output)
         transcript.extend(client._finish())
         return transcript
 

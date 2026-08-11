@@ -22,7 +22,14 @@ send:
     for cache in Path(os.environ["MPLCONFIGDIR"]).glob("fontlist-v*.json"):
         cache.unlink()
 
+    import matplotlib
     import matplotlib.pyplot as plt
+
+    assert (
+        Path(matplotlib.matplotlib_fname()).resolve()
+        == Path(os.environ["MCP_CONSOLE_TEST_MATPLOTLIBRC"]).resolve()
+    )
+    assert matplotlib.rcParams["lines.linewidth"] == 7.25
 
     later_figure, later_axes = plt.subplots(num=20)
     later_axes.plot([1, 2, 3], [1, 2, 1])
@@ -42,10 +49,10 @@ send:
 result:
   content:
     - type: image
-      data: <PNG byte-identical to live matplotlib savefig 1>
+      data: "<PNG byte-identical to live matplotlib savefig 1>"
       mimeType: image/png
     - type: image
-      data: <PNG byte-identical to live matplotlib savefig 2>
+      data: "<PNG byte-identical to live matplotlib savefig 2>"
       mimeType: image/png
   isError: false
 ---
@@ -68,7 +75,7 @@ result:
         after show
         <matplotlib figure displayhook representation>
     - type: image
-      data: <PNG byte-identical to live shown matplotlib savefig 1>
+      data: "<PNG byte-identical to live shown matplotlib savefig 1>"
       mimeType: image/png
   isError: false
 ---
@@ -117,7 +124,7 @@ result:
           File "<mcp-console:python:e5>", line 5, in <module>
         ValueError: cell failed
     - type: image
-      data: <PNG byte-identical to live error-cell matplotlib savefig 1>
+      data: "<PNG byte-identical to live error-cell matplotlib savefig 1>"
       mimeType: image/png
   isError: false
 ---
@@ -153,7 +160,7 @@ result:
           File "<mcp-console:python:e7>", line 2, in fail_plot_capture
         RuntimeError: plot render failed
     - type: image
-      data: <PNG byte-identical to live second matplotlib savefig 1>
+      data: "<PNG byte-identical to live second matplotlib savefig 1>"
       mimeType: image/png
   isError: false
 ---
@@ -193,11 +200,9 @@ input:
 result:
   tools:
     - name: send
-      description: >-
-        Evaluate one complete R, Python, or SQL code cell, write its stdin, or
-        poll it.
+      description: "Evaluate one complete R, Python, or SQL code cell, write its stdin, or poll it."
       inputSchema:
-        $schema: https://json-schema.org/draft/2020-12/schema
+        $schema: "https://json-schema.org/draft/2020-12/schema"
         additionalProperties: false
         type: object
         properties:
@@ -222,9 +227,7 @@ result:
               - string
               - "null"
           sql:
-            description: >-
-              Complete DuckDB SQL evaluated in the persistent catalog. Omit to write
-              stdin or poll.
+            description: Complete DuckDB SQL evaluated in the persistent catalog. Omit to write stdin or poll.
             type:
               - string
               - "null"
@@ -234,21 +237,15 @@ result:
               - string
               - "null"
           timeout_ms:
-            description: >-
-              Maximum time this call waits for an evaluation. It does not limit or
-              stop the computation.
+            description: Maximum time this call waits for an evaluation. It does not limit or stop the computation.
             type: integer
             format: uint64
             minimum: 0
             default: 60000
     - name: session
-      description: >-
-        Prepare additive R or Python requirements before the implicit session
-        starts, or restart its worker with retained requirements and optional
-        new Python requirements. Restart starts a worker if none exists and
-        loses all in-memory R, Python, and SQL state.
+      description: "Prepare additive R or Python requirements before the implicit session starts, or restart its worker with retained requirements and optional new Python requirements. Restart starts a worker if none exists and loses all in-memory R, Python, and SQL state."
       inputSchema:
-        $schema: https://json-schema.org/draft/2020-12/schema
+        $schema: "https://json-schema.org/draft/2020-12/schema"
         $defs:
           SessionAction:
             type: string
@@ -270,9 +267,7 @@ result:
                 maxItems: 64
                 default: []
               python:
-                description: >-
-                  One or more additive, single-line PEP 508 Python requirement strings for
-                  prepare or restart.
+                description: "One or more additive, single-line PEP 508 Python requirement strings for prepare or restart."
                 type: array
                 items:
                   type: string
@@ -283,9 +278,7 @@ result:
         type: object
         properties:
           action:
-            description: >-
-              Prepare R or Python requirements or restart the implicit session,
-              starting it if needed.
+            description: "Prepare R or Python requirements or restart the implicit session, starting it if needed."
             $ref: "#/$defs/SessionAction"
           requirements:
             description: |-
@@ -323,13 +316,197 @@ send:
     invalid_cache = Path(os.environ["MPLCONFIGDIR"]) / "fontlist-v999.json"
     invalid_cache_was_seeded = invalid_cache.exists()
 
+    import matplotlib
     import matplotlib.font_manager
 
-    (marker.exists(), invalid_cache_was_seeded)
+    config = Path(matplotlib.matplotlib_fname())
+    try:
+        with config.open("a", encoding="utf-8"):
+            pass
+    except PermissionError:
+        config_read_only = True
+    else:
+        config_read_only = False
+
+    try:
+        config.with_name("worker-payload").write_text("payload", encoding="utf-8")
+    except PermissionError:
+        config_directory_read_only = True
+    else:
+        config_directory_read_only = False
+
+    private_probe = Path(os.environ["MPLCONFIGDIR"]) / "config-write-probe"
+    private_probe.write_text("ok", encoding="utf-8")
+
+    (
+        config.resolve() == Path(os.environ["MCP_CONSOLE_TEST_MATPLOTLIBRC"]).resolve(),
+        matplotlib.rcParams["lines.linewidth"],
+        config_read_only,
+        config_directory_read_only,
+        private_probe.read_text(encoding="utf-8") == "ok",
+        marker.exists(),
+        invalid_cache_was_seeded,
+    )
 result:
   content:
     - type: text
       text: |
-        (False, False)
+        (True, 8.25, True, True, True, False, False)
+  isError: false
+---
+id: 1
+input:
+  method: initialize
+  params:
+    protocolVersion: 2025-11-25
+    capabilities: {}
+    clientInfo:
+      name: acceptance-test
+      version: 1.0.0
+result:
+  protocolVersion: 2025-11-25
+  capabilities:
+    tools: {}
+  serverInfo:
+    name: mcp-console
+    version: 0.1.0
+---
+input:
+  method: notifications/initialized
+---
+id: 2
+input:
+  method: tools/list
+result:
+  tools:
+    - name: send
+      description: "Evaluate one complete R, Python, or SQL code cell, write its stdin, or poll it."
+      inputSchema:
+        $schema: "https://json-schema.org/draft/2020-12/schema"
+        additionalProperties: false
+        type: object
+        properties:
+          r:
+            description: |-
+              Complete multiline R code evaluated in persistent state. Plots drawn on the default device
+              return as PNG images in MCP results. Set their size with the R options
+              `options(console.plot.width = ..., console.plot.height = ..., console.plot.dpi = ...)`;
+              width and height are in inches. Keep each plot and its drawing operations in one cell. Omit
+              to write stdin or poll.
+            type:
+              - string
+              - "null"
+          python:
+            description: |-
+              Complete multiline Python code evaluated in persistent state. At cell end, including after a
+              Python error, every open `matplotlib.pyplot` figure returns once as a PNG image and is closed;
+              `show()` is optional, and `savefig()` does not suppress capture while the figure remains open.
+              R plots invoked through reticulate's `r` bridge follow the cell-scoped rules and R options
+              described for `r`. Omit to write stdin or poll.
+            type:
+              - string
+              - "null"
+          sql:
+            description: Complete DuckDB SQL evaluated in the persistent catalog. Omit to write stdin or poll.
+            type:
+              - string
+              - "null"
+          stdin:
+            description: Exact UTF-8 text queued to worker fd 0 without adding a newline.
+            type:
+              - string
+              - "null"
+          timeout_ms:
+            description: Maximum time this call waits for an evaluation. It does not limit or stop the computation.
+            type: integer
+            format: uint64
+            minimum: 0
+            default: 60000
+    - name: session
+      description: "Prepare additive R or Python requirements before the implicit session starts, or restart its worker with retained requirements and optional new Python requirements. Restart starts a worker if none exists and loses all in-memory R, Python, and SQL state."
+      inputSchema:
+        $schema: "https://json-schema.org/draft/2020-12/schema"
+        $defs:
+          SessionAction:
+            type: string
+            enum:
+              - prepare
+              - restart
+          Requirements:
+            type: object
+            properties:
+              r:
+                description: |-
+                  One or more additive, single-line R package references accepted by IR for prepare.
+                  Installing a local reference can execute package-controlled code from the referenced host
+                  path; use only trusted local packages.
+                type: array
+                items:
+                  type: string
+                  minLength: 1
+                maxItems: 64
+                default: []
+              python:
+                description: "One or more additive, single-line PEP 508 Python requirement strings for prepare or restart."
+                type: array
+                items:
+                  type: string
+                  minLength: 1
+                maxItems: 64
+                default: []
+            additionalProperties: false
+        type: object
+        properties:
+          action:
+            description: "Prepare R or Python requirements or restart the implicit session, starting it if needed."
+            $ref: "#/$defs/SessionAction"
+          requirements:
+            description: |-
+              Additive R or Python requirements for prepare.
+              Restart accepts only Python requirements.
+              Resolution runs outside the worker sandbox.
+              Package installation or build code may execute on the host.
+              Omit to restart unchanged.
+            anyOf:
+              - $ref: "#/$defs/Requirements"
+              - type: "null"
+        additionalProperties: false
+        required:
+          - action
+---
+id: 3
+session:
+  action: prepare
+  requirements:
+    python:
+      - matplotlib
+result:
+  content:
+    - type: text
+      text: "[prepared]"
+  isError: false
+---
+id: 4
+send:
+  python: |
+    import os
+    from pathlib import Path
+
+    marker = Path(os.environ["TMPDIR"]) / "mcp-console-font-discovery"
+
+    import matplotlib
+    import matplotlib.font_manager
+
+    (
+        Path(matplotlib.matplotlib_fname()).resolve()
+        == Path(os.environ["MCP_CONSOLE_TEST_MATPLOTLIBRC"]).resolve(),
+        matplotlib.rcParams["lines.linewidth"],
+        marker.exists(),
+    )
+result:
+  content:
+    - type: text
+      text: |
+        (True, 9.25, False)
   isError: false
 ...

@@ -83,10 +83,11 @@ Pyplot-managed figures are cell scoped, so one plot's drawing operations must be
 Figures closed before cell end and figures not registered with `pyplot` are not captured.
 Matplotlib rendering failures print a Python traceback as a normal language outcome; cell-end cleanup still closes all pyplot-managed figures and leaves the worker available.
 Unless an inherited value configures it, the worker sets Matplotlib's backend to Agg.
-Before Python initializes, it forces Matplotlib's configuration and XDG cache directories under the worker's private temporary directory so font discovery can write within the sandbox.
+Before Python initializes, a built-in worker resolves an existing user `matplotlibrc` from inherited `MATPLOTLIBRC`; otherwise it uses inherited `MPLCONFIGDIR`, or `$HOME/.matplotlib` when `MPLCONFIGDIR` is unset or empty, and exposes that regular file read-only through `MATPLOTLIBRC`.
+It then forces Matplotlib's writable configuration and XDG cache directories under the worker's private temporary directory so font discovery can write within the sandbox.
 For built-in workers, the server seeds that private Matplotlib directory with valid version-matched `fontlist-v*.json` files from an app-owned cache and atomically publishes changed valid files after the worker exits.
 The persistent cache is `$XDG_CACHE_HOME/mcp-console/matplotlib` when the inherited XDG root is nonempty and absolute, otherwise `$HOME/Library/Caches/mcp-console/matplotlib` when that root is available and absolute; an invalid or unavailable root disables reuse, and the cache is never granted as a writable sandbox path.
-Only Matplotlib's local installed-font metadata persists: Matplotlib configuration, styles, TeX state, and the complete XDG cache remain worker-private.
+Only Matplotlib's local installed-font metadata persists: the selected host `matplotlibrc` is read-only, while worker-created configuration, styles, TeX state, and the complete XDG cache remain worker-private.
 The server structurally validates, size-bounds, and atomically publishes only font indexes, but evaluated code can deliberately influence valid metadata; the app-owned cache is disposable and may be removed to force discovery.
 Matplotlib remains optional, and capture inspects only modules already loaded by evaluated code.
 At worker startup, MCP Console sets `RETICULATE_REMAP_OUTPUT_STREAMS=1` once, before user R can initialize Python.

@@ -92,11 +92,15 @@ When R requirements were prepared, the server prepends the validated IR library 
 R then places that library first in `.libPaths()` while retaining its remaining user, site, and base libraries.
 
 For built-in workers only, the server retains Matplotlib's local installed-font index between worker generations and server processes.
+Before replacing the inherited `MPLCONFIGDIR`, the worker resolves an existing `matplotlibrc` from `MATPLOTLIBRC`; otherwise it uses the inherited `MPLCONFIGDIR`, or `$HOME/.matplotlib` when `MPLCONFIGDIR` is unset or empty.
+It exposes the resolved regular file through `MATPLOTLIBRC`; a `matplotlibrc` in the working directory at Matplotlib import time retains Matplotlib's normal higher precedence.
+The sandbox permits reads of the resolved host file but not writes to it.
 The cache directory is `$XDG_CACHE_HOME/mcp-console/matplotlib` when the server inherits a nonempty absolute `XDG_CACHE_HOME`, and otherwise `$HOME/Library/Caches/mcp-console/matplotlib` when that root is available and absolute.
 An invalid or unavailable cache root disables reuse without preventing server startup.
 Before launch, the server copies valid version-matched `fontlist-v*.json` files into the worker's private `$TMPDIR/matplotlib` directory; the worker sets `MPLCONFIGDIR` to that private copy and keeps `XDG_CACHE_HOME` private as well.
 After the direct sandbox process exits and is reaped, the server validates changed font indexes and publishes them through a same-directory atomic rename.
-The persistent directory is not added to the sandbox's writable paths, and the server never transfers Matplotlib configuration, styles, TeX state, lock files, or other XDG cache contents.
+The persistent directory is not added to the sandbox's writable paths.
+Apart from the read-only `matplotlibrc`, the server never transfers Matplotlib configuration, styles, TeX state, lock files, or other XDG cache contents.
 An absent, invalid, or incompatible index is a cache miss, so Matplotlib rebuilds it by scanning fonts without network access.
 The server bounds the files, aggregate bytes, and directory entries it inspects and requires the expected `FontManager` and `FontEntry` structure before publication.
 Evaluated code can still deliberately modify structurally valid metadata in its private directory, so this app-owned cache is a disposable cross-worker state channel rather than a trust boundary; removing it forces later discovery.
