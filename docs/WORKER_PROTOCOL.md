@@ -91,6 +91,17 @@ Harp opens `R_HOME/lib/libR.dylib` by its absolute path, so the worker does not 
 When R requirements were prepared, the server prepends the validated IR library to inherited `R_LIBS` before this initialization.
 R then places that library first in `.libPaths()` while retaining its remaining user, site, and base libraries.
 
+For built-in workers only, the server retains Matplotlib's local installed-font index between worker generations and server processes.
+The cache directory is `$XDG_CACHE_HOME/mcp-console/matplotlib` when the server inherits a nonempty absolute `XDG_CACHE_HOME`, and otherwise `$HOME/Library/Caches/mcp-console/matplotlib` when that root is available and absolute.
+An invalid or unavailable cache root disables reuse without preventing server startup.
+Before launch, the server copies valid version-matched `fontlist-v*.json` files into the worker's private `$TMPDIR/matplotlib` directory; the worker sets `MPLCONFIGDIR` to that private copy and keeps `XDG_CACHE_HOME` private as well.
+After the direct sandbox process exits and is reaped, the server validates changed font indexes and publishes them through a same-directory atomic rename.
+The persistent directory is not added to the sandbox's writable paths, and the server never transfers Matplotlib configuration, styles, TeX state, lock files, or other XDG cache contents.
+An absent, invalid, or incompatible index is a cache miss, so Matplotlib rebuilds it by scanning fonts without network access.
+The server bounds the files, aggregate bytes, and directory entries it inspects and requires the expected `FontManager` and `FontEntry` structure before publication.
+Evaluated code can still deliberately modify structurally valid metadata in its private directory, so this app-owned cache is a disposable cross-worker state channel rather than a trust boundary; removing it forces later discovery.
+Custom workers do not receive this cache transfer.
+
 The server launches the sandboxed worker with piped standard input, standard output, and standard error.
 Sideband frames carry control and managed output; interactive input bytes travel through the worker's fd 0, while the server drains fd 1 and fd 2 continuously.
 The sandbox child leads a dedicated process group so the current bounded shutdown can stop a live wrapper and its in-group descendants.
