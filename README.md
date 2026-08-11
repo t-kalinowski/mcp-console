@@ -113,9 +113,15 @@ plot(1:10)
 ```
 
 Graphics devices opened explicitly by evaluated code, such as with `grDevices::png()`, are user-owned: the worker does not close them, read their files, or return them as MCP images.
-Python cells execute statements in persistent `__main__` state and send a final expression through Python's display hook.
+Python cells execute statements in persistent `__main__` state and display their final expression through Python's display hook.
 R and Python can exchange objects through reticulate's `py` and `r` bridges.
 R plots invoked from a Python cell through reticulate's `r` bridge use the same managed default device, sizing options, cell scope, and MCP image output as plots invoked from an R cell.
+At the end of each Python cell, including after a Python error, every open figure managed by `matplotlib.pyplot` is rendered in memory, returned once as a PNG image, and closed.
+`plt.show()` is optional, and calling `savefig()` does not suppress this capture while the figure remains open.
+These figures are cell scoped, so one plot's drawing operations must be submitted together.
+Figures closed before cell end and figures not registered with `pyplot` are not captured.
+Unless an inherited setting selects otherwise, the worker uses Matplotlib's noninteractive Agg backend.
+It forces Matplotlib's configuration and XDG cache directories under the worker's private temporary directory so font discovery can write within the sandbox.
 Reticulate routes Python text written through `sys.stdout` and `sys.stderr`, including tracebacks, through the same sideband console output path as R.
 Writes through `sys.stdout.buffer`, `sys.stderr.buffer`, or fd 1/2 directly remain on the captured standard streams.
 After a Python cell calls `os.fork()`, reticulate restores the child's original fd-backed text streams after its sideband is disabled, so its ordinary stdout and stderr are captured too.
@@ -146,6 +152,7 @@ R language failures, uncaught Python exceptions, and DuckDB errors remain ordina
 A silent successful R, Python, or SQL cell sends no sideband `output` frame, still sends `completed`, and projects to `[done]` when no other response text is pending.
 
 Python cells require the `reticulate` R package.
+Matplotlib figure capture requires the Python `matplotlib` package; prepare it before the worker starts when it is not already available.
 SQL cells require the `arrow`, `DBI`, `duckdb`, `nanoarrow`, `pillar`, and `tibble` R packages.
 Lazy dplyr relations created from `sql_connection()` additionally require `dplyr` and `dbplyr`.
 MCP Console does not automatically install these R runtime dependencies.

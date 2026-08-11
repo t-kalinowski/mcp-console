@@ -420,10 +420,13 @@ An explicit `session prepare` addition after worker startup still returns `[rest
 Each Python cell receives a synthetic filename such as `<mcp-console:python:e1>`.
 The worker stores the source in a process-lifetime private R environment and calls its evaluator with only a short evaluation ID.
 The evaluator derives the synthetic filename from that ID, so neither the source nor the bridge implementation appears in its R call expression.
-That evaluator parses the complete cell with Python's `ast` module, executes statements in `__main__.__dict__`, and sends a final expression through `sys.displayhook()`.
+That evaluator parses the complete cell with Python's `ast` module, executes statements in `__main__.__dict__`, and displays a final expression through `sys.displayhook()`.
 Assignments, imports, and objects remain available to later Python cells and through reticulate's R/Python object bridge.
-Python cells enter the same managed graphics lifecycle as R cells.
-An R plot invoked through reticulate's `r` bridge therefore uses the managed default device, returns as MCP image content, and follows the same sizing, cell-scope, device-ownership, and finalization rules.
+An R plot invoked through reticulate's `r` bridge uses the managed R default device and follows its sizing, cell-scope, device-ownership, and finalization rules.
+When `matplotlib.pyplot` loads, the worker replaces `show()` with a no-op so common notebook-style calls do not warn under the noninteractive backend or finalize figures before cell-end collection.
+At Python cell end, including after a Python error, the worker visits every still-open pyplot figure in figure-number order, renders it in memory as `image/png`, and then closes all pyplot-managed figures.
+Calling `savefig()` does not suppress this capture while the figure remains open; calling `close()` before cell end does.
+Figures not registered with `pyplot` are not captured.
 
 An uncaught Python exception prints its traceback and completes as a normal language outcome.
 The worker remains reusable, and state changes made before the exception remain applied.

@@ -74,9 +74,17 @@ Their default dimensions are 800 by 600 pixels at 96 DPI; persistent `console.pl
 Graphics devices opened explicitly by evaluated code, such as with `grDevices::png()`, remain user-owned: the worker does not close them, read their files, or emit images for them.
 A silent successful R cell sends `completed` without an `output` frame and projects to `[done]` when no other response text is pending.
 Submitted R functions do not currently retain a source filename.
-Python cells run in the same worker through reticulate, retain `__main__` state, execute statements, and send a final expression through `sys.displayhook()`.
+Python cells run in the same worker through reticulate, retain `__main__` state, execute statements, and display a final expression through `sys.displayhook()`.
 Python source uses a synthetic evaluation filename, and uncaught exceptions print a Python traceback as a normal language outcome with `isError: false`.
-Python cells enter the same managed graphics lifecycle as R cells, so R plots invoked through reticulate's `r` bridge return as MCP images under the same sizing, cell-scope, device-ownership, and finalization rules.
+R plots invoked through reticulate's `r` bridge use the managed R graphics lifecycle and return as MCP images under the same sizing, cell-scope, and device-ownership rules as R cells.
+At Python cell end, including after a Python error, the worker renders every open `matplotlib.pyplot` figure in memory, emits it once as `image/png`, and closes all pyplot-managed figures.
+`matplotlib.pyplot.show()` is optional, and calling `savefig()` does not suppress capture while the figure remains open.
+Pyplot-managed figures are cell scoped, so one plot's drawing operations must be submitted in the same cell.
+Figures closed before cell end and figures not registered with `pyplot` are not captured.
+Matplotlib rendering failures print a Python traceback as a normal language outcome; cell-end cleanup still closes all pyplot-managed figures and leaves the worker available.
+Unless an inherited value configures it, the worker sets Matplotlib's backend to Agg.
+Before Python initializes, it forces Matplotlib's configuration and XDG cache directories under the worker's private temporary directory so font discovery can write within the sandbox.
+Matplotlib remains optional, and capture inspects only modules already loaded by evaluated code.
 At worker startup, MCP Console sets `RETICULATE_REMAP_OUTPUT_STREAMS=1` once, before user R can initialize Python.
 Within the worker process, reticulate then routes Python text writes, including `print()`, `sys.stderr.write()`, and tracebacks, through the R console callback as sideband `output` frames.
 Writes through `sys.stdout.buffer`, `sys.stderr.buffer`, or native fd 1/2 bypass that remap and use the captured standard streams.

@@ -1,0 +1,154 @@
+---
+!same-as tests/transcripts/golden/server/initializes_and_lists_tools.yaml
+---
+id: 3
+session:
+  action: prepare
+  requirements:
+    python:
+      - matplotlib
+result:
+  content:
+    - type: text
+      text: "[prepared]"
+  isError: false
+---
+id: 4
+send:
+  python: |
+    import os
+    from pathlib import Path
+
+    import matplotlib.pyplot as plt
+
+    later_figure, later_axes = plt.subplots(num=20)
+    later_axes.plot([1, 2, 3], [1, 2, 1])
+    later_reference = Path(os.environ["TMPDIR"]) / "matplotlib-later-reference.png"
+    later_figure.savefig(later_reference, format="png")
+
+    figure, axes = plt.subplots(num=10)
+    axes.plot([1, 2, 3], [3, 1, 2])
+    reference = Path(os.environ["TMPDIR"]) / "matplotlib-reference.png"
+    figure.savefig(reference, format="png")
+result:
+  content:
+    - type: image
+      data: <PNG byte-identical to live matplotlib savefig 1>
+      mimeType: image/png
+    - type: image
+      data: <PNG byte-identical to live matplotlib savefig 2>
+      mimeType: image/png
+  isError: false
+---
+id: 5
+send:
+  python: |
+    shown_figure, shown_axes = plt.subplots()
+    shown_axes.plot([1, 2, 3], [1, 3, 2])
+    shown_reference = Path(os.environ["TMPDIR"]) / "matplotlib-shown-reference.png"
+    shown_figure.savefig(shown_reference, format="png")
+    print("before show")
+    plt.show()
+    print("after show")
+    shown_figure
+result:
+  content:
+    - type: text
+      text: |
+        before show
+        after show
+        <matplotlib figure displayhook representation>
+    - type: image
+      data: <PNG byte-identical to live shown matplotlib savefig 1>
+      mimeType: image/png
+  isError: false
+---
+id: 6
+send:
+  python: |
+    closed_figure, closed_axes = plt.subplots()
+    closed_axes.plot([1, 2, 3], [2, 1, 3])
+    closed_reference = Path(os.environ["TMPDIR"]) / "matplotlib-closed-reference.png"
+    closed_figure.savefig(closed_reference, format="png")
+    plt.close(closed_figure)
+    plt.get_fignums()
+result:
+  content:
+    - type: text
+      text: |
+        []
+  isError: false
+---
+id: 7
+send:
+  python: |
+    axes.plot([1, 3], [2, 0])
+    plt.get_fignums()
+result:
+  content:
+    - type: text
+      text: |
+        []
+  isError: false
+---
+id: 8
+send:
+  python: |
+    error_figure, error_axes = plt.subplots()
+    error_axes.plot([1, 2], [2, 1])
+    error_reference = Path(os.environ["TMPDIR"]) / "matplotlib-error-reference.png"
+    error_figure.savefig(error_reference, format="png")
+    raise ValueError("cell failed")
+result:
+  content:
+    - type: text
+      text: |
+        <python traceback ending in ValueError: cell failed>
+    - type: image
+      data: <PNG byte-identical to live error-cell matplotlib savefig 1>
+      mimeType: image/png
+  isError: false
+---
+id: 9
+send:
+  python: plt.get_fignums()
+result:
+  content:
+    - type: text
+      text: |
+        []
+  isError: false
+---
+id: 10
+send:
+  python: |
+    def fail_plot_capture(*args, **kwargs):
+        raise RuntimeError("plot render failed")
+
+
+    failed_figure = plt.figure()
+    failed_figure.savefig = fail_plot_capture
+    figure, axes = plt.subplots()
+    axes.plot([1, 3], [2, 0])
+    second_reference = Path(os.environ["TMPDIR"]) / "matplotlib-second-reference.png"
+    figure.savefig(second_reference, format="png")
+result:
+  content:
+    - type: text
+      text: |
+        <matplotlib render traceback ending in RuntimeError: plot render failed>
+    - type: image
+      data: <PNG byte-identical to live second matplotlib savefig 1>
+      mimeType: image/png
+  isError: false
+---
+id: 11
+send:
+  python: plt.get_fignums()
+result:
+  content:
+    - type: text
+      text: |
+        []
+  isError: false
+...

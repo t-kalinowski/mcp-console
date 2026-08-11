@@ -34,9 +34,11 @@ struct SendArguments {
     /// width and height are in inches. Keep each plot and its drawing operations in one cell. Omit
     /// to write stdin or poll.
     r: Option<String>,
-    /// Complete multiline Python code evaluated in persistent state. R plots invoked through
-    /// reticulate's `r` bridge return as PNG images under the same cell-scoped rules and R options
-    /// as `r`. Omit to write stdin or poll.
+    /// Complete multiline Python code evaluated in persistent state. At cell end, including after a
+    /// Python error, every open `matplotlib.pyplot` figure returns once as a PNG image and is closed;
+    /// `show()` is optional, and `savefig()` does not suppress capture while the figure remains open.
+    /// R plots invoked through reticulate's `r` bridge follow the cell-scoped rules and R options
+    /// described for `r`. Omit to write stdin or poll.
     python: Option<String>,
     /// Complete DuckDB SQL evaluated in the persistent catalog. Omit to write stdin or poll.
     sql: Option<String>,

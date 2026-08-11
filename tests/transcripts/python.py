@@ -636,6 +636,192 @@ def test_returns_r_plots_from_python_bridge(binary: Path) -> Transcript:
     return client._finish()
 
 
+def test_returns_matplotlib_plots(binary: Path) -> Transcript:
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        temporary = Path(temporary_directory)
+        fontconfig = temporary / "fonts.conf"
+        fontconfig.write_text(
+            code(r"""
+                <?xml version="1.0"?>
+                <!DOCTYPE fontconfig SYSTEM "urn:fontconfig:fonts.dtd">
+                <fontconfig>
+                  <cachedir prefix="xdg">mcp-console-test</cachedir>
+                </fontconfig>
+                """),
+            encoding="utf-8",
+        )
+        environment = os.environ.copy()
+        environment["TMPDIR"] = temporary_directory
+        environment["FONTCONFIG_FILE"] = str(fontconfig)
+        environment["MPLCONFIGDIR"] = str(temporary / "host-matplotlib")
+        environment["XDG_CACHE_HOME"] = str(temporary / "host-cache")
+        client = McpClient(binary, ("serve",), environment)
+        client._initialize_and_list_tools()
+        client.session(
+            action="prepare",
+            requirements={"python": ["matplotlib"]},
+        )
+        assert last_tool_text(client) == "[prepared]"
+
+        # fmt: python
+        python = code("""
+            import os
+            from pathlib import Path
+
+            import matplotlib.pyplot as plt
+
+            later_figure, later_axes = plt.subplots(num=20)
+            later_axes.plot([1, 2, 3], [1, 2, 1])
+            later_reference = Path(os.environ["TMPDIR"]) / "matplotlib-later-reference.png"
+            later_figure.savefig(later_reference, format="png")
+
+            figure, axes = plt.subplots(num=10)
+            axes.plot([1, 2, 3], [3, 1, 2])
+            reference = Path(os.environ["TMPDIR"]) / "matplotlib-reference.png"
+            figure.savefig(reference, format="png")
+            """)
+        client.send(python=python)
+        reference = wait_for_worker_file(
+            Path(temporary_directory),
+            "matplotlib-reference.png",
+            client,
+        )
+        later_reference = wait_for_worker_file(
+            Path(temporary_directory),
+            "matplotlib-later-reference.png",
+            client,
+        )
+        assert_result_content(
+            client,
+            [reference.read_bytes(), later_reference.read_bytes()],
+            image_reference="live matplotlib savefig {page}",
+        )
+
+        # fmt: python
+        python = code("""
+            shown_figure, shown_axes = plt.subplots()
+            shown_axes.plot([1, 2, 3], [1, 3, 2])
+            shown_reference = Path(os.environ["TMPDIR"]) / "matplotlib-shown-reference.png"
+            shown_figure.savefig(shown_reference, format="png")
+            print("before show")
+            plt.show()
+            print("after show")
+            shown_figure
+            """)
+        client.send(python=python)
+        shown_reference = wait_for_worker_file(
+            Path(temporary_directory),
+            "matplotlib-shown-reference.png",
+            client,
+        )
+        result = client.transcript[-1]["result"]
+        output = result["content"][0]["text"]
+        assert output.startswith("before show\nafter show\n<Figure size "), output
+        assert output.endswith(" with 1 Axes>\n"), output
+        result["content"][0]["text"] = (
+            "before show\nafter show\n<matplotlib figure displayhook representation>\n"
+        )
+        assert_result_content(
+            client,
+            [result["content"][0]["text"], shown_reference.read_bytes()],
+            image_reference="live shown matplotlib savefig {page}",
+        )
+
+        # fmt: python
+        python = code("""
+            closed_figure, closed_axes = plt.subplots()
+            closed_axes.plot([1, 2, 3], [2, 1, 3])
+            closed_reference = Path(os.environ["TMPDIR"]) / "matplotlib-closed-reference.png"
+            closed_figure.savefig(closed_reference, format="png")
+            plt.close(closed_figure)
+            plt.get_fignums()
+            """)
+        client.send(python=python)
+        closed_reference = wait_for_worker_file(
+            Path(temporary_directory),
+            "matplotlib-closed-reference.png",
+            client,
+        )
+        assert closed_reference.is_file()
+        assert last_tool_text(client) == "[]\n"
+
+        # fmt: python
+        python = code("""
+            axes.plot([1, 3], [2, 0])
+            plt.get_fignums()
+            """)
+        client.send(python=python)
+        assert last_tool_text(client) == "[]\n"
+
+        # fmt: python
+        python = code("""
+            error_figure, error_axes = plt.subplots()
+            error_axes.plot([1, 2], [2, 1])
+            error_reference = Path(os.environ["TMPDIR"]) / "matplotlib-error-reference.png"
+            error_figure.savefig(error_reference, format="png")
+            raise ValueError("cell failed")
+            """)
+        client.send(python=python)
+        result = client.transcript[-1]["result"]
+        assert result["isError"] is False, result
+        output = result["content"][0]["text"]
+        assert output.startswith("Traceback (most recent call last):\n"), output
+        assert output.endswith("ValueError: cell failed\n"), output
+        result["content"][0]["text"] = (
+            "<python traceback ending in ValueError: cell failed>\n"
+        )
+        error_reference = wait_for_worker_file(
+            Path(temporary_directory),
+            "matplotlib-error-reference.png",
+            client,
+        )
+        assert_result_content(
+            client,
+            [result["content"][0]["text"], error_reference.read_bytes()],
+            image_reference="live error-cell matplotlib savefig {page}",
+        )
+
+        client.send(python="plt.get_fignums()")
+        assert last_tool_text(client) == "[]\n"
+
+        # fmt: python
+        python = code("""
+            def fail_plot_capture(*args, **kwargs):
+                raise RuntimeError("plot render failed")
+
+
+            failed_figure = plt.figure()
+            failed_figure.savefig = fail_plot_capture
+            figure, axes = plt.subplots()
+            axes.plot([1, 3], [2, 0])
+            second_reference = Path(os.environ["TMPDIR"]) / "matplotlib-second-reference.png"
+            figure.savefig(second_reference, format="png")
+            """)
+        client.send(python=python)
+        result = client.transcript[-1]["result"]
+        assert result["isError"] is False, result
+        output = result["content"][0]["text"]
+        assert output.startswith("Traceback (most recent call last):\n"), output
+        assert output.endswith("RuntimeError: plot render failed\n"), output
+        result["content"][0]["text"] = (
+            "<matplotlib render traceback ending in RuntimeError: plot render failed>\n"
+        )
+        second_reference = wait_for_worker_file(
+            Path(temporary_directory),
+            "matplotlib-second-reference.png",
+            client,
+        )
+        assert_result_content(
+            client,
+            [result["content"][0]["text"], second_reference.read_bytes()],
+            image_reference="live second matplotlib savefig {page}",
+        )
+
+        client.send(python="plt.get_fignums()")
+        assert last_tool_text(client) == "[]\n"
+        return client._finish()
+
+
 def test_runs_async_python_explicitly(binary: Path) -> Transcript:
     client = McpClient(binary, ("serve",))
     client._initialize_and_list_tools()
