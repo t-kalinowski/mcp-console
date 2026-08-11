@@ -82,31 +82,16 @@ base::local({
     unset = NA_character_
   )
   if (!base::is.na(cache_directory)) {
-    script <- base::paste0(
-      "import sys, sysconfig\n",
-      "assert sys.flags.no_site\n",
-      "from pathlib import Path\n",
-      "prefix = Path(sys.executable).parent.parent\n",
-      "paths = sysconfig.get_paths(vars={'base': str(prefix), 'platbase': str(prefix)})\n",
-      "for path in (paths['purelib'], paths['platlib']):\n",
-      "    if path and path not in sys.path:\n",
-      "        sys.path.append(path)\n",
-      "import importlib.util\n",
-      "if importlib.util.find_spec('matplotlib') is not None:\n",
-      "    import matplotlib\n",
-      "    import matplotlib.font_manager as font_manager\n",
-      "    cache = Path(matplotlib.get_cachedir()) / ",
-      "f'fontlist-v{font_manager.FontManager.__version__}.json'\n",
-      "    if not cache.is_file():\n",
-      "        raise RuntimeError(f'Matplotlib did not create {cache}')\n"
-    )
-    output_file <- base::tempfile("mcp-console-matplotlib-output-")
+    script <- "import importlib.util
+if importlib.util.find_spec('matplotlib') is not None:
+    import matplotlib.font_manager
+"
     error_file <- base::tempfile("mcp-console-matplotlib-")
-    base::on.exit(base::unlink(c(output_file, error_file)), add = TRUE)
+    base::on.exit(base::unlink(error_file), add = TRUE)
     status <- base::system2(
       python,
-      c("-I", "-S", "-c", base::shQuote(script)),
-      stdout = output_file,
+      c("-I", "-c", base::shQuote(script)),
+      stdout = FALSE,
       stderr = error_file
     )
     if (status != 0L) {

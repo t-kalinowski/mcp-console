@@ -187,6 +187,48 @@ def test_prepares_explicit_numpy_requirement(binary: Path) -> Transcript:
     return client._finish()
 
 
+def test_does_not_fail_resolution_when_matplotlib_cache_cannot_be_written(
+    binary: Path,
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        temporary = Path(temporary_directory)
+        environment = os.environ.copy()
+        environment["XDG_CACHE_HOME"] = str(temporary / "host-cache")
+        environment["MPL_IGNORE_SYSTEM_FONTS"] = "1"
+        client = McpClient(
+            binary,
+            ("serve",),
+            environment,
+            current_directory=temporary,
+        )
+        client._initialize_and_list_tools()
+        client.session(
+            action="prepare",
+            requirements={"python": ["matplotlib"]},
+        )
+        assert last_tool_text(client) == "[prepared]"
+        cache_directory = temporary / "host-cache" / "mcp-console" / "matplotlib"
+        caches = list(cache_directory.glob("fontlist-v*.json"))
+        assert len(caches) == 1, caches
+        caches[0].unlink()
+        caches[0].mkdir()
+
+        client.session(
+            action="prepare",
+            requirements={"python": ["py-yaml12"]},
+        )
+        assert last_tool_text(client) == "[prepared]", client.transcript[-1]
+        assert caches[0].is_dir()
+        assert not [
+            path for path in cache_directory.glob("fontlist-v*.json") if path.is_file()
+        ]
+        client.send(
+            python="(__import__('matplotlib').__name__, __import__('yaml12').__name__)"
+        )
+        assert last_tool_text(client) == "('matplotlib', 'yaml12')\n"
+        return client._finish()
+
+
 def test_restart_loses_state_and_retains_python_requirements(
     binary: Path,
 ) -> Transcript:
