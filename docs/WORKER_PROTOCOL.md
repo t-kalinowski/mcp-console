@@ -60,7 +60,7 @@ Two boundary details apply:
   A later `send` after restart may return those bytes, including alongside output from the replacement.
 
 The IR resolver receives R package references as process arguments and the Python resolver receives only a requirement manifest on standard input; neither receives submitted cells or `send` stdin.
-Both may use the network, write normal host caches, and execute package installation or build code outside the sandbox.
+Both may use the network, write normal host caches, and execute package installation or build code outside the sandbox; a resolved Matplotlib package is also imported there to warm its font index.
 IR currently accepts local package references.
 Installing them may run package-controlled hooks and build code with the resolver's host permissions; the server does not restrict those references.
 Runtime requests also supply the worker's current `UV_*` settings except `UV_OFFLINE`; the server removes its own `UV_*` settings before applying that exact set to the resolver.
@@ -91,20 +91,21 @@ Harp opens `R_HOME/lib/libR.dylib` by its absolute path, so the worker does not 
 When R requirements were prepared, the server prepends the validated IR library to inherited `R_LIBS` before this initialization.
 R then places that library first in `.libPaths()` while retaining its remaining user, site, and base libraries.
 
-For built-in workers only, the server retains Matplotlib's local installed-font index between worker generations and server processes.
+For server-managed Python, the host resolver warms Matplotlib's local installed-font index before returning a resolved environment.
 Before replacing the inherited `MPLCONFIGDIR`, the worker resolves an existing `matplotlibrc` from `MATPLOTLIBRC`; otherwise it uses the inherited `MPLCONFIGDIR`, or `$HOME/.matplotlib` when `MPLCONFIGDIR` is unset or empty.
 It exposes the resolved regular file through `MATPLOTLIBRC`; a `matplotlibrc` in the working directory at Matplotlib import time retains Matplotlib's normal higher precedence.
 The sandbox permits reads of the resolved host file but not writes to it.
 The cache directory is `$XDG_CACHE_HOME/mcp-console/matplotlib` when the server inherits a nonempty absolute `XDG_CACHE_HOME`, and otherwise `$HOME/Library/Caches/mcp-console/matplotlib` when that root is available and absolute.
-An invalid or unavailable cache root disables reuse without preventing server startup.
-Before launch, the server copies valid version-matched `fontlist-v*.json` files into the worker's private `$TMPDIR/matplotlib` directory; the worker sets `MPLCONFIGDIR` to that private copy and keeps `XDG_CACHE_HOME` private as well.
-After the direct sandbox process exits and is reaped, the server validates changed font indexes and publishes them through a same-directory atomic rename.
-The persistent directory is not added to the sandbox's writable paths.
-Apart from the read-only `matplotlibrc`, the server never transfers Matplotlib configuration, styles, TeX state, lock files, or other XDG cache contents.
-An absent, invalid, or incompatible index is a cache miss, so Matplotlib rebuilds it by scanning fonts without network access.
-The server bounds the files, aggregate bytes, and directory entries it inspects and requires the expected `FontManager` and `FontEntry` structure before publication.
-Evaluated code can still deliberately modify structurally valid metadata in its private directory, so this app-owned cache is a disposable cross-worker state channel rather than a trust boundary; removing it forces later discovery.
-Custom workers do not receive this cache transfer.
+The existing managed-Python resolver invokes the exact resolved interpreter with `-I -S`, adds the environment's package directories directly without processing `.pth`, `sitecustomize`, or `usercustomize`, and imports `matplotlib.font_manager`; Matplotlib itself reuses or creates its versioned index in the app cache.
+That import runs selected package code outside the worker sandbox and remains inside the resolver process group, so cancellation and atomic prepare or restart behavior are unchanged.
+An environment without Matplotlib leaves the app cache unchanged, while an installed Matplotlib that cannot import or create its index fails that candidate resolution.
+Before Python initializes, the worker creates its private `$TMPDIR/matplotlib` directory, links versioned font indexes from the app cache into it, and sets `MPLCONFIGDIR` to the private directory.
+The sandbox permits reads through that link but denies writes to its host target; evaluated code can unlink or replace only its worker-private directory entry.
+After runtime Python resolution, the waiting worker rescans the app cache for new indexes; later worker generations scan it during startup.
+The server neither copies cache bytes nor grants the persistent cache directory as a writable sandbox path.
+Matplotlib configuration, styles, TeX state, lock files, and the broader XDG cache remain worker-private apart from the selected read-only `matplotlibrc`.
+Without an absolute supported cache root, the resolver skips warming and Matplotlib discovers fonts in the worker-private directory normally.
+Caller-selected non-managed Python environments and custom workers do not receive resolver-owned cache warming.
 
 The server launches the sandboxed worker with piped standard input, standard output, and standard error.
 Sideband frames carry control and managed output; interactive input bytes travel through the worker's fd 0, while the server drains fd 1 and fd 2 continuously.

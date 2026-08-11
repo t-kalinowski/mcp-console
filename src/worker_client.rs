@@ -15,7 +15,6 @@ pub(crate) struct Client(Arc<ClientInner>);
 struct ClientInner {
     program: PathBuf,
     arguments: Vec<OsString>,
-    matplotlib_cache: Option<crate::sandbox::MatplotlibCache>,
     worker: Mutex<WorkerState>,
     evaluation: Mutex<Option<ActiveEvaluation>>,
     output: CapturedOutput,
@@ -285,7 +284,7 @@ fn merge_python_requirements(
 
 impl Client {
     pub(crate) fn new(program: PathBuf) -> Self {
-        Self::with_arguments(program, Vec::new(), None, None)
+        Self::with_arguments(program, Vec::new(), None)
     }
 
     pub(crate) fn builtin() -> Result<Self, String> {
@@ -296,7 +295,6 @@ impl Client {
             program,
             vec![OsString::from("worker")],
             Some(Environment { python, r: None }),
-            crate::sandbox::MatplotlibCache::from_environment(),
         ))
     }
 
@@ -304,12 +302,10 @@ impl Client {
         program: PathBuf,
         arguments: Vec<OsString>,
         environment: Option<Environment>,
-        matplotlib_cache: Option<crate::sandbox::MatplotlibCache>,
     ) -> Self {
         Self(Arc::new(ClientInner {
             program,
             arguments,
-            matplotlib_cache,
             worker: Mutex::new(WorkerState::Initial),
             evaluation: Mutex::new(None),
             output: CapturedOutput::new(),
@@ -832,7 +828,6 @@ impl Client {
                 &self.0.arguments,
                 managed_python,
                 managed_r,
-                self.0.matplotlib_cache.as_ref(),
                 self.0.output.clone(),
                 on_started,
             )?;
@@ -1511,7 +1506,6 @@ mod platform {
             arguments: &[OsString],
             managed_python: Option<&crate::resolver::ManagedPython>,
             managed_r: Option<&crate::resolver::ManagedR>,
-            matplotlib_cache: Option<&crate::sandbox::MatplotlibCache>,
             output: super::CapturedOutput,
             on_started: impl FnOnce(StopHandle) -> Result<(), String>,
         ) -> Result<Self, String> {
@@ -1519,9 +1513,6 @@ mod platform {
                 .map_err(|error| format!("failed to create worker sideband: {error}"))?;
             let mut command = crate::sandbox::SandboxedCommand::new(program.as_os_str())
                 .map_err(|error| format!("failed to prepare worker sandbox: {error}"))?;
-            if let Some(matplotlib_cache) = matplotlib_cache {
-                command.seed_matplotlib_cache(matplotlib_cache);
-            }
             if let Some(managed_python) = managed_python {
                 managed_python.configure_worker(&mut command);
             }
@@ -1763,7 +1754,6 @@ mod platform {
             _arguments: &[OsString],
             _managed_python: Option<&crate::resolver::ManagedPython>,
             _managed_r: Option<&crate::resolver::ManagedR>,
-            _matplotlib_cache: Option<&crate::sandbox::MatplotlibCache>,
             _output: super::CapturedOutput,
             _on_started: impl FnOnce(StopHandle) -> Result<(), String>,
         ) -> Result<Self, String> {

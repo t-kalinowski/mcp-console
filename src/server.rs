@@ -79,7 +79,8 @@ struct SessionArguments {
     /// Additive R or Python requirements for prepare.
     /// Restart accepts only Python requirements.
     /// Resolution runs outside the worker sandbox.
-    /// Package installation or build code may execute on the host.
+    /// Package installation, build code, or managed Matplotlib font-cache
+    /// warming may execute selected package code on the host.
     /// Omit to restart unchanged.
     requirements: Option<Requirements>,
 }

@@ -88,7 +88,10 @@ mod platform {
     ) -> Result<String, String> {
         send_worker_message(&WorkerMessage::ResolvePython { request })?;
         match receive_server_message().map_err(infrastructure_failure)? {
-            ServerMessage::PythonResolved { python } => Ok(python),
+            ServerMessage::PythonResolved { python } => {
+                crate::python::link_matplotlib_caches();
+                Ok(python)
+            }
             ServerMessage::PythonResolutionFailed { message } => Err(message),
             ServerMessage::Shutdown => {
                 WORKER_SHUTDOWN.store(true, Ordering::SeqCst);

@@ -85,10 +85,13 @@ Matplotlib rendering failures print a Python traceback as a normal language outc
 Unless an inherited value configures it, the worker sets Matplotlib's backend to Agg.
 Before Python initializes, a built-in worker resolves an existing user `matplotlibrc` from inherited `MATPLOTLIBRC`; otherwise it uses inherited `MPLCONFIGDIR`, or `$HOME/.matplotlib` when `MPLCONFIGDIR` is unset or empty, and exposes that regular file read-only through `MATPLOTLIBRC`.
 It then forces Matplotlib's writable configuration and XDG cache directories under the worker's private temporary directory so font discovery can write within the sandbox.
-For built-in workers, the server seeds that private Matplotlib directory with valid version-matched `fontlist-v*.json` files from an app-owned cache and atomically publishes changed valid files after the worker exits.
-The persistent cache is `$XDG_CACHE_HOME/mcp-console/matplotlib` when the inherited XDG root is nonempty and absolute, otherwise `$HOME/Library/Caches/mcp-console/matplotlib` when that root is available and absolute; an invalid or unavailable root disables reuse, and the cache is never granted as a writable sandbox path.
-Only Matplotlib's local installed-font metadata persists: the selected host `matplotlibrc` is read-only, while worker-created configuration, styles, TeX state, and the complete XDG cache remain worker-private.
-The server structurally validates, size-bounds, and atomically publishes only font indexes, but evaluated code can deliberately influence valid metadata; the app-owned cache is disposable and may be removed to force discovery.
+When a server-managed environment contains Matplotlib, the existing host resolver invokes that exact interpreter with `-I -S`, adds its package directories without processing `.pth` or site customization hooks, and imports `matplotlib.font_manager` before returning the environment.
+Matplotlib warms its versioned font index under `$XDG_CACHE_HOME/mcp-console/matplotlib` when the inherited XDG root is nonempty and absolute, otherwise under `$HOME/Library/Caches/mcp-console/matplotlib` when that root is available and absolute.
+The worker links versioned font indexes from that app cache read-only into its private Matplotlib directory before Python initializes; runtime resolution refreshes the links while the worker waits, and later generations link the existing files at startup.
+The persistent directory is never writable in the sandbox, and the server does not copy, parse, validate, or publish cache bytes.
+Only the host resolver writes persistent installed-font metadata; the selected host `matplotlibrc` is read-only, while worker-created configuration, styles, TeX state, lock files, and the complete XDG cache remain worker-private.
+Without an absolute supported cache root, or for caller-selected non-managed Python, Matplotlib uses the worker-private cache normally.
+The resolver import executes the selected Matplotlib package outside the worker sandbox as part of managed Python preparation and remains under the resolver process-group lifecycle.
 Matplotlib remains optional, and capture inspects only modules already loaded by evaluated code.
 At worker startup, MCP Console sets `RETICULATE_REMAP_OUTPUT_STREAMS=1` once, before user R can initialize Python.
 Within the worker process, reticulate then routes Python text writes, including `print()`, `sys.stderr.write()`, and tracebacks, through the R console callback as sideband `output` frames.
@@ -100,7 +103,8 @@ An exec descendant that retains fd 1/2 creates fresh standard streams backed by 
 When inherited `RETICULATE_PYTHON` is absent or exactly `managed`, built-in server startup calls reticulate's internal uv environment resolver with its NumPy baseline outside the sandbox and retains the resulting interpreter and normalized manifest for every worker generation.
 Other inherited values, including an empty value, are preserved and skip that startup preflight; a later successful explicit preparation takes precedence over them.
 Custom workers skip resolution and reject R and Python requirement preparation.
-R and Python resolution may access the network, write normal host caches, and execute package installation or build code outside the sandbox, but requirement strings remain process-argument or JSON data rather than R source and no submitted cell is evaluated.
+R and Python resolution may access the network, write normal host caches, and execute package installation or build code outside the sandbox; when a resolved environment contains Matplotlib, the resolver also imports its font manager there to warm the font index.
+Requirement strings remain process-argument or JSON data rather than R source, and no submitted cell is evaluated by the resolver.
 Before initializing R, the worker forces `UV_OFFLINE=1`, overwriting any inherited value to match the sandbox's network denial.
 Reticulate reuses the server-resolved or caller-selected interpreter.
 For a server-managed worker, MCP Console seeds reticulate's requirement manifest and intercepts only its internal `uv_get_or_create_env` binding, without wrapping `py_require()`.
@@ -251,7 +255,7 @@ Begin as one Cargo package and split crates only when a real boundary emerges.
 - Keep the MCP adapter independent of interpreter implementation details.
 - Treat submitted R, Python, and SQL execution as shell-class capability and place safety at the worker-process boundary.
   Managed-Python startup and explicit R or Python preparation are host-bootstrap exceptions.
-  R requirements are IR command arguments and Python requirements use a JSON standard-input manifest; neither is evaluated as R source, though package installation and build code may execute outside the worker sandbox.
+  R requirements are IR command arguments and Python requirements use a JSON standard-input manifest; neither is evaluated as R source, though package installation, build code, and the managed Matplotlib font-cache import may execute outside the worker sandbox.
 - Update this file when a PR changes the implemented surface or repository map.
 - Before every commit, run `scripts/format` and review its changes.
 - Run `scripts/check` before opening a PR.
