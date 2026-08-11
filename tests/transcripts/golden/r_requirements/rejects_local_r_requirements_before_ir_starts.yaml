@@ -116,7 +116,7 @@ session:
   action: prepare
   requirements:
     r:
-      - file://<absolute package archive>
+      - git::<absolute package path>
 result:
   content:
     - type: text
@@ -128,7 +128,7 @@ session:
   action: prepare
   requirements:
     r:
-      - mcpconsolerinstallescape=file://<absolute package archive>
+      - git::../package
 result:
   content:
     - type: text
@@ -140,7 +140,7 @@ session:
   action: prepare
   requirements:
     r:
-      - mcpconsolerinstallescape=url::file:///tmp/package.tar.gz
+      - file://<absolute package archive>
 result:
   content:
     - type: text
@@ -148,6 +148,30 @@ result:
   isError: true
 ---
 id: 15
+session:
+  action: prepare
+  requirements:
+    r:
+      - mcpconsolerinstallescape=file://<absolute package archive>
+result:
+  content:
+    - type: text
+      text: local R package references are not supported
+  isError: true
+---
+id: 16
+session:
+  action: prepare
+  requirements:
+    r:
+      - mcpconsolerinstallescape=url::file:///tmp/package.tar.gz
+result:
+  content:
+    - type: text
+      text: local R package references are not supported
+  isError: true
+---
+id: 17
 session:
   action: prepare
   requirements:

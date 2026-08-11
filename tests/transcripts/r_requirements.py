@@ -2,6 +2,7 @@
 
 import os
 import shutil
+import subprocess
 import tarfile
 import tempfile
 from pathlib import Path
@@ -17,7 +18,7 @@ from _support import (
 
 
 PLATFORMS = {"darwin"}
-REQUIRED_COMMANDS = {"ir"}
+REQUIRED_COMMANDS = {"git", "ir"}
 
 
 def test_rejects_local_r_requirements_before_ir_starts(binary: Path) -> Transcript:
@@ -39,6 +40,25 @@ def test_rejects_local_r_requirements_before_ir_starts(binary: Path) -> Transcri
         archive = workspace / "mcpconsolerinstallescape_0.0.0.9000.tar.gz"
         with tarfile.open(archive, "w:gz") as package_archive:
             package_archive.add(package, arcname="mcpconsolerinstallescape")
+        subprocess.run(("git", "init", "--quiet"), cwd=package, check=True)
+        subprocess.run(("git", "add", "."), cwd=package, check=True)
+        subprocess.run(
+            (
+                "git",
+                "-c",
+                "user.name=MCP Console",
+                "-c",
+                "user.email=fixture@example.com",
+                "-c",
+                "commit.gpgSign=false",
+                "commit",
+                "--quiet",
+                "-m",
+                "initial",
+            ),
+            cwd=package,
+            check=True,
+        )
 
         install_marker = workspace / "package-configure-ran"
         ir_marker = workspace / "ir-started"
@@ -81,6 +101,8 @@ def test_rejects_local_r_requirements_before_ir_starts(binary: Path) -> Transcri
             f"mcpconsolerinstallescape={absolute}?reinstall&nocache",
             "cli, mcpconsolerinstallescape=local::./package?reinstall&nocache",
             "deps::./package",
+            f"git::{absolute}",
+            "git::../package",
             archive_url,
             f"mcpconsolerinstallescape={archive_url}",
             "mcpconsolerinstallescape=url::file:///tmp/package.tar.gz",

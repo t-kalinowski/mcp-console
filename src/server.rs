@@ -261,33 +261,38 @@ fn looks_like_r_package_name(name: &str) -> bool {
 
 fn is_local_r_source(source: &str) -> bool {
     let source = source.split_once('?').map_or(source, |(source, _)| source);
-    let bytes = source.as_bytes();
-    let windows_absolute = bytes.len() >= 3
-        && bytes[0].is_ascii_alphabetic()
-        && bytes[1] == b':'
-        && matches!(bytes[2], b'/' | b'\\');
+    let is_local_path = |location: &str| {
+        let bytes = location.as_bytes();
+        let windows_absolute = bytes.len() >= 3
+            && bytes[0].is_ascii_alphabetic()
+            && bytes[1] == b':'
+            && matches!(bytes[2], b'/' | b'\\');
+        matches!(location, "." | "..")
+            || location.starts_with("./")
+            || location.starts_with(".\\")
+            || location.starts_with("../")
+            || location.starts_with("..\\")
+            || location.starts_with('/')
+            || location.starts_with('\\')
+            || location.starts_with('~')
+            || windows_absolute
+    };
     let has_file_scheme = |location: &str| {
         location
             .get(..5)
             .is_some_and(|scheme| scheme.eq_ignore_ascii_case("file:"))
     };
-    let local_file_source = has_file_scheme(source)
-        || source
-            .split_once("::")
-            .filter(|(kind, _)| matches!(*kind, "url" | "git"))
-            .is_some_and(|(_, location)| has_file_scheme(location));
+    let nested_local_source = source
+        .split_once("::")
+        .filter(|(kind, _)| matches!(*kind, "url" | "git"))
+        .is_some_and(|(kind, location)| {
+            has_file_scheme(location) || (kind == "git" && is_local_path(location))
+        });
     source.starts_with("local::")
         || source.starts_with("deps::")
-        || matches!(source, "." | "..")
-        || source.starts_with("./")
-        || source.starts_with(".\\")
-        || source.starts_with("../")
-        || source.starts_with("..\\")
-        || source.starts_with('/')
-        || source.starts_with('\\')
-        || source.starts_with('~')
-        || windows_absolute
-        || local_file_source
+        || is_local_path(source)
+        || has_file_scheme(source)
+        || nested_local_source
 }
 
 fn validate_python_requirements(python: &[String]) -> Result<(), String> {
