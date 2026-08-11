@@ -767,9 +767,6 @@ def test_returns_matplotlib_plots(binary: Path) -> Transcript:
         output = result["content"][0]["text"]
         assert output.startswith("Traceback (most recent call last):\n"), output
         assert output.endswith("ValueError: cell failed\n"), output
-        result["content"][0]["text"] = (
-            "<python traceback ending in ValueError: cell failed>\n"
-        )
         error_reference = wait_for_worker_file(
             Path(temporary_directory),
             "matplotlib-error-reference.png",
@@ -803,9 +800,6 @@ def test_returns_matplotlib_plots(binary: Path) -> Transcript:
         output = result["content"][0]["text"]
         assert output.startswith("Traceback (most recent call last):\n"), output
         assert output.endswith("RuntimeError: plot render failed\n"), output
-        result["content"][0]["text"] = (
-            "<matplotlib render traceback ending in RuntimeError: plot render failed>\n"
-        )
         second_reference = wait_for_worker_file(
             Path(temporary_directory),
             "matplotlib-second-reference.png",

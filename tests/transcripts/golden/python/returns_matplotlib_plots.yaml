@@ -103,7 +103,10 @@ result:
   content:
     - type: text
       text: |
-        <python traceback ending in ValueError: cell failed>
+        Traceback (most recent call last):
+          File "<string>", line 83, in _mcp_console_eval_cell
+          File "<mcp-console:python:e5>", line 5, in <module>
+        ValueError: cell failed
     - type: image
       data: <PNG byte-identical to live error-cell matplotlib savefig 1>
       mimeType: image/png
@@ -136,7 +139,10 @@ result:
   content:
     - type: text
       text: |
-        <matplotlib render traceback ending in RuntimeError: plot render failed>
+        Traceback (most recent call last):
+          File "<string>", line 43, in _mcp_console_collect_plots
+          File "<mcp-console:python:e7>", line 2, in fail_plot_capture
+        RuntimeError: plot render failed
     - type: image
       data: <PNG byte-identical to live second matplotlib savefig 1>
       mimeType: image/png
