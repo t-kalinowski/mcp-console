@@ -28,7 +28,7 @@ struct Environment {
     r: Option<crate::resolver::ManagedR>,
 }
 
-/// Describes one worker launch independently of the platform runtime.
+/// Describes one worker launch for the current runtime.
 struct WorkerSpec<'a> {
     executable: &'a std::path::Path,
     arguments: &'a [OsString],
