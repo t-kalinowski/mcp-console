@@ -78,7 +78,7 @@ Direct-process exit ends the resolver-group lifetime: the server force-stops any
 Closing MCP input force-stops an active explicit or runtime resolver group and reaps its direct process; startup preflight finishes before MCP input is accepted and does not participate in this cancellation path.
 
 Outside an explicit restart, the worker starts lazily on the first `send` call that supplies `r`, `python`, `sql`, or nonempty `stdin`.
-On macOS, the server uses the same `SandboxedCommand` builder as the `sandbox` command.
+On macOS, the server's `WorkerRuntime` uses the same `SandboxedCommand` builder as the `sandbox` command.
 For `--worker PATH`, `PATH` is one program name or path, with no arguments or shell parsing, producing a launch equivalent to:
 
 ```text

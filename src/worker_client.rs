@@ -13,6 +13,7 @@ const WORKER_RESTART_BANNER: &str = "[worker restarted: in-memory state lost]\n"
 pub(crate) struct Client(Arc<ClientInner>);
 
 struct ClientInner {
+    runtime: platform::WorkerRuntime,
     program: PathBuf,
     arguments: Vec<OsString>,
     worker: Mutex<WorkerState>,
@@ -25,6 +26,14 @@ struct ClientInner {
 struct Environment {
     python: Option<crate::resolver::ManagedPython>,
     r: Option<crate::resolver::ManagedR>,
+}
+
+/// Describes one worker launch for the current runtime.
+struct WorkerSpec<'a> {
+    executable: &'a std::path::Path,
+    arguments: &'a [OsString],
+    managed_python: Option<&'a crate::resolver::ManagedPython>,
+    managed_r: Option<&'a crate::resolver::ManagedR>,
 }
 
 enum WorkerState {
@@ -243,7 +252,7 @@ enum LifecycleState {
 
 #[derive(Clone, Default)]
 struct ProcessStopHandles {
-    worker: Option<platform::StopHandle>,
+    worker: Option<platform::WorkerHandle>,
     resolver: Option<crate::resolver::ResolverStopHandle>,
 }
 
@@ -304,6 +313,7 @@ impl Client {
         environment: Option<Environment>,
     ) -> Self {
         Self(Arc::new(ClientInner {
+            runtime: platform::WorkerRuntime,
             program,
             arguments,
             worker: Mutex::new(WorkerState::Initial),
@@ -805,7 +815,7 @@ impl Client {
     fn start_worker(
         &self,
         worker: &mut WorkerState,
-        on_started: impl FnOnce(platform::StopHandle) -> Result<(), String>,
+        on_started: impl FnOnce(platform::WorkerHandle) -> Result<(), String>,
     ) -> Result<(), String> {
         let replacing = matches!(&*worker, WorkerState::ReplacementPending);
         if !matches!(&*worker, WorkerState::Running(_)) {
@@ -823,14 +833,16 @@ impl Client {
             let managed_r = environment
                 .as_ref()
                 .and_then(|environment| environment.r.as_ref());
-            let running = platform::Worker::start(
-                &self.0.program,
-                &self.0.arguments,
+            let spec = WorkerSpec {
+                executable: &self.0.program,
+                arguments: &self.0.arguments,
                 managed_python,
                 managed_r,
-                self.0.output.clone(),
-                on_started,
-            )?;
+            };
+            let running = self
+                .0
+                .runtime
+                .spawn(spec, self.0.output.clone(), on_started)?;
             *worker = WorkerState::Running(running);
             if replacing {
                 self.0.output.push_restart_notice();
@@ -989,7 +1001,7 @@ impl Client {
     fn register_stop_handle(
         &self,
         expected: &WorkerGeneration,
-        handle: platform::StopHandle,
+        handle: platform::WorkerHandle,
     ) -> Result<(), String> {
         let (deadline, message) = {
             let mut lifecycle = self
@@ -1014,7 +1026,7 @@ impl Client {
         Err(message.to_string())
     }
 
-    fn register_restart_stop_handle(&self, handle: platform::StopHandle) -> Result<(), String> {
+    fn register_restart_stop_handle(&self, handle: platform::WorkerHandle) -> Result<(), String> {
         let (deadline, message) = {
             let mut lifecycle = self
                 .0
@@ -1469,9 +1481,7 @@ fn complete_utf8_prefix(bytes: &[u8]) -> usize {
 
 #[cfg(target_os = "macos")]
 mod platform {
-    use std::ffi::OsString;
     use std::io::{Read, Write};
-    use std::path::Path;
     use std::process::Stdio;
     use std::sync::{Arc, Mutex, mpsc};
     use std::thread;
@@ -1479,13 +1489,17 @@ mod platform {
 
     use crate::worker_protocol::{ServerMessage, WorkerMessage};
 
+    /// Spawns workers through the platform's runtime boundary.
+    pub(super) struct WorkerRuntime;
+
     pub(super) struct Worker {
         reader: crate::sideband::Reader,
-        stop_handle: StopHandle,
+        handle: WorkerHandle,
     }
 
+    /// Controls the lifecycle of one spawned worker.
     #[derive(Clone)]
-    pub(super) struct StopHandle {
+    pub(super) struct WorkerHandle {
         writer: crate::sideband::Writer,
         stdin: StdinSender,
         child: Arc<Mutex<crate::sandbox::SandboxedChild>>,
@@ -1499,19 +1513,23 @@ mod platform {
         Close,
     }
 
-    impl Worker {
+    impl WorkerRuntime {
         /// Starts an executable worker and waits for its ready message.
-        pub(super) fn start(
-            program: &Path,
-            arguments: &[OsString],
-            managed_python: Option<&crate::resolver::ManagedPython>,
-            managed_r: Option<&crate::resolver::ManagedR>,
+        pub(super) fn spawn(
+            &self,
+            spec: super::WorkerSpec<'_>,
             output: super::CapturedOutput,
-            on_started: impl FnOnce(StopHandle) -> Result<(), String>,
-        ) -> Result<Self, String> {
+            on_started: impl FnOnce(WorkerHandle) -> Result<(), String>,
+        ) -> Result<Worker, String> {
+            let super::WorkerSpec {
+                executable,
+                arguments,
+                managed_python,
+                managed_r,
+            } = spec;
             let (reader, writer, child_fds) = crate::sideband::bind()
                 .map_err(|error| format!("failed to create worker sideband: {error}"))?;
-            let mut command = crate::sandbox::SandboxedCommand::new(program.as_os_str())
+            let mut command = crate::sandbox::SandboxedCommand::new(executable.as_os_str())
                 .map_err(|error| format!("failed to prepare worker sandbox: {error}"))?;
             if let Some(managed_python) = managed_python {
                 managed_python.configure_worker(&mut command);
@@ -1544,16 +1562,13 @@ mod platform {
             let child = Arc::new(Mutex::new(child));
             let stdin = start_stdin_writer(stdin, child.clone());
 
-            let stop_handle = StopHandle {
+            let handle = WorkerHandle {
                 writer,
                 stdin,
                 child,
             };
-            let mut worker = Self {
-                reader,
-                stop_handle,
-            };
-            on_started(worker.stop_handle.clone())?;
+            let mut worker = Worker { reader, handle };
+            on_started(worker.handle.clone())?;
             match worker.receive()? {
                 WorkerMessage::Ready => {}
                 WorkerMessage::Output { data } => {
@@ -1566,7 +1581,9 @@ mod platform {
             }
             Ok(worker)
         }
+    }
 
+    impl Worker {
         /// Sends one cell and collects output until the completed message.
         pub(super) fn evaluate(
             &mut self,
@@ -1582,11 +1599,11 @@ mod platform {
             ) -> Result<(), String>,
         ) -> Result<(), String> {
             let crate::cell::Cell { language, source } = cell;
-            self.stop_handle
+            self.handle
                 .writer
                 .send(&ServerMessage::Evaluate { language, source })
                 .map_err(|error| format!("worker sideband write failed: {error}"))?;
-            evaluation.attach_writer(self.stop_handle.stdin.clone())?;
+            evaluation.attach_writer(self.handle.stdin.clone())?;
             let mut python_candidates = Vec::new();
 
             loop {
@@ -1602,7 +1619,7 @@ mod platform {
                     WorkerMessage::ResolvePython { request } => match resolve_python(request) {
                         Ok(managed) => {
                             let python = managed.python().to_string_lossy().into_owned();
-                            self.stop_handle
+                            self.handle
                                 .writer
                                 .send(&ServerMessage::PythonResolved { python })
                                 .map_err(|error| {
@@ -1611,7 +1628,7 @@ mod platform {
                             python_candidates.push(managed);
                         }
                         Err(message) => {
-                            self.stop_handle
+                            self.handle
                                 .writer
                                 .send(&ServerMessage::PythonResolutionFailed { message })
                                 .map_err(|error| {
@@ -1638,7 +1655,7 @@ mod platform {
         }
 
         pub(super) fn write_stdin(&self, stdin: String) -> Result<(), String> {
-            self.stop_handle.stdin.send(stdin.into_bytes())
+            self.handle.stdin.send(stdin.into_bytes())
         }
     }
 
@@ -1704,11 +1721,11 @@ mod platform {
 
     impl Drop for Worker {
         fn drop(&mut self) {
-            let _ = self.stop_handle.force_stop();
+            let _ = self.handle.force_stop();
         }
     }
 
-    impl StopHandle {
+    impl WorkerHandle {
         /// Attempts graceful shutdown while independently enforcing its deadline.
         pub(super) fn shutdown(&self, deadline: Instant) -> Result<(), String> {
             let writer = self.writer.clone();
@@ -1740,26 +1757,34 @@ mod platform {
 
 #[cfg(not(target_os = "macos"))]
 mod platform {
-    use std::ffi::OsString;
-    use std::path::Path;
+    /// The unsupported platform runtime keeps the server boundary portable.
+    pub(super) struct WorkerRuntime;
 
     pub(super) struct Worker;
 
+    /// The unsupported-platform counterpart to the worker lifecycle handle.
     #[derive(Clone)]
-    pub(super) struct StopHandle;
+    pub(super) struct WorkerHandle;
 
-    impl Worker {
-        pub(super) fn start(
-            _program: &Path,
-            _arguments: &[OsString],
-            _managed_python: Option<&crate::resolver::ManagedPython>,
-            _managed_r: Option<&crate::resolver::ManagedR>,
+    impl WorkerRuntime {
+        pub(super) fn spawn(
+            &self,
+            spec: super::WorkerSpec<'_>,
             _output: super::CapturedOutput,
-            _on_started: impl FnOnce(StopHandle) -> Result<(), String>,
-        ) -> Result<Self, String> {
+            _on_started: impl FnOnce(WorkerHandle) -> Result<(), String>,
+        ) -> Result<Worker, String> {
+            let super::WorkerSpec {
+                executable,
+                arguments,
+                managed_python,
+                managed_r,
+            } = spec;
+            let _ = (executable, arguments, managed_python, managed_r);
             Err("workers are supported only on macOS".to_string())
         }
+    }
 
+    impl Worker {
         pub(super) fn evaluate(
             &mut self,
             cell: crate::cell::Cell,
@@ -1782,7 +1807,7 @@ mod platform {
         }
     }
 
-    impl StopHandle {
+    impl WorkerHandle {
         pub(super) fn shutdown(&self, _deadline: std::time::Instant) -> Result<(), String> {
             Ok(())
         }
