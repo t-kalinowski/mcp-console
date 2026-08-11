@@ -197,7 +197,7 @@ See `design-sketches/README.md` for the product overview and `design-sketches/do
 - `src/r_repl.c` — C-owned per-cell DLL-REPL iterator and long-jump boundary.
 - `src/sideband.rs` — macOS inherited-pipe JSON-lines transport.
 - `src/worker.rs` — embedded R initialization, cell dispatch, and console callbacks.
-- `src/worker_client.rs` — server-side worker launch, lifecycle, fd-0 input, and output collection.
+- `src/worker_client.rs` — worker-runtime interface, server-side launch and lifecycle, fd-0 input, and output collection.
 - `src/worker_protocol.rs` — shared sideband message definitions.
 - `src/sandbox.rs` — platform dispatch for the sandbox process launcher.
 - `src/sandbox/` — platform implementation and macOS Seatbelt policy.
