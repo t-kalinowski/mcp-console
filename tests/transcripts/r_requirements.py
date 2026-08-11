@@ -1,6 +1,7 @@
 #!/usr/bin/env -S uv run --script
 
 import os
+import shutil
 import tempfile
 from pathlib import Path
 
@@ -18,6 +19,89 @@ PLATFORMS = {"darwin"}
 REQUIRED_COMMANDS = {"ir"}
 
 
+def test_rejects_local_r_requirements_before_ir_starts(binary: Path) -> Transcript:
+    environment, _ = r_test_environment()
+    environment["RETICULATE_PYTHON"] = ""
+    real_ir = shutil.which("ir")
+    assert real_ir is not None
+
+    with tempfile.TemporaryDirectory() as temporary:
+        workspace = Path(temporary)
+        service = workspace / "service"
+        service.mkdir()
+        fixture = Path(__file__).resolve().parents[1] / "fixtures" / "r_install_escape"
+        package = service / "package"
+        shutil.copytree(fixture, package)
+        (package / "inst").mkdir()
+        (package / "inst" / "nonce").write_text(str(workspace), encoding="utf-8")
+        (workspace / "package").symlink_to(package, target_is_directory=True)
+
+        install_marker = workspace / "package-configure-ran"
+        ir_marker = workspace / "ir-started"
+        wrapper_directory = workspace / "bin"
+        wrapper_directory.mkdir()
+        ir_wrapper = wrapper_directory / "ir"
+        ir_wrapper.write_text(
+            code(r"""
+                #!/bin/sh
+                set -eu
+                : > "$MCP_CONSOLE_IR_STARTED"
+                exec "$MCP_CONSOLE_REAL_IR" "$@"
+                """),
+            encoding="utf-8",
+        )
+        ir_wrapper.chmod(0o755)
+        environment["PATH"] = os.pathsep.join(
+            (str(wrapper_directory), environment["PATH"])
+        )
+        environment["MCP_CONSOLE_REAL_IR"] = real_ir
+        environment["MCP_CONSOLE_IR_STARTED"] = str(ir_marker)
+        environment["MCP_CONSOLE_R_INSTALL_MARKER"] = str(install_marker)
+
+        client = McpClient(
+            binary,
+            ("serve",),
+            environment,
+            current_directory=service,
+        )
+        client._initialize_and_list_tools()
+        absolute = str(package)
+        references = [
+            f"local::{absolute}?reinstall&nocache",
+            f"mcpconsolerinstallescape=local::{absolute}?reinstall&nocache",
+            "./package?reinstall&nocache",
+            "mcpconsolerinstallescape=./package?reinstall&nocache",
+            "../package?reinstall&nocache",
+            f"{absolute}?reinstall&nocache",
+            f"mcpconsolerinstallescape={absolute}?reinstall&nocache",
+            "cli, mcpconsolerinstallescape=local::./package?reinstall&nocache",
+            "deps::./package",
+            "mcpconsolerinstallescape=url::file:///tmp/package.tar.gz",
+            "git::file://localhost/tmp/package",
+        ]
+        for reference in references:
+            client.session(
+                action="prepare",
+                requirements={"r": [reference]},
+            )
+            result = client.transcript[-1]["result"]
+            assert not install_marker.exists(), (
+                "local package configure ran with server permissions"
+            )
+            assert not ir_marker.exists(), (
+                f"IR started before rejecting a local reference: {result}"
+            )
+            assert result["isError"] is True, result
+            assert result["content"][0]["text"] == (
+                "local R package references are not supported"
+            )
+            if absolute in reference:
+                client.transcript[-1]["session"]["requirements"]["r"] = [
+                    reference.replace(absolute, "<absolute package path>")
+                ]
+        return client._finish()
+
+
 def test_prepares_and_uses_cran_packages(binary: Path) -> Transcript:
     environment, _ = r_test_environment()
     environment["RETICULATE_PYTHON"] = ""
@@ -25,7 +109,7 @@ def test_prepares_and_uses_cran_packages(binary: Path) -> Transcript:
     client._initialize_and_list_tools()
     client.session(
         action="prepare",
-        requirements={"r": ["cli", "dplyr"]},
+        requirements={"r": ["cli, dplyr"]},
     )
     assert last_tool_text(client) == "[prepared]"
 
@@ -48,16 +132,10 @@ def test_prepares_and_uses_cran_packages(binary: Path) -> Transcript:
 
 def test_prepares_initial_r_requirements(binary: Path) -> Transcript:
     environment, _ = r_test_environment()
-    initial_r = "local::tests/fixtures/r_require?reinstall"
-    candidate_r = "local::tests/fixtures/r_require_candidate?reinstall"
+    initial_r = "cli"
+    candidate_r = "glue"
     with tempfile.TemporaryDirectory() as temporary:
         workspace = Path(temporary)
-        fixture_link = workspace / "tests" / "fixtures"
-        fixture_link.parent.mkdir()
-        fixture_link.symlink_to(
-            Path(__file__).resolve().parents[1] / "fixtures",
-            target_is_directory=True,
-        )
         ambient_library = workspace / "ambient-library"
         ambient_library.mkdir()
         environment["R_LIBS"] = os.pathsep.join(
@@ -115,17 +193,16 @@ def test_prepares_initial_r_requirements(binary: Path) -> Transcript:
         r = code(r"""
             stopifnot(
               identical(
-                dirname(find.package("mcpconsolerrequire")),
+                dirname(find.package("cli")),
                 .libPaths()[[1L]]
               ),
-              !requireNamespace(
-                "mcpconsolerrequirecandidate",
-                quietly = TRUE
+              !file.exists(
+                file.path(.libPaths()[[1L]], "glue", "DESCRIPTION")
               ),
               normalizePath(.libPaths()[[2L]]) ==
                 normalizePath(Sys.getenv("MCP_CONSOLE_AMBIENT_R_LIBRARY"))
             )
-            mcpconsolerrequire::answer()
+            42L
             """)
         client.send(r=r)
         assert last_tool_text(client) == "[1] 42\n"

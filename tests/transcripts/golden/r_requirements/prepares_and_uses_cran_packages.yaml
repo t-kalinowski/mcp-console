@@ -6,8 +6,7 @@ session:
   action: prepare
   requirements:
     r:
-      - cli
-      - dplyr
+      - cli, dplyr
 result:
   content:
     - type: text

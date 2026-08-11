@@ -46,6 +46,7 @@ The implemented `session` surface accepts `action = "prepare"` with one or more 
 Requirements are exact, additive, and idempotent.
 Before the worker starts, each successful prepare resolves the complete candidate sets outside the sandbox, atomically retains them in server memory, and returns `[prepared]` without starting the worker.
 R requirements use `ir run` from `PATH` with the worker's Rscript and become the first worker `R_LIBS` entry; Python requirements use reticulate and uv and replace any inherited Python selection with the resolved interpreter.
+Before starting IR, the server rejects local R sources in explicit, named, or comma-separated forms while leaving other IR package syntax unchanged.
 A failed resolution leaves the prior requirements, R library, and interpreter unchanged.
 For a uv tool failure, the tool error reports a JSON manifest containing reticulate's selected Python and the complete candidate package set, followed by uv's stderr, while omitting the helper command, temporary output path, and reticulate's `py_require()`-oriented guidance.
 The direct resolver process defines its process-group lifetime: after it exits, the server force-stops any remaining in-group descendants before reaping it and collecting its standard streams.
@@ -95,7 +96,7 @@ An exec descendant that retains fd 1/2 creates fresh standard streams backed by 
 When inherited `RETICULATE_PYTHON` is absent or exactly `managed`, built-in server startup calls reticulate's internal uv environment resolver with its NumPy baseline outside the sandbox and retains the resulting interpreter and normalized manifest for every worker generation.
 Other inherited values, including an empty value, are preserved and skip that startup preflight; a later successful explicit preparation takes precedence over them.
 Custom workers skip resolution and reject R and Python requirement preparation.
-R and Python resolution may access the network, write normal host caches, and execute package installation or build code outside the sandbox, but requirement strings remain process-argument or JSON data rather than R source and no submitted cell is evaluated.
+Accepted R and Python requirements may access the network, write normal host caches, and execute package installation or build code outside the sandbox, but requirement strings remain process-argument or JSON data rather than R source and no submitted cell is evaluated.
 Before initializing R, the worker forces `UV_OFFLINE=1`, overwriting any inherited value to match the sandbox's network denial.
 Reticulate reuses the server-resolved or caller-selected interpreter.
 For a server-managed worker, MCP Console seeds reticulate's requirement manifest and intercepts only its internal `uv_get_or_create_env` binding, without wrapping `py_require()`.
@@ -203,8 +204,7 @@ See `design-sketches/README.md` for the product overview and `design-sketches/do
 - `src/sandbox/` — platform implementation and macOS Seatbelt policy.
 - `tests/cli.rs` — public binary acceptance tests.
 - `tests/fixtures/py_require` — minimal R package that declares a Python requirement from its load hook.
-- `tests/fixtures/r_require` — local R package installed through IR for initial requirement coverage.
-- `tests/fixtures/r_require_candidate` — distinct local R package used to verify atomic preparation.
+- `tests/fixtures/r_install_escape` — local R package whose configure hook proves rejected references never reach IR.
 - `tests/fixtures/zod` — executable Python sideband worker used by acceptance tests.
 - `tests/fixtures/worker_mitm` — transparent worker proxy used to capture sideband, standard-stream, fd-0 closure, and worker-sideband closure events through `serve`.
 - `tests/transcripts/r.py` — public built-in R worker acceptance suite.
@@ -246,7 +246,8 @@ Begin as one Cargo package and split crates only when a real boundary emerges.
 - Keep the MCP adapter independent of interpreter implementation details.
 - Treat submitted R, Python, and SQL execution as shell-class capability and place safety at the worker-process boundary.
   Managed-Python startup and explicit R or Python preparation are host-bootstrap exceptions.
-  R requirements are IR command arguments and Python requirements use a JSON standard-input manifest; neither is evaluated as R source, though package installation and build code may execute outside the worker sandbox.
+  Filter local R sources before passing requirements as IR command arguments; Python requirements use a JSON standard-input manifest.
+  Neither is evaluated as R source, though accepted package installation and build code may execute outside the worker sandbox.
 - Update this file when a PR changes the implemented surface or repository map.
 - Before every commit, run `scripts/format` and review its changes.
 - Run `scripts/check` before opening a PR.

@@ -323,7 +323,7 @@ Package download access does not imply general network access for user code.
             "type": "array",
             "items": { "type": "string", "minLength": 1 },
             "maxItems": 64,
-            "description": "R package requirement strings. Installing a local reference can execute package-controlled code from the referenced host path; use only trusted local packages."
+            "description": "R package requirement strings. Local package references are rejected before resolution because IR runs with server permissions."
           },
           "python": {
             "type": "array",

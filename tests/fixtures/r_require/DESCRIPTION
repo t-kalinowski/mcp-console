@@ -1,7 +1,0 @@
-Package: mcpconsolerrequire
-Title: MCP Console R Requirement Fixture
-Version: 0.0.0.9000
-Authors@R: person("MCP Console", role = c("aut", "cre"), email = "fixture@example.com")
-Description: Exposes a small function from an explicitly prepared R library.
-License: MIT
-Encoding: UTF-8

@@ -93,8 +93,8 @@ result:
               r:
                 description: |-
                   One or more additive, single-line R package references accepted by IR for prepare.
-                  Installing a local reference can execute package-controlled code from the referenced host
-                  path; use only trusted local packages.
+                  Local package references are rejected before resolution because IR runs with server
+                  permissions.
                 type: array
                 items:
                   type: string

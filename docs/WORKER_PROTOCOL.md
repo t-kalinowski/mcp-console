@@ -36,6 +36,8 @@ Other inherited values, including an empty value, bypass the startup preflight u
 Before the worker starts, `session` with `action = "prepare"` can add R or Python requirements to the implicit session.
 The server merges exact strings with each retained in-memory set and resolves the complete candidates outside the sandbox.
 R requirements invoke `ir` through `PATH`; the server runs `ir run` with the same Rscript selection as the worker, one `--with` argument per requirement, and a constant expression that prints the resolved library path.
+Before spawning IR, the server rejects local sources in each comma-separated reference, including named `local::` and `deps::` forms, direct paths, and local `file:` URL or Git references.
+It leaves all other package-reference parsing to IR.
 Python requirements use the host resolver described above and take precedence over an inherited Python selection.
 The server commits both candidates together only after every requested resolution succeeds.
 It returns `[prepared]` without creating sideband pipes or starting the worker.
@@ -61,8 +63,6 @@ Two boundary details apply:
 
 The IR resolver receives R package references as process arguments and the Python resolver receives only a requirement manifest on standard input; neither receives submitted cells or `send` stdin.
 Both may use the network, write normal host caches, and execute package installation or build code outside the sandbox.
-IR currently accepts local package references.
-Installing them may run package-controlled hooks and build code with the resolver's host permissions; the server does not restrict those references.
 Runtime requests also supply the worker's current `UV_*` settings except `UV_OFFLINE`; the server removes its own `UV_*` settings before applying that exact set to the resolver.
 Those settings are inputs to that resolution only; the server does not retain or replay them.
 Requirements and settings remain data rather than evaluated cell source; the IR invocation uses a constant R expression that does not contain requirement text.

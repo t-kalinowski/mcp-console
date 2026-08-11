@@ -60,8 +60,8 @@ enum SessionAction {
 #[serde(deny_unknown_fields)]
 struct Requirements {
     /// One or more additive, single-line R package references accepted by IR for prepare.
-    /// Installing a local reference can execute package-controlled code from the referenced host
-    /// path; use only trusted local packages.
+    /// Local package references are rejected before resolution because IR runs with server
+    /// permissions.
     #[serde(default)]
     #[schemars(length(max = 64), inner(length(min = 1)))]
     r: Vec<String>,
@@ -227,7 +227,65 @@ impl ConsoleServer {
 }
 
 fn validate_r_requirements(r: &[String]) -> Result<(), String> {
-    validate_requirements(r, "r", "R")
+    validate_requirements(r, "r", "R")?;
+    // IR splits each --with value on commas before pak parses its references.
+    if r.iter()
+        .flat_map(|requirement| requirement.split(','))
+        .any(is_local_r_reference)
+    {
+        return Err("local R package references are not supported".to_string());
+    }
+    Ok(())
+}
+
+fn is_local_r_reference(reference: &str) -> bool {
+    let reference = reference.trim();
+    if is_local_r_source(reference) {
+        return true;
+    }
+    reference
+        .split_once('=')
+        .filter(|(name, _)| looks_like_r_package_name(name))
+        .is_some_and(|(_, source)| is_local_r_source(source))
+}
+
+// Only distinguish pak's optional `name=source`; IR still validates the full reference.
+fn looks_like_r_package_name(name: &str) -> bool {
+    let bytes = name.as_bytes();
+    bytes.first().is_some_and(u8::is_ascii_alphabetic)
+        && bytes.last().is_some_and(u8::is_ascii_alphanumeric)
+        && bytes
+            .iter()
+            .all(|byte| byte.is_ascii_alphanumeric() || *byte == b'.')
+}
+
+fn is_local_r_source(source: &str) -> bool {
+    let source = source.split_once('?').map_or(source, |(source, _)| source);
+    let bytes = source.as_bytes();
+    let windows_absolute = bytes.len() >= 3
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && matches!(bytes[2], b'/' | b'\\');
+    let local_file_source = source
+        .split_once("::")
+        .filter(|(kind, _)| matches!(*kind, "url" | "git"))
+        .is_some_and(|(_, location)| {
+            location
+                .get(..5)
+                .is_some_and(|scheme| scheme.eq_ignore_ascii_case("file:"))
+        });
+    source.starts_with("local::")
+        || source.starts_with("deps::")
+        || matches!(source, "." | "..")
+        || source.starts_with("./")
+        || source.starts_with(".\\")
+        || source.starts_with("../")
+        || source.starts_with("..\\")
+        || source.starts_with('/')
+        || source.starts_with('\\')
+        || source.starts_with('~')
+        || windows_absolute
+        || local_file_source
 }
 
 fn validate_python_requirements(python: &[String]) -> Result<(), String> {

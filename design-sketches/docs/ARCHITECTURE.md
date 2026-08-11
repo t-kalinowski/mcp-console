@@ -808,8 +808,9 @@ The supervisor runs `ir run` outside the worker sandbox with the same Rscript se
 It validates IR's returned library and prepends it to inherited `R_LIBS` before each worker generation initializes R.
 The prepared library persists across explicit restart and crash replacement.
 R additions after the worker starts still require a future restart-with-R-requirements path; the live worker does not mutate `.libPaths()`.
-IR currently has no option to reject local package references before `pak` and `renv` process them.
-A future restricted mode should use an upstream IR policy rather than duplicate its reference grammar in MCP Console; rejecting local references would not sandbox other source-package build code.
+Before starting IR, the supervisor uses a small lexical filter for IR's local source forms, including named and comma-separated references.
+It leaves the rest of the package-reference grammar to IR and pak.
+Rejecting local sources does not sandbox build code from accepted repository or remote packages.
 The exact package-reference grammar belongs in a later `docs/DEPENDENCIES.md`.
 
 ### 14.3 Atomic public behavior
