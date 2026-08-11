@@ -2,6 +2,7 @@
 
 import os
 import shutil
+import tarfile
 import tempfile
 from pathlib import Path
 
@@ -35,6 +36,9 @@ def test_rejects_local_r_requirements_before_ir_starts(binary: Path) -> Transcri
         (package / "inst").mkdir()
         (package / "inst" / "nonce").write_text(str(workspace), encoding="utf-8")
         (workspace / "package").symlink_to(package, target_is_directory=True)
+        archive = workspace / "mcpconsolerinstallescape_0.0.0.9000.tar.gz"
+        with tarfile.open(archive, "w:gz") as package_archive:
+            package_archive.add(package, arcname="mcpconsolerinstallescape")
 
         install_marker = workspace / "package-configure-ran"
         ir_marker = workspace / "ir-started"
@@ -66,6 +70,7 @@ def test_rejects_local_r_requirements_before_ir_starts(binary: Path) -> Transcri
         )
         client._initialize_and_list_tools()
         absolute = str(package)
+        archive_url = archive.as_uri()
         references = [
             f"local::{absolute}?reinstall&nocache",
             f"mcpconsolerinstallescape=local::{absolute}?reinstall&nocache",
@@ -76,6 +81,8 @@ def test_rejects_local_r_requirements_before_ir_starts(binary: Path) -> Transcri
             f"mcpconsolerinstallescape={absolute}?reinstall&nocache",
             "cli, mcpconsolerinstallescape=local::./package?reinstall&nocache",
             "deps::./package",
+            archive_url,
+            f"mcpconsolerinstallescape={archive_url}",
             "mcpconsolerinstallescape=url::file:///tmp/package.tar.gz",
             "git::file://localhost/tmp/package",
         ]
@@ -98,6 +105,10 @@ def test_rejects_local_r_requirements_before_ir_starts(binary: Path) -> Transcri
             if absolute in reference:
                 client.transcript[-1]["session"]["requirements"]["r"] = [
                     reference.replace(absolute, "<absolute package path>")
+                ]
+            elif archive_url in reference:
+                client.transcript[-1]["session"]["requirements"]["r"] = [
+                    reference.replace(archive_url, "file://<absolute package archive>")
                 ]
         return client._finish()
 

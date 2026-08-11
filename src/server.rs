@@ -266,14 +266,16 @@ fn is_local_r_source(source: &str) -> bool {
         && bytes[0].is_ascii_alphabetic()
         && bytes[1] == b':'
         && matches!(bytes[2], b'/' | b'\\');
-    let local_file_source = source
-        .split_once("::")
-        .filter(|(kind, _)| matches!(*kind, "url" | "git"))
-        .is_some_and(|(_, location)| {
-            location
-                .get(..5)
-                .is_some_and(|scheme| scheme.eq_ignore_ascii_case("file:"))
-        });
+    let has_file_scheme = |location: &str| {
+        location
+            .get(..5)
+            .is_some_and(|scheme| scheme.eq_ignore_ascii_case("file:"))
+    };
+    let local_file_source = has_file_scheme(source)
+        || source
+            .split_once("::")
+            .filter(|(kind, _)| matches!(*kind, "url" | "git"))
+            .is_some_and(|(_, location)| has_file_scheme(location));
     source.starts_with("local::")
         || source.starts_with("deps::")
         || matches!(source, "." | "..")
