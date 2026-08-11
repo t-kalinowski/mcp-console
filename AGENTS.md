@@ -85,13 +85,13 @@ Matplotlib rendering failures print a Python traceback as a normal language outc
 Unless an inherited value configures it, the worker sets Matplotlib's backend to Agg.
 Before Python initializes, a built-in worker resolves an existing user `matplotlibrc` from inherited `MATPLOTLIBRC`; otherwise it uses inherited `MPLCONFIGDIR`, or `$HOME/.matplotlib` when `MPLCONFIGDIR` is unset or empty, and exposes that regular file read-only through `MATPLOTLIBRC`.
 It then forces Matplotlib's writable configuration and XDG cache directories under the worker's private temporary directory so font discovery can write within the sandbox.
-When a server-managed environment contains Matplotlib, the existing host resolver invokes that exact interpreter with `-I` and imports `matplotlib.font_manager` before returning the environment.
-Matplotlib warms its versioned font index under `$XDG_CACHE_HOME/mcp-console/matplotlib` when the inherited XDG root is nonempty and absolute, otherwise under `$HOME/Library/Caches/mcp-console/matplotlib` when that root is available and absolute.
-The worker links versioned font indexes from that app cache read-only into its private Matplotlib directory before Python initializes; runtime resolution refreshes the links while the worker waits, and later generations link the existing files at startup.
-The persistent directory is never writable in the sandbox, and the server does not copy, parse, validate, or publish cache bytes.
-Only the host resolver writes persistent installed-font metadata; the selected host `matplotlibrc` is read-only, while worker-created configuration, styles, TeX state, lock files, and the complete XDG cache remain worker-private.
-Without an absolute supported cache root, or for caller-selected non-managed Python, Matplotlib uses the worker-private cache normally.
-The explicit probe does nothing when Matplotlib is absent; a Matplotlib import failure rejects the candidate, while failure to persist its font index does not.
+After each server-managed environment resolves, the host resolver invokes that exact interpreter with `-I` and attempts to import `matplotlib.font_manager` before returning the environment.
+Matplotlib may reuse or create its versioned font index in the inherited nonempty `MPLCONFIGDIR`, or in `$HOME/.matplotlib` when `MPLCONFIGDIR` is unset or empty.
+Before replacing that setting, the worker retains the same user directory and links its regular versioned font indexes read-only into the worker's private Matplotlib directory; runtime resolution refreshes the links while the worker waits, and later generations link existing files at startup.
+The user directory is never writable in the sandbox, and the server does not copy, parse, validate, or publish cache bytes.
+The host resolver may create or replace user font indexes; the selected host `matplotlibrc` is read-only in the worker, while worker-created configuration, styles, TeX state, lock files, and the complete XDG cache remain worker-private.
+An absent or broken Matplotlib import, unavailable user directory, or unusable font index does not reject Python resolution; Matplotlib discovers fonts in the worker-private cache when needed.
+Caller-selected non-managed Python skips host prewarming, but a built-in worker can reuse a matching index already present in the inherited user directory.
 The resolver import executes the selected Matplotlib package outside the worker sandbox as part of managed Python preparation and remains under the resolver process-group lifecycle.
 Matplotlib remains optional, and capture inspects only modules already loaded by evaluated code.
 At worker startup, MCP Console sets `RETICULATE_REMAP_OUTPUT_STREAMS=1` once, before user R can initialize Python.

@@ -11,7 +11,7 @@ mod platform {
     use libr::SEXP;
 
     static MATPLOTLIB_DIRECTORY: OnceLock<PathBuf> = OnceLock::new();
-    static MATPLOTLIB_CACHE_DIRECTORY: OnceLock<PathBuf> = OnceLock::new();
+    static INHERITED_MATPLOTLIB_DIRECTORY: OnceLock<PathBuf> = OnceLock::new();
 
     const BRIDGE_INIT: &str = r#"
 base::local({
@@ -289,9 +289,10 @@ def _mcp_console_eval_cell(
     }
 
     pub(crate) fn configure_worker_environment() -> io::Result<()> {
+        let matplotlib_cache_directory = inherited_matplotlib_directory();
         // Preserve the selected host configuration before redirecting all
         // Matplotlib writes to the worker's private directory.
-        if let Some(config) = inherited_matplotlibrc() {
+        if let Some(config) = inherited_matplotlibrc(matplotlib_cache_directory.as_deref()) {
             let config = CString::new(config.as_os_str().as_bytes())
                 .expect("Matplotlib configuration path should not contain NUL");
             set_environment(c"MATPLOTLIBRC", &config, true)?;
@@ -301,11 +302,10 @@ def _mcp_console_eval_cell(
         MATPLOTLIB_DIRECTORY
             .set(matplotlib_directory.clone())
             .map_err(|_| io::Error::other("Matplotlib directory is already configured"))?;
-        if let Some(cache) = std::env::var_os("MCP_CONSOLE_MATPLOTLIB_CACHE_DIRECTORY") {
-            let _ = MATPLOTLIB_CACHE_DIRECTORY.set(PathBuf::from(cache));
+        if let Some(cache) = matplotlib_cache_directory {
+            let _ = INHERITED_MATPLOTLIB_DIRECTORY.set(cache);
         }
         link_matplotlib_caches();
-        unset_environment(c"MCP_CONSOLE_MATPLOTLIB_CACHE_DIRECTORY")?;
 
         for (name, value, overwrite) in [
             (c"RETICULATE_REMAP_OUTPUT_STREAMS", c"1", true),
@@ -327,9 +327,10 @@ def _mcp_console_eval_cell(
     }
 
     pub(crate) fn link_matplotlib_caches() {
-        let (Some(cache_directory), Some(directory)) =
-            (MATPLOTLIB_CACHE_DIRECTORY.get(), MATPLOTLIB_DIRECTORY.get())
-        else {
+        let (Some(cache_directory), Some(directory)) = (
+            INHERITED_MATPLOTLIB_DIRECTORY.get(),
+            MATPLOTLIB_DIRECTORY.get(),
+        ) else {
             return;
         };
         let Ok(caches) = fs::read_dir(cache_directory) else {
@@ -356,7 +357,7 @@ def _mcp_console_eval_cell(
         }
     }
 
-    fn inherited_matplotlibrc() -> Option<PathBuf> {
+    fn inherited_matplotlibrc(config_directory: Option<&Path>) -> Option<PathBuf> {
         if let Some(config) = std::env::var_os("MATPLOTLIBRC").filter(|path| !path.is_empty()) {
             let config = PathBuf::from(config);
             if let Some(config) =
@@ -366,14 +367,22 @@ def _mcp_console_eval_cell(
             }
         }
 
-        let config_directory = match std::env::var_os("MPLCONFIGDIR") {
+        regular_file(&config_directory?.join("matplotlibrc"))
+    }
+
+    fn inherited_matplotlib_directory() -> Option<PathBuf> {
+        let directory = match std::env::var_os("MPLCONFIGDIR") {
             Some(directory) if !directory.is_empty() => PathBuf::from(directory),
             Some(_) | None => {
                 PathBuf::from(std::env::var_os("HOME").filter(|home| !home.is_empty())?)
                     .join(".matplotlib")
             }
         };
-        regular_file(&config_directory.join("matplotlibrc"))
+        if directory.is_absolute() {
+            Some(directory)
+        } else {
+            Some(std::env::current_dir().ok()?.join(directory))
+        }
     }
 
     fn regular_file(path: &Path) -> Option<PathBuf> {
@@ -383,13 +392,6 @@ def _mcp_console_eval_cell(
 
     fn set_environment(name: &CStr, value: &CStr, overwrite: bool) -> io::Result<()> {
         if unsafe { libc::setenv(name.as_ptr(), value.as_ptr(), overwrite.into()) } != 0 {
-            return Err(io::Error::last_os_error());
-        }
-        Ok(())
-    }
-
-    fn unset_environment(name: &CStr) -> io::Result<()> {
-        if unsafe { libc::unsetenv(name.as_ptr()) } != 0 {
             return Err(io::Error::last_os_error());
         }
         Ok(())

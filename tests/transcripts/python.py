@@ -193,6 +193,8 @@ def test_does_not_fail_resolution_when_matplotlib_cache_cannot_be_written(
     with tempfile.TemporaryDirectory() as temporary_directory:
         temporary = Path(temporary_directory)
         environment = os.environ.copy()
+        cache_directory = temporary / "user-matplotlib"
+        environment["MPLCONFIGDIR"] = str(cache_directory)
         environment["XDG_CACHE_HOME"] = str(temporary / "host-cache")
         environment["MPL_IGNORE_SYSTEM_FONTS"] = "1"
         client = McpClient(
@@ -207,7 +209,6 @@ def test_does_not_fail_resolution_when_matplotlib_cache_cannot_be_written(
             requirements={"python": ["matplotlib"]},
         )
         assert last_tool_text(client) == "[prepared]"
-        cache_directory = temporary / "host-cache" / "mcp-console" / "matplotlib"
         caches = list(cache_directory.glob("fontlist-v*.json"))
         assert len(caches) == 1, caches
         caches[0].unlink()
@@ -738,11 +739,7 @@ def test_returns_matplotlib_plots(binary: Path) -> Transcript:
         assert last_tool_text(client) == "[done]"
         host_discovery = temporary / "mcp-console-font-discovery"
         assert host_discovery.is_file()
-        persistent_caches = list(
-            (temporary / "host-cache" / "mcp-console" / "matplotlib").glob(
-                "fontlist-v*.json"
-            )
-        )
+        persistent_caches = list(host_matplotlib.glob("fontlist-v*.json"))
         assert len(persistent_caches) == 1, persistent_caches
         persistent_cache_bytes = persistent_caches[0].read_bytes()
         host_discovery.unlink()
@@ -1002,10 +999,14 @@ def test_returns_matplotlib_plots(binary: Path) -> Transcript:
             host_matplotlibrc.read_text(encoding="utf-8") == "lines.linewidth: 7.25\n"
         )
         assert not (host_matplotlib / "worker-payload").exists()
-        assert not list(host_matplotlib.glob("fontlist-v*.json"))
         assert len(persistent_caches) == 1, persistent_caches
         assert persistent_caches[0].read_bytes() == persistent_cache_bytes
         assert not (persistent_caches[0].parent / "fontlist-v999.json").exists()
+        assert not list(
+            (temporary / "host-cache" / "mcp-console" / "matplotlib").glob(
+                "fontlist-v*.json"
+            )
+        )
         return transcript
 
 
@@ -1068,7 +1069,13 @@ def test_inherits_explicit_matplotlib_config(binary: Path) -> Transcript:
         transcript = client._finish()
         assert explicit_rc.read_text(encoding="utf-8") == "lines.linewidth: 8.25\n"
         assert not list(explicit.glob("fontlist-v*.json"))
-        assert not list(inherited.glob("fontlist-v*.json"))
+        caches = list(inherited.glob("fontlist-v*.json"))
+        assert len(caches) == 1, caches
+        assert not list(
+            (temporary / "host-cache" / "mcp-console" / "matplotlib").glob(
+                "fontlist-v*.json"
+            )
+        )
         return transcript
 
 
@@ -1143,7 +1150,13 @@ def test_inherits_default_matplotlib_config(binary: Path) -> Transcript:
         assert output == "(True, 9.25)\n", repr(output)
         transcript = client._finish()
         assert matplotlibrc.read_text(encoding="utf-8") == "lines.linewidth: 9.25\n"
-        assert not list(matplotlib.glob("fontlist-v*.json"))
+        caches = list(matplotlib.glob("fontlist-v*.json"))
+        assert len(caches) == 1, caches
+        assert not list(
+            (temporary / "host-cache" / "mcp-console" / "matplotlib").glob(
+                "fontlist-v*.json"
+            )
+        )
         return transcript
 
 

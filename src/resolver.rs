@@ -77,28 +77,12 @@ base::local({
     !base::is.na(python),
     base::nzchar(python)
   )
-  cache_directory <- base::Sys.getenv(
-    "MCP_CONSOLE_MATPLOTLIB_CACHE_DIRECTORY",
-    unset = NA_character_
+  ignored_status <- base::system2(
+    python,
+    c("-I", "-c", base::shQuote("import matplotlib.font_manager")),
+    stdout = FALSE,
+    stderr = FALSE
   )
-  if (!base::is.na(cache_directory)) {
-    script <- "import importlib.util
-if importlib.util.find_spec('matplotlib') is not None:
-    import matplotlib.font_manager
-"
-    error_file <- base::tempfile("mcp-console-matplotlib-")
-    base::on.exit(base::unlink(error_file), add = TRUE)
-    status <- base::system2(
-      python,
-      c("-I", "-c", base::shQuote(script)),
-      stdout = FALSE,
-      stderr = error_file
-    )
-    if (status != 0L) {
-      base::writeLines(base::readLines(error_file, warn = FALSE), base::stderr())
-      base::quit(save = "no", status = status, runLast = FALSE)
-    }
-  }
   base::cat(python, "\n", sep = "")
 })
 "#;
@@ -149,9 +133,6 @@ if importlib.util.find_spec('matplotlib') is not None:
                 serde_json::to_string(&self.requirements)
                     .expect("managed Python requirements should serialize as JSON"),
             );
-            if let Some(cache) = matplotlib_cache_directory() {
-                command.env("MCP_CONSOLE_MATPLOTLIB_CACHE_DIRECTORY", cache);
-            }
         }
 
         pub(crate) fn python(&self) -> &Path {
@@ -364,12 +345,6 @@ if importlib.util.find_spec('matplotlib') is not None:
             command.env_remove(name);
         }
         command.envs(&environment).env_remove("UV_OFFLINE");
-        command.env_remove("MCP_CONSOLE_MATPLOTLIB_CACHE_DIRECTORY");
-        if let Some(cache) = matplotlib_cache_directory() {
-            command
-                .env("MCP_CONSOLE_MATPLOTLIB_CACHE_DIRECTORY", &cache)
-                .env("MPLCONFIGDIR", cache);
-        }
         // Managed resolution intentionally runs before the sandboxed worker starts
         // because reticulate and uv need normal host network and cache access.
         // Requirement manifests are JSON standard-input data, never R source.
@@ -481,24 +456,6 @@ if importlib.util.find_spec('matplotlib') is not None:
         std::env::var_os("R_HOME")
             .map(|r_home| PathBuf::from(r_home).join("bin/Rscript"))
             .unwrap_or_else(|| PathBuf::from("Rscript"))
-    }
-
-    fn matplotlib_cache_directory() -> Option<PathBuf> {
-        let root = std::env::var_os("XDG_CACHE_HOME")
-            .filter(|path| !path.is_empty())
-            .map(PathBuf::from)
-            .filter(|path| path.is_absolute())
-            .or_else(|| {
-                std::env::var_os("HOME")
-                    .filter(|path| !path.is_empty())
-                    .map(PathBuf::from)
-                    .filter(|path| path.is_absolute())
-                    .map(|path| path.join("Library/Caches"))
-            })?;
-        let cache = root.join("mcp-console/matplotlib");
-        std::fs::create_dir_all(&cache).ok()?;
-        let cache = cache.canonicalize().ok()?;
-        cache.is_dir().then_some(cache)
     }
 
     fn manifest_from_packages(
