@@ -35,7 +35,7 @@ struct ClientInner {
     arguments: Vec<OsString>,
     worker: Mutex<WorkerState>,
     evaluation: Mutex<Option<ActiveEvaluation>>,
-    preparation: Mutex<()>,
+    preparation: tokio::sync::Mutex<()>,
     output: CapturedOutput,
     lifecycle: Mutex<LifecycleControl>,
     environment: Option<Mutex<Environment>>,
@@ -113,7 +113,7 @@ impl Client {
             arguments,
             worker: Mutex::new(WorkerState::Initial),
             evaluation: Mutex::new(None),
-            preparation: Mutex::new(()),
+            preparation: tokio::sync::Mutex::new(()),
             output: CapturedOutput::new(),
             lifecycle: Mutex::new(LifecycleControl::new()),
             environment: environment.map(Mutex::new),
@@ -161,7 +161,6 @@ impl Client {
                     active.evaluation
                 }
                 None => {
-                    drop(preparation);
                     if let Some(stdin) = stdin {
                         self.write_idle_stdin(stdin, generation).await?;
                     }
@@ -241,16 +240,11 @@ impl Client {
             .map_err(|_| "worker evaluation lock poisoned".to_string())
     }
 
-    fn try_preparation(&self) -> Result<MutexGuard<'_, ()>, String> {
-        match self.0.preparation.try_lock() {
-            Ok(preparation) => Ok(preparation),
-            Err(std::sync::TryLockError::WouldBlock) => {
-                Err("session is preparing requirements".to_string())
-            }
-            Err(std::sync::TryLockError::Poisoned(_)) => {
-                Err("worker preparation lock poisoned".to_string())
-            }
-        }
+    fn try_preparation(&self) -> Result<tokio::sync::MutexGuard<'_, ()>, String> {
+        self.0
+            .preparation
+            .try_lock()
+            .map_err(|_| "session is preparing requirements".to_string())
     }
 
     async fn write_idle_stdin(
