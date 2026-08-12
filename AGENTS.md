@@ -202,7 +202,11 @@ See `design-sketches/README.md` for the product overview and `design-sketches/do
 - `src/cell.rs` — language-neutral complete-cell type shared by the server and worker protocol.
 - `src/cli.rs` — clap command definitions and user-facing help.
 - `src/python.rs` — worker environment and reticulate bridge.
-- `src/resolver.rs` — IR-backed R and managed-Python host resolution plus resolver process lifecycle.
+- `src/resolver.rs` — platform-gated host-resolver facade.
+- `src/resolver/managed_r.rs` — macOS IR-backed R library resolution.
+- `src/resolver/managed_python.rs` — macOS reticulate/uv-managed Python resolution.
+- `src/resolver/process.rs` — shared macOS resolver process-group lifecycle and cancellation.
+- `src/resolver/unsupported.rs` — non-macOS resolver stubs.
 - `src/r_bridge.rs` — shared private R-environment bridge used by graphics, Python, and SQL adapters.
 - `src/r_graphics.c` — C-owned forwarding boundary for managed graphics-device callbacks that may long-jump.
 - `src/r_graphics.rs` — cell-scoped managed R graphics device and PNG image publication.
@@ -212,7 +216,13 @@ See `design-sketches/README.md` for the product overview and `design-sketches/do
 - `src/r_repl.c` — C-owned per-cell DLL-REPL iterator and long-jump boundary.
 - `src/sideband.rs` — macOS inherited-pipe JSON-lines transport.
 - `src/worker.rs` — embedded R initialization, cell dispatch, and console callbacks.
-- `src/worker_client.rs` — worker-runtime interface, server-side launch and lifecycle, fd-0 input, and output collection.
+- `src/worker_client.rs` — server-side worker orchestration and lazy worker access.
+- `src/worker_client/environment.rs` — requirement preparation and managed environment checkpoints.
+- `src/worker_client/evaluation.rs` — per-cell evaluation, stdin, input-request, and wait state.
+- `src/worker_client/lifecycle.rs` — worker generations, restart coordination, and process shutdown.
+- `src/worker_client/output.rs` — response assembly and captured standard-stream buffering.
+- `src/worker_client/macos.rs` — macOS worker launch, sideband exchange, fd-0 writing, and process control.
+- `src/worker_client/unsupported.rs` — non-macOS worker-runtime stubs.
 - `src/worker_protocol.rs` — shared sideband message definitions.
 - `src/sandbox.rs` — platform dispatch for the sandbox process launcher.
 - `src/sandbox/` — platform implementation and macOS Seatbelt policy.
