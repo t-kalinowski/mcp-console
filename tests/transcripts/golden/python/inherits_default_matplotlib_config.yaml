@@ -1,0 +1,35 @@
+---
+!same-as tests/transcripts/golden/server/initializes_and_lists_tools.yaml
+---
+id: 3
+session:
+  action: prepare
+  requirements:
+    python:
+      - matplotlib
+result:
+  content:
+    - type: text
+      text: "[prepared]"
+  isError: false
+---
+id: 4
+send:
+  python: |
+    import os
+    from pathlib import Path
+
+    import matplotlib
+
+    (
+        Path(matplotlib.matplotlib_fname()).resolve()
+        == Path(os.environ["MCP_CONSOLE_TEST_MATPLOTLIBRC"]).resolve(),
+        matplotlib.rcParams["lines.linewidth"],
+    )
+result:
+  content:
+    - type: text
+      text: |
+        (True, 9.25)
+  isError: false
+...

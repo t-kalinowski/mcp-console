@@ -797,9 +797,8 @@ The Python interpreter and its live objects remain in place throughout a success
 Reticulate owns the live manifest during an evaluation, while the supervisor owns the last accepted checkpoint between evaluations and worker generations.
 
 Only newly added package requirements fit the v1 late-layering contract.
-Removals and changes to Python-version or `exclude_newer` constraints are unsupported after initialization rather than silently projected as additions.
-An explicit late `session prepare` still returns `[restart required]`.
-The implemented implicit-session restart can merge additive Python requirements into the last accepted checkpoint before replacing the worker.
+Removals and constraint changes remain unsupported after initialization.
+Idle Python-only `session prepare` uses this same path; restart still handles runtime replacement.
 
 ### 14.2 R
 
@@ -808,9 +807,9 @@ The supervisor runs `ir run` outside the worker sandbox with the same Rscript se
 It validates IR's returned library and prepends it to inherited `R_LIBS` before each worker generation initializes R.
 The prepared library persists across explicit restart and crash replacement.
 R additions after the worker starts still require a future restart-with-R-requirements path; the live worker does not mutate `.libPaths()`.
-Before starting IR, the supervisor uses a small lexical filter for IR's local source forms, including named and comma-separated references.
-It leaves the rest of the package-reference grammar to IR and pak.
-Rejecting local sources does not sandbox build code from accepted repository or remote packages.
+The supervisor sets `IR_NO_LOCAL_SOURCES` for every invocation.
+IR owns package-reference parsing and prevents direct or transitive local package installation before materialization.
+This does not sandbox build code from accepted repository or remote packages, and IR may reuse an already materialized library.
 The exact package-reference grammar belongs in a later `docs/DEPENDENCIES.md`.
 
 ### 14.3 Atomic public behavior
@@ -820,6 +819,10 @@ Before worker startup, an explicit `prepare` action remains atomic:
 1. merge the requested additions with the current manifest;
 2. resolve and prepare the candidate environment outside the arbitrary-code worker;
 3. commit the R library, Python interpreter, and manifests only after every requested resolution succeeds.
+
+After startup, reject preparation during evaluation and return `[restart required]` atomically for calls with a new R requirement.
+Otherwise send structured Python additions through reticulate and commit the matching checkpoint before returning `[prepared]`.
+Failure preserves the prior live manifest and supervisor checkpoint.
 
 An explicit `restart` with requirements is atomic until the worker replacement boundary:
 

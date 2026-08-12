@@ -5,10 +5,7 @@ id: 3
 send:
   python: |
     runtime_generation_marker = "original runtime retained"
-
-    import time
-    from pathlib import Path
-
+    import time; from pathlib import Path
     temporary = Path(__import__("os").environ["TMPDIR"])
     (temporary / "python-evaluation-running").touch()
     while not (temporary / "release-python").exists():
@@ -17,9 +14,7 @@ send:
 result:
   content:
     - type: text
-      text: |-
-
-        [running]
+      text: <running>
   isError: false
 ---
 id: 4
@@ -31,8 +26,10 @@ session:
 result:
   content:
     - type: text
-      text: "[restart required]"
-  isError: false
+      text: >-
+        worker is already evaluating a cell; poll it before preparing
+        requirements
+  isError: true
 ---
 id: 5
 send: {}

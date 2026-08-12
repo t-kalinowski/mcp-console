@@ -1,0 +1,69 @@
+---
+!same-as tests/transcripts/golden/server/initializes_and_lists_tools.yaml
+---
+id: 3
+send:
+  r: |
+    restart_marker <- 42L
+    Sys.setenv(UV_DEFAULT_INDEX = "http://127.0.0.1:<PORT>/simple")
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+id: 4
+session:
+  action: prepare
+  requirements:
+    python:
+      - mcp-console-blocked-live-preparation
+result:
+  content:
+    - type: text
+      text: Python preparation cancelled by restart
+  isError: true
+---
+id: 5
+send: {}
+result:
+  content:
+    - type: text
+      text: session is preparing requirements
+  isError: true
+---
+id: 6
+session:
+  action: prepare
+  requirements:
+    python:
+      - py-yaml12
+result:
+  content:
+    - type: text
+      text: session is preparing requirements
+  isError: true
+---
+id: 7
+session:
+  action: restart
+result:
+  content:
+    - type: text
+      text: "[restarted]"
+  isError: false
+---
+id: 8
+send:
+  r: |
+    requirements <- reticulate::py_require()
+    stopifnot(
+      !exists("restart_marker", inherits = FALSE),
+      !"mcp-console-blocked-live-preparation" %in% requirements$packages
+    )
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+...

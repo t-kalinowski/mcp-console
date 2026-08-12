@@ -34,7 +34,7 @@ Property descriptions:
 - `action`: `Session operation: list, status, prepare, interrupt, restart, or close.`
 - `session`: `Target session; defaults to default.`
 - `requirements`: `Additive package requirements, valid with prepare or restart. Resolution runs outside the worker sandbox, where package installation or build code may execute on the host.`
-- `requirements.r`: `R package requirement strings. Local package references are rejected before resolution because IR runs with server permissions.`
+- `requirements.r`: `R package requirement strings. IR prevents installation from local package sources because it runs with server permissions.`
 - `requirements.python`: `PEP 508 Python requirement strings.`
 
 ## Inclusion rule

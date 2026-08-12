@@ -2,8 +2,6 @@
 
 import os
 import shutil
-import subprocess
-import tarfile
 import tempfile
 from pathlib import Path
 
@@ -18,120 +16,49 @@ from _support import (
 
 
 PLATFORMS = {"darwin"}
-REQUIRED_COMMANDS = {"git", "ir"}
+REQUIRED_COMMANDS = {"ir"}
 
 
-def test_rejects_local_r_requirements_before_ir_starts(binary: Path) -> Transcript:
+def test_rejects_local_r_installation(binary: Path) -> Transcript:
     environment, _ = r_test_environment()
     environment["RETICULATE_PYTHON"] = ""
-    real_ir = shutil.which("ir")
-    assert real_ir is not None
+    environment.pop("IR_NO_LOCAL_SOURCES", None)
 
     with tempfile.TemporaryDirectory() as temporary:
         workspace = Path(temporary)
-        service = workspace / "service"
-        service.mkdir()
         fixture = Path(__file__).resolve().parents[1] / "fixtures" / "r_install_escape"
-        package = service / "package"
+        package = workspace / "package"
         shutil.copytree(fixture, package)
         (package / "inst").mkdir()
         (package / "inst" / "nonce").write_text(str(workspace), encoding="utf-8")
-        (workspace / "package").symlink_to(package, target_is_directory=True)
-        archive = workspace / "mcpconsolerinstallescape_0.0.0.9000.tar.gz"
-        with tarfile.open(archive, "w:gz") as package_archive:
-            package_archive.add(package, arcname="mcpconsolerinstallescape")
-        subprocess.run(("git", "init", "--quiet"), cwd=package, check=True)
-        subprocess.run(("git", "add", "."), cwd=package, check=True)
-        subprocess.run(
-            (
-                "git",
-                "-c",
-                "user.name=MCP Console",
-                "-c",
-                "user.email=fixture@example.com",
-                "-c",
-                "commit.gpgSign=false",
-                "commit",
-                "--quiet",
-                "-m",
-                "initial",
-            ),
-            cwd=package,
-            check=True,
-        )
 
         install_marker = workspace / "package-configure-ran"
-        ir_marker = workspace / "ir-started"
-        wrapper_directory = workspace / "bin"
-        wrapper_directory.mkdir()
-        ir_wrapper = wrapper_directory / "ir"
-        ir_wrapper.write_text(
-            code(r"""
-                #!/bin/sh
-                set -eu
-                : > "$MCP_CONSOLE_IR_STARTED"
-                exec "$MCP_CONSOLE_REAL_IR" "$@"
-                """),
-            encoding="utf-8",
-        )
-        ir_wrapper.chmod(0o755)
-        environment["PATH"] = os.pathsep.join(
-            (str(wrapper_directory), environment["PATH"])
-        )
-        environment["MCP_CONSOLE_REAL_IR"] = real_ir
-        environment["MCP_CONSOLE_IR_STARTED"] = str(ir_marker)
         environment["MCP_CONSOLE_R_INSTALL_MARKER"] = str(install_marker)
 
         client = McpClient(
             binary,
             ("serve",),
             environment,
-            current_directory=service,
+            current_directory=workspace,
         )
         client._initialize_and_list_tools()
-        absolute = str(package)
-        archive_url = archive.as_uri()
-        references = [
-            f"local::{absolute}?reinstall&nocache",
-            f"mcpconsolerinstallescape=local::{absolute}?reinstall&nocache",
-            "./package?reinstall&nocache",
-            "mcpconsolerinstallescape=./package?reinstall&nocache",
-            "../package?reinstall&nocache",
-            f"{absolute}?reinstall&nocache",
-            f"mcpconsolerinstallescape={absolute}?reinstall&nocache",
-            "cli, mcpconsolerinstallescape=local::./package?reinstall&nocache",
-            "deps::./package",
-            f"git::{absolute}",
-            "git::../package",
-            archive_url,
-            f"mcpconsolerinstallescape={archive_url}",
-            "mcpconsolerinstallescape=url::file:///tmp/package.tar.gz",
-            "git::file://localhost/tmp/package",
+        reference = f"local::{package}?reinstall&nocache"
+        client.session(action="prepare", requirements={"r": [reference]})
+        result = client.transcript[-1]["result"]
+        assert not install_marker.exists(), (
+            "local package configure ran with server permissions"
+        )
+        assert result["isError"] is True, result
+        error = result["content"][0]["text"]
+        assert "IR_NO_LOCAL_SOURCES is set" in error, error
+        assert "mcpconsolerinstallescape" in error, error
+        assert "Use a remote package source" in error, error
+        client.transcript[-1]["session"]["requirements"]["r"] = [
+            reference.replace(str(package), "<absolute package path>")
         ]
-        for reference in references:
-            client.session(
-                action="prepare",
-                requirements={"r": [reference]},
-            )
-            result = client.transcript[-1]["result"]
-            assert not install_marker.exists(), (
-                "local package configure ran with server permissions"
-            )
-            assert not ir_marker.exists(), (
-                f"IR started before rejecting a local reference: {result}"
-            )
-            assert result["isError"] is True, result
-            assert result["content"][0]["text"] == (
-                "local R package references are not supported"
-            )
-            if absolute in reference:
-                client.transcript[-1]["session"]["requirements"]["r"] = [
-                    reference.replace(absolute, "<absolute package path>")
-                ]
-            elif archive_url in reference:
-                client.transcript[-1]["session"]["requirements"]["r"] = [
-                    reference.replace(archive_url, "file://<absolute package archive>")
-                ]
+        result["content"][0]["text"] = error.replace(
+            str(package), "<absolute package path>"
+        )
         return client._finish()
 
 
@@ -247,9 +174,19 @@ def test_prepares_initial_r_requirements(binary: Path) -> Transcript:
         assert last_tool_text(client) == "[prepared]"
         client.session(
             action="prepare",
-            requirements={"r": [candidate_r]},
+            requirements={
+                "r": [candidate_r],
+                "python": ["py-yaml12"],
+            },
         )
         assert last_tool_text(client) == "[restart required]"
+
+        # fmt: r
+        manifest_r = code(r"""
+            stopifnot(!"py-yaml12" %in% reticulate::py_require()$packages)
+            """)
+        client.send(r=manifest_r)
+        assert last_tool_text(client) == "[done]"
 
         client.session(action="restart")
         assert last_tool_text(client) == "[restarted]"

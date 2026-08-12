@@ -2,7 +2,7 @@
 
 This document describes the worker protocol implemented by `mcp-console serve`, the built-in worker, and `tests/fixtures/zod`.
 It describes the current code, not the broader design under `design-sketches/`.
-The message enums in `src/worker_protocol.rs`, the framing in `src/sideband.rs`, the language bridges in `src/python.rs`, `src/r_bridge.rs`, `src/r_graphics.rs`, and `src/sql.rs`, and the standard-stream routing in `src/worker_client.rs` are the source of truth.
+The message enums in `src/worker_protocol.rs`, the framing in `src/sideband.rs`, the language bridges in `src/python.rs`, `src/r_bridge.rs`, `src/r_graphics.rs`, and `src/sql.rs`, and the worker-client orchestration, platform runtime, evaluation state, and output assembly in `src/worker_client.rs` and `src/worker_client/` are the source of truth.
 
 ## Scope
 
@@ -33,17 +33,16 @@ It removes inherited `UV_OFFLINE`, allows reticulate and uv to use their normal 
 The server retains the result and normalized manifest and applies them to each server-managed worker.
 Other inherited values, including an empty value, bypass the startup preflight unchanged.
 
-Before the worker starts, `session` with `action = "prepare"` can add R or Python requirements to the implicit session.
-The server merges exact strings with each retained in-memory set and resolves the complete candidates outside the sandbox.
-R requirements invoke `ir` through `PATH`; the server runs `ir run` with the same Rscript selection as the worker, one `--with` argument per requirement, and a constant expression that prints the resolved library path.
-Before spawning IR, the server rejects local sources in each comma-separated reference, including named `local::` and `deps::` forms, direct paths, and local `file:` URL or Git references.
-It leaves all other package-reference parsing to IR.
+`session` with `action = "prepare"` can add R or Python requirements to the implicit session.
+Before worker startup, the server merges exact strings with each retained in-memory set and resolves the complete candidates outside the sandbox.
+R requirements invoke `ir` 0.4.0 or later through `PATH`; the server runs `ir run` with the same Rscript selection as the worker, one `--with` argument per requirement, and a constant expression that prints the resolved library path.
+The server sets `IR_NO_LOCAL_SOURCES` for every invocation, so IR refuses package installation from direct or transitive local sources while retaining ownership of package-reference parsing.
 Python requirements use the host resolver described above and take precedence over an inherited Python selection.
 The server commits both candidates together only after every requested resolution succeeds.
 It returns `[prepared]` without creating sideband pipes or starting the worker.
-New explicit `session` requirements after worker startup return `[restart required]` without changing the retained configuration or running resolver work; exact retained requirements remain idempotent.
-This restriction does not apply to additive requirements declared through `reticulate::py_require()` inside a server-managed worker.
-Custom workers reject preparation and restart requests that include requirements, and skip managed resolution.
+
+After startup, an idle server-managed worker accepts Python-only additions through `prepare_python`, specified below.
+New R additions require restart; custom workers reject managed requirements.
 
 `session` with `action = "restart"` may include additive Python requirements or omit them to retain the current manifest.
 The server merges additions into its complete Python checkpoint and resolves the candidate before terminating the current worker.
@@ -54,15 +53,18 @@ The implicit session exists for the server lifetime, so restart starts its first
 After any requirement resolution succeeds, restart starts the same one-second stdin-close, sideband-shutdown, and process-group escalation path described below.
 It reopens the lifecycle for the new worker instead of ending the MCP server.
 
-Two boundary details apply:
+These boundary details apply:
 
 - Evaluations and idle stdin writes stay associated with the worker that admitted them.
   Work from the old worker is rejected rather than delivered to the replacement.
+- A live Python preparation invalidated by restart returns `Python preparation cancelled by restart`, regardless of whether resolver cancellation or worker shutdown completes first.
+  Sideband failures from the active generation remain infrastructure errors.
 - Standard-output and standard-error bytes already collected from the old worker are retained.
   A later `send` after restart may return those bytes, including alongside output from the replacement.
 
 The IR resolver receives R package references as process arguments and the Python resolver receives only a requirement manifest on standard input; neither receives submitted cells or `send` stdin.
-Both may use the network, write normal host caches, and execute package installation or build code outside the sandbox.
+Both may use the network, write normal host caches, and execute package installation or build code outside the sandbox; managed Python environment startup and the Matplotlib font-manager import also run there.
+`IR_NO_LOCAL_SOURCES` prevents IR from running package installation code for local sources; it may reuse a library that was already materialized.
 Runtime requests also supply the worker's current `UV_*` settings except `UV_OFFLINE`; the server removes its own `UV_*` settings before applying that exact set to the resolver.
 Those settings are inputs to that resolution only; the server does not retain or replay them.
 Requirements and settings remain data rather than evaluated cell source; the IR invocation uses a constant R expression that does not contain requirement text.
@@ -78,7 +80,7 @@ Direct-process exit ends the resolver-group lifetime: the server force-stops any
 Closing MCP input force-stops an active explicit or runtime resolver group and reaps its direct process; startup preflight finishes before MCP input is accepted and does not participate in this cancellation path.
 
 Outside an explicit restart, the worker starts lazily on the first `send` call that supplies `r`, `python`, `sql`, or nonempty `stdin`.
-On macOS, the server uses the same `SandboxedCommand` builder as the `sandbox` command.
+On macOS, the server's `WorkerRuntime` uses the same `SandboxedCommand` builder as the `sandbox` command.
 For `--worker PATH`, `PATH` is one program name or path, with no arguments or shell parsing, producing a launch equivalent to:
 
 ```text
@@ -90,6 +92,22 @@ Inside the sandbox, the worker takes ownership of the sideband, discovers `R_HOM
 Harp opens `R_HOME/lib/libR.dylib` by its absolute path, so the worker does not self-execute or set a dynamic-loader environment variable.
 When R requirements were prepared, the server prepends the validated IR library to inherited `R_LIBS` before this initialization.
 R then places that library first in `.libPaths()` while retaining its remaining user, site, and base libraries.
+
+For server-managed Python, the host resolver warms Matplotlib's local installed-font index before returning a resolved environment.
+Before replacing the inherited `MPLCONFIGDIR`, the worker resolves an existing `matplotlibrc` from `MATPLOTLIBRC`; otherwise it uses the inherited `MPLCONFIGDIR`, or `$HOME/.matplotlib` when `MPLCONFIGDIR` is unset or empty.
+It exposes the resolved regular file through `MATPLOTLIBRC`; a `matplotlibrc` in the working directory at Matplotlib import time retains Matplotlib's normal higher precedence.
+The sandbox permits reads of the resolved host file but not writes to it.
+The user cache directory is the inherited nonempty `MPLCONFIGDIR`, or `$HOME/.matplotlib` when `MPLCONFIGDIR` is unset or empty.
+After the existing managed-Python resolver selects an interpreter, it invokes that exact interpreter with isolated Python import settings and attempts to import `matplotlib.font_manager`; Matplotlib itself may reuse or create its versioned index in the user cache.
+Starting that environment and importing its font manager run environment startup hooks and selected package code outside the worker sandbox, within the resolver process group, so cancellation and atomic prepare or restart behavior are unchanged.
+The import is a best-effort cache warm: its exit status and output do not affect Python resolution.
+Before Python initializes, the worker creates its private `$TMPDIR/matplotlib` directory, links regular versioned font indexes from the inherited user directory into it, and sets `MPLCONFIGDIR` to the private directory.
+The sandbox permits reads through that link but denies writes to its host target; evaluated code can unlink or replace only its worker-private directory entry.
+After runtime Python resolution, the waiting worker rescans the user cache for new indexes; later worker generations scan it during startup.
+The server neither copies cache bytes nor grants the user cache directory as a writable sandbox path.
+Matplotlib configuration, styles, TeX state, lock files, and the broader XDG cache remain worker-private apart from the selected read-only `matplotlibrc`.
+Without a readable matching user index, Matplotlib discovers fonts in the worker-private directory normally.
+Caller-selected non-managed Python environments skip resolver-owned prewarming but can reuse an existing matching user index; custom workers receive neither behavior.
 
 The server launches the sandboxed worker with piped standard input, standard output, and standard error.
 Sideband frames carry control and managed output; interactive input bytes travel through the worker's fd 0, while the server drains fd 1 and fd 2 continuously.
@@ -143,6 +161,7 @@ The complete implemented message set is:
 | Direction | Frame | Meaning |
 | --- | --- | --- |
 | server → worker | `{"kind":"evaluate","language":"r","source":"..."}` | Evaluate one complete source string in the selected language. |
+| server → worker | `{"kind":"prepare_python","packages":["py-yaml12"]}` | Add packages through reticulate in an idle server-managed worker. |
 | server → worker | `{"kind":"python_resolved","python":"..."}` | Return the interpreter from one host resolution request. |
 | server → worker | `{"kind":"python_resolution_failed","message":"..."}` | Return the failure from one host resolution request. |
 | server → worker | `{"kind":"shutdown"}` | Exit without replying. |
@@ -152,6 +171,8 @@ The complete implemented message set is:
 | worker → server | `{"kind":"input_requested","prompt":"..."}` | Report that the runtime requested input. |
 | worker → server | `{"kind":"input_received"}` | Report that the current read succeeded. |
 | worker → server | `{"kind":"resolve_python","request":{"requirements":{"packages":["numpy"]},"environment":{}}}` | Resolve the complete proposed reticulate manifest outside the sandbox. |
+| worker → server | `{"kind":"python_prepared","python_checkpoint":{"packages":["numpy","py-yaml12"]}}` | Finish explicit Python preparation and report its normalized manifest. |
+| worker → server | `{"kind":"python_preparation_failed","message":"..."}` | Report an ordinary explicit-preparation failure without discarding the worker. |
 | worker → server | `{"kind":"completed","python_checkpoint":{"packages":["numpy","py-yaml12"]}}` | Complete the evaluation and report its normalized Python manifest. |
 | worker → server | `{"kind":"completed"}` | Complete without a managed-Python checkpoint. |
 
@@ -190,6 +211,20 @@ Only one request may be outstanding: a second request, a receipt without a reque
 `completed` ends the sideband evaluation.
 The server must accept its optional Python checkpoint before the MCP evaluation completes and the next cell is permitted.
 
+An explicit live Python preparation has this shape:
+
+```text
+server -> worker  {"kind":"prepare_python","packages":["py-yaml12"]}
+worker -> server  {"kind":"resolve_python","request":{"requirements":{"packages":["numpy","py-yaml12"]},"environment":{}}}
+server -> worker  {"kind":"python_resolved","python":"..."}
+worker -> server  {"kind":"python_prepared","python_checkpoint":{"packages":["numpy","py-yaml12"]}}
+```
+
+`prepare_python` is idle-only and calls additive `reticulate::py_require()`.
+Before initialization it materializes the manifest; afterward reticulate validates the live `libpython` and activates the candidate.
+Resolver replies remain candidates until `python_prepared` commits a matching checkpoint.
+`python_preparation_failed` restores the live manifest, discards candidates, and leaves the worker usable.
+
 A server-managed worker may send `resolve_python` during an evaluation when reticulate invokes its internal `uv_get_or_create_env` binding.
 The request contains the complete proposed manifest, not a history delta.
 The server performs the resolution while the worker waits and replies with exactly one `python_resolved` or `python_resolution_failed` frame on the same sideband.
@@ -206,7 +241,7 @@ An infrastructure or protocol failure before `completed` leaves the prior server
 If no sideband content or input-request record remains pending at `completed` and no standard-stream text is pending, the current MCP projection returns `[done]`.
 That marker is produced by the server; it is not a sideband message.
 
-The protocol has no request IDs because only one evaluation and one nested Python resolution can be in flight over this sideband.
+The protocol has no request IDs because only one evaluation or explicit Python preparation can be in flight over this sideband, with at most one synchronous nested Python resolution.
 New code is rejected while an evaluation or its uncollected result is active.
 
 ## MCP waiting and polling
@@ -300,20 +335,23 @@ New code is rejected while an evaluation or its uncollected result is active.
 | From | Frame | To |
 | --- | --- | --- |
 | starting | worker → server `ready` | idle |
-| starting, idle, or evaluating | worker or descendant → fd 1 or fd 2 | unchanged |
+| starting, idle, evaluating, or preparing Python | worker or descendant → fd 1 or fd 2 | unchanged |
 | absent or idle | MCP stdin submission | idle |
 | idle | server → worker `evaluate` | evaluating |
+| idle | server → worker `prepare_python` | preparing Python |
 | evaluating | worker → server `output` | evaluating |
 | evaluating | worker → server `image` | evaluating |
 | evaluating | worker → server `input_requested` | append request record; evaluating, input provisional |
 | evaluating, input provisional | worker → server `input_received` | retain request record; evaluating |
-| evaluating | worker → server `resolve_python` | host resolving; worker waiting |
-| host resolving | server → worker `python_resolved` | evaluating; retain candidate |
-| host resolving | server → worker `python_resolution_failed` | evaluating; prior checkpoint unchanged |
+| evaluating or preparing Python | worker → server `resolve_python` | host resolving; worker waiting |
+| host resolving | server → worker `python_resolved` | prior operation; retain candidate |
+| host resolving | server → worker `python_resolution_failed` | prior operation; prior checkpoint unchanged |
 | evaluating, with or without input reported | MCP stdin submission | evaluating |
 | evaluating, no provisional input | worker → server `completed` | validate checkpoint, then idle |
-| starting, idle, or evaluating | server → worker `shutdown` | terminal |
-| starting, idle, or evaluating | MCP `session` restart | starting in a new generation |
+| preparing Python | worker → server `python_prepared` | validate checkpoint, then idle |
+| preparing Python | worker → server `python_preparation_failed` | discard candidates, then idle |
+| starting, idle, evaluating, preparing Python, or host resolving | server → worker `shutdown` | terminal |
+| starting, idle, evaluating, preparing Python, or host resolving | MCP `session` restart | starting in a new generation |
 
 Malformed JSON, invalid UTF-8, an unexpected message, or sideband EOF fails the active operation.
 `python_resolution_failed` is a reply to a valid resolution request, not a general protocol error message.
@@ -415,7 +453,7 @@ If reticulate is loaded but Python remains uninitialized at cell end, the worker
 The worker then sends that normalized manifest as `completed.python_checkpoint`; it does not send reticulate's history.
 The server accepts the last candidate from the evaluation with that manifest, or its prior environment if the manifest did not change.
 An R package load hook may trigger this path while its namespace is loading.
-An explicit `session prepare` addition after worker startup still returns `[restart required]`; it does not use the runtime layering path.
+Explicit preparation uses this bridge through `prepare_python`.
 
 Each Python cell receives a synthetic filename such as `<mcp-console:python:e1>`.
 The worker stores the source in a process-lifetime private R environment and calls its evaluator with only a short evaluation ID.
@@ -498,7 +536,7 @@ MCP Console does not automatically install these runtime packages.
 The default preflight must be able to resolve or provision its interpreter and initial requirements outside the sandbox.
 An explicitly configured interpreter must be initializable under the offline worker policy.
 R requirements, the selected IR library, and Python requirements are retained only in server memory.
-Server-managed workers can activate additive package requirements and checkpoint their final manifest after startup, but an explicit late `session prepare` still requires restart.
+Server-managed workers can activate additive package requirements and checkpoint their final manifest after startup through evaluated `py_require()` calls or idle explicit preparation.
 Runtime Python version changes, `exclude_newer` changes, and non-additive package changes after initialization are not supported by the layering path.
 Named sessions, post-startup R requirement additions, and environment provenance do not exist.
 The Python input bridge does not observe direct `sys.stdin` or fd-0 reads.

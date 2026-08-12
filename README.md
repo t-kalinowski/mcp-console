@@ -47,7 +47,7 @@ An immediate `input_received` receipt retains the request record but suppresses 
 That receipt describes the runtime read, not a particular stdin payload; direct fd-0 reads emit no request or receipt.
 Payload end is not EOF, and queued input is not an acknowledgment of consumption.
 Unread bytes may be completed by later stdin or satisfy a later worker read or evaluation.
-Before the worker starts, the MCP client can prepare additive R and Python requirements for the implicit session:
+The MCP client can prepare additive R and Python requirements for the implicit session:
 
 ```json
 {
@@ -59,19 +59,26 @@ Before the worker starts, the MCP client can prepare additive R and Python requi
 }
 ```
 
-Requirement resolution is host-code execution: package installation or build hooks run outside the worker sandbox.
-Use only trusted requirements.
-Before starting IR, MCP Console rejects local R sources such as `local::`, direct paths, and local `file:` URL or Git references, including IR's named and comma-separated forms.
-It passes other R package syntax through to IR unchanged.
+Requirement resolution is host-code execution: package installation or build hooks, managed Python environment startup, and Matplotlib cache warming run outside the worker sandbox.
+Use only trusted requirements and host environment settings.
+MCP Console sets `IR_NO_LOCAL_SOURCES` for every R resolution, so IR refuses package installation from direct or transitive local sources while retaining its accepted package syntax.
+The policy prevents local package installation code from running; IR may still reuse an already materialized library.
 
-This `session` call resolves each complete initial requirement set outside the worker sandbox, using IR for R and reticulate with uv for Python, then returns `[prepared]`.
+Before the worker starts, this `session` call resolves each complete requirement set outside the worker sandbox, using IR for R and reticulate with uv for Python, then returns `[prepared]`.
 When both languages are supplied, it retains the new configuration only after both resolutions succeed.
-It does not load the packages or start the worker.
-R preparation requires an executable `ir` on `PATH`.
+It does not load packages into or start the worker.
+R preparation requires `ir` 0.4.0 or later on `PATH`.
 The server runs IR with the same Rscript selection as the worker and prepends the returned library to the worker's inherited `R_LIBS`, leaving its other R libraries available.
-Exact repeated requirements are idempotent.
-Once the worker has started, a new explicit `session` requirement returns `[restart required]` without changing the environment.
-Server-managed workers can still layer additive requirements declared through `reticulate::py_require()` while an evaluation is running.
+
+After a server-managed worker starts, a Python-only `prepare` applies additions while the worker is idle.
+It materializes an uninitialized manifest or activates a same-`libpython` environment while preserving live state.
+The server returns `[prepared]` only after accepting the checkpoint; failure leaves the live and retained manifests unchanged.
+Exact repeats are idempotent.
+
+Preparation during an evaluation is an error.
+A call with a new R requirement after startup returns `[restart required]` and applies none of that call's additions.
+Caller-selected Python environments and custom workers cannot use managed live preparation.
+
 The client can explicitly replace the worker, retain the prepared R library, and add Python requirements in the same call:
 
 ```json
@@ -123,7 +130,14 @@ At the end of each Python cell, including after a Python error, every open figur
 These figures are cell scoped, so one plot's drawing operations must be submitted together.
 Figures closed before cell end and figures not registered with `pyplot` are not captured.
 Unless an inherited setting selects otherwise, the worker uses Matplotlib's noninteractive Agg backend.
-It forces Matplotlib's configuration and XDG cache directories under the worker's private temporary directory so font discovery can write within the sandbox.
+Built-in workers inherit an existing user `matplotlibrc` as a read-only file while keeping Matplotlib's writable configuration and XDG cache directories under the worker's private temporary directory.
+Evaluated code can use the user's settings but cannot modify that host file through the sandbox.
+After each server-managed Python environment resolves, the host resolver starts its exact interpreter and attempts to import `matplotlib.font_manager`.
+Matplotlib may reuse or create its local `fontlist-v*.json` index in the user's inherited nonempty `MPLCONFIGDIR`, or in `$HOME/.matplotlib` when that setting is unset or empty; the font scan itself does not require network access.
+Each worker links matching indexes from that user directory read-only into its private Matplotlib directory, so restarts reuse them without copying them or granting evaluated code persistent writes.
+If the import fails or no usable index is available, Python resolution still succeeds and the worker performs private font discovery when needed.
+The resolver import executes the selected Matplotlib package outside the worker sandbox as part of managed Python preparation.
+Caller-selected non-managed Python environments do not receive host prewarming, but can reuse a matching user index that already exists.
 Reticulate routes Python text written through `sys.stdout` and `sys.stderr`, including tracebacks, through the same sideband console output path as R.
 Writes through `sys.stdout.buffer`, `sys.stderr.buffer`, or fd 1/2 directly remain on the captured standard streams.
 After a Python cell calls `os.fork()`, reticulate restores the child's original fd-backed text streams after its sideband is disabled, so its ordinary stdout and stderr are captured too.
@@ -154,7 +168,7 @@ R language failures, uncaught Python exceptions, and DuckDB errors remain ordina
 A silent successful R, Python, or SQL cell sends no sideband `output` frame, still sends `completed`, and projects to `[done]` when no other response text is pending.
 
 Python cells require the `reticulate` R package.
-Matplotlib figure capture requires the Python `matplotlib` package; prepare it before the worker starts when it is not already available.
+Matplotlib figure capture requires the Python `matplotlib` package; prepare it before use when it is not already available.
 SQL cells require the `arrow`, `DBI`, `duckdb`, `nanoarrow`, `pillar`, and `tibble` R packages.
 Lazy dplyr relations created from `sql_connection()` additionally require `dplyr` and `dbplyr`.
 MCP Console does not automatically install these R runtime dependencies.
@@ -166,11 +180,10 @@ Other configured values, including an empty value, are preserved when no require
 An explicit `session` preparation selects its resolved managed environment even when `RETICULATE_PYTHON` was configured, so a successful call guarantees that its requirements are present.
 The server retains the selected interpreter and normalized manifest and applies them to each sandboxed worker; the worker forces `UV_OFFLINE=1` and otherwise uses the existing sandbox policy unchanged.
 For a server-managed worker, MCP Console seeds reticulate's requirement manifest and replaces only its internal uv environment lookup.
-It does not wrap `py_require()`, so reticulate retains caller attribution, manifest history, and activation behavior within the live R process.
-If managed reticulate is loaded but Python remains uninitialized at cell end, the worker resolves the final manifest outside the sandbox before completing.
-After Python initializes, additive package requirements resolve to candidate environments outside the sandbox; reticulate checks the exact `libpython`, runs `activate_this.py`, swaps its Python configuration, and updates its manifest while the interpreter and its existing state remain live.
-At completion, the worker reports the normalized manifest, and the server accepts the last matching candidate or its unchanged prior environment before retaining that checkpoint.
-Normal language outcomes reach this checkpoint; an infrastructure or protocol failure before completion leaves the prior checkpoint unchanged.
+It does not wrap `py_require()`, so reticulate retains its activation behavior.
+Idle explicit preparation passes structured additions through the same bridge and reports a checkpoint instead of completing a cell.
+It materializes an uninitialized manifest or activates a same-`libpython` environment while preserving live state.
+The server retains only a matching checkpoint; failure preserves the prior live and server manifests.
 Each runtime resolution uses the worker's current `UV_*` settings except `UV_OFFLINE`; those settings are not retained or replayed across worker generations.
 The requirement strings and forwarded settings are structured data rather than R code, and the resolver does not evaluate the submitted cell.
 However, evaluated R code or an R package load can request this resolution, and reticulate and uv may access the network, write normal host caches, and execute a source distribution's build backend outside the worker sandbox.
@@ -190,7 +203,7 @@ The intended default client registration name is `console`:
 codex mcp add console -- mcp-console serve
 ```
 
-Under Codex's current naming convention, the implemented tools are `mcp__console.send` and `mcp__console.session`; `session` supports initial R and Python requirement preparation and explicit restart with optional additive Python requirements for the implicit session.
+Under Codex's current naming convention, the implemented tools are `mcp__console.send` and `mcp__console.session`; `session` supports R and Python requirement preparation, live late Python additions, and explicit restart with optional additive Python requirements for the implicit session.
 
 On macOS, `sandbox` launches the command under `/usr/bin/sandbox-exec`.
 The command can read the host filesystem, can write regular files only in a dedicated temporary directory, and cannot access the network.

@@ -45,20 +45,25 @@ The server preserves sideband text and image order as MCP content blocks, coales
 The implemented `session` surface accepts `action = "prepare"` with one or more R or Python requirement strings or `action = "restart"` with optional Python requirement strings for the implicit session.
 Requirements are exact, additive, and idempotent.
 Before the worker starts, each successful prepare resolves the complete candidate sets outside the sandbox, atomically retains them in server memory, and returns `[prepared]` without starting the worker.
-R requirements use `ir run` from `PATH` with the worker's Rscript and become the first worker `R_LIBS` entry; Python requirements use reticulate and uv and replace any inherited Python selection with the resolved interpreter.
-Before starting IR, the server rejects local R sources in explicit, named, or comma-separated forms while leaving other IR package syntax unchanged.
+R requirements use `ir run` 0.4.0 or later from `PATH` with the worker's Rscript and become the first worker `R_LIBS` entry; Python requirements use reticulate and uv and replace any inherited Python selection with the resolved interpreter.
+The server sets `IR_NO_LOCAL_SOURCES` for every R resolution, so IR prevents direct or transitive local package installation while retaining ownership of package-reference parsing.
 A failed resolution leaves the prior requirements, R library, and interpreter unchanged.
 For a uv tool failure, the tool error reports a JSON manifest containing reticulate's selected Python and the complete candidate package set, followed by uv's stderr, while omitting the helper command, temporary output path, and reticulate's `py_require()`-oriented guidance.
 The direct resolver process defines its process-group lifetime: after it exits, the server force-stops any remaining in-group descendants before reaping it and collecting its standard streams.
 Closing MCP input cancels an in-flight explicit or runtime resolution by force-stopping its host resolver process group; startup preflight completes before MCP input is accepted and is not cancellable through that lifecycle.
-Once a worker has started, an already-retained explicit requirement remains idempotent, while any explicit addition returns `[restart required]` without changing the environment.
-This restriction applies to `session` preparation; server-managed workers can layer additive requirements declared through `reticulate::py_require()` during evaluation.
+An idle server-managed worker can apply Python-only additions through reticulate without replacement.
+It materializes an uninitialized manifest or activates a same-`libpython` environment while preserving live state.
+The server returns `[prepared]` only after checkpointing the result; failure preserves the live and retained manifests.
+Preparation during evaluation is rejected.
+A call with a new R requirement after startup returns `[restart required]` and applies none of that call's additions.
+New requirements also return that marker while a failed worker awaits replacement; prepare does not start or configure the replacement.
 Restart retains the prepared R library, merges any supplied Python additions into the complete checkpointed manifest, and resolves the candidate before terminating the current worker.
 A failed restart resolution leaves the current worker, its in-memory state, requirements, R library, and Python interpreter unchanged.
 After successful resolution, restart retains the prepared R library and candidate Python environment, loses all worker-owned in-memory state and unread stdin, eagerly starts a replacement, and returns `[restarted]` after it reports ready.
 The implicit session exists for the server lifetime, so restart starts its first worker if none exists yet.
 It first queues worker-stdin closure and the sideband shutdown message without waiting behind an evaluation, then force-stops the process group and reaps the direct sandbox process at the one-second deadline if that process remains live.
 Each admitted evaluation or idle stdin write carries its worker generation, so work admitted before restart cannot reach the replacement.
+A live Python preparation invalidated by restart returns `Python preparation cancelled by restart`; active-generation sideband failures retain their transport diagnostics.
 Direct standard-stream bytes collected around restart remain pending for the next `send` response and may share it with replacement output.
 Named sessions and runtime R requirement additions do not exist yet.
 On macOS, managed-Python preflight happens during `serve` startup when required; the first nonempty stdin submission or evaluation still lazily starts the built-in worker under the same sandbox policy as the `sandbox` command.
@@ -84,7 +89,16 @@ Pyplot-managed figures are cell scoped, so one plot's drawing operations must be
 Figures closed before cell end and figures not registered with `pyplot` are not captured.
 Matplotlib rendering failures print a Python traceback as a normal language outcome; cell-end cleanup still closes all pyplot-managed figures and leaves the worker available.
 Unless an inherited value configures it, the worker sets Matplotlib's backend to Agg.
-Before Python initializes, it forces Matplotlib's configuration and XDG cache directories under the worker's private temporary directory so font discovery can write within the sandbox.
+Before Python initializes, a built-in worker resolves an existing user `matplotlibrc` from inherited `MATPLOTLIBRC`; otherwise it uses inherited `MPLCONFIGDIR`, or `$HOME/.matplotlib` when `MPLCONFIGDIR` is unset or empty, and exposes that regular file read-only through `MATPLOTLIBRC`.
+It then forces Matplotlib's writable configuration and XDG cache directories under the worker's private temporary directory so font discovery can write within the sandbox.
+After each server-managed environment resolves, the host resolver invokes that exact interpreter with `-I` and attempts to import `matplotlib.font_manager` before returning the environment.
+Matplotlib may reuse or create its versioned font index in the inherited nonempty `MPLCONFIGDIR`, or in `$HOME/.matplotlib` when `MPLCONFIGDIR` is unset or empty.
+Before replacing that setting, the worker retains the same user directory and links its regular versioned font indexes read-only into the worker's private Matplotlib directory; runtime resolution refreshes the links while the worker waits, and later generations link existing files at startup.
+The user directory is never writable in the sandbox, and the server does not copy, parse, validate, or publish cache bytes.
+The host resolver may create or replace user font indexes; the selected host `matplotlibrc` is read-only in the worker, while worker-created configuration, styles, TeX state, lock files, and the complete XDG cache remain worker-private.
+An absent or broken Matplotlib import, unavailable user directory, or unusable font index does not reject Python resolution; Matplotlib discovers fonts in the worker-private cache when needed.
+Caller-selected non-managed Python skips host prewarming, but a built-in worker can reuse a matching index already present in the inherited user directory.
+The resolver import executes the selected Matplotlib package outside the worker sandbox as part of managed Python preparation and remains under the resolver process-group lifecycle.
 Matplotlib remains optional, and capture inspects only modules already loaded by evaluated code.
 At worker startup, MCP Console sets `RETICULATE_REMAP_OUTPUT_STREAMS=1` once, before user R can initialize Python.
 Within the worker process, reticulate then routes Python text writes, including `print()`, `sys.stderr.write()`, and tracebacks, through the R console callback as sideband `output` frames.
@@ -95,18 +109,20 @@ Fork-child text capture requires reticulate from its `main` branch or a release 
 An exec descendant that retains fd 1/2 creates fresh standard streams backed by those descriptors, so its ordinary stdout and stderr are captured.
 When inherited `RETICULATE_PYTHON` is absent or exactly `managed`, built-in server startup calls reticulate's internal uv environment resolver with its NumPy baseline outside the sandbox and retains the resulting interpreter and normalized manifest for every worker generation.
 Other inherited values, including an empty value, are preserved and skip that startup preflight; a later successful explicit preparation takes precedence over them.
-Custom workers skip resolution and reject R and Python requirement preparation.
-Accepted R and Python requirements may access the network, write normal host caches, and execute package installation or build code outside the sandbox, but requirement strings remain process-argument or JSON data rather than R source and no submitted cell is evaluated.
+Custom workers skip resolution and reject R and Python requirement preparation and restart requests with Python requirements.
+R and Python resolution may access the network, write normal host caches, and execute package installation or build code outside the sandbox; managed Python environment startup and the Matplotlib font-manager import also run there.
+Requirement strings remain process-argument or JSON data rather than R source, and no submitted cell is evaluated by the resolver.
 Before initializing R, the worker forces `UV_OFFLINE=1`, overwriting any inherited value to match the sandbox's network denial.
 Reticulate reuses the server-resolved or caller-selected interpreter.
 For a server-managed worker, MCP Console seeds reticulate's requirement manifest and intercepts only its internal `uv_get_or_create_env` binding, without wrapping `py_require()`.
-Each runtime request sends the complete proposed manifest and the worker's current `UV_*` settings except `UV_OFFLINE` to the host resolver; those settings are transient inputs and are not retained or replayed.
-If managed reticulate is loaded but Python remains uninitialized at cell end, the worker invokes that resolver once to materialize the final manifest before completing.
+Each runtime or explicit-preparation request sends the complete proposed manifest and the worker's current `UV_*` settings except `UV_OFFLINE` to the host resolver; those settings are transient inputs and are not retained or replayed.
+Explicit preparation sends structured additions and reports a separate checkpoint or failure without evaluating a cell.
+If managed reticulate is loaded but Python remains uninitialized at cell end or after explicit preparation, the worker invokes the resolver once to materialize the final manifest.
 After initialization, additive package requirements resolve to candidate environments outside the sandbox, and reticulate performs its exact-`libpython` check, `activate_this.py`, configuration swap, and manifest assignment.
-The worker retains every resolved candidate for the evaluation and includes reticulate's normalized manifest as an optional field on `completed`.
-The server accepts the last candidate matching that checkpoint, or the prior environment when its manifest still matches, and only then updates its retained state.
-Normal language outcomes reach this checkpoint; an infrastructure or protocol failure before `completed` leaves the prior checkpoint unchanged.
-The live Python interpreter and its state are retained during this activation.
+The worker retains every resolved candidate for the active operation.
+The server accepts the last candidate matching its reported checkpoint, or the prior environment when its manifest still matches, and only then updates its retained state.
+Normal language outcomes reach the evaluation checkpoint; an infrastructure or protocol failure leaves the prior checkpoint unchanged.
+The live Python interpreter and its state are retained during successful activation.
 Evaluated R code or an R package load can therefore trigger host resolution, which may use the network, write host caches, and execute package build backends outside the worker sandbox; the structured requirements and forwarded settings are data, and the submitted cell is not evaluated by the resolver.
 R and Python share objects through reticulate's `py` and `r` bridges.
 A silent successful Python cell sends `completed` without an `output` frame and projects to `[done]` when no other response text is pending.
@@ -169,7 +185,7 @@ The public MCP surface has two tools:
 - `send` evaluates complete R, Python, or SQL cells, writes to the session's stdin stream, and polls for output.
 - `session` manages session requirements and lifecycle operations.
 
-Initial R and Python requirement preparation and explicit restart with optional additive Python requirements are implemented for `session`; its broader lifecycle surface remains planned.
+R and Python requirement preparation, live late Python additions, and explicit restart with optional additive Python requirements are implemented for `session`; its broader lifecycle surface remains planned.
 
 The MCP initialization identity remains `mcp-console`.
 The intended default client registration name is `console`, for example `codex mcp add console -- mcp-console serve`.
@@ -188,7 +204,11 @@ See `design-sketches/README.md` for the product overview and `design-sketches/do
 - `src/cell.rs` — language-neutral complete-cell type shared by the server and worker protocol.
 - `src/cli.rs` — clap command definitions and user-facing help.
 - `src/python.rs` — worker environment and reticulate bridge.
-- `src/resolver.rs` — IR-backed R and managed-Python host resolution plus resolver process lifecycle.
+- `src/resolver.rs` — platform-gated host-resolver facade.
+- `src/resolver/managed_r.rs` — macOS IR-backed R library resolution.
+- `src/resolver/managed_python.rs` — macOS reticulate/uv-managed Python resolution.
+- `src/resolver/process.rs` — shared macOS resolver process-group lifecycle and cancellation.
+- `src/resolver/unsupported.rs` — non-macOS resolver stubs.
 - `src/r_bridge.rs` — shared private R-environment bridge used by graphics, Python, and SQL adapters.
 - `src/r_graphics.c` — C-owned forwarding boundary for managed graphics-device callbacks that may long-jump.
 - `src/r_graphics.rs` — cell-scoped managed R graphics device and PNG image publication.
@@ -198,13 +218,19 @@ See `design-sketches/README.md` for the product overview and `design-sketches/do
 - `src/r_repl.c` — C-owned per-cell DLL-REPL iterator and long-jump boundary.
 - `src/sideband.rs` — macOS inherited-pipe JSON-lines transport.
 - `src/worker.rs` — embedded R initialization, cell dispatch, and console callbacks.
-- `src/worker_client.rs` — server-side worker launch, lifecycle, fd-0 input, and output collection.
+- `src/worker_client.rs` — server-side worker orchestration and lazy worker access.
+- `src/worker_client/environment.rs` — requirement preparation and managed environment checkpoints.
+- `src/worker_client/evaluation.rs` — per-cell evaluation, stdin, input-request, and wait state.
+- `src/worker_client/lifecycle.rs` — worker generations, restart coordination, and process shutdown.
+- `src/worker_client/output.rs` — response assembly and captured standard-stream buffering.
+- `src/worker_client/macos.rs` — macOS worker launch, sideband exchange, fd-0 writing, and process control.
+- `src/worker_client/unsupported.rs` — non-macOS worker-runtime stubs.
 - `src/worker_protocol.rs` — shared sideband message definitions.
 - `src/sandbox.rs` — platform dispatch for the sandbox process launcher.
 - `src/sandbox/` — platform implementation and macOS Seatbelt policy.
 - `tests/cli.rs` — public binary acceptance tests.
 - `tests/fixtures/py_require` — minimal R package that declares a Python requirement from its load hook.
-- `tests/fixtures/r_install_escape` — local R package whose configure hook proves rejected references never reach IR.
+- `tests/fixtures/r_install_escape` — local R package whose configure hook proves rejected sources are not installed.
 - `tests/fixtures/zod` — executable Python sideband worker used by acceptance tests.
 - `tests/fixtures/worker_mitm` — transparent worker proxy used to capture sideband, standard-stream, fd-0 closure, and worker-sideband closure events through `serve`.
 - `tests/transcripts/r.py` — public built-in R worker acceptance suite.
@@ -226,18 +252,24 @@ See `design-sketches/README.md` for the product overview and `design-sketches/do
 - `README.md` — current user-facing project status.
 - `LICENSE` — project license.
 
-Add modules only when implemented public behavior needs them.
-Begin as one Cargo package and split crates only when a real boundary emerges.
+Refactor and reorganize internal modules and files freely when the implemented feature set has a clearer natural structure.
+Do not add structure for planned or speculative behavior.
+Treat roughly 500 lines of production source as a prompt to reassess a file's boundaries.
+Split a file when it contains distinct responsibilities that can be named and understood independently.
+The threshold is a review trigger, not a hard limit: keep cohesive code together and do not create thin modules solely to meet it.
+Keep one Cargo package until the implemented code presents a concrete crate boundary.
 
 ## Working rules
 
 - Keep PRs coherent, compact, and easy to review.
-  As a heuristic, aim to keep implementation-code changes under 200 added and deleted lines.
-  Tests, golden snapshots, and documentation do not count toward this guideline.
+  For behavior-changing implementation, aim as a heuristic to keep changes under 200 added and deleted lines.
+  Mechanical moves, internal-only reorganization, tests, golden snapshots, and documentation do not count toward this guideline.
   The line count is not a limit; prefer a larger coherent change over splits that make the work harder to understand or validate.
-- Each PR should implement and test one observable behavior.
-  Update design documents in the same PR only when they describe that behavior.
-- Add a public acceptance or regression test first and confirm that it fails before implementing behavior.
+- Keep each behavior-changing PR to one coherent observable behavior.
+  Internal-only refactors may be standalone and must preserve observable behavior.
+  Update design documents in the same PR only when they describe the changed behavior.
+- For every public-facing behavior change, add a public acceptance or regression test first and confirm that it fails before implementing the change.
+  An internal-only refactor does not need a new test; verify it with the existing public test suite.
 - Test through public interfaces.
   Do not add tests for private helpers.
 - Format embedded R, Python, SQL, and shell test programs as multiline raw strings.
@@ -246,8 +278,8 @@ Begin as one Cargo package and split crates only when a real boundary emerges.
 - Keep the MCP adapter independent of interpreter implementation details.
 - Treat submitted R, Python, and SQL execution as shell-class capability and place safety at the worker-process boundary.
   Managed-Python startup and explicit R or Python preparation are host-bootstrap exceptions.
-  Filter local R sources before passing requirements as IR command arguments; Python requirements use a JSON standard-input manifest.
-  Neither is evaluated as R source, though accepted package installation and build code may execute outside the worker sandbox.
+  R requirements are IR command arguments resolved with `IR_NO_LOCAL_SOURCES`; Python requirements use a JSON standard-input manifest.
+  Neither is evaluated as R source, though accepted package installation, build code, managed Python startup, and the Matplotlib font-cache import may execute outside the worker sandbox.
 - Update this file when a PR changes the implemented surface or repository map.
 - Before every commit, run `scripts/format` and review its changes.
 - Run `scripts/check` before opening a PR.

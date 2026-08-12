@@ -10,6 +10,7 @@ use crate::cell::Language;
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum ServerMessage {
     Evaluate { language: Language, source: String },
+    PreparePython { packages: Vec<String> },
     PythonResolved { python: String },
     PythonResolutionFailed { message: String },
     Shutdown,
@@ -69,6 +70,12 @@ pub(crate) enum WorkerMessage {
     InputReceived,
     ResolvePython {
         request: PythonResolveRequest,
+    },
+    PythonPrepared {
+        python_checkpoint: PythonRequirementManifest,
+    },
+    PythonPreparationFailed {
+        message: String,
     },
     Completed {
         #[serde(default, skip_serializing_if = "Option::is_none")]

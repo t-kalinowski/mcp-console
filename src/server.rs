@@ -60,8 +60,7 @@ enum SessionAction {
 #[serde(deny_unknown_fields)]
 struct Requirements {
     /// One or more additive, single-line R package references accepted by IR for prepare.
-    /// Local package references are rejected before resolution because IR runs with server
-    /// permissions.
+    /// IR prevents installation from local package sources because it runs with server permissions.
     #[serde(default)]
     #[schemars(length(max = 64), inner(length(min = 1)))]
     r: Vec<String>,
@@ -77,9 +76,13 @@ struct SessionArguments {
     /// Prepare R or Python requirements or restart the implicit session, starting it if needed.
     action: SessionAction,
     /// Additive R or Python requirements for prepare.
+    /// After startup, an idle server-managed worker can apply Python-only additions.
+    /// A new R addition requires restart and applies none of that call's additions.
+    /// New additions also require restart while a failed worker awaits replacement.
     /// Restart accepts only Python requirements.
     /// Resolution runs outside the worker sandbox.
-    /// Package installation or build code may execute on the host.
+    /// Package installation, build code, managed Python startup, or Matplotlib
+    /// cache warming may execute selected code on the host.
     /// Omit to restart unchanged.
     requirements: Option<Requirements>,
 }
@@ -168,7 +171,7 @@ impl ConsoleServer {
     }
 
     #[tool(
-        description = "Prepare additive R or Python requirements before the implicit session starts, or restart its worker with retained requirements and optional new Python requirements. Restart starts a worker if none exists and loses all in-memory R, Python, and SQL state."
+        description = "Prepare additive R or Python requirements, or restart the implicit session. An idle server-managed worker applies Python-only additions without losing state; new R additions require restart. Restart retains requirements and loses all in-memory R, Python, and SQL state."
     )]
     async fn session(
         &self,
@@ -227,72 +230,7 @@ impl ConsoleServer {
 }
 
 fn validate_r_requirements(r: &[String]) -> Result<(), String> {
-    validate_requirements(r, "r", "R")?;
-    // IR splits each --with value on commas before pak parses its references.
-    if r.iter()
-        .flat_map(|requirement| requirement.split(','))
-        .any(is_local_r_reference)
-    {
-        return Err("local R package references are not supported".to_string());
-    }
-    Ok(())
-}
-
-fn is_local_r_reference(reference: &str) -> bool {
-    let reference = reference.trim();
-    if is_local_r_source(reference) {
-        return true;
-    }
-    reference
-        .split_once('=')
-        .filter(|(name, _)| looks_like_r_package_name(name))
-        .is_some_and(|(_, source)| is_local_r_source(source))
-}
-
-// Only distinguish pak's optional `name=source`; IR still validates the full reference.
-fn looks_like_r_package_name(name: &str) -> bool {
-    let bytes = name.as_bytes();
-    bytes.first().is_some_and(u8::is_ascii_alphabetic)
-        && bytes.last().is_some_and(u8::is_ascii_alphanumeric)
-        && bytes
-            .iter()
-            .all(|byte| byte.is_ascii_alphanumeric() || *byte == b'.')
-}
-
-fn is_local_r_source(source: &str) -> bool {
-    let source = source.split_once('?').map_or(source, |(source, _)| source);
-    let is_local_path = |location: &str| {
-        let bytes = location.as_bytes();
-        let windows_absolute = bytes.len() >= 3
-            && bytes[0].is_ascii_alphabetic()
-            && bytes[1] == b':'
-            && matches!(bytes[2], b'/' | b'\\');
-        matches!(location, "." | "..")
-            || location.starts_with("./")
-            || location.starts_with(".\\")
-            || location.starts_with("../")
-            || location.starts_with("..\\")
-            || location.starts_with('/')
-            || location.starts_with('\\')
-            || location.starts_with('~')
-            || windows_absolute
-    };
-    let has_file_scheme = |location: &str| {
-        location
-            .get(..5)
-            .is_some_and(|scheme| scheme.eq_ignore_ascii_case("file:"))
-    };
-    let nested_local_source = source
-        .split_once("::")
-        .filter(|(kind, _)| matches!(*kind, "url" | "git"))
-        .is_some_and(|(kind, location)| {
-            has_file_scheme(location) || (kind == "git" && is_local_path(location))
-        });
-    source.starts_with("local::")
-        || source.starts_with("deps::")
-        || is_local_path(source)
-        || has_file_scheme(source)
-        || nested_local_source
+    validate_requirements(r, "r", "R")
 }
 
 fn validate_python_requirements(python: &[String]) -> Result<(), String> {
