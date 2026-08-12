@@ -550,6 +550,65 @@ def test_accepts_idle_stdin(binary: Path) -> Transcript:
     return client._finish()
 
 
+def test_idle_stdin_startup_blocks_preparation(binary: Path) -> Transcript:
+    zod = Path(__file__).resolve().parents[1] / "fixtures" / "zod"
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        temporary_path = Path(temporary_directory)
+        startup_control = temporary_path / "zod-startup-control"
+        startup_release = temporary_path / "zod-startup-release"
+        startup_control.write_text("block", encoding="utf-8")
+        environment = os.environ.copy()
+        environment["TMPDIR"] = temporary_directory
+        environment["ZOD_STARTUP_CONTROL"] = str(startup_control)
+        environment["ZOD_STARTUP_RELEASE"] = str(startup_release)
+        client = McpClient(
+            binary,
+            ("serve", "--worker", str(zod)),
+            environment,
+        )
+        passed = False
+        try:
+            client._initialize_and_list_tools()
+            idle_stdin = client._start_send(stdin="queued\n")
+            wait_for_marker(
+                temporary_path,
+                "zod-replacement-waiting-ready",
+                client,
+            )
+
+            preparation = client._start_session(
+                action="prepare",
+                requirements={"python": ["py-yaml12"]},
+            )
+            client._receive(preparation)
+            assert preparation["result"] == {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "session is preparing requirements",
+                    }
+                ],
+                "isError": True,
+            }, preparation
+
+            startup_release.touch()
+            client._receive(idle_stdin)
+            assert idle_stdin["result"] == {
+                "content": [{"type": "text", "text": "\n[idle]"}],
+                "isError": False,
+            }, idle_stdin
+
+            client.send(r="input without request")
+            assert last_tool_text(client) == "zod stdin: queued\n"
+            transcript = client._finish()
+            passed = True
+            return transcript
+        finally:
+            startup_release.touch()
+            if not passed:
+                stop_process(client.process)
+
+
 def test_routes_combined_and_followup_stdin(binary: Path) -> Transcript:
     zod = Path(__file__).resolve().parents[1] / "fixtures" / "zod"
     client = McpClient(
