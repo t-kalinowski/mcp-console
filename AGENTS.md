@@ -252,18 +252,24 @@ See `design-sketches/README.md` for the product overview and `design-sketches/do
 - `README.md` — current user-facing project status.
 - `LICENSE` — project license.
 
-Add modules only when implemented public behavior needs them.
-Begin as one Cargo package and split crates only when a real boundary emerges.
+Refactor and reorganize internal modules and files freely when the implemented feature set has a clearer natural structure.
+Do not add structure for planned or speculative behavior.
+Treat roughly 500 lines of production source as a prompt to reassess a file's boundaries.
+Split a file when it contains distinct responsibilities that can be named and understood independently.
+The threshold is a review trigger, not a hard limit: keep cohesive code together and do not create thin modules solely to meet it.
+Keep one Cargo package until the implemented code presents a concrete crate boundary.
 
 ## Working rules
 
 - Keep PRs coherent, compact, and easy to review.
-  As a heuristic, aim to keep implementation-code changes under 200 added and deleted lines.
-  Tests, golden snapshots, and documentation do not count toward this guideline.
+  For behavior-changing implementation, aim as a heuristic to keep changes under 200 added and deleted lines.
+  Mechanical moves, internal-only reorganization, tests, golden snapshots, and documentation do not count toward this guideline.
   The line count is not a limit; prefer a larger coherent change over splits that make the work harder to understand or validate.
-- Each PR should implement and test one observable behavior.
-  Update design documents in the same PR only when they describe that behavior.
-- Add a public acceptance or regression test first and confirm that it fails before implementing behavior.
+- Keep each behavior-changing PR to one coherent observable behavior.
+  Internal-only refactors may be standalone and must preserve observable behavior.
+  Update design documents in the same PR only when they describe the changed behavior.
+- For every public-facing behavior change, add a public acceptance or regression test first and confirm that it fails before implementing the change.
+  An internal-only refactor does not need a new test; verify it with the existing public test suite.
 - Test through public interfaces.
   Do not add tests for private helpers.
 - Format embedded R, Python, SQL, and shell test programs as multiline raw strings.
