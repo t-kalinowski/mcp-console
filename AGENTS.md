@@ -203,7 +203,11 @@ See `design-sketches/README.md` for the product overview and `design-sketches/do
 - `src/cell.rs` — language-neutral complete-cell type shared by the server and worker protocol.
 - `src/cli.rs` — clap command definitions and user-facing help.
 - `src/python.rs` — worker environment and reticulate bridge.
-- `src/resolver.rs` — IR-backed R and managed-Python host resolution plus resolver process lifecycle.
+- `src/resolver.rs` — platform-gated host-resolver facade.
+- `src/resolver/managed_r.rs` — macOS IR-backed R library resolution.
+- `src/resolver/managed_python.rs` — macOS reticulate/uv-managed Python resolution.
+- `src/resolver/process.rs` — shared macOS resolver process-group lifecycle and cancellation.
+- `src/resolver/unsupported.rs` — non-macOS resolver stubs.
 - `src/r_bridge.rs` — shared private R-environment bridge used by graphics, Python, and SQL adapters.
 - `src/r_graphics.c` — C-owned forwarding boundary for managed graphics-device callbacks that may long-jump.
 - `src/r_graphics.rs` — cell-scoped managed R graphics device and PNG image publication.
@@ -213,7 +217,13 @@ See `design-sketches/README.md` for the product overview and `design-sketches/do
 - `src/r_repl.c` — C-owned per-cell DLL-REPL iterator and long-jump boundary.
 - `src/sideband.rs` — macOS inherited-pipe JSON-lines transport.
 - `src/worker.rs` — embedded R initialization, cell dispatch, and console callbacks.
-- `src/worker_client.rs` — worker-runtime interface, server-side launch and lifecycle, fd-0 input, and output collection.
+- `src/worker_client.rs` — server-side worker orchestration and lazy worker access.
+- `src/worker_client/environment.rs` — requirement preparation and managed environment checkpoints.
+- `src/worker_client/evaluation.rs` — per-cell evaluation, stdin, input-request, and wait state.
+- `src/worker_client/lifecycle.rs` — worker generations, restart coordination, and process shutdown.
+- `src/worker_client/output.rs` — response assembly and captured standard-stream buffering.
+- `src/worker_client/macos.rs` — macOS worker launch, sideband exchange, fd-0 writing, and process control.
+- `src/worker_client/unsupported.rs` — non-macOS worker-runtime stubs.
 - `src/worker_protocol.rs` — shared sideband message definitions.
 - `src/sandbox.rs` — platform dispatch for the sandbox process launcher.
 - `src/sandbox/` — platform implementation and macOS Seatbelt policy.
@@ -242,18 +252,24 @@ See `design-sketches/README.md` for the product overview and `design-sketches/do
 - `README.md` — current user-facing project status.
 - `LICENSE` — project license.
 
-Add modules only when implemented public behavior needs them.
-Begin as one Cargo package and split crates only when a real boundary emerges.
+Refactor and reorganize internal modules and files freely when the implemented feature set has a clearer natural structure.
+Do not add structure for planned or speculative behavior.
+Treat roughly 500 lines of production source as a prompt to reassess a file's boundaries.
+Split a file when it contains distinct responsibilities that can be named and understood independently.
+The threshold is a review trigger, not a hard limit: keep cohesive code together and do not create thin modules solely to meet it.
+Keep one Cargo package until the implemented code presents a concrete crate boundary.
 
 ## Working rules
 
 - Keep PRs coherent, compact, and easy to review.
-  As a heuristic, aim to keep implementation-code changes under 200 added and deleted lines.
-  Tests, golden snapshots, and documentation do not count toward this guideline.
+  For behavior-changing implementation, aim as a heuristic to keep changes under 200 added and deleted lines.
+  Mechanical moves, internal-only reorganization, tests, golden snapshots, and documentation do not count toward this guideline.
   The line count is not a limit; prefer a larger coherent change over splits that make the work harder to understand or validate.
-- Each PR should implement and test one observable behavior.
-  Update design documents in the same PR only when they describe that behavior.
-- Add a public acceptance or regression test first and confirm that it fails before implementing behavior.
+- Keep each behavior-changing PR to one coherent observable behavior.
+  Internal-only refactors may be standalone and must preserve observable behavior.
+  Update design documents in the same PR only when they describe the changed behavior.
+- For every public-facing behavior change, add a public acceptance or regression test first and confirm that it fails before implementing the change.
+  An internal-only refactor does not need a new test; verify it with the existing public test suite.
 - Test through public interfaces.
   Do not add tests for private helpers.
 - Format embedded R, Python, SQL, and shell test programs as multiline raw strings.

@@ -2,7 +2,7 @@
 
 This document describes the worker protocol implemented by `mcp-console serve`, the built-in worker, and `tests/fixtures/zod`.
 It describes the current code, not the broader design under `design-sketches/`.
-The message enums in `src/worker_protocol.rs`, the framing in `src/sideband.rs`, the language bridges in `src/python.rs`, `src/r_bridge.rs`, `src/r_graphics.rs`, and `src/sql.rs`, and the standard-stream routing in `src/worker_client.rs` are the source of truth.
+The message enums in `src/worker_protocol.rs`, the framing in `src/sideband.rs`, the language bridges in `src/python.rs`, `src/r_bridge.rs`, `src/r_graphics.rs`, and `src/sql.rs`, and the worker-client orchestration, platform runtime, evaluation state, and output assembly in `src/worker_client.rs` and `src/worker_client/` are the source of truth.
 
 ## Scope
 
