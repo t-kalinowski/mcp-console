@@ -651,14 +651,15 @@ def test_restart_cancels_live_python_preparation(binary: Path) -> Transcript:
     client._receive_many([preparation, restart])
 
     preparation_result = preparation["result"]
-    assert preparation_result["isError"] is True, preparation_result
-    assert preparation_result["content"][0]["text"] in {
-        "managed Python resolution cancelled",
-        "worker sideband read failed: worker sideband closed",
+    assert preparation_result == {
+        "content": [
+            {
+                "type": "text",
+                "text": "Python preparation cancelled by restart",
+            }
+        ],
+        "isError": True,
     }, preparation_result
-    preparation_result["content"][0]["text"] = (
-        "<Python preparation cancelled by restart>"
-    )
     assert restart["result"]["content"] == [{"type": "text", "text": "[restarted]"}], (
         restart
     )

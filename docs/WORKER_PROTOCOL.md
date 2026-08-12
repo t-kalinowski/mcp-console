@@ -52,10 +52,12 @@ The implicit session exists for the server lifetime, so restart starts its first
 After any requirement resolution succeeds, restart starts the same one-second stdin-close, sideband-shutdown, and process-group escalation path described below.
 It reopens the lifecycle for the new worker instead of ending the MCP server.
 
-Two boundary details apply:
+These boundary details apply:
 
 - Evaluations and idle stdin writes stay associated with the worker that admitted them.
   Work from the old worker is rejected rather than delivered to the replacement.
+- A live Python preparation invalidated by restart returns `Python preparation cancelled by restart`, regardless of whether resolver cancellation or worker shutdown completes first.
+  Sideband failures from the active generation remain infrastructure errors.
 - Standard-output and standard-error bytes already collected from the old worker are retained.
   A later `send` after restart may return those bytes, including alongside output from the replacement.
 
