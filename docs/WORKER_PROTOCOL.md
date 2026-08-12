@@ -154,7 +154,7 @@ Each pipe reader queues raw byte chunks without decoding them.
 The server appends those chunks, sideband text and images, failures, and lifecycle notices to one pending output tape as it accepts them.
 When a response drains the tape, the server decodes queued chunks for each pipe as UTF-8, retains an incomplete trailing sequence for a later response, and replaces invalid sequences.
 It preserves order within each stream, but makes no relative ordering guarantee between standard output, standard error, and sideband output.
-Descendants that inherit fd 1 or fd 2 write into the same pipes even when the interpreter is idle.
+Descendants that inherit fd 1 or fd 2 write into the same pipes even when the interpreter is idle, until retirement closes that worker generation's capture boundary.
 
 ## Messages
 
@@ -380,9 +380,9 @@ The shutdown task queues worker-stdin closure, then attempts the sideband write.
 It runs independently of the deadline so a blocked stdin writer or full sideband pipe cannot postpone forced termination.
 The sandbox child waits only for the time remaining before the original deadline.
 If its direct process is still running at the deadline, the sandbox force-stops its process group and reaps that direct process.
-After the process stops and the active sideband operation returns, shutdown joins its stdin writer and standard-stream readers.
-For the supported worker lifetime, this closes the old generation's server-side I/O boundary before shutdown returns.
-Background descendants that outlive that boundary remain unsupported as described below.
+After the process stops and the active sideband operation returns, shutdown cancels and joins its standard-stream readers and joins its stdin writer.
+This closes the old generation's server-side output boundary before shutdown returns, even when a background descendant retains a pipe descriptor.
+The descendant itself remains unsupervised as described below, and any later write to the closed pipe is not captured.
 
 Shutdown owns stop handles independently of the evaluation lock, including simultaneous handles for the worker and its nested host resolver.
 This lets the server terminate both processes while another thread is blocked waiting for resolver or worker output.
@@ -544,7 +544,7 @@ Runtime Python version changes, `exclude_newer` changes, and non-additive packag
 Named sessions, post-startup R requirement additions, and environment provenance do not exist.
 The Python input bridge does not observe direct `sys.stdin` or fd-0 reads.
 The SQL adapter does not expose Python objects as relations or provide a separate registration API.
-The current sandbox child does not yet supervise descendants after its direct process exits, or descendants that leave its process group; capturing inherited standard streams does not change that boundary.
+The current sandbox child does not yet supervise descendants after its direct process exits, or descendants that leave its process group; capturing inherited standard streams until worker retirement does not change that boundary.
 
 ## Zod fixture behavior
 

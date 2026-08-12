@@ -145,7 +145,7 @@ Writes through `sys.stdout.buffer`, `sys.stderr.buffer`, or fd 1/2 directly rema
 After a Python cell calls `os.fork()`, reticulate restores the child's original fd-backed text streams after its sideband is disabled, so its ordinary stdout and stderr are captured too.
 Native extensions that fork without running CPython's registered fork callbacks and then resume Python are unsupported.
 Fork-child text capture requires reticulate from its `main` branch or a release containing fork-aware stream restoration.
-An exec descendant that retains fd 1/2 creates fresh standard streams backed by those descriptors, so its ordinary stdout and stderr are captured.
+An exec descendant that retains fd 1/2 creates fresh standard streams backed by those descriptors, so its ordinary stdout and stderr are captured while that worker generation's output boundary remains open.
 SQL cells and `sql_connection()` lazily open one in-memory DuckDB connection through the `duckdb` and `DBI` R packages and reuse it for the worker generation.
 DuckDB extension, secret, and spill paths stay under the worker's private R temporary directory.
 The worker sends the complete SQL source out of band to a private R bridge and executes query results through DBI's streaming Arrow API.

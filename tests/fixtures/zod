@@ -158,11 +158,16 @@ def main() -> None:
 
         if source == "start background stderr":
             temporary = Path(os.environ["TMPDIR"])
-            if os.fork() == 0:
+            child = os.fork()
+            if child == 0:
                 reader.close()
                 writer.close()
                 emit_background_stderr(temporary)
                 os._exit(0)
+            (temporary / "zod-background-stderr-pid").write_text(
+                str(child),
+                encoding="utf-8",
+            )
             (temporary / "zod-background-stderr-started").touch()
             send(writer, {"kind": "completed"})
             continue

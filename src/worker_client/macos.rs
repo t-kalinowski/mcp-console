@@ -1,4 +1,5 @@
 use std::io::{Read, Write};
+use std::os::fd::AsRawFd;
 use std::process::Stdio;
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
@@ -31,8 +32,13 @@ struct WorkerProcess {
 
 struct WorkerThreads {
     stdin: thread::JoinHandle<()>,
-    stdout: thread::JoinHandle<()>,
-    stderr: thread::JoinHandle<()>,
+    stdout: OutputReader,
+    stderr: OutputReader,
+}
+
+struct OutputReader {
+    cancel: std::io::PipeWriter,
+    thread: thread::JoinHandle<()>,
 }
 
 #[derive(Clone)]
@@ -279,28 +285,50 @@ impl Worker {
 }
 
 fn start_output_reader(
-    mut stream: impl Read + Send + 'static,
+    stream: impl Read + AsRawFd + Send + 'static,
     output: super::OutputTapeStream,
-) -> thread::JoinHandle<()> {
-    thread::spawn(move || {
+) -> OutputReader {
+    let (cancelled, cancel) = std::io::pipe().expect("output cancellation pipe should open");
+    let thread = thread::spawn(move || {
+        let mut stream = stream;
         let mut buffer = [0; 8 * 1024];
         loop {
-            match stream.read(&mut buffer) {
-                Ok(0) => {
-                    output.close();
-                    return;
+            let mut descriptors = [
+                libc::pollfd {
+                    fd: stream.as_raw_fd(),
+                    events: libc::POLLIN,
+                    revents: 0,
+                },
+                libc::pollfd {
+                    fd: cancelled.as_raw_fd(),
+                    events: libc::POLLIN,
+                    revents: 0,
+                },
+            ];
+            // SAFETY: both descriptors remain open for the call, and the pointer and
+            // count describe the initialized array exactly.
+            let ready = unsafe { libc::poll(descriptors.as_mut_ptr(), descriptors.len() as _, -1) };
+            if ready < 0 {
+                if std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted {
+                    continue;
                 }
-                Ok(length) => {
-                    output.push(&buffer[..length]);
-                }
-                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
-                Err(_) => {
-                    output.close();
-                    return;
+                break;
+            }
+            if descriptors[1].revents != 0 {
+                break;
+            }
+            if descriptors[0].revents != 0 {
+                match stream.read(&mut buffer) {
+                    Ok(0) => break,
+                    Ok(length) => output.push(&buffer[..length]),
+                    Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                    Err(_) => break,
                 }
             }
         }
-    })
+        output.close();
+    });
+    OutputReader { cancel, thread }
 }
 
 fn start_stdin_writer(
@@ -367,10 +395,19 @@ impl WorkerProcess {
         let Some(threads) = self.threads.take() else {
             return Ok(());
         };
+        let stdout = threads.stdout.cancel();
+        let stderr = threads.stderr.cancel();
         let stdin = join_worker_thread(threads.stdin, "stdin writer");
-        let stdout = join_worker_thread(threads.stdout, "stdout reader");
-        let stderr = join_worker_thread(threads.stderr, "stderr reader");
+        let stdout = join_worker_thread(stdout, "stdout reader");
+        let stderr = join_worker_thread(stderr, "stderr reader");
         stdin.and(stdout).and(stderr)
+    }
+}
+
+impl OutputReader {
+    fn cancel(self) -> thread::JoinHandle<()> {
+        drop(self.cancel);
+        self.thread
     }
 }
 
