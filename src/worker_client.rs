@@ -250,6 +250,12 @@ enum LifecycleState {
     ShuttingDown { deadline: Instant },
 }
 
+enum GenerationStatus {
+    CurrentReady,
+    CurrentClosing,
+    Changed,
+}
+
 #[derive(Clone, Default)]
 struct ProcessStopHandles {
     worker: Option<platform::WorkerHandle>,
@@ -448,14 +454,20 @@ impl Client {
                 self.checkpoint_runtime_python(generation.clone(), Some(checkpoint), candidates)
             },
         );
-        match result {
-            Ok(result) => result,
-            Err(error) => {
-                if self.generation_is_ready(generation)? {
+        let (infrastructure_failure, error) = match result {
+            Ok(Ok(())) => return Ok(()),
+            Ok(Err(error)) => (false, error),
+            Err(error) => (true, error),
+        };
+        match self.generation_status(generation)? {
+            GenerationStatus::Changed => Err("Python preparation cancelled by restart".to_string()),
+            GenerationStatus::CurrentReady => {
+                if infrastructure_failure {
                     *worker = WorkerState::ReplacementPending;
                 }
                 Err(error)
             }
+            GenerationStatus::CurrentClosing => Err(error),
         }
     }
 
@@ -946,6 +958,21 @@ impl Client {
             .lock()
             .map_err(|_| "worker lifecycle lock poisoned".to_string())?;
         Ok(lifecycle.state == LifecycleState::Ready && lifecycle.generation.is(expected))
+    }
+
+    fn generation_status(&self, expected: &WorkerGeneration) -> Result<GenerationStatus, String> {
+        let lifecycle = self
+            .0
+            .lifecycle
+            .lock()
+            .map_err(|_| "worker lifecycle lock poisoned".to_string())?;
+        Ok(if !lifecycle.generation.is(expected) {
+            GenerationStatus::Changed
+        } else if lifecycle.state == LifecycleState::Ready {
+            GenerationStatus::CurrentReady
+        } else {
+            GenerationStatus::CurrentClosing
+        })
     }
 
     fn ensure_generation(&self, expected: &WorkerGeneration) -> Result<(), String> {
