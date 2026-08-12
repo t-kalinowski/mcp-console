@@ -25,14 +25,6 @@ jobs:
         if: runner.os == 'macOS'
         uses: r-lib/actions/setup-r@v2
 
-      - name: Install IR
-        env:
-          IR_INSTALL_DIR: ${{ runner.temp }}/ir/bin
-          IR_NO_MODIFY_PATH: "1"
-        run: |
-          curl -fsSL https://raw.githubusercontent.com/r-lib/ir/main/scripts/install.sh | sh
-          echo "$IR_INSTALL_DIR" >> "$GITHUB_PATH"
-
       - name: Install R dependencies
         if: runner.os == 'macOS'
         uses: r-lib/actions/setup-r-dependencies@v2
@@ -56,6 +48,11 @@ jobs:
 
       - name: Install uv
         uses: astral-sh/setup-uv@v9.0.0
+
+      - name: Install tools
+        run: |
+          uv tool install r-lib-ir
+          uv tool install yamark
 
       - name: Cache Rust build data
         uses: Swatinem/rust-cache@v2
