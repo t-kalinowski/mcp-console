@@ -8,7 +8,7 @@ impl WorkerRuntime {
         &self,
         spec: super::WorkerSpec<'_>,
         _output: super::CapturedOutput,
-        _on_started: impl FnOnce(WorkerInterrupt) -> Result<(), String>,
+        _on_started: impl FnOnce(WorkerShutdownHandle) -> Result<(), String>,
     ) -> Result<Worker, String> {
         let super::WorkerSpec {
             executable,
@@ -66,15 +66,15 @@ impl Worker {
         Ok(())
     }
 
-    pub(super) fn interrupt(&self) -> WorkerInterrupt {
-        WorkerInterrupt
+    pub(super) fn shutdown_handle(&self) -> WorkerShutdownHandle {
+        WorkerShutdownHandle
     }
 }
 
 #[derive(Clone)]
-pub(super) struct WorkerInterrupt;
+pub(super) struct WorkerShutdownHandle;
 
-impl WorkerInterrupt {
+impl WorkerShutdownHandle {
     pub(super) fn shutdown(
         &self,
         _deadline: std::time::Instant,

@@ -16,9 +16,9 @@ pub(super) struct Worker {
     process: WorkerProcess,
 }
 
-/// Interrupts worker I/O so its owner can finish retiring the process.
+/// Requests deadline-bounded shutdown while `Worker` retains the I/O task joins.
 #[derive(Clone)]
-pub(super) struct WorkerInterrupt {
+pub(super) struct WorkerShutdownHandle {
     writer: crate::sideband::Writer,
     stdin: StdinSender,
     child: Arc<Mutex<crate::sandbox::SandboxedChild>>,
@@ -49,7 +49,7 @@ impl WorkerRuntime {
         &self,
         spec: super::WorkerSpec<'_>,
         output: super::CapturedOutput,
-        on_started: impl FnOnce(WorkerInterrupt) -> Result<(), String>,
+        on_started: impl FnOnce(WorkerShutdownHandle) -> Result<(), String>,
     ) -> Result<Worker, String> {
         let super::WorkerSpec {
             executable,
@@ -106,7 +106,7 @@ impl WorkerRuntime {
             stdin,
             process,
         };
-        if let Err(error) = on_started(worker.interrupt()) {
+        if let Err(error) = on_started(worker.shutdown_handle()) {
             return Err(worker.startup_failure(error));
         }
         let ready = match worker.receive() {
@@ -253,7 +253,7 @@ impl Worker {
     }
 
     pub(super) fn shutdown(&mut self, deadline: Instant) -> Result<(), String> {
-        let shutdown = self.interrupt().shutdown(deadline)?;
+        let shutdown = self.shutdown_handle().shutdown(deadline)?;
         join_worker_thread(shutdown, "shutdown sender")?;
         self.finish_retirement()
     }
@@ -262,8 +262,8 @@ impl Worker {
         self.process.finish_threads()
     }
 
-    pub(super) fn interrupt(&self) -> WorkerInterrupt {
-        WorkerInterrupt {
+    pub(super) fn shutdown_handle(&self) -> WorkerShutdownHandle {
+        WorkerShutdownHandle {
             writer: self.writer.clone(),
             stdin: self.stdin.clone(),
             child: self.process.child.clone(),
@@ -338,8 +338,10 @@ impl StdinSender {
     }
 }
 
-impl WorkerInterrupt {
-    /// Closes worker input and enforces the process deadline without joining I/O tasks.
+impl WorkerShutdownHandle {
+    /// Closes worker input, requests protocol shutdown, and enforces the process deadline.
+    ///
+    /// The owning `Worker` separately joins the stdin and standard-stream tasks.
     pub(super) fn shutdown(&self, deadline: Instant) -> Result<thread::JoinHandle<()>, String> {
         let writer = self.writer.clone();
         let stdin = self.stdin.clone();

@@ -355,7 +355,7 @@ impl Client {
             let error = match self.clear_worker_stop_handle(generation) {
                 Ok(()) => error,
                 Err(clear_error) => format!(
-                    "{error}; additionally failed to clear the worker interrupt: {clear_error}"
+                    "{error}; additionally failed to clear the worker shutdown handle: {clear_error}"
                 ),
             };
             return finish(Err(SendFailure::from(error)));
@@ -381,7 +381,7 @@ impl Client {
     fn start_worker(
         &self,
         worker: &mut WorkerState,
-        on_started: impl FnOnce(platform::WorkerInterrupt) -> Result<(), String>,
+        on_started: impl FnOnce(platform::WorkerShutdownHandle) -> Result<(), String>,
     ) -> Result<(), String> {
         let replacing = matches!(&*worker, WorkerState::Stopped);
         if !matches!(&*worker, WorkerState::Running(_)) {

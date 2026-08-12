@@ -67,7 +67,7 @@ enum RestartOutcome {
 
 #[derive(Clone, Default)]
 pub(super) struct ProcessStopHandles {
-    worker: Option<platform::WorkerInterrupt>,
+    worker: Option<platform::WorkerShutdownHandle>,
     pub(super) resolver: Option<crate::resolver::ResolverStopHandle>,
 }
 
@@ -217,7 +217,7 @@ impl Client {
             let message = match self.clear_restart_stop_handle() {
                 Ok(()) => message,
                 Err(clear_error) => format!(
-                    "{message}; additionally failed to clear the worker interrupt: {clear_error}"
+                    "{message}; additionally failed to clear the worker shutdown handle: {clear_error}"
                 ),
             };
             let startup = self.0.output.take();
@@ -431,7 +431,7 @@ impl Client {
     pub(super) fn register_stop_handle(
         &self,
         expected: &WorkerGeneration,
-        handle: platform::WorkerInterrupt,
+        handle: platform::WorkerShutdownHandle,
     ) -> Result<(), String> {
         let (deadline, message) = {
             let mut lifecycle = self
@@ -476,7 +476,7 @@ impl Client {
 
     fn register_restart_stop_handle(
         &self,
-        handle: platform::WorkerInterrupt,
+        handle: platform::WorkerShutdownHandle,
     ) -> Result<(), String> {
         let (deadline, message) = {
             let mut lifecycle = self
