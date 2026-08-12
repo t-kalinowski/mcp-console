@@ -7,7 +7,9 @@ send:
 result:
   content:
     - type: text
-      text: "worker sideband read failed: worker sideband closed"
+      text: |-
+        [worker sideband read failed: worker sideband closed]
+        [worker stopped: in-memory state lost]
   isError: true
 ---
 id: 4
@@ -18,8 +20,8 @@ result:
   content:
     - type: text
       text: |-
+        [starting new worker]
 
-        [worker restarted: in-memory state lost]
         [idle]
   isError: false
 ---

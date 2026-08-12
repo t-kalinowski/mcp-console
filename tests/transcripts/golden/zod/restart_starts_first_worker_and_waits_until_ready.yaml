@@ -7,7 +7,9 @@ session:
 result:
   content:
     - type: text
-      text: "[restarted]"
+      text: |-
+        [starting new worker]
+        [restarted]
   isError: false
 ---
 id: 4

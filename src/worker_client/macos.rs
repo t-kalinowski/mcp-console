@@ -11,15 +11,28 @@ pub(super) struct WorkerRuntime;
 
 pub(super) struct Worker {
     reader: crate::sideband::Reader,
-    handle: WorkerHandle,
+    writer: crate::sideband::Writer,
+    stdin: StdinSender,
+    process: WorkerProcess,
 }
 
-/// Controls the lifecycle of one spawned worker.
+/// Interrupts worker I/O so its owner can finish retiring the process.
 #[derive(Clone)]
-pub(super) struct WorkerHandle {
+pub(super) struct WorkerInterrupt {
     writer: crate::sideband::Writer,
     stdin: StdinSender,
     child: Arc<Mutex<crate::sandbox::SandboxedChild>>,
+}
+
+struct WorkerProcess {
+    child: Arc<Mutex<crate::sandbox::SandboxedChild>>,
+    threads: Option<WorkerThreads>,
+}
+
+struct WorkerThreads {
+    stdin: thread::JoinHandle<()>,
+    stdout: thread::JoinHandle<()>,
+    stderr: thread::JoinHandle<()>,
 }
 
 #[derive(Clone)]
@@ -36,7 +49,7 @@ impl WorkerRuntime {
         &self,
         spec: super::WorkerSpec<'_>,
         output: super::CapturedOutput,
-        on_started: impl FnOnce(WorkerHandle) -> Result<(), String>,
+        on_started: impl FnOnce(WorkerInterrupt) -> Result<(), String>,
     ) -> Result<Worker, String> {
         let super::WorkerSpec {
             executable,
@@ -74,27 +87,44 @@ impl WorkerRuntime {
         let stderr = child
             .take_stderr()
             .expect("piped worker stderr should be available");
-        start_output_reader(stdout, output.stream());
-        start_output_reader(stderr, output.stream());
+        let stdout = start_output_reader(stdout, output.stream());
+        let stderr = start_output_reader(stderr, output.stream());
         let child = Arc::new(Mutex::new(child));
-        let stdin = start_stdin_writer(stdin, child.clone());
+        let (stdin, stdin_thread) = start_stdin_writer(stdin, child.clone());
+        let process = WorkerProcess {
+            child,
+            threads: Some(WorkerThreads {
+                stdin: stdin_thread,
+                stdout,
+                stderr,
+            }),
+        };
 
-        let handle = WorkerHandle {
+        let mut worker = Worker {
+            reader,
             writer,
             stdin,
-            child,
+            process,
         };
-        let mut worker = Worker { reader, handle };
-        on_started(worker.handle.clone())?;
-        match worker.receive()? {
-            WorkerMessage::Ready => {}
+        if let Err(error) = on_started(worker.interrupt()) {
+            return Err(worker.startup_failure(error));
+        }
+        let ready = match worker.receive() {
+            Ok(message) => message,
+            Err(error) => return Err(worker.startup_failure(error)),
+        };
+        let error = match ready {
+            WorkerMessage::Ready => None,
             WorkerMessage::Output { data } => {
-                return Err(format!("worker emitted output before readiness: {data}"));
+                Some(format!("worker emitted output before readiness: {data}"))
             }
             WorkerMessage::Image { .. } => {
-                return Err("worker emitted an image before readiness".to_string());
+                Some("worker emitted an image before readiness".to_string())
             }
-            _ => return Err("worker did not report readiness".to_string()),
+            _ => Some("worker did not report readiness".to_string()),
+        };
+        if let Some(error) = error {
+            return Err(worker.startup_failure(error));
         }
         Ok(worker)
     }
@@ -113,8 +143,7 @@ impl Worker {
             Vec<crate::resolver::ManagedPython>,
         ) -> Result<(), String>,
     ) -> Result<Result<(), String>, String> {
-        self.handle
-            .writer
+        self.writer
             .send(&ServerMessage::PreparePython { packages })
             .map_err(|error| format!("worker sideband write failed: {error}"))?;
         let mut python_candidates = Vec::new();
@@ -153,11 +182,10 @@ impl Worker {
         ) -> Result<(), String>,
     ) -> Result<(), String> {
         let crate::cell::Cell { language, source } = cell;
-        self.handle
-            .writer
+        self.writer
             .send(&ServerMessage::Evaluate { language, source })
             .map_err(|error| format!("worker sideband write failed: {error}"))?;
-        evaluation.attach_writer(self.handle.stdin.clone())?;
+        evaluation.attach_writer(self.stdin.clone())?;
         let mut python_candidates = Vec::new();
 
         loop {
@@ -200,15 +228,13 @@ impl Worker {
         match resolve_python(request) {
             Ok(managed) => {
                 let python = managed.python().to_string_lossy().into_owned();
-                self.handle
-                    .writer
+                self.writer
                     .send(&ServerMessage::PythonResolved { python })
                     .map_err(|error| format!("worker sideband write failed: {error}"))?;
                 Ok(Some(managed))
             }
             Err(message) => {
-                self.handle
-                    .writer
+                self.writer
                     .send(&ServerMessage::PythonResolutionFailed { message })
                     .map_err(|error| format!("worker sideband write failed: {error}"))?;
                 Ok(None)
@@ -223,15 +249,39 @@ impl Worker {
     }
 
     pub(super) fn write_stdin(&self, stdin: String) -> Result<(), String> {
-        self.handle.stdin.send(stdin.into_bytes())
+        self.stdin.send(stdin.into_bytes())
+    }
+
+    pub(super) fn shutdown(&mut self, deadline: Instant) -> Result<(), String> {
+        self.interrupt().shutdown(deadline)?;
+        self.finish_retirement()
+    }
+
+    pub(super) fn finish_retirement(&mut self) -> Result<(), String> {
+        self.process.finish_threads()
+    }
+
+    pub(super) fn interrupt(&self) -> WorkerInterrupt {
+        WorkerInterrupt {
+            writer: self.writer.clone(),
+            stdin: self.stdin.clone(),
+            child: self.process.child.clone(),
+        }
+    }
+
+    fn startup_failure(&mut self, message: String) -> String {
+        match self.shutdown(Instant::now()) {
+            Ok(()) => message,
+            Err(error) => format!("{message}; additionally failed to stop the worker: {error}"),
+        }
     }
 }
 
 fn start_output_reader(
     mut stream: impl Read + Send + 'static,
     output: super::CapturedOutputStream,
-) {
-    let _ = thread::spawn(move || {
+) -> thread::JoinHandle<()> {
+    thread::spawn(move || {
         let mut buffer = [0; 8 * 1024];
         loop {
             match stream.read(&mut buffer) {
@@ -249,15 +299,15 @@ fn start_output_reader(
                 }
             }
         }
-    });
+    })
 }
 
 fn start_stdin_writer(
     mut stdin: std::process::ChildStdin,
     child: Arc<Mutex<crate::sandbox::SandboxedChild>>,
-) -> StdinSender {
+) -> (StdinSender, thread::JoinHandle<()>) {
     let (sender, receiver) = mpsc::channel();
-    let _ = thread::spawn(move || {
+    let thread = thread::spawn(move || {
         for message in receiver {
             match message {
                 StdinMessage::Write(bytes) => {
@@ -272,7 +322,7 @@ fn start_stdin_writer(
             }
         }
     });
-    StdinSender(sender)
+    (StdinSender(sender), thread)
 }
 
 impl StdinSender {
@@ -287,18 +337,12 @@ impl StdinSender {
     }
 }
 
-impl Drop for Worker {
-    fn drop(&mut self) {
-        let _ = self.handle.force_stop();
-    }
-}
-
-impl WorkerHandle {
-    /// Attempts graceful shutdown while independently enforcing its deadline.
+impl WorkerInterrupt {
+    /// Closes worker input and enforces the process deadline without joining I/O tasks.
     pub(super) fn shutdown(&self, deadline: Instant) -> Result<(), String> {
         let writer = self.writer.clone();
         let stdin = self.stdin.clone();
-        let _ = thread::spawn(move || {
+        let _shutdown = thread::spawn(move || {
             stdin.close();
             let _ = writer.send(&ServerMessage::Shutdown);
         });
@@ -313,11 +357,22 @@ impl WorkerHandle {
         }
         Ok(())
     }
+}
 
-    fn force_stop(&self) -> Result<(), String> {
-        self.child
-            .lock()
-            .map_err(|_| "worker child lock poisoned".to_string())?
-            .force_stop()
+impl WorkerProcess {
+    fn finish_threads(&mut self) -> Result<(), String> {
+        let Some(threads) = self.threads.take() else {
+            return Ok(());
+        };
+        let stdin = join_worker_thread(threads.stdin, "stdin writer");
+        let stdout = join_worker_thread(threads.stdout, "stdout reader");
+        let stderr = join_worker_thread(threads.stderr, "stderr reader");
+        stdin.and(stdout).and(stderr)
     }
+}
+
+fn join_worker_thread(thread: thread::JoinHandle<()>, name: &str) -> Result<(), String> {
+    thread
+        .join()
+        .map_err(|_| format!("worker {name} task failed"))
 }

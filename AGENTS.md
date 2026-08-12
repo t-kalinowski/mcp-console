@@ -63,9 +63,10 @@ A failed restart resolution leaves the current worker, its in-memory state, requ
 After successful resolution, restart retains the prepared R library and candidate Python environment, loses all worker-owned in-memory state and unread stdin, eagerly starts a replacement, and returns `[restarted]` after it reports ready.
 The implicit session exists for the server lifetime, so restart starts its first worker if none exists yet.
 It first queues worker-stdin closure and the sideband shutdown message without waiting behind an evaluation, then force-stops the process group and reaps the direct sandbox process at the one-second deadline if that process remains live.
+It then joins the worker's stdin writer and standard-stream readers before reporting `[worker stopped: in-memory state lost]` or launching the replacement.
 Each admitted evaluation or idle stdin write carries its worker generation, so work admitted before restart cannot reach the replacement.
 A live Python preparation invalidated by restart returns `Python preparation cancelled by restart`; active-generation sideband failures retain their transport diagnostics.
-Direct standard-stream bytes collected around restart remain pending for the next `send` response and may share it with replacement output.
+The explicit restart response preserves old-worker output, the stopped notice when a worker existed, `[starting new worker]`, replacement startup output, and `[restarted]` in that order.
 Named sessions and runtime R requirement additions do not exist yet.
 On macOS, managed-Python preflight happens during `serve` startup when required; the first nonempty stdin submission or evaluation still lazily starts the built-in worker under the same sandbox policy as the `sandbox` command.
 The worker embeds R through `libr` and `harp`, retains global state, and feeds each complete R cell through R's DLL REPL iterator.
@@ -151,14 +152,13 @@ DuckDB errors are normal language outcomes with `isError: false`, and the connec
 Automatic Python relation sharing and a separate relation-registration API do not exist.
 Worker standard output and standard error are piped and collected continuously, including while the worker is idle.
 Each pipe reader queues raw byte chunks, and each `send` response decodes and drains complete UTF-8 prefixes from bytes already collected at its response boundary; later bytes remain for the next response.
-Without a pending restart notice, idle, running, and outstanding-input responses append the literal `\n[idle]`, `\n[running]`, or `\n[stdin needed]` banner; its leading newline is present even when no output precedes it.
-After an infrastructure failure discards a ready worker, its successfully started replacement queues `[worker restarted: in-memory state lost]\n` in pending response output.
-The next response drains it exactly once, after runtime or error text, inserting a preceding newline only when needed.
-If an idle, running, or outstanding-input banner follows, the restart notice's trailing newline supplies its separator.
+Idle, running, and outstanding-input responses append the literal `\n[idle]`, `\n[running]`, or `\n[stdin needed]` banner; its leading newline is present even when no output precedes it.
+After an infrastructure failure, the server finishes worker shutdown and its I/O readers before appending `[worker stopped: in-memory state lost]` after the specific error.
+Each replacement attempt appends `[starting new worker]\n` before launch, so its startup output or error follows that fact.
 Initial lazy startup and retries before a worker reaches ready are silent.
 Completion returns collected standard-stream and pending evaluation content, including sideband text, images, and input-request records, instead of `[done]` when any produced content.
 A failed evaluation likewise returns all pending evaluation output and any complete standard-stream output available at the response boundary before its infrastructure or protocol error.
-When worker output or a restart notice shares that response, the server starts the bracketed error on a new line; an error returned alone remains bare.
+When worker output or a lifecycle notice shares that response, the server starts the bracketed error on a new line; an error returned alone remains bare.
 Ordering between the two standard streams and sideband output is best effort; incomplete UTF-8 remains with its pipe until a later response, and invalid UTF-8 is replaced when output is rendered.
 The built-in worker and custom workers send console prompt fields verbatim; the server preserves each value without trimming it and renders it as a JSON-quoted `[input requested: ...]` record.
 Writes to inherited fd 1 or fd 2 from descendants follow the same path, but this does not add descendant supervision; forked descendants cannot use the inherited sideband.
@@ -167,7 +167,7 @@ It does not self-execute or set a dynamic-loader environment variable.
 The worker command runs synchronously on the process main thread; only `serve` creates a Tokio runtime.
 The hidden development option `serve --worker PATH` replaces the built-in worker with an executable that implements the same sideband request/receipt protocol and fd-0 input contract.
 The Python fixture `tests/fixtures/zod` provides deterministic acceptance coverage for R, Python, and SQL language tags at that boundary, MCP image content, direct fd-0 input, captured standard streams, and server-owned timeout and polling mechanics.
-An infrastructure or protocol failure is returned as a tool error, force-stops and discards that worker, and lets the next evaluation or nonempty idle stdin submission start a fresh worker with the replacement notice above.
+An infrastructure or protocol failure is returned as a tool error, fully retires that worker, and lets the next evaluation or nonempty idle stdin submission start a fresh worker with the starting notice above.
 When MCP input closes, the server cancels any active host resolver and starts a one-second deadline for graceful sideband shutdown without delaying it.
 If the direct sandbox process is still running when time expires, the sandbox boundary force-stops its process group and reaps that direct process.
 The version command prints the package name and version.

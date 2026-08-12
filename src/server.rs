@@ -146,28 +146,7 @@ impl ConsoleServer {
                 call.id(),
             )
             .await;
-        let (content, is_error) = response.into_parts();
-        let mut result_images = Vec::new();
-        let content = content
-            .into_iter()
-            .map(|content| match content {
-                crate::worker_client::Content::Text(text) => ContentBlock::text(text),
-                crate::worker_client::Content::Image {
-                    data,
-                    mime_type,
-                    artifact,
-                } => {
-                    result_images.push(artifact);
-                    ContentBlock::image(data, mime_type)
-                }
-            })
-            .collect();
-        call.record_result_images(result_images)?;
-        Ok(if is_error {
-            CallToolResult::error(content)
-        } else {
-            CallToolResult::success(content)
-        })
+        response_to_tool_result(response, &call)
     }
 
     #[tool(
@@ -175,6 +154,7 @@ impl ConsoleServer {
     )]
     async fn session(
         &self,
+        Extension(call): Extension<crate::transcript::Call>,
         Parameters(SessionArguments {
             action,
             requirements,
@@ -200,6 +180,10 @@ impl ConsoleServer {
                 {
                     crate::worker_client::PrepareResult::Prepared => "[prepared]",
                     crate::worker_client::PrepareResult::RestartRequired => "[restart required]",
+                    crate::worker_client::PrepareResult::WorkerStopped(message) => {
+                        let response = self.worker.worker_stopped_response(message);
+                        return response_to_tool_result(response, &call);
+                    }
                 }
             }
             SessionAction::Restart => {
@@ -221,12 +205,40 @@ impl ConsoleServer {
                     }
                     None => Vec::new(),
                 };
-                self.worker.restart(python, WORKER_SHUTDOWN_GRACE).await?;
-                "[restarted]"
+                let response = self.worker.restart(python, WORKER_SHUTDOWN_GRACE).await?;
+                return response_to_tool_result(response, &call);
             }
         };
         Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
     }
+}
+
+fn response_to_tool_result(
+    response: crate::worker_client::Response,
+    call: &crate::transcript::Call,
+) -> Result<CallToolResult, String> {
+    let (content, is_error) = response.into_parts();
+    let mut result_images = Vec::new();
+    let content = content
+        .into_iter()
+        .map(|content| match content {
+            crate::worker_client::Content::Text(text) => ContentBlock::text(text),
+            crate::worker_client::Content::Image {
+                data,
+                mime_type,
+                artifact,
+            } => {
+                result_images.push(artifact);
+                ContentBlock::image(data, mime_type)
+            }
+        })
+        .collect();
+    call.record_result_images(result_images)?;
+    Ok(if is_error {
+        CallToolResult::error(content)
+    } else {
+        CallToolResult::success(content)
+    })
 }
 
 fn validate_r_requirements(r: &[String]) -> Result<(), String> {

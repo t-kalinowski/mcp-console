@@ -245,7 +245,9 @@ def test_restart_loses_state_and_retains_python_requirements(
     assert last_tool_text(client) == "[done]"
 
     client.session(action="restart")
-    assert last_tool_text(client) == "[restarted]"
+    assert last_tool_text(client) == (
+        "[worker stopped: in-memory state lost]\n[starting new worker]\n[restarted]"
+    )
 
     # fmt: python
     python = code("""
@@ -299,7 +301,9 @@ def test_prepares_python_requirements_after_worker_startup(binary: Path) -> Tran
     assert last_tool_text(client) == "(42, True, True, 'yaml12')\n"
 
     client.session(action="restart")
-    assert last_tool_text(client) == "[restarted]"
+    assert last_tool_text(client) == (
+        "[worker stopped: in-memory state lost]\n[starting new worker]\n[restarted]"
+    )
     # fmt: python
     python = code("""
         import yaml12
@@ -393,7 +397,9 @@ def test_layers_python_requirements_declared_by_r_packages(
         assert output == "(42, 'yaml12', True)\n", repr(output)
 
         client.session(action="restart")
-        assert last_tool_text(client) == "[restarted]"
+        assert last_tool_text(client) == (
+            "[worker stopped: in-memory state lost]\n[starting new worker]\n[restarted]"
+        )
 
         # fmt: python
         python = code("""
@@ -449,7 +455,12 @@ def test_resolves_package_requirements_before_python_initializes(
             tools::pskill(Sys.getpid(), signal = 9L)
             """).removesuffix("\n")
         client.send(r=r)
-        assert client.transcript[-1]["result"]["isError"] is True
+        result = client.transcript[-1]["result"]
+        assert result["isError"] is True
+        assert result["content"][0]["text"] == (
+            "[worker sideband read failed: worker sideband closed]\n"
+            "[worker stopped: in-memory state lost]"
+        )
 
         # fmt: r
         r = code(r"""
@@ -457,9 +468,7 @@ def test_resolves_package_requirements_before_python_initializes(
             """)
         client.send(r=r)
         output = last_tool_text(client)
-        assert output == ("[1] TRUE\n[worker restarted: in-memory state lost]\n"), repr(
-            output
-        )
+        assert output == "[starting new worker]\n[1] TRUE\n", repr(output)
 
         # fmt: python
         python = code("""
@@ -485,7 +494,12 @@ def test_does_not_checkpoint_python_requirements_from_failed_cell(
         tools::pskill(Sys.getpid(), signal = 9L)
         """).removesuffix("\n")
     client.send(r=r)
-    assert client.transcript[-1]["result"]["isError"] is True
+    result = client.transcript[-1]["result"]
+    assert result["isError"] is True
+    assert result["content"][0]["text"] == (
+        "[worker sideband read failed: worker sideband closed]\n"
+        "[worker stopped: in-memory state lost]"
+    )
 
     # Start the replacement and confirm that the failed cell did not advance its manifest.
     # fmt: r
@@ -495,9 +509,7 @@ def test_does_not_checkpoint_python_requirements_from_failed_cell(
         """)
     client.send(r=r)
     output = last_tool_text(client)
-    assert output == ("[1] FALSE\n[worker restarted: in-memory state lost]\n"), repr(
-        output
-    )
+    assert output == "[starting new worker]\n[1] FALSE\n", repr(output)
 
     client.session(
         action="prepare",
@@ -660,9 +672,16 @@ def test_restart_cancels_live_python_preparation(binary: Path) -> Transcript:
         ],
         "isError": True,
     }, preparation_result
-    assert restart["result"]["content"] == [{"type": "text", "text": "[restarted]"}], (
-        restart
-    )
+    assert restart["result"]["content"] == [
+        {
+            "type": "text",
+            "text": (
+                "[worker stopped: in-memory state lost]\n"
+                "[starting new worker]\n"
+                "[restarted]"
+            ),
+        }
+    ], restart
     assert resolver_stopped.wait(2), "restart did not stop the Python resolver"
     release.set()
     index.join(2)
@@ -1087,7 +1106,9 @@ def test_returns_matplotlib_plots(binary: Path) -> Transcript:
         assert last_tool_text(client) == "(True, 'yaml12')\n"
 
         client.session(action="restart")
-        assert last_tool_text(client) == "[restarted]"
+        assert last_tool_text(client) == (
+            "[worker stopped: in-memory state lost]\n[starting new worker]\n[restarted]"
+        )
         # fmt: python
         python = code("""
             import os
@@ -1455,12 +1476,11 @@ def test_restarts_after_python_bridge_failure(binary: Path) -> Transcript:
         "Error in py_discover_config(required_module, use_environment) : \n"
         "  Python specified in RETICULATE_PYTHON "
         "(/mcp-console-missing-python) does not exist\n"
-        "[worker sideband read failed: worker sideband closed]"
+        "[worker sideband read failed: worker sideband closed]\n"
+        "[worker stopped: in-memory state lost]"
     )
     client.send(r='exists("python_worker_marker", inherits = FALSE)')
-    assert last_tool_text(client) == (
-        "[1] FALSE\n[worker restarted: in-memory state lost]\n"
-    )
+    assert last_tool_text(client) == "[starting new worker]\n[1] FALSE\n"
     client.send(python="6 * 7")
     assert last_tool_text(client) == "42\n"
     return client._finish()

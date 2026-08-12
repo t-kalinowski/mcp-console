@@ -263,25 +263,24 @@ Bytes collected after that snapshot and incomplete trailing sequences remain for
 Completion returns decoded standard-stream text followed by pending evaluation content, including sideband text, images, and input-request records not already delivered at a `[stdin needed]` boundary, or `[done]` when neither produced content.
 If evaluation instead ends in an infrastructure or protocol failure, all pending evaluation output received before the failure precedes the tool error.
 When runtime output shares that response, the server starts the bracketed error on a new line, inserting a newline only when the output does not already end with one.
-A tool error returned without runtime output or a restart notice remains bare.
-If the poll wait expires first and no restart notice is pending, the literal `\n[running]` banner is appended to any collected standard-stream text.
-A call without a code field or `stdin` while no evaluation is active and no restart notice is pending appends the literal `\n[idle]` banner to collected standard-stream text.
+A worker failure adds `[worker stopped: in-memory state lost]` after that error once shutdown has finished and no standard-stream reader can append more output.
+A tool error returned without runtime output or a worker-stopped notice remains bare.
+If the poll wait expires first, the literal `\n[running]` banner is appended to any collected standard-stream text.
+A call without a code field or `stdin` while no evaluation is active appends the literal `\n[idle]` banner to collected standard-stream text.
 A stdin-only call in that state queues the bytes and uses the same idle response projection.
 
-After an infrastructure or protocol failure discards a ready worker, its successfully started replacement eagerly queues the literal `[worker restarted: in-memory state lost]\n` banner in pending MCP response output.
-Whichever response is assembled next drains that banner exactly once.
-This is server-owned MCP response text, not a sideband frame.
-It follows collected standard-stream, evaluation, or error text and starts on a new line, without adding a blank line when that text already ends with a newline.
-If a final `[stdin needed]`, `[running]`, or `[idle]` banner follows, the restart notice's trailing newline supplies its separator.
-With no preceding or following text, the response is `\n[worker restarted: in-memory state lost]\n`.
-When it is the only text from a completed evaluation, it replaces `[done]`.
+Before each replacement attempt, the server appends `[starting new worker]\n` to the same ordered output stream used for captured standard output and standard error.
+The notice is recorded before launch, so startup output and startup errors follow it.
+A failed replacement remains stopped, and each retry emits a new starting notice.
 Initial lazy startup and retries after a failure before `ready` remain silent because no established worker state was lost.
+An explicit restart reports retained old-worker output, the stopped notice when a worker existed, the starting notice, replacement startup output, and `[restarted]` in its `session` response.
+Concurrent `send` calls cannot drain those lifecycle events while restart owns them.
 
 Except for outstanding-input boundaries, this slice does not expose partial sideband output while an evaluation is running.
 Standard-stream text is attached to whichever response is sent next, including `[running]`, `[stdin needed]`, or `[idle]` responses.
-Without a preceding restart notice, each state banner has a newline before it, including when no worker or evaluation output precedes it.
+Each state banner has a newline before it, including when no worker or evaluation output precedes it.
 An existing trailing newline supplies that boundary for `[stdin needed]`; `[running]` and `[idle]` always add one, so their preceding output may leave a blank line.
-When a tool error shares the response with runtime output or a restart notice, brackets distinguish it from worker text and the server inserts a newline before it only when needed.
+When a tool error shares the response with runtime output or a lifecycle notice, brackets distinguish it from worker text and the server inserts a newline before it only when needed.
 Output cursors and general incremental polling remain unimplemented.
 
 ### Interactive input
@@ -357,10 +356,11 @@ New code is rejected while an evaluation or its uncollected result is active.
 Malformed JSON, invalid UTF-8, an unexpected message, or sideband EOF fails the active operation.
 `python_resolution_failed` is a reply to a valid resolution request, not a general protocol error message.
 There is no structured message for other protocol or infrastructure failures.
-Startup failure leaves no cached worker, so a later evaluation retries startup without a replacement notice.
-After `ready`, a sideband failure force-stops and discards the worker; a later evaluation or nonempty idle stdin submission starts a fresh worker and queues the replacement notice described above for the next response.
+Initial startup failure leaves no cached worker, so a later evaluation retries startup silently.
+After `ready`, a sideband failure retires the worker before its tool error reports `[worker stopped: in-memory state lost]`.
+A later evaluation or nonempty idle stdin submission emits `[starting new worker]` before attempting the replacement.
 Sideband content received before that failure is retained and precedes the tool error.
-Standard-stream text collected before an infrastructure failure is attached to its tool error when available at the response boundary; text collected later remains for the next `send` response.
+Worker retirement waits for the standard-stream readers, so all accepted standard-stream text precedes the tool error and stopped notice.
 If either output path contributed text, the server starts the bracketed error on a new line.
 R parse and evaluation errors, Python exceptions, and DuckDB errors are not sideband failures: the built-in worker sends them as output followed by `completed`, checkpoints any resulting manifest, and remains reusable.
 
@@ -380,7 +380,9 @@ The shutdown task queues worker-stdin closure, then attempts the sideband write.
 It runs independently of the deadline so a blocked stdin writer or full sideband pipe cannot postpone forced termination.
 The sandbox child waits only for the time remaining before the original deadline.
 If its direct process is still running at the deadline, the sandbox force-stops its process group and reaps that direct process.
-Shutdown does not wait for the standard-stream readers to reach EOF because descendants may retain those descriptors.
+After the process stops, shutdown joins its stdin writer and standard-stream readers.
+For the supported worker lifetime, this closes the old generation's server-side I/O boundary before shutdown returns.
+Background descendants that outlive that boundary remain unsupported as described below.
 
 Shutdown owns stop handles independently of the evaluation lock, including simultaneous handles for the worker and its nested host resolver.
 This lets the server terminate both processes while another thread is blocked waiting for resolver or worker output.

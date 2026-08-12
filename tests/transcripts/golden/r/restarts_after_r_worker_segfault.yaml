@@ -35,6 +35,7 @@ result:
         [input requested: "Selection: "]
         R is aborting now ...
         [worker sideband read failed: worker sideband closed]
+        [worker stopped: in-memory state lost]
   isError: true
 ---
 id: 5
@@ -44,8 +45,8 @@ result:
   content:
     - type: text
       text: |
+        [starting new worker]
         [1] FALSE
-        [worker restarted: in-memory state lost]
   isError: false
 ---
 id: 6

@@ -11,6 +11,7 @@ pub(super) struct Environment {
 pub(crate) enum PrepareResult {
     Prepared,
     RestartRequired,
+    WorkerStopped(String),
 }
 
 pub(crate) struct Requirements {
@@ -92,7 +93,7 @@ impl Client {
                 return Err("worker lock poisoned".to_string());
             }
         };
-        if matches!(*worker, WorkerState::ReplacementPending)
+        if matches!(*worker, WorkerState::Stopped)
             || (!matches!(*worker, WorkerState::Initial) && !r_additions.is_subset(&current_r))
         {
             return Ok(PrepareResult::RestartRequired);
@@ -102,9 +103,11 @@ impl Client {
                 return Ok(PrepareResult::RestartRequired);
             }
             drop(environment);
-            return self
-                .prepare_running_python(&generation, worker, python_additions.into_iter().collect())
-                .map(|()| PrepareResult::Prepared);
+            return self.prepare_running_python(
+                &generation,
+                worker,
+                python_additions.into_iter().collect(),
+            );
         }
 
         let r_requirements = current_r.union(&r_additions).cloned().collect::<Vec<_>>();
@@ -152,7 +155,7 @@ impl Client {
         generation: &WorkerGeneration,
         mut worker: std::sync::MutexGuard<'_, WorkerState>,
         packages: Vec<String>,
-    ) -> Result<(), String> {
+    ) -> Result<PrepareResult, String> {
         self.ensure_generation(generation)?;
         let WorkerState::Running(running) = &mut *worker else {
             return Err("worker state changed during Python preparation".to_string());
@@ -165,7 +168,7 @@ impl Client {
             },
         );
         let (infrastructure_failure, error) = match result {
-            Ok(Ok(())) => return Ok(()),
+            Ok(Ok(())) => return Ok(PrepareResult::Prepared),
             Ok(Err(error)) => (false, error),
             Err(error) => (true, error),
         };
@@ -173,7 +176,10 @@ impl Client {
             GenerationStatus::Changed => Err("Python preparation cancelled by restart".to_string()),
             GenerationStatus::CurrentReady => {
                 if infrastructure_failure {
-                    *worker = WorkerState::ReplacementPending;
+                    return match self.retire_failed_worker(&mut worker, generation)? {
+                        true => Ok(PrepareResult::WorkerStopped(error)),
+                        false => Err(error),
+                    };
                 }
                 Err(error)
             }

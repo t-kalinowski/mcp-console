@@ -342,13 +342,12 @@ def test_restarts_after_r_worker_segfault(binary: Path) -> Transcript:
     assert "Possible actions:\n1: abort (with core dump, if enabled)\n" in fatal_output
     assert fatal_output.endswith(
         '[input requested: "Selection: "]\nR is aborting now ...\n'
-        "[worker sideband read failed: worker sideband closed]"
+        "[worker sideband read failed: worker sideband closed]\n"
+        "[worker stopped: in-memory state lost]"
     )
 
     client.send(r='exists("r_worker_marker", inherits = FALSE)')
-    assert last_tool_text(client) == (
-        "[1] FALSE\n[worker restarted: in-memory state lost]\n"
-    )
+    assert last_tool_text(client) == "[starting new worker]\n[1] FALSE\n"
     client.send(r="1 + 1")
     assert last_tool_text(client) == "[1] 2\n"
     return client._finish()
@@ -364,12 +363,15 @@ def test_reports_r_worker_restart_with_idle_stdin(binary: Path) -> Transcript:
         tools::pskill(Sys.getpid(), signal = 9L)
         """).removesuffix("\n")
     client.send(r=r)
-    assert client.transcript[-1]["result"]["isError"] is True
+    result = client.transcript[-1]["result"]
+    assert result["isError"] is True
+    assert result["content"][0]["text"] == (
+        "[worker sideband read failed: worker sideband closed]\n"
+        "[worker stopped: in-memory state lost]"
+    )
 
     client.send(stdin="replacement\n")
-    assert last_tool_text(client) == (
-        "\n[worker restarted: in-memory state lost]\n[idle]"
-    )
+    assert last_tool_text(client) == "[starting new worker]\n\n[idle]"
 
     # fmt: r
     direct_stdin = code(r"""
@@ -396,7 +398,13 @@ def test_restart_while_r_waits_for_input(binary: Path) -> Transcript:
     assert last_tool_text(client) == ('[input requested: "restart> "]\n[stdin needed]')
 
     client.session(action="restart")
-    assert last_tool_text(client) == "[restarted]"
+    output = last_tool_text(client)
+    assert output == (
+        '[1] ""\n'
+        "[worker stopped: in-memory state lost]\n"
+        "[starting new worker]\n"
+        "[restarted]"
+    ), repr(output)
 
     client.send(r='exists("restart_marker", inherits = FALSE)')
     assert last_tool_text(client) == "[1] FALSE\n"

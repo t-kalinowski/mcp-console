@@ -3,37 +3,26 @@
 ---
 id: 3
 send:
-  r: wait for stdin close
-  timeout_ms: 0
+  r: violate protocol after stdout
 result:
   content:
     - type: text
       text: |-
-
-        [running]
-  isError: false
+        zod old stdout
+        <large output>
+        [worker sent an unexpected ready message]
+        [worker stopped: in-memory state lost]
+  isError: true
 ---
 id: 4
-session:
-  action: restart
-result:
-  content:
-    - type: text
-      text: |-
-        zod stdin closed
-        <large output>
-        [worker stopped: in-memory state lost]
-        [starting new worker]
-        [restarted]
-  isError: false
----
-id: 5
 send:
   r: echo
 result:
   content:
     - type: text
       text: |
+        [starting new worker]
+        zod replacement startup ready
         zod: echo
   isError: false
 ...

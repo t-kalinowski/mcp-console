@@ -68,7 +68,10 @@ session:
 result:
   content:
     - type: text
-      text: "[restarted]"
+      text: |-
+        [worker stopped: in-memory state lost]
+        [starting new worker]
+        [restarted]
   isError: false
 ---
 id: 9

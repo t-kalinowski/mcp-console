@@ -50,8 +50,33 @@ struct WorkerSpec<'a> {
 
 enum WorkerState {
     Initial,
-    ReplacementPending,
+    Stopped,
     Running(platform::Worker),
+}
+
+impl WorkerState {
+    fn retire(&mut self, deadline: std::time::Instant) -> Result<bool, String> {
+        match self {
+            Self::Running(worker) => {
+                worker.shutdown(deadline)?;
+                *self = Self::Stopped;
+                Ok(true)
+            }
+            Self::Initial => Ok(false),
+            Self::Stopped => Ok(false),
+        }
+    }
+
+    fn finish_retirement(&mut self) -> Result<bool, String> {
+        match self {
+            Self::Running(worker) => {
+                worker.finish_retirement()?;
+                *self = Self::Stopped;
+                Ok(true)
+            }
+            Self::Initial | Self::Stopped => Ok(false),
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -118,7 +143,12 @@ impl Client {
     ) -> Result<SendResponse, SendFailure> {
         let generation = self.admit()?;
         let evaluation = match cell {
-            Some(cell) => self.start_evaluation(cell, stdin, generation, transcript, call_id)?,
+            Some(cell) => {
+                let evaluation =
+                    self.start_evaluation(cell, stdin, generation, transcript, call_id)?;
+                evaluation.claim_wait()?;
+                evaluation
+            }
             None => match self.current_evaluation()? {
                 Some(active) => {
                     self.ensure_generation(&generation)?;
@@ -130,6 +160,7 @@ impl Client {
                     if let Some(stdin) = stdin {
                         active.evaluation.submit_stdin(stdin)?;
                     }
+                    active.evaluation.claim_wait()?;
                     active.evaluation
                 }
                 None => {
@@ -180,17 +211,17 @@ impl Client {
         drop(active);
 
         let client = self.clone();
-        let running = evaluation.clone();
         let evaluator = evaluation.clone();
         let evaluation_task = tokio::task::spawn_blocking(move || {
-            client.evaluate_blocking(cell, &evaluator, generation)
+            client.evaluate_blocking(cell, &evaluator, generation);
         });
+        let failed = evaluation.clone();
         let _completion_task = tokio::spawn(async move {
-            let result = evaluation_task
-                .await
-                .map_err(|error| format!("worker task failed: {error}"))
-                .and_then(|result| result);
-            running.complete(result);
+            if let Err(error) = evaluation_task.await {
+                failed.complete(Err(SendFailure::from(format!(
+                    "worker task failed: {error}"
+                ))));
+            }
         });
         Ok(evaluation)
     }
@@ -215,22 +246,26 @@ impl Client {
         &self,
         stdin: String,
         generation: WorkerGeneration,
-    ) -> Result<(), String> {
+    ) -> Result<(), SendFailure> {
         if stdin.is_empty() {
             return Ok(());
         }
         let client = self.clone();
         tokio::task::spawn_blocking(move || client.write_idle_stdin_blocking(stdin, generation))
             .await
-            .map_err(|error| format!("worker stdin task failed: {error}"))?
+            .map_err(|error| SendFailure::from(format!("worker stdin task failed: {error}")))?
     }
 
     fn write_idle_stdin_blocking(
         &self,
         stdin: String,
         generation: WorkerGeneration,
-    ) -> Result<(), String> {
-        self.with_worker(&generation, |worker| worker.write_stdin(stdin))
+    ) -> Result<(), SendFailure> {
+        self.with_worker(
+            &generation,
+            |worker| worker.write_stdin(stdin),
+            std::convert::identity,
+        )
     }
 
     fn clear_evaluation(&self, completed: &Arc<Evaluation>) -> Result<(), String> {
@@ -242,6 +277,7 @@ impl Client {
         if active
             .as_ref()
             .is_some_and(|active| Arc::ptr_eq(&active.evaluation, completed))
+            && !completed.is_restarting()?
         {
             *active = None;
         }
@@ -253,62 +289,87 @@ impl Client {
         cell: crate::cell::Cell,
         evaluation: &Evaluation,
         generation: WorkerGeneration,
-    ) -> Result<(), String> {
+    ) {
         let resolver = self.clone();
         let checkpointer = self.clone();
         let resolver_generation = generation.clone();
         let checkpoint_generation = generation.clone();
-        self.with_worker(&generation, |worker| {
-            worker.evaluate(
-                cell,
-                evaluation,
-                move |request| {
-                    resolver.resolve_runtime_python(resolver_generation.clone(), request)
-                },
-                move |checkpoint, candidates| {
-                    checkpointer.checkpoint_runtime_python(
-                        checkpoint_generation.clone(),
-                        checkpoint,
-                        candidates,
-                    )
-                },
-            )
-        })
+        self.with_worker(
+            &generation,
+            |worker| {
+                worker.evaluate(
+                    cell,
+                    evaluation,
+                    move |request| {
+                        resolver.resolve_runtime_python(resolver_generation.clone(), request)
+                    },
+                    move |checkpoint, candidates| {
+                        checkpointer.checkpoint_runtime_python(
+                            checkpoint_generation.clone(),
+                            checkpoint,
+                            candidates,
+                        )
+                    },
+                )
+            },
+            |result| evaluation.complete(result),
+        )
     }
 
-    fn with_worker<T>(
+    fn with_worker<T, U>(
         &self,
         generation: &WorkerGeneration,
         operation: impl FnOnce(&mut platform::Worker) -> Result<T, String>,
-    ) -> Result<T, String> {
-        self.ensure_generation(generation)?;
+        finish: impl FnOnce(Result<T, SendFailure>) -> U,
+    ) -> U {
+        if let Err(error) = self.ensure_generation(generation) {
+            return finish(Err(SendFailure::from(error)));
+        }
 
-        let mut worker = self
-            .0
-            .worker
-            .lock()
-            .map_err(|_| "worker lock poisoned".to_string())?;
-        self.ensure_generation(generation)?;
+        let mut worker = match self.0.worker.lock() {
+            Ok(worker) => worker,
+            Err(_) => {
+                return finish(Err(SendFailure::from("worker lock poisoned".to_string())));
+            }
+        };
+        if let Err(error) = self.ensure_generation(generation) {
+            return finish(Err(SendFailure::from(error)));
+        }
 
-        self.start_worker(&mut worker, |stop_handle| {
+        if let Err(error) = self.start_worker(&mut worker, |stop_handle| {
             self.register_stop_handle(generation, stop_handle)
-        })?;
+        }) {
+            let error = match self.clear_worker_stop_handle(generation) {
+                Ok(()) => error,
+                Err(clear_error) => format!(
+                    "{error}; additionally failed to clear the worker interrupt: {clear_error}"
+                ),
+            };
+            return finish(Err(SendFailure::from(error)));
+        }
         let WorkerState::Running(running) = &mut *worker else {
             unreachable!("worker should be running");
         };
-        let result = operation(running);
-        if result.is_err() && self.generation_is_ready(generation)? {
-            *worker = WorkerState::ReplacementPending;
-        }
-        result
+        let result = match operation(running) {
+            Ok(result) => Ok(result),
+            Err(message) => match self.retire_failed_worker(&mut worker, generation) {
+                Ok(true) => Err(SendFailure::from(message).worker_stopped()),
+                Ok(false) => Err(SendFailure::from(message)),
+                Err(stop_error) => Err(SendFailure::from(format!(
+                    "{message}; additionally failed to stop the worker: {stop_error}"
+                ))),
+            },
+        };
+        drop(worker);
+        finish(result)
     }
 
     fn start_worker(
         &self,
         worker: &mut WorkerState,
-        on_started: impl FnOnce(platform::WorkerHandle) -> Result<(), String>,
+        on_started: impl FnOnce(platform::WorkerInterrupt) -> Result<(), String>,
     ) -> Result<(), String> {
-        let replacing = matches!(&*worker, WorkerState::ReplacementPending);
+        let replacing = matches!(&*worker, WorkerState::Stopped);
         if !matches!(&*worker, WorkerState::Running(_)) {
             let environment = match &self.0.environment {
                 Some(environment) => Some(
@@ -330,14 +391,14 @@ impl Client {
                 managed_python,
                 managed_r,
             };
+            if replacing {
+                self.0.output.push_notice(output::WORKER_STARTED_NOTICE);
+            }
             let running = self
                 .0
                 .runtime
                 .spawn(spec, self.0.output.clone(), on_started)?;
             *worker = WorkerState::Running(running);
-            if replacing {
-                self.0.output.push_restart_notice();
-            }
         }
         Ok(())
     }

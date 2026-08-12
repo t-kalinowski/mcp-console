@@ -64,7 +64,7 @@ def wait_for_server_to_process_sideband(stream: TextIO) -> None:
     stream.flush()
 
 
-def configure_startup(root: Path) -> None:
+def configure_startup(root: Path, writer: TextIO) -> None:
     control_path = os.environ.get("ZOD_STARTUP_CONTROL")
     if control_path is None:
         return
@@ -72,11 +72,17 @@ def configure_startup(root: Path) -> None:
     mode = control.read_text(encoding="utf-8")
     if mode == "fail":
         os._exit(86)
+    if mode == "fail with stderr":
+        write_all(2, b"zod replacement startup failed\n")
+        os._exit(86)
     if mode == "block":
         (root / "zod-replacement-waiting-ready").touch()
         release = Path(os.environ["ZOD_STARTUP_RELEASE"])
         while not release.exists():
             time.sleep(0.01)
+        mode = "ready"
+    if mode == "ready with stdout":
+        write_all(1, b"zod replacement startup ready\n")
         mode = "ready"
     assert mode == "ready", f"unsupported Zod startup mode: {mode}"
 
@@ -91,7 +97,7 @@ def main() -> None:
             str(os.getpgrp()),
             encoding="utf-8",
         )
-    configure_startup(temporary)
+    configure_startup(temporary, writer)
     send(writer, {"kind": "ready"})
 
     if os.environ.get("ZOD_BLOCK_SIDEBAND_WRITE") == "1":
@@ -131,6 +137,11 @@ def main() -> None:
                     "data": "zod output before protocol failure",
                 },
             )
+            send(writer, {"kind": "ready"})
+            continue
+
+        if source == "violate protocol after stdout":
+            emit_large_output(1, b"zod old stdout\n")
             send(writer, {"kind": "ready"})
             continue
 
@@ -255,10 +266,15 @@ def main() -> None:
             send(writer, {"kind": "completed"})
             continue
 
-        if source == "emit image before completion":
+        if source in {
+            "emit image before completion",
+            "emit output and image before completion",
+        }:
             (temporary / "zod-image-evaluation-started").touch()
             while not (temporary / "zod-release-image").exists():
                 time.sleep(0.01)
+            if source == "emit output and image before completion":
+                send(writer, {"kind": "output", "data": "before pending image\n"})
             send(
                 writer,
                 {
@@ -267,6 +283,8 @@ def main() -> None:
                     "mime_type": "image/png",
                 },
             )
+            if source == "emit output and image before completion":
+                send(writer, {"kind": "output", "data": "after pending image\n"})
             wait_for_server_to_process_sideband(writer)
             (temporary / "zod-image-processed").touch()
             while not (temporary / "zod-release-image-completion").exists():

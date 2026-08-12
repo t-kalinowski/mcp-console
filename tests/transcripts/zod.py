@@ -6,6 +6,7 @@ import os
 import signal
 import subprocess
 import tempfile
+import threading
 import time
 from datetime import datetime
 from pathlib import Path
@@ -645,6 +646,267 @@ def assert_large_output(output: str, prefix: str) -> None:
     assert barrier and not barrier.strip("y"), "unexpected text after captured payload"
 
 
+def large_output(prefix: str) -> str:
+    return prefix + ("x" * LARGE_OUTPUT_SIZE) + ("y" * LARGE_OUTPUT_SIZE)
+
+
+def test_orders_failure_and_replacement_output(binary: Path) -> Transcript:
+    zod = Path(__file__).resolve().parents[1] / "fixtures" / "zod"
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        startup_control = Path(temporary_directory) / "zod-startup-control"
+        startup_control.write_text("ready", encoding="utf-8")
+        environment = os.environ.copy()
+        environment["TMPDIR"] = temporary_directory
+        environment["ZOD_STARTUP_CONTROL"] = str(startup_control)
+        client = McpClient(
+            binary,
+            ("serve", "--worker", str(zod)),
+            environment,
+        )
+        client._initialize_and_list_tools()
+
+        client.send(r="violate protocol after stdout")
+        result = client.transcript[-1]["result"]
+        assert result["isError"] is True, result
+        expected_failure = large_output("zod old stdout\n") + (
+            "\n[worker sent an unexpected ready message]"
+            "\n[worker stopped: in-memory state lost]"
+        )
+        assert result["content"] == [{"type": "text", "text": expected_failure}]
+        result["content"][0]["text"] = (
+            "zod old stdout\n<large output>\n"
+            "[worker sent an unexpected ready message]\n"
+            "[worker stopped: in-memory state lost]"
+        )
+
+        startup_control.write_text("ready with stdout", encoding="utf-8")
+        client.send(r="echo")
+        assert last_tool_text(client) == (
+            "[starting new worker]\nzod replacement startup ready\nzod: echo\n"
+        )
+        return client._finish()
+
+
+def test_reports_replacement_startup_failure_and_retry(
+    binary: Path,
+) -> Transcript:
+    zod = Path(__file__).resolve().parents[1] / "fixtures" / "zod"
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        startup_control = Path(temporary_directory) / "zod-startup-control"
+        startup_control.write_text("ready", encoding="utf-8")
+        environment = os.environ.copy()
+        environment["TMPDIR"] = temporary_directory
+        environment["ZOD_STARTUP_CONTROL"] = str(startup_control)
+        client = McpClient(
+            binary,
+            ("serve", "--worker", str(zod)),
+            environment,
+        )
+        client._initialize_and_list_tools()
+
+        client.send(r="exit unexpectedly")
+        result = client.transcript[-1]["result"]
+        assert result == {
+            "content": [
+                {
+                    "type": "text",
+                    "text": (
+                        "[worker sideband read failed: worker sideband closed]\n"
+                        "[worker stopped: in-memory state lost]"
+                    ),
+                }
+            ],
+            "isError": True,
+        }, result
+
+        startup_control.write_text("fail with stderr", encoding="utf-8")
+        client.send(r="echo")
+        result = client.transcript[-1]["result"]
+        assert result == {
+            "content": [
+                {
+                    "type": "text",
+                    "text": (
+                        "[starting new worker]\n"
+                        "zod replacement startup failed\n"
+                        "[worker sideband read failed: worker sideband closed]"
+                    ),
+                }
+            ],
+            "isError": True,
+        }, result
+
+        startup_control.write_text("ready with stdout", encoding="utf-8")
+        client.send(r="echo")
+        assert last_tool_text(client) == (
+            "[starting new worker]\nzod replacement startup ready\nzod: echo\n"
+        )
+        return client._finish()
+
+
+def test_orders_explicit_restart_output(binary: Path) -> Transcript:
+    zod = Path(__file__).resolve().parents[1] / "fixtures" / "zod"
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        temporary_path = Path(temporary_directory)
+        startup_control = temporary_path / "zod-startup-control"
+        startup_control.write_text("ready", encoding="utf-8")
+        environment = os.environ.copy()
+        environment["TMPDIR"] = temporary_directory
+        environment["ZOD_STARTUP_CONTROL"] = str(startup_control)
+        client = McpClient(
+            binary,
+            ("serve", "--worker", str(zod)),
+            environment,
+        )
+        client._initialize_and_list_tools()
+
+        client.send(r="wait for stdin close", timeout_ms=0)
+        assert last_tool_text(client) == "\n[running]"
+        wait_for_marker(
+            temporary_path,
+            "zod-waiting-for-stdin-close",
+            client,
+        )
+
+        startup_control.write_text("ready with stdout", encoding="utf-8")
+        client.session(action="restart")
+        result = client.transcript[-1]["result"]
+        assert result["isError"] is False, result
+        expected = large_output("zod stdin closed\n") + (
+            "\n[worker stopped: in-memory state lost]"
+            "\n[starting new worker]"
+            "\nzod replacement startup ready"
+            "\n[restarted]"
+        )
+        assert result["content"] == [{"type": "text", "text": expected}], result
+        result["content"][0]["text"] = (
+            "zod stdin closed\n<large output>\n"
+            "[worker stopped: in-memory state lost]\n"
+            "[starting new worker]\n"
+            "zod replacement startup ready\n"
+            "[restarted]"
+        )
+
+        client.send(r="echo")
+        assert last_tool_text(client) == "zod: echo\n"
+        return client._finish()
+
+
+def test_restart_preserves_pending_sideband_output(binary: Path) -> Transcript:
+    zod = Path(__file__).resolve().parents[1] / "fixtures" / "zod"
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        temporary_path = Path(temporary_directory)
+        environment = os.environ.copy()
+        environment["TMPDIR"] = temporary_directory
+        client = McpClient(
+            binary,
+            ("serve", "--worker", str(zod)),
+            environment,
+        )
+        client._initialize_and_list_tools()
+
+        client.send(r="emit output and image before completion", timeout_ms=0)
+        assert last_tool_text(client) == "\n[running]"
+        image_started = wait_for_marker(
+            temporary_path,
+            "zod-image-evaluation-started",
+            client,
+        )
+        (image_started.parent / "zod-release-image").touch()
+        wait_for_marker(temporary_path, "zod-image-processed", client)
+
+        client.session(action="restart")
+        result = client.transcript[-1]["result"]
+        assert result == {
+            "content": [
+                {"type": "text", "text": "before pending image\n"},
+                {"type": "image", "data": PNG_1X1, "mimeType": "image/png"},
+                {
+                    "type": "text",
+                    "text": (
+                        "after pending image\n"
+                        "[worker stopped: in-memory state lost]\n"
+                        "[starting new worker]\n"
+                        "[restarted]"
+                    ),
+                },
+            ],
+            "isError": False,
+        }, result
+        return client._finish()
+
+
+def test_restart_interrupts_waiting_send(binary: Path) -> Transcript:
+    zod = Path(__file__).resolve().parents[1] / "fixtures" / "zod"
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        temporary_path = Path(temporary_directory)
+        environment = os.environ.copy()
+        environment["TMPDIR"] = temporary_directory
+        client = McpClient(
+            binary,
+            ("serve", "--worker", str(zod)),
+            environment,
+        )
+        client._initialize_and_list_tools()
+
+        waiting = client._start_send(
+            r="emit output and image before completion",
+            timeout_ms=30_000,
+        )
+        image_started = wait_for_marker(
+            temporary_path,
+            "zod-image-evaluation-started",
+            client,
+        )
+        (image_started.parent / "zod-release-image").touch()
+        wait_for_marker(temporary_path, "zod-image-processed", client)
+
+        restarted = client._start_session(action="restart")
+        responses_returned = threading.Event()
+        forced_stop = threading.Event()
+
+        def stop_if_calls_block() -> None:
+            if not responses_returned.wait(5):
+                forced_stop.set()
+                stop_process(client.process)
+
+        watchdog = threading.Thread(target=stop_if_calls_block, daemon=True)
+        watchdog.start()
+        try:
+            client._receive_many([waiting, restarted])
+        finally:
+            responses_returned.set()
+            watchdog.join()
+        assert not forced_stop.is_set(), "restart did not release the waiting send"
+
+        assert restarted["result"] == {
+            "content": [
+                {"type": "text", "text": "before pending image\n"},
+                {"type": "image", "data": PNG_1X1, "mimeType": "image/png"},
+                {
+                    "type": "text",
+                    "text": (
+                        "after pending image\n"
+                        "[worker stopped: in-memory state lost]\n"
+                        "[starting new worker]\n"
+                        "[restarted]"
+                    ),
+                },
+            ],
+            "isError": False,
+        }, restarted
+        assert waiting["result"] == {
+            "content": [
+                {
+                    "type": "text",
+                    "text": "session restarted before the operation completed",
+                }
+            ],
+            "isError": True,
+        }, waiting
+        return client._finish()
+
+
 def test_restarts_after_unexpected_sideband_message(binary: Path) -> Transcript:
     zod = Path(__file__).resolve().parents[1] / "fixtures" / "zod"
     with tempfile.TemporaryDirectory() as temporary_directory:
@@ -661,27 +923,27 @@ def test_restarts_after_unexpected_sideband_message(binary: Path) -> Transcript:
         passed = False
         try:
             client._initialize_and_list_tools()
-            failed_call = client._start_send(r="violate protocol")
+            client.send(r="complete silently")
             group_marker = wait_for_marker(
                 temporary_path,
                 "zod-process-group",
                 client,
             )
             worker_group = read_worker_group(group_marker)
+            failed_call = client._start_send(r="violate protocol")
             client._receive(failed_call)
             result = failed_call["result"]
             assert result["isError"] is True
             assert result["content"][0]["text"] == (
                 "zod output before protocol failure\n"
-                "[worker sent an unexpected ready message]"
+                "[worker sent an unexpected ready message]\n"
+                "[worker stopped: in-memory state lost]"
             )
             assert not process_group_exists(worker_group), "Zod outlived its failure"
 
             restarted_call = client._start_send(r="complete silently")
             client._receive(restarted_call)
-            assert last_tool_text(client) == (
-                "\n[worker restarted: in-memory state lost]\n"
-            )
+            assert last_tool_text(client) == "[starting new worker]\n"
             transcript = client._finish()
             passed = True
             return transcript
@@ -701,35 +963,9 @@ def test_restarts_after_worker_exit(binary: Path) -> Transcript:
     client.send(r="exit unexpectedly")
     assert client.transcript[-1]["result"]["isError"] is True
     client.send(stdin="replacement\n")
-    assert last_tool_text(client) == (
-        "\n[worker restarted: in-memory state lost]\n[idle]"
-    )
+    assert last_tool_text(client) == "[starting new worker]\n\n[idle]"
     client.send(r="input without request")
     assert last_tool_text(client) == "zod stdin: replacement\n"
-    return client._finish()
-
-
-def test_explicit_restart_preserves_pending_restart_notice(
-    binary: Path,
-) -> Transcript:
-    zod = Path(__file__).resolve().parents[1] / "fixtures" / "zod"
-    client = McpClient(
-        binary,
-        ("serve", "--worker", str(zod)),
-    )
-    client._initialize_and_list_tools()
-    client.send(r="exit unexpectedly")
-    assert client.transcript[-1]["result"]["isError"] is True
-
-    client.session(action="restart")
-    assert last_tool_text(client) == "[restarted]"
-
-    client.send(r="echo")
-    assert last_tool_text(client) == (
-        "zod: echo\n[worker restarted: in-memory state lost]\n"
-    )
-    client.send(r="echo")
-    assert last_tool_text(client) == "zod: echo\n"
     return client._finish()
 
 
@@ -754,18 +990,24 @@ def test_restart_closes_worker_stdin(binary: Path) -> Transcript:
         )
 
         client.session(action="restart")
-        assert last_tool_text(client) == "[restarted]"
-
-        client.send(r="echo")
         output = last_tool_text(client)
         prefix = "zod stdin closed\n" + ("x" * LARGE_OUTPUT_SIZE)
-        assert output.startswith(prefix), "worker stdin did not close before restart"
-        assert output.endswith("zod: echo\n")
-        barrier = output.removeprefix(prefix).removesuffix("zod: echo\n")
-        assert barrier and not barrier.strip("y"), "unexpected old-worker output"
-        client.transcript[-1]["result"]["content"][0]["text"] = (
-            "zod stdin closed\n<large output>\nzod: echo\n"
+        suffix = (
+            "[worker stopped: in-memory state lost]\n[starting new worker]\n[restarted]"
         )
+        assert output.startswith(prefix), "worker stdin did not close before restart"
+        assert output.endswith(suffix), "restart notices followed old-worker output"
+        barrier = output.removeprefix(prefix).removesuffix(suffix)
+        assert barrier and not barrier.strip("y\n"), "unexpected old-worker output"
+        client.transcript[-1]["result"]["content"][0]["text"] = (
+            "zod stdin closed\n<large output>\n"
+            "[worker stopped: in-memory state lost]\n"
+            "[starting new worker]\n"
+            "[restarted]"
+        )
+
+        client.send(r="echo")
+        assert last_tool_text(client) == "zod: echo\n"
         return client._finish()
 
 
@@ -798,7 +1040,11 @@ def test_restart_force_stops_stalled_worker(binary: Path) -> Transcript:
             restart_call = client._start_session(action="restart")
             wait_for_process_group_exit(worker_group, client)
             client._receive(restart_call)
-            assert last_tool_text(client) == "[restarted]"
+            assert last_tool_text(client) == (
+                "[worker stopped: in-memory state lost]\n"
+                "[starting new worker]\n"
+                "[restarted]"
+            )
 
             client.send(r="echo")
             assert last_tool_text(client) == "zod: echo\n"
@@ -852,7 +1098,9 @@ def test_restart_starts_first_worker_and_waits_until_ready(
 
             startup_release.touch()
             client._receive(restarted)
-            assert restarted["result"]["content"][0]["text"] == "[restarted]"
+            assert restarted["result"]["content"][0]["text"] == (
+                "[starting new worker]\n[restarted]"
+            )
 
             after_restart = client._start_send(r="echo")
             client._receive(after_restart)
@@ -877,59 +1125,13 @@ def test_restart_discards_unread_stdin(binary: Path) -> Transcript:
     assert last_tool_text(client) == "\n[idle]"
 
     client.session(action="restart")
-    assert last_tool_text(client) == "[restarted]"
+    assert last_tool_text(client) == (
+        "[worker stopped: in-memory state lost]\n[starting new worker]\n[restarted]"
+    )
 
     client.send(r="input without request", stdin="fresh\n")
     assert last_tool_text(client) == "zod stdin: fresh\n"
     return client._finish()
-
-
-def test_reports_restart_notice_on_next_response(binary: Path) -> Transcript:
-    zod = Path(__file__).resolve().parents[1] / "fixtures" / "zod"
-    with tempfile.TemporaryDirectory() as temporary_directory:
-        temporary_path = Path(temporary_directory)
-        startup_control = temporary_path / "zod-startup-control"
-        startup_release = temporary_path / "zod-startup-release"
-        startup_control.write_text("ready", encoding="utf-8")
-        environment = os.environ.copy()
-        environment["TMPDIR"] = temporary_directory
-        environment["ZOD_STARTUP_CONTROL"] = str(startup_control)
-        environment["ZOD_STARTUP_RELEASE"] = str(startup_release)
-        client = McpClient(
-            binary,
-            ("serve", "--worker", str(zod)),
-            environment,
-        )
-        client._initialize_and_list_tools()
-        client.send(r="exit unexpectedly")
-        assert client.transcript[-1]["result"]["isError"] is True
-
-        startup_control.write_text("block", encoding="utf-8")
-        client.send(r="complete after release", timeout_ms=0)
-        assert last_tool_text(client) == "\n[running]"
-        wait_for_marker(temporary_path, "zod-replacement-waiting-ready", client)
-        startup_release.touch()
-        evaluation_started = wait_for_marker(
-            temporary_path,
-            "zod-evaluation-started",
-            client,
-        )
-
-        client.send(r="echo")
-        result = client.transcript[-1]["result"]
-        assert result["isError"] is True
-        assert result["content"][0]["text"] == (
-            "[worker is already evaluating a cell; poll without a code field]"
-            "\n[worker restarted: in-memory state lost]\n"
-        )
-
-        (evaluation_started.parent / "zod-release-evaluation").touch()
-        client.send(timeout_ms=3_000)
-        output = last_tool_text(client)
-        assert output == "zod: complete after release\n", repr(output)
-        client.send(r="echo")
-        assert last_tool_text(client) == "zod: echo\n"
-        return client._finish()
 
 
 def test_retries_initial_startup_silently(binary: Path) -> Transcript:

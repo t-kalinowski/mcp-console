@@ -95,13 +95,15 @@ Restart returns `[restarted]` after the replacement reports ready.
 It loses all in-memory R, Python, SQL, debugger, and unread-stdin state.
 The implicit session exists for the server lifetime, so restart starts its first worker if none exists yet.
 The server closes worker stdin and sends the sideband shutdown message, then force-stops the worker process group and reaps the direct sandbox process if that process has not exited after one second.
+It waits for the worker's stdin writer and standard-stream readers to finish before reporting that the worker stopped or launching a replacement.
 Code and idle stdin remain associated with the worker that admitted them and cannot run in the replacement.
-Standard-output and standard-error bytes already collected from the old worker are retained and may appear in a later `send`, including with replacement output.
+The restart response includes retained standard-stream output from the old worker, `[worker stopped: in-memory state lost]` when a worker existed, `[starting new worker]`, startup output, and finally `[restarted]`, in that order.
 On macOS, the default managed-Python preflight happens during `serve` startup when required; a successful `prepare` replaces that initial selection before the first nonempty stdin submission or evaluation lazily starts the sandboxed embedded R worker.
 Later calls reuse the same global R state, reticulate Python interpreter, and in-memory DuckDB catalog.
-An infrastructure or protocol failure discards that worker and its in-memory R, Python, and SQL state.
-Worker output available when the failure response is assembled remains visible; when it shares that response with the MCP tool error, the server starts the bracketed error on a new line.
-The next response after its replacement successfully starts includes the newline-delimited banner `[worker restarted: in-memory state lost]\n`, preceded by a newline when prior output does not already supply one; initial lazy startup remains silent.
+An infrastructure or protocol failure stops that worker and discards its in-memory R, Python, and SQL state.
+The failure response includes retained worker output, the specific bracketed error, and `[worker stopped: in-memory state lost]`.
+The next replacement attempt emits `[starting new worker]` before launch, so its startup output or startup error follows that notice.
+Initial lazy startup and retries before any worker reaches ready remain silent.
 The worker runs each R cell through R's native top-level loop, captures R console output, prints each visible value, and maintains `.Last.value`.
 If a cell ends while an expression is incomplete, earlier complete expressions from that cell remain applied.
 The worker installs a worker-owned `grDevices::png()` function as R's default graphics device and opens it lazily when a cell draws.

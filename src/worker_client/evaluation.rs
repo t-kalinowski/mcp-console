@@ -16,6 +16,9 @@ struct EvaluationState {
     result: Option<Result<Response, SendFailure>>,
     output: Response,
     input_report_at: Option<Instant>,
+    waiting: bool,
+    restarting: bool,
+    restart_output: Option<RestartOutput>,
     #[cfg(target_os = "macos")]
     stdin: Option<super::platform::StdinSender>,
     pending_stdin: Vec<u8>,
@@ -25,6 +28,11 @@ pub(super) enum EvaluationWait {
     Running,
     InputRequested(Response),
     Completed(Result<Response, SendFailure>),
+}
+
+pub(super) enum RestartOutput {
+    Output(Response),
+    WorkerStopped(Response),
 }
 
 enum EvaluationStatus {
@@ -40,6 +48,9 @@ impl Evaluation {
                 result: None,
                 output: Response::default(),
                 input_report_at: None,
+                waiting: false,
+                restarting: false,
+                restart_output: None,
                 #[cfg(target_os = "macos")]
                 stdin: None,
                 pending_stdin: Vec::new(),
@@ -48,6 +59,26 @@ impl Evaluation {
             transcript,
             call_id,
         }
+    }
+
+    pub(super) fn claim_wait(&self) -> Result<(), String> {
+        self.set_waiting(true)
+    }
+
+    pub(super) fn begin_restart(&self) -> Result<(), String> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| "worker evaluation state lock poisoned".to_string())?;
+        state.restarting = true;
+        Ok(())
+    }
+
+    pub(super) fn is_restarting(&self) -> Result<bool, String> {
+        self.state
+            .lock()
+            .map(|state| state.restarting)
+            .map_err(|_| "worker evaluation state lock poisoned".to_string())
     }
 
     /// Queues bytes and briefly defers any outstanding input report for its receipt.
@@ -160,43 +191,108 @@ impl Evaluation {
         Ok(())
     }
 
-    pub(super) fn complete(&self, result: Result<(), String>) {
+    pub(super) fn complete(&self, result: Result<(), SendFailure>) {
         let Ok(mut state) = self.state.lock() else {
             return;
         };
         state.input_report_at = None;
         let result = match result {
             Ok(()) => Ok(std::mem::take(&mut state.output)),
-            Err(message) => Err(SendFailure {
-                output: std::mem::take(&mut state.output),
-                message,
-            }),
+            Err(mut failure) => {
+                failure.output.extend(std::mem::take(&mut state.output));
+                Err(failure)
+            }
         };
-        state.result = Some(result);
+        if state.restarting {
+            let (output, worker_stopped) = match result {
+                Ok(output) => (output, false),
+                Err(failure) => (failure.output, failure.worker_stopped),
+            };
+            state.restart_output = Some(if worker_stopped {
+                RestartOutput::WorkerStopped(output)
+            } else {
+                RestartOutput::Output(output)
+            });
+            state.result = state.waiting.then(|| {
+                Err(SendFailure::from(
+                    "session restarted before the operation completed".to_string(),
+                ))
+            });
+        } else {
+            state.result = Some(result);
+        }
         self.changed.notify_one();
+    }
+
+    /// Takes the final output accepted before an explicit restart retired the worker.
+    pub(super) fn take_restart_output(&self) -> Result<RestartOutput, String> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| "worker evaluation state lock poisoned".to_string())?;
+        if let Some(output) = state.restart_output.take() {
+            return Ok(output);
+        }
+        let mut output = std::mem::take(&mut state.output);
+        match state.result.take() {
+            Some(Ok(completed)) => output.extend(completed),
+            Some(Err(failure)) => {
+                output.extend(failure.output);
+                if failure.worker_stopped {
+                    output.push_line(format!("[{}]", failure.message));
+                    output.push_line(super::output::WORKER_STOPPED_NOTICE);
+                    if state.waiting {
+                        state.result = Some(Err(SendFailure::from(
+                            "session restarted before the operation completed".to_string(),
+                        )));
+                        self.changed.notify_one();
+                    }
+                    return Ok(RestartOutput::WorkerStopped(output));
+                }
+            }
+            None => {}
+        }
+        if state.waiting {
+            state.result = Some(Err(SendFailure::from(
+                "session restarted before the operation completed".to_string(),
+            )));
+            self.changed.notify_one();
+        }
+        Ok(RestartOutput::Output(output))
     }
 
     pub(super) async fn wait(&self, timeout: Duration) -> Result<EvaluationWait, String> {
         let started = Instant::now();
-        loop {
+        let result = loop {
             let changed = self.changed.notified();
             let grace = match self.reported_state(false)? {
                 EvaluationStatus::Waiting => None,
                 EvaluationStatus::Grace(grace) => Some(grace),
-                EvaluationStatus::Report(state) => return Ok(state),
+                EvaluationStatus::Report(state) => break Ok(state),
             };
             let remaining = timeout.saturating_sub(started.elapsed());
             if remaining.is_zero() {
-                return self.state_at_deadline();
+                break self.state_at_deadline();
             }
             let wait = grace.map_or(remaining, |grace| grace.min(remaining));
             if tokio::time::timeout(wait, changed).await.is_err() {
                 if grace.is_some_and(|grace| grace <= remaining) {
                     continue;
                 }
-                return self.state_at_deadline();
+                break self.state_at_deadline();
             }
-        }
+        };
+        self.set_waiting(false)?;
+        result
+    }
+
+    fn set_waiting(&self, waiting: bool) -> Result<(), String> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| "worker evaluation state lock poisoned".to_string())?;
+        state.waiting = waiting;
+        Ok(())
     }
 
     fn state_at_deadline(&self) -> Result<EvaluationWait, String> {
