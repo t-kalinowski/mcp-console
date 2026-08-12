@@ -457,8 +457,8 @@ def test_resolves_package_requirements_before_python_initializes(
             """)
         client.send(r=r)
         output = last_tool_text(client)
-        assert output == ("[1] TRUE\n[worker restarted: in-memory state lost]\n"), repr(
-            output
+        assert output == ("\n[worker restarted: in-memory state lost]\n[1] TRUE\n"), (
+            repr(output)
         )
 
         # fmt: python
@@ -495,7 +495,7 @@ def test_does_not_checkpoint_python_requirements_from_failed_cell(
         """)
     client.send(r=r)
     output = last_tool_text(client)
-    assert output == ("[1] FALSE\n[worker restarted: in-memory state lost]\n"), repr(
+    assert output == ("\n[worker restarted: in-memory state lost]\n[1] FALSE\n"), repr(
         output
     )
 
@@ -1459,7 +1459,7 @@ def test_restarts_after_python_bridge_failure(binary: Path) -> Transcript:
     )
     client.send(r='exists("python_worker_marker", inherits = FALSE)')
     assert last_tool_text(client) == (
-        "[1] FALSE\n[worker restarted: in-memory state lost]\n"
+        "\n[worker restarted: in-memory state lost]\n[1] FALSE\n"
     )
     client.send(python="6 * 7")
     assert last_tool_text(client) == "42\n"

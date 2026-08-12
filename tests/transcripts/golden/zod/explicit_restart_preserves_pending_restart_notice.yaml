@@ -21,13 +21,15 @@ result:
 ---
 id: 5
 send:
-  r: echo
+  r: emit stdout
 result:
   content:
     - type: text
-      text: |
-        zod: echo
+      text: |2
+
         [worker restarted: in-memory state lost]
+        zod stdout 👩🏽‍💻
+        <large output>
   isError: false
 ---
 id: 6

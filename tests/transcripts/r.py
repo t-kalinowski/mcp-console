@@ -347,7 +347,7 @@ def test_restarts_after_r_worker_segfault(binary: Path) -> Transcript:
 
     client.send(r='exists("r_worker_marker", inherits = FALSE)')
     assert last_tool_text(client) == (
-        "[1] FALSE\n[worker restarted: in-memory state lost]\n"
+        "\n[worker restarted: in-memory state lost]\n[1] FALSE\n"
     )
     client.send(r="1 + 1")
     assert last_tool_text(client) == "[1] 2\n"

@@ -28,9 +28,10 @@ send:
 result:
   content:
     - type: text
-      text: |
-        [worker is already evaluating a cell; poll without a code field]
+      text: |2-
+
         [worker restarted: in-memory state lost]
+        [worker is already evaluating a cell; poll without a code field]
   isError: true
 ---
 id: 6

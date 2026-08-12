@@ -150,13 +150,14 @@ Automatic Python relation sharing and a separate relation-registration API do no
 Worker standard output and standard error are piped and collected continuously, including while the worker is idle.
 Each pipe reader queues raw byte chunks, and each `send` response decodes and drains complete UTF-8 prefixes from bytes already collected at its response boundary; later bytes remain for the next response.
 Without a pending restart notice, idle, running, and outstanding-input responses append the literal `\n[idle]`, `\n[running]`, or `\n[stdin needed]` banner; its leading newline is present even when no output precedes it.
-After an infrastructure failure discards a ready worker, its successfully started replacement queues `[worker restarted: in-memory state lost]\n` in pending response output.
-The next response drains it exactly once, after runtime or error text, inserting a preceding newline only when needed.
+After an infrastructure failure discards a ready worker, replacement startup reserves `[worker restarted: in-memory state lost]\n` as an ordered captured-output boundary and commits it when the replacement reports ready.
+The next response drains it exactly once, after standard-stream output collected before replacement startup and before standard-stream, sideband, or error text from the replacement.
+Failed replacement startup removes its uncommitted boundary without reporting a restart.
 If an idle, running, or outstanding-input banner follows, the restart notice's trailing newline supplies its separator.
 Initial lazy startup and retries before a worker reaches ready are silent.
 Completion returns collected standard-stream and pending evaluation content, including sideband text, images, and input-request records, instead of `[done]` when any produced content.
 A failed evaluation likewise returns all pending evaluation output and any complete standard-stream output available at the response boundary before its infrastructure or protocol error.
-When worker output or a restart notice shares that response, the server starts the bracketed error on a new line; an error returned alone remains bare.
+When worker output or a restart notice shares that response, the server starts the bracketed error on a new line after that preceding output; an error returned alone remains bare.
 Ordering between the two standard streams and sideband output is best effort; incomplete UTF-8 remains with its pipe until a later response, and invalid UTF-8 is replaced when output is rendered.
 The built-in worker and custom workers send console prompt fields verbatim; the server preserves each value without trimming it and renders it as a JSON-quoted `[input requested: ...]` record.
 Writes to inherited fd 1 or fd 2 from descendants follow the same path, but this does not add descendant supervision; forked descendants cannot use the inherited sideband.

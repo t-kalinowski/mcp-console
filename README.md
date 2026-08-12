@@ -99,7 +99,8 @@ On macOS, the default managed-Python preflight happens during `serve` startup wh
 Later calls reuse the same global R state, reticulate Python interpreter, and in-memory DuckDB catalog.
 An infrastructure or protocol failure discards that worker and its in-memory R, Python, and SQL state.
 Worker output available when the failure response is assembled remains visible; when it shares that response with the MCP tool error, the server starts the bracketed error on a new line.
-The next response after its replacement successfully starts includes the newline-delimited banner `[worker restarted: in-memory state lost]\n`, preceded by a newline when prior output does not already supply one; initial lazy startup remains silent.
+The next response after its replacement successfully starts includes the newline-delimited banner `[worker restarted: in-memory state lost]\n`, before output from the replacement.
+The banner is preceded by a newline when prior output does not already supply one; failed replacement startup and initial lazy startup remain silent.
 The worker runs each R cell through R's native top-level loop, captures R console output, prints each visible value, and maintains `.Last.value`.
 If a cell ends while an expression is incomplete, earlier complete expressions from that cell remain applied.
 The worker installs a worker-owned `grDevices::png()` function as R's default graphics device and opens it lazily when a cell draws.

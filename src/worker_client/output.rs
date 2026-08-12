@@ -17,14 +17,22 @@ pub(super) struct CapturedOutput;
 struct CapturedOutputState {
     streams: Vec<Option<Vec<u8>>>,
     events: Vec<CapturedOutputEvent>,
-    restart_notice: String,
+    next_restart_notice: u64,
 }
 
 #[cfg(target_os = "macos")]
 enum CapturedOutputEvent {
     Data { stream: usize, bytes: Vec<u8> },
     Closed { stream: usize },
+    RestartPending { notice: u64 },
+    Restarted,
 }
+
+#[cfg(target_os = "macos")]
+pub(super) struct RestartNotice(u64);
+
+#[cfg(not(target_os = "macos"))]
+pub(super) struct RestartNotice;
 
 #[cfg(target_os = "macos")]
 pub(super) struct CapturedOutputStream {
@@ -122,20 +130,20 @@ impl Response {
 
 impl super::Client {
     pub(super) fn attach_output(&self, result: Result<SendResponse, SendFailure>) -> Response {
-        let (captured_output, restart_notice) = self.0.output.take();
+        let (captured_output, restart_notice_at_end) = self.0.output.take();
         let mut output = Response::default();
         output.push_text(captured_output);
         match result {
-            Ok(response) => render_response(output, response, restart_notice),
+            Ok(response) => render_response(output, response, restart_notice_at_end),
             Err(SendFailure {
                 output: worker_output,
                 message,
             }) => {
                 output.extend(worker_output);
-                if output.is_empty() && restart_notice.is_empty() {
+                if output.is_empty() {
                     output.push_text(message);
                 } else {
-                    attach_error_output(&mut output, message, restart_notice);
+                    attach_error_output(&mut output, message);
                 }
                 output.is_error = true;
                 output
@@ -163,22 +171,62 @@ impl CapturedOutput {
         }
     }
 
-    pub(super) fn push_restart_notice(&self) {
-        self.0
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .restart_notice
-            .push_str(WORKER_RESTART_BANNER);
-    }
-
-    fn take(&self) -> (String, String) {
+    pub(super) fn begin_restart_notice(&self) -> RestartNotice {
         let mut state = self
             .0
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let events = std::mem::take(&mut state.events);
-        let restart_notice = std::mem::take(&mut state.restart_notice);
+        let notice = state.next_restart_notice;
+        state.next_restart_notice += 1;
+        state
+            .events
+            .push(CapturedOutputEvent::RestartPending { notice });
+        RestartNotice(notice)
+    }
+
+    pub(super) fn commit_restart_notice(&self, notice: RestartNotice) {
+        let mut state = self
+            .0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let event = state
+            .events
+            .iter_mut()
+            .find(|event| {
+                matches!(event, CapturedOutputEvent::RestartPending { notice: pending } if *pending == notice.0)
+            })
+            .expect("pending worker restart notice should exist");
+        *event = CapturedOutputEvent::Restarted;
+    }
+
+    pub(super) fn cancel_restart_notice(&self, notice: RestartNotice) {
+        let mut state = self
+            .0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let index = state
+            .events
+            .iter()
+            .position(|event| {
+                matches!(event, CapturedOutputEvent::RestartPending { notice: pending } if *pending == notice.0)
+            })
+            .expect("pending worker restart notice should exist");
+        state.events.remove(index);
+    }
+
+    fn take(&self) -> (String, bool) {
+        let mut state = self
+            .0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let available = state
+            .events
+            .iter()
+            .position(|event| matches!(event, CapturedOutputEvent::RestartPending { .. }))
+            .unwrap_or(state.events.len());
+        let events = state.events.drain(..available).collect::<Vec<_>>();
         let mut output = String::new();
+        let mut restart_notice_at_end = false;
 
         for event in events {
             match event {
@@ -190,18 +238,34 @@ impl CapturedOutput {
                     let complete = complete_utf8_prefix(pending);
                     let incomplete = pending.split_off(complete);
                     let complete = std::mem::replace(pending, incomplete);
-                    output.push_str(&String::from_utf8_lossy(&complete));
+                    if !complete.is_empty() {
+                        output.push_str(&String::from_utf8_lossy(&complete));
+                        restart_notice_at_end = false;
+                    }
                 }
                 CapturedOutputEvent::Closed { stream } => {
                     let pending = state.streams[stream]
                         .take()
                         .expect("captured output stream should be open");
-                    output.push_str(&String::from_utf8_lossy(&pending));
+                    if !pending.is_empty() {
+                        output.push_str(&String::from_utf8_lossy(&pending));
+                        restart_notice_at_end = false;
+                    }
+                }
+                CapturedOutputEvent::Restarted => {
+                    if !output.ends_with('\n') {
+                        output.push('\n');
+                    }
+                    output.push_str(WORKER_RESTART_BANNER);
+                    restart_notice_at_end = true;
+                }
+                CapturedOutputEvent::RestartPending { .. } => {
+                    unreachable!("pending restart notices are not available")
                 }
             }
         }
 
-        (output, restart_notice)
+        (output, restart_notice_at_end)
     }
 }
 
@@ -211,10 +275,16 @@ impl CapturedOutput {
         Self
     }
 
-    pub(super) fn push_restart_notice(&self) {}
+    pub(super) fn begin_restart_notice(&self) -> RestartNotice {
+        RestartNotice
+    }
 
-    fn take(&self) -> (String, String) {
-        (String::new(), String::new())
+    pub(super) fn commit_restart_notice(&self, _notice: RestartNotice) {}
+
+    pub(super) fn cancel_restart_notice(&self, _notice: RestartNotice) {}
+
+    fn take(&self) -> (String, bool) {
+        (String::new(), false)
     }
 }
 
@@ -247,12 +317,11 @@ impl CapturedOutputStream {
 fn render_response(
     mut output: Response,
     response: SendResponse,
-    restart_notice: String,
+    restart_notice_at_end: bool,
 ) -> Response {
     match response {
         SendResponse::Completed(completed) => {
             output.extend(completed);
-            append_restart_notice(&mut output, &restart_notice);
             if output.is_empty() {
                 output.push_text("[done]");
             }
@@ -260,51 +329,39 @@ fn render_response(
         }
         SendResponse::InputRequested(input) => {
             output.extend(input);
-            append_input_banner(&mut output, &restart_notice);
+            append_input_banner(&mut output);
             output
         }
         SendResponse::Running => {
-            append_state_banner(&mut output, &restart_notice, "[running]");
+            append_state_banner(&mut output, restart_notice_at_end, "[running]");
             output
         }
         SendResponse::Idle => {
-            append_state_banner(&mut output, &restart_notice, "[idle]");
+            append_state_banner(&mut output, restart_notice_at_end, "[idle]");
             output
         }
     }
 }
 
-fn append_input_banner(output: &mut Response, restart_notice: &str) {
-    if !append_restart_notice(output, restart_notice) && output.text_needs_newline() {
+fn append_input_banner(output: &mut Response) {
+    if output.text_needs_newline() {
         output.push_text("\n");
     }
     output.push_text("[stdin needed]");
 }
 
-fn append_state_banner(output: &mut Response, restart_notice: &str, banner: &str) {
-    if !append_restart_notice(output, restart_notice) {
+fn append_state_banner(output: &mut Response, restart_notice_at_end: bool, banner: &str) {
+    if !restart_notice_at_end {
         output.push_text("\n");
     }
     output.push_text(banner);
 }
 
-fn append_restart_notice(output: &mut Response, restart_notice: &str) -> bool {
-    if restart_notice.is_empty() {
-        return false;
-    }
-    if output.text_needs_newline() {
-        output.push_text("\n");
-    }
-    output.push_text(restart_notice);
-    true
-}
-
-fn attach_error_output(output: &mut Response, error: String, restart_notice: String) {
+fn attach_error_output(output: &mut Response, error: String) {
     if !output.is_empty() && output.text_needs_newline() {
         output.push_text("\n");
     }
     output.push_text(format!("[{error}]"));
-    append_restart_notice(output, &restart_notice);
 }
 
 #[cfg(target_os = "macos")]

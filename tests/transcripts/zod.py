@@ -724,9 +724,13 @@ def test_explicit_restart_preserves_pending_restart_notice(
     client.session(action="restart")
     assert last_tool_text(client) == "[restarted]"
 
-    client.send(r="echo")
-    assert last_tool_text(client) == (
-        "zod: echo\n[worker restarted: in-memory state lost]\n"
+    client.send(r="emit stdout")
+    output = last_tool_text(client)
+    restart = "\n[worker restarted: in-memory state lost]\n"
+    assert output.startswith(restart), repr(output[:100])
+    assert_large_output(output.removeprefix(restart), "zod stdout 👩🏽‍💻\n")
+    client.transcript[-1]["result"]["content"][0]["text"] = (
+        restart + "zod stdout 👩🏽‍💻\n<large output>\n"
     )
     client.send(r="echo")
     assert last_tool_text(client) == "zod: echo\n"
@@ -919,8 +923,8 @@ def test_reports_restart_notice_on_next_response(binary: Path) -> Transcript:
         result = client.transcript[-1]["result"]
         assert result["isError"] is True
         assert result["content"][0]["text"] == (
-            "[worker is already evaluating a cell; poll without a code field]"
             "\n[worker restarted: in-memory state lost]\n"
+            "[worker is already evaluating a cell; poll without a code field]"
         )
 
         (evaluation_started.parent / "zod-release-evaluation").touch()

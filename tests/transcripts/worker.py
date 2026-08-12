@@ -172,7 +172,7 @@ def test_recovers_after_worker_segfault(binary: Path) -> Transcript:
         cat("after crash\n")
         """)
     assert _tool_text(client.send(r=after_crash)) == (
-        "after crash\n[worker restarted: in-memory state lost]\n"
+        "\n[worker restarted: in-memory state lost]\nafter crash\n"
     )
 
     transcript = client._finish_replacement(old_path, old_capture)

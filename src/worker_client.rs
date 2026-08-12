@@ -330,13 +330,23 @@ impl Client {
                 managed_python,
                 managed_r,
             };
-            let running = self
+            let restart_notice = replacing.then(|| self.0.output.begin_restart_notice());
+            let running = match self
                 .0
                 .runtime
-                .spawn(spec, self.0.output.clone(), on_started)?;
+                .spawn(spec, self.0.output.clone(), on_started)
+            {
+                Ok(running) => running,
+                Err(error) => {
+                    if let Some(restart_notice) = restart_notice {
+                        self.0.output.cancel_restart_notice(restart_notice);
+                    }
+                    return Err(error);
+                }
+            };
             *worker = WorkerState::Running(running);
-            if replacing {
-                self.0.output.push_restart_notice();
+            if let Some(restart_notice) = restart_notice {
+                self.0.output.commit_restart_notice(restart_notice);
             }
         }
         Ok(())

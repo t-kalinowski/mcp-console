@@ -259,7 +259,7 @@ A pending input request wins over the `\n[running]` banner at the deadline.
 A later `send` call without a code field polls that evaluation with its own `timeout_ms`; it may include `stdin` to queue bytes before waiting.
 Every `send` response decodes and drains complete UTF-8 prefixes from standard-stream bytes already collected when that response is assembled.
 Bytes collected after that snapshot and incomplete trailing sequences remain for the next response; standard-stream output does not itself wake a waiting call.
-Completion returns decoded standard-stream text followed by pending evaluation content, including sideband text, images, and input-request records not already delivered at a `[stdin needed]` boundary, or `[done]` when neither produced content.
+Completion returns decoded captured-output events followed by pending evaluation content, including sideband text, images, and input-request records not already delivered at a `[stdin needed]` boundary, or `[done]` when neither produced content.
 If evaluation instead ends in an infrastructure or protocol failure, all pending evaluation output received before the failure precedes the tool error.
 When runtime output shares that response, the server starts the bracketed error on a new line, inserting a newline only when the output does not already end with one.
 A tool error returned without runtime output or a restart notice remains bare.
@@ -267,10 +267,12 @@ If the poll wait expires first and no restart notice is pending, the literal `\n
 A call without a code field or `stdin` while no evaluation is active and no restart notice is pending appends the literal `\n[idle]` banner to collected standard-stream text.
 A stdin-only call in that state queues the bytes and uses the same idle response projection.
 
-After an infrastructure or protocol failure discards a ready worker, its successfully started replacement eagerly queues the literal `[worker restarted: in-memory state lost]\n` banner in pending MCP response output.
-Whichever response is assembled next drains that banner exactly once.
+After an infrastructure or protocol failure discards a ready worker, replacement startup reserves the literal `[worker restarted: in-memory state lost]\n` banner as an ordered captured-output event before launching the new process.
+The boundary remains unavailable to responses until the replacement reports `ready`.
+A failed replacement startup removes the uncommitted boundary; successful startup commits it, and whichever response is assembled next drains it exactly once.
 This is server-owned MCP response text, not a sideband frame.
-It follows collected standard-stream, evaluation, or error text and starts on a new line, without adding a blank line when that text already ends with a newline.
+It follows standard-stream events collected before replacement startup and precedes captured standard-stream, evaluation, or error text from the replacement.
+It starts on a new line without adding a blank line when preceding output already ends with a newline.
 If a final `[stdin needed]`, `[running]`, or `[idle]` banner follows, the restart notice's trailing newline supplies its separator.
 With no preceding or following text, the response is `\n[worker restarted: in-memory state lost]\n`.
 When it is the only text from a completed evaluation, it replaces `[done]`.
@@ -280,7 +282,7 @@ Except for outstanding-input boundaries, this slice does not expose partial side
 Standard-stream text is attached to whichever response is sent next, including `[running]`, `[stdin needed]`, or `[idle]` responses.
 Without a preceding restart notice, each state banner has a newline before it, including when no worker or evaluation output precedes it.
 An existing trailing newline supplies that boundary for `[stdin needed]`; `[running]` and `[idle]` always add one, so their preceding output may leave a blank line.
-When a tool error shares the response with runtime output or a restart notice, brackets distinguish it from worker text and the server inserts a newline before it only when needed.
+When a tool error shares the response with runtime output or a restart notice, brackets distinguish it from worker text and the server inserts a newline before it only when needed; a committed restart notice precedes replacement errors.
 Output cursors and general incremental polling remain unimplemented.
 
 ### Interactive input
