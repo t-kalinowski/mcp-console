@@ -53,6 +53,7 @@ jobs:
         run: |
           uv tool install r-lib-ir
           uv tool install yamark
+          uv tool dir --bin >> "$GITHUB_PATH"
 
       - name: Cache Rust build data
         uses: Swatinem/rust-cache@v2
