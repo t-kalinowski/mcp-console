@@ -59,11 +59,6 @@ pub(super) enum GenerationStatus {
     Changed,
 }
 
-enum RestartOutcome {
-    Finished(Response),
-    Terminal(Response),
-}
-
 #[derive(Clone, Default)]
 pub(super) struct ProcessStopHandles {
     worker: Option<platform::WorkerShutdownHandle>,
@@ -99,17 +94,10 @@ impl Client {
         grace: Duration,
     ) -> Result<Response, String> {
         let client = self.clone();
-        let outcome =
+        let response =
             tokio::task::spawn_blocking(move || client.restart_blocking(requirements, grace))
                 .await
                 .map_err(|error| format!("worker restart task failed: {error}"))??;
-        let response = match outcome {
-            RestartOutcome::Finished(output) => {
-                self.finish_restart()?;
-                output
-            }
-            RestartOutcome::Terminal(output) => output,
-        };
         Ok(response)
     }
 
@@ -117,7 +105,7 @@ impl Client {
         &self,
         requirements: Vec<String>,
         grace: Duration,
-    ) -> Result<RestartOutcome, String> {
+    ) -> Result<Response, String> {
         let (stop_handles, deadline) = if requirements.is_empty() {
             self.begin_restart(grace)?
         } else {
@@ -126,20 +114,22 @@ impl Client {
         if let Err(error) = stop_handles.shutdown(deadline) {
             self.fail_restart(deadline)?;
             self.0.output.push_failure(SendFailure::from(error));
-            return Ok(RestartOutcome::Terminal(self.0.output.take()));
+            return Ok(self.0.output.take());
         }
-        match self.replace_worker() {
+        let response = match self.replace_worker() {
             Ok(true) => {
                 self.0.output.push_line("[restarted]");
-                Ok(RestartOutcome::Finished(self.0.output.take()))
+                self.0.output.take()
             }
-            Ok(false) => Ok(RestartOutcome::Finished(self.0.output.take())),
+            Ok(false) => self.0.output.take(),
             Err(error) => {
                 self.fail_restart(deadline)?;
                 self.0.output.push_failure(SendFailure::from(error));
-                Ok(RestartOutcome::Terminal(self.0.output.take()))
+                return Ok(self.0.output.take());
             }
-        }
+        };
+        self.finish_restart()?;
+        Ok(response)
     }
 
     fn resolve_and_begin_restart(
