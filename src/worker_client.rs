@@ -398,7 +398,7 @@ impl Client {
                 managed_r,
             };
             if replacing {
-                self.0.output.push_notice(output::WORKER_STARTED_NOTICE);
+                self.0.output.push_notice(output::WORKER_STARTING_NOTICE);
             }
             let running = self
                 .0

@@ -1,7 +1,7 @@
 #[cfg(target_os = "macos")]
 use std::sync::{Arc, Mutex};
 
-pub(super) const WORKER_STARTED_NOTICE: &str = "[starting new worker]\n";
+pub(super) const WORKER_STARTING_NOTICE: &str = "[starting new worker]\n";
 pub(super) const WORKER_STOPPED_NOTICE: &str = "[worker stopped: in-memory state lost]";
 
 #[cfg(target_os = "macos")]

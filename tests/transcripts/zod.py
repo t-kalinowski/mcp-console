@@ -1055,7 +1055,7 @@ def test_restart_closes_worker_stdin(binary: Path) -> Transcript:
             "[worker stopped: in-memory state lost]\n[starting new worker]\n[restarted]"
         )
         assert output.startswith(prefix), "worker stdin did not close before restart"
-        assert output.endswith(suffix), "restart notices followed old-worker output"
+        assert output.endswith(suffix), "lifecycle notices followed old-worker output"
         barrier = output.removeprefix(prefix).removesuffix(suffix)
         assert barrier and not barrier.strip("y\n"), "unexpected old-worker output"
         client.transcript[-1]["result"]["content"][0]["text"] = (
