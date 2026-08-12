@@ -253,7 +253,8 @@ impl Worker {
     }
 
     pub(super) fn shutdown(&mut self, deadline: Instant) -> Result<(), String> {
-        self.interrupt().shutdown(deadline)?;
+        let shutdown = self.interrupt().shutdown(deadline)?;
+        join_worker_thread(shutdown, "shutdown sender")?;
         self.finish_retirement()
     }
 
@@ -339,10 +340,10 @@ impl StdinSender {
 
 impl WorkerInterrupt {
     /// Closes worker input and enforces the process deadline without joining I/O tasks.
-    pub(super) fn shutdown(&self, deadline: Instant) -> Result<(), String> {
+    pub(super) fn shutdown(&self, deadline: Instant) -> Result<thread::JoinHandle<()>, String> {
         let writer = self.writer.clone();
         let stdin = self.stdin.clone();
-        let _shutdown = thread::spawn(move || {
+        let shutdown = thread::spawn(move || {
             stdin.close();
             let _ = writer.send(&ServerMessage::Shutdown);
         });
@@ -355,7 +356,7 @@ impl WorkerInterrupt {
         if child.wait_timeout(remaining)?.is_none() {
             child.force_stop()?;
         }
-        Ok(())
+        Ok(shutdown)
     }
 }
 

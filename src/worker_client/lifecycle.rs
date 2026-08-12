@@ -80,7 +80,14 @@ impl ProcessStopHandles {
         let worker = self
             .worker
             .as_ref()
-            .map_or(Ok(()), |handle| handle.shutdown(deadline));
+            .map_or(Ok(None), |handle| handle.shutdown(deadline).map(Some));
+        let worker = worker.and_then(|shutdown| {
+            shutdown.map_or(Ok(()), |shutdown| {
+                shutdown
+                    .join()
+                    .map_err(|_| "worker shutdown sender task failed".to_string())
+            })
+        });
         resolver.and(worker)
     }
 }
@@ -165,8 +172,9 @@ impl Client {
             }
         };
 
-        let restart = self.begin_restart_after_resolution(&generation, grace)?;
         environment.python = Some(managed);
+        drop(environment);
+        let restart = self.begin_restart_after_resolution(&generation, grace)?;
         Ok(restart)
     }
 
@@ -449,7 +457,10 @@ impl Client {
                 LifecycleState::ShuttingDown { deadline } => (deadline, "worker is shutting down"),
             }
         };
-        handle.shutdown(deadline)?;
+        handle
+            .shutdown(deadline)?
+            .join()
+            .map_err(|_| "worker shutdown sender task failed".to_string())?;
         Err(message.to_string())
     }
 
@@ -487,7 +498,10 @@ impl Client {
                 LifecycleState::Ready => (Instant::now(), "worker restart state changed"),
             }
         };
-        handle.shutdown(deadline)?;
+        handle
+            .shutdown(deadline)?
+            .join()
+            .map_err(|_| "worker shutdown sender task failed".to_string())?;
         Err(message.to_string())
     }
 
@@ -570,7 +584,14 @@ impl Client {
                 .map_or(Ok(()), |resolver| resolver.stop());
             let worker = stop_handles
                 .worker
-                .map_or(Ok(()), |worker| worker.shutdown(deadline));
+                .map_or(Ok(None), |worker| worker.shutdown(deadline).map(Some));
+            let worker = worker.and_then(|shutdown| {
+                shutdown.map_or(Ok(()), |shutdown| {
+                    shutdown
+                        .join()
+                        .map_err(|_| "worker shutdown sender task failed".to_string())
+                })
+            });
             let stopped = resolver.and(worker);
             if stopped.is_ok() {
                 let mut owner = client

@@ -75,7 +75,10 @@ impl Worker {
 pub(super) struct WorkerInterrupt;
 
 impl WorkerInterrupt {
-    pub(super) fn shutdown(&self, _deadline: std::time::Instant) -> Result<(), String> {
-        Ok(())
+    pub(super) fn shutdown(
+        &self,
+        _deadline: std::time::Instant,
+    ) -> Result<std::thread::JoinHandle<()>, String> {
+        Ok(std::thread::spawn(|| {}))
     }
 }

@@ -143,12 +143,7 @@ impl Client {
     ) -> Result<SendResponse, SendFailure> {
         let generation = self.admit()?;
         let evaluation = match cell {
-            Some(cell) => {
-                let evaluation =
-                    self.start_evaluation(cell, stdin, generation, transcript, call_id)?;
-                evaluation.claim_wait()?;
-                evaluation
-            }
+            Some(cell) => self.start_evaluation(cell, stdin, generation, transcript, call_id)?,
             None => match self.current_evaluation()? {
                 Some(active) => {
                     self.ensure_generation(&generation)?;
@@ -160,7 +155,6 @@ impl Client {
                     if let Some(stdin) = stdin {
                         active.evaluation.submit_stdin(stdin)?;
                     }
-                    active.evaluation.claim_wait()?;
                     active.evaluation
                 }
                 None => {
@@ -193,6 +187,7 @@ impl Client {
         self.ensure_generation(&generation)?;
 
         let evaluation = Arc::new(Evaluation::new(transcript, call_id));
+        evaluation.claim_wait()?;
         if let Some(stdin) = stdin {
             evaluation.submit_stdin(stdin)?;
         }
@@ -227,7 +222,11 @@ impl Client {
     }
 
     fn current_evaluation(&self) -> Result<Option<ActiveEvaluation>, String> {
-        self.try_evaluation().map(|evaluation| evaluation.clone())
+        let evaluation = self.try_evaluation()?;
+        if let Some(active) = evaluation.as_ref() {
+            active.evaluation.claim_wait()?;
+        }
+        Ok(evaluation.clone())
     }
 
     fn try_evaluation(&self) -> Result<MutexGuard<'_, Option<ActiveEvaluation>>, String> {
@@ -360,8 +359,9 @@ impl Client {
                 ))),
             },
         };
+        let output = finish(result);
         drop(worker);
-        finish(result)
+        output
     }
 
     fn start_worker(

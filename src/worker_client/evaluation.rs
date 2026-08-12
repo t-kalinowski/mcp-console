@@ -62,7 +62,15 @@ impl Evaluation {
     }
 
     pub(super) fn claim_wait(&self) -> Result<(), String> {
-        self.set_waiting(true)
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| "worker evaluation state lock poisoned".to_string())?;
+        if state.waiting {
+            return Err("worker evaluation is already being polled".to_string());
+        }
+        state.waiting = true;
+        Ok(())
     }
 
     pub(super) fn begin_restart(&self) -> Result<(), String> {
@@ -206,7 +214,14 @@ impl Evaluation {
         if state.restarting {
             let (output, worker_stopped) = match result {
                 Ok(output) => (output, false),
-                Err(failure) => (failure.output, failure.worker_stopped),
+                Err(failure) => {
+                    let mut output = failure.output;
+                    if failure.worker_stopped {
+                        output.push_line(format!("[{}]", failure.message));
+                        output.push_line(super::output::WORKER_STOPPED_NOTICE);
+                    }
+                    (output, failure.worker_stopped)
+                }
             };
             state.restart_output = Some(if worker_stopped {
                 RestartOutput::WorkerStopped(output)
@@ -263,7 +278,7 @@ impl Evaluation {
 
     pub(super) async fn wait(&self, timeout: Duration) -> Result<EvaluationWait, String> {
         let started = Instant::now();
-        let result = loop {
+        loop {
             let changed = self.changed.notified();
             let grace = match self.reported_state(false)? {
                 EvaluationStatus::Waiting => None,
@@ -281,18 +296,7 @@ impl Evaluation {
                 }
                 break self.state_at_deadline();
             }
-        };
-        self.set_waiting(false)?;
-        result
-    }
-
-    fn set_waiting(&self, waiting: bool) -> Result<(), String> {
-        let mut state = self
-            .state
-            .lock()
-            .map_err(|_| "worker evaluation state lock poisoned".to_string())?;
-        state.waiting = waiting;
-        Ok(())
+        }
     }
 
     fn state_at_deadline(&self) -> Result<EvaluationWait, String> {
@@ -310,6 +314,7 @@ impl Evaluation {
             .lock()
             .map_err(|_| "worker evaluation state lock poisoned".to_string())?;
         if let Some(result) = state.result.take() {
+            state.waiting = false;
             return Ok(EvaluationStatus::Report(EvaluationWait::Completed(result)));
         }
         let Some(report_at) = state.input_report_at else {
@@ -324,6 +329,7 @@ impl Evaluation {
             return Ok(EvaluationStatus::Grace(grace));
         }
         let output = std::mem::take(&mut state.output);
+        state.waiting = false;
         Ok(EvaluationStatus::Report(EvaluationWait::InputRequested(
             output,
         )))
