@@ -35,7 +35,8 @@ Other inherited values, including an empty value, bypass the startup preflight u
 
 `session` with `action = "prepare"` can add R or Python requirements to the implicit session.
 Before worker startup, the server merges exact strings with each retained in-memory set and resolves the complete candidates outside the sandbox.
-R requirements invoke `ir` 0.4.0 or later through `PATH`; the server runs `ir run` with the same Rscript selection as the worker, one `--with` argument per requirement, and a constant expression that prints the resolved library path.
+Before R resolution, the server requires `ir --version` from `PATH` to report 0.4.0 or later.
+It then runs `ir run` with the same Rscript selection as the worker, one `--with` argument per requirement, and a constant expression that prints the resolved library path.
 The server sets `IR_NO_LOCAL_SOURCES` for every invocation, so IR refuses package installation from direct or transitive local sources while retaining ownership of package-reference parsing.
 Python requirements use the host resolver described above and take precedence over an inherited Python selection.
 The server commits both candidates together only after every requested resolution succeeds.

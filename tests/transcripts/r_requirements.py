@@ -19,13 +19,64 @@ PLATFORMS = {"darwin"}
 REQUIRED_COMMANDS = {"ir"}
 
 
+def test_rejects_unsupported_ir_version(binary: Path) -> Transcript:
+    environment, _ = r_test_environment()
+    environment["RETICULATE_PYTHON"] = ""
+
+    with tempfile.TemporaryDirectory() as temporary:
+        workspace = Path(temporary).resolve()
+        fake_bin = workspace / "bin"
+        fake_bin.mkdir()
+        fake_ir = fake_bin / "ir"
+        fake_ir.write_text(
+            code(r"""
+                #!/bin/sh
+
+                set -eu
+                if [ "$#" -eq 1 ] && [ "$1" = "--version" ]; then
+                  printf 'ir 0.3.0\n'
+                  exit 0
+                fi
+                printf 'started\n' > "$MCP_CONSOLE_UNSUPPORTED_IR_RUN_MARKER"
+                printf '%s\n' "$MCP_CONSOLE_FAKE_R_LIBRARY"
+                """),
+            encoding="utf-8",
+        )
+        fake_ir.chmod(0o755)
+        path = environment.get("PATH")
+        assert path is not None, "PATH is required"
+        environment["PATH"] = os.pathsep.join((str(fake_bin), path))
+        run_marker = workspace / "unsupported-ir-ran"
+        environment["MCP_CONSOLE_UNSUPPORTED_IR_RUN_MARKER"] = str(run_marker)
+        environment["MCP_CONSOLE_FAKE_R_LIBRARY"] = str(workspace)
+
+        client = McpClient(
+            binary,
+            ("serve",),
+            environment,
+            current_directory=workspace,
+        )
+        client._initialize_and_list_tools()
+        client.session(
+            action="prepare",
+            requirements={"r": ["local::package"]},
+        )
+        result = client.transcript[-1]["result"]
+        assert not run_marker.exists(), "unsupported IR reached package resolution"
+        assert result["isError"] is True, result
+        assert result["content"][0]["text"] == (
+            "R package resolution requires ir 0.4.0 or later; found ir 0.3.0"
+        ), result
+        return client._finish()
+
+
 def test_rejects_local_r_installation(binary: Path) -> Transcript:
     environment, _ = r_test_environment()
     environment["RETICULATE_PYTHON"] = ""
     environment.pop("IR_NO_LOCAL_SOURCES", None)
 
     with tempfile.TemporaryDirectory() as temporary:
-        workspace = Path(temporary)
+        workspace = Path(temporary).resolve()
         fixture = Path(__file__).resolve().parents[1] / "fixtures" / "r_install_escape"
         package = workspace / "package"
         shutil.copytree(fixture, package)

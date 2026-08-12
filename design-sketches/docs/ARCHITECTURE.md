@@ -803,7 +803,7 @@ Idle Python-only `session prepare` uses this same path; restart still handles ru
 ### 14.2 R
 
 The implemented implicit session uses IR for explicit pre-start R requirements.
-The supervisor runs `ir run` outside the worker sandbox with the same Rscript selection as the worker and one `--with` argument per exact requirement.
+The supervisor requires `ir --version` from `PATH` to report 0.4.0 or later, then runs `ir run` outside the worker sandbox with the same Rscript selection as the worker and one `--with` argument per exact requirement.
 It validates IR's returned library and prepends it to inherited `R_LIBS` before each worker generation initializes R.
 The prepared library persists across explicit restart and crash replacement.
 R additions after the worker starts still require a future restart-with-R-requirements path; the live worker does not mutate `.libPaths()`.

@@ -3,7 +3,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use super::process::{
-    ResolverProcess, ResolverStopHandle, completed_write, read_output, stop_resolver,
+    ResolverOutput, ResolverProcess, ResolverStopHandle, completed_write, read_output,
+    stop_resolver,
 };
 
 const R_LIBRARY_RESOLVER: &str = r#"
@@ -13,6 +14,7 @@ base::cat(base::normalizePath(
   mustWork = TRUE
 ))
 "#;
+const MINIMUM_IR_VERSION: semver::Version = semver::Version::new(0, 4, 0);
 
 #[derive(Clone)]
 pub(crate) struct ManagedR {
@@ -64,23 +66,10 @@ pub(crate) fn resolve_r(
                     program.display()
                 )
             })?;
-            let stdout = read_output(child.stdout.take().expect("R stdout is piped"));
-            let stderr = read_output(child.stderr.take().expect("R stderr is piped"));
-            let stop_handle = resolver.stop_handle();
-            if let Err(error) = on_started
-                .take()
-                .expect("resolver start callback should be available")(
-                stop_handle
-            ) {
-                let _ = stop_resolver(&mut child, program, "worker R home");
-                return Err(error);
-            }
-            resolver.watch_exit(child.id());
-            let output = resolver.wait(
+            let output = collect_resolver_output(
+                &resolver,
                 &mut child,
-                completed_write(),
-                stdout,
-                stderr,
+                &mut on_started,
                 program,
                 "worker R home",
             )?;
@@ -102,6 +91,7 @@ pub(crate) fn resolve_r(
         }
     };
     let program = Path::new("ir");
+    validate_ir_version(&resolver, &mut on_started, program)?;
     let mut command = Command::new(program);
     command.arg("run").arg("--rscript").arg(&rscript);
     for requirement in &requirements {
@@ -122,24 +112,8 @@ pub(crate) fn resolve_r(
             program.display()
         )
     })?;
-    let stdout = read_output(child.stdout.take().expect("resolver stdout is piped"));
-    let stderr = read_output(child.stderr.take().expect("resolver stderr is piped"));
-    if let Some(on_started) = on_started.take() {
-        let stop_handle = resolver.stop_handle();
-        if let Err(error) = on_started(stop_handle) {
-            let _ = stop_resolver(&mut child, program, "R package");
-            return Err(error);
-        }
-    }
-    resolver.watch_exit(child.id());
-    let output = resolver.wait(
-        &mut child,
-        completed_write(),
-        stdout,
-        stderr,
-        program,
-        "R package",
-    )?;
+    let output =
+        collect_resolver_output(&resolver, &mut child, &mut on_started, program, "R package")?;
     if !output.status.success() {
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -175,4 +149,75 @@ pub(crate) fn resolve_r(
         r_libs,
         requirements,
     })
+}
+
+fn validate_ir_version(
+    resolver: &ResolverProcess,
+    on_started: &mut Option<impl FnOnce(ResolverStopHandle) -> Result<(), String>>,
+    program: &Path,
+) -> Result<(), String> {
+    let mut command = Command::new(program);
+    command
+        .arg("--version")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .process_group(0);
+    let mut child = command.spawn().map_err(|error| {
+        format!(
+            "failed to check R package resolver version with `{}`: {error}",
+            program.display()
+        )
+    })?;
+    let output = collect_resolver_output(resolver, &mut child, on_started, program, "R package")?;
+    if !output.status.success() {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let detail = if stderr.trim().is_empty() {
+            stdout.trim()
+        } else {
+            stderr.trim()
+        };
+        return Err(format!(
+            "failed to check R package resolver version with {}: {detail}",
+            output.status
+        ));
+    }
+
+    let output = String::from_utf8(output.stdout)
+        .map_err(|_| "R package resolver returned a non-UTF-8 version".to_string())?;
+    let reported = output.trim();
+    let version = reported
+        .strip_prefix("ir ")
+        .and_then(|version| semver::Version::parse(version).ok())
+        .ok_or_else(|| {
+            format!(
+                "R package resolution requires ir {MINIMUM_IR_VERSION} or later; could not parse `{reported}`"
+            )
+        })?;
+    if version < MINIMUM_IR_VERSION {
+        return Err(format!(
+            "R package resolution requires ir {MINIMUM_IR_VERSION} or later; found ir {version}"
+        ));
+    }
+    Ok(())
+}
+
+fn collect_resolver_output(
+    resolver: &ResolverProcess,
+    child: &mut std::process::Child,
+    on_started: &mut Option<impl FnOnce(ResolverStopHandle) -> Result<(), String>>,
+    program: &Path,
+    kind: &str,
+) -> Result<ResolverOutput, String> {
+    let stdout = read_output(child.stdout.take().expect("resolver stdout is piped"));
+    let stderr = read_output(child.stderr.take().expect("resolver stderr is piped"));
+    if let Some(on_started) = on_started.take()
+        && let Err(error) = on_started(resolver.stop_handle())
+    {
+        let _ = stop_resolver(child, program, kind);
+        return Err(error);
+    }
+    resolver.watch_exit(child.id());
+    resolver.wait(child, completed_write(), stdout, stderr, program, kind)
 }

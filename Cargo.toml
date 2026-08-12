@@ -20,6 +20,7 @@ libloading = "0.9"
 libr = { git = "https://github.com/t-kalinowski/ark", rev = "37d3db0074e01a184d67b7a85faf9a3492836422" }
 rmcp = { version = "2.2.0", default-features = false, features = ["macros", "server", "transport-io"] }
 rust-embed = { version = "8.11", features = ["debug-embed"] }
+semver = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["macros", "rt", "sync", "time"] }

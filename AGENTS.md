@@ -45,7 +45,8 @@ The server preserves sideband text and image order as MCP content blocks, coales
 The implemented `session` surface accepts `action = "prepare"` with one or more R or Python requirement strings or `action = "restart"` with optional Python requirement strings for the implicit session.
 Requirements are exact, additive, and idempotent.
 Before the worker starts, each successful prepare resolves the complete candidate sets outside the sandbox, atomically retains them in server memory, and returns `[prepared]` without starting the worker.
-R requirements use `ir run` 0.4.0 or later from `PATH` with the worker's Rscript and become the first worker `R_LIBS` entry; Python requirements use reticulate and uv and replace any inherited Python selection with the resolved interpreter.
+Before each R resolution, the server requires `ir --version` from `PATH` to report 0.4.0 or later; it then uses `ir run` with the worker's Rscript, and the result becomes the first worker `R_LIBS` entry.
+Python requirements use reticulate and uv and replace any inherited Python selection with the resolved interpreter.
 The server sets `IR_NO_LOCAL_SOURCES` for every R resolution, so IR prevents direct or transitive local package installation while retaining ownership of package-reference parsing.
 A failed resolution leaves the prior requirements, R library, and interpreter unchanged.
 For a uv tool failure, the tool error reports a JSON manifest containing reticulate's selected Python and the complete candidate package set, followed by uv's stderr, while omitting the helper command, temporary output path, and reticulate's `py_require()`-oriented guidance.

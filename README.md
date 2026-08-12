@@ -67,7 +67,7 @@ The policy prevents local package installation code from running; IR may still r
 Before the worker starts, this `session` call resolves each complete requirement set outside the worker sandbox, using IR for R and reticulate with uv for Python, then returns `[prepared]`.
 When both languages are supplied, it retains the new configuration only after both resolutions succeed.
 It does not load packages into or start the worker.
-R preparation requires `ir` 0.4.0 or later on `PATH`.
+Before R preparation, the server requires `ir --version` from `PATH` to report 0.4.0 or later.
 The server runs IR with the same Rscript selection as the worker and prepends the returned library to the worker's inherited `R_LIBS`, leaving its other R libraries available.
 
 After a server-managed worker starts, a Python-only `prepare` applies additions while the worker is idle.
