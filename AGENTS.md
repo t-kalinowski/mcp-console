@@ -31,7 +31,7 @@ Startup fails when the run record cannot be created, and any later recording fai
 Submitted source, stdin, and tool-result output are recorded without redaction.
 Generated Quarto transcripts and complete output spools do not exist yet.
 Supplying exactly one of `r`, `python`, or `sql` starts one complete cell and waits for up to `timeout_ms`, which defaults to 60 seconds.
-If that wait expires, `send` returns the newline-prefixed banner `\n[running]` without stopping the computation; a later call without a code field polls it, and a poll while idle returns `\n[idle]`.
+If that wait expires, `send` drains output produced so far, appends the newline-prefixed banner `\n[running]`, and leaves the computation running; a later call without a code field polls it, and a poll while idle returns `\n[idle]`.
 Concurrent `send` calls are unsupported.
 Supplying `stdin` with a code cell, during an evaluation, or while idle queues exact UTF-8 bytes to worker fd 0 without adding a newline, inspecting, echoing, or limiting the text, or waiting for an input request.
 A nonempty idle stdin call lazily starts the worker when needed, queues the bytes, and returns `\n[idle]`; `timeout_ms` does not bound that startup because the call does not wait on an evaluation.
@@ -63,7 +63,7 @@ A failed restart resolution leaves the current worker, its in-memory state, requ
 After successful resolution, restart retains the prepared R library and candidate Python environment, loses all worker-owned in-memory state and unread stdin, eagerly starts a replacement, and returns `[restarted]` after it reports ready.
 The implicit session exists for the server lifetime, so restart starts its first worker if none exists yet.
 It first queues worker-stdin closure and the sideband shutdown message without waiting behind an evaluation, then force-stops the process group and reaps the direct sandbox process at the one-second deadline if that process remains live.
-It then joins the worker's stdin writer and standard-stream readers before reporting `[worker stopped: in-memory state lost]` or launching the replacement.
+It then waits for the active sideband operation to end and joins the worker's stdin writer and standard-stream readers before reporting `[worker stopped: in-memory state lost]` or launching the replacement.
 Each admitted evaluation or idle stdin write carries its worker generation, so work admitted before restart cannot reach the replacement.
 A live Python preparation invalidated by restart returns `Python preparation cancelled by restart`; active-generation sideband failures retain their transport diagnostics.
 The explicit restart response preserves old-worker output, the stopped notice when a worker existed, `[starting new worker]`, replacement startup output, and `[restarted]` in that order.
@@ -150,14 +150,14 @@ Temporary Arrow relations use collision-checked names and are unregistered after
 DDL and DML results without columns are silent; affected-row summaries do not exist yet.
 DuckDB errors are normal language outcomes with `isError: false`, and the connection remains reusable.
 Automatic Python relation sharing and a separate relation-registration API do not exist.
-Worker standard output and standard error are piped and collected continuously, including while the worker is idle.
-Each pipe reader queues raw byte chunks, and each `send` response decodes and drains complete UTF-8 prefixes from bytes already collected at its response boundary; later bytes remain for the next response.
+Sideband text and images, worker standard-output and standard-error bytes, failures, and lifecycle notices share one pending output tape in publication order.
+Each pipe reader queues raw byte chunks, and each successful `send` response drains all tape events available at its response boundary, decoding complete UTF-8 prefixes and retaining incomplete suffixes for a later response.
 Idle, running, and outstanding-input responses append the literal `\n[idle]`, `\n[running]`, or `\n[stdin needed]` banner; its leading newline is present even when no output precedes it.
 After an infrastructure failure, the server finishes worker shutdown and its I/O readers before appending `[worker stopped: in-memory state lost]` after the specific error.
 Each replacement attempt appends `[starting new worker]\n` before launch, so its startup output or error follows that fact.
 Initial lazy startup and retries before a worker reaches ready are silent.
-Completion returns collected standard-stream and pending evaluation content, including sideband text, images, and input-request records, instead of `[done]` when any produced content.
-A failed evaluation likewise returns all pending evaluation output and any complete standard-stream output available at the response boundary before its infrastructure or protocol error.
+Completion returns pending text, images, and input-request records instead of `[done]` when any content was produced.
+A failed evaluation likewise returns all pending output before its infrastructure or protocol error.
 When worker output or a lifecycle notice shares that response, the server starts the bracketed error on a new line; an error returned alone remains bare.
 Ordering between the two standard streams and sideband output is best effort; incomplete UTF-8 remains with its pipe until a later response, and invalid UTF-8 is replaced when output is rendered.
 The built-in worker and custom workers send console prompt fields verbatim; the server preserves each value without trimming it and renders it as a JSON-quoted `[input requested: ...]` record.

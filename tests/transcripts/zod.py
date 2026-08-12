@@ -564,7 +564,7 @@ def test_drains_pending_sideband_output_while_running(binary: Path) -> Transcrip
             "isError": False,
         }, result
 
-        (temporary_path / "zod-release-image-completion").touch()
+        (image_started.parent / "zod-release-image-completion").touch()
         client.send(timeout_ms=3_000)
         assert last_tool_text(client) == "[done]"
         return client._finish()

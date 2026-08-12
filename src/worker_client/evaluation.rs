@@ -1,7 +1,7 @@
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use super::output::{Response, SendFailure};
+use super::output::{OutputTape, Response, SendFailure};
 
 const INPUT_REQUEST_GRACE: Duration = Duration::from_millis(10);
 
@@ -10,29 +10,24 @@ pub(super) struct Evaluation {
     changed: tokio::sync::Notify,
     transcript: crate::transcript::Transcript,
     call_id: u64,
+    output: OutputTape,
 }
 
 struct EvaluationState {
-    result: Option<Result<Response, SendFailure>>,
-    output: Response,
+    completed: bool,
     input_report_at: Option<Instant>,
     waiting: bool,
-    restarting: bool,
-    restart_output: Option<RestartOutput>,
+    cancelled_by_restart: bool,
     #[cfg(target_os = "macos")]
     stdin: Option<super::platform::StdinSender>,
     pending_stdin: Vec<u8>,
 }
 
 pub(super) enum EvaluationWait {
-    Running,
+    Running(Response),
     InputRequested(Response),
-    Completed(Result<Response, SendFailure>),
-}
-
-pub(super) enum RestartOutput {
-    Output(Response),
-    WorkerStopped(Response),
+    Completed(Response),
+    Restarted,
 }
 
 enum EvaluationStatus {
@@ -42,15 +37,17 @@ enum EvaluationStatus {
 }
 
 impl Evaluation {
-    pub(super) fn new(transcript: crate::transcript::Transcript, call_id: u64) -> Self {
+    pub(super) fn new(
+        transcript: crate::transcript::Transcript,
+        call_id: u64,
+        output: OutputTape,
+    ) -> Self {
         Self {
             state: Mutex::new(EvaluationState {
-                result: None,
-                output: Response::default(),
+                completed: false,
                 input_report_at: None,
                 waiting: false,
-                restarting: false,
-                restart_output: None,
+                cancelled_by_restart: false,
                 #[cfg(target_os = "macos")]
                 stdin: None,
                 pending_stdin: Vec::new(),
@@ -58,6 +55,7 @@ impl Evaluation {
             changed: tokio::sync::Notify::new(),
             transcript,
             call_id,
+            output,
         }
     }
 
@@ -66,6 +64,9 @@ impl Evaluation {
             .state
             .lock()
             .map_err(|_| "worker evaluation state lock poisoned".to_string())?;
+        if state.cancelled_by_restart {
+            return Err("session restarted before the operation completed".to_string());
+        }
         if state.waiting {
             return Err("worker evaluation is already being polled".to_string());
         }
@@ -73,26 +74,15 @@ impl Evaluation {
         Ok(())
     }
 
-    pub(super) fn begin_restart(&self) -> Result<(), String> {
+    /// Prevents this evaluation from draining output after restart takes ownership.
+    pub(super) fn cancel_for_restart(&self) -> Result<(), String> {
         let mut state = self
             .state
             .lock()
             .map_err(|_| "worker evaluation state lock poisoned".to_string())?;
-        state.restarting = true;
-        let output = take_restart_output(&mut state);
-        state.restart_output = Some(output);
-        if state.waiting {
-            state.result = Some(Err(restart_failure()));
-            self.changed.notify_one();
-        }
+        state.cancelled_by_restart = true;
+        self.changed.notify_one();
         Ok(())
-    }
-
-    pub(super) fn is_restarting(&self) -> Result<bool, String> {
-        self.state
-            .lock()
-            .map(|state| state.restarting)
-            .map_err(|_| "worker evaluation state lock poisoned".to_string())
     }
 
     /// Queues bytes and briefly defers any outstanding input report for its receipt.
@@ -136,11 +126,7 @@ impl Evaluation {
 
     #[cfg(target_os = "macos")]
     pub(super) fn output(&self, output: String) -> Result<(), String> {
-        let mut state = self
-            .state
-            .lock()
-            .map_err(|_| "worker evaluation state lock poisoned".to_string())?;
-        state.output.push_text(output);
+        self.output.push_text(output);
         Ok(())
     }
 
@@ -149,11 +135,7 @@ impl Evaluation {
         let artifact = self
             .transcript
             .persist_image(self.call_id, &data, &mime_type)?;
-        let mut state = self
-            .state
-            .lock()
-            .map_err(|_| "worker evaluation state lock poisoned".to_string())?;
-        state.output.push_image(data, mime_type, artifact);
+        self.output.push_image(data, mime_type, artifact);
         Ok(())
     }
 
@@ -168,12 +150,8 @@ impl Evaluation {
         }
         let prompt = serde_json::to_string(&prompt)
             .map_err(|error| format!("failed to render worker input prompt: {error}"))?;
-        if !state.output.is_empty() && state.output.text_needs_newline() {
-            state.output.push_text("\n");
-        }
-        state
-            .output
-            .push_text(format!("[input requested: {prompt}]\n"));
+        self.output
+            .push_line(format!("[input requested: {prompt}]\n"));
         state.input_report_at = Some(Instant::now() + INPUT_REQUEST_GRACE);
         self.changed.notify_one();
         Ok(())
@@ -210,48 +188,13 @@ impl Evaluation {
             return;
         };
         state.input_report_at = None;
-        let result = match result {
-            Ok(()) => Ok(std::mem::take(&mut state.output)),
-            Err(mut failure) => {
-                failure.output.extend(std::mem::take(&mut state.output));
-                Err(failure)
-            }
-        };
-        if state.restarting {
-            let (output, worker_stopped) = match result {
-                Ok(output) => (output, false),
-                Err(failure) => {
-                    let mut output = failure.output;
-                    if failure.worker_stopped {
-                        output.push_line(format!("[{}]", failure.message));
-                        output.push_line(super::output::WORKER_STOPPED_NOTICE);
-                    }
-                    (output, failure.worker_stopped)
-                }
-            };
-            extend_restart_output(&mut state, output, worker_stopped);
-            state.result = state.waiting.then(|| Err(restart_failure()));
-        } else {
-            state.result = Some(result);
+        if let Err(failure) = result
+            && (!state.cancelled_by_restart || failure.worker_stopped)
+        {
+            self.output.push_failure(failure);
         }
+        state.completed = true;
         self.changed.notify_one();
-    }
-
-    /// Takes the final output accepted before an explicit restart retired the worker.
-    pub(super) fn take_restart_output(&self) -> Result<RestartOutput, String> {
-        let mut state = self
-            .state
-            .lock()
-            .map_err(|_| "worker evaluation state lock poisoned".to_string())?;
-        if let Some(output) = state.restart_output.take() {
-            return Ok(output);
-        }
-        let output = take_restart_output(&mut state);
-        if state.waiting {
-            state.result = Some(Err(restart_failure()));
-            self.changed.notify_one();
-        }
-        Ok(output)
     }
 
     pub(super) async fn wait(&self, timeout: Duration) -> Result<EvaluationWait, String> {
@@ -291,14 +234,22 @@ impl Evaluation {
             .state
             .lock()
             .map_err(|_| "worker evaluation state lock poisoned".to_string())?;
-        if let Some(result) = state.result.take() {
+        if state.cancelled_by_restart {
             state.waiting = false;
-            return Ok(EvaluationStatus::Report(EvaluationWait::Completed(result)));
+            return Ok(EvaluationStatus::Report(EvaluationWait::Restarted));
+        }
+        if state.completed {
+            state.waiting = false;
+            return Ok(EvaluationStatus::Report(EvaluationWait::Completed(
+                self.output.take(),
+            )));
         }
         let Some(report_at) = state.input_report_at else {
             if at_deadline {
                 state.waiting = false;
-                return Ok(EvaluationStatus::Report(EvaluationWait::Running));
+                return Ok(EvaluationStatus::Report(EvaluationWait::Running(
+                    self.output.take(),
+                )));
             }
             return Ok(EvaluationStatus::Waiting);
         };
@@ -306,53 +257,9 @@ impl Evaluation {
         if !at_deadline && !grace.is_zero() {
             return Ok(EvaluationStatus::Grace(grace));
         }
-        let output = std::mem::take(&mut state.output);
         state.waiting = false;
         Ok(EvaluationStatus::Report(EvaluationWait::InputRequested(
-            output,
+            self.output.take(),
         )))
     }
-}
-
-fn take_restart_output(state: &mut EvaluationState) -> RestartOutput {
-    let mut output = std::mem::take(&mut state.output);
-    let mut worker_stopped = false;
-    match state.result.take() {
-        Some(Ok(completed)) => output.extend(completed),
-        Some(Err(failure)) => {
-            output.extend(failure.output);
-            if failure.worker_stopped {
-                output.push_line(format!("[{}]", failure.message));
-                output.push_line(super::output::WORKER_STOPPED_NOTICE);
-                worker_stopped = true;
-            }
-        }
-        None => {}
-    }
-    if worker_stopped {
-        RestartOutput::WorkerStopped(output)
-    } else {
-        RestartOutput::Output(output)
-    }
-}
-
-fn extend_restart_output(state: &mut EvaluationState, output: Response, worker_stopped: bool) {
-    let current = state
-        .restart_output
-        .take()
-        .unwrap_or_else(|| RestartOutput::Output(Response::default()));
-    let (mut current, already_stopped) = match current {
-        RestartOutput::Output(output) => (output, false),
-        RestartOutput::WorkerStopped(output) => (output, true),
-    };
-    current.extend(output);
-    state.restart_output = Some(if already_stopped || worker_stopped {
-        RestartOutput::WorkerStopped(current)
-    } else {
-        RestartOutput::Output(current)
-    });
-}
-
-fn restart_failure() -> SendFailure {
-    SendFailure::from("session restarted before the operation completed".to_string())
 }

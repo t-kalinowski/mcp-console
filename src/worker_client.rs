@@ -21,9 +21,9 @@ pub(crate) use environment::{PrepareResult, Requirements};
 use evaluation::{Evaluation, EvaluationWait};
 use lifecycle::{LifecycleControl, WorkerGeneration};
 #[cfg(target_os = "macos")]
-use output::CapturedOutputStream;
-use output::{CapturedOutput, SendFailure, SendResponse};
+use output::OutputTapeStream;
 pub(crate) use output::{Content, Response};
+use output::{OutputTape, SendFailure, SendResponse};
 
 /// A cloneable handle to one lazily started worker.
 #[derive(Clone)]
@@ -36,7 +36,7 @@ struct ClientInner {
     worker: Mutex<WorkerState>,
     evaluation: Mutex<Option<ActiveEvaluation>>,
     preparation: tokio::sync::RwLock<()>,
-    output: CapturedOutput,
+    output: OutputTape,
     lifecycle: Mutex<LifecycleControl>,
     environment: Option<Mutex<Environment>>,
 }
@@ -114,7 +114,7 @@ impl Client {
             worker: Mutex::new(WorkerState::Initial),
             evaluation: Mutex::new(None),
             preparation: tokio::sync::RwLock::new(()),
-            output: CapturedOutput::new(),
+            output: OutputTape::new(),
             lifecycle: Mutex::new(LifecycleControl::new()),
             environment: environment.map(Mutex::new),
         }))
@@ -129,10 +129,13 @@ impl Client {
         transcript: crate::transcript::Transcript,
         call_id: u64,
     ) -> Response {
-        let result = self
+        match self
             .send_inner(cell, stdin, timeout, transcript, call_id)
-            .await;
-        self.attach_output(result)
+            .await
+        {
+            Ok(response) => output::render_response(response),
+            Err(failure) => output::direct_failure(failure.message),
+        }
     }
 
     async fn send_inner(
@@ -161,22 +164,33 @@ impl Client {
                     active.evaluation
                 }
                 None => {
-                    if let Some(stdin) = stdin {
-                        self.write_idle_stdin(stdin, generation).await?;
+                    if let Some(stdin) = stdin
+                        && let Err(failure) = self.write_idle_stdin(stdin, generation.clone()).await
+                    {
+                        match self.generation_status(&generation)? {
+                            lifecycle::GenerationStatus::CurrentReady => {
+                                self.0.output.push_failure(failure);
+                            }
+                            lifecycle::GenerationStatus::CurrentClosing
+                            | lifecycle::GenerationStatus::Changed => {
+                                return Err(failure);
+                            }
+                        }
                     }
-                    return Ok(SendResponse::Idle);
+                    return Ok(SendResponse::Idle(self.take_idle_output(&generation)?));
                 }
             },
         };
         drop(preparation);
 
         match evaluation.wait(timeout).await? {
-            EvaluationWait::Running => Ok(SendResponse::Running),
+            EvaluationWait::Running(output) => Ok(SendResponse::Running(output)),
             EvaluationWait::InputRequested(output) => Ok(SendResponse::InputRequested(output)),
-            EvaluationWait::Completed(result) => {
+            EvaluationWait::Completed(output) => {
                 self.clear_evaluation(&evaluation)?;
-                result.map(SendResponse::Completed)
+                Ok(SendResponse::Completed(output))
             }
+            EvaluationWait::Restarted => Ok(SendResponse::Restarted),
         }
     }
 
@@ -190,7 +204,7 @@ impl Client {
     ) -> Result<Arc<Evaluation>, String> {
         self.ensure_generation(&generation)?;
 
-        let evaluation = Arc::new(Evaluation::new(transcript, call_id));
+        let evaluation = Arc::new(Evaluation::new(transcript, call_id, self.0.output.clone()));
         evaluation.claim_wait()?;
         if let Some(stdin) = stdin {
             evaluation.submit_stdin(stdin)?;
@@ -290,11 +304,29 @@ impl Client {
         if active
             .as_ref()
             .is_some_and(|active| Arc::ptr_eq(&active.evaluation, completed))
-            && !completed.is_restarting()?
         {
             *active = None;
         }
         Ok(())
+    }
+
+    /// Drains idle output only while this call still owns the admitted generation.
+    fn take_idle_output(&self, generation: &WorkerGeneration) -> Result<Response, String> {
+        let evaluation = self.evaluation()?;
+        if evaluation.is_some() {
+            return Err("worker started evaluating before idle output was collected".to_string());
+        }
+        let lifecycle = self
+            .0
+            .lifecycle
+            .lock()
+            .map_err(|_| "worker lifecycle lock poisoned".to_string())?;
+        if lifecycle.state != lifecycle::LifecycleState::Ready
+            || !lifecycle.generation.is(generation)
+        {
+            return Err("session restarted before the operation completed".to_string());
+        }
+        Ok(self.0.output.take())
     }
 
     fn evaluate_blocking(
@@ -406,7 +438,7 @@ impl Client {
                 managed_r,
             };
             if replacing {
-                self.0.output.push_notice(output::WORKER_STARTING_NOTICE);
+                self.0.output.push_line(output::WORKER_STARTING_NOTICE);
             }
             let running = self
                 .0

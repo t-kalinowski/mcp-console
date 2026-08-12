@@ -32,7 +32,7 @@ Recording is mandatory: startup fails if the run record cannot be created, and a
 Submitted source, stdin, and tool-result output are recorded without redaction.
 Complete evaluation-output spools and the generated Quarto projection described in the design sketches are not yet implemented.
 Supplying exactly one of `r`, `python`, or `sql` evaluates one complete code cell and waits up to the optional `timeout_ms`, which defaults to 60 seconds.
-When that wait expires, the call returns the newline-prefixed banner `\n[running]` while computation continues; call `send` without a code field to poll for completion.
+When that wait expires, the call drains output produced so far, appends the newline-prefixed banner `\n[running]`, and leaves the computation running; call `send` without a code field to poll again.
 A call may also supply exact standard-input text with a code cell, during an evaluation, or while the worker is idle:
 
 ```json
@@ -95,9 +95,9 @@ Restart returns `[restarted]` after the replacement reports ready.
 It loses all in-memory R, Python, SQL, debugger, and unread-stdin state.
 The implicit session exists for the server lifetime, so restart starts its first worker if none exists yet.
 The server closes worker stdin and sends the sideband shutdown message, then force-stops the worker process group and reaps the direct sandbox process if that process has not exited after one second.
-It waits for the worker's stdin writer and standard-stream readers to finish before reporting that the worker stopped or launching a replacement.
+It waits for the active sideband operation to end and joins the worker's stdin writer and standard-stream readers before reporting that the worker stopped or launching a replacement.
 Code and idle stdin remain associated with the worker that admitted them and cannot run in the replacement.
-The restart response includes retained standard-stream output from the old worker, `[worker stopped: in-memory state lost]` when a worker existed, `[starting new worker]`, startup output, and finally `[restarted]`, in that order.
+The restart response includes retained output from the old worker, `[worker stopped: in-memory state lost]` when a worker existed, `[starting new worker]`, startup output, and finally `[restarted]`, in that order.
 On macOS, the default managed-Python preflight happens during `serve` startup when required; a successful `prepare` replaces that initial selection before the first nonempty stdin submission or evaluation lazily starts the sandboxed embedded R worker.
 Later calls reuse the same global R state, reticulate Python interpreter, and in-memory DuckDB catalog.
 An infrastructure or protocol failure stops that worker and discards its in-memory R, Python, and SQL state.
@@ -163,8 +163,9 @@ For example, `dplyr::tbl(sql_connection(), "answers")` creates a lazy relation t
 These paths avoid an eager snapshot transfer, but do not promise end-to-end zero-copy behavior: DuckDB converts R values during execution, and collecting a lazy relation materializes its result in R.
 Automatic Python relation sharing and affected-row summaries do not exist yet.
 
-The server also collects text written directly to the worker's standard output and standard error, including direct writes by descendants that retain those descriptors.
-It retains raw bytes until the next `send` response is assembled; output produced while the worker is idle can therefore appear on a later idle poll before the server-owned `\n[idle]` banner.
+The server appends sideband text and images, worker standard-output and standard-error bytes, failures, and lifecycle notices to one pending output tape.
+Each successful `send` boundary drains the events available then; output produced while the worker is idle can therefore appear on a later idle poll before the server-owned `\n[idle]` banner.
+Standard-stream bytes remain undecoded until a response drains them, so incomplete UTF-8 can remain pending for a later response.
 Ordering among standard output, standard error, and sideband console or image output is best effort.
 R language failures, uncaught Python exceptions, and DuckDB errors remain ordinary console results rather than MCP tool errors.
 A silent successful R, Python, or SQL cell sends no sideband `output` frame, still sends `completed`, and projects to `[done]` when no other response text is pending.

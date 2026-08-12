@@ -1,34 +1,39 @@
-#[cfg(target_os = "macos")]
 use std::sync::{Arc, Mutex};
 
 pub(super) const WORKER_STARTING_NOTICE: &str = "[starting new worker]\n";
 pub(super) const WORKER_STOPPED_NOTICE: &str = "[worker stopped: in-memory state lost]";
 
-#[cfg(target_os = "macos")]
+/// Stores pending session output in publication order until one response drains it.
 #[derive(Clone)]
-pub(super) struct CapturedOutput(Arc<Mutex<CapturedOutputState>>);
+pub(super) struct OutputTape(Arc<Mutex<OutputTapeState>>);
 
-#[cfg(not(target_os = "macos"))]
-#[derive(Clone)]
-pub(super) struct CapturedOutput;
-
-#[cfg(target_os = "macos")]
 #[derive(Default)]
-struct CapturedOutputState {
+struct OutputTapeState {
     streams: Vec<Option<Vec<u8>>>,
-    events: Vec<CapturedOutputEvent>,
+    events: Vec<OutputEvent>,
+}
+
+enum OutputEvent {
+    StreamData {
+        stream: usize,
+        bytes: Vec<u8>,
+    },
+    StreamClosed {
+        stream: usize,
+    },
+    Text(String),
+    Image {
+        data: String,
+        mime_type: String,
+        artifact: crate::transcript::Artifact,
+    },
+    Line(String),
+    Failure(SendFailure),
 }
 
 #[cfg(target_os = "macos")]
-enum CapturedOutputEvent {
-    Data { stream: usize, bytes: Vec<u8> },
-    Closed { stream: usize },
-    Notice(String),
-}
-
-#[cfg(target_os = "macos")]
-pub(super) struct CapturedOutputStream {
-    output: CapturedOutput,
+pub(super) struct OutputTapeStream {
+    output: OutputTape,
     stream: usize,
 }
 
@@ -48,14 +53,14 @@ pub(crate) enum Content {
 }
 
 pub(super) enum SendResponse {
-    Idle,
-    Running,
+    Idle(Response),
+    Running(Response),
     InputRequested(Response),
     Completed(Response),
+    Restarted,
 }
 
 pub(super) struct SendFailure {
-    pub(super) output: Response,
     pub(super) message: String,
     pub(super) worker_stopped: bool,
 }
@@ -63,7 +68,6 @@ pub(super) struct SendFailure {
 impl From<String> for SendFailure {
     fn from(message: String) -> Self {
         Self {
-            output: Response::default(),
             message,
             worker_stopped: false,
         }
@@ -107,21 +111,12 @@ impl Response {
         });
     }
 
-    pub(super) fn extend(&mut self, other: Self) {
-        for content in other.content {
-            match content {
-                Content::Text(text) => self.push_text(text),
-                Content::Image {
-                    data,
-                    mime_type,
-                    artifact,
-                } => self.push_image(data, mime_type, artifact),
-            }
-        }
-    }
-
     pub(super) fn is_empty(&self) -> bool {
         self.content.is_empty()
+    }
+
+    pub(super) fn is_error(&self) -> bool {
+        self.is_error
     }
 
     pub(super) fn text_needs_newline(&self) -> bool {
@@ -136,183 +131,156 @@ impl Response {
     }
 }
 
-impl super::Client {
-    pub(super) fn attach_output(&self, result: Result<SendResponse, SendFailure>) -> Response {
-        let lifecycle = self.0.lifecycle.lock();
-        let captured_output = if lifecycle
-            .as_ref()
-            .is_ok_and(|lifecycle| lifecycle.state == super::lifecycle::LifecycleState::Ready)
-        {
-            self.0.output.take()
-        } else {
-            String::new()
-        };
-        drop(lifecycle);
-        assemble_response(captured_output, result)
-    }
-
-    pub(crate) fn worker_stopped_response(&self, message: String) -> Response {
-        self.attach_output(Err(SendFailure::from(message).worker_stopped()))
-    }
-}
-
-fn assemble_response(
-    captured_output: String,
-    result: Result<SendResponse, SendFailure>,
-) -> Response {
-    let mut output = Response::default();
-    output.push_text(captured_output);
-    match result {
-        Ok(response) => render_response(output, response),
-        Err(SendFailure {
-            output: worker_output,
-            message,
-            worker_stopped,
-        }) => {
-            output.extend(worker_output);
-            if output.is_empty() && !worker_stopped {
-                output.push_text(message);
-            } else {
-                attach_error_output(&mut output, message, worker_stopped);
-            }
-            output.is_error = true;
-            output
-        }
-    }
-}
-
-pub(super) fn render_failure(captured_output: String, failure: SendFailure) -> Response {
-    assemble_response(captured_output, Err(failure))
-}
-
-#[cfg(target_os = "macos")]
-impl CapturedOutput {
+impl OutputTape {
     pub(super) fn new() -> Self {
-        Self(Arc::new(Mutex::new(CapturedOutputState::default())))
+        Self(Arc::new(Mutex::new(OutputTapeState::default())))
     }
 
-    pub(super) fn stream(&self) -> CapturedOutputStream {
-        let mut state = self
-            .0
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+    #[cfg(target_os = "macos")]
+    pub(super) fn stream(&self) -> OutputTapeStream {
+        let mut state = self.lock();
         let stream = state.streams.len();
         state.streams.push(Some(Vec::new()));
-        CapturedOutputStream {
+        OutputTapeStream {
             output: self.clone(),
             stream,
         }
     }
 
-    pub(super) fn push_notice(&self, notice: impl Into<String>) {
-        self.0
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .events
-            .push(CapturedOutputEvent::Notice(notice.into()));
+    pub(super) fn push_text(&self, text: impl Into<String>) {
+        let text = text.into();
+        if !text.is_empty() {
+            self.lock().events.push(OutputEvent::Text(text));
+        }
     }
 
-    pub(super) fn take(&self) -> String {
-        let mut state = self
-            .0
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+    pub(super) fn push_image(
+        &self,
+        data: String,
+        mime_type: String,
+        artifact: crate::transcript::Artifact,
+    ) {
+        self.lock().events.push(OutputEvent::Image {
+            data,
+            mime_type,
+            artifact,
+        });
+    }
+
+    pub(super) fn push_line(&self, line: impl Into<String>) {
+        self.lock().events.push(OutputEvent::Line(line.into()));
+    }
+
+    pub(super) fn push_failure(&self, failure: SendFailure) {
+        self.lock().events.push(OutputEvent::Failure(failure));
+    }
+
+    pub(super) fn take(&self) -> Response {
+        let mut state = self.lock();
         let events = std::mem::take(&mut state.events);
-        let mut output = String::new();
+        let mut output = Response::default();
 
         for event in events {
             match event {
-                CapturedOutputEvent::Data { stream, bytes } => {
+                OutputEvent::StreamData { stream, bytes } => {
                     let pending = state.streams[stream]
                         .as_mut()
-                        .expect("captured output stream should be open");
+                        .expect("output tape stream should be open");
                     pending.extend_from_slice(&bytes);
                     let complete = complete_utf8_prefix(pending);
                     let incomplete = pending.split_off(complete);
                     let complete = std::mem::replace(pending, incomplete);
-                    output.push_str(&String::from_utf8_lossy(&complete));
+                    output.push_text(String::from_utf8_lossy(&complete));
                 }
-                CapturedOutputEvent::Closed { stream } => {
+                OutputEvent::StreamClosed { stream } => {
                     let pending = state.streams[stream]
                         .take()
-                        .expect("captured output stream should be open");
-                    output.push_str(&String::from_utf8_lossy(&pending));
+                        .expect("output tape stream should be open");
+                    output.push_text(String::from_utf8_lossy(&pending));
                 }
-                CapturedOutputEvent::Notice(notice) => {
-                    if !output.is_empty() && !output.ends_with('\n') {
-                        output.push('\n');
+                OutputEvent::Text(text) => output.push_text(text),
+                OutputEvent::Image {
+                    data,
+                    mime_type,
+                    artifact,
+                } => output.push_image(data, mime_type, artifact),
+                OutputEvent::Line(line) => output.push_line(line),
+                OutputEvent::Failure(SendFailure {
+                    message,
+                    worker_stopped,
+                }) => {
+                    if output.is_empty() && !worker_stopped {
+                        output.push_text(message);
+                    } else {
+                        output.push_line(format!("[{message}]"));
                     }
-                    output.push_str(&notice);
+                    if worker_stopped {
+                        output.push_line(WORKER_STOPPED_NOTICE);
+                    }
+                    output.is_error = true;
                 }
             }
         }
 
         output
     }
-}
 
-#[cfg(not(target_os = "macos"))]
-impl CapturedOutput {
-    pub(super) fn new() -> Self {
-        Self
-    }
-
-    pub(super) fn push_notice(&self, _notice: impl Into<String>) {}
-
-    pub(super) fn take(&self) -> String {
-        String::new()
+    fn lock(&self) -> std::sync::MutexGuard<'_, OutputTapeState> {
+        self.0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 }
 
 #[cfg(target_os = "macos")]
-impl CapturedOutputStream {
+impl OutputTapeStream {
     pub(super) fn push(&self, bytes: &[u8]) {
-        self.output
-            .0
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .events
-            .push(CapturedOutputEvent::Data {
-                stream: self.stream,
-                bytes: bytes.to_vec(),
-            });
+        self.output.lock().events.push(OutputEvent::StreamData {
+            stream: self.stream,
+            bytes: bytes.to_vec(),
+        });
     }
 
     pub(super) fn close(&self) {
-        self.output
-            .0
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .events
-            .push(CapturedOutputEvent::Closed {
-                stream: self.stream,
-            });
+        self.output.lock().events.push(OutputEvent::StreamClosed {
+            stream: self.stream,
+        });
     }
 }
 
-fn render_response(mut output: Response, response: SendResponse) -> Response {
+pub(super) fn render_response(response: SendResponse) -> Response {
     match response {
-        SendResponse::Completed(completed) => {
-            output.extend(completed);
+        SendResponse::Completed(mut output) => {
             if output.is_empty() {
                 output.push_text("[done]");
             }
             output
         }
-        SendResponse::InputRequested(input) => {
-            output.extend(input);
+        SendResponse::InputRequested(mut output) => {
             append_input_banner(&mut output);
             output
         }
-        SendResponse::Running => {
+        SendResponse::Running(mut output) => {
             append_state_banner(&mut output, "[running]");
             output
         }
-        SendResponse::Idle => {
-            append_state_banner(&mut output, "[idle]");
+        SendResponse::Idle(mut output) => {
+            if !output.is_error() {
+                append_state_banner(&mut output, "[idle]");
+            }
             output
         }
+        SendResponse::Restarted => {
+            direct_failure("session restarted before the operation completed")
+        }
     }
+}
+
+pub(super) fn direct_failure(message: impl Into<String>) -> Response {
+    let mut output = Response::default();
+    output.push_text(message);
+    output.is_error = true;
+    output
 }
 
 fn append_input_banner(output: &mut Response) {
@@ -327,14 +295,6 @@ fn append_state_banner(output: &mut Response, banner: &str) {
     output.push_text(banner);
 }
 
-fn attach_error_output(output: &mut Response, error: String, worker_stopped: bool) {
-    output.push_line(format!("[{error}]"));
-    if worker_stopped {
-        output.push_line(WORKER_STOPPED_NOTICE);
-    }
-}
-
-#[cfg(target_os = "macos")]
 fn complete_utf8_prefix(bytes: &[u8]) -> usize {
     let mut offset = 0;
     loop {

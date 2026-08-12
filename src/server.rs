@@ -180,8 +180,7 @@ impl ConsoleServer {
                 {
                     crate::worker_client::PrepareResult::Prepared => "[prepared]",
                     crate::worker_client::PrepareResult::RestartRequired => "[restart required]",
-                    crate::worker_client::PrepareResult::WorkerStopped(message) => {
-                        let response = self.worker.worker_stopped_response(message);
+                    crate::worker_client::PrepareResult::WorkerStopped(response) => {
                         return response_to_tool_result(response, &call);
                     }
                 }

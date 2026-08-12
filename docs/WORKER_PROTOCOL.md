@@ -151,7 +151,8 @@ JSON escaping represents newlines, quotes, and other control characters on the w
 
 Worker standard output and standard error are not protocol frames.
 Each pipe reader queues raw byte chunks without decoding them.
-When a response is assembled, the server decodes the queued chunks for each pipe as UTF-8, retains an incomplete trailing sequence for a later response, and replaces invalid sequences.
+The server appends those chunks, sideband text and images, failures, and lifecycle notices to one pending output tape as it accepts them.
+When a response drains the tape, the server decodes queued chunks for each pipe as UTF-8, retains an incomplete trailing sequence for a later response, and replaces invalid sequences.
 It preserves order within each stream, but makes no relative ordering guarantee between standard output, standard error, and sideband output.
 Descendants that inherit fd 1 or fd 2 write into the same pipes even when the interpreter is idle.
 
@@ -258,9 +259,9 @@ If the grace expires first, the call returns output collected so far, the reques
 Supplying nonempty stdin for an outstanding request starts a fresh 10-millisecond grace window; the MCP deadline reports a still-outstanding request immediately, even inside that window.
 A pending input request wins over the `\n[running]` banner at the deadline.
 A later `send` call without a code field polls that evaluation with its own `timeout_ms`; it may include `stdin` to queue bytes before waiting.
-Every `send` response decodes and drains complete UTF-8 prefixes from standard-stream bytes already collected when that response is assembled.
-Bytes collected after that snapshot and incomplete trailing sequences remain for the next response; standard-stream output does not itself wake a waiting call.
-Completion returns decoded standard-stream text followed by pending evaluation content, including sideband text, images, and input-request records not already delivered at a `[stdin needed]` boundary, or `[done]` when neither produced content.
+Every successful `send` response drains pending tape events available when that response is assembled, including sideband text and images and complete UTF-8 prefixes from standard-stream bytes.
+Events accepted after that snapshot and incomplete trailing byte sequences remain for the next response; new output does not itself wake a waiting call.
+Completion returns the pending content in tape order, including input-request records not already delivered at an earlier boundary, or `[done]` when the tape is empty.
 If evaluation instead ends in an infrastructure or protocol failure, all pending evaluation output received before the failure precedes the tool error.
 When runtime output shares that response, the server starts the bracketed error on a new line, inserting a newline only when the output does not already end with one.
 A worker failure adds `[worker stopped: in-memory state lost]` after that error once shutdown has finished and no standard-stream reader can append more output.
@@ -269,15 +270,14 @@ If the poll wait expires first, the literal `\n[running]` banner is appended to 
 A call without a code field or `stdin` while no evaluation is active appends the literal `\n[idle]` banner to collected standard-stream text.
 A stdin-only call in that state queues the bytes and uses the same idle response projection.
 
-Before each replacement attempt, the server appends `[starting new worker]\n` to the same ordered output stream used for captured standard output and standard error.
+Before each replacement attempt, the server appends `[starting new worker]\n` to that same pending output tape.
 The notice is recorded before launch, so startup output and startup errors follow it.
 A failed replacement remains stopped, and each retry emits a new starting notice.
 Initial lazy startup and retries after a failure before `ready` remain silent because no established worker state was lost.
 An explicit restart reports retained old-worker output, the stopped notice when a worker existed, the starting notice, replacement startup output, and `[restarted]` in its `session` response.
-Concurrent `send` calls cannot drain those lifecycle events while restart owns them.
+Once restart begins, an active waiting `send` returns a restart-cancellation error without draining the tape; the restart response is the next output boundary.
 
-Except for outstanding-input boundaries, this slice does not expose partial sideband output while an evaluation is running.
-Standard-stream text is attached to whichever response is sent next, including `[running]`, `[stdin needed]`, or `[idle]` responses.
+A `[running]`, `[stdin needed]`, or `[idle]` response drains all pending tape content before appending its state banner.
 Each state banner has a newline before it, including when no worker or evaluation output precedes it.
 An existing trailing newline supplies that boundary for `[stdin needed]`; `[running]` and `[idle]` always add one, so their preceding output may leave a blank line.
 When a tool error shares the response with runtime output or a lifecycle notice, brackets distinguish it from worker text and the server inserts a newline before it only when needed.
@@ -380,7 +380,7 @@ The shutdown task queues worker-stdin closure, then attempts the sideband write.
 It runs independently of the deadline so a blocked stdin writer or full sideband pipe cannot postpone forced termination.
 The sandbox child waits only for the time remaining before the original deadline.
 If its direct process is still running at the deadline, the sandbox force-stops its process group and reaps that direct process.
-After the process stops, shutdown joins its stdin writer and standard-stream readers.
+After the process stops and the active sideband operation returns, shutdown joins its stdin writer and standard-stream readers.
 For the supported worker lifetime, this closes the old generation's server-side I/O boundary before shutdown returns.
 Background descendants that outlive that boundary remain unsupported as described below.
 

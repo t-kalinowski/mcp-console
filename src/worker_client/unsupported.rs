@@ -7,7 +7,7 @@ impl WorkerRuntime {
     pub(super) fn spawn(
         &self,
         spec: super::WorkerSpec<'_>,
-        _output: super::CapturedOutput,
+        _output: super::OutputTape,
         _on_started: impl FnOnce(WorkerShutdownHandle) -> Result<(), String>,
     ) -> Result<Worker, String> {
         let super::WorkerSpec {

@@ -48,7 +48,7 @@ impl WorkerRuntime {
     pub(super) fn spawn(
         &self,
         spec: super::WorkerSpec<'_>,
-        output: super::CapturedOutput,
+        output: super::OutputTape,
         on_started: impl FnOnce(WorkerShutdownHandle) -> Result<(), String>,
     ) -> Result<Worker, String> {
         let super::WorkerSpec {
@@ -280,7 +280,7 @@ impl Worker {
 
 fn start_output_reader(
     mut stream: impl Read + Send + 'static,
-    output: super::CapturedOutputStream,
+    output: super::OutputTapeStream,
 ) -> thread::JoinHandle<()> {
     thread::spawn(move || {
         let mut buffer = [0; 8 * 1024];

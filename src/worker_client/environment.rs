@@ -11,7 +11,7 @@ pub(super) struct Environment {
 pub(crate) enum PrepareResult {
     Prepared,
     RestartRequired,
-    WorkerStopped(String),
+    WorkerStopped(super::Response),
 }
 
 pub(crate) struct Requirements {
@@ -178,7 +178,12 @@ impl Client {
             GenerationStatus::CurrentReady => {
                 if infrastructure_failure {
                     return match self.retire_failed_worker(&mut worker, generation)? {
-                        true => Ok(PrepareResult::WorkerStopped(error)),
+                        true => {
+                            self.0.output.push_failure(
+                                super::output::SendFailure::from(error).worker_stopped(),
+                            );
+                            Ok(PrepareResult::WorkerStopped(self.0.output.take()))
+                        }
                         false => Err(error),
                     };
                 }
