@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 
-use super::lifecycle::{LifecycleState, WorkerGeneration};
+use super::lifecycle::{GenerationStatus, LifecycleState, WorkerGeneration};
 use super::{Client, WorkerState};
 
 pub(super) struct Environment {
@@ -164,14 +164,20 @@ impl Client {
                 self.checkpoint_runtime_python(generation.clone(), Some(checkpoint), candidates)
             },
         );
-        match result {
-            Ok(result) => result,
-            Err(error) => {
-                if self.generation_is_ready(generation)? {
+        let (infrastructure_failure, error) = match result {
+            Ok(Ok(())) => return Ok(()),
+            Ok(Err(error)) => (false, error),
+            Err(error) => (true, error),
+        };
+        match self.generation_status(generation)? {
+            GenerationStatus::Changed => Err("Python preparation cancelled by restart".to_string()),
+            GenerationStatus::CurrentReady => {
+                if infrastructure_failure {
                     *worker = WorkerState::ReplacementPending;
                 }
                 Err(error)
             }
+            GenerationStatus::CurrentClosing => Err(error),
         }
     }
 

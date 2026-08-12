@@ -52,6 +52,12 @@ pub(super) enum LifecycleState {
     ShuttingDown { deadline: Instant },
 }
 
+pub(super) enum GenerationStatus {
+    CurrentReady,
+    CurrentClosing,
+    Changed,
+}
+
 #[derive(Clone, Default)]
 pub(super) struct ProcessStopHandles {
     worker: Option<platform::WorkerHandle>,
@@ -185,6 +191,24 @@ impl Client {
             .lock()
             .map_err(|_| "worker lifecycle lock poisoned".to_string())?;
         Ok(lifecycle.state == LifecycleState::Ready && lifecycle.generation.is(expected))
+    }
+
+    pub(super) fn generation_status(
+        &self,
+        expected: &WorkerGeneration,
+    ) -> Result<GenerationStatus, String> {
+        let lifecycle = self
+            .0
+            .lifecycle
+            .lock()
+            .map_err(|_| "worker lifecycle lock poisoned".to_string())?;
+        Ok(if !lifecycle.generation.is(expected) {
+            GenerationStatus::Changed
+        } else if lifecycle.state == LifecycleState::Ready {
+            GenerationStatus::CurrentReady
+        } else {
+            GenerationStatus::CurrentClosing
+        })
     }
 
     pub(super) fn ensure_generation(&self, expected: &WorkerGeneration) -> Result<(), String> {

@@ -21,7 +21,7 @@ session:
 result:
   content:
     - type: text
-      text: <Python preparation cancelled by restart>
+      text: Python preparation cancelled by restart
   isError: true
 ---
 id: 5
