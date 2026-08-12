@@ -66,7 +66,6 @@ struct Requirements {
     #[schemars(length(max = 64), inner(length(min = 1)))]
     r: Vec<String>,
     /// One or more additive, single-line PEP 508 Python requirement strings for prepare or restart.
-    /// A Python-only prepare can add packages to an idle server-managed worker without restarting it.
     #[serde(default)]
     #[schemars(length(max = 64), inner(length(min = 1)))]
     python: Vec<String>,
@@ -78,10 +77,9 @@ struct SessionArguments {
     /// Prepare R or Python requirements or restart the implicit session, starting it if needed.
     action: SessionAction,
     /// Additive R or Python requirements for prepare.
-    /// After worker startup, prepare requires an idle worker. Python-only additions can be
-    /// activated in a server-managed interpreter, or retained for a pending replacement without
-    /// starting it. A new R requirement returns restart required and applies none of that call's
-    /// additions.
+    /// After startup, an idle server-managed worker can apply Python-only additions.
+    /// A new R addition requires restart and applies none of that call's additions.
+    /// New additions also require restart while a failed worker awaits replacement.
     /// Restart accepts only Python requirements.
     /// Resolution runs outside the worker sandbox.
     /// Package installation, build code, managed Python startup, or Matplotlib
@@ -174,7 +172,7 @@ impl ConsoleServer {
     }
 
     #[tool(
-        description = "Prepare additive R or Python requirements for the implicit session, or restart its worker. An idle server-managed worker can activate Python-only additions without losing state. A new R requirement after startup returns restart required and applies none of that call's additions. Restart retains requirements, may add Python requirements, and loses all in-memory R, Python, and SQL state."
+        description = "Prepare additive R or Python requirements, or restart the implicit session. An idle server-managed worker applies Python-only additions without losing state; new R additions require restart. Restart retains requirements and loses all in-memory R, Python, and SQL state."
     )]
     async fn session(
         &self,

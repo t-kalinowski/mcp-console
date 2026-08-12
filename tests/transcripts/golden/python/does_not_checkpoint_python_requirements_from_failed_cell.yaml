@@ -5,8 +5,8 @@ id: 3
 send:
   r: |-
     invisible(reticulate::py_config())
-    invisible(reticulate::py_require("six"))
-    stopifnot(reticulate::py_module_available("six"))
+    invisible(reticulate::py_require("py-yaml12"))
+    stopifnot(reticulate::py_module_available("yaml12"))
     tools::pskill(Sys.getpid(), signal = 9L)
 result:
   content:
@@ -15,6 +15,19 @@ result:
   isError: true
 ---
 id: 4
+send:
+  r: |
+    worker_pid <- Sys.getpid()
+    "py-yaml12" %in% reticulate::py_require()$packages
+result:
+  content:
+    - type: text
+      text: |
+        [1] FALSE
+        [worker restarted: in-memory state lost]
+  isError: false
+---
+id: 5
 session:
   action: prepare
   requirements:
@@ -26,16 +39,27 @@ result:
       text: "[prepared]"
   isError: false
 ---
-id: 5
+id: 6
 send:
-  python: >-
-    import importlib.util, yaml12; (importlib.util.find_spec("six") is None,
-    yaml12.__name__)
+  r: |
+    identical(Sys.getpid(), worker_pid) && !reticulate::py_available(FALSE)
 result:
   content:
     - type: text
       text: |
-        (True, 'yaml12')
-        [worker restarted: in-memory state lost]
+        [1] TRUE
+  isError: false
+---
+id: 7
+send:
+  python: |
+    import yaml12
+
+    yaml12.__name__
+result:
+  content:
+    - type: text
+      text: |
+        'yaml12'
   isError: false
 ...

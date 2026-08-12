@@ -68,20 +68,14 @@ It does not load packages into or start the worker.
 R preparation requires an executable `ir` on `PATH`.
 The server runs IR with the same Rscript selection as the worker and prepends the returned library to the worker's inherited `R_LIBS`, leaving its other R libraries available.
 
-After a server-managed worker starts, a Python-only `prepare` can add packages while that worker is idle.
-Before Python initializes, reticulate adds the packages to its manifest and the server materializes the resolved environment for later initialization.
-After Python initializes, reticulate requires the candidate to use the same `libpython`, activates it, and keeps the interpreter, Python objects, and other worker state live.
-The call returns `[prepared]` only after the server accepts the resulting checkpoint.
-A failed resolution leaves the live manifest, interpreter, and retained checkpoint unchanged.
+After a server-managed worker starts, a Python-only `prepare` applies additions while the worker is idle.
+It materializes an uninitialized manifest or activates a same-`libpython` environment while preserving live state.
+The server returns `[prepared]` only after accepting the checkpoint; failure leaves the live and retained manifests unchanged.
 Exact repeats are idempotent.
 
-Live preparation is rejected while an evaluation is running.
-A new R requirement after worker startup returns `[restart required]` without resolving or retaining any additions from that call, including Python additions supplied with it.
-The same marker is returned when the current Python selection cannot use managed live layering.
-If an infrastructure failure has discarded the worker, a Python-only `prepare` resolves and retains the replacement environment without starting it.
-The next evaluation or nonempty idle stdin submission starts the replacement and emits the normal `[worker restarted: in-memory state lost]` notice.
-Custom workers reject managed requirement preparation and restart calls that include Python requirements.
-Requirements declared by evaluated code through `reticulate::py_require()` use the same managed resolution and activation path.
+Preparation during an evaluation is an error.
+A call with a new R requirement after startup returns `[restart required]` and applies none of that call's additions.
+Caller-selected Python environments and custom workers cannot use managed live preparation.
 
 The client can explicitly replace the worker, retain the prepared R library, and add Python requirements in the same call:
 
@@ -184,12 +178,10 @@ Other configured values, including an empty value, are preserved when no require
 An explicit `session` preparation selects its resolved managed environment even when `RETICULATE_PYTHON` was configured, so a successful call guarantees that its requirements are present.
 The server retains the selected interpreter and normalized manifest and applies them to each sandboxed worker; the worker forces `UV_OFFLINE=1` and otherwise uses the existing sandbox policy unchanged.
 For a server-managed worker, MCP Console seeds reticulate's requirement manifest and replaces only its internal uv environment lookup.
-It does not wrap `py_require()`, so reticulate retains caller attribution, manifest history, and activation behavior within the live R process.
-An idle Python-only `session` preparation asks that same bridge to add structured package data; it does not evaluate an R cell.
-If managed reticulate is loaded but Python remains uninitialized at cell end or after explicit preparation, the worker resolves the final manifest outside the sandbox before reporting its checkpoint.
-After Python initializes, additive package requirements resolve to candidate environments outside the sandbox; reticulate checks the exact `libpython`, runs `activate_this.py`, swaps its Python configuration, and updates its manifest while the interpreter and its existing state remain live.
-The server accepts the last candidate that matches the reported manifest before retaining that checkpoint.
-Normal language outcomes reach the evaluation checkpoint; failed explicit resolution restores the prior live manifest, and an infrastructure or protocol failure leaves the prior server checkpoint unchanged.
+It does not wrap `py_require()`, so reticulate retains its activation behavior.
+Idle explicit preparation passes structured additions through the same bridge and reports a checkpoint instead of completing a cell.
+It materializes an uninitialized manifest or activates a same-`libpython` environment while preserving live state.
+The server retains only a matching checkpoint; failure preserves the prior live and server manifests.
 Each runtime resolution uses the worker's current `UV_*` settings except `UV_OFFLINE`; those settings are not retained or replayed across worker generations.
 The requirement strings and forwarded settings are structured data rather than R code, and the resolver does not evaluate the submitted cell.
 However, evaluated R code or an R package load can request this resolution, and reticulate and uv may access the network, write normal host caches, and execute a source distribution's build backend outside the worker sandbox.

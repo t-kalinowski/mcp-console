@@ -50,17 +50,12 @@ A failed resolution leaves the prior requirements, R library, and interpreter un
 For a uv tool failure, the tool error reports a JSON manifest containing reticulate's selected Python and the complete candidate package set, followed by uv's stderr, while omitting the helper command, temporary output path, and reticulate's `py_require()`-oriented guidance.
 The direct resolver process defines its process-group lifetime: after it exits, the server force-stops any remaining in-group descendants before reaping it and collecting its standard streams.
 Closing MCP input cancels an in-flight explicit or runtime resolution by force-stopping its host resolver process group; startup preflight completes before MCP input is accepted and is not cancellable through that lifecycle.
-Once a server-managed worker has started, a Python-only prepare can add requirements while that worker is idle.
-Before Python initializes, reticulate updates its manifest and the worker materializes the resolved environment without initializing Python.
-After initialization, reticulate checks that the candidate uses the live `libpython`, activates it, and preserves the interpreter, Python objects, and other worker state.
-The server commits the matching reported checkpoint before returning `[prepared]`.
-An exact repeat remains idempotent.
-A failed resolution restores the prior live manifest and leaves the retained checkpoint unchanged.
-Preparation is rejected while the worker is evaluating.
-A prepare with a new R requirement after startup returns `[restart required]` without resolving or retaining any additions from that call, including Python additions.
-A built-in worker without a server-managed Python environment returns the same marker for new Python additions.
-After an infrastructure failure leaves replacement pending, a Python-only prepare resolves and retains the replacement environment without starting it; the next evaluation or nonempty idle stdin submission starts that worker and emits the restart notice.
-Server-managed workers also layer additive requirements declared through `reticulate::py_require()` during evaluation.
+An idle server-managed worker can apply Python-only additions through reticulate without replacement.
+It materializes an uninitialized manifest or activates a same-`libpython` environment while preserving live state.
+The server returns `[prepared]` only after checkpointing the result; failure preserves the live and retained manifests.
+Preparation during evaluation is rejected.
+A call with a new R requirement after startup returns `[restart required]` and applies none of that call's additions.
+New requirements also return that marker while a failed worker awaits replacement; prepare does not start or configure the replacement.
 Restart retains the prepared R library, merges any supplied Python additions into the complete checkpointed manifest, and resolves the candidate before terminating the current worker.
 A failed restart resolution leaves the current worker, its in-memory state, requirements, R library, and Python interpreter unchanged.
 After successful resolution, restart retains the prepared R library and candidate Python environment, loses all worker-owned in-memory state and unread stdin, eagerly starts a replacement, and returns `[restarted]` after it reports ready.
@@ -118,13 +113,12 @@ Requirement strings remain process-argument or JSON data rather than R source, a
 Before initializing R, the worker forces `UV_OFFLINE=1`, overwriting any inherited value to match the sandbox's network denial.
 Reticulate reuses the server-resolved or caller-selected interpreter.
 For a server-managed worker, MCP Console seeds reticulate's requirement manifest and intercepts only its internal `uv_get_or_create_env` binding, without wrapping `py_require()`.
-Each runtime request sends the complete proposed manifest and the worker's current `UV_*` settings except `UV_OFFLINE` to the host resolver; those settings are transient inputs and are not retained or replayed.
-An idle explicit Python preparation sends additions as structured sideband data and invokes the same `py_require()` activation path without evaluating a cell.
+Each runtime or explicit-preparation request sends the complete proposed manifest and the worker's current `UV_*` settings except `UV_OFFLINE` to the host resolver; those settings are transient inputs and are not retained or replayed.
+Explicit preparation sends structured additions and reports a separate checkpoint or failure without evaluating a cell.
 If managed reticulate is loaded but Python remains uninitialized at cell end or after explicit preparation, the worker invokes the resolver once to materialize the final manifest.
 After initialization, additive package requirements resolve to candidate environments outside the sandbox, and reticulate performs its exact-`libpython` check, `activate_this.py`, configuration swap, and manifest assignment.
-The worker retains every resolved candidate for the active evaluation or preparation.
-An evaluation includes reticulate's normalized manifest on `completed`; an explicit preparation reports a separate checkpoint or failure.
-The server accepts the last candidate matching that checkpoint, or the prior environment when its manifest still matches, and only then updates its retained state.
+The worker retains every resolved candidate for the active operation.
+The server accepts the last candidate matching its reported checkpoint, or the prior environment when its manifest still matches, and only then updates its retained state.
 Normal language outcomes reach the evaluation checkpoint; an infrastructure or protocol failure leaves the prior checkpoint unchanged.
 The live Python interpreter and its state are retained during successful activation.
 Evaluated R code or an R package load can therefore trigger host resolution, which may use the network, write host caches, and execute package build backends outside the worker sandbox; the structured requirements and forwarded settings are data, and the submitted cell is not evaluated by the resolver.

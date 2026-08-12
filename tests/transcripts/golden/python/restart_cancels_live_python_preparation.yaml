@@ -34,6 +34,18 @@ result:
 ---
 id: 6
 session:
+  action: prepare
+  requirements:
+    python:
+      - py-yaml12
+result:
+  content:
+    - type: text
+      text: session is preparing requirements
+  isError: true
+---
+id: 7
+session:
   action: restart
 result:
   content:
@@ -41,7 +53,7 @@ result:
       text: "[restarted]"
   isError: false
 ---
-id: 7
+id: 8
 send:
   r: |
     requirements <- reticulate::py_require()

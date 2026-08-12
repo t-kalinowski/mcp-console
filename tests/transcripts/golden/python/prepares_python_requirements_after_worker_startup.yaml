@@ -19,23 +19,22 @@ session:
   action: prepare
   requirements:
     python:
-      - py-yaml12
+      - not a valid requirement !!!
 result:
   content:
     - type: text
-      text: "[prepared]"
-  isError: false
+      text: "<invalid Python requirement rejected>"
+  isError: true
 ---
 id: 5
 send:
   python: |
-    import os; import sys; import yaml12
-    (sentinel, os.getpid() == worker_pid, sys.prefix != initial_prefix, yaml12.__name__)
+    sentinel, os.getpid() == worker_pid, importlib.util.find_spec("yaml12") is None
 result:
   content:
     - type: text
       text: |
-        (42, True, True, 'yaml12')
+        (42, True, True)
   isError: false
 ---
 id: 6
@@ -51,68 +50,18 @@ result:
   isError: false
 ---
 id: 7
-session:
-  action: prepare
-  requirements:
-    python:
-      - not a valid requirement !!!
-result:
-  content:
-    - type: text
-      text: |-
-        managed Python resolution failed:
-        resolver input:
-        {
-          "python": "3.12.x (reticulate default)",
-          "packages": [
-            "numpy",
-            "not a valid requirement !!!",
-            "py-yaml12"
-          ]
-        }
-        uv output:
-        error: Failed to parse: `not a valid requirement !!!`
-          Caused by: Expected one of `@`, `(`, `<`, `=`, `>`, `~`, `!`, `;`, found `a`
-        not a valid requirement !!!
-            ^
-  isError: true
----
-id: 8
 send:
   python: |
-    import yaml12
-    sentinel, os.getpid() == worker_pid, yaml12.__name__
+    import os; import sys; import yaml12
+    (sentinel, os.getpid() == worker_pid, sys.prefix != initial_prefix, yaml12.__name__)
 result:
   content:
     - type: text
       text: |
-        (42, True, 'yaml12')
+        (42, True, True, 'yaml12')
   isError: false
 ---
-id: 9
-send:
-  r: |
-    requirements <- reticulate::py_require()
-    matching_requests <- Filter(
-      function(request) {
-        identical(request$requested_from, "mcp-console") &&
-          identical(request$env_is_package, FALSE) &&
-          identical(request$action, "add") &&
-          identical(request$packages, "py-yaml12")
-      },
-      requirements$history
-    )
-    stopifnot(
-      length(matching_requests) == 1L,
-      !"not a valid requirement !!!" %in% requirements$packages
-    )
-result:
-  content:
-    - type: text
-      text: "[done]"
-  isError: false
----
-id: 10
+id: 8
 session:
   action: restart
 result:
@@ -121,9 +70,12 @@ result:
       text: "[restarted]"
   isError: false
 ---
-id: 11
+id: 9
 send:
-  python: "import yaml12; (\"sentinel\" in globals(), yaml12.__name__)"
+  python: |
+    import yaml12
+
+    "sentinel" in globals(), yaml12.__name__
 result:
   content:
     - type: text

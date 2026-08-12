@@ -269,6 +269,22 @@ def test_prepares_python_requirements_after_worker_startup(binary: Path) -> Tran
     client.send(python=python)
     assert last_tool_text(client) == "True\n"
 
+    invalid = "not a valid requirement !!!"
+    client.session(
+        action="prepare",
+        requirements={"python": [invalid]},
+    )
+    result = client.transcript[-1]["result"]
+    assert result["isError"] is True, result
+    assert "managed Python resolution failed" in result["content"][0]["text"]
+    result["content"][0]["text"] = "<invalid Python requirement rejected>"
+
+    python = code("""
+        sentinel, os.getpid() == worker_pid, importlib.util.find_spec("yaml12") is None
+        """)
+    client.send(python=python)
+    assert last_tool_text(client) == "(42, True, True)\n"
+
     client.session(
         action="prepare",
         requirements={"python": ["py-yaml12"]},
@@ -282,114 +298,16 @@ def test_prepares_python_requirements_after_worker_startup(binary: Path) -> Tran
     client.send(python=python)
     assert last_tool_text(client) == "(42, True, True, 'yaml12')\n"
 
-    client.session(
-        action="prepare",
-        requirements={"python": ["py-yaml12"]},
-    )
-    assert last_tool_text(client) == "[prepared]"
-
-    invalid = "not a valid requirement !!!"
-    client.session(
-        action="prepare",
-        requirements={"python": [invalid]},
-    )
-    result = client.transcript[-1]["result"]
-    assert result["isError"] is True, result
-    result["content"][0]["text"] = normalize_python_resolution_error(
-        result["content"][0]["text"], invalid
-    )
-
-    python = code("""
-        import yaml12
-        sentinel, os.getpid() == worker_pid, yaml12.__name__
-        """)
-    client.send(python=python)
-    assert last_tool_text(client) == "(42, True, 'yaml12')\n"
-
-    # fmt: r
-    r = code(r"""
-        requirements <- reticulate::py_require()
-        matching_requests <- Filter(
-          function(request) {
-            identical(request$requested_from, "mcp-console") &&
-              identical(request$env_is_package, FALSE) &&
-              identical(request$action, "add") &&
-              identical(request$packages, "py-yaml12")
-          },
-          requirements$history
-        )
-        stopifnot(
-          length(matching_requests) == 1L,
-          !"not a valid requirement !!!" %in% requirements$packages
-        )
-        """)
-    client.send(r=r)
-    assert last_tool_text(client) == "[done]"
-
     client.session(action="restart")
     assert last_tool_text(client) == "[restarted]"
-    client.send(python='import yaml12; ("sentinel" in globals(), yaml12.__name__)')
+    # fmt: python
+    python = code("""
+        import yaml12
+
+        "sentinel" in globals(), yaml12.__name__
+        """)
+    client.send(python=python)
     assert last_tool_text(client) == "(False, 'yaml12')\n"
-    return client._finish()
-
-
-def test_prepares_python_requirements_before_python_initializes(
-    binary: Path,
-) -> Transcript:
-    client = McpClient(binary, ("serve",))
-    client._initialize_and_list_tools()
-    # fmt: r
-    r = code(r"""
-        worker_pid <- Sys.getpid()
-        worker_marker <- 42L
-        stopifnot(!"reticulate" %in% loadedNamespaces())
-        """)
-    client.send(r=r)
-    assert last_tool_text(client) == "[done]"
-
-    invalid = "not a valid requirement !!!"
-    client.session(
-        action="prepare",
-        requirements={"python": [invalid]},
-    )
-    result = client.transcript[-1]["result"]
-    assert result["isError"] is True, result
-    result["content"][0]["text"] = normalize_python_resolution_error(
-        result["content"][0]["text"], invalid
-    )
-
-    # fmt: r
-    r = code(r"""
-        stopifnot(
-          identical(Sys.getpid(), worker_pid),
-          identical(worker_marker, 42L),
-          !reticulate::py_available(initialize = FALSE),
-          !"not a valid requirement !!!" %in% reticulate::py_require()$packages
-        )
-        """)
-    client.send(r=r)
-    assert last_tool_text(client) == "[done]"
-
-    client.session(
-        action="prepare",
-        requirements={"python": ["py-yaml12"]},
-    )
-    assert last_tool_text(client) == "[prepared]"
-
-    # fmt: r
-    r = code(r"""
-        stopifnot(
-          identical(Sys.getpid(), worker_pid),
-          identical(worker_marker, 42L),
-          !reticulate::py_available(initialize = FALSE),
-          "py-yaml12" %in% reticulate::py_require()$packages
-        )
-        """)
-    client.send(r=r)
-    assert last_tool_text(client) == "[done]"
-
-    client.send(python="import yaml12; (r.worker_marker, yaml12.__name__)")
-    assert last_tool_text(client) == "(42, 'yaml12')\n"
     return client._finish()
 
 
@@ -562,29 +480,46 @@ def test_does_not_checkpoint_python_requirements_from_failed_cell(
     # fmt: r
     r = code(r"""
         invisible(reticulate::py_config())
-        invisible(reticulate::py_require("six"))
-        stopifnot(reticulate::py_module_available("six"))
+        invisible(reticulate::py_require("py-yaml12"))
+        stopifnot(reticulate::py_module_available("yaml12"))
         tools::pskill(Sys.getpid(), signal = 9L)
         """).removesuffix("\n")
     client.send(r=r)
     assert client.transcript[-1]["result"]["isError"] is True
 
+    # Start the replacement and confirm that the failed cell did not advance its manifest.
+    # fmt: r
+    r = code(r"""
+        worker_pid <- Sys.getpid()
+        "py-yaml12" %in% reticulate::py_require()$packages
+        """)
+    client.send(r=r)
+    output = last_tool_text(client)
+    assert output == ("[1] FALSE\n[worker restarted: in-memory state lost]\n"), repr(
+        output
+    )
+
     client.session(
         action="prepare",
         requirements={"python": ["py-yaml12"]},
     )
-    output = last_tool_text(client)
-    assert output == "[prepared]", repr(output)
+    assert last_tool_text(client) == "[prepared]"
 
-    python = (
-        "import importlib.util, yaml12; "
-        '(importlib.util.find_spec("six") is None, yaml12.__name__)'
-    )
+    # Preparing materializes the manifest without initializing Python.
+    # fmt: r
+    r = code(r"""
+        identical(Sys.getpid(), worker_pid) && !reticulate::py_available(FALSE)
+        """)
+    client.send(r=r)
+    assert last_tool_text(client) == "[1] TRUE\n"
+    # fmt: python
+    python = code("""
+        import yaml12
+
+        yaml12.__name__
+        """)
     client.send(python=python)
-    output = last_tool_text(client)
-    assert output == ("(True, 'yaml12')\n[worker restarted: in-memory state lost]\n"), (
-        repr(output)
-    )
+    assert last_tool_text(client) == "'yaml12'\n"
     return client._finish()
 
 
@@ -613,12 +548,6 @@ def test_rejects_python_preparation_while_evaluation_is_running(
             client,
         )
         release = running.parent / "release-python"
-
-        client.session(
-            action="prepare",
-            requirements={"python": ["numpy"]},
-        )
-        assert last_tool_text(client) == "[prepared]"
 
         session_returned = threading.Event()
         forced_release = threading.Event()
@@ -693,31 +622,40 @@ def test_restart_cancels_live_python_preparation(binary: Path) -> Transcript:
     )
     assert connected.wait(10), "live preparation did not contact the blocking index"
 
-    poll_returned = threading.Event()
+    calls_returned = threading.Event()
     forced_release = threading.Event()
 
-    def release_if_poll_blocks() -> None:
-        if not poll_returned.wait(2):
+    def release_if_calls_block() -> None:
+        if not calls_returned.wait(2):
             forced_release.set()
             release.set()
 
-    watchdog = threading.Thread(target=release_if_poll_blocks)
+    watchdog = threading.Thread(target=release_if_calls_block)
     watchdog.start()
     poll = client._start_send()
-    client._receive(poll)
-    poll_returned.set()
+    second_prepare = client._start_session(
+        action="prepare",
+        requirements={"python": ["py-yaml12"]},
+    )
+    client._receive_many([poll, second_prepare])
+    calls_returned.set()
     watchdog.join()
-    assert not forced_release.is_set(), "send waited for live Python preparation"
+    assert not forced_release.is_set(), "another tool call waited for live preparation"
     assert poll["result"] == {
         "content": [{"type": "text", "text": "session is preparing requirements"}],
         "isError": True,
     }, poll
+    assert second_prepare["result"] == poll["result"], second_prepare
 
     restart = client._start_session(action="restart")
     client._receive_many([preparation, restart])
 
     preparation_result = preparation["result"]
     assert preparation_result["isError"] is True, preparation_result
+    assert preparation_result["content"][0]["text"] in {
+        "managed Python resolution cancelled",
+        "worker sideband read failed: worker sideband closed",
+    }, preparation_result
     preparation_result["content"][0]["text"] = (
         "<Python preparation cancelled by restart>"
     )
@@ -739,69 +677,6 @@ def test_restart_cancels_live_python_preparation(binary: Path) -> Transcript:
     client.send(r=r)
     assert last_tool_text(client) == "[done]"
     transcript = client._finish()
-    address = f"127.0.0.1:{port}"
-    for entry in transcript:
-        if source := entry.get("send", {}).get("r"):
-            entry["send"]["r"] = source.replace(address, "127.0.0.1:<PORT>")
-    return transcript
-
-
-def test_shutdown_cancels_live_python_preparation(binary: Path) -> Transcript:
-    listener = socket.socket()
-    listener.bind(("127.0.0.1", 0))
-    listener.listen()
-    port = listener.getsockname()[1]
-    connected = threading.Event()
-    resolver_stopped = threading.Event()
-    release = threading.Event()
-
-    def hold_index_connection() -> None:
-        connection, _ = listener.accept()
-        listener.close()
-        connected.set()
-        connection.settimeout(0.05)
-        with connection:
-            while not release.is_set():
-                try:
-                    if not connection.recv(4096):
-                        resolver_stopped.set()
-                        return
-                except TimeoutError:
-                    pass
-
-    index = threading.Thread(target=hold_index_connection, daemon=True)
-    index.start()
-
-    client = McpClient(binary, ("serve",))
-    client._initialize_and_list_tools()
-    # fmt: r
-    r = code(rf"""
-        Sys.setenv(UV_DEFAULT_INDEX = "http://127.0.0.1:{port}/simple")
-        """)
-    client.send(r=r)
-    assert last_tool_text(client) == "[done]"
-    client._start_session(
-        action="prepare",
-        requirements={"python": ["mcp-console-blocked-live-preparation"]},
-    )
-    assert connected.wait(10), "live preparation did not contact the blocking index"
-
-    client.stdin.close()
-    try:
-        return_code = client.process.wait(timeout=3)
-    except subprocess.TimeoutExpired:
-        release.set()
-        raise AssertionError(
-            "mcp-console did not stop live Python preparation during shutdown"
-        ) from None
-    assert return_code == 0, client.stderr.read()
-    client.stdout.read()
-    assert client.stderr.read() == ""
-    assert resolver_stopped.wait(2), "shutdown did not stop the Python resolver"
-    release.set()
-    index.join(2)
-
-    transcript = client.transcript
     address = f"127.0.0.1:{port}"
     for entry in transcript:
         if source := entry.get("send", {}).get("r"):

@@ -80,10 +80,12 @@ mod platform {
                         return Err(io::Error::other(message).into());
                     }
                     match result {
-                        Ok(crate::python::PreparationOutcome::Prepared(python_checkpoint)) => {
+                        Ok(crate::python::PreparationOutcome::Prepared {
+                            checkpoint: python_checkpoint,
+                        }) => {
                             writer.send(&WorkerMessage::PythonPrepared { python_checkpoint })?;
                         }
-                        Ok(crate::python::PreparationOutcome::Failed(message)) => {
+                        Ok(crate::python::PreparationOutcome::Failed { message }) => {
                             writer.send(&WorkerMessage::PythonPreparationFailed { message })?;
                         }
                         Err(message) => return Err(io::Error::other(message).into()),

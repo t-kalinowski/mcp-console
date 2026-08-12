@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 use std::ffi::OsString;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 const INPUT_REQUEST_GRACE: Duration = Duration::from_millis(10);
@@ -342,16 +342,12 @@ impl Client {
             .environment
             .as_ref()
             .ok_or_else(|| "requirements are unavailable with a custom worker".to_string())?;
+        let active_evaluation = self.try_evaluation()?;
         let mut environment = environment
             .lock()
             .map_err(|_| "worker environment lock poisoned".to_string())?;
         self.ensure_generation(&generation)?;
         let python_additions = requirements.python.into_iter().collect::<BTreeSet<_>>();
-        let current_python = environment
-            .python
-            .as_ref()
-            .map(|managed| managed.requirements().packages.iter().cloned().collect())
-            .unwrap_or_default();
         let python_candidate = merge_python_requirements(
             environment.python.as_ref(),
             python_additions.iter().cloned().collect(),
@@ -365,11 +361,6 @@ impl Client {
         if python_candidate.is_none() && r_additions.is_subset(&current_r) {
             return Ok(PrepareResult::Prepared);
         }
-        let active_evaluation = self
-            .0
-            .evaluation
-            .lock()
-            .map_err(|_| "worker evaluation lock poisoned".to_string())?;
         if active_evaluation.is_some() {
             return Err(
                 "worker is already evaluating a cell; poll it before preparing requirements"
@@ -385,20 +376,18 @@ impl Client {
                 return Err("worker lock poisoned".to_string());
             }
         };
-        if !matches!(*worker, WorkerState::Initial) && !r_additions.is_subset(&current_r) {
+        if matches!(*worker, WorkerState::ReplacementPending)
+            || (!matches!(*worker, WorkerState::Initial) && !r_additions.is_subset(&current_r))
+        {
             return Ok(PrepareResult::RestartRequired);
         }
         if matches!(*worker, WorkerState::Running(_)) {
             if environment.python.is_none() {
                 return Ok(PrepareResult::RestartRequired);
             }
-            let additions = python_additions
-                .difference(&current_python)
-                .cloned()
-                .collect();
             drop(environment);
             return self
-                .prepare_running_python(&generation, worker, additions)
+                .prepare_running_python(&generation, worker, python_additions.into_iter().collect())
                 .map(|()| PrepareResult::Prepared);
         }
 
@@ -432,8 +421,6 @@ impl Client {
                 lifecycle.processes.resolver = None;
                 environment.python = managed_python;
                 environment.r = managed_r;
-                drop(worker);
-                drop(active_evaluation);
                 Ok(PrepareResult::Prepared)
             }
             LifecycleState::Ready => {
@@ -454,19 +441,11 @@ impl Client {
         let WorkerState::Running(running) = &mut *worker else {
             return Err("worker state changed during Python preparation".to_string());
         };
-        let resolver = self.clone();
-        let checkpointer = self.clone();
-        let resolver_generation = generation.clone();
-        let checkpoint_generation = generation.clone();
         let result = running.prepare_python(
             packages,
-            move |request| resolver.resolve_runtime_python(resolver_generation.clone(), request),
-            move |checkpoint, candidates| {
-                checkpointer.checkpoint_runtime_python(
-                    checkpoint_generation.clone(),
-                    Some(checkpoint),
-                    candidates,
-                )
+            |request| self.resolve_runtime_python(generation.clone(), request),
+            |checkpoint, candidates| {
+                self.checkpoint_runtime_python(generation.clone(), Some(checkpoint), candidates)
             },
         );
         match result {
@@ -657,15 +636,7 @@ impl Client {
             evaluation.submit_stdin(stdin)?;
         }
 
-        let mut active = match self.0.evaluation.try_lock() {
-            Ok(active) => active,
-            Err(std::sync::TryLockError::WouldBlock) => {
-                return Err("session is preparing requirements".to_string());
-            }
-            Err(std::sync::TryLockError::Poisoned(_)) => {
-                return Err("worker evaluation lock poisoned".to_string());
-            }
-        };
+        let mut active = self.try_evaluation()?;
         if active.is_some() {
             return Err(
                 "worker is already evaluating a cell; poll without a code field".to_string(),
@@ -695,8 +666,12 @@ impl Client {
     }
 
     fn current_evaluation(&self) -> Result<Option<ActiveEvaluation>, String> {
+        self.try_evaluation().map(|evaluation| evaluation.clone())
+    }
+
+    fn try_evaluation(&self) -> Result<MutexGuard<'_, Option<ActiveEvaluation>>, String> {
         match self.0.evaluation.try_lock() {
-            Ok(evaluation) => Ok(evaluation.clone()),
+            Ok(evaluation) => Ok(evaluation),
             Err(std::sync::TryLockError::WouldBlock) => {
                 Err("session is preparing requirements".to_string())
             }
@@ -1683,11 +1658,10 @@ mod platform {
 
             loop {
                 match self.receive()? {
-                    WorkerMessage::ResolvePython { request } => self.resolve_python_request(
-                        request,
-                        &mut resolve_python,
-                        &mut python_candidates,
-                    )?,
+                    WorkerMessage::ResolvePython { request } => {
+                        python_candidates
+                            .extend(self.resolve_python_request(request, &mut resolve_python)?);
+                    }
                     WorkerMessage::PythonPrepared { python_checkpoint } => {
                         checkpoint_python(python_checkpoint, python_candidates)?;
                         return Ok(Ok(()));
@@ -1695,18 +1669,7 @@ mod platform {
                     WorkerMessage::PythonPreparationFailed { message } => {
                         return Ok(Err(message));
                     }
-                    WorkerMessage::Output { data } => {
-                        return Err(format!(
-                            "worker emitted output during Python preparation: {data}"
-                        ));
-                    }
-                    WorkerMessage::Image { .. } => {
-                        return Err("worker emitted an image during Python preparation".to_string());
-                    }
-                    WorkerMessage::InputRequested { .. } | WorkerMessage::InputReceived => {
-                        return Err("worker requested input during Python preparation".to_string());
-                    }
-                    WorkerMessage::Ready | WorkerMessage::Completed { .. } => {
+                    _ => {
                         return Err(
                             "worker sent an unexpected Python preparation message".to_string()
                         );
@@ -1747,11 +1710,10 @@ mod platform {
                         evaluation.input_requested(prompt)?;
                     }
                     WorkerMessage::InputReceived => evaluation.input_received()?,
-                    WorkerMessage::ResolvePython { request } => self.resolve_python_request(
-                        request,
-                        &mut resolve_python,
-                        &mut python_candidates,
-                    )?,
+                    WorkerMessage::ResolvePython { request } => {
+                        python_candidates
+                            .extend(self.resolve_python_request(request, &mut resolve_python)?);
+                    }
                     WorkerMessage::Completed { python_checkpoint } => {
                         evaluation.input_complete()?;
                         checkpoint_python(python_checkpoint, python_candidates)?;
@@ -1777,8 +1739,7 @@ mod platform {
                 crate::worker_protocol::PythonResolveRequest,
             )
                 -> Result<crate::resolver::ManagedPython, String>,
-            python_candidates: &mut Vec<crate::resolver::ManagedPython>,
-        ) -> Result<(), String> {
+        ) -> Result<Option<crate::resolver::ManagedPython>, String> {
             match resolve_python(request) {
                 Ok(managed) => {
                     let python = managed.python().to_string_lossy().into_owned();
@@ -1786,16 +1747,16 @@ mod platform {
                         .writer
                         .send(&ServerMessage::PythonResolved { python })
                         .map_err(|error| format!("worker sideband write failed: {error}"))?;
-                    python_candidates.push(managed);
+                    Ok(Some(managed))
                 }
                 Err(message) => {
                     self.handle
                         .writer
                         .send(&ServerMessage::PythonResolutionFailed { message })
                         .map_err(|error| format!("worker sideband write failed: {error}"))?;
+                    Ok(None)
                 }
             }
-            Ok(())
         }
 
         fn receive(&mut self) -> Result<WorkerMessage, String> {

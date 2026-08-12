@@ -369,16 +369,8 @@ requirements: r=2 python=1
 transcript: .mcp-console/sessions/default/transcript.qmd
 ```
 
-`prepare` resolves and adds requirements.
-For a missing session it creates a configured logical session without starting a worker.
-The first code cell or nonempty stdin submission starts the runtime.
-For an existing session it never replaces the runtime implicitly.
-An idle server-managed runtime can apply a Python-only addition through reticulate while preserving its interpreter and in-memory state.
-The call returns `[prepared]` after the supervisor accepts the worker's reported manifest.
-A failed resolution restores the prior live manifest and leaves the retained checkpoint unchanged.
-Preparation while an evaluation is active is an error.
-A call with a new R requirement after startup returns `[restart required]` and applies none of that call's additions, including Python additions.
-After worker failure, a Python-only prepare configures the pending replacement without starting it; the next evaluation or nonempty idle stdin submission starts that worker and reports the restart notice.
+`prepare` follows the requirement semantics above.
+For a missing session it retains configuration without starting a worker; the first cell or nonempty stdin submission starts it.
 
 ```json
 {

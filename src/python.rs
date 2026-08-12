@@ -168,11 +168,6 @@ base::local({
     result <- tryCatch({
       packages <- unlist(jsonlite::fromJSON(request), use.names = FALSE)
       reticulate::py_require(packages, action = "add")
-      requirements <- get("py_reqs_get", envir = namespace)()
-      request_index <- length(requirements$history)
-      requirements$history[[request_index]]$requested_from <- "mcp-console"
-      requirements$history[[request_index]]$env_is_package <- FALSE
-      globals$python_requirements <- requirements
       checkpoint <- checkpoint_manifest()
       if (is.null(checkpoint)) {
         stop("Python preparation did not produce a managed checkpoint")
@@ -304,14 +299,9 @@ def _mcp_console_eval_cell(
 }, envir = base::new.env(parent = base::baseenv()))
 "#;
 
-    pub(crate) enum PreparationOutcome {
-        Prepared(crate::worker_protocol::PythonRequirementManifest),
-        Failed(String),
-    }
-
     #[derive(serde::Deserialize)]
     #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-    enum PreparationResponse {
+    pub(crate) enum PreparationOutcome {
         Prepared {
             checkpoint: crate::worker_protocol::PythonRequirementManifest,
         },
@@ -338,14 +328,8 @@ def _mcp_console_eval_cell(
                 .0
                 .call1_string(c"prepare", &request)?
                 .ok_or_else(|| "Python preparation bridge returned no response".to_string())?;
-            let response: PreparationResponse = serde_json::from_str(&response)
-                .map_err(|error| format!("invalid Python preparation response: {error}"))?;
-            Ok(match response {
-                PreparationResponse::Prepared { checkpoint } => {
-                    PreparationOutcome::Prepared(checkpoint)
-                }
-                PreparationResponse::Failed { message } => PreparationOutcome::Failed(message),
-            })
+            serde_json::from_str(&response)
+                .map_err(|error| format!("invalid Python preparation response: {error}"))
         }
 
         pub(crate) fn checkpoint(

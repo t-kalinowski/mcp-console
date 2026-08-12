@@ -40,21 +40,8 @@ Python requirements use the host resolver described above and take precedence ov
 The server commits both candidates together only after every requested resolution succeeds.
 It returns `[prepared]` without creating sideband pipes or starting the worker.
 
-After startup, a new Python-only preparation can use an idle server-managed worker.
-The server sends only the additions as structured sideband data.
-The worker calls `reticulate::py_require()` with additive semantics and uses the same host resolver as runtime declarations.
-Before Python initializes, it materializes the updated manifest without initializing Python.
-After initialization, reticulate requires the candidate to use the same live `libpython`, activates it, and preserves the interpreter and worker state.
-The worker reports the final manifest, and the server returns `[prepared]` only after accepting a matching candidate.
-A failed resolution restores the prior live manifest and leaves the retained checkpoint unchanged.
-Exact repeats are idempotent.
-
-Preparation while an evaluation is active is a tool error.
-A prepare with a new R requirement after startup returns `[restart required]` without resolving or retaining any additions from that call, including Python additions.
-A built-in worker without a server-managed Python environment returns the same marker for new Python additions.
-If an infrastructure failure leaves the worker in replacement-pending state, a Python-only prepare uses host resolution and retains the environment for that replacement without starting it.
-The next evaluation or nonempty idle stdin submission starts the replacement and queues the existing restart notice.
-Custom workers reject preparation and restart requests that include requirements, and skip managed resolution.
+After startup, an idle server-managed worker accepts Python-only additions through `prepare_python`, specified below.
+New R additions require restart; custom workers reject managed requirements.
 
 `session` with `action = "restart"` may include additive Python requirements or omit them to retain the current manifest.
 The server merges additions into its complete Python checkpoint and resolves the candidate before terminating the current worker.
@@ -231,13 +218,10 @@ server -> worker  {"kind":"python_resolved","python":"..."}
 worker -> server  {"kind":"python_prepared","python_checkpoint":{"packages":["numpy","py-yaml12"]}}
 ```
 
-The worker accepts this operation only while idle.
-It calls `reticulate::py_require()` with additive package requirements.
-Before Python initialization, it resolves the updated manifest without initializing Python.
-After initialization, reticulate performs its exact-`libpython` check and live activation.
-Successful resolver replies remain candidates until `python_prepared`; the server accepts the last matching candidate before returning `[prepared]`.
-If resolution fails, the worker restores its prior manifest, sends `python_preparation_failed`, and remains available.
-The server discards the operation's candidates and retains its prior checkpoint.
+`prepare_python` is idle-only and calls additive `reticulate::py_require()`.
+Before initialization it materializes the manifest; afterward reticulate validates the live `libpython` and activates the candidate.
+Resolver replies remain candidates until `python_prepared` commits a matching checkpoint.
+`python_preparation_failed` restores the live manifest, discards candidates, and leaves the worker usable.
 
 A server-managed worker may send `resolve_python` during an evaluation when reticulate invokes its internal `uv_get_or_create_env` binding.
 The request contains the complete proposed manifest, not a history delta.
@@ -467,8 +451,7 @@ If reticulate is loaded but Python remains uninitialized at cell end, the worker
 The worker then sends that normalized manifest as `completed.python_checkpoint`; it does not send reticulate's history.
 The server accepts the last candidate from the evaluation with that manifest, or its prior environment if the manifest did not change.
 An R package load hook may trigger this path while its namespace is loading.
-An idle explicit Python-only `session prepare` sends package additions as structured data and uses the same reticulate resolution and activation path.
-It reports a separate checkpoint instead of completing an evaluated cell.
+Explicit preparation uses this bridge through `prepare_python`.
 
 Each Python cell receives a synthetic filename such as `<mcp-console:python:e1>`.
 The worker stores the source in a process-lifetime private R environment and calls its evaluator with only a short evaluation ID.

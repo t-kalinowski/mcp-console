@@ -14,22 +14,10 @@ send:
 result:
   content:
     - type: text
-      text: "<running>"
+      text: <running>
   isError: false
 ---
 id: 4
-session:
-  action: prepare
-  requirements:
-    python:
-      - numpy
-result:
-  content:
-    - type: text
-      text: "[prepared]"
-  isError: false
----
-id: 5
 session:
   action: prepare
   requirements:
@@ -38,10 +26,12 @@ session:
 result:
   content:
     - type: text
-      text: worker is already evaluating a cell; poll it before preparing requirements
+      text: >-
+        worker is already evaluating a cell; poll it before preparing
+        requirements
   isError: true
 ---
-id: 6
+id: 5
 send: {}
 result:
   content:
@@ -49,7 +39,7 @@ result:
       text: "[done]"
   isError: false
 ---
-id: 7
+id: 6
 send:
   python: runtime_generation_marker
 result:
