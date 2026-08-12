@@ -8,8 +8,8 @@ send:
 result:
   content:
     - type: text
-      text: |-
-        
+      text: |2-
+
         [idle]
   isError: false
 ---
