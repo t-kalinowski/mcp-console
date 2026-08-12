@@ -803,12 +803,13 @@ Idle Python-only `session prepare` uses this same path; restart still handles ru
 ### 14.2 R
 
 The implemented implicit session uses IR for explicit pre-start R requirements.
-The supervisor runs `ir run` outside the worker sandbox with the same Rscript selection as the worker and one `--with` argument per exact requirement.
+The supervisor requires `ir --version` from `PATH` to report 0.4.0 or later, then runs `ir run` outside the worker sandbox with the same Rscript selection as the worker and one `--with` argument per exact requirement.
 It validates IR's returned library and prepends it to inherited `R_LIBS` before each worker generation initializes R.
 The prepared library persists across explicit restart and crash replacement.
 R additions after the worker starts still require a future restart-with-R-requirements path; the live worker does not mutate `.libPaths()`.
-IR currently has no option to reject local package references before `pak` and `renv` process them.
-A future restricted mode should use an upstream IR policy rather than duplicate its reference grammar in MCP Console; rejecting local references would not sandbox other source-package build code.
+The supervisor sets `IR_NO_LOCAL_SOURCES` for every invocation.
+IR owns package-reference parsing and prevents direct or transitive local package installation before materialization.
+This does not sandbox build code from accepted repository or remote packages, and IR may reuse an already materialized library.
 The exact package-reference grammar belongs in a later `docs/DEPENDENCIES.md`.
 
 ### 14.3 Atomic public behavior

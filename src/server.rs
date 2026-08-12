@@ -60,8 +60,7 @@ enum SessionAction {
 #[serde(deny_unknown_fields)]
 struct Requirements {
     /// One or more additive, single-line R package references accepted by IR for prepare.
-    /// Installing a local reference can execute package-controlled code from the referenced host
-    /// path; use only trusted local packages.
+    /// IR prevents installation from local package sources because it runs with server permissions.
     #[serde(default)]
     #[schemars(length(max = 64), inner(length(min = 1)))]
     r: Vec<String>,

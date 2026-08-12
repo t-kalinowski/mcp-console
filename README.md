@@ -60,12 +60,14 @@ The MCP client can prepare additive R and Python requirements for the implicit s
 ```
 
 Requirement resolution is host-code execution: package installation or build hooks, managed Python environment startup, and Matplotlib cache warming run outside the worker sandbox.
-Use only trusted requirements and host environment settings; installing a local R package can execute package-controlled code from the referenced host path with the server's permissions.
+Use only trusted requirements and host environment settings.
+MCP Console sets `IR_NO_LOCAL_SOURCES` for every R resolution, so IR refuses package installation from direct or transitive local sources while retaining its accepted package syntax.
+The policy prevents local package installation code from running; IR may still reuse an already materialized library.
 
 Before the worker starts, this `session` call resolves each complete requirement set outside the worker sandbox, using IR for R and reticulate with uv for Python, then returns `[prepared]`.
 When both languages are supplied, it retains the new configuration only after both resolutions succeed.
 It does not load packages into or start the worker.
-R preparation requires an executable `ir` on `PATH`.
+Before R preparation, the server requires `ir --version` from `PATH` to report 0.4.0 or later.
 The server runs IR with the same Rscript selection as the worker and prepends the returned library to the worker's inherited `R_LIBS`, leaving its other R libraries available.
 
 After a server-managed worker starts, a Python-only `prepare` applies additions while the worker is idle.

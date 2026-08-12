@@ -45,7 +45,9 @@ The server preserves sideband text and image order as MCP content blocks, coales
 The implemented `session` surface accepts `action = "prepare"` with one or more R or Python requirement strings or `action = "restart"` with optional Python requirement strings for the implicit session.
 Requirements are exact, additive, and idempotent.
 Before the worker starts, each successful prepare resolves the complete candidate sets outside the sandbox, atomically retains them in server memory, and returns `[prepared]` without starting the worker.
-R requirements use `ir run` from `PATH` with the worker's Rscript and become the first worker `R_LIBS` entry; Python requirements use reticulate and uv and replace any inherited Python selection with the resolved interpreter.
+Before each R resolution, the server requires `ir --version` from `PATH` to report 0.4.0 or later; it then uses `ir run` with the worker's Rscript, and the result becomes the first worker `R_LIBS` entry.
+Python requirements use reticulate and uv and replace any inherited Python selection with the resolved interpreter.
+The server sets `IR_NO_LOCAL_SOURCES` for every R resolution, so IR prevents direct or transitive local package installation while retaining ownership of package-reference parsing.
 A failed resolution leaves the prior requirements, R library, and interpreter unchanged.
 For a uv tool failure, the tool error reports a JSON manifest containing reticulate's selected Python and the complete candidate package set, followed by uv's stderr, while omitting the helper command, temporary output path, and reticulate's `py_require()`-oriented guidance.
 The direct resolver process defines its process-group lifetime: after it exits, the server force-stops any remaining in-group descendants before reaping it and collecting its standard streams.
@@ -229,8 +231,7 @@ See `design-sketches/README.md` for the product overview and `design-sketches/do
 - `src/sandbox/` — platform implementation and macOS Seatbelt policy.
 - `tests/cli.rs` — public binary acceptance tests.
 - `tests/fixtures/py_require` — minimal R package that declares a Python requirement from its load hook.
-- `tests/fixtures/r_require` — local R package installed through IR for initial requirement coverage.
-- `tests/fixtures/r_require_candidate` — distinct local R package used to verify atomic preparation.
+- `tests/fixtures/r_install_escape` — local R package whose configure hook proves rejected sources are not installed.
 - `tests/fixtures/zod` — executable Python sideband worker used by acceptance tests.
 - `tests/fixtures/worker_mitm` — transparent worker proxy used to capture sideband, standard-stream, fd-0 closure, and worker-sideband closure events through `serve`.
 - `tests/transcripts/r.py` — public built-in R worker acceptance suite.
@@ -278,7 +279,8 @@ Keep one Cargo package until the implemented code presents a concrete crate boun
 - Keep the MCP adapter independent of interpreter implementation details.
 - Treat submitted R, Python, and SQL execution as shell-class capability and place safety at the worker-process boundary.
   Managed-Python startup and explicit R or Python preparation are host-bootstrap exceptions.
-  R requirements are IR command arguments and Python requirements use a JSON standard-input manifest; neither is evaluated as R source, though package installation, build code, managed Python startup, and the Matplotlib font-cache import may execute outside the worker sandbox.
+  R requirements are IR command arguments resolved with `IR_NO_LOCAL_SOURCES`; Python requirements use a JSON standard-input manifest.
+  Neither is evaluated as R source, though accepted package installation, build code, managed Python startup, and the Matplotlib font-cache import may execute outside the worker sandbox.
 - Update this file when a PR changes the implemented surface or repository map.
 - Before every commit, run `scripts/format` and review its changes.
 - Run `scripts/check` before opening a PR.

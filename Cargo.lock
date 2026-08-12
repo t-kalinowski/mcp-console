@@ -615,6 +615,7 @@ dependencies = [
  "libr",
  "rmcp",
  "rust-embed",
+ "semver",
  "serde",
  "serde_json",
  "tokio",

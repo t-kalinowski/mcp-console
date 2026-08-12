@@ -6,7 +6,7 @@ session:
   action: prepare
   requirements:
     r:
-      - local::tests/fixtures/r_require?reinstall
+      - cli
 result:
   content:
     - type: text
@@ -60,7 +60,7 @@ session:
   action: prepare
   requirements:
     r:
-      - local::tests/fixtures/r_require_candidate?reinstall
+      - glue
     python:
       - not a valid requirement !!!
 result:
@@ -88,17 +88,16 @@ send:
   r: |
     stopifnot(
       identical(
-        dirname(find.package("mcpconsolerrequire")),
+        dirname(find.package("cli")),
         .libPaths()[[1L]]
       ),
-      !requireNamespace(
-        "mcpconsolerrequirecandidate",
-        quietly = TRUE
+      !file.exists(
+        file.path(.libPaths()[[1L]], "glue", "DESCRIPTION")
       ),
       normalizePath(.libPaths()[[2L]]) ==
         normalizePath(Sys.getenv("MCP_CONSOLE_AMBIENT_R_LIBRARY"))
     )
-    mcpconsolerrequire::answer()
+    42L
 result:
   content:
     - type: text
@@ -111,7 +110,7 @@ session:
   action: prepare
   requirements:
     r:
-      - local::tests/fixtures/r_require?reinstall
+      - cli
 result:
   content:
     - type: text
@@ -123,7 +122,7 @@ session:
   action: prepare
   requirements:
     r:
-      - local::tests/fixtures/r_require_candidate?reinstall
+      - glue
     python:
       - py-yaml12
 result:
@@ -156,17 +155,16 @@ send:
   r: |
     stopifnot(
       identical(
-        dirname(find.package("mcpconsolerrequire")),
+        dirname(find.package("cli")),
         .libPaths()[[1L]]
       ),
-      !requireNamespace(
-        "mcpconsolerrequirecandidate",
-        quietly = TRUE
+      !file.exists(
+        file.path(.libPaths()[[1L]], "glue", "DESCRIPTION")
       ),
       normalizePath(.libPaths()[[2L]]) ==
         normalizePath(Sys.getenv("MCP_CONSOLE_AMBIENT_R_LIBRARY"))
     )
-    mcpconsolerrequire::answer()
+    42L
 result:
   content:
     - type: text

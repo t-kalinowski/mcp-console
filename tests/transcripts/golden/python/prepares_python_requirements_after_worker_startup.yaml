@@ -23,7 +23,7 @@ session:
 result:
   content:
     - type: text
-      text: "<invalid Python requirement rejected>"
+      text: <invalid Python requirement rejected>
   isError: true
 ---
 id: 5
