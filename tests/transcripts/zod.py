@@ -530,6 +530,46 @@ def test_times_out_and_polls_running_evaluation(binary: Path) -> Transcript:
     return client._finish()
 
 
+def test_drains_pending_sideband_output_while_running(binary: Path) -> Transcript:
+    zod = Path(__file__).resolve().parents[1] / "fixtures" / "zod"
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        temporary_path = Path(temporary_directory)
+        environment = os.environ.copy()
+        environment["TMPDIR"] = temporary_directory
+        client = McpClient(
+            binary,
+            ("serve", "--worker", str(zod)),
+            environment,
+        )
+        client._initialize_and_list_tools()
+
+        client.send(r="emit output and image before completion", timeout_ms=0)
+        assert last_tool_text(client) == "\n[running]"
+        image_started = wait_for_marker(
+            temporary_path,
+            "zod-image-evaluation-started",
+            client,
+        )
+        (image_started.parent / "zod-release-image").touch()
+        wait_for_marker(temporary_path, "zod-image-processed", client)
+
+        client.send(timeout_ms=0)
+        result = client.transcript[-1]["result"]
+        assert result == {
+            "content": [
+                {"type": "text", "text": "before pending image\n"},
+                {"type": "image", "data": PNG_1X1, "mimeType": "image/png"},
+                {"type": "text", "text": "after pending image\n\n[running]"},
+            ],
+            "isError": False,
+        }, result
+
+        (temporary_path / "zod-release-image-completion").touch()
+        client.send(timeout_ms=3_000)
+        assert last_tool_text(client) == "[done]"
+        return client._finish()
+
+
 def test_accepts_idle_stdin(binary: Path) -> Transcript:
     zod = Path(__file__).resolve().parents[1] / "fixtures" / "zod"
     client = McpClient(
