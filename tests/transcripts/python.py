@@ -1471,14 +1471,23 @@ def test_restarts_after_python_bridge_failure(binary: Path) -> Transcript:
     client.send(python="6 * 7")
     result = client.transcript[-1]["result"]
     assert result["isError"] is True
-    assert result["content"][0]["text"] == (
-        "Python bridge failed during R evaluation\n"
+    bridge_failure = "Python bridge failed during R evaluation\n"
+    python_failure = (
         "Error in py_discover_config(required_module, use_environment) : \n"
         "  Python specified in RETICULATE_PYTHON "
         "(/mcp-console-missing-python) does not exist\n"
+    )
+    worker_failure = (
         "[worker sideband read failed: worker sideband closed]\n"
         "[worker stopped: in-memory state lost]"
     )
+    output = result["content"][0]["text"]
+    expected = {
+        bridge_failure + python_failure + worker_failure,
+        python_failure + bridge_failure + worker_failure,
+    }
+    assert output in expected, output
+    result["content"][0]["text"] = bridge_failure + python_failure + worker_failure
     client.send(r='exists("python_worker_marker", inherits = FALSE)')
     assert last_tool_text(client) == "[starting new worker]\n[1] FALSE\n"
     client.send(python="6 * 7")

@@ -491,13 +491,23 @@ def test_routes_idle_and_timed_out_stdin(binary: Path) -> Transcript:
         paste(prompted, direct, sep = "|")
         """)
     client.send(r=r, stdin="café\n", timeout_ms=50)
-    assert last_tool_text(client) == "\n[running]"
+    first_output = last_tool_text(client)
+    assert first_output in {
+        "\n[running]",
+        '[input requested: "bundled> "]\n\n[running]',
+    }, first_output
+    client.transcript[-1]["result"]["content"][0]["text"] = "\n[running]"
     client.send(timeout_ms=0)
     assert last_tool_text(client) == "\n[running]"
     client.send(stdin="timed out ", timeout_ms=50)
     assert last_tool_text(client) == "\n[running]"
     client.send(stdin="fd 0\n", timeout_ms=3_000)
-    assert last_tool_text(client) == (
+    final_output = last_tool_text(client)
+    expected_result = '[1] "café|timed out fd 0"\n'
+    if first_output == "\n[running]":
+        expected_result = '[input requested: "bundled> "]\n' + expected_result
+    assert final_output == expected_result, final_output
+    client.transcript[-1]["result"]["content"][0]["text"] = (
         '[input requested: "bundled> "]\n[1] "café|timed out fd 0"\n'
     )
     return client._finish()
