@@ -318,11 +318,11 @@ impl Evaluation {
             return Ok(EvaluationStatus::Report(EvaluationWait::Completed(result)));
         }
         let Some(report_at) = state.input_report_at else {
-            return Ok(if at_deadline {
-                EvaluationStatus::Report(EvaluationWait::Running)
-            } else {
-                EvaluationStatus::Waiting
-            });
+            if at_deadline {
+                state.waiting = false;
+                return Ok(EvaluationStatus::Report(EvaluationWait::Running));
+            }
+            return Ok(EvaluationStatus::Waiting);
         };
         let grace = report_at.saturating_duration_since(Instant::now());
         if !at_deadline && !grace.is_zero() {

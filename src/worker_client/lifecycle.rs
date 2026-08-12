@@ -172,9 +172,14 @@ impl Client {
             }
         };
 
-        environment.python = Some(managed);
+        let restart = self.commit_environment_and_begin_restart(
+            &generation,
+            grace,
+            &mut environment,
+            managed,
+        )?;
         drop(environment);
-        let restart = self.begin_restart_after_resolution(&generation, grace)?;
+        self.mark_evaluation_restarting()?;
         Ok(restart)
     }
 
@@ -333,10 +338,12 @@ impl Client {
         Ok(restart)
     }
 
-    fn begin_restart_after_resolution(
+    fn commit_environment_and_begin_restart(
         &self,
         expected: &WorkerGeneration,
         grace: Duration,
+        environment: &mut super::environment::Environment,
+        managed: crate::resolver::ManagedPython,
     ) -> Result<(ProcessStopHandles, Instant), String> {
         let mut lifecycle = self
             .0
@@ -356,10 +363,8 @@ impl Client {
             }
         }
         lifecycle.processes.resolver = None;
-        let restart = lifecycle.start_restart(grace);
-        drop(lifecycle);
-        self.mark_evaluation_restarting()?;
-        Ok(restart)
+        environment.python = Some(managed);
+        Ok(lifecycle.start_restart(grace))
     }
 
     fn mark_evaluation_restarting(&self) -> Result<(), String> {
