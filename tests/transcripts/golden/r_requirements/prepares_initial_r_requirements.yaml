@@ -124,6 +124,8 @@ session:
   requirements:
     r:
       - local::tests/fixtures/r_require_candidate?reinstall
+    python:
+      - py-yaml12
 result:
   content:
     - type: text
@@ -131,6 +133,16 @@ result:
   isError: false
 ---
 id: 9
+send:
+  r: |
+    stopifnot(!"py-yaml12" %in% reticulate::py_require()$packages)
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+id: 10
 session:
   action: restart
 result:
@@ -139,7 +151,7 @@ result:
       text: "[restarted]"
   isError: false
 ---
-id: 10
+id: 11
 send:
   r: |
     stopifnot(

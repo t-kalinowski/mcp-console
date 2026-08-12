@@ -47,7 +47,7 @@ An immediate `input_received` receipt retains the request record but suppresses 
 That receipt describes the runtime read, not a particular stdin payload; direct fd-0 reads emit no request or receipt.
 Payload end is not EOF, and queued input is not an acknowledgment of consumption.
 Unread bytes may be completed by later stdin or satisfy a later worker read or evaluation.
-Before the worker starts, the MCP client can prepare additive R and Python requirements for the implicit session:
+The MCP client can prepare additive R and Python requirements for the implicit session:
 
 ```json
 {
@@ -62,14 +62,27 @@ Before the worker starts, the MCP client can prepare additive R and Python requi
 Requirement resolution is host-code execution: package installation or build hooks, managed Python environment startup, and Matplotlib cache warming run outside the worker sandbox.
 Use only trusted requirements and host environment settings; installing a local R package can execute package-controlled code from the referenced host path with the server's permissions.
 
-This `session` call resolves each complete initial requirement set outside the worker sandbox, using IR for R and reticulate with uv for Python, then returns `[prepared]`.
+Before the worker starts, this `session` call resolves each complete requirement set outside the worker sandbox, using IR for R and reticulate with uv for Python, then returns `[prepared]`.
 When both languages are supplied, it retains the new configuration only after both resolutions succeed.
 It does not load packages into or start the worker.
 R preparation requires an executable `ir` on `PATH`.
 The server runs IR with the same Rscript selection as the worker and prepends the returned library to the worker's inherited `R_LIBS`, leaving its other R libraries available.
-Exact repeated requirements are idempotent.
-Once the worker has started, a new explicit `session` requirement returns `[restart required]` without changing the environment.
-Server-managed workers can still layer additive requirements declared through `reticulate::py_require()` while an evaluation is running.
+
+After a server-managed worker starts, a Python-only `prepare` can add packages while that worker is idle.
+Before Python initializes, reticulate adds the packages to its manifest and the server materializes the resolved environment for later initialization.
+After Python initializes, reticulate requires the candidate to use the same `libpython`, activates it, and keeps the interpreter, Python objects, and other worker state live.
+The call returns `[prepared]` only after the server accepts the resulting checkpoint.
+A failed resolution leaves the live manifest, interpreter, and retained checkpoint unchanged.
+Exact repeats are idempotent.
+
+Live preparation is rejected while an evaluation is running.
+A new R requirement after worker startup returns `[restart required]` without resolving or retaining any additions from that call, including Python additions supplied with it.
+The same marker is returned when the current Python selection cannot use managed live layering.
+If an infrastructure failure has discarded the worker, a Python-only `prepare` resolves and retains the replacement environment without starting it.
+The next evaluation or nonempty idle stdin submission starts the replacement and emits the normal `[worker restarted: in-memory state lost]` notice.
+Custom workers reject managed requirement preparation and restart calls that include Python requirements.
+Requirements declared by evaluated code through `reticulate::py_require()` use the same managed resolution and activation path.
+
 The client can explicitly replace the worker, retain the prepared R library, and add Python requirements in the same call:
 
 ```json
@@ -159,7 +172,7 @@ R language failures, uncaught Python exceptions, and DuckDB errors remain ordina
 A silent successful R, Python, or SQL cell sends no sideband `output` frame, still sends `completed`, and projects to `[done]` when no other response text is pending.
 
 Python cells require the `reticulate` R package.
-Matplotlib figure capture requires the Python `matplotlib` package; prepare it before the worker starts when it is not already available.
+Matplotlib figure capture requires the Python `matplotlib` package; prepare it before use when it is not already available.
 SQL cells require the `arrow`, `DBI`, `duckdb`, `nanoarrow`, `pillar`, and `tibble` R packages.
 Lazy dplyr relations created from `sql_connection()` additionally require `dplyr` and `dbplyr`.
 MCP Console does not automatically install these R runtime dependencies.
@@ -172,10 +185,11 @@ An explicit `session` preparation selects its resolved managed environment even 
 The server retains the selected interpreter and normalized manifest and applies them to each sandboxed worker; the worker forces `UV_OFFLINE=1` and otherwise uses the existing sandbox policy unchanged.
 For a server-managed worker, MCP Console seeds reticulate's requirement manifest and replaces only its internal uv environment lookup.
 It does not wrap `py_require()`, so reticulate retains caller attribution, manifest history, and activation behavior within the live R process.
-If managed reticulate is loaded but Python remains uninitialized at cell end, the worker resolves the final manifest outside the sandbox before completing.
+An idle Python-only `session` preparation asks that same bridge to add structured package data; it does not evaluate an R cell.
+If managed reticulate is loaded but Python remains uninitialized at cell end or after explicit preparation, the worker resolves the final manifest outside the sandbox before reporting its checkpoint.
 After Python initializes, additive package requirements resolve to candidate environments outside the sandbox; reticulate checks the exact `libpython`, runs `activate_this.py`, swaps its Python configuration, and updates its manifest while the interpreter and its existing state remain live.
-At completion, the worker reports the normalized manifest, and the server accepts the last matching candidate or its unchanged prior environment before retaining that checkpoint.
-Normal language outcomes reach this checkpoint; an infrastructure or protocol failure before completion leaves the prior checkpoint unchanged.
+The server accepts the last candidate that matches the reported manifest before retaining that checkpoint.
+Normal language outcomes reach the evaluation checkpoint; failed explicit resolution restores the prior live manifest, and an infrastructure or protocol failure leaves the prior server checkpoint unchanged.
 Each runtime resolution uses the worker's current `UV_*` settings except `UV_OFFLINE`; those settings are not retained or replayed across worker generations.
 The requirement strings and forwarded settings are structured data rather than R code, and the resolver does not evaluate the submitted cell.
 However, evaluated R code or an R package load can request this resolution, and reticulate and uv may access the network, write normal host caches, and execute a source distribution's build backend outside the worker sandbox.
@@ -195,7 +209,7 @@ The intended default client registration name is `console`:
 codex mcp add console -- mcp-console serve
 ```
 
-Under Codex's current naming convention, the implemented tools are `mcp__console.send` and `mcp__console.session`; `session` supports initial R and Python requirement preparation and explicit restart with optional additive Python requirements for the implicit session.
+Under Codex's current naming convention, the implemented tools are `mcp__console.send` and `mcp__console.session`; `session` supports R and Python requirement preparation, live late Python additions, and explicit restart with optional additive Python requirements for the implicit session.
 
 On macOS, `sandbox` launches the command under `/usr/bin/sandbox-exec`.
 The command can read the host filesystem, can write regular files only in a dedicated temporary directory, and cannot access the network.

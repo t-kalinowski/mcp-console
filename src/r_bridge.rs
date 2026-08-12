@@ -117,6 +117,53 @@ impl Bridge {
         })
     }
 
+    pub(crate) fn call1_string(
+        &self,
+        function: &CStr,
+        argument: &str,
+    ) -> Result<Option<String>, String> {
+        let argument_length = c_int::try_from(argument.len()).map_err(|_| {
+            format!(
+                "{} bridge argument exceeds R's maximum string size",
+                self.language
+            )
+        })?;
+        let result = harp::top_level_exec(|| {
+            // SAFETY: This runs on R's main thread. The outer top-level
+            // boundary contains allocation errors; R_tryEval contains errors
+            // raised while calling the private environment's fixed function.
+            unsafe {
+                let function = libr::Rf_install(function.as_ptr());
+                let argument = libr::Rf_protect(r_string(argument, argument_length));
+                let call = libr::Rf_protect(libr::Rf_lang2(function, argument));
+                let mut evaluation_error = 0;
+                let value = (self.try_eval)(call, self.state, &mut evaluation_error);
+                let value = if evaluation_error == 0 {
+                    let value = libr::Rf_protect(value);
+                    let value = Option::<String>::try_from(harp::object::RObject::view(value))
+                        .map_err(|error| error.to_string());
+                    libr::Rf_unprotect(1);
+                    Some(value)
+                } else {
+                    None
+                };
+                libr::Rf_unprotect(2);
+                (evaluation_error, value)
+            }
+        });
+        let (evaluation_error, value) = result
+            .map_err(|error| format!("failed to call the {} bridge: {error}", self.language))?;
+        if evaluation_error != 0 {
+            return Err(format!(
+                "{} bridge failed during R evaluation",
+                self.language
+            ));
+        }
+        value
+            .expect("successful R evaluation should return a value")
+            .map_err(|error| format!("{} bridge returned {error}", self.language))
+    }
+
     fn call0<T>(
         &self,
         function: &CStr,

@@ -137,9 +137,19 @@ def test_prepares_initial_r_requirements(binary: Path) -> Transcript:
         assert last_tool_text(client) == "[prepared]"
         client.session(
             action="prepare",
-            requirements={"r": [candidate_r]},
+            requirements={
+                "r": [candidate_r],
+                "python": ["py-yaml12"],
+            },
         )
         assert last_tool_text(client) == "[restart required]"
+
+        # fmt: r
+        manifest_r = code(r"""
+            stopifnot(!"py-yaml12" %in% reticulate::py_require()$packages)
+            """)
+        client.send(r=manifest_r)
+        assert last_tool_text(client) == "[done]"
 
         client.session(action="restart")
         assert last_tool_text(client) == "[restarted]"

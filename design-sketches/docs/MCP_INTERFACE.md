@@ -278,7 +278,11 @@ Requirements are additive logical-session configuration managed by `session`, no
 
 `prepare` resolves and adds requirements without replacing an existing runtime.
 It creates the logical session if needed but may leave it in `prepared` state without a worker.
-If safe activation in an existing runtime is impossible, it reports that a restart is required and leaves the current runtime and manifest unchanged.
+For an idle server-managed runtime, a Python-only prepare can add packages through reticulate without replacing the runtime.
+Before Python initializes, it updates and materializes the manifest; after initialization, it activates a candidate that uses the same `libpython`.
+A failed resolution leaves the live and retained manifests unchanged.
+Preparation while the runtime is evaluating is an error.
+If a call contains a new R requirement after startup, it reports that a restart is required and applies none of that call's additions.
 
 `restart` may include additive requirements.
 Resolution occurs before the old runtime is terminated.
@@ -295,7 +299,7 @@ Package download access does not imply general network access for user code.
 ```json
 {
   "name": "session",
-  "description": "Prepare, inspect, or control persistent console sessions; normal evaluation and polling use send. Requirements are additive session configuration and survive runtime restarts. prepare creates the session if needed and adds requirements without replacing an existing runtime; if activation requires replacement, it reports that a restart is required. restart starts a fresh runtime generation; any existing in-memory R, Python, and SQL state is lost, while requirements, workspace files, and the transcript are retained. close ends the logical session.",
+  "description": "Prepare, inspect, or control persistent console sessions; normal evaluation and polling use send. Requirements are additive session configuration and survive runtime restarts. prepare creates the session if needed and adds requirements without replacing an existing runtime. An idle server-managed runtime can activate new Python packages in place; unsupported late additions report that a restart is required. restart starts a fresh runtime generation; any existing in-memory R, Python, and SQL state is lost, while requirements, workspace files, and the transcript are retained. close ends the logical session.",
   "inputSchema": {
     "type": "object",
     "additionalProperties": false,
@@ -329,7 +333,7 @@ Package download access does not imply general network access for user code.
             "type": "array",
             "items": { "type": "string", "minLength": 1 },
             "maxItems": 64,
-            "description": "PEP 508 Python requirement strings."
+            "description": "PEP 508 Python requirement strings. prepare can activate Python-only additions in an idle server-managed runtime."
           }
         }
       }
@@ -369,7 +373,12 @@ transcript: .mcp-console/sessions/default/transcript.qmd
 For a missing session it creates a configured logical session without starting a worker.
 The first code cell or nonempty stdin submission starts the runtime.
 For an existing session it never replaces the runtime implicitly.
-If activation requires replacement, it returns `[restart required]` and makes no change.
+An idle server-managed runtime can apply a Python-only addition through reticulate while preserving its interpreter and in-memory state.
+The call returns `[prepared]` after the supervisor accepts the worker's reported manifest.
+A failed resolution restores the prior live manifest and leaves the retained checkpoint unchanged.
+Preparation while an evaluation is active is an error.
+A call with a new R requirement after startup returns `[restart required]` and applies none of that call's additions, including Python additions.
+After worker failure, a Python-only prepare configures the pending replacement without starting it; the next evaluation or nonempty idle stdin submission starts that worker and reports the restart notice.
 
 ```json
 {

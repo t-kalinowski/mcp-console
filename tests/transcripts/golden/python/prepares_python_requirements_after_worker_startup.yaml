@@ -1,0 +1,133 @@
+---
+!same-as tests/transcripts/golden/server/initializes_and_lists_tools.yaml
+---
+id: 3
+send:
+  python: |
+    import importlib.util; import os; import sys
+    sentinel = 42; worker_pid = os.getpid(); initial_prefix = sys.prefix
+    importlib.util.find_spec("yaml12") is None
+result:
+  content:
+    - type: text
+      text: |
+        True
+  isError: false
+---
+id: 4
+session:
+  action: prepare
+  requirements:
+    python:
+      - py-yaml12
+result:
+  content:
+    - type: text
+      text: "[prepared]"
+  isError: false
+---
+id: 5
+send:
+  python: |
+    import os; import sys; import yaml12
+    (sentinel, os.getpid() == worker_pid, sys.prefix != initial_prefix, yaml12.__name__)
+result:
+  content:
+    - type: text
+      text: |
+        (42, True, True, 'yaml12')
+  isError: false
+---
+id: 6
+session:
+  action: prepare
+  requirements:
+    python:
+      - py-yaml12
+result:
+  content:
+    - type: text
+      text: "[prepared]"
+  isError: false
+---
+id: 7
+session:
+  action: prepare
+  requirements:
+    python:
+      - not a valid requirement !!!
+result:
+  content:
+    - type: text
+      text: |-
+        managed Python resolution failed:
+        resolver input:
+        {
+          "python": "3.12.x (reticulate default)",
+          "packages": [
+            "numpy",
+            "not a valid requirement !!!",
+            "py-yaml12"
+          ]
+        }
+        uv output:
+        error: Failed to parse: `not a valid requirement !!!`
+          Caused by: Expected one of `@`, `(`, `<`, `=`, `>`, `~`, `!`, `;`, found `a`
+        not a valid requirement !!!
+            ^
+  isError: true
+---
+id: 8
+send:
+  python: |
+    import yaml12
+    sentinel, os.getpid() == worker_pid, yaml12.__name__
+result:
+  content:
+    - type: text
+      text: |
+        (42, True, 'yaml12')
+  isError: false
+---
+id: 9
+send:
+  r: |
+    requirements <- reticulate::py_require()
+    matching_requests <- Filter(
+      function(request) {
+        identical(request$requested_from, "mcp-console") &&
+          identical(request$env_is_package, FALSE) &&
+          identical(request$action, "add") &&
+          identical(request$packages, "py-yaml12")
+      },
+      requirements$history
+    )
+    stopifnot(
+      length(matching_requests) == 1L,
+      !"not a valid requirement !!!" %in% requirements$packages
+    )
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+id: 10
+session:
+  action: restart
+result:
+  content:
+    - type: text
+      text: "[restarted]"
+  isError: false
+---
+id: 11
+send:
+  python: "import yaml12; (\"sentinel\" in globals(), yaml12.__name__)"
+result:
+  content:
+    - type: text
+      text: |
+        (False, 'yaml12')
+  isError: false
+...

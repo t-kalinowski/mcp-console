@@ -230,6 +230,20 @@ class McpClient:
         assert entry.keys().isdisjoint(message), message
         entry.update(message)
 
+    def _receive_many(self, entries: list[TranscriptEntry]) -> None:
+        pending = {entry["id"]: entry for entry in entries}
+        for _ in entries:
+            line = self.stdout.readline()
+            assert line, "mcp-console stopped before replying"
+            message = json.loads(line)
+            assert message.pop("jsonrpc", None) == "2.0", message
+            request_id = message.pop("id", None)
+            assert request_id in pending, message
+            entry = pending.pop(request_id)
+            assert message.keys() == {"result"} or message.keys() == {"error"}, message
+            assert entry.keys().isdisjoint(message), message
+            entry.update(message)
+
     def _start_request(self, method: str, **params: Any) -> TranscriptEntry:
         message: dict[str, Any] = {
             "jsonrpc": "2.0",

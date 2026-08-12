@@ -1,0 +1,20 @@
+---
+!same-as tests/transcripts/golden/server/initializes_and_lists_tools.yaml
+---
+id: 3
+send:
+  r: |
+    Sys.setenv(UV_DEFAULT_INDEX = "http://127.0.0.1:<PORT>/simple")
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+id: 4
+session:
+  action: prepare
+  requirements:
+    python:
+      - mcp-console-blocked-live-preparation
+...

@@ -798,8 +798,10 @@ Reticulate owns the live manifest during an evaluation, while the supervisor own
 
 Only newly added package requirements fit the v1 late-layering contract.
 Removals and changes to Python-version or `exclude_newer` constraints are unsupported after initialization rather than silently projected as additions.
-An explicit late `session prepare` still returns `[restart required]`.
-The implemented implicit-session restart can merge additive Python requirements into the last accepted checkpoint before replacing the worker.
+An explicit late Python-only `session prepare` uses this reticulate path while a server-managed worker is idle.
+Before Python initializes, it updates and materializes the manifest without initializing Python.
+After initialization, it activates a compatible environment without replacing the worker.
+The implemented implicit-session restart can still merge additive Python requirements into the last accepted checkpoint before replacing the worker.
 
 ### 14.2 R
 
@@ -819,6 +821,19 @@ Before worker startup, an explicit `prepare` action remains atomic:
 1. merge the requested additions with the current manifest;
 2. resolve and prepare the candidate environment outside the arbitrary-code worker;
 3. commit the R library, Python interpreter, and manifests only after every requested resolution succeeds.
+
+After worker startup, an explicit prepare has one supported live path:
+
+1. reject the call while an evaluation owns the worker;
+2. if the call contains a new R requirement, return `[restart required]` without resolving or retaining any additions;
+3. send Python-only additions to the idle server-managed worker as structured data;
+4. let reticulate update its manifest, request host resolution, and activate the candidate when Python is already initialized;
+5. commit the matching reported checkpoint and return `[prepared]`.
+
+A failed resolution restores the prior live manifest and leaves the supervisor checkpoint unchanged.
+The worker and its in-memory state stay live throughout the operation.
+If a worker failure has left replacement pending, Python-only preparation instead resolves and retains that replacement's environment without starting it.
+The next evaluation or nonempty idle stdin submission starts the replacement and reports the generation loss through the existing restart notice.
 
 An explicit `restart` with requirements is atomic until the worker replacement boundary:
 
