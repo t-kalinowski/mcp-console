@@ -124,9 +124,9 @@ base::local({
     }
   }
 
-  checkpoint <- function() {
+  checkpoint_manifest <- function() {
     if (is.na(managed) || !"reticulate" %in% loadedNamespaces()) {
-      return(NA_character_)
+      return(NULL)
     }
     namespace <- asNamespace("reticulate")
     requirements <- reticulate::py_require()
@@ -138,12 +138,47 @@ base::local({
         requirements$exclude_newer
       ))
     }
+    manifest(
+      requirements$packages,
+      requirements$python_version,
+      requirements$exclude_newer
+    )
+  }
+
+  checkpoint <- function() {
+    checkpoint <- checkpoint_manifest()
+    if (is.null(checkpoint)) {
+      return(NA_character_)
+    }
     jsonlite::toJSON(
-      manifest(
-        requirements$packages,
-        requirements$python_version,
-        requirements$exclude_newer
-      ),
+      checkpoint,
+      auto_unbox = TRUE,
+      null = "null",
+      na = "null"
+    )
+  }
+
+  prepare <- function(request) {
+    if (is.na(managed)) {
+      stop("Python preparation requires a server-managed interpreter")
+    }
+    namespace <- asNamespace("reticulate")
+    globals <- get(".globals", envir = namespace)
+    snapshot <- get("py_reqs_get", envir = namespace)()
+    result <- tryCatch({
+      packages <- unlist(jsonlite::fromJSON(request), use.names = FALSE)
+      reticulate::py_require(packages, action = "add")
+      checkpoint <- checkpoint_manifest()
+      if (is.null(checkpoint)) {
+        stop("Python preparation did not produce a managed checkpoint")
+      }
+      list(kind = "prepared", checkpoint = checkpoint)
+    }, error = function(error) {
+      globals$python_requirements <- snapshot
+      list(kind = "failed", message = conditionMessage(error))
+    })
+    jsonlite::toJSON(
+      result,
       auto_unbox = TRUE,
       null = "null",
       na = "null"
@@ -264,6 +299,17 @@ def _mcp_console_eval_cell(
 }, envir = base::new.env(parent = base::baseenv()))
 "#;
 
+    #[derive(serde::Deserialize)]
+    #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+    pub(crate) enum PreparationOutcome {
+        Prepared {
+            checkpoint: crate::worker_protocol::PythonRequirementManifest,
+        },
+        Failed {
+            message: String,
+        },
+    }
+
     pub(crate) struct Bridge(crate::r_bridge::Bridge);
 
     impl Bridge {
@@ -273,6 +319,17 @@ def _mcp_console_eval_cell(
 
         pub(crate) fn evaluate(&mut self, source: &str) -> Result<(), String> {
             self.0.evaluate(source)
+        }
+
+        pub(crate) fn prepare(&self, packages: Vec<String>) -> Result<PreparationOutcome, String> {
+            let request = serde_json::to_string(&packages)
+                .map_err(|error| format!("failed to serialize Python preparation: {error}"))?;
+            let response = self
+                .0
+                .call1_string(c"prepare", &request)?
+                .ok_or_else(|| "Python preparation bridge returned no response".to_string())?;
+            serde_json::from_str(&response)
+                .map_err(|error| format!("invalid Python preparation response: {error}"))
         }
 
         pub(crate) fn checkpoint(
@@ -417,4 +474,6 @@ def _mcp_console_eval_cell(
 }
 
 #[cfg(target_os = "macos")]
-pub(crate) use platform::{Bridge, configure_worker_environment, link_matplotlib_caches};
+pub(crate) use platform::{
+    Bridge, PreparationOutcome, configure_worker_environment, link_matplotlib_caches,
+};

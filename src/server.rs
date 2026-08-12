@@ -77,6 +77,9 @@ struct SessionArguments {
     /// Prepare R or Python requirements or restart the implicit session, starting it if needed.
     action: SessionAction,
     /// Additive R or Python requirements for prepare.
+    /// After startup, an idle server-managed worker can apply Python-only additions.
+    /// A new R addition requires restart and applies none of that call's additions.
+    /// New additions also require restart while a failed worker awaits replacement.
     /// Restart accepts only Python requirements.
     /// Resolution runs outside the worker sandbox.
     /// Package installation, build code, managed Python startup, or Matplotlib
@@ -169,7 +172,7 @@ impl ConsoleServer {
     }
 
     #[tool(
-        description = "Prepare additive R or Python requirements before the implicit session starts, or restart its worker with retained requirements and optional new Python requirements. Restart starts a worker if none exists and loses all in-memory R, Python, and SQL state."
+        description = "Prepare additive R or Python requirements, or restart the implicit session. An idle server-managed worker applies Python-only additions without losing state; new R additions require restart. Restart retains requirements and loses all in-memory R, Python, and SQL state."
     )]
     async fn session(
         &self,

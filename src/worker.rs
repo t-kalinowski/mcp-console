@@ -71,6 +71,26 @@ mod platform {
                         python_checkpoint: python.checkpoint()?,
                     })?;
                 }
+                ServerMessage::PreparePython { packages } => {
+                    let result = python.prepare(packages);
+                    if WORKER_SHUTDOWN.load(Ordering::SeqCst) {
+                        return Ok(());
+                    }
+                    if let Some(message) = take_worker_failure() {
+                        return Err(io::Error::other(message).into());
+                    }
+                    match result {
+                        Ok(crate::python::PreparationOutcome::Prepared {
+                            checkpoint: python_checkpoint,
+                        }) => {
+                            writer.send(&WorkerMessage::PythonPrepared { python_checkpoint })?;
+                        }
+                        Ok(crate::python::PreparationOutcome::Failed { message }) => {
+                            writer.send(&WorkerMessage::PythonPreparationFailed { message })?;
+                        }
+                        Err(message) => return Err(io::Error::other(message).into()),
+                    }
+                }
                 ServerMessage::Shutdown => return Ok(()),
                 ServerMessage::PythonResolved { .. }
                 | ServerMessage::PythonResolutionFailed { .. } => {
@@ -99,6 +119,9 @@ mod platform {
             }
             ServerMessage::Evaluate { .. } => Err(infrastructure_failure(
                 "worker received an evaluation while resolving Python".to_string(),
+            )),
+            ServerMessage::PreparePython { .. } => Err(infrastructure_failure(
+                "worker received Python preparation while resolving Python".to_string(),
             )),
         }
     }

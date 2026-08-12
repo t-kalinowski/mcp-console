@@ -2,6 +2,7 @@
 
 import os
 import shutil
+import socket
 import subprocess
 import tempfile
 import threading
@@ -257,22 +258,47 @@ def test_restart_loses_state_and_retains_python_requirements(
     return client._finish()
 
 
-def test_requires_restart_for_late_python_requirements(binary: Path) -> Transcript:
+def test_prepares_python_requirements_after_worker_startup(binary: Path) -> Transcript:
     client = McpClient(binary, ("serve",))
     client._initialize_and_list_tools()
-    client.send(python="sentinel = 42")
+    python = code("""
+        import importlib.util; import os; import sys
+        sentinel = 42; worker_pid = os.getpid(); initial_prefix = sys.prefix
+        importlib.util.find_spec("yaml12") is None
+        """)
+    client.send(python=python)
+    assert last_tool_text(client) == "True\n"
+
+    invalid = "not a valid requirement !!!"
+    client.session(
+        action="prepare",
+        requirements={"python": [invalid]},
+    )
+    result = client.transcript[-1]["result"]
+    assert result["isError"] is True, result
+    assert "managed Python resolution failed" in result["content"][0]["text"]
+    result["content"][0]["text"] = "<invalid Python requirement rejected>"
+
+    python = code("""
+        sentinel, os.getpid() == worker_pid, importlib.util.find_spec("yaml12") is None
+        """)
+    client.send(python=python)
+    assert last_tool_text(client) == "(42, True, True)\n"
+
     client.session(
         action="prepare",
         requirements={"python": ["py-yaml12"]},
     )
-    assert last_tool_text(client) == "[restart required]"
-    client.send(python="sentinel")
-    assert last_tool_text(client) == "42\n"
+    assert last_tool_text(client) == "[prepared]"
 
-    client.session(
-        action="restart",
-        requirements={"python": ["py-yaml12"]},
-    )
+    python = code("""
+        import os; import sys; import yaml12
+        (sentinel, os.getpid() == worker_pid, sys.prefix != initial_prefix, yaml12.__name__)
+        """)
+    client.send(python=python)
+    assert last_tool_text(client) == "(42, True, True, 'yaml12')\n"
+
+    client.session(action="restart")
     assert last_tool_text(client) == "[restarted]"
     # fmt: python
     python = code("""
@@ -461,8 +487,10 @@ def test_does_not_checkpoint_python_requirements_from_failed_cell(
     client.send(r=r)
     assert client.transcript[-1]["result"]["isError"] is True
 
+    # Start the replacement and confirm that the failed cell did not advance its manifest.
     # fmt: r
     r = code(r"""
+        worker_pid <- Sys.getpid()
         "py-yaml12" %in% reticulate::py_require()$packages
         """)
     client.send(r=r)
@@ -475,24 +503,37 @@ def test_does_not_checkpoint_python_requirements_from_failed_cell(
         action="prepare",
         requirements={"python": ["py-yaml12"]},
     )
-    output = last_tool_text(client)
-    assert output == "[restart required]", repr(output)
+    assert last_tool_text(client) == "[prepared]"
+
+    # Preparing materializes the manifest without initializing Python.
+    # fmt: r
+    r = code(r"""
+        identical(Sys.getpid(), worker_pid) && !reticulate::py_available(FALSE)
+        """)
+    client.send(r=r)
+    assert last_tool_text(client) == "[1] TRUE\n"
+    # fmt: python
+    python = code("""
+        import yaml12
+
+        yaml12.__name__
+        """)
+    client.send(python=python)
+    assert last_tool_text(client) == "'yaml12'\n"
     return client._finish()
 
 
-def test_reports_restart_required_while_python_is_running(binary: Path) -> Transcript:
+def test_rejects_python_preparation_while_evaluation_is_running(
+    binary: Path,
+) -> Transcript:
     with tempfile.TemporaryDirectory() as temporary_directory:
         environment = os.environ.copy()
         environment["TMPDIR"] = temporary_directory
         client = McpClient(binary, ("serve",), environment)
         client._initialize_and_list_tools()
-        # fmt: python
         python = code("""
             runtime_generation_marker = "original runtime retained"
-
-            import time
-            from pathlib import Path
-
+            import time; from pathlib import Path
             temporary = Path(__import__("os").environ["TMPDIR"])
             (temporary / "python-evaluation-running").touch()
             while not (temporary / "release-python").exists():
@@ -500,6 +541,7 @@ def test_reports_restart_required_while_python_is_running(binary: Path) -> Trans
             """)
         client.send(python=python, timeout_ms=0)
         assert last_tool_text(client) == "\n[running]"
+        client.transcript[-1]["result"]["content"][0]["text"] = "<running>"
         running = wait_for_worker_file(
             Path(temporary_directory),
             "python-evaluation-running",
@@ -524,7 +566,11 @@ def test_reports_restart_required_while_python_is_running(binary: Path) -> Trans
         session_returned.set()
         watchdog.join()
         assert not forced_release.is_set(), "session waited for the running evaluation"
-        assert last_tool_text(client) == "[restart required]"
+        result = client.transcript[-1]["result"]
+        assert result["isError"] is True, result
+        assert result["content"][0]["text"] == (
+            "worker is already evaluating a cell; poll it before preparing requirements"
+        )
 
         release.touch()
         client.send()
@@ -532,6 +578,110 @@ def test_reports_restart_required_while_python_is_running(binary: Path) -> Trans
         client.send(python="runtime_generation_marker")
         assert last_tool_text(client) == "'original runtime retained'\n"
         return client._finish()
+
+
+def test_restart_cancels_live_python_preparation(binary: Path) -> Transcript:
+    listener = socket.socket()
+    listener.bind(("127.0.0.1", 0))
+    listener.listen()
+    port = listener.getsockname()[1]
+    connected = threading.Event()
+    resolver_stopped = threading.Event()
+    release = threading.Event()
+
+    def hold_index_connection() -> None:
+        connection, _ = listener.accept()
+        listener.close()
+        connected.set()
+        connection.settimeout(0.05)
+        with connection:
+            while not release.is_set():
+                try:
+                    if not connection.recv(4096):
+                        resolver_stopped.set()
+                        return
+                except TimeoutError:
+                    pass
+
+    index = threading.Thread(target=hold_index_connection, daemon=True)
+    index.start()
+
+    client = McpClient(binary, ("serve",))
+    client._initialize_and_list_tools()
+    # fmt: r
+    r = code(rf"""
+        restart_marker <- 42L
+        Sys.setenv(UV_DEFAULT_INDEX = "http://127.0.0.1:{port}/simple")
+        """)
+    client.send(r=r)
+    assert last_tool_text(client) == "[done]"
+
+    preparation = client._start_session(
+        action="prepare",
+        requirements={"python": ["mcp-console-blocked-live-preparation"]},
+    )
+    assert connected.wait(10), "live preparation did not contact the blocking index"
+
+    calls_returned = threading.Event()
+    forced_release = threading.Event()
+
+    def release_if_calls_block() -> None:
+        if not calls_returned.wait(2):
+            forced_release.set()
+            release.set()
+
+    watchdog = threading.Thread(target=release_if_calls_block)
+    watchdog.start()
+    poll = client._start_send()
+    second_prepare = client._start_session(
+        action="prepare",
+        requirements={"python": ["py-yaml12"]},
+    )
+    client._receive_many([poll, second_prepare])
+    calls_returned.set()
+    watchdog.join()
+    assert not forced_release.is_set(), "another tool call waited for live preparation"
+    assert poll["result"] == {
+        "content": [{"type": "text", "text": "session is preparing requirements"}],
+        "isError": True,
+    }, poll
+    assert second_prepare["result"] == poll["result"], second_prepare
+
+    restart = client._start_session(action="restart")
+    client._receive_many([preparation, restart])
+
+    preparation_result = preparation["result"]
+    assert preparation_result["isError"] is True, preparation_result
+    assert preparation_result["content"][0]["text"] in {
+        "managed Python resolution cancelled",
+        "worker sideband read failed: worker sideband closed",
+    }, preparation_result
+    preparation_result["content"][0]["text"] = (
+        "<Python preparation cancelled by restart>"
+    )
+    assert restart["result"]["content"] == [{"type": "text", "text": "[restarted]"}], (
+        restart
+    )
+    assert resolver_stopped.wait(2), "restart did not stop the Python resolver"
+    release.set()
+    index.join(2)
+
+    # fmt: r
+    r = code(r"""
+        requirements <- reticulate::py_require()
+        stopifnot(
+          !exists("restart_marker", inherits = FALSE),
+          !"mcp-console-blocked-live-preparation" %in% requirements$packages
+        )
+        """)
+    client.send(r=r)
+    assert last_tool_text(client) == "[done]"
+    transcript = client._finish()
+    address = f"127.0.0.1:{port}"
+    for entry in transcript:
+        if source := entry.get("send", {}).get("r"):
+            entry["send"]["r"] = source.replace(address, "127.0.0.1:<PORT>")
+    return transcript
 
 
 def test_does_not_parse_requirements_as_rscript_options(binary: Path) -> Transcript:

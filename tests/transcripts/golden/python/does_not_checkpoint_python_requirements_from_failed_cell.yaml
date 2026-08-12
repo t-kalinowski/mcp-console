@@ -17,6 +17,7 @@ result:
 id: 4
 send:
   r: |
+    worker_pid <- Sys.getpid()
     "py-yaml12" %in% reticulate::py_require()$packages
 result:
   content:
@@ -35,6 +36,30 @@ session:
 result:
   content:
     - type: text
-      text: "[restart required]"
+      text: "[prepared]"
+  isError: false
+---
+id: 6
+send:
+  r: |
+    identical(Sys.getpid(), worker_pid) && !reticulate::py_available(FALSE)
+result:
+  content:
+    - type: text
+      text: |
+        [1] TRUE
+  isError: false
+---
+id: 7
+send:
+  python: |
+    import yaml12
+
+    yaml12.__name__
+result:
+  content:
+    - type: text
+      text: |
+        'yaml12'
   isError: false
 ...
