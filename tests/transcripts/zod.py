@@ -585,7 +585,7 @@ def test_idle_stdin_startup_blocks_preparation(binary: Path) -> Transcript:
                 "content": [
                     {
                         "type": "text",
-                        "text": "session is preparing requirements",
+                        "text": "worker is busy",
                     }
                 ],
                 "isError": True,

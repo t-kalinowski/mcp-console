@@ -35,7 +35,7 @@ struct ClientInner {
     arguments: Vec<OsString>,
     worker: Mutex<WorkerState>,
     evaluation: Mutex<Option<ActiveEvaluation>>,
-    preparation: tokio::sync::Mutex<()>,
+    preparation: tokio::sync::RwLock<()>,
     output: CapturedOutput,
     lifecycle: Mutex<LifecycleControl>,
     environment: Option<Mutex<Environment>>,
@@ -113,7 +113,7 @@ impl Client {
             arguments,
             worker: Mutex::new(WorkerState::Initial),
             evaluation: Mutex::new(None),
-            preparation: tokio::sync::Mutex::new(()),
+            preparation: tokio::sync::RwLock::new(()),
             output: CapturedOutput::new(),
             lifecycle: Mutex::new(LifecycleControl::new()),
             environment: environment.map(Mutex::new),
@@ -144,7 +144,7 @@ impl Client {
         call_id: u64,
     ) -> Result<SendResponse, SendFailure> {
         let generation = self.admit()?;
-        let preparation = self.try_preparation()?;
+        let preparation = self.admit_send()?;
         let evaluation = match cell {
             Some(cell) => self.start_evaluation(cell, stdin, generation, transcript, call_id)?,
             None => match self.current_evaluation()? {
@@ -240,11 +240,19 @@ impl Client {
             .map_err(|_| "worker evaluation lock poisoned".to_string())
     }
 
-    fn try_preparation(&self) -> Result<tokio::sync::MutexGuard<'_, ()>, String> {
+    fn admit_send(&self) -> Result<tokio::sync::RwLockReadGuard<'_, ()>, String> {
         self.0
             .preparation
-            .try_lock()
+            .try_read()
             .map_err(|_| "session is preparing requirements".to_string())
+    }
+
+    fn admit_preparation(&self) -> Result<tokio::sync::RwLockWriteGuard<'_, ()>, String> {
+        match self.0.preparation.try_write() {
+            Ok(preparation) => Ok(preparation),
+            Err(_) if self.0.preparation.try_read().is_ok() => Err("worker is busy".to_string()),
+            Err(_) => Err("session is preparing requirements".to_string()),
+        }
     }
 
     async fn write_idle_stdin(

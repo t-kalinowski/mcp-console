@@ -54,7 +54,7 @@ impl Client {
 
     fn prepare_blocking(&self, requirements: Requirements) -> Result<PrepareResult, String> {
         let generation = self.admit()?;
-        let _preparation = self.try_preparation()?;
+        let _preparation = self.admit_preparation()?;
         let environment = self
             .0
             .environment
