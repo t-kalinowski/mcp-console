@@ -79,6 +79,12 @@ impl Evaluation {
             .lock()
             .map_err(|_| "worker evaluation state lock poisoned".to_string())?;
         state.restarting = true;
+        let output = take_restart_output(&mut state);
+        state.restart_output = Some(output);
+        if state.waiting {
+            state.result = Some(Err(restart_failure()));
+            self.changed.notify_one();
+        }
         Ok(())
     }
 
@@ -223,16 +229,8 @@ impl Evaluation {
                     (output, failure.worker_stopped)
                 }
             };
-            state.restart_output = Some(if worker_stopped {
-                RestartOutput::WorkerStopped(output)
-            } else {
-                RestartOutput::Output(output)
-            });
-            state.result = state.waiting.then(|| {
-                Err(SendFailure::from(
-                    "session restarted before the operation completed".to_string(),
-                ))
-            });
+            extend_restart_output(&mut state, output, worker_stopped);
+            state.result = state.waiting.then(|| Err(restart_failure()));
         } else {
             state.result = Some(result);
         }
@@ -248,32 +246,12 @@ impl Evaluation {
         if let Some(output) = state.restart_output.take() {
             return Ok(output);
         }
-        let mut output = std::mem::take(&mut state.output);
-        match state.result.take() {
-            Some(Ok(completed)) => output.extend(completed),
-            Some(Err(failure)) => {
-                output.extend(failure.output);
-                if failure.worker_stopped {
-                    output.push_line(format!("[{}]", failure.message));
-                    output.push_line(super::output::WORKER_STOPPED_NOTICE);
-                    if state.waiting {
-                        state.result = Some(Err(SendFailure::from(
-                            "session restarted before the operation completed".to_string(),
-                        )));
-                        self.changed.notify_one();
-                    }
-                    return Ok(RestartOutput::WorkerStopped(output));
-                }
-            }
-            None => {}
-        }
+        let output = take_restart_output(&mut state);
         if state.waiting {
-            state.result = Some(Err(SendFailure::from(
-                "session restarted before the operation completed".to_string(),
-            )));
+            state.result = Some(Err(restart_failure()));
             self.changed.notify_one();
         }
-        Ok(RestartOutput::Output(output))
+        Ok(output)
     }
 
     pub(super) async fn wait(&self, timeout: Duration) -> Result<EvaluationWait, String> {
@@ -334,4 +312,47 @@ impl Evaluation {
             output,
         )))
     }
+}
+
+fn take_restart_output(state: &mut EvaluationState) -> RestartOutput {
+    let mut output = std::mem::take(&mut state.output);
+    let mut worker_stopped = false;
+    match state.result.take() {
+        Some(Ok(completed)) => output.extend(completed),
+        Some(Err(failure)) => {
+            output.extend(failure.output);
+            if failure.worker_stopped {
+                output.push_line(format!("[{}]", failure.message));
+                output.push_line(super::output::WORKER_STOPPED_NOTICE);
+                worker_stopped = true;
+            }
+        }
+        None => {}
+    }
+    if worker_stopped {
+        RestartOutput::WorkerStopped(output)
+    } else {
+        RestartOutput::Output(output)
+    }
+}
+
+fn extend_restart_output(state: &mut EvaluationState, output: Response, worker_stopped: bool) {
+    let current = state
+        .restart_output
+        .take()
+        .unwrap_or_else(|| RestartOutput::Output(Response::default()));
+    let (mut current, already_stopped) = match current {
+        RestartOutput::Output(output) => (output, false),
+        RestartOutput::WorkerStopped(output) => (output, true),
+    };
+    current.extend(output);
+    state.restart_output = Some(if already_stopped || worker_stopped {
+        RestartOutput::WorkerStopped(current)
+    } else {
+        RestartOutput::Output(current)
+    });
+}
+
+fn restart_failure() -> SendFailure {
+    SendFailure::from("session restarted before the operation completed".to_string())
 }

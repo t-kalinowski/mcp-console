@@ -35,6 +35,7 @@ struct ClientInner {
     arguments: Vec<OsString>,
     worker: Mutex<WorkerState>,
     evaluation: Mutex<Option<ActiveEvaluation>>,
+    preparation: Mutex<()>,
     output: CapturedOutput,
     lifecycle: Mutex<LifecycleControl>,
     environment: Option<Mutex<Environment>>,
@@ -112,6 +113,7 @@ impl Client {
             arguments,
             worker: Mutex::new(WorkerState::Initial),
             evaluation: Mutex::new(None),
+            preparation: Mutex::new(()),
             output: CapturedOutput::new(),
             lifecycle: Mutex::new(LifecycleControl::new()),
             environment: environment.map(Mutex::new),
@@ -142,6 +144,7 @@ impl Client {
         call_id: u64,
     ) -> Result<SendResponse, SendFailure> {
         let generation = self.admit()?;
+        let preparation = self.try_preparation()?;
         let evaluation = match cell {
             Some(cell) => self.start_evaluation(cell, stdin, generation, transcript, call_id)?,
             None => match self.current_evaluation()? {
@@ -158,6 +161,7 @@ impl Client {
                     active.evaluation
                 }
                 None => {
+                    drop(preparation);
                     if let Some(stdin) = stdin {
                         self.write_idle_stdin(stdin, generation).await?;
                     }
@@ -165,6 +169,7 @@ impl Client {
                 }
             },
         };
+        drop(preparation);
 
         match evaluation.wait(timeout).await? {
             EvaluationWait::Running => Ok(SendResponse::Running),
@@ -192,7 +197,7 @@ impl Client {
             evaluation.submit_stdin(stdin)?;
         }
 
-        let mut active = self.try_evaluation()?;
+        let mut active = self.evaluation()?;
         if active.is_some() {
             return Err(
                 "worker is already evaluating a cell; poll without a code field".to_string(),
@@ -222,21 +227,28 @@ impl Client {
     }
 
     fn current_evaluation(&self) -> Result<Option<ActiveEvaluation>, String> {
-        let evaluation = self.try_evaluation()?;
+        let evaluation = self.evaluation()?;
         if let Some(active) = evaluation.as_ref() {
             active.evaluation.claim_wait()?;
         }
         Ok(evaluation.clone())
     }
 
-    fn try_evaluation(&self) -> Result<MutexGuard<'_, Option<ActiveEvaluation>>, String> {
-        match self.0.evaluation.try_lock() {
-            Ok(evaluation) => Ok(evaluation),
+    fn evaluation(&self) -> Result<MutexGuard<'_, Option<ActiveEvaluation>>, String> {
+        self.0
+            .evaluation
+            .lock()
+            .map_err(|_| "worker evaluation lock poisoned".to_string())
+    }
+
+    fn try_preparation(&self) -> Result<MutexGuard<'_, ()>, String> {
+        match self.0.preparation.try_lock() {
+            Ok(preparation) => Ok(preparation),
             Err(std::sync::TryLockError::WouldBlock) => {
                 Err("session is preparing requirements".to_string())
             }
             Err(std::sync::TryLockError::Poisoned(_)) => {
-                Err("worker evaluation lock poisoned".to_string())
+                Err("worker preparation lock poisoned".to_string())
             }
         }
     }

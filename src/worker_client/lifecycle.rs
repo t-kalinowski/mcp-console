@@ -178,8 +178,6 @@ impl Client {
             &mut environment,
             managed,
         )?;
-        drop(environment);
-        self.mark_evaluation_restarting()?;
         Ok(restart)
     }
 
@@ -312,6 +310,7 @@ impl Client {
     }
 
     fn begin_restart(&self, grace: Duration) -> Result<(ProcessStopHandles, Instant), String> {
+        let evaluation = self.evaluation()?;
         let mut lifecycle = self
             .0
             .lifecycle
@@ -332,10 +331,10 @@ impl Client {
             }
             LifecycleState::Ready => {}
         }
-        let restart = lifecycle.start_restart(grace);
-        drop(lifecycle);
-        self.mark_evaluation_restarting()?;
-        Ok(restart)
+        if let Some(active) = evaluation.as_ref() {
+            active.evaluation.begin_restart()?;
+        }
+        Ok(lifecycle.start_restart(grace))
     }
 
     fn commit_environment_and_begin_restart(
@@ -345,6 +344,7 @@ impl Client {
         environment: &mut super::environment::Environment,
         managed: crate::resolver::ManagedPython,
     ) -> Result<(ProcessStopHandles, Instant), String> {
+        let evaluation = self.evaluation()?;
         let mut lifecycle = self
             .0
             .lifecycle
@@ -363,21 +363,11 @@ impl Client {
             }
         }
         lifecycle.processes.resolver = None;
-        environment.python = Some(managed);
-        Ok(lifecycle.start_restart(grace))
-    }
-
-    fn mark_evaluation_restarting(&self) -> Result<(), String> {
-        if let Some(active) = self
-            .0
-            .evaluation
-            .lock()
-            .map_err(|_| "worker evaluation lock poisoned".to_string())?
-            .as_ref()
-        {
+        if let Some(active) = evaluation.as_ref() {
             active.evaluation.begin_restart()?;
         }
-        Ok(())
+        environment.python = Some(managed);
+        Ok(lifecycle.start_restart(grace))
     }
 
     fn finish_restart(&self) -> Result<(), String> {

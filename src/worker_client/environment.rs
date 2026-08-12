@@ -54,12 +54,13 @@ impl Client {
 
     fn prepare_blocking(&self, requirements: Requirements) -> Result<PrepareResult, String> {
         let generation = self.admit()?;
+        let _preparation = self.try_preparation()?;
         let environment = self
             .0
             .environment
             .as_ref()
             .ok_or_else(|| "requirements are unavailable with a custom worker".to_string())?;
-        let active_evaluation = self.try_evaluation()?;
+        let active_evaluation = self.evaluation()?.is_some();
         let mut environment = environment
             .lock()
             .map_err(|_| "worker environment lock poisoned".to_string())?;
@@ -78,7 +79,7 @@ impl Client {
         if python_candidate.is_none() && r_additions.is_subset(&current_r) {
             return Ok(PrepareResult::Prepared);
         }
-        if active_evaluation.is_some() {
+        if active_evaluation {
             return Err(
                 "worker is already evaluating a cell; poll it before preparing requirements"
                     .to_string(),
