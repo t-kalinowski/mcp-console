@@ -60,7 +60,7 @@ Two boundary details apply:
   A later `send` after restart may return those bytes, including alongside output from the replacement.
 
 The IR resolver receives R package references as process arguments and the Python resolver receives only a requirement manifest on standard input; neither receives submitted cells or `send` stdin.
-Both may use the network, write normal host caches, and execute package installation or build code outside the sandbox.
+Both may use the network, write normal host caches, and execute package installation or build code outside the sandbox; managed Python environment startup and the Matplotlib font-manager import also run there.
 IR currently accepts local package references.
 Installing them may run package-controlled hooks and build code with the resolver's host permissions; the server does not restrict those references.
 Runtime requests also supply the worker's current `UV_*` settings except `UV_OFFLINE`; the server removes its own `UV_*` settings before applying that exact set to the resolver.
@@ -90,6 +90,22 @@ Inside the sandbox, the worker takes ownership of the sideband, discovers `R_HOM
 Harp opens `R_HOME/lib/libR.dylib` by its absolute path, so the worker does not self-execute or set a dynamic-loader environment variable.
 When R requirements were prepared, the server prepends the validated IR library to inherited `R_LIBS` before this initialization.
 R then places that library first in `.libPaths()` while retaining its remaining user, site, and base libraries.
+
+For server-managed Python, the host resolver warms Matplotlib's local installed-font index before returning a resolved environment.
+Before replacing the inherited `MPLCONFIGDIR`, the worker resolves an existing `matplotlibrc` from `MATPLOTLIBRC`; otherwise it uses the inherited `MPLCONFIGDIR`, or `$HOME/.matplotlib` when `MPLCONFIGDIR` is unset or empty.
+It exposes the resolved regular file through `MATPLOTLIBRC`; a `matplotlibrc` in the working directory at Matplotlib import time retains Matplotlib's normal higher precedence.
+The sandbox permits reads of the resolved host file but not writes to it.
+The user cache directory is the inherited nonempty `MPLCONFIGDIR`, or `$HOME/.matplotlib` when `MPLCONFIGDIR` is unset or empty.
+After the existing managed-Python resolver selects an interpreter, it invokes that exact interpreter with isolated Python import settings and attempts to import `matplotlib.font_manager`; Matplotlib itself may reuse or create its versioned index in the user cache.
+Starting that environment and importing its font manager run environment startup hooks and selected package code outside the worker sandbox, within the resolver process group, so cancellation and atomic prepare or restart behavior are unchanged.
+The import is a best-effort cache warm: its exit status and output do not affect Python resolution.
+Before Python initializes, the worker creates its private `$TMPDIR/matplotlib` directory, links regular versioned font indexes from the inherited user directory into it, and sets `MPLCONFIGDIR` to the private directory.
+The sandbox permits reads through that link but denies writes to its host target; evaluated code can unlink or replace only its worker-private directory entry.
+After runtime Python resolution, the waiting worker rescans the user cache for new indexes; later worker generations scan it during startup.
+The server neither copies cache bytes nor grants the user cache directory as a writable sandbox path.
+Matplotlib configuration, styles, TeX state, lock files, and the broader XDG cache remain worker-private apart from the selected read-only `matplotlibrc`.
+Without a readable matching user index, Matplotlib discovers fonts in the worker-private directory normally.
+Caller-selected non-managed Python environments skip resolver-owned prewarming but can reuse an existing matching user index; custom workers receive neither behavior.
 
 The server launches the sandboxed worker with piped standard input, standard output, and standard error.
 Sideband frames carry control and managed output; interactive input bytes travel through the worker's fd 0, while the server drains fd 1 and fd 2 continuously.

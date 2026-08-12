@@ -83,7 +83,16 @@ Pyplot-managed figures are cell scoped, so one plot's drawing operations must be
 Figures closed before cell end and figures not registered with `pyplot` are not captured.
 Matplotlib rendering failures print a Python traceback as a normal language outcome; cell-end cleanup still closes all pyplot-managed figures and leaves the worker available.
 Unless an inherited value configures it, the worker sets Matplotlib's backend to Agg.
-Before Python initializes, it forces Matplotlib's configuration and XDG cache directories under the worker's private temporary directory so font discovery can write within the sandbox.
+Before Python initializes, a built-in worker resolves an existing user `matplotlibrc` from inherited `MATPLOTLIBRC`; otherwise it uses inherited `MPLCONFIGDIR`, or `$HOME/.matplotlib` when `MPLCONFIGDIR` is unset or empty, and exposes that regular file read-only through `MATPLOTLIBRC`.
+It then forces Matplotlib's writable configuration and XDG cache directories under the worker's private temporary directory so font discovery can write within the sandbox.
+After each server-managed environment resolves, the host resolver invokes that exact interpreter with `-I` and attempts to import `matplotlib.font_manager` before returning the environment.
+Matplotlib may reuse or create its versioned font index in the inherited nonempty `MPLCONFIGDIR`, or in `$HOME/.matplotlib` when `MPLCONFIGDIR` is unset or empty.
+Before replacing that setting, the worker retains the same user directory and links its regular versioned font indexes read-only into the worker's private Matplotlib directory; runtime resolution refreshes the links while the worker waits, and later generations link existing files at startup.
+The user directory is never writable in the sandbox, and the server does not copy, parse, validate, or publish cache bytes.
+The host resolver may create or replace user font indexes; the selected host `matplotlibrc` is read-only in the worker, while worker-created configuration, styles, TeX state, lock files, and the complete XDG cache remain worker-private.
+An absent or broken Matplotlib import, unavailable user directory, or unusable font index does not reject Python resolution; Matplotlib discovers fonts in the worker-private cache when needed.
+Caller-selected non-managed Python skips host prewarming, but a built-in worker can reuse a matching index already present in the inherited user directory.
+The resolver import executes the selected Matplotlib package outside the worker sandbox as part of managed Python preparation and remains under the resolver process-group lifecycle.
 Matplotlib remains optional, and capture inspects only modules already loaded by evaluated code.
 At worker startup, MCP Console sets `RETICULATE_REMAP_OUTPUT_STREAMS=1` once, before user R can initialize Python.
 Within the worker process, reticulate then routes Python text writes, including `print()`, `sys.stderr.write()`, and tracebacks, through the R console callback as sideband `output` frames.
@@ -95,7 +104,8 @@ An exec descendant that retains fd 1/2 creates fresh standard streams backed by 
 When inherited `RETICULATE_PYTHON` is absent or exactly `managed`, built-in server startup calls reticulate's internal uv environment resolver with its NumPy baseline outside the sandbox and retains the resulting interpreter and normalized manifest for every worker generation.
 Other inherited values, including an empty value, are preserved and skip that startup preflight; a later successful explicit preparation takes precedence over them.
 Custom workers skip resolution and reject R and Python requirement preparation.
-R and Python resolution may access the network, write normal host caches, and execute package installation or build code outside the sandbox, but requirement strings remain process-argument or JSON data rather than R source and no submitted cell is evaluated.
+R and Python resolution may access the network, write normal host caches, and execute package installation or build code outside the sandbox; managed Python environment startup and the Matplotlib font-manager import also run there.
+Requirement strings remain process-argument or JSON data rather than R source, and no submitted cell is evaluated by the resolver.
 Before initializing R, the worker forces `UV_OFFLINE=1`, overwriting any inherited value to match the sandbox's network denial.
 Reticulate reuses the server-resolved or caller-selected interpreter.
 For a server-managed worker, MCP Console seeds reticulate's requirement manifest and intercepts only its internal `uv_get_or_create_env` binding, without wrapping `py_require()`.
@@ -246,7 +256,7 @@ Begin as one Cargo package and split crates only when a real boundary emerges.
 - Keep the MCP adapter independent of interpreter implementation details.
 - Treat submitted R, Python, and SQL execution as shell-class capability and place safety at the worker-process boundary.
   Managed-Python startup and explicit R or Python preparation are host-bootstrap exceptions.
-  R requirements are IR command arguments and Python requirements use a JSON standard-input manifest; neither is evaluated as R source, though package installation and build code may execute outside the worker sandbox.
+  R requirements are IR command arguments and Python requirements use a JSON standard-input manifest; neither is evaluated as R source, though package installation, build code, managed Python startup, and the Matplotlib font-cache import may execute outside the worker sandbox.
 - Update this file when a PR changes the implemented surface or repository map.
 - Before every commit, run `scripts/format` and review its changes.
 - Run `scripts/check` before opening a PR.

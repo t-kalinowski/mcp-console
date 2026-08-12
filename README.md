@@ -59,12 +59,12 @@ Before the worker starts, the MCP client can prepare additive R and Python requi
 }
 ```
 
-Requirement resolution is host-code execution: package installation or build hooks run outside the worker sandbox.
-Use only trusted requirements; installing a local R package can execute package-controlled code from the referenced host path with the server's permissions.
+Requirement resolution is host-code execution: package installation or build hooks, managed Python environment startup, and Matplotlib cache warming run outside the worker sandbox.
+Use only trusted requirements and host environment settings; installing a local R package can execute package-controlled code from the referenced host path with the server's permissions.
 
 This `session` call resolves each complete initial requirement set outside the worker sandbox, using IR for R and reticulate with uv for Python, then returns `[prepared]`.
 When both languages are supplied, it retains the new configuration only after both resolutions succeed.
-It does not load the packages or start the worker.
+It does not load packages into or start the worker.
 R preparation requires an executable `ir` on `PATH`.
 The server runs IR with the same Rscript selection as the worker and prepends the returned library to the worker's inherited `R_LIBS`, leaving its other R libraries available.
 Exact repeated requirements are idempotent.
@@ -121,7 +121,14 @@ At the end of each Python cell, including after a Python error, every open figur
 These figures are cell scoped, so one plot's drawing operations must be submitted together.
 Figures closed before cell end and figures not registered with `pyplot` are not captured.
 Unless an inherited setting selects otherwise, the worker uses Matplotlib's noninteractive Agg backend.
-It forces Matplotlib's configuration and XDG cache directories under the worker's private temporary directory so font discovery can write within the sandbox.
+Built-in workers inherit an existing user `matplotlibrc` as a read-only file while keeping Matplotlib's writable configuration and XDG cache directories under the worker's private temporary directory.
+Evaluated code can use the user's settings but cannot modify that host file through the sandbox.
+After each server-managed Python environment resolves, the host resolver starts its exact interpreter and attempts to import `matplotlib.font_manager`.
+Matplotlib may reuse or create its local `fontlist-v*.json` index in the user's inherited nonempty `MPLCONFIGDIR`, or in `$HOME/.matplotlib` when that setting is unset or empty; the font scan itself does not require network access.
+Each worker links matching indexes from that user directory read-only into its private Matplotlib directory, so restarts reuse them without copying them or granting evaluated code persistent writes.
+If the import fails or no usable index is available, Python resolution still succeeds and the worker performs private font discovery when needed.
+The resolver import executes the selected Matplotlib package outside the worker sandbox as part of managed Python preparation.
+Caller-selected non-managed Python environments do not receive host prewarming, but can reuse a matching user index that already exists.
 Reticulate routes Python text written through `sys.stdout` and `sys.stderr`, including tracebacks, through the same sideband console output path as R.
 Writes through `sys.stdout.buffer`, `sys.stderr.buffer`, or fd 1/2 directly remain on the captured standard streams.
 After a Python cell calls `os.fork()`, reticulate restores the child's original fd-backed text streams after its sideband is disabled, so its ordinary stdout and stderr are captured too.

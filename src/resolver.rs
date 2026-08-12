@@ -77,6 +77,12 @@ base::local({
     !base::is.na(python),
     base::nzchar(python)
   )
+  ignored_status <- base::system2(
+    python,
+    c("-I", "-c", base::shQuote("import matplotlib.font_manager")),
+    stdout = FALSE,
+    stderr = FALSE
+  )
   base::cat(python, "\n", sep = "")
 })
 "#;
