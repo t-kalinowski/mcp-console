@@ -404,7 +404,7 @@ def test_restart_while_r_waits_for_input(binary: Path) -> Transcript:
     client.session(action="restart")
     output = last_tool_text(client)
     assert output == (
-        '[1] ""\n[active evaluation stopped]\n'
+        '[1] ""\n[active evaluation stopped by session restart request]\n'
         "[worker stopped: in-memory state lost]\n"
         "[starting new worker]\n"
         "[idle]"

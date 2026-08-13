@@ -25,6 +25,18 @@ result:
   isError: true
 ---
 id: 5
+session:
+  action: prepare
+  requirements:
+    python:
+      - py-yaml12
+result:
+  content:
+    - type: text
+      text: "[requirements not prepared: worker is starting]"
+  isError: true
+---
+id: 6
 send:
   timeout_ms: 3000
 result:

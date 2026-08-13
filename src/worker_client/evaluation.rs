@@ -1,7 +1,10 @@
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
 
-use super::output::{OutputTape, Response, ResponseAcknowledgment, SendFailure};
+use super::output::{
+    OutputTape, Response, ResponseAcknowledgment, SendFailure, project_completed,
+    project_replacement_ready,
+};
 
 const INPUT_REQUEST_GRACE: Duration = Duration::from_millis(10);
 
@@ -15,6 +18,8 @@ pub(super) struct Evaluation {
 
 struct EvaluationState {
     phase: EvaluationPhase,
+    /// Whether a waiter already drained the response for a terminal phase.
+    completion_collected: bool,
     input_report_at: Option<Instant>,
     /// Whether one `send` currently owns the right to drain this evaluation's response.
     waiting: bool,
@@ -56,7 +61,8 @@ enum EvaluationStatus {
 
 pub(super) struct RestartReservation {
     evaluation: Arc<Evaluation>,
-    pub(super) unfinished: bool,
+    unfinished: bool,
+    completion: Option<CompletionKind>,
     pub(super) waiting: bool,
 }
 
@@ -79,6 +85,7 @@ impl Evaluation {
         Self {
             state: Mutex::new(EvaluationState {
                 phase: EvaluationPhase::Evaluating,
+                completion_collected: false,
                 input_report_at: None,
                 waiting: false,
                 restart_reserved: false,
@@ -119,10 +126,18 @@ impl Evaluation {
             .map_err(|_| "worker evaluation state lock poisoned".to_string())?;
         state.restart_reserved = true;
         let unfinished = !matches!(state.phase, EvaluationPhase::Complete(_));
+        let completion = match state.phase {
+            EvaluationPhase::Complete(completion) if !state.completion_collected => {
+                Some(completion)
+            }
+            EvaluationPhase::Complete(_) => None,
+            EvaluationPhase::Evaluating | EvaluationPhase::ReplacementStarting => None,
+        };
         let waiting = state.waiting;
         Ok(RestartReservation {
             evaluation: self.clone(),
             unfinished,
+            completion,
             waiting,
         })
     }
@@ -168,7 +183,7 @@ impl Evaluation {
 
     #[cfg(target_os = "macos")]
     pub(super) fn output(&self, output: String) -> Result<(), String> {
-        self.output.push_text(output);
+        self.output.push_console_text(output);
         Ok(())
     }
 
@@ -259,6 +274,7 @@ impl Evaluation {
             self.output.push_failure(failure);
         }
         state.phase = EvaluationPhase::Complete(completion);
+        state.completion_collected = false;
         self.changed.notify_one();
     }
 
@@ -332,11 +348,13 @@ impl Evaluation {
         match state.phase {
             EvaluationPhase::Complete(CompletionKind::Cell)
             | EvaluationPhase::Complete(CompletionKind::ReplacementFailed) => {
+                state.completion_collected = true;
                 return Ok(EvaluationStatus::Report(EvaluationWait::Completed(
                     self.output.take(),
                 )));
             }
             EvaluationPhase::Complete(CompletionKind::ReplacementReady) => {
+                state.completion_collected = true;
                 return Ok(EvaluationStatus::Report(EvaluationWait::ReplacementReady(
                     self.output.take(),
                 )));
@@ -367,6 +385,20 @@ impl Evaluation {
 }
 
 impl RestartReservation {
+    pub(super) fn unfinished(&self) -> bool {
+        self.unfinished
+    }
+
+    pub(super) fn project_response(&self, response: Response) -> Response {
+        match self.completion {
+            Some(CompletionKind::Cell | CompletionKind::ReplacementFailed) => {
+                project_completed(response)
+            }
+            Some(CompletionKind::ReplacementReady) => project_replacement_ready(response),
+            None => response,
+        }
+    }
+
     pub(super) fn deliver(self, mut response: Response) -> Result<RestartDelivery, String> {
         let mut state = self
             .evaluation

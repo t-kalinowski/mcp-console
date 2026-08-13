@@ -3,15 +3,13 @@
 ---
 id: 3
 send:
-  r: wait for stdin close
-  timeout_ms: 0
+  r: echo
+  timeout_ms: 30000
 result:
   content:
     - type: text
-      text: |-
-
-        [running]
-  isError: false
+      text: "[stopped by session restart request before evaluation finished]"
+  isError: true
 ---
 id: 4
 session:
@@ -20,10 +18,7 @@ result:
   content:
     - type: text
       text: |-
-        zod stdin closed
-        <large output>
         [active evaluation stopped by session restart request]
-        [worker stopped: in-memory state lost]
         [starting new worker]
         [idle]
   isError: false

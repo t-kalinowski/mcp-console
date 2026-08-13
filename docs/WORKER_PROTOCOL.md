@@ -63,9 +63,9 @@ These boundary details apply:
   Sideband failures from the active generation remain infrastructure errors.
 - Standard-output and standard-error bytes collected from the old worker are retained through retirement.
 - When a `send` is waiting on an unfinished evaluation, that call owns the old worker's text and images.
-  Restart releases it only after retirement with `[stopped by session restart request before evaluation finished]` and `[worker stopped: in-memory state lost]`.
+  Restart releases it only after retirement with `[stopped by session restart request before evaluation finished]` and, when it retired a ready worker, `[worker stopped: in-memory state lost]`.
   The server finishes writing that reply before starting the replacement or returning the restart response.
-  The restart response reports `[active evaluation stopped]` and its own worker lifecycle facts without repeating that worker output.
+  The restart response reports `[active evaluation stopped by session restart request]` and its own worker lifecycle facts without repeating that worker output.
 - Without a waiting `send`, restart returns retained old-worker output itself.
 
 The IR resolver receives R package references as process arguments and the Python resolver receives only a requirement manifest on standard input; neither receives submitted cells or `send` stdin.
@@ -283,9 +283,9 @@ The server adds `[starting new worker]\n` before each announced replacement atte
 The notice is recorded before launch, so startup output and startup errors follow it.
 A failed replacement remains stopped, and each retry emits a new starting notice.
 Initial lazy startup and its retries before any worker has reached `ready` remain silent because no established worker state was lost.
-Without a waiting `send`, an explicit restart reports retained old-worker output, `[active evaluation stopped]` when it interrupts an unfinished cell, the stopped notice when a worker existed, the starting notice, replacement startup output, and `[idle]` in its `session` response.
-If an unfinished evaluation has a waiting `send`, restart retires the worker and gives that response the old-worker tape content, its restart-cancellation notice, and its worker-stopped notice.
-The restart call waits for that response to be written, then reports `[active evaluation stopped]`, its own worker-stopped and starting notices, replacement startup output, and `[idle]`.
+Without a waiting `send`, an explicit restart reports retained old-worker output, `[active evaluation stopped by session restart request]` when it interrupts an unfinished cell, the stopped notice when it retires a ready worker, the starting notice, replacement startup output, and `[idle]` in its `session` response.
+If an unfinished evaluation has a waiting `send`, restart gives that response the old-worker tape content, its restart-cancellation notice, and a worker-stopped notice when restart retired a ready worker.
+The restart call waits for that response to be written, then reports `[active evaluation stopped by session restart request]`, its own worker-stopped notice when it retired a ready worker, the starting notice, replacement startup output, and `[idle]`.
 
 An ordinary `[running]`, `[stdin needed]`, or idle-poll `[idle]` response drains all pending tape content before appending its state banner.
 Each ordinary state banner has a newline before it, including when no worker or evaluation output precedes it.

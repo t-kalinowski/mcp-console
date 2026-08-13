@@ -21,7 +21,7 @@ pub(crate) use environment::{PrepareResult, Requirements};
 use evaluation::{Evaluation, EvaluationWait};
 use lifecycle::{LifecycleControl, WorkerGeneration};
 #[cfg(target_os = "macos")]
-use output::OutputTapeStream;
+use output::DirectOutput;
 pub(crate) use output::{Content, Response, ResponseDelivery};
 use output::{OutputTape, SendFailure, SendResponse};
 
@@ -417,9 +417,7 @@ impl Client {
             Err(failure) => failure,
         };
         match self.stop_failed_worker(&mut worker, &generation) {
-            Ok(lifecycle::FailedWorkerStop::Stopped) => {
-                evaluation.start_replacement(failure.worker_stopped());
-            }
+            Ok(lifecycle::FailedWorkerStop::Stopped) => {}
             Ok(lifecycle::FailedWorkerStop::RestartOwnsWorker) => return Err(failure),
             Err(stop_error) => {
                 let mut failure = failure;
@@ -430,6 +428,8 @@ impl Client {
             }
         }
 
+        let _replacement_startup = self.0.preparation.blocking_read();
+        evaluation.start_replacement(failure.worker_stopped());
         let replacement = self
             .start_worker(&mut worker, true, |stop_handle| {
                 self.register_stop_handle(&generation, stop_handle)

@@ -189,8 +189,7 @@ impl Client {
         if matches!(retirement, WorkerRetirement::NeverStarted) {
             *worker = WorkerState::Stopped;
         }
-        let had_worker =
-            !matches!(retirement, WorkerRetirement::NeverStarted) || evaluation.is_some();
+        let retired_worker = matches!(retirement, WorkerRetirement::Stopped);
         let old_output = self.0.output.take();
         drop(worker);
 
@@ -198,13 +197,14 @@ impl Client {
         let mut wait_for_send = None;
         let mut interrupted = false;
         if let Some(evaluation) = evaluation {
-            let unfinished = evaluation.unfinished;
+            let unfinished = evaluation.unfinished();
             interrupted = unfinished;
+            let old_output = evaluation.project_response(old_output);
             if evaluation.waiting {
                 let mut send_output = old_output;
                 if unfinished {
                     send_output.push_notice(super::output::EVALUATION_STOPPED_BY_RESTART_NOTICE);
-                    if had_worker {
+                    if retired_worker {
                         send_output.push_notice(super::output::WORKER_STOPPED_NOTICE);
                     }
                     send_output.mark_error();
@@ -229,7 +229,7 @@ impl Client {
         if interrupted {
             response.push_notice(super::output::ACTIVE_EVALUATION_STOPPED_NOTICE);
         }
-        if had_worker {
+        if retired_worker {
             response.push_notice(super::output::WORKER_STOPPED_NOTICE);
         }
 

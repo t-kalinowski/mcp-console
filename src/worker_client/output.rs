@@ -7,7 +7,8 @@ pub(super) const WORKER_STOPPED_NOTICE: &str = "worker stopped: in-memory state 
 pub(super) const WORKER_IDLE_NOTICE: &str = "idle";
 pub(super) const EVALUATION_STOPPED_BY_RESTART_NOTICE: &str =
     "stopped by session restart request before evaluation finished";
-pub(super) const ACTIVE_EVALUATION_STOPPED_NOTICE: &str = "active evaluation stopped";
+pub(super) const ACTIVE_EVALUATION_STOPPED_NOTICE: &str =
+    "active evaluation stopped by session restart request";
 
 /// Stores pending session output in publication order until one response drains it.
 #[derive(Clone)]
@@ -15,20 +16,30 @@ pub(super) struct OutputTape(Arc<Mutex<OutputTapeState>>);
 
 #[derive(Default)]
 struct OutputTapeState {
-    streams: Vec<Option<Vec<u8>>>,
+    direct_stdout: Vec<u8>,
+    direct_stderr: Vec<u8>,
     events: Vec<OutputEvent>,
 }
 
+/// One publication from a directly captured worker file descriptor.
+///
+/// These paths capture output that bypasses worker `output` frames, including
+/// Python `.buffer` writes, native fd writes, forked or execed descendants, and
+/// custom workers.
+enum DirectOutputEvent {
+    Bytes(Vec<u8>),
+    Closed,
+}
+
 enum OutputEvent {
-    /// Raw worker stdout or stderr bytes, decoded only when the tape is drained.
-    /// Incomplete UTF-8 therefore remains buffered independently for each pipe.
-    PipeBytes { stream: usize, bytes: Vec<u8> },
-    /// Reader EOF or cancellation, which flushes that pipe's incomplete UTF-8 suffix.
-    PipeClosed { stream: usize },
+    /// Raw bytes or closure from the worker's directly captured stdout (fd 1).
+    DirectStdout(DirectOutputEvent),
+    /// Raw bytes or closure from the worker's directly captured stderr (fd 2).
+    DirectStderr(DirectOutputEvent),
     /// Text from a worker `output` sideband frame.
-    SidebandText(String),
+    WorkerConsoleText(String),
     /// An image from a worker `image` sideband frame, already persisted when enabled.
-    SidebandImage {
+    WorkerImage {
         data: String,
         mime_type: String,
         artifact: Option<crate::transcript::Artifact>,
@@ -46,9 +57,16 @@ enum OutputEvent {
 }
 
 #[cfg(target_os = "macos")]
-pub(super) struct OutputTapeStream {
+pub(super) struct DirectOutput {
     output: OutputTape,
-    stream: usize,
+    stream: DirectOutputStream,
+}
+
+#[cfg(target_os = "macos")]
+#[derive(Clone, Copy)]
+enum DirectOutputStream {
+    Stdout,
+    Stderr,
 }
 
 #[derive(Default)]
@@ -249,20 +267,27 @@ impl OutputTape {
     }
 
     #[cfg(target_os = "macos")]
-    pub(super) fn stream(&self) -> OutputTapeStream {
-        let mut state = self.lock();
-        let stream = state.streams.len();
-        state.streams.push(Some(Vec::new()));
-        OutputTapeStream {
+    pub(super) fn direct_stdout(&self) -> DirectOutput {
+        DirectOutput {
             output: self.clone(),
-            stream,
+            stream: DirectOutputStream::Stdout,
         }
     }
 
-    pub(super) fn push_text(&self, text: impl Into<String>) {
+    #[cfg(target_os = "macos")]
+    pub(super) fn direct_stderr(&self) -> DirectOutput {
+        DirectOutput {
+            output: self.clone(),
+            stream: DirectOutputStream::Stderr,
+        }
+    }
+
+    pub(super) fn push_console_text(&self, text: impl Into<String>) {
         let text = text.into();
         if !text.is_empty() {
-            self.lock().events.push(OutputEvent::SidebandText(text));
+            self.lock()
+                .events
+                .push(OutputEvent::WorkerConsoleText(text));
         }
     }
 
@@ -272,7 +297,7 @@ impl OutputTape {
         mime_type: String,
         artifact: Option<crate::transcript::Artifact>,
     ) {
-        self.lock().events.push(OutputEvent::SidebandImage {
+        self.lock().events.push(OutputEvent::WorkerImage {
             data,
             mime_type,
             artifact,
@@ -298,24 +323,14 @@ impl OutputTape {
 
         for event in events {
             match event {
-                OutputEvent::PipeBytes { stream, bytes } => {
-                    let pending = state.streams[stream]
-                        .as_mut()
-                        .expect("output tape stream should be open");
-                    pending.extend_from_slice(&bytes);
-                    let complete = complete_utf8_prefix(pending);
-                    let incomplete = pending.split_off(complete);
-                    let complete = std::mem::replace(pending, incomplete);
-                    output.push_text(String::from_utf8_lossy(&complete));
+                OutputEvent::DirectStdout(event) => {
+                    append_direct_output(&mut output, &mut state.direct_stdout, event);
                 }
-                OutputEvent::PipeClosed { stream } => {
-                    let pending = state.streams[stream]
-                        .take()
-                        .expect("output tape stream should be open");
-                    output.push_text(String::from_utf8_lossy(&pending));
+                OutputEvent::DirectStderr(event) => {
+                    append_direct_output(&mut output, &mut state.direct_stderr, event);
                 }
-                OutputEvent::SidebandText(text) => output.push_text(text),
-                OutputEvent::SidebandImage {
+                OutputEvent::WorkerConsoleText(text) => output.push_text(text),
+                OutputEvent::WorkerImage {
                     data,
                     mime_type,
                     artifact,
@@ -354,29 +369,55 @@ impl OutputTape {
 }
 
 #[cfg(target_os = "macos")]
-impl OutputTapeStream {
+impl DirectOutput {
     pub(super) fn push(&self, bytes: &[u8]) {
-        self.output.lock().events.push(OutputEvent::PipeBytes {
-            stream: self.stream,
-            bytes: bytes.to_vec(),
-        });
+        self.push_event(DirectOutputEvent::Bytes(bytes.to_vec()));
     }
 
     pub(super) fn close(&self) {
-        self.output.lock().events.push(OutputEvent::PipeClosed {
-            stream: self.stream,
-        });
+        self.push_event(DirectOutputEvent::Closed);
     }
+
+    fn push_event(&self, event: DirectOutputEvent) {
+        let event = match self.stream {
+            DirectOutputStream::Stdout => OutputEvent::DirectStdout(event),
+            DirectOutputStream::Stderr => OutputEvent::DirectStderr(event),
+        };
+        self.output.lock().events.push(event);
+    }
+}
+
+fn append_direct_output(output: &mut Response, pending: &mut Vec<u8>, event: DirectOutputEvent) {
+    match event {
+        DirectOutputEvent::Bytes(bytes) => {
+            pending.extend_from_slice(&bytes);
+            let complete = complete_utf8_prefix(pending);
+            let incomplete = pending.split_off(complete);
+            let complete = std::mem::replace(pending, incomplete);
+            output.push_text(String::from_utf8_lossy(&complete));
+        }
+        DirectOutputEvent::Closed => {
+            output.push_text(String::from_utf8_lossy(pending));
+            pending.clear();
+        }
+    }
+}
+
+pub(super) fn project_completed(mut output: Response) -> Response {
+    if output.is_empty() {
+        output.push_notice("done");
+    }
+    output
+}
+
+pub(super) fn project_replacement_ready(mut output: Response) -> Response {
+    output.push_notice(WORKER_IDLE_NOTICE);
+    output
 }
 
 pub(super) fn render_response(response: SendResponse) -> Response {
     match response {
-        SendResponse::Completed(mut output) => {
-            if output.is_empty() {
-                output.push_notice("done");
-            }
-            output
-        }
+        SendResponse::Completed(output) => project_completed(output),
         SendResponse::InputRequested(mut output) => {
             append_input_banner(&mut output);
             output
@@ -395,10 +436,7 @@ pub(super) fn render_response(response: SendResponse) -> Response {
             output.push_notice(WORKER_STARTING_STATE);
             output
         }
-        SendResponse::ReplacementReady(mut output) => {
-            output.push_notice(WORKER_IDLE_NOTICE);
-            output
-        }
+        SendResponse::ReplacementReady(output) => project_replacement_ready(output),
         SendResponse::Restarted(output) => output,
     }
 }
