@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 
-use super::lifecycle::{GenerationStatus, LifecycleState, WorkerGeneration};
+use super::lifecycle::{FailedWorkerStop, GenerationStatus, LifecycleState, WorkerGeneration};
 use super::{Client, WorkerState};
 
 pub(super) struct Environment {
@@ -88,7 +88,7 @@ impl Client {
         let worker = match self.0.worker.try_lock() {
             Ok(worker) => worker,
             Err(std::sync::TryLockError::WouldBlock) => {
-                return Err("worker is busy".to_string());
+                return Err("[requirements not prepared: worker is starting]".to_string());
             }
             Err(std::sync::TryLockError::Poisoned(_)) => {
                 return Err("worker lock poisoned".to_string());
@@ -177,14 +177,14 @@ impl Client {
             GenerationStatus::Changed => Err("Python preparation cancelled by restart".to_string()),
             GenerationStatus::CurrentReady => {
                 if infrastructure_failure {
-                    return match self.retire_failed_worker(&mut worker, generation)? {
-                        true => {
+                    return match self.stop_failed_worker(&mut worker, generation)? {
+                        FailedWorkerStop::Stopped => {
                             self.0.output.push_failure(
                                 super::output::SendFailure::from(error).worker_stopped(),
                             );
                             Ok(PrepareResult::WorkerStopped(self.0.output.take()))
                         }
-                        false => Err(error),
+                        FailedWorkerStop::RestartOwnsWorker => Err(error),
                     };
                 }
                 Err(error)

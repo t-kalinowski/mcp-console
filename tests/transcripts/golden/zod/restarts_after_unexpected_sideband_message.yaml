@@ -20,6 +20,8 @@ result:
         zod output before protocol failure
         [worker sent an unexpected ready message]
         [worker stopped: in-memory state lost]
+        [starting new worker]
+        [idle]
   isError: true
 ---
 id: 5
@@ -28,7 +30,6 @@ send:
 result:
   content:
     - type: text
-      text: |
-        [starting new worker]
+      text: "[done]"
   isError: false
 ...

@@ -7,7 +7,7 @@ send:
 result:
   content:
     - type: text
-      text: "worker sideband read failed: worker sideband closed"
+      text: "[worker sideband read failed: worker sideband closed]"
   isError: true
 ---
 id: 4

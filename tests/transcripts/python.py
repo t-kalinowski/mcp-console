@@ -246,7 +246,7 @@ def test_restart_loses_state_and_retains_python_requirements(
 
     client.session(action="restart")
     assert last_tool_text(client) == (
-        "[worker stopped: in-memory state lost]\n[starting new worker]\n[restarted]"
+        "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
     )
 
     # fmt: python
@@ -302,7 +302,7 @@ def test_prepares_python_requirements_after_worker_startup(binary: Path) -> Tran
 
     client.session(action="restart")
     assert last_tool_text(client) == (
-        "[worker stopped: in-memory state lost]\n[starting new worker]\n[restarted]"
+        "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
     )
     # fmt: python
     python = code("""
@@ -398,7 +398,7 @@ def test_layers_python_requirements_declared_by_r_packages(
 
         client.session(action="restart")
         assert last_tool_text(client) == (
-            "[worker stopped: in-memory state lost]\n[starting new worker]\n[restarted]"
+            "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
         )
 
         # fmt: python
@@ -459,7 +459,9 @@ def test_resolves_package_requirements_before_python_initializes(
         assert result["isError"] is True
         assert result["content"][0]["text"] == (
             "[worker sideband read failed: worker sideband closed]\n"
-            "[worker stopped: in-memory state lost]"
+            "[worker stopped: in-memory state lost]\n"
+            "[starting new worker]\n"
+            "[idle]"
         )
 
         # fmt: r
@@ -468,7 +470,7 @@ def test_resolves_package_requirements_before_python_initializes(
             """)
         client.send(r=r)
         output = last_tool_text(client)
-        assert output == "[starting new worker]\n[1] TRUE\n", repr(output)
+        assert output == "[1] TRUE\n", repr(output)
 
         # fmt: python
         python = code("""
@@ -498,10 +500,12 @@ def test_does_not_checkpoint_python_requirements_from_failed_cell(
     assert result["isError"] is True
     assert result["content"][0]["text"] == (
         "[worker sideband read failed: worker sideband closed]\n"
-        "[worker stopped: in-memory state lost]"
+        "[worker stopped: in-memory state lost]\n"
+        "[starting new worker]\n"
+        "[idle]"
     )
 
-    # Start the replacement and confirm that the failed cell did not advance its manifest.
+    # Confirm that the failed cell did not advance the replacement's manifest.
     # fmt: r
     r = code(r"""
         worker_pid <- Sys.getpid()
@@ -509,7 +513,7 @@ def test_does_not_checkpoint_python_requirements_from_failed_cell(
         """)
     client.send(r=r)
     output = last_tool_text(client)
-    assert output == "[starting new worker]\n[1] FALSE\n", repr(output)
+    assert output == "[1] FALSE\n", repr(output)
 
     client.session(
         action="prepare",
@@ -654,10 +658,13 @@ def test_restart_cancels_live_python_preparation(binary: Path) -> Transcript:
     watchdog.join()
     assert not forced_release.is_set(), "another tool call waited for live preparation"
     assert poll["result"] == {
-        "content": [{"type": "text", "text": "session is preparing requirements"}],
+        "content": [{"type": "text", "text": "[session is preparing requirements]"}],
         "isError": True,
     }, poll
-    assert second_prepare["result"] == poll["result"], second_prepare
+    assert second_prepare["result"] == {
+        "content": [{"type": "text", "text": "session is preparing requirements"}],
+        "isError": True,
+    }, second_prepare
 
     restart = client._start_session(action="restart")
     client._receive_many([preparation, restart])
@@ -676,9 +683,7 @@ def test_restart_cancels_live_python_preparation(binary: Path) -> Transcript:
         {
             "type": "text",
             "text": (
-                "[worker stopped: in-memory state lost]\n"
-                "[starting new worker]\n"
-                "[restarted]"
+                "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
             ),
         }
     ], restart
@@ -1129,7 +1134,7 @@ def test_returns_matplotlib_plots(binary: Path) -> Transcript:
 
         client.session(action="restart")
         assert last_tool_text(client) == (
-            "[worker stopped: in-memory state lost]\n[starting new worker]\n[restarted]"
+            "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
         )
         # fmt: python
         python = code("""
@@ -1501,7 +1506,9 @@ def test_restarts_after_python_bridge_failure(binary: Path) -> Transcript:
     )
     worker_failure = (
         "[worker sideband read failed: worker sideband closed]\n"
-        "[worker stopped: in-memory state lost]"
+        "[worker stopped: in-memory state lost]\n"
+        "[starting new worker]\n"
+        "[idle]"
     )
     output = result["content"][0]["text"]
     expected = {
@@ -1511,7 +1518,7 @@ def test_restarts_after_python_bridge_failure(binary: Path) -> Transcript:
     assert output in expected, output
     result["content"][0]["text"] = bridge_failure + python_failure + worker_failure
     client.send(r='exists("python_worker_marker", inherits = FALSE)')
-    assert last_tool_text(client) == "[starting new worker]\n[1] FALSE\n"
+    assert last_tool_text(client) == "[1] FALSE\n"
     client.send(python="6 * 7")
     assert last_tool_text(client) == "42\n"
     return client._finish()

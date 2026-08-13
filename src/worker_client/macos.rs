@@ -110,8 +110,8 @@ impl WorkerRuntime {
                 )),
             };
         }
-        let stdout = start_output_reader(stdout, output.stream(), stdout_cancel);
-        let stderr = start_output_reader(stderr, output.stream(), stderr_cancel);
+        let stdout = start_output_reader(stdout, output.direct_stdout(), stdout_cancel);
+        let stderr = start_output_reader(stderr, output.direct_stderr(), stderr_cancel);
         let child = Arc::new(Mutex::new(child));
         let (stdin, stdin_thread) = start_stdin_writer(stdin, child.clone(), stdin_cancel);
         let process = WorkerProcess {
@@ -303,7 +303,7 @@ impl Worker {
 
 fn start_output_reader(
     stream: impl Read + AsRawFd + Send + 'static,
-    output: super::OutputTapeStream,
+    output: super::DirectOutput,
     (cancelled, cancel): (std::io::PipeReader, std::io::PipeWriter),
 ) -> WorkerIoThread {
     let thread = thread::spawn(move || {
@@ -377,7 +377,7 @@ fn write_worker_stdin(
 
 fn drain_buffered_output(
     stream: &mut (impl Read + AsRawFd),
-    output: &super::OutputTapeStream,
+    output: &super::DirectOutput,
     buffer: &mut [u8],
 ) {
     let mut remaining: libc::c_int = 0;

@@ -104,9 +104,10 @@ result:
               - "null"
           timeout_ms:
             description: |-
-              Maximum time this call waits for an evaluation. On expiry, the call returns available output
-              followed by `[running]` without stopping the computation. Poll by calling `send` again without
-              `r`, `python`, `sql`, or `stdin`.
+              Maximum time this call waits for an evaluation or one automatic worker replacement attempt.
+              On expiry, the call returns available output followed by the current state, such as
+              `[running]` or `[worker starting]`, without stopping the computation or startup. Poll by
+              calling `send` again without `r`, `python`, `sql`, or `stdin`.
             type: integer
             format: uint64
             minimum: 0
@@ -147,9 +148,11 @@ result:
             description: |-
               Additive packages to make available. `prepare` requires at least one R or Python entry.
               `restart` accepts Python entries only; omit `requirements` to restart unchanged. Requirements
-              persist across restart but do not import or attach packages. Resolution runs outside the worker
-              sandbox and may download packages or execute installation or build code on the host; use only
-              trusted requirements.
+              persist across restart but do not import or attach packages. After an automatic replacement
+              attempt fails, a later `prepare` with new additions returns `[restart required]`. Resolution
+              runs outside the worker sandbox and may download packages or execute installation or build
+              code on the host. Managed Python startup and Matplotlib cache warming also run on the host
+              and may execute selected code; use only trusted requirements.
             type:
               - object
               - "null"

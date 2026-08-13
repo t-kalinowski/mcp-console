@@ -12,6 +12,7 @@ mod r_graphics;
 mod resolver;
 mod sandbox;
 mod server;
+mod server_transport;
 #[cfg(target_os = "macos")]
 mod sideband;
 #[cfg(target_os = "macos")]

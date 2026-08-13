@@ -34,7 +34,9 @@ An existing journal may therefore end with the last successfully flushed event.
 Submitted source, stdin, and tool-result output are recorded without redaction.
 Complete evaluation-output spools and the generated Quarto projection described in the design sketches are not yet implemented.
 Supplying exactly one of `r`, `python`, or `sql` evaluates one complete code cell and waits up to the optional `timeout_ms`, which defaults to 60 seconds.
-When that wait expires, the call drains output produced so far, appends the newline-prefixed banner `\n[running]`, and leaves the computation running; call `send` without a code field to poll again.
+When that wait expires during evaluation, the call drains output produced so far, appends the newline-prefixed banner `\n[running]`, and leaves the computation running; call `send` without a code field to poll again.
+If an established worker fails, the same call uses its remaining wait for one automatic replacement attempt.
+When that wait expires during replacement startup, the response ends with `[worker starting]`; later polls report the same state until the worker reports ready, then return startup output followed by `[idle]`.
 A call may also supply exact standard-input text with a code cell, during an evaluation, or while the worker is idle:
 
 ```json
@@ -78,6 +80,7 @@ The server returns `[prepared]` only after accepting the checkpoint; failure lea
 Exact repeats are idempotent.
 
 Preparation during an evaluation is an error.
+Preparation that overlaps worker startup returns `[requirements not prepared: worker is starting]` without resolving the additions or changing the retained requirements, R library, or Python manifest.
 A call with a new R requirement after startup returns `[restart required]` and applies none of that call's additions.
 No session action can add a new R requirement after startup; start a fresh `mcp-console serve` process and prepare it before its worker starts.
 Caller-selected Python environments and custom workers cannot use managed live preparation.
@@ -94,18 +97,23 @@ The client can explicitly replace the worker, retain the prepared R library, and
 The client can omit `requirements` to retain the current Python checkpoint unchanged.
 When requirements are supplied, the server resolves the complete merged candidate before stopping the current worker.
 A resolution failure leaves the current worker, its in-memory state, and its environment unchanged.
-Restart returns `[restarted]` after the replacement reports ready.
+Restart returns `[idle]` after the replacement reports ready.
 It loses all in-memory R, Python, SQL, debugger, and unread-stdin state.
 The implicit session exists for the server lifetime, so restart starts its first worker if none exists yet.
 The server closes worker stdin and sends the sideband shutdown message, then force-stops the worker process group and reaps the direct sandbox process if that process has not exited after one second.
 It waits for the active sideband operation to end, cancels the worker's stdin writer and standard-stream readers, and joins them before reporting that the worker stopped or launching a replacement.
 Code and idle stdin remain associated with the worker that admitted them and cannot run in the replacement.
-The restart response includes retained output from the old worker, `[worker stopped: in-memory state lost]` when a worker existed, `[starting new worker]`, startup output, and finally `[restarted]`, in that order.
+Without a waiting `send`, the restart response includes retained output from the old worker, `[active evaluation stopped by session restart request]` when restart interrupts an unfinished cell, `[worker stopped: in-memory state lost]` when restart retires a ready worker, `[starting new worker]`, startup output, and finally `[idle]`, in that order.
+If a `send` is waiting on the interrupted cell, that call receives the old worker's text and images through retirement, followed by `[stopped by session restart request before evaluation finished]` and, when restart retires a ready worker, `[worker stopped: in-memory state lost]`.
+The server writes that `send` reply before starting the replacement or returning the restart response.
+The restart response contains `[active evaluation stopped by session restart request]`, its own stopped notice when it retires a ready worker, `[starting new worker]`, replacement startup output, and `[idle]` without repeating the old worker's output.
 On macOS, the default managed-Python preflight happens during `serve` startup when required; a successful `prepare` replaces that initial selection before the first nonempty stdin submission or evaluation lazily starts the sandboxed embedded R worker.
 Later calls reuse the same global R state, reticulate Python interpreter, and in-memory DuckDB catalog.
 An infrastructure or protocol failure stops that worker and discards its in-memory R, Python, and SQL state.
-The failure response includes retained worker output, the specific bracketed error, and `[worker stopped: in-memory state lost]`.
-The next replacement attempt emits `[starting new worker]` before launch, so its startup output or startup error follows that notice.
+The failed `send` includes retained worker output, the specific bracketed error, and `[worker stopped: in-memory state lost]`, then emits `[starting new worker]` and makes one replacement attempt within the same deadline.
+If the replacement reports ready in time, startup output and `[idle]` complete that error response.
+If it remains in startup at the deadline, the response ends with `[worker starting]`, and a later poll waits on the same attempt.
+A startup failure ends that attempt; a later call can try again and emits a new starting notice.
 Initial lazy startup and retries before any worker reaches ready remain silent.
 
 ## A mixed-language analysis
@@ -248,6 +256,7 @@ Each successful `send` boundary drains the events available then; output produce
 Standard-stream bytes remain undecoded until a response drains them, so incomplete UTF-8 can remain pending for a later response.
 Ordering among standard output, standard error, and sideband console or image output is best effort.
 R language failures, uncaught Python exceptions, and DuckDB errors remain ordinary console results rather than MCP tool errors.
+Server-owned timeline, state, and admission facts are bracketed; worker console text remains unchanged.
 A silent successful R, Python, or SQL cell sends no sideband `output` frame, still sends `completed`, and projects to `[done]` when no other response text is pending.
 
 Python cells require the `reticulate` R package.

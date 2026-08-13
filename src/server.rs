@@ -24,6 +24,7 @@ const DEFAULT_TIMEOUT_MS: u64 = 60_000;
 struct ConsoleServer {
     worker: crate::worker_client::Client,
     transcript: crate::transcript::Transcript,
+    deliveries: crate::server_transport::ResponseDeliveries,
 }
 
 #[derive(Deserialize, schemars::JsonSchema)]
@@ -58,9 +59,10 @@ struct SendArguments {
     /// worker is running or idle. If output ends in `[stdin needed]`, send the requested input here.
     /// Unread text can satisfy later reads and is discarded by restart.
     stdin: Option<String>,
-    /// Maximum time this call waits for an evaluation. On expiry, the call returns available output
-    /// followed by `[running]` without stopping the computation. Poll by calling `send` again without
-    /// `r`, `python`, `sql`, or `stdin`.
+    /// Maximum time this call waits for an evaluation or one automatic worker replacement attempt.
+    /// On expiry, the call returns available output followed by the current state, such as
+    /// `[running]` or `[worker starting]`, without stopping the computation or startup. Poll by
+    /// calling `send` again without `r`, `python`, `sql`, or `stdin`.
     #[serde(default = "default_timeout_ms")]
     timeout_ms: u64,
 }
@@ -103,9 +105,11 @@ struct SessionArguments {
     action: SessionAction,
     /// Additive packages to make available. `prepare` requires at least one R or Python entry.
     /// `restart` accepts Python entries only; omit `requirements` to restart unchanged. Requirements
-    /// persist across restart but do not import or attach packages. Resolution runs outside the worker
-    /// sandbox and may download packages or execute installation or build code on the host; use only
-    /// trusted requirements.
+    /// persist across restart but do not import or attach packages. After an automatic replacement
+    /// attempt fails, a later `prepare` with new additions returns `[restart required]`. Resolution
+    /// runs outside the worker sandbox and may download packages or execute installation or build
+    /// code on the host. Managed Python startup and Matplotlib cache warming also run on the host
+    /// and may execute selected code; use only trusted requirements.
     requirements: Option<Requirements>,
 }
 
@@ -120,7 +124,11 @@ impl ConsoleServer {
             Some(program) => crate::worker_client::Client::new(program),
             None => crate::worker_client::Client::builtin()?,
         };
-        Ok(Self { worker, transcript })
+        Ok(Self {
+            worker,
+            transcript,
+            deliveries: crate::server_transport::ResponseDeliveries::default(),
+        })
     }
 }
 
@@ -132,6 +140,7 @@ impl ConsoleServer {
     async fn send(
         &self,
         Extension(call): Extension<crate::transcript::Call>,
+        Extension(delivery): Extension<crate::server_transport::ResponseDeliveryCall>,
         Parameters(SendArguments {
             r,
             python,
@@ -168,7 +177,12 @@ impl ConsoleServer {
                 call.id(),
             )
             .await;
-        Ok(response_to_tool_result(response, &call, &self.transcript))
+        Ok(response_to_tool_result(
+            response,
+            &call,
+            &self.transcript,
+            &delivery,
+        ))
     }
 
     #[tool(
@@ -177,6 +191,7 @@ impl ConsoleServer {
     async fn session(
         &self,
         Extension(call): Extension<crate::transcript::Call>,
+        Extension(delivery): Extension<crate::server_transport::ResponseDeliveryCall>,
         Parameters(SessionArguments {
             action,
             requirements,
@@ -203,7 +218,12 @@ impl ConsoleServer {
                     crate::worker_client::PrepareResult::Prepared => "[prepared]",
                     crate::worker_client::PrepareResult::RestartRequired => "[restart required]",
                     crate::worker_client::PrepareResult::WorkerStopped(response) => {
-                        return Ok(response_to_tool_result(response, &call, &self.transcript));
+                        return Ok(response_to_tool_result(
+                            response,
+                            &call,
+                            &self.transcript,
+                            &delivery,
+                        ));
                     }
                 }
             }
@@ -227,7 +247,12 @@ impl ConsoleServer {
                     None => Vec::new(),
                 };
                 let response = self.worker.restart(python, WORKER_SHUTDOWN_GRACE).await?;
-                return Ok(response_to_tool_result(response, &call, &self.transcript));
+                return Ok(response_to_tool_result(
+                    response,
+                    &call,
+                    &self.transcript,
+                    &delivery,
+                ));
             }
         };
         Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
@@ -238,8 +263,9 @@ fn response_to_tool_result(
     response: crate::worker_client::Response,
     call: &crate::transcript::Call,
     transcript: &crate::transcript::Transcript,
+    delivery: &crate::server_transport::ResponseDeliveryCall,
 ) -> CallToolResult {
-    let (content, is_error) = response.into_parts();
+    let (content, is_error, response_delivery) = response.into_parts();
     let mut result_images = Vec::new();
     let content = content
         .into_iter()
@@ -257,6 +283,9 @@ fn response_to_tool_result(
         .collect();
     if let Err(error) = call.record_result_images(result_images) {
         transcript.disable(error);
+    }
+    if let Some(response_delivery) = response_delivery {
+        delivery.register(response_delivery);
     }
     if is_error {
         CallToolResult::error(content)
@@ -308,13 +337,13 @@ impl ServerHandler for ConsoleServer {
         request: CallToolRequestParams,
         mut context: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
+        let request_id = context.id.clone();
         if !matches!(request.name.as_ref(), "send" | "session") {
             return Self::tool_router()
                 .call(ToolCallContext::new(self, request, context))
                 .await;
         }
         let transcript = self.transcript.clone();
-        let request_id = context.id.clone();
         let request_meta = context.meta.clone();
         let request = Arc::new(request);
         let recording_request = Arc::clone(&request);
@@ -359,7 +388,12 @@ pub async fn run(worker: Option<PathBuf>) -> Result<(), Box<dyn Error>> {
     let worker = server.worker.clone();
     let (input_closed, wait_for_input_close) = oneshot::channel();
     let input = ShutdownReader::new(tokio::io::stdin(), input_closed);
-    let service = server.serve((input, tokio::io::stdout())).await?;
+    let transport = crate::server_transport::ServerTransport::new(
+        input,
+        tokio::io::stdout(),
+        server.deliveries.clone(),
+    );
+    let service = server.serve(transport).await?;
     let shutdown = async move {
         let shutdown_started = wait_for_input_close
             .await

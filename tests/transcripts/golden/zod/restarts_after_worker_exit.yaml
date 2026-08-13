@@ -10,6 +10,8 @@ result:
       text: |-
         [worker sideband read failed: worker sideband closed]
         [worker stopped: in-memory state lost]
+        [starting new worker]
+        [idle]
   isError: true
 ---
 id: 4
@@ -20,7 +22,6 @@ result:
   content:
     - type: text
       text: |-
-        [starting new worker]
 
         [idle]
   isError: false

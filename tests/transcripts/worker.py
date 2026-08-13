@@ -126,7 +126,7 @@ def test_restarts_session(binary: Path) -> Transcript:
     old_path, old_capture = client._open_capture()
 
     assert _tool_text(client.session(action="restart")) == (
-        "[worker stopped: in-memory state lost]\n[starting new worker]\n[restarted]"
+        "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
     )
     # fmt: r
     after_restart = code(r"""
@@ -166,7 +166,9 @@ def test_recovers_after_worker_segfault(binary: Path) -> Transcript:
     assert result["isError"] is True, result
     assert result["content"][0]["text"] == (
         "[worker sideband read failed: worker sideband closed]\n"
-        "[worker stopped: in-memory state lost]"
+        "[worker stopped: in-memory state lost]\n"
+        "[starting new worker]\n"
+        "[idle]"
     )
 
     # fmt: r
@@ -174,9 +176,7 @@ def test_recovers_after_worker_segfault(binary: Path) -> Transcript:
         stopifnot(!exists("crash_marker", inherits = FALSE))
         cat("after crash\n")
         """)
-    assert _tool_text(client.send(r=after_crash)) == (
-        "[starting new worker]\nafter crash\n"
-    )
+    assert _tool_text(client.send(r=after_crash)) == "after crash\n"
 
     transcript = client._finish_replacement(old_path, old_capture)
     assert {"worker_sideband": {"closed": True}} in transcript

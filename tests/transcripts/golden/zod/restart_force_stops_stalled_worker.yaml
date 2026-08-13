@@ -20,9 +20,10 @@ result:
   content:
     - type: text
       text: |-
+        [active evaluation stopped by session restart request]
         [worker stopped: in-memory state lost]
         [starting new worker]
-        [restarted]
+        [idle]
   isError: false
 ---
 id: 5

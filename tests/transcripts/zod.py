@@ -724,7 +724,7 @@ def test_idle_stdin_startup_blocks_preparation(binary: Path) -> Transcript:
                 "content": [
                     {
                         "type": "text",
-                        "text": "worker is busy",
+                        "text": "[requirements not prepared: worker is starting]",
                     }
                 ],
                 "isError": True,
@@ -863,25 +863,31 @@ def test_orders_failure_and_replacement_output(binary: Path) -> Transcript:
         )
         client._initialize_and_list_tools()
 
+        client.send(r="complete silently")
+        assert last_tool_text(client) == "[done]"
+        startup_control.write_text("ready with stdout", encoding="utf-8")
         client.send(r="violate protocol after stdout")
         result = client.transcript[-1]["result"]
         assert result["isError"] is True, result
         expected_failure = large_output("zod old stdout\n") + (
             "\n[worker sent an unexpected ready message]"
             "\n[worker stopped: in-memory state lost]"
+            "\n[starting new worker]"
+            "\nzod replacement startup ready"
+            "\n[idle]"
         )
-        assert result["content"] == [{"type": "text", "text": expected_failure}]
+        assert result["content"] == [{"type": "text", "text": expected_failure}], result
         result["content"][0]["text"] = (
             "zod old stdout\n<large output>\n"
             "[worker sent an unexpected ready message]\n"
-            "[worker stopped: in-memory state lost]"
+            "[worker stopped: in-memory state lost]\n"
+            "[starting new worker]\n"
+            "zod replacement startup ready\n"
+            "[idle]"
         )
 
-        startup_control.write_text("ready with stdout", encoding="utf-8")
         client.send(r="echo")
-        assert last_tool_text(client) == (
-            "[starting new worker]\nzod replacement startup ready\nzod: echo\n"
-        )
+        assert last_tool_text(client) == "zod: echo\n"
         return client._finish()
 
 
@@ -902,29 +908,34 @@ def test_reports_replacement_startup_failure_and_retry(
         )
         client._initialize_and_list_tools()
 
-        client.send(r="exit unexpectedly")
-        result = client.transcript[-1]["result"]
+        client.send(r="complete silently")
+        assert last_tool_text(client) == "[done]"
+        startup_control.write_text("fail with stderr", encoding="utf-8")
+        failed = client._start_send(r="exit unexpectedly")
+        response_returned = threading.Event()
+        forced_stop = threading.Event()
+
+        def stop_if_replacement_loops() -> None:
+            if not response_returned.wait(5):
+                forced_stop.set()
+                stop_process(client.process)
+
+        watchdog = threading.Thread(target=stop_if_replacement_loops, daemon=True)
+        watchdog.start()
+        try:
+            client._receive(failed)
+        finally:
+            response_returned.set()
+            watchdog.join()
+        assert not forced_stop.is_set(), "replacement startup retried automatically"
+        result = failed["result"]
         assert result == {
             "content": [
                 {
                     "type": "text",
                     "text": (
                         "[worker sideband read failed: worker sideband closed]\n"
-                        "[worker stopped: in-memory state lost]"
-                    ),
-                }
-            ],
-            "isError": True,
-        }, result
-
-        startup_control.write_text("fail with stderr", encoding="utf-8")
-        client.send(r="echo")
-        result = client.transcript[-1]["result"]
-        assert result == {
-            "content": [
-                {
-                    "type": "text",
-                    "text": (
+                        "[worker stopped: in-memory state lost]\n"
                         "[starting new worker]\n"
                         "zod replacement startup failed\n"
                         "[worker sideband read failed: worker sideband closed]"
@@ -940,6 +951,98 @@ def test_reports_replacement_startup_failure_and_retry(
             "[starting new worker]\nzod replacement startup ready\nzod: echo\n"
         )
         return client._finish()
+
+
+def test_polls_replacement_startup_after_send_timeout(binary: Path) -> Transcript:
+    zod = Path(__file__).resolve().parents[1] / "fixtures" / "zod"
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        temporary_path = Path(temporary_directory)
+        startup_control = temporary_path / "zod-startup-control"
+        startup_release = temporary_path / "zod-startup-release"
+        startup_control.write_text("ready", encoding="utf-8")
+        environment = os.environ.copy()
+        environment["TMPDIR"] = temporary_directory
+        environment["ZOD_STARTUP_CONTROL"] = str(startup_control)
+        environment["ZOD_STARTUP_RELEASE"] = str(startup_release)
+        client = McpClient(
+            binary,
+            ("serve", "--worker", str(zod)),
+            environment,
+        )
+        forced_release = threading.Event()
+        response_returned = threading.Event()
+        passed = False
+        try:
+            client._initialize_and_list_tools()
+            client.send(r="complete silently")
+            assert last_tool_text(client) == "[done]"
+            startup_control.write_text(
+                "block then ready with stdout",
+                encoding="utf-8",
+            )
+
+            failed = client._start_send(r="exit unexpectedly", timeout_ms=1_000)
+            wait_for_marker(
+                temporary_path,
+                "zod-replacement-waiting-ready",
+                client,
+            )
+
+            def release_if_send_ignores_timeout() -> None:
+                if not response_returned.wait(5):
+                    forced_release.set()
+                    startup_release.touch()
+
+            watchdog = threading.Thread(
+                target=release_if_send_ignores_timeout,
+                daemon=True,
+            )
+            watchdog.start()
+            try:
+                client._receive(failed)
+            finally:
+                response_returned.set()
+                watchdog.join()
+            assert not forced_release.is_set(), "send did not honor its startup timeout"
+            assert failed["result"] == {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": (
+                            "[worker sideband read failed: worker sideband closed]\n"
+                            "[worker stopped: in-memory state lost]\n"
+                            "[starting new worker]\n"
+                            "[worker starting]"
+                        ),
+                    }
+                ],
+                "isError": True,
+            }, failed
+
+            client.session(
+                action="prepare",
+                requirements={"python": ["py-yaml12"]},
+            )
+            assert client.transcript[-1]["result"] == {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "[requirements not prepared: worker is starting]",
+                    }
+                ],
+                "isError": True,
+            }, client.transcript[-1]
+
+            startup_release.touch()
+            client.send(timeout_ms=3_000)
+            assert last_tool_text(client) == ("zod replacement startup ready\n[idle]")
+            transcript = client._finish()
+            passed = True
+            return transcript
+        finally:
+            startup_release.touch()
+            if not passed:
+                stop_process(client.process)
 
 
 def test_orders_explicit_restart_output(binary: Path) -> Transcript:
@@ -971,18 +1074,20 @@ def test_orders_explicit_restart_output(binary: Path) -> Transcript:
         result = client.transcript[-1]["result"]
         assert result["isError"] is False, result
         expected = large_output("zod stdin closed\n") + (
+            "\n[active evaluation stopped by session restart request]"
             "\n[worker stopped: in-memory state lost]"
             "\n[starting new worker]"
             "\nzod replacement startup ready"
-            "\n[restarted]"
+            "\n[idle]"
         )
         assert result["content"] == [{"type": "text", "text": expected}], result
         result["content"][0]["text"] = (
             "zod stdin closed\n<large output>\n"
+            "[active evaluation stopped by session restart request]\n"
             "[worker stopped: in-memory state lost]\n"
             "[starting new worker]\n"
             "zod replacement startup ready\n"
-            "[restarted]"
+            "[idle]"
         )
 
         client.send(r="echo")
@@ -1023,9 +1128,10 @@ def test_restart_preserves_pending_sideband_output(binary: Path) -> Transcript:
                     "type": "text",
                     "text": (
                         "after pending image\n"
+                        "[active evaluation stopped by session restart request]\n"
                         "[worker stopped: in-memory state lost]\n"
                         "[starting new worker]\n"
-                        "[restarted]"
+                        "[idle]"
                     ),
                 },
             ],
@@ -1071,7 +1177,8 @@ def test_restart_interrupts_waiting_send(binary: Path) -> Transcript:
         watchdog = threading.Thread(target=stop_if_calls_block, daemon=True)
         watchdog.start()
         try:
-            client._receive_many([waiting, restarted])
+            client._receive(waiting)
+            client._receive(restarted)
         finally:
             responses_returned.set()
             watchdog.join()
@@ -1079,15 +1186,13 @@ def test_restart_interrupts_waiting_send(binary: Path) -> Transcript:
 
         assert restarted["result"] == {
             "content": [
-                {"type": "text", "text": "before pending image\n"},
-                {"type": "image", "data": PNG_1X1, "mimeType": "image/png"},
                 {
                     "type": "text",
                     "text": (
-                        "after pending image\n"
+                        "[active evaluation stopped by session restart request]\n"
                         "[worker stopped: in-memory state lost]\n"
                         "[starting new worker]\n"
-                        "[restarted]"
+                        "[idle]"
                     ),
                 },
             ],
@@ -1095,10 +1200,16 @@ def test_restart_interrupts_waiting_send(binary: Path) -> Transcript:
         }, restarted
         assert waiting["result"] == {
             "content": [
+                {"type": "text", "text": "before pending image\n"},
+                {"type": "image", "data": PNG_1X1, "mimeType": "image/png"},
                 {
                     "type": "text",
-                    "text": "session restarted before the operation completed",
-                }
+                    "text": (
+                        "after pending image\n"
+                        "[stopped by session restart request before evaluation finished]\n"
+                        "[worker stopped: in-memory state lost]"
+                    ),
+                },
             ],
             "isError": True,
         }, waiting
@@ -1135,13 +1246,15 @@ def test_restarts_after_unexpected_sideband_message(binary: Path) -> Transcript:
             assert result["content"][0]["text"] == (
                 "zod output before protocol failure\n"
                 "[worker sent an unexpected ready message]\n"
-                "[worker stopped: in-memory state lost]"
+                "[worker stopped: in-memory state lost]\n"
+                "[starting new worker]\n"
+                "[idle]"
             )
             assert not process_group_exists(worker_group), "Zod outlived its failure"
 
             restarted_call = client._start_send(r="complete silently")
             client._receive(restarted_call)
-            assert last_tool_text(client) == "[starting new worker]\n"
+            assert last_tool_text(client) == "[done]"
             transcript = client._finish()
             passed = True
             return transcript
@@ -1159,9 +1272,22 @@ def test_restarts_after_worker_exit(binary: Path) -> Transcript:
     )
     client._initialize_and_list_tools()
     client.send(r="exit unexpectedly")
-    assert client.transcript[-1]["result"]["isError"] is True
+    assert client.transcript[-1]["result"] == {
+        "content": [
+            {
+                "type": "text",
+                "text": (
+                    "[worker sideband read failed: worker sideband closed]\n"
+                    "[worker stopped: in-memory state lost]\n"
+                    "[starting new worker]\n"
+                    "[idle]"
+                ),
+            }
+        ],
+        "isError": True,
+    }
     client.send(stdin="replacement\n")
-    assert last_tool_text(client) == "[starting new worker]\n\n[idle]"
+    assert last_tool_text(client) == "\n[idle]"
     client.send(r="input without request")
     assert last_tool_text(client) == "zod stdin: replacement\n"
     return client._finish()
@@ -1190,18 +1316,18 @@ def test_restart_closes_worker_stdin(binary: Path) -> Transcript:
         client.session(action="restart")
         output = last_tool_text(client)
         prefix = "zod stdin closed\n" + ("x" * LARGE_OUTPUT_SIZE)
-        suffix = (
-            "[worker stopped: in-memory state lost]\n[starting new worker]\n[restarted]"
-        )
+        suffix = "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
+        suffix = "[active evaluation stopped by session restart request]\n" + suffix
         assert output.startswith(prefix), "worker stdin did not close before restart"
         assert output.endswith(suffix), "lifecycle notices followed old-worker output"
         barrier = output.removeprefix(prefix).removesuffix(suffix)
         assert barrier and not barrier.strip("y\n"), "unexpected old-worker output"
         client.transcript[-1]["result"]["content"][0]["text"] = (
             "zod stdin closed\n<large output>\n"
+            "[active evaluation stopped by session restart request]\n"
             "[worker stopped: in-memory state lost]\n"
             "[starting new worker]\n"
-            "[restarted]"
+            "[idle]"
         )
 
         client.send(r="echo")
@@ -1239,9 +1365,10 @@ def test_restart_force_stops_stalled_worker(binary: Path) -> Transcript:
             wait_for_process_group_exit(worker_group, client)
             client._receive(restart_call)
             assert last_tool_text(client) == (
+                "[active evaluation stopped by session restart request]\n"
                 "[worker stopped: in-memory state lost]\n"
                 "[starting new worker]\n"
-                "[restarted]"
+                "[idle]"
             )
 
             client.send(r="echo")
@@ -1292,12 +1419,12 @@ def test_restart_starts_first_worker_and_waits_until_ready(
             client._receive(while_restarting)
             result = while_restarting["result"]
             assert result["isError"] is True
-            assert result["content"][0]["text"] == "worker is restarting"
+            assert result["content"][0]["text"] == "[worker is restarting]"
 
             startup_release.touch()
             client._receive(restarted)
             assert restarted["result"]["content"][0]["text"] == (
-                "[starting new worker]\n[restarted]"
+                "[starting new worker]\n[idle]"
             )
 
             after_restart = client._start_send(r="echo")
@@ -1309,6 +1436,91 @@ def test_restart_starts_first_worker_and_waits_until_ready(
         finally:
             if not passed:
                 stop_process_group(worker_group)
+                stop_process(client.process)
+
+
+def test_restart_does_not_report_never_ready_worker_as_stopped(
+    binary: Path,
+) -> Transcript:
+    zod = Path(__file__).resolve().parents[1] / "fixtures" / "zod"
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        temporary_path = Path(temporary_directory)
+        startup_control = temporary_path / "zod-startup-control"
+        startup_release = temporary_path / "zod-startup-release"
+        startup_control.write_text("block", encoding="utf-8")
+        environment = os.environ.copy()
+        environment["TMPDIR"] = temporary_directory
+        environment["ZOD_STARTUP_CONTROL"] = str(startup_control)
+        environment["ZOD_STARTUP_RELEASE"] = str(startup_release)
+        client = McpClient(
+            binary,
+            ("serve", "--worker", str(zod)),
+            environment,
+        )
+        passed = False
+        try:
+            client._initialize_and_list_tools()
+            waiting = client._start_send(r="echo", timeout_ms=30_000)
+            wait_for_marker(
+                temporary_path,
+                "zod-replacement-waiting-ready",
+                client,
+            )
+
+            startup_control.write_text("ready", encoding="utf-8")
+            restarted = client._start_session(action="restart")
+            responses_returned = threading.Event()
+            forced_stop = threading.Event()
+
+            def stop_if_calls_block() -> None:
+                if not responses_returned.wait(5):
+                    forced_stop.set()
+                    stop_process(client.process)
+
+            watchdog = threading.Thread(target=stop_if_calls_block, daemon=True)
+            watchdog.start()
+            try:
+                client._receive(waiting)
+                client._receive(restarted)
+            finally:
+                responses_returned.set()
+                watchdog.join()
+            assert not forced_stop.is_set(), "restart did not finish initial startup"
+
+            assert waiting["result"] == {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": (
+                            "[stopped by session restart request before "
+                            "evaluation finished]"
+                        ),
+                    }
+                ],
+                "isError": True,
+            }, waiting
+            assert restarted["result"] == {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": (
+                            "[active evaluation stopped by session restart request]\n"
+                            "[starting new worker]\n"
+                            "[idle]"
+                        ),
+                    }
+                ],
+                "isError": False,
+            }, restarted
+
+            client.send(r="echo")
+            assert last_tool_text(client) == "zod: echo\n"
+            transcript = client._finish()
+            passed = True
+            return transcript
+        finally:
+            startup_release.touch()
+            if not passed:
                 stop_process(client.process)
 
 
@@ -1324,7 +1536,7 @@ def test_restart_discards_unread_stdin(binary: Path) -> Transcript:
 
     client.session(action="restart")
     assert last_tool_text(client) == (
-        "[worker stopped: in-memory state lost]\n[starting new worker]\n[restarted]"
+        "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
     )
 
     client.send(r="input without request", stdin="fresh\n")
@@ -1350,7 +1562,7 @@ def test_retries_initial_startup_silently(binary: Path) -> Transcript:
         result = client.transcript[-1]["result"]
         assert result["isError"] is True
         assert result["content"][0]["text"] == (
-            "worker sideband read failed: worker sideband closed"
+            "[worker sideband read failed: worker sideband closed]"
         )
         startup_control.write_text("ready", encoding="utf-8")
         client.send(r="echo")

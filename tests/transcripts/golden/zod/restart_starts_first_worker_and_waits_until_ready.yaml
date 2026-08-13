@@ -9,7 +9,7 @@ result:
     - type: text
       text: |-
         [starting new worker]
-        [restarted]
+        [idle]
   isError: false
 ---
 id: 4
@@ -18,7 +18,7 @@ send:
 result:
   content:
     - type: text
-      text: worker is restarting
+      text: "[worker is restarting]"
   isError: true
 ---
 id: 5

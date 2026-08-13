@@ -2,8 +2,9 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use super::environment::merge_python_requirements;
-use super::output::{Response, SendFailure};
-use super::{Client, WorkerState, platform};
+use super::evaluation::{RestartDelivery, RestartReservation};
+use super::output::{Response, ResponseAcknowledgment, SendFailure};
+use super::{Client, WorkerRetirement, WorkerState, platform};
 
 /// Identifies work admitted against one worker without exposing an epoch counter.
 #[derive(Clone)]
@@ -59,6 +60,17 @@ pub(super) enum GenerationStatus {
     Changed,
 }
 
+pub(super) enum FailedWorkerStop {
+    Stopped,
+    RestartOwnsWorker,
+}
+
+struct RestartContext {
+    processes: ProcessStopHandles,
+    deadline: Instant,
+    evaluation: Option<RestartReservation>,
+}
+
 #[derive(Clone, Default)]
 pub(super) struct ProcessStopHandles {
     worker: Option<platform::WorkerShutdownHandle>,
@@ -106,37 +118,34 @@ impl Client {
         requirements: Vec<String>,
         grace: Duration,
     ) -> Result<Response, String> {
-        let (stop_handles, deadline) = if requirements.is_empty() {
+        let restart = if requirements.is_empty() {
             self.begin_restart(grace)?
         } else {
             self.resolve_and_begin_restart(requirements, grace)?
         };
-        if let Err(error) = stop_handles.shutdown(deadline) {
-            self.fail_restart(deadline)?;
+        if let Err(error) = restart.processes.shutdown(restart.deadline) {
+            self.fail_restart(restart.deadline)?;
             self.0.output.push_failure(SendFailure::from(error));
             return Ok(self.0.output.take());
         }
-        let response = match self.replace_worker() {
-            Ok(true) => {
-                self.0.output.push_line("[restarted]");
-                self.0.output.take()
+        match self.replace_worker(restart.evaluation) {
+            Ok(response) => {
+                self.finish_restart()?;
+                Ok(response)
             }
-            Ok(false) => self.0.output.take(),
             Err(error) => {
-                self.fail_restart(deadline)?;
+                self.fail_restart(restart.deadline)?;
                 self.0.output.push_failure(SendFailure::from(error));
-                return Ok(self.0.output.take());
+                Ok(self.0.output.take())
             }
-        };
-        self.finish_restart()?;
-        Ok(response)
+        }
     }
 
     fn resolve_and_begin_restart(
         &self,
         requirements: Vec<String>,
         grace: Duration,
-    ) -> Result<(ProcessStopHandles, Instant), String> {
+    ) -> Result<RestartContext, String> {
         let generation = self.admit()?;
         let environment = self.0.environment.as_ref().ok_or_else(|| {
             "Python requirements are unavailable with a custom worker".to_string()
@@ -161,13 +170,7 @@ impl Client {
             }
         };
 
-        let restart = self.commit_environment_and_begin_restart(
-            &generation,
-            grace,
-            &mut environment,
-            managed,
-        )?;
-        Ok(restart)
+        self.commit_environment_and_begin_restart(&generation, grace, &mut environment, managed)
     }
 
     /// Crosses the physical worker boundary before starting its replacement.
@@ -175,23 +178,70 @@ impl Client {
     /// Acquiring the worker waits for its sideband operation to end, and
     /// `finish_retirement()` joins its remaining I/O tasks. No old-worker output
     /// can be published after the stopped notice below.
-    fn replace_worker(&self) -> Result<bool, String> {
+    fn replace_worker(&self, evaluation: Option<RestartReservation>) -> Result<Response, String> {
         let mut worker = self
             .0
             .worker
             .lock()
             .map_err(|_| "worker lock poisoned".to_string())?;
         self.ensure_restarting()?;
-        let stopped = worker.finish_retirement()?;
-        if stopped {
-            self.0
-                .output
-                .push_line(super::output::WORKER_STOPPED_NOTICE);
-        } else if matches!(&*worker, WorkerState::Initial) {
+        let retirement = worker.finish_retirement()?;
+        if matches!(retirement, WorkerRetirement::NeverStarted) {
             *worker = WorkerState::Stopped;
         }
+        let retired_worker = matches!(retirement, WorkerRetirement::Stopped);
+        let old_output = self.0.output.take();
+        drop(worker);
 
-        if let Err(message) = self.start_worker(&mut worker, |stop_handle| {
+        let mut response = Response::default();
+        let mut wait_for_send = None;
+        let mut interrupted = false;
+        if let Some(evaluation) = evaluation {
+            let unfinished = evaluation.unfinished();
+            interrupted = unfinished;
+            let old_output = evaluation.project_response(old_output);
+            if evaluation.waiting {
+                let mut send_output = old_output;
+                if unfinished {
+                    send_output.push_notice(super::output::EVALUATION_STOPPED_BY_RESTART_NOTICE);
+                    if retired_worker {
+                        send_output.push_notice(super::output::WORKER_STOPPED_NOTICE);
+                    }
+                    send_output.mark_error();
+                }
+                match evaluation.deliver(send_output)? {
+                    RestartDelivery::Waiting(acknowledged) => {
+                        wait_for_send = Some(acknowledged);
+                    }
+                    RestartDelivery::Unclaimed(output) => response.extend(output),
+                }
+            } else {
+                response.extend(old_output);
+            }
+        } else {
+            response.extend(old_output);
+        }
+        if let Some(acknowledged) = wait_for_send
+            && let Ok(ResponseAcknowledgment::Unclaimed(output)) = acknowledged.recv()
+        {
+            response.extend(output);
+        }
+        if interrupted {
+            response.push_notice(super::output::ACTIVE_EVALUATION_STOPPED_NOTICE);
+        }
+        if retired_worker {
+            response.push_notice(super::output::WORKER_STOPPED_NOTICE);
+        }
+
+        let mut worker = self
+            .0
+            .worker
+            .lock()
+            .map_err(|_| "worker lock poisoned".to_string())?;
+        self.ensure_restarting()?;
+        response.push_notice_line(super::output::WORKER_STARTING_NOTICE);
+
+        if let Err(message) = self.start_worker(&mut worker, false, |stop_handle| {
             self.register_restart_stop_handle(stop_handle)
         }) {
             let message = match self.clear_restart_stop_handle() {
@@ -200,10 +250,13 @@ impl Client {
                     "{message}; additionally failed to clear the worker shutdown handle: {clear_error}"
                 ),
             };
-            self.0.output.push_failure(SendFailure::from(message));
-            return Ok(false);
+            response.extend(self.0.output.take());
+            response.push_server_failure(message);
+            return Ok(response);
         }
-        Ok(true)
+        response.extend(self.0.output.take());
+        response.push_notice(super::output::WORKER_IDLE_NOTICE);
+        Ok(response)
     }
 
     pub(super) fn admit(&self) -> Result<WorkerGeneration, String> {
@@ -258,7 +311,7 @@ impl Client {
         }
     }
 
-    fn begin_restart(&self, grace: Duration) -> Result<(ProcessStopHandles, Instant), String> {
+    fn begin_restart(&self, grace: Duration) -> Result<RestartContext, String> {
         let mut evaluation = self.evaluation()?;
         let mut lifecycle = self
             .0
@@ -280,11 +333,16 @@ impl Client {
             }
             LifecycleState::Ready => {}
         }
-        if let Some(active) = evaluation.as_ref() {
-            active.evaluation.cancel_for_restart()?;
-        }
-        drop(evaluation.take());
-        Ok(lifecycle.start_restart(grace))
+        let evaluation = evaluation
+            .take()
+            .map(|active| active.evaluation.reserve_for_restart())
+            .transpose()?;
+        let (processes, deadline) = lifecycle.start_restart(grace);
+        Ok(RestartContext {
+            processes,
+            deadline,
+            evaluation,
+        })
     }
 
     fn commit_environment_and_begin_restart(
@@ -293,7 +351,7 @@ impl Client {
         grace: Duration,
         environment: &mut super::environment::Environment,
         managed: crate::resolver::ManagedPython,
-    ) -> Result<(ProcessStopHandles, Instant), String> {
+    ) -> Result<RestartContext, String> {
         let mut evaluation = self.evaluation()?;
         let mut lifecycle = self
             .0
@@ -313,12 +371,17 @@ impl Client {
             }
         }
         lifecycle.processes.resolver = None;
-        if let Some(active) = evaluation.as_ref() {
-            active.evaluation.cancel_for_restart()?;
-        }
-        drop(evaluation.take());
+        let evaluation = evaluation
+            .take()
+            .map(|active| active.evaluation.reserve_for_restart())
+            .transpose()?;
         environment.python = Some(managed);
-        Ok(lifecycle.start_restart(grace))
+        let (processes, deadline) = lifecycle.start_restart(grace);
+        Ok(RestartContext {
+            processes,
+            deadline,
+            evaluation,
+        })
     }
 
     fn finish_restart(&self) -> Result<(), String> {
@@ -353,30 +416,30 @@ impl Client {
         }
     }
 
-    pub(super) fn retire_failed_worker(
+    pub(super) fn stop_failed_worker(
         &self,
         worker: &mut WorkerState,
         expected: &WorkerGeneration,
-    ) -> Result<bool, String> {
+    ) -> Result<FailedWorkerStop, String> {
         let mut lifecycle = self
             .0
             .lifecycle
             .lock()
             .map_err(|_| "worker lifecycle lock poisoned".to_string())?;
         if lifecycle.state != LifecycleState::Ready || !lifecycle.generation.is(expected) {
-            return Ok(false);
+            return Ok(FailedWorkerStop::RestartOwnsWorker);
         }
         if !matches!(worker, WorkerState::Running(_)) {
-            return Ok(false);
+            return Err("failed worker was not running".to_string());
         }
-        if let Err(error) = worker.retire(Instant::now()) {
+        if let Err(error) = worker.stop(Instant::now()) {
             lifecycle.state = LifecycleState::ShuttingDown {
                 deadline: Instant::now(),
             };
             return Err(error);
         }
         lifecycle.processes.worker = None;
-        Ok(true)
+        Ok(FailedWorkerStop::Stopped)
     }
 
     pub(super) fn register_stop_handle(

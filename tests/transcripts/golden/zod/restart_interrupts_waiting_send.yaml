@@ -8,15 +8,6 @@ send:
 result:
   content:
     - type: text
-      text: session restarted before the operation completed
-  isError: true
----
-id: 4
-session:
-  action: restart
-result:
-  content:
-    - type: text
       text: |
         before pending image
     - type: image
@@ -25,8 +16,20 @@ result:
     - type: text
       text: |-
         after pending image
+        [stopped by session restart request before evaluation finished]
+        [worker stopped: in-memory state lost]
+  isError: true
+---
+id: 4
+session:
+  action: restart
+result:
+  content:
+    - type: text
+      text: |-
+        [active evaluation stopped by session restart request]
         [worker stopped: in-memory state lost]
         [starting new worker]
-        [restarted]
+        [idle]
   isError: false
 ...

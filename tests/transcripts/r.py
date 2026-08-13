@@ -343,11 +343,13 @@ def test_restarts_after_r_worker_segfault(binary: Path) -> Transcript:
     assert fatal_output.endswith(
         '[input requested: "Selection: "]\nR is aborting now ...\n'
         "[worker sideband read failed: worker sideband closed]\n"
-        "[worker stopped: in-memory state lost]"
+        "[worker stopped: in-memory state lost]\n"
+        "[starting new worker]\n"
+        "[idle]"
     )
 
     client.send(r='exists("r_worker_marker", inherits = FALSE)')
-    assert last_tool_text(client) == "[starting new worker]\n[1] FALSE\n"
+    assert last_tool_text(client) == "[1] FALSE\n"
     client.send(r="1 + 1")
     assert last_tool_text(client) == "[1] 2\n"
     return client._finish()
@@ -367,11 +369,13 @@ def test_reports_r_worker_restart_with_idle_stdin(binary: Path) -> Transcript:
     assert result["isError"] is True
     assert result["content"][0]["text"] == (
         "[worker sideband read failed: worker sideband closed]\n"
-        "[worker stopped: in-memory state lost]"
+        "[worker stopped: in-memory state lost]\n"
+        "[starting new worker]\n"
+        "[idle]"
     )
 
     client.send(stdin="replacement\n")
-    assert last_tool_text(client) == "[starting new worker]\n\n[idle]"
+    assert last_tool_text(client) == "\n[idle]"
 
     # fmt: r
     direct_stdin = code(r"""
@@ -400,10 +404,10 @@ def test_restart_while_r_waits_for_input(binary: Path) -> Transcript:
     client.session(action="restart")
     output = last_tool_text(client)
     assert output == (
-        '[1] ""\n'
+        '[1] ""\n[active evaluation stopped by session restart request]\n'
         "[worker stopped: in-memory state lost]\n"
         "[starting new worker]\n"
-        "[restarted]"
+        "[idle]"
     ), repr(output)
 
     client.send(r='exists("restart_marker", inherits = FALSE)')

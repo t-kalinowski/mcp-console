@@ -3,6 +3,15 @@
 ---
 id: 3
 send:
+  r: complete silently
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+id: 4
+send:
   r: exit unexpectedly
 result:
   content:
@@ -10,15 +19,6 @@ result:
       text: |-
         [worker sideband read failed: worker sideband closed]
         [worker stopped: in-memory state lost]
-  isError: true
----
-id: 4
-send:
-  r: echo
-result:
-  content:
-    - type: text
-      text: |-
         [starting new worker]
         zod replacement startup failed
         [worker sideband read failed: worker sideband closed]

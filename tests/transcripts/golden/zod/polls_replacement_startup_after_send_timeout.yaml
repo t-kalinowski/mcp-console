@@ -12,27 +12,38 @@ result:
 ---
 id: 4
 send:
-  r: violate protocol after stdout
+  r: exit unexpectedly
+  timeout_ms: 1000
 result:
   content:
     - type: text
       text: |-
-        zod old stdout
-        <large output>
-        [worker sent an unexpected ready message]
+        [worker sideband read failed: worker sideband closed]
         [worker stopped: in-memory state lost]
         [starting new worker]
-        zod replacement startup ready
-        [idle]
+        [worker starting]
   isError: true
 ---
 id: 5
-send:
-  r: echo
+session:
+  action: prepare
+  requirements:
+    python:
+      - py-yaml12
 result:
   content:
     - type: text
-      text: |
-        zod: echo
+      text: "[requirements not prepared: worker is starting]"
+  isError: true
+---
+id: 6
+send:
+  timeout_ms: 3000
+result:
+  content:
+    - type: text
+      text: |-
+        zod replacement startup ready
+        [idle]
   isError: false
 ...
