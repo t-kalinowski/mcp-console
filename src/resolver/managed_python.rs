@@ -6,7 +6,7 @@ use std::process::{Command, Stdio};
 use serde::Serialize;
 
 use super::process::{
-    ResolverProcess, ResolverStopHandle, read_output, stop_resolver, write_input,
+    ResolverOutput, ResolverProcess, ResolverStopHandle, read_output, stop_resolver, write_input,
 };
 
 const PYTHON_RESOLVER: &str = r#"
@@ -77,6 +77,37 @@ base::local({
 })
 "#;
 
+const PYTHON_VERSION_RESOLVER: &str = r#"
+base::local({
+  input <- base::paste(base::readLines(
+    base::file("stdin", encoding = "UTF-8"),
+    warn = FALSE
+  ), collapse = "\n")
+  constraints <- base::unlist(
+    jsonlite::fromJSON(input),
+    use.names = FALSE
+  )
+  if (!base::length(constraints)) {
+    constraints <- NULL
+  }
+  version <- base::try(
+    reticulate:::resolve_python_version(constraints),
+    silent = TRUE
+  )
+  if (base::inherits(version, "try-error")) {
+    error <- base::attr(version, "condition")
+    base::writeLines(base::conditionMessage(error), con = base::stderr())
+    base::quit(save = "no", status = 1L, runLast = FALSE)
+  }
+  base::stopifnot(
+    base::length(version) == 1L,
+    !base::is.na(version),
+    base::nzchar(version)
+  )
+  base::cat(version, "\n", sep = "")
+})
+"#;
+
 #[derive(Clone)]
 pub(crate) struct ManagedPython {
     python: PathBuf,
@@ -139,48 +170,13 @@ pub(crate) fn resolve_python_manifest(
     on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
 ) -> Result<ManagedPython, String> {
     let requirements = requirements.normalized();
-    validate_environment(&environment)?;
-    let rscript = python_resolver_rscript();
-    let mut command = Command::new(&rscript);
-    command
-        .args(["--vanilla", "-e", PYTHON_RESOLVER])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .process_group(0);
-    for name in std::env::vars_os()
-        .filter_map(|(name, _)| name.into_string().ok())
-        .filter(|name| name.starts_with("UV_"))
-    {
-        command.env_remove(name);
-    }
-    command.envs(&environment).env_remove("UV_OFFLINE");
-    // Managed resolution intentionally runs before the sandboxed worker starts
-    // because reticulate and uv need normal host network and cache access.
-    // Requirement manifests are JSON standard-input data, never R source.
-    let mut child = command.spawn().map_err(|error| {
-        format!(
-            "failed to run managed Python resolver with `{}`: {error}",
-            rscript.display()
-        )
-    })?;
-    let stdout = read_output(child.stdout.take().expect("resolver stdout is piped"));
-    let stderr = read_output(child.stderr.take().expect("resolver stderr is piped"));
-    let input = child.stdin.take().expect("resolver stdin is piped");
-    let resolver = ResolverProcess::new();
-    let stop_handle = resolver.stop_handle();
-    if let Err(error) = on_started(stop_handle) {
-        let _ = stop_resolver(&mut child, &rscript, "managed Python");
-        return Err(error);
-    }
-    resolver.watch_exit(child.id());
-    let input = write_requirements(input, &requirements);
-    let output = resolver.wait(
-        &mut child,
+    let input = serde_json::to_vec(&requirements)
+        .expect("managed Python requirements should serialize as JSON");
+    let output = run_python_resolver(
+        PYTHON_RESOLVER,
         input,
-        stdout,
-        stderr,
-        &rscript,
+        environment,
+        on_started,
         "managed Python",
     )?;
     if !output.status.success() {
@@ -231,6 +227,40 @@ pub(crate) fn resolve_python_manifest(
     })
 }
 
+pub(crate) fn resolve_python_version(
+    constraints: Vec<String>,
+    environment: BTreeMap<String, String>,
+    on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
+) -> Result<String, String> {
+    let input = serde_json::to_vec(&constraints)
+        .expect("managed Python version constraints should serialize as JSON");
+    let output = run_python_resolver(
+        PYTHON_VERSION_RESOLVER,
+        input,
+        environment,
+        on_started,
+        "managed Python version",
+    )?;
+    if !output.status.success() {
+        let error = String::from_utf8_lossy(&output.stderr);
+        return Err(format!(
+            "managed Python version resolution failed with {}: {}",
+            output.status,
+            error.trim()
+        ));
+    }
+    output
+        .write_result
+        .map_err(|error| format!("failed to write Python version constraints: {error}"))?;
+    let version = String::from_utf8(output.stdout)
+        .map_err(|_| "managed Python version resolver returned non-UTF-8 output".to_string())?;
+    let version = version.trim();
+    if version.is_empty() || version.lines().count() != 1 {
+        return Err("managed Python version resolver returned an invalid version".to_string());
+    }
+    Ok(version.to_string())
+}
+
 pub(crate) fn resolve_python_host(
     requirements: crate::worker_protocol::PythonRequirementManifest,
     on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
@@ -238,13 +268,50 @@ pub(crate) fn resolve_python_host(
     resolve_python_manifest(requirements, uv_environment(), on_started)
 }
 
-fn write_requirements(
-    input: std::process::ChildStdin,
-    requirements: &crate::worker_protocol::PythonRequirementManifest,
-) -> std::sync::mpsc::Receiver<std::io::Result<()>> {
-    let bytes = serde_json::to_vec(requirements)
-        .expect("managed Python requirements should serialize as JSON");
-    write_input(input, bytes)
+fn run_python_resolver(
+    source: &str,
+    input: Vec<u8>,
+    environment: BTreeMap<String, String>,
+    on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
+    kind: &str,
+) -> Result<ResolverOutput, String> {
+    validate_environment(&environment)?;
+    let rscript = python_resolver_rscript();
+    let mut command = Command::new(&rscript);
+    command
+        .args(["--vanilla", "-e", source])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .process_group(0);
+    for name in std::env::vars_os()
+        .filter_map(|(name, _)| name.into_string().ok())
+        .filter(|name| name.starts_with("UV_"))
+    {
+        command.env_remove(name);
+    }
+    command.envs(&environment).env_remove("UV_OFFLINE");
+    // Managed resolution intentionally runs outside the sandbox because
+    // reticulate and uv need normal host network and cache access. Resolver
+    // inputs are JSON standard-input data, never R source.
+    let mut child = command.spawn().map_err(|error| {
+        format!(
+            "failed to run {kind} resolver with `{}`: {error}",
+            rscript.display()
+        )
+    })?;
+    let stdout = read_output(child.stdout.take().expect("resolver stdout is piped"));
+    let stderr = read_output(child.stderr.take().expect("resolver stderr is piped"));
+    let stdin = child.stdin.take().expect("resolver stdin is piped");
+    let resolver = ResolverProcess::new();
+    let stop_handle = resolver.stop_handle();
+    if let Err(error) = on_started(stop_handle) {
+        let _ = stop_resolver(&mut child, &rscript, kind);
+        return Err(error);
+    }
+    resolver.watch_exit(child.id());
+    let input = write_input(stdin, input);
+    resolver.wait(&mut child, input, stdout, stderr, &rscript, kind)
 }
 
 fn python_resolver_rscript() -> PathBuf {

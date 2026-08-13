@@ -237,6 +237,34 @@ impl Client {
         Ok(managed.with_retained_requirements(retained_requirements))
     }
 
+    pub(super) fn resolve_runtime_python_version(
+        &self,
+        generation: WorkerGeneration,
+        request: crate::worker_protocol::PythonVersionResolveRequest,
+    ) -> Result<String, String> {
+        self.ensure_generation(&generation)?;
+        let environment = self.0.environment.as_ref().ok_or_else(|| {
+            "Python requirements are unavailable with a custom worker".to_string()
+        })?;
+        let environment = environment
+            .lock()
+            .map_err(|_| "worker environment lock poisoned".to_string())?;
+        if environment.python.is_none() {
+            return Err(
+                "runtime Python version resolution requires a server-managed interpreter"
+                    .to_string(),
+            );
+        }
+        let result = crate::resolver::resolve_python_version(
+            request.constraints,
+            request.environment,
+            |handle| self.register_resolver_stop_handle(&generation, handle),
+        );
+        self.clear_resolver_stop_handle(&generation)?;
+        self.ensure_generation(&generation)?;
+        result
+    }
+
     pub(super) fn checkpoint_runtime_python(
         &self,
         generation: WorkerGeneration,

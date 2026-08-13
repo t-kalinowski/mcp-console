@@ -785,9 +785,10 @@ Requirements must be finalized before first Python initialization whenever they 
 After initialization, v1 permits additive requirements only.
 
 R packages may declare requirements by calling `py_require()` from load hooks.
-For a server-managed worker, seed reticulate's manifest and intercept only its internal `uv_get_or_create_env` binding rather than wrapping `py_require()`.
+For a server-managed worker, seed reticulate's manifest and intercept its internal `uv_get_or_create_env` and `resolve_python_version` bindings rather than wrapping `py_require()`.
 This retains originating-package attribution, manifest history, and reticulate's native validation and activation behavior within the live R process.
-The binding reports the physical resolver manifest and the logical manifest to retain if accepted, together with the worker's `UV_*` settings except `UV_OFFLINE`, and waits for the host resolver to return an interpreter path.
+The environment binding reports the physical resolver manifest and the logical manifest to retain if accepted, together with the worker's `UV_*` settings except `UV_OFFLINE`, and waits for the host resolver to return an interpreter path.
+The version binding reports only the requested constraints and UV settings, then waits for the host resolver to return the selected version without creating a candidate environment.
 
 If reticulate is loaded but Python remains uninitialized at cell end, the worker calls the replacement resolver to materialize the final manifest before completing.
 After initialization, reticulate resolves late additions with the exact active Python patch version while leaving the logical `py_require()` Python constraints unchanged, and each host result remains only a candidate until the evaluation completes.

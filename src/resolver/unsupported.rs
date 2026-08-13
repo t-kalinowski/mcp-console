@@ -69,3 +69,11 @@ pub(crate) fn resolve_python_host(
 ) -> Result<ManagedPython, String> {
     resolve_python_manifest(requirements, BTreeMap::new(), on_started)
 }
+
+pub(crate) fn resolve_python_version(
+    _constraints: Vec<String>,
+    _environment: BTreeMap<String, String>,
+    _on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
+) -> Result<String, String> {
+    Err("managed Python versions are supported only on macOS".to_string())
+}

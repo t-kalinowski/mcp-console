@@ -48,6 +48,18 @@ base::local({
     )
   }
 
+  version_request_json <- function(constraints) {
+    jsonlite::toJSON(
+      list(
+        constraints = I(as.character(constraints %||% character())),
+        environment = uv_environment()
+      ),
+      auto_unbox = TRUE,
+      null = "null",
+      na = "null"
+    )
+  }
+
   install_managed_python <- function(...) {
     namespace <- asNamespace("reticulate")
     current_requirements <- function() {
@@ -68,6 +80,14 @@ base::local({
       .Call(
         "mcp_console_resolve_python",
         request_json(requirements, retained_requirements)
+      )
+    }
+    resolve_version <- function(constraints = NULL, uv = NULL) {
+      # The host resolver owns the executable; worker code supplies only
+      # version constraints and supported UV settings.
+      .Call(
+        "mcp_console_resolve_python_version",
+        version_request_json(constraints)
       )
     }
 
@@ -116,6 +136,7 @@ base::local({
       invisible()
     }
     replace_binding("uv_get_or_create_env", resolve)
+    replace_binding("resolve_python_version", resolve_version)
     invisible()
   }
 
@@ -478,6 +499,18 @@ def _mcp_console_eval_cell(
         let python =
             crate::worker::resolve_python(request).map_err(|error| harp::anyhow!("{error}"))?;
         Ok(harp::object::RObject::from(python).sexp)
+    }
+
+    #[allow(clippy::result_large_err)]
+    #[harp::register]
+    pub extern "C-unwind" fn mcp_console_resolve_python_version(
+        request: SEXP,
+    ) -> harp::Result<SEXP> {
+        let request = String::try_from(harp::object::RObject::view(request))?;
+        let request = serde_json::from_str(&request).map_err(|error| harp::anyhow!("{error}"))?;
+        let version = crate::worker::resolve_python_version(request)
+            .map_err(|error| harp::anyhow!("{error}"))?;
+        Ok(harp::object::RObject::from(version).sexp)
     }
 }
 

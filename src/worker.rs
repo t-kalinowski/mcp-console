@@ -93,7 +93,9 @@ mod platform {
                 }
                 ServerMessage::Shutdown => return Ok(()),
                 ServerMessage::PythonResolved { .. }
-                | ServerMessage::PythonResolutionFailed { .. } => {
+                | ServerMessage::PythonResolutionFailed { .. }
+                | ServerMessage::PythonVersionResolved { .. }
+                | ServerMessage::PythonVersionResolutionFailed { .. } => {
                     return Err(io::Error::other(
                         "worker received an unexpected Python resolver response",
                     )
@@ -113,6 +115,10 @@ mod platform {
                 Ok(python)
             }
             ServerMessage::PythonResolutionFailed { message } => Err(message),
+            ServerMessage::PythonVersionResolved { .. }
+            | ServerMessage::PythonVersionResolutionFailed { .. } => Err(infrastructure_failure(
+                "worker received a Python version response while resolving Python".to_string(),
+            )),
             ServerMessage::Shutdown => {
                 WORKER_SHUTDOWN.store(true, Ordering::SeqCst);
                 Err("worker is shutting down".to_string())
@@ -123,6 +129,32 @@ mod platform {
             ServerMessage::PreparePython { .. } => Err(infrastructure_failure(
                 "worker received Python preparation while resolving Python".to_string(),
             )),
+        }
+    }
+
+    pub(crate) fn resolve_python_version(
+        request: crate::worker_protocol::PythonVersionResolveRequest,
+    ) -> Result<String, String> {
+        send_worker_message(&WorkerMessage::ResolvePythonVersion { request })?;
+        match receive_server_message().map_err(infrastructure_failure)? {
+            ServerMessage::PythonVersionResolved { version } => Ok(version),
+            ServerMessage::PythonVersionResolutionFailed { message } => Err(message),
+            ServerMessage::Shutdown => {
+                WORKER_SHUTDOWN.store(true, Ordering::SeqCst);
+                Err("worker is shutting down".to_string())
+            }
+            ServerMessage::Evaluate { .. } => Err(infrastructure_failure(
+                "worker received an evaluation while resolving a Python version".to_string(),
+            )),
+            ServerMessage::PreparePython { .. } => Err(infrastructure_failure(
+                "worker received Python preparation while resolving a Python version".to_string(),
+            )),
+            ServerMessage::PythonResolved { .. } | ServerMessage::PythonResolutionFailed { .. } => {
+                Err(infrastructure_failure(
+                    "worker received a Python environment response while resolving a Python version"
+                        .to_string(),
+                ))
+            }
         }
     }
 
@@ -551,7 +583,7 @@ mod platform {
 }
 
 #[cfg(target_os = "macos")]
-pub(crate) use platform::{publish_plot, resolve_python, run};
+pub(crate) use platform::{publish_plot, resolve_python, resolve_python_version, run};
 
 #[cfg(not(target_os = "macos"))]
 pub(crate) fn run() -> Result<(), Box<dyn std::error::Error>> {

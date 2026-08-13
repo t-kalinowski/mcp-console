@@ -106,6 +106,67 @@ def test_evaluates_with_explicit_managed_python(binary: Path) -> Transcript:
     return managed_python_transcript(binary, configured=True)
 
 
+def test_prints_requirements_with_host_uv_cache(binary: Path) -> Transcript:
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        temporary = Path(temporary_directory)
+        environment = os.environ.copy()
+        uv_cache = str(temporary / "uv-cache")
+        environment["UV_CACHE_DIR"] = str(temporary / "startup-uv-cache")
+        environment["MCP_CONSOLE_TEST_UV_CACHE_DIR"] = uv_cache
+        client = McpClient(
+            binary,
+            ("serve",),
+            environment,
+            current_directory=temporary,
+        )
+        client._initialize_and_list_tools()
+        # fmt: r
+        r = code(r"""
+            cache <- Sys.getenv("MCP_CONSOLE_TEST_UV_CACHE_DIR")
+            stopifnot(!file.exists(cache))
+            Sys.setenv(UV_CACHE_DIR = cache)
+            printed <- capture.output(print(reticulate::py_require()))
+            stopifnot(
+              length(printed) > 0L,
+              dir.exists(cache),
+              identical(Sys.getenv("UV_CACHE_DIR"), cache)
+            )
+            """)
+        client.send(r=r)
+        assert last_tool_text(client) == "[done]", client.transcript[-1]
+        return client._finish()
+
+
+def test_recovers_from_python_version_resolution_failure(binary: Path) -> Transcript:
+    client = McpClient(binary, ("serve",))
+    client._initialize_and_list_tools()
+    # fmt: r
+    r = code(r"""
+        worker_pid <- Sys.getpid()
+        base::local({
+          old_cache <- Sys.getenv("UV_CACHE_DIR", unset = NA_character_)
+          on.exit(
+            if (is.na(old_cache)) {
+              Sys.unsetenv("UV_CACHE_DIR")
+            } else {
+              Sys.setenv(UV_CACHE_DIR = old_cache)
+            }
+          )
+          Sys.setenv(UV_CACHE_DIR = "/dev/null")
+          print(reticulate::py_require())
+        })
+        """)
+    client.send(r=r)
+    result = client.transcript[-1]["result"]
+    assert result["isError"] is False, result
+    assert "managed Python version resolution failed" in result["content"][0]["text"]
+    result["content"][0]["text"] = "<Python version resolution failed>\n"
+
+    client.send(r="identical(Sys.getpid(), worker_pid)")
+    assert last_tool_text(client) == "[1] TRUE\n"
+    return client._finish()
+
+
 def test_prepares_initial_python_requirements(binary: Path) -> Transcript:
     environment = os.environ.copy()
     environment["RETICULATE_PYTHON"] = "/mcp-console-prepare-must-replace-python"

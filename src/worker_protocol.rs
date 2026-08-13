@@ -15,6 +15,8 @@ pub(crate) enum ServerMessage {
     PreparePython { packages: Vec<String> },
     PythonResolved { python: String },
     PythonResolutionFailed { message: String },
+    PythonVersionResolved { version: String },
+    PythonVersionResolutionFailed { message: String },
     Shutdown,
 }
 
@@ -65,6 +67,13 @@ pub(crate) struct PythonResolveRequest {
     pub(crate) environment: BTreeMap<String, String>,
 }
 
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct PythonVersionResolveRequest {
+    pub(crate) constraints: Vec<String>,
+    pub(crate) environment: BTreeMap<String, String>,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ConsoleChannel {
     Output,
@@ -92,6 +101,9 @@ pub(crate) enum WorkerMessage {
     InputReceived,
     ResolvePython {
         request: PythonResolveRequest,
+    },
+    ResolvePythonVersion {
+        request: PythonVersionResolveRequest,
     },
     PythonPrepared {
         python_checkpoint: PythonRequirementManifest,
