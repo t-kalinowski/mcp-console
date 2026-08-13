@@ -155,7 +155,10 @@ impl WorkerRuntime {
 
 impl Worker {
     /// Adds a resolved R library to the live worker's library search path.
-    pub(super) fn prepare_r(&mut self, library: &std::path::Path) -> Result<(), String> {
+    pub(super) fn prepare_r(
+        &mut self,
+        library: &std::path::Path,
+    ) -> Result<Result<(), String>, String> {
         let library = library
             .to_str()
             .ok_or_else(|| "resolved R library path is not UTF-8".to_string())?
@@ -166,10 +169,11 @@ impl Worker {
             })
             .map_err(|error| format!("worker sideband write failed: {error}"))?;
         match self.receive()? {
-            WorkerMessage::RPrepared { library: prepared } if prepared == library => Ok(()),
+            WorkerMessage::RPrepared { library: prepared } if prepared == library => Ok(Ok(())),
             WorkerMessage::RPrepared { .. } => {
                 Err("worker prepared an unexpected R library".to_string())
             }
+            WorkerMessage::RPreparationFailed { message } => Ok(Err(message)),
             _ => Err("worker sent an unexpected R preparation message".to_string()),
         }
     }
@@ -264,7 +268,8 @@ impl Worker {
                 }
                 WorkerMessage::PythonPrepared { .. }
                 | WorkerMessage::PythonPreparationFailed { .. }
-                | WorkerMessage::RPrepared { .. } => {
+                | WorkerMessage::RPrepared { .. }
+                | WorkerMessage::RPreparationFailed { .. } => {
                     return Err("worker sent an unexpected Python preparation result".to_string());
                 }
             }

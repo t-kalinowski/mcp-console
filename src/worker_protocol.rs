@@ -93,6 +93,9 @@ pub(crate) enum WorkerMessage {
     RPrepared {
         library: String,
     },
+    RPreparationFailed {
+        message: String,
+    },
     ResolvePython {
         request: PythonResolveRequest,
     },

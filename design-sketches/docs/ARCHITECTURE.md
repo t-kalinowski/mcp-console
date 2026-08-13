@@ -807,6 +807,7 @@ The supervisor requires `ir --version` from `PATH` to report 0.4.0 or later, the
 It validates IR's returned library and prepends it to inherited `R_LIBS` before each worker generation initializes R.
 The prepared library persists across explicit restart and crash replacement.
 While the built-in worker is idle, the supervisor can resolve the complete additive R requirement set and ask a fixed private R bridge to prepend the candidate to `.libPaths()` and remove the previous managed entry.
+Each candidate contains the complete retained R requirement set, so replacing the previous managed entry keeps live package lookup consistent with restart and crash replacement instead of accumulating stale candidates.
 The bridge preserves the other live library paths and in-memory state.
 Only after the worker confirms the normalized library path does the supervisor retain that library for later generations.
 The supervisor sets `IR_NO_LOCAL_SOURCES` for every invocation.
@@ -830,7 +831,9 @@ After startup, preparation remains an atomic public operation while the built-in
 4. commit both retained configurations only after every requested live change succeeds and the worker generation is still current.
 
 A failure leaves the prior retained configuration unchanged.
-If a partial live activation cannot be rolled back, the supervisor stops the worker rather than leave a partially prepared environment running.
+If a synchronized failure may have partially changed the live worker, the supervisor keeps it available for evaluation but rejects new requirement additions until a successful explicit restart.
+This gives the caller an opportunity to save in-memory state before replacing the worker.
+Transport or protocol failures still stop a worker whose usability is unknown.
 Preparation during evaluation remains rejected.
 
 A stopped worker cannot receive live environment updates.

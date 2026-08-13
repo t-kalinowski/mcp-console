@@ -52,7 +52,9 @@ It returns `[prepared]` without creating sideband pipes or starting the worker.
 After startup, an idle built-in worker accepts a resolved R library through `prepare_r`, updates its live `.libPaths()`, and preserves in-memory state.
 An idle server-managed worker accepts compatible Python additions through `prepare_python`.
 For a mixed request, the server keeps both candidates provisional until both live operations succeed, then commits the retained R and Python environments together.
-If a partial live change cannot be rolled back, the server stops the worker and leaves the retained configuration unchanged.
+After a synchronized failure may have partially changed the live worker, the server leaves the retained configuration unchanged and rejects new requirement additions until a successful explicit restart.
+Evaluations remain available so the caller can save in-memory state.
+Transport or protocol failures still stop a worker whose usability is unknown.
 Custom workers reject managed requirements.
 If preparation overlaps worker startup, the server returns `[requirements not prepared: worker is starting]` without resolving the additions or changing the retained requirements, R library, or Python manifest.
 
@@ -193,6 +195,7 @@ The complete implemented message set is:
 | worker → server | `{"kind":"input_requested","prompt":"..."}` | Report that the runtime requested input. |
 | worker → server | `{"kind":"input_received"}` | Report that the current read succeeded. |
 | worker → server | `{"kind":"r_prepared","library":"..."}` | Confirm the normalized live R library path. |
+| worker → server | `{"kind":"r_preparation_failed","message":"..."}` | Report a synchronized live R update failure without discarding the worker. |
 | worker → server | `{"kind":"resolve_python","request":{"requirements":{"packages":["numpy","pandas"]},"environment":{}}}` | Resolve the complete proposed reticulate manifest outside the sandbox. |
 | worker → server | `{"kind":"python_prepared","python_checkpoint":{"packages":["numpy","pandas","py-yaml12"]}}` | Finish explicit Python preparation and report its normalized manifest. |
 | worker → server | `{"kind":"python_preparation_failed","message":"..."}` | Report an ordinary explicit-preparation failure without discarding the worker. |
@@ -240,13 +243,18 @@ An explicit live R preparation has this shape after the server resolves the comp
 ```text
 server -> worker  {"kind":"prepare_r","library":"..."}
 worker -> server  {"kind":"r_prepared","library":"..."}
+# or
+worker -> server  {"kind":"r_preparation_failed","message":"..."}
 ```
 
 `prepare_r` is idle-only.
 The built-in worker passes the path to a fixed private R bridge rather than evaluating submitted source.
 The bridge tracks the current managed path, prepends the new library, removes its predecessor, and preserves every other live library path.
+The resolved library contains the complete retained R requirement set, so the predecessor is not needed by later worker generations.
 The server accepts only an acknowledgment for the requested normalized path and retains the candidate for future worker generations only after the complete public preparation succeeds.
-An R bridge or protocol failure stops the worker and leaves the retained environment unchanged.
+`r_preparation_failed` leaves the worker evaluable but prevents new requirement additions until explicit restart because its live search path may have changed without a retained checkpoint.
+While requirement changes are blocked, completed-cell Python checkpoints remain live-only and are not retained.
+An R bridge infrastructure error or protocol failure still stops the worker and leaves the retained environment unchanged.
 
 An explicit live Python preparation has this shape:
 
@@ -392,6 +400,7 @@ New code is rejected while an evaluation or its uncollected result is active.
 | evaluating, with or without input reported | MCP stdin submission | evaluating |
 | evaluating, no provisional input | worker → server `completed` | validate checkpoint, then idle |
 | preparing R | worker → server `r_prepared` | validate library path, then idle |
+| preparing R | worker → server `r_preparation_failed` | block requirement changes; then idle |
 | preparing Python | worker → server `python_prepared` | validate checkpoint, then idle |
 | preparing Python | worker → server `python_preparation_failed` | discard candidates, then idle |
 | starting, idle, evaluating, preparing R or Python, or host resolving | server → worker `shutdown` | terminal |

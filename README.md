@@ -80,12 +80,15 @@ The server runs IR with the same Rscript selection as the worker and prepends th
 
 After the built-in worker starts, `prepare` can apply new R requirements while the worker is idle.
 The server resolves the complete R requirement set outside the sandbox, then prepends the new library to the live `.libPaths()` and removes the previous managed IR entry.
+Each candidate contains the complete retained R requirement set, so replacing the previous managed entry keeps the live worker aligned with later worker generations and avoids accumulating stale managed libraries.
 Other live library paths and the worker's in-memory state are preserved.
 The server retains the new library only after the worker confirms the change, and later worker generations reuse it.
 
 An idle server-managed worker can also materialize an uninitialized Python manifest or activate a same-`libpython` environment without replacing the worker.
 A mixed R and Python preparation commits both retained configurations only after both live changes succeed.
-A failure leaves the retained R and Python configurations unchanged; if a partial live change cannot be rolled back, the server stops the worker rather than leave it running with a partially prepared environment.
+A failure leaves the retained R and Python configurations unchanged.
+If a synchronized failure may have partially changed the live worker, evaluation remains available so its state can be saved, but new requirement additions return `[restart required]` until a successful explicit restart.
+Transport or protocol failures still stop the worker when its usability is unknown.
 The server returns `[prepared]` only after accepting the complete checkpoint.
 Exact repeats are idempotent.
 

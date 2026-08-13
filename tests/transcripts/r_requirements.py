@@ -188,12 +188,92 @@ def test_prepares_r_requirements_after_worker_startup(binary: Path) -> Transcrip
         stopifnot(
           identical(sentinel, 42L),
           identical(Sys.getpid(), worker_pid),
+          !initial_library %in% .libPaths(),
           identical(dirname(find.package("zeallot")), .libPaths()[[1L]])
         )
         42L
         """)
     client.send(r=r)
     assert last_tool_text(client) == "[1] 42\n"
+    return client._finish()
+
+
+def test_failed_live_r_preparation_requires_restart(binary: Path) -> Transcript:
+    environment, _ = r_test_environment()
+    client = McpClient(binary, ("serve",), environment)
+    client._initialize_and_list_tools()
+
+    # fmt: r
+    setup = code(r"""
+        sentinel <- 42L
+        worker_pid <- Sys.getpid()
+        invisible(loadNamespace("reticulate"))
+        stopifnot(!reticulate::py_available(initialize = FALSE))
+        original_lib_paths <- base::.libPaths
+        replacement_lib_paths <- base::local({
+          original <- original_lib_paths
+          function(new) {
+            if (base::missing(new)) {
+              return(original())
+            }
+            original(new)
+            base::stop("blocked live R preparation")
+          }
+        })
+        base::unlockBinding(".libPaths", base::baseenv())
+        base::assign(
+          ".libPaths",
+          replacement_lib_paths,
+          envir = base::baseenv()
+        )
+        base::lockBinding(".libPaths", base::baseenv())
+        """)
+    client.send(r=setup)
+    assert last_tool_text(client) == "[done]", client.transcript[-1]
+
+    client.session(action="prepare", requirements={"r": ["praise"]})
+    result = client.transcript[-1]["result"]
+    assert result["isError"] is True, result
+    failure = result["content"][0]["text"]
+    assert failure == (
+        "blocked live R preparation; further requirement changes are unavailable "
+        "until session restart"
+    ), failure
+    assert "[worker stopped:" not in failure, failure
+
+    client.session(action="prepare", requirements={"r": ["zeallot"]})
+    assert last_tool_text(client) == "[restart required]"
+
+    # fmt: r
+    usable = code(r"""
+        saved <- base::unserialize(base::serialize(sentinel, NULL))
+        saveRDS(saved, tempfile())
+        stopifnot(
+          identical(saved, 42L),
+          identical(Sys.getpid(), worker_pid),
+          is.character(base::.libPaths())
+        )
+        42L
+        """)
+    client.send(r=usable)
+    assert last_tool_text(client) == "[1] 42\n"
+
+    client.session(action="restart")
+    assert last_tool_text(client) == (
+        "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
+    )
+    client.session(action="prepare", requirements={"r": ["zeallot"]})
+    assert last_tool_text(client) == "[prepared]"
+
+    # fmt: r
+    restarted = code(r"""
+        stopifnot(
+          !exists("sentinel", inherits = FALSE),
+          identical(dirname(find.package("zeallot")), .libPaths()[[1L]])
+        )
+        """)
+    client.send(r=restarted)
+    assert last_tool_text(client) == "[done]"
     return client._finish()
 
 
@@ -210,7 +290,11 @@ def test_failed_late_mixed_preparation_preserves_worker(binary: Path) -> Transcr
         worker_pid <- Sys.getpid()
         initial_library <- .libPaths()[[1L]]
         stopifnot(
-          !file.exists(file.path(initial_library, "zeallot", "DESCRIPTION"))
+          !requireNamespace(
+            "zeallot",
+            lib.loc = initial_library,
+            quietly = TRUE
+          )
         )
         """)
     client.send(r=r)
@@ -236,7 +320,11 @@ def test_failed_late_mixed_preparation_preserves_worker(binary: Path) -> Transcr
           identical(sentinel, 42L),
           identical(Sys.getpid(), worker_pid),
           identical(.libPaths()[[1L]], initial_library),
-          !file.exists(file.path(initial_library, "zeallot", "DESCRIPTION")),
+          !requireNamespace(
+            "zeallot",
+            lib.loc = initial_library,
+            quietly = TRUE
+          ),
           !"not a valid requirement !!!" %in%
             reticulate::py_require()$packages
         )

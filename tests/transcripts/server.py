@@ -67,6 +67,8 @@ def test_initializes_and_lists_tools(binary: Path) -> Transcript:
         "packages not included in the built-in environments",
         "idle server-managed worker can add R and compatible Python requirements",
         "without losing live state",
+        "evaluation remains available so state can be saved",
+        "new requirement additions require restart",
         "Packages are not imported or attached automatically",
         "loses all in-memory R, Python, and SQL state",
     ):
@@ -84,6 +86,12 @@ def test_initializes_and_lists_tools(binary: Path) -> Transcript:
         "After startup, it can add R and compatible Python requirements while the worker is idle"
         in action_description
     ), action_description
+    requirements_description = session["inputSchema"]["properties"]["requirements"][
+        "description"
+    ]
+    assert "return `[restart required]` until restart" in requirements_description, (
+        requirements_description
+    )
     transcript = client._finish()
     assert not (workspace / ".mcp-console").exists(), workspace
     return transcript

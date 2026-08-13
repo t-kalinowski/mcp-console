@@ -24,6 +24,7 @@ impl WorkerGeneration {
 pub(super) struct LifecycleControl {
     pub(super) state: LifecycleState,
     pub(super) generation: WorkerGeneration,
+    pub(super) requirement_changes: RequirementChangeState,
     pub(super) processes: ProcessStopHandles,
 }
 
@@ -32,6 +33,7 @@ impl LifecycleControl {
         Self {
             state: LifecycleState::Ready,
             generation: WorkerGeneration::new(),
+            requirement_changes: RequirementChangeState::Available,
             processes: ProcessStopHandles::default(),
         }
     }
@@ -52,6 +54,12 @@ pub(super) enum LifecycleState {
     Ready,
     Restarting { deadline: Instant },
     ShuttingDown { deadline: Instant },
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub(super) enum RequirementChangeState {
+    Available,
+    RestartRequired,
 }
 
 pub(super) enum GenerationStatus {
@@ -393,6 +401,7 @@ impl Client {
         match lifecycle.state {
             LifecycleState::Restarting { .. } => {
                 lifecycle.state = LifecycleState::Ready;
+                lifecycle.requirement_changes = RequirementChangeState::Available;
                 Ok(())
             }
             LifecycleState::ShuttingDown { .. } => Err("worker is shutting down".to_string()),

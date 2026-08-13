@@ -46,6 +46,7 @@ send:
     stopifnot(
       identical(sentinel, 42L),
       identical(Sys.getpid(), worker_pid),
+      !initial_library %in% .libPaths(),
       identical(dirname(find.package("zeallot")), .libPaths()[[1L]])
     )
     42L

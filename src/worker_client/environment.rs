@@ -1,6 +1,8 @@
 use std::collections::BTreeSet;
 
-use super::lifecycle::{FailedWorkerStop, GenerationStatus, LifecycleState, WorkerGeneration};
+use super::lifecycle::{
+    FailedWorkerStop, GenerationStatus, LifecycleState, RequirementChangeState, WorkerGeneration,
+};
 use super::{Client, WorkerState};
 
 pub(super) struct Environment {
@@ -93,6 +95,9 @@ impl Client {
             .unwrap_or_default();
         if python_candidate.is_none() && r_additions.is_subset(&current_r) {
             return Ok(PrepareResult::Prepared);
+        }
+        if self.requirement_changes(&generation)? == RequirementChangeState::RestartRequired {
+            return Ok(PrepareResult::RestartRequired);
         }
         if active_evaluation {
             return Err(
@@ -206,13 +211,8 @@ impl Client {
                     match select_python_checkpoint(current_python, checkpoint, candidates) {
                         Ok(managed) => Some(managed),
                         Err(error) => {
-                            return self.fail_running_preparation(
-                                &mut worker,
-                                generation,
-                                true,
-                                error,
-                                includes_r,
-                            );
+                            self.require_restart_for_requirement_changes(generation)?;
+                            return Err(requirement_restart_error(error));
                         }
                     }
                 }
@@ -236,10 +236,23 @@ impl Client {
                 }
             }
         };
-        if let Some(managed_r) = managed_r.as_ref()
-            && let Err(error) = running.prepare_r(managed_r.library())
-        {
-            return self.fail_running_preparation(&mut worker, generation, true, error, true);
+        if let Some(managed_r) = managed_r.as_ref() {
+            match running.prepare_r(managed_r.library()) {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) => {
+                    self.require_restart_for_requirement_changes(generation)?;
+                    return Err(requirement_restart_error(error));
+                }
+                Err(error) => {
+                    return self.fail_running_preparation(
+                        &mut worker,
+                        generation,
+                        true,
+                        error,
+                        true,
+                    );
+                }
+            }
         }
         if let Err(error) = self.commit_running_environment(generation, managed_python, managed_r) {
             return self.fail_running_preparation(&mut worker, generation, true, error, includes_r);
@@ -316,6 +329,49 @@ impl Client {
         }
     }
 
+    fn requirement_changes(
+        &self,
+        generation: &WorkerGeneration,
+    ) -> Result<RequirementChangeState, String> {
+        let lifecycle = self
+            .0
+            .lifecycle
+            .lock()
+            .map_err(|_| "worker lifecycle lock poisoned".to_string())?;
+        match lifecycle.state {
+            LifecycleState::Ready if lifecycle.generation.is(generation) => {
+                Ok(lifecycle.requirement_changes)
+            }
+            LifecycleState::Ready => {
+                Err("session restarted before the operation began".to_string())
+            }
+            LifecycleState::Restarting { .. } => Err("worker is restarting".to_string()),
+            LifecycleState::ShuttingDown { .. } => Err("worker is shutting down".to_string()),
+        }
+    }
+
+    fn require_restart_for_requirement_changes(
+        &self,
+        generation: &WorkerGeneration,
+    ) -> Result<(), String> {
+        let mut lifecycle = self
+            .0
+            .lifecycle
+            .lock()
+            .map_err(|_| "worker lifecycle lock poisoned".to_string())?;
+        match lifecycle.state {
+            LifecycleState::Ready if lifecycle.generation.is(generation) => {
+                lifecycle.requirement_changes = RequirementChangeState::RestartRequired;
+                Ok(())
+            }
+            LifecycleState::Ready => {
+                Err("session restarted before the operation began".to_string())
+            }
+            LifecycleState::Restarting { .. } => Err("worker is restarting".to_string()),
+            LifecycleState::ShuttingDown { .. } => Err("worker is shutting down".to_string()),
+        }
+    }
+
     pub(super) fn resolve_runtime_python(
         &self,
         generation: WorkerGeneration,
@@ -336,6 +392,9 @@ impl Client {
         if current.requirements() == &requirements {
             self.ensure_generation(&generation)?;
             return Ok(current);
+        }
+        if self.requirement_changes(&generation)? == RequirementChangeState::RestartRequired {
+            return Err("requirement changes are unavailable until session restart".to_string());
         }
 
         let managed = match crate::resolver::resolve_python_manifest(
@@ -361,6 +420,9 @@ impl Client {
         candidates: Vec<crate::resolver::ManagedPython>,
     ) -> Result<(), String> {
         self.ensure_generation(&generation)?;
+        if self.requirement_changes(&generation)? == RequirementChangeState::RestartRequired {
+            return Ok(());
+        }
         let Some(checkpoint) = checkpoint else {
             return if candidates.is_empty() {
                 Ok(())
@@ -395,4 +457,8 @@ impl Client {
             LifecycleState::ShuttingDown { .. } => Err("worker is shutting down".to_string()),
         }
     }
+}
+
+fn requirement_restart_error(error: String) -> String {
+    format!("{error}; further requirement changes are unavailable until session restart")
 }

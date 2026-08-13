@@ -283,7 +283,8 @@ It preserves the other R library paths and in-memory runtime state, and retains 
 Before Python initializes, it updates and materializes the manifest; after initialization, it activates a candidate that uses the same `libpython`.
 A mixed R and Python preparation commits both retained configurations only after both live changes succeed.
 A failed resolution or activation leaves the retained configuration unchanged.
-If a partial live activation cannot be rolled back, the runtime is stopped rather than left running with a partially prepared environment.
+If a synchronized failure may have partially changed the live runtime, evaluation remains available so the caller can save state, but new requirement additions report that restart is required until a successful explicit restart.
+Transport or protocol failures still stop a runtime whose usability is unknown.
 Preparation while the runtime is evaluating is an error.
 
 `restart` may include additive requirements.

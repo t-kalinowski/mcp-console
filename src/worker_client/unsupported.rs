@@ -22,7 +22,10 @@ impl WorkerRuntime {
 }
 
 impl Worker {
-    pub(super) fn prepare_r(&mut self, _library: &std::path::Path) -> Result<(), String> {
+    pub(super) fn prepare_r(
+        &mut self,
+        _library: &std::path::Path,
+    ) -> Result<Result<(), String>, String> {
         unreachable!("unsupported workers cannot start")
     }
 

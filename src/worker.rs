@@ -100,8 +100,14 @@ mod platform {
                     if let Some(message) = take_worker_failure() {
                         return Err(io::Error::other(message).into());
                     }
-                    let library = result.map_err(io::Error::other)?;
-                    writer.send(&WorkerMessage::RPrepared { library })?;
+                    match result.map_err(io::Error::other)? {
+                        crate::r_environment::PreparationOutcome::Prepared { library } => {
+                            writer.send(&WorkerMessage::RPrepared { library })?;
+                        }
+                        crate::r_environment::PreparationOutcome::Failed { message } => {
+                            writer.send(&WorkerMessage::RPreparationFailed { message })?;
+                        }
+                    }
                 }
                 ServerMessage::Shutdown => return Ok(()),
                 ServerMessage::PythonResolved { .. }

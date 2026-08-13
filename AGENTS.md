@@ -63,9 +63,12 @@ The direct resolver process defines its process-group lifetime: after it exits, 
 Closing MCP input cancels an in-flight explicit or runtime resolution by force-stopping its host resolver process group; startup preflights complete before MCP input is accepted and are not cancellable through that lifecycle.
 An idle built-in worker can apply new R requirements without replacement.
 The server resolves the complete R requirement set outside the sandbox, prepends the new library to the live `.libPaths()`, removes the previous managed IR entry, preserves the other live library paths and in-memory state, and retains the confirmed library for later worker generations.
+Each IR candidate contains the complete retained R requirement set, so replacing the previous managed entry keeps the live search path aligned with restart and crash replacement instead of accumulating stale managed libraries.
 An idle server-managed worker can also materialize an uninitialized Python manifest or activate a same-`libpython` environment while preserving live state.
 A mixed live R and Python preparation commits both retained configurations only after both changes succeed.
-Failure preserves the prior retained configuration; if a partial live activation cannot be rolled back, the server stops the worker rather than leave a partially prepared environment running.
+Failure preserves the prior retained configuration.
+After a synchronized failure may have partially changed the live worker, evaluation remains available so its state can be saved, but new requirement additions return `[restart required]` until a successful explicit restart.
+Transport or protocol failures still stop the worker when its usability is unknown.
 The server returns `[prepared]` only after checkpointing the complete result.
 Preparation during evaluation is rejected.
 Preparation that overlaps worker startup returns `[requirements not prepared: worker is starting]` without resolving the additions or changing the retained requirements, R library, or Python manifest.

@@ -123,7 +123,9 @@ result:
         persistent console session. Use `prepare` for packages not included in
         the built-in environments. Packages are not imported or attached
         automatically. An idle server-managed worker can add R and compatible
-        Python requirements without losing live state. Requirements are
+        Python requirements without losing live state. After a recoverable live
+        preparation failure, evaluation remains available so state can be saved,
+        but new requirement additions require restart. Requirements are
         additive, idempotent, and persist across restart. `restart` may
         optionally add Python requirements, then replaces the worker and loses
         all in-memory R, Python, and SQL state, debugger state, and unread
@@ -149,11 +151,13 @@ result:
             description: |-
               Additive packages to make available. `prepare` requires at least one R or Python entry.
               `restart` accepts Python entries only; omit `requirements` to restart unchanged. Requirements
-              persist across restart but do not import or attach packages. After an automatic replacement
-              attempt fails, a later `prepare` with new additions returns `[restart required]`. Resolution
-              runs outside the worker sandbox and may download packages or execute installation or build
-              code on the host. Managed Python startup and Matplotlib cache warming also run on the host
-              and may execute selected code; use only trusted requirements.
+              persist across restart but do not import or attach packages. After a recoverable live
+              preparation failure, evaluation remains available so state can be saved, but new requirement
+              additions return `[restart required]` until restart. The same marker follows a failed
+              automatic replacement. Resolution runs outside the worker sandbox and may download packages
+              or execute installation or build code on the host. Managed Python startup and Matplotlib
+              cache warming also run on the host and may execute selected code; use only trusted
+              requirements.
             type:
               - object
               - "null"
