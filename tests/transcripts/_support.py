@@ -2,6 +2,7 @@ import base64
 import json
 import os
 import re
+import shutil
 import subprocess
 import tempfile
 from concurrent.futures import ThreadPoolExecutor
@@ -15,6 +16,26 @@ TranscriptEntry = dict[str, Any]
 Transcript = list[TranscriptEntry]
 ToolResult = dict[str, Any]
 YamlStream = list[Any]
+
+
+def host_ir_cache_dir() -> str | None:
+    if cache := os.environ.get("IR_CACHE_DIR"):
+        return cache
+    ir = shutil.which("ir")
+    if ir is None:
+        return None
+    result = subprocess.run(
+        [ir, "cache", "dir"],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        return None
+    cache = result.stdout.strip()
+    return cache or None
+
+
+HOST_IR_CACHE_DIR = host_ir_cache_dir()
 
 
 @dataclass(frozen=True)
@@ -162,6 +183,10 @@ class McpClient:
         current_directory: Path | None = None,
         umask: int = -1,
     ) -> None:
+        if environment is not None:
+            environment = environment.copy()
+            if HOST_IR_CACHE_DIR is not None:
+                environment.setdefault("IR_CACHE_DIR", HOST_IR_CACHE_DIR)
         self.temporary_directory = (
             tempfile.TemporaryDirectory() if current_directory is None else None
         )

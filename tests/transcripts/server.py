@@ -17,12 +17,14 @@ def test_initializes_and_lists_tools(binary: Path) -> Transcript:
         "Use it whenever exact computation or direct inspection would improve accuracy",
         "arithmetic, string counting, parsing",
         "Choose the clearest language for each step",
+        "The built-in R environment includes tidyverse and reticulate",
+        "The built-in managed Python environment includes NumPy and pandas",
         "Language-native help and introspection are available",
         "`r.name`",
         "`py$name`",
         "SQL queries R data frames by name",
         "`sql_connection()`",
-        "Use `session` to prepare missing packages",
+        "Use `session` to prepare other packages",
         "Call `send` sequentially",
         "ordinary console output",
         "cannot directly access the network",
@@ -32,8 +34,21 @@ def test_initializes_and_lists_tools(binary: Path) -> Transcript:
     assert (
         "Default-device plots" in send["inputSchema"]["properties"]["r"]["description"]
     )
+    r_description = send["inputSchema"]["properties"]["r"]["description"]
+    for guidance in (
+        "packages are not attached automatically",
+        "`ggplot2::ggplot()`",
+        "`dplyr::mutate()`",
+        "`readr::read_csv()`",
+        "`jsonlite::fromJSON()`",
+    ):
+        assert guidance in r_description, guidance
     assert (
         "`matplotlib.pyplot`"
+        in send["inputSchema"]["properties"]["python"]["description"]
+    )
+    assert (
+        "The built-in managed Python environment includes NumPy and pandas"
         in send["inputSchema"]["properties"]["python"]["description"]
     )
     assert "bounded preview" in send["inputSchema"]["properties"]["sql"]["description"]
@@ -44,6 +59,8 @@ def test_initializes_and_lists_tools(binary: Path) -> Transcript:
 
     session = tools["session"]
     for guidance in (
+        "Make additional R or Python packages available",
+        "packages not included in the built-in environments",
         "Prepare anticipated R packages before the worker starts",
         "returns `[restart required]` and applies none of that call's R or Python additions",
         "Packages are not imported or attached automatically",

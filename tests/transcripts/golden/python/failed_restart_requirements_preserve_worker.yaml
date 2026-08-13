@@ -26,6 +26,7 @@ result:
           "python": "3.12.x (reticulate default)",
           "packages": [
             "numpy",
+            "pandas",
             "not a valid requirement !!!"
           ]
         }

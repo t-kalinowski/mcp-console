@@ -6,7 +6,7 @@ session:
   action: prepare
   requirements:
     r:
-      - cli
+      - praise
 result:
   content:
     - type: text
@@ -60,7 +60,7 @@ session:
   action: prepare
   requirements:
     r:
-      - glue
+      - zeallot
     python:
       - not a valid requirement !!!
 result:
@@ -73,6 +73,7 @@ result:
           "python": "3.12.x (reticulate default)",
           "packages": [
             "numpy",
+            "pandas",
             "not a valid requirement !!!"
           ]
         }
@@ -88,11 +89,11 @@ send:
   r: |
     stopifnot(
       identical(
-        dirname(find.package("cli")),
+        dirname(find.package("praise")),
         .libPaths()[[1L]]
       ),
       !file.exists(
-        file.path(.libPaths()[[1L]], "glue", "DESCRIPTION")
+        file.path(.libPaths()[[1L]], "zeallot", "DESCRIPTION")
       ),
       normalizePath(.libPaths()[[2L]]) ==
         normalizePath(Sys.getenv("MCP_CONSOLE_AMBIENT_R_LIBRARY"))
@@ -110,7 +111,7 @@ session:
   action: prepare
   requirements:
     r:
-      - cli
+      - praise
 result:
   content:
     - type: text
@@ -122,7 +123,7 @@ session:
   action: prepare
   requirements:
     r:
-      - glue
+      - zeallot
     python:
       - py-yaml12
 result:
@@ -158,11 +159,11 @@ send:
   r: |
     stopifnot(
       identical(
-        dirname(find.package("cli")),
+        dirname(find.package("praise")),
         .libPaths()[[1L]]
       ),
       !file.exists(
-        file.path(.libPaths()[[1L]], "glue", "DESCRIPTION")
+        file.path(.libPaths()[[1L]], "zeallot", "DESCRIPTION")
       ),
       normalizePath(.libPaths()[[2L]]) ==
         normalizePath(Sys.getenv("MCP_CONSOLE_AMBIENT_R_LIBRARY"))
