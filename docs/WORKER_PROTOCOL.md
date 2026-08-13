@@ -380,7 +380,7 @@ The shutdown task queues worker-stdin closure, then attempts the sideband write.
 It runs independently of the deadline so a blocked stdin writer or full sideband pipe cannot postpone forced termination.
 The sandbox child waits only for the time remaining before the original deadline.
 If its direct process is still running at the deadline, the sandbox force-stops its process group and reaps that direct process.
-After the process stops and the active sideband operation returns, shutdown cancels and joins its stdin writer and standard-stream readers.
+After the process stops and the active sideband operation returns, shutdown cancels its stdin writer and standard-stream readers, drains the finite standard-stream bytes already buffered at that boundary, and joins those tasks.
 This closes the old generation's server-side pipe boundary before shutdown returns, even when a background descendant retains a pipe descriptor or a blocked stdin write.
 The descendant itself remains unsupervised as described below, and any later write to the closed pipe is not captured.
 

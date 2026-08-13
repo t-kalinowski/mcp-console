@@ -41,6 +41,11 @@ struct WorkerIoThread {
     thread: thread::JoinHandle<()>,
 }
 
+struct WorkerIoEvents {
+    ready: bool,
+    cancelled: bool,
+}
+
 #[derive(Clone)]
 pub(super) struct StdinSender(mpsc::Sender<StdinMessage>);
 
@@ -304,12 +309,13 @@ fn start_output_reader(
     let thread = thread::spawn(move || {
         let mut stream = stream;
         let mut buffer = [0; 8 * 1024];
-        loop {
-            if !matches!(
-                wait_for_worker_io(stream.as_raw_fd(), libc::POLLIN, &cancelled),
-                Ok(true)
-            ) {
+        while let Ok(events) = wait_for_worker_io(stream.as_raw_fd(), libc::POLLIN, &cancelled) {
+            if events.cancelled {
+                drain_buffered_output(&mut stream, &output, &mut buffer);
                 break;
+            }
+            if !events.ready {
+                continue;
             }
             match stream.read(&mut buffer) {
                 Ok(0) => break,
@@ -351,8 +357,12 @@ fn write_worker_stdin(
     mut bytes: &[u8],
 ) -> std::io::Result<()> {
     while !bytes.is_empty() {
-        if !wait_for_worker_io(stdin.as_raw_fd(), libc::POLLOUT, cancelled)? {
+        let events = wait_for_worker_io(stdin.as_raw_fd(), libc::POLLOUT, cancelled)?;
+        if events.cancelled {
             return Ok(());
+        }
+        if !events.ready {
+            continue;
         }
         match stdin.write(bytes) {
             Ok(0) => return Err(std::io::ErrorKind::WriteZero.into()),
@@ -365,11 +375,37 @@ fn write_worker_stdin(
     Ok(())
 }
 
+fn drain_buffered_output(
+    stream: &mut (impl Read + AsRawFd),
+    output: &super::OutputTapeStream,
+    buffer: &mut [u8],
+) {
+    let mut remaining: libc::c_int = 0;
+    // SAFETY: `stream` remains open and `remaining` points to writable storage
+    // of the type expected by FIONREAD.
+    if unsafe { libc::ioctl(stream.as_raw_fd(), libc::FIONREAD, &mut remaining) } < 0 {
+        return;
+    }
+    let mut remaining = remaining.max(0) as usize;
+    while remaining > 0 {
+        let length = remaining.min(buffer.len());
+        match stream.read(&mut buffer[..length]) {
+            Ok(0) => break,
+            Ok(length) => {
+                output.push(&buffer[..length]);
+                remaining -= length;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(_) => break,
+        }
+    }
+}
+
 fn wait_for_worker_io(
     descriptor: RawFd,
     events: libc::c_short,
     cancelled: &std::io::PipeReader,
-) -> std::io::Result<bool> {
+) -> std::io::Result<WorkerIoEvents> {
     loop {
         let mut descriptors = [
             libc::pollfd {
@@ -386,7 +422,10 @@ fn wait_for_worker_io(
         // SAFETY: both descriptors remain open for the call, and the pointer and
         // count describe the initialized array exactly.
         if unsafe { libc::poll(descriptors.as_mut_ptr(), descriptors.len() as _, -1) } >= 0 {
-            return Ok(descriptors[1].revents == 0);
+            return Ok(WorkerIoEvents {
+                ready: descriptors[0].revents != 0,
+                cancelled: descriptors[1].revents != 0,
+            });
         }
         let error = std::io::Error::last_os_error();
         if error.kind() != std::io::ErrorKind::Interrupted {
