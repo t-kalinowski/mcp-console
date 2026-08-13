@@ -780,7 +780,15 @@ def test_evaluates_cells_in_persistent_reticulate_state(binary: Path) -> Transcr
     assert last_tool_text(client) == "2\n"
     client.send(python="answer")
     assert last_tool_text(client) == "41\n"
-    client.send(r="reticulate::py$answer")
+    # fmt: r
+    r = code(r"""
+        stopifnot(!"package:reticulate" %in% search())
+        py <- "user shadow"
+        stopifnot(identical(py, "user shadow"))
+        rm(py)
+        py$answer
+        """)
+    client.send(r=r)
     assert last_tool_text(client) == "[1] 41\n"
     # fmt: python
     python = code("""
@@ -814,6 +822,20 @@ def test_evaluates_cells_in_persistent_reticulate_state(binary: Path) -> Transcr
     assert last_tool_text(client) == "42\n"
     client.send(python="silent = True")
     assert last_tool_text(client) == "[done]"
+    # fmt: r
+    r = code(r"""
+        rm(list = ls())
+        py$assigned_from_r <- 43L
+        py$answer
+        """)
+    client.send(r=r)
+    assert last_tool_text(client) == "[1] 41\n"
+    # fmt: python
+    python = code("""
+        assigned_from_r
+        """)
+    client.send(python=python)
+    assert last_tool_text(client) == "43\n"
     return client._finish()
 
 

@@ -82,6 +82,7 @@ Exact repeats are idempotent.
 Preparation during an evaluation is an error.
 Preparation that overlaps worker startup returns `[requirements not prepared: worker is starting]` without resolving the additions or changing the retained requirements, R library, or Python manifest.
 A call with a new R requirement after startup returns `[restart required]` and applies none of that call's additions.
+No session action can add a new R requirement after startup; start a fresh `mcp-console serve` process and prepare it before its worker starts.
 Caller-selected Python environments and custom workers cannot use managed live preparation.
 
 The client can explicitly replace the worker, retain the prepared R library, and add Python requirements in the same call:
@@ -114,6 +115,83 @@ If the replacement reports ready in time, startup output and `[idle]` complete t
 If it remains in startup at the deadline, the response ends with `[worker starting]`, and a later poll waits on the same attempt.
 A startup failure ends that attempt; a later call can try again and emits a new starting notice.
 Initial lazy startup and retries before any worker reaches ready remain silent.
+
+## A mixed-language analysis
+
+An MCP client can use R, Python, and DuckDB as one persistent workspace and choose the clearest language for each step without exporting intermediate files.
+After the `session` call below, each language-labeled block contains one complete cell for the named `send` field.
+
+First, call `session` to prepare the packages before the worker starts:
+
+```json
+{
+  "action": "prepare",
+  "requirements": {
+    "r": ["dplyr", "ggplot2"],
+    "python": ["pandas", "matplotlib"]
+  }
+}
+```
+
+Load and inspect data with a `python` cell:
+
+```python
+import pandas as pd
+
+measurements = pd.read_csv("measurements.csv")
+measurements.describe()
+```
+
+Read that Python object from an `r` cell, fit a model with `lm()`, and leave the augmented data in R global state:
+
+```r
+measurements <- tibble::as_tibble(py$measurements)
+fit <- lm(response ~ temperature + group, data = measurements)
+measurements <- dplyr::mutate(
+  measurements,
+  .fitted = fitted(fit),
+  .residual = residuals(fit)
+)
+summary(fit)
+```
+
+Query the R data frame directly by name with an `sql` cell:
+
+```sql
+SELECT
+  "group",
+  count(*) AS n,
+  avg(abs(".residual")) AS mean_abs_residual
+FROM measurements
+GROUP BY "group"
+ORDER BY mean_abs_residual DESC
+```
+
+Use another `python` cell to read the updated R object and return a Matplotlib figure as an MCP image:
+
+```python
+import matplotlib.pyplot as plt
+
+frame = r.measurements
+plt.scatter(frame["temperature"], frame[".residual"])
+plt.axhline(0, color="black", linewidth=1)
+```
+
+Switch back to an `r` cell for a ggplot2 diagnostic:
+
+```r
+ggplot2::ggplot(
+  measurements,
+  ggplot2::aes(.fitted, .residual, color = group)
+) +
+  ggplot2::geom_point() +
+  ggplot2::geom_hline(yintercept = 0)
+```
+
+Python reads R globals as `r.name`, and R reads Python globals as `py$name` without attaching reticulate.
+SQL can scan data frames in R global state; Python data frames become visible to SQL after they are bound to an R name, as above.
+Requirements make packages available but do not import or attach them.
+
 The worker runs each R cell through R's native top-level loop, captures R console output, prints each visible value, and maintains `.Last.value`.
 If a cell ends while an expression is incomplete, earlier complete expressions from that cell remain applied.
 The worker installs a worker-owned `grDevices::png()` function as R's default graphics device and opens it lazily when a cell draws.
@@ -135,7 +213,7 @@ plot(1:10)
 
 Graphics devices opened explicitly by evaluated code, such as with `grDevices::png()`, are user-owned: the worker does not close them, read their files, or return them as MCP images.
 Python cells execute statements in persistent `__main__` state and display their final expression through Python's display hook.
-R and Python can exchange objects through reticulate's `py` and `r` bridges.
+Python reads R globals through reticulate's `r.name` bridge, and R reads Python globals through the attached `py$name` binding.
 R plots invoked from a Python cell through reticulate's `r` bridge use the same managed default device, sizing options, cell scope, and MCP image output as plots invoked from an R cell.
 At the end of each Python cell, including after a Python error, every open figure managed by `matplotlib.pyplot` is rendered in memory, returned once as a PNG image, and closed.
 `plt.show()` is optional, and calling `savefig()` does not suppress this capture while the figure remains open.
@@ -168,7 +246,7 @@ DuckDB first resolves unqualified relation names in its persistent catalog.
 When no catalog table or view matches, it can scan a data frame bound in the persistent R global environment.
 An SQL view over a scanned name observes later changes to that R binding.
 R code can call `sql_connection()` to borrow the worker-owned DBI connection for established DuckDB, DBI, and dplyr interfaces.
-The helper remains available after clearing the global R workspace with `rm(list = ls())`; callers must not disconnect the returned connection.
+The worker exposes `py` and `sql_connection()` in its attached `tools:mcp-console` environment, so both remain available after clearing the global R workspace with `rm(list = ls())`; callers must not disconnect the returned connection.
 For example, `dplyr::tbl(sql_connection(), "answers")` creates a lazy relation that observes later catalog changes until it is collected.
 These paths avoid an eager snapshot transfer, but do not promise end-to-end zero-copy behavior: DuckDB converts R values during execution, and collecting a lazy relation materializes its result in R.
 Automatic Python relation sharing and affected-row summaries do not exist yet.
@@ -253,6 +331,7 @@ The `worker` suite drives `serve` through a transparent proxy, asserts the publi
 The `zod` suite uses the hidden `serve --worker PATH` development option to exercise the same protocol with an executable Python fixture.
 These built-in-worker and protocol suites run on macOS, where the sandbox policy is implemented.
 See [`docs/WORKER_PROTOCOL.md`](docs/WORKER_PROTOCOL.md) for the exact implemented launch and message contract.
+See [`docs/TOOL_DESCRIPTIONS.md`](docs/TOOL_DESCRIPTIONS.md) for the exact descriptions registered for the MCP tools.
 
 ## License
 

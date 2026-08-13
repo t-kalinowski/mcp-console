@@ -30,29 +30,45 @@ struct ConsoleServer {
 #[derive(Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct SendArguments {
-    /// Complete multiline R code evaluated in persistent state. Plots drawn on the default device
-    /// return as PNG images in MCP results. Set their size with the R options
-    /// `options(console.plot.width = ..., console.plot.height = ..., console.plot.dpi = ...)`;
-    /// width and height are in inches. Keep each plot and its drawing operations in one cell. Omit
-    /// to write stdin or poll.
+    /// Complete multiline R cell evaluated in persistent global state. Use base R for statistics
+    /// and modeling, or prepared packages such as dplyr and ggplot2. Read Python globals through
+    /// `py$name`; for example, `df <- tibble::as_tibble(py$df)`. R data frames are directly
+    /// queryable by name from later SQL cells. Access DuckDB tables and views through the borrowed
+    /// `sql_connection()` with DBI or dplyr; do not disconnect it. Default-device plots return as PNG
+    /// images. Keep all drawing operations for one plot in the same cell. Set persistent
+    /// dimensions with `options(console.plot.width = ..., console.plot.height = ...,
+    /// console.plot.dpi = ...)`; width and height are in inches. Omit to send stdin or poll.
     r: Option<String>,
-    /// Complete multiline Python code evaluated in persistent state. At cell end, including after a
-    /// Python error, every open `matplotlib.pyplot` figure returns once as a PNG image and is closed;
-    /// `show()` is optional, and `savefig()` does not suppress capture while the figure remains open.
-    /// R plots invoked through reticulate's `r` bridge follow the cell-scoped rules and R options
-    /// described for `r`. Omit to write stdin or poll.
+    /// Complete multiline Python cell evaluated in persistent `__main__` state; its final expression
+    /// is displayed. Use prepared packages such as pandas, NumPy, scikit-learn, and Matplotlib. Read
+    /// R globals and call R functions through `r.name`; for example, `frame = r.df`. Return Python
+    /// globals to R through `py$name`. Python data frames are not automatically visible to SQL; bind
+    /// them to an R name first. At cell end, including after a Python error, every open
+    /// `matplotlib.pyplot` figure returns once as a PNG image and is closed. `show()` is optional.
+    /// R plots called through `r` follow the R plot rules. Omit to send stdin or poll.
     python: Option<String>,
-    /// Complete DuckDB SQL evaluated in the persistent catalog. Omit to write stdin or poll.
+    /// Complete DuckDB SQL cell evaluated in the persistent catalog. Use it for filtering, joins,
+    /// aggregation, and tabular inspection. An unqualified relation name can query a data frame in R
+    /// global state; a DuckDB table or view with the same name takes precedence. Query results return
+    /// a bounded preview. Use `SHOW TABLES`, `DESCRIBE`, `SUMMARIZE`, and `EXPLAIN` for discovery.
+    /// DuckDB CLI dot commands are not supported. Omit to send stdin or poll.
     sql: Option<String>,
-    /// Exact UTF-8 text queued to worker fd 0 without adding a newline.
+    /// Text for interactive reads and debugger commands such as R `readline()` or `browser()` and
+    /// Python `input()`, `breakpoint()`, or `pdb`. Its UTF-8 encoding is queued to worker stdin
+    /// exactly; no newline is added. Send it with a cell to prequeue input or on its own while the
+    /// worker is running or idle. If output ends in `[stdin needed]`, send the requested input here.
+    /// Unread text can satisfy later reads and is discarded by restart.
     stdin: Option<String>,
-    /// Maximum time this call waits for evaluation or one automatic worker replacement attempt.
-    /// Expiry reports the current state without stopping the computation or startup.
+    /// Maximum time this call waits for an evaluation or one automatic worker replacement attempt.
+    /// On expiry, the call returns available output followed by the current state, such as
+    /// `[running]` or `[worker starting]`, without stopping the computation or startup. Poll by
+    /// calling `send` again without `r`, `python`, `sql`, or `stdin`.
     #[serde(default = "default_timeout_ms")]
     timeout_ms: u64,
 }
 
 #[derive(Deserialize, schemars::JsonSchema)]
+#[schemars(inline)]
 #[serde(rename_all = "snake_case")]
 enum SessionAction {
     Prepare,
@@ -60,14 +76,20 @@ enum SessionAction {
 }
 
 #[derive(Deserialize, schemars::JsonSchema)]
+#[schemars(inline)]
 #[serde(deny_unknown_fields)]
 struct Requirements {
-    /// One or more additive, single-line R package references accepted by IR for prepare.
-    /// IR prevents installation from local package sources because it runs with server permissions.
+    /// Additive, single-line IR package references for `prepare`, for example `dplyr`, `ggplot2`, or
+    /// `jsonlite`. Prepare new R requirements before the worker starts. After startup, a `prepare`
+    /// call containing any new R requirement returns `[restart required]` and applies none of that
+    /// call's R or Python additions; start a fresh server to add R packages. Local package sources
+    /// are rejected because resolution runs with server permissions.
     #[serde(default)]
     #[schemars(length(max = 64), inner(length(min = 1)))]
     r: Vec<String>,
-    /// One or more additive, single-line PEP 508 Python requirement strings for prepare or restart.
+    /// Additive, single-line PEP 508 requirements for `prepare` or `restart`, for example `pandas>=2`,
+    /// `scikit-learn`, or `matplotlib`. An idle server-managed worker may activate compatible
+    /// additions without losing state.
     #[serde(default)]
     #[schemars(length(max = 64), inner(length(min = 1)))]
     python: Vec<String>,
@@ -76,17 +98,18 @@ struct Requirements {
 #[derive(Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct SessionArguments {
-    /// Prepare R or Python requirements or restart the implicit session, starting it if needed.
+    /// `prepare` adds R or Python requirements before a server-managed worker starts. After startup,
+    /// it can add compatible Python requirements while the worker is idle; a new R requirement
+    /// instead returns `[restart required]` and applies none of that call's additions. `restart`
+    /// replaces the worker, optionally adds Python requirements, and starts it if needed.
     action: SessionAction,
-    /// Additive R or Python requirements for prepare.
-    /// After startup, an idle server-managed worker can apply Python-only additions.
-    /// A new R addition requires restart and applies none of that call's additions.
-    /// New additions also require restart after an automatic replacement attempt fails.
-    /// Restart accepts only Python requirements.
-    /// Resolution runs outside the worker sandbox.
-    /// Package installation, build code, managed Python startup, or Matplotlib
-    /// cache warming may execute selected code on the host.
-    /// Omit to restart unchanged.
+    /// Additive packages to make available. `prepare` requires at least one R or Python entry.
+    /// `restart` accepts Python entries only; omit `requirements` to restart unchanged. Requirements
+    /// persist across restart but do not import or attach packages. After an automatic replacement
+    /// attempt fails, a later `prepare` with new additions returns `[restart required]`. Resolution
+    /// runs outside the worker sandbox and may download packages or execute installation or build
+    /// code on the host. Managed Python startup and Matplotlib cache warming also run on the host
+    /// and may execute selected code; use only trusted requirements.
     requirements: Option<Requirements>,
 }
 
@@ -112,7 +135,7 @@ impl ConsoleServer {
 #[tool_router]
 impl ConsoleServer {
     #[tool(
-        description = "Evaluate one complete R, Python, or SQL code cell, write its stdin, or poll it."
+        description = "Persistent mixed-language computational workbench. Use it whenever exact computation or direct inspection would improve accuracy—from arithmetic, string counting, parsing, and file or binary-data inspection to data wrangling, exploratory analysis, visualization, statistics, simulation, and model training or tuning. Choose the clearest language for each step and switch freely between calls: base R or prepared packages such as dplyr and ggplot2; Python packages such as pandas, NumPy, scikit-learn, and Matplotlib; or DuckDB SQL. State persists across calls. Python reads R globals through `r.name`; R reads Python globals through `py$name`; SQL queries R data frames by name; R accesses the DuckDB catalog through `sql_connection()`. Language-native help and introspection are available. Use `session` to prepare missing packages before loading or importing them. R default-device plots and open `matplotlib.pyplot` figures return as PNG images. Send exactly one complete `r`, `python`, or `sql` cell. Call `send` sequentially; concurrent calls are unsupported. Use `stdin` for interactive reads or debugger commands; omit code and stdin to poll. A wait timeout does not stop computation, and running work must be collected before new code is sent. R errors, Python exceptions, and DuckDB errors are ordinary console output, so inspect result text and continue or correct the cell. Evaluated code can read host files but cannot directly access the network and can write only within the worker's private temporary directory. Managed Python requirement resolution triggered by R code such as `reticulate::py_require()` or by an R package load is a host-side exception: it may access the network and execute installation or build code, so use only trusted requirements."
     )]
     async fn send(
         &self,
@@ -163,7 +186,7 @@ impl ConsoleServer {
     }
 
     #[tool(
-        description = "Prepare additive R or Python requirements, or restart the implicit session. An idle server-managed worker applies Python-only additions without losing state; new R additions require restart. Restart retains requirements and loses all in-memory R, Python, and SQL state."
+        description = "Make R or Python packages available, or restart the persistent console session. Use `prepare` before loading or importing missing packages. Packages are not imported or attached automatically. Prepare anticipated R packages before the worker starts. After startup, a `prepare` call containing any new R requirement returns `[restart required]` and applies none of that call's R or Python additions; start a fresh server to add R packages. An idle server-managed worker can add compatible Python requirements without losing live state. Requirements are additive, idempotent, and persist across restart. `restart` may optionally add Python requirements, then replaces the worker and loses all in-memory R, Python, and SQL state, debugger state, and unread stdin. Requirement resolution runs outside the execution sandbox and may download packages or execute installation or build code on the host; use only trusted requirements."
     )]
     async fn session(
         &self,
