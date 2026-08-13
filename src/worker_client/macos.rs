@@ -1,4 +1,5 @@
 use std::io::{Read, Write};
+use std::os::fd::{AsRawFd, RawFd};
 use std::process::Stdio;
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
@@ -11,15 +12,38 @@ pub(super) struct WorkerRuntime;
 
 pub(super) struct Worker {
     reader: crate::sideband::Reader,
-    handle: WorkerHandle,
+    writer: crate::sideband::Writer,
+    stdin: StdinSender,
+    process: WorkerProcess,
 }
 
-/// Controls the lifecycle of one spawned worker.
+/// Requests deadline-bounded shutdown while `Worker` retains the I/O task joins.
 #[derive(Clone)]
-pub(super) struct WorkerHandle {
+pub(super) struct WorkerShutdownHandle {
     writer: crate::sideband::Writer,
     stdin: StdinSender,
     child: Arc<Mutex<crate::sandbox::SandboxedChild>>,
+}
+
+struct WorkerProcess {
+    child: Arc<Mutex<crate::sandbox::SandboxedChild>>,
+    threads: Option<WorkerThreads>,
+}
+
+struct WorkerThreads {
+    stdin: WorkerIoThread,
+    stdout: WorkerIoThread,
+    stderr: WorkerIoThread,
+}
+
+struct WorkerIoThread {
+    cancel: std::io::PipeWriter,
+    thread: thread::JoinHandle<()>,
+}
+
+struct WorkerIoEvents {
+    ready: bool,
+    cancelled: bool,
 }
 
 #[derive(Clone)]
@@ -35,8 +59,8 @@ impl WorkerRuntime {
     pub(super) fn spawn(
         &self,
         spec: super::WorkerSpec<'_>,
-        output: super::CapturedOutput,
-        on_started: impl FnOnce(WorkerHandle) -> Result<(), String>,
+        output: super::OutputTape,
+        on_started: impl FnOnce(WorkerShutdownHandle) -> Result<(), String>,
     ) -> Result<Worker, String> {
         let super::WorkerSpec {
             executable,
@@ -61,6 +85,9 @@ impl WorkerRuntime {
             .stderr(Stdio::piped())
             .new_process_group();
         child_fds.configure(&mut command);
+        let stdin_cancel = cancellation_pipe("stdin")?;
+        let stdout_cancel = cancellation_pipe("stdout")?;
+        let stderr_cancel = cancellation_pipe("stderr")?;
         let mut child = command
             .spawn()
             .map_err(|error| format!("failed to launch worker: {error}"))?;
@@ -74,27 +101,53 @@ impl WorkerRuntime {
         let stderr = child
             .take_stderr()
             .expect("piped worker stderr should be available");
-        start_output_reader(stdout, output.stream());
-        start_output_reader(stderr, output.stream());
+        if let Err(error) = set_nonblocking(&stdin) {
+            let error = format!("failed to configure worker stdin: {error}");
+            return match child.force_stop() {
+                Ok(()) => Err(error),
+                Err(stop_error) => Err(format!(
+                    "{error}; additionally failed to stop the worker: {stop_error}"
+                )),
+            };
+        }
+        let stdout = start_output_reader(stdout, output.stream(), stdout_cancel);
+        let stderr = start_output_reader(stderr, output.stream(), stderr_cancel);
         let child = Arc::new(Mutex::new(child));
-        let stdin = start_stdin_writer(stdin, child.clone());
+        let (stdin, stdin_thread) = start_stdin_writer(stdin, child.clone(), stdin_cancel);
+        let process = WorkerProcess {
+            child,
+            threads: Some(WorkerThreads {
+                stdin: stdin_thread,
+                stdout,
+                stderr,
+            }),
+        };
 
-        let handle = WorkerHandle {
+        let mut worker = Worker {
+            reader,
             writer,
             stdin,
-            child,
+            process,
         };
-        let mut worker = Worker { reader, handle };
-        on_started(worker.handle.clone())?;
-        match worker.receive()? {
-            WorkerMessage::Ready => {}
+        if let Err(error) = on_started(worker.shutdown_handle()) {
+            return Err(worker.startup_failure(error));
+        }
+        let ready = match worker.receive() {
+            Ok(message) => message,
+            Err(error) => return Err(worker.startup_failure(error)),
+        };
+        let error = match ready {
+            WorkerMessage::Ready => None,
             WorkerMessage::Output { data } => {
-                return Err(format!("worker emitted output before readiness: {data}"));
+                Some(format!("worker emitted output before readiness: {data}"))
             }
             WorkerMessage::Image { .. } => {
-                return Err("worker emitted an image before readiness".to_string());
+                Some("worker emitted an image before readiness".to_string())
             }
-            _ => return Err("worker did not report readiness".to_string()),
+            _ => Some("worker did not report readiness".to_string()),
+        };
+        if let Some(error) = error {
+            return Err(worker.startup_failure(error));
         }
         Ok(worker)
     }
@@ -113,8 +166,7 @@ impl Worker {
             Vec<crate::resolver::ManagedPython>,
         ) -> Result<(), String>,
     ) -> Result<Result<(), String>, String> {
-        self.handle
-            .writer
+        self.writer
             .send(&ServerMessage::PreparePython { packages })
             .map_err(|error| format!("worker sideband write failed: {error}"))?;
         let mut python_candidates = Vec::new();
@@ -153,11 +205,10 @@ impl Worker {
         ) -> Result<(), String>,
     ) -> Result<(), String> {
         let crate::cell::Cell { language, source } = cell;
-        self.handle
-            .writer
+        self.writer
             .send(&ServerMessage::Evaluate { language, source })
             .map_err(|error| format!("worker sideband write failed: {error}"))?;
-        evaluation.attach_writer(self.handle.stdin.clone())?;
+        evaluation.attach_writer(self.stdin.clone())?;
         let mut python_candidates = Vec::new();
 
         loop {
@@ -200,15 +251,13 @@ impl Worker {
         match resolve_python(request) {
             Ok(managed) => {
                 let python = managed.python().to_string_lossy().into_owned();
-                self.handle
-                    .writer
+                self.writer
                     .send(&ServerMessage::PythonResolved { python })
                     .map_err(|error| format!("worker sideband write failed: {error}"))?;
                 Ok(Some(managed))
             }
             Err(message) => {
-                self.handle
-                    .writer
+                self.writer
                     .send(&ServerMessage::PythonResolutionFailed { message })
                     .map_err(|error| format!("worker sideband write failed: {error}"))?;
                 Ok(None)
@@ -223,48 +272,75 @@ impl Worker {
     }
 
     pub(super) fn write_stdin(&self, stdin: String) -> Result<(), String> {
-        self.handle.stdin.send(stdin.into_bytes())
+        self.stdin.send(stdin.into_bytes())
+    }
+
+    pub(super) fn shutdown(&mut self, deadline: Instant) -> Result<(), String> {
+        let shutdown = self.shutdown_handle().shutdown(deadline)?;
+        join_worker_thread(shutdown, "shutdown sender")?;
+        self.finish_retirement()
+    }
+
+    pub(super) fn finish_retirement(&mut self) -> Result<(), String> {
+        self.process.finish_threads()
+    }
+
+    pub(super) fn shutdown_handle(&self) -> WorkerShutdownHandle {
+        WorkerShutdownHandle {
+            writer: self.writer.clone(),
+            stdin: self.stdin.clone(),
+            child: self.process.child.clone(),
+        }
+    }
+
+    fn startup_failure(&mut self, message: String) -> String {
+        match self.shutdown(Instant::now()) {
+            Ok(()) => message,
+            Err(error) => format!("{message}; additionally failed to stop the worker: {error}"),
+        }
     }
 }
 
 fn start_output_reader(
-    mut stream: impl Read + Send + 'static,
-    output: super::CapturedOutputStream,
-) {
-    let _ = thread::spawn(move || {
+    stream: impl Read + AsRawFd + Send + 'static,
+    output: super::OutputTapeStream,
+    (cancelled, cancel): (std::io::PipeReader, std::io::PipeWriter),
+) -> WorkerIoThread {
+    let thread = thread::spawn(move || {
+        let mut stream = stream;
         let mut buffer = [0; 8 * 1024];
-        loop {
+        while let Ok(events) = wait_for_worker_io(stream.as_raw_fd(), libc::POLLIN, &cancelled) {
+            if events.cancelled {
+                drain_buffered_output(&mut stream, &output, &mut buffer);
+                break;
+            }
+            if !events.ready {
+                continue;
+            }
             match stream.read(&mut buffer) {
-                Ok(0) => {
-                    output.close();
-                    return;
-                }
-                Ok(length) => {
-                    output.push(&buffer[..length]);
-                }
+                Ok(0) => break,
+                Ok(length) => output.push(&buffer[..length]),
                 Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
-                Err(_) => {
-                    output.close();
-                    return;
-                }
+                Err(_) => break,
             }
         }
+        output.close();
     });
+    WorkerIoThread { cancel, thread }
 }
 
 fn start_stdin_writer(
     mut stdin: std::process::ChildStdin,
     child: Arc<Mutex<crate::sandbox::SandboxedChild>>,
-) -> StdinSender {
+    (cancelled, cancel): (std::io::PipeReader, std::io::PipeWriter),
+) -> (StdinSender, WorkerIoThread) {
     let (sender, receiver) = mpsc::channel();
-    let _ = thread::spawn(move || {
+    let thread = thread::spawn(move || {
         for message in receiver {
             match message {
                 StdinMessage::Write(bytes) => {
-                    if stdin.write_all(&bytes).is_err() {
-                        if let Ok(mut child) = child.lock() {
-                            let _ = child.force_stop();
-                        }
+                    if write_worker_stdin(&mut stdin, &cancelled, &bytes).is_err() {
+                        stop_worker_after_stdin_failure(&child);
                         return;
                     }
                 }
@@ -272,7 +348,115 @@ fn start_stdin_writer(
             }
         }
     });
-    StdinSender(sender)
+    (StdinSender(sender), WorkerIoThread { cancel, thread })
+}
+
+fn write_worker_stdin(
+    stdin: &mut std::process::ChildStdin,
+    cancelled: &std::io::PipeReader,
+    mut bytes: &[u8],
+) -> std::io::Result<()> {
+    while !bytes.is_empty() {
+        let events = wait_for_worker_io(stdin.as_raw_fd(), libc::POLLOUT, cancelled)?;
+        if events.cancelled {
+            return Ok(());
+        }
+        if !events.ready {
+            continue;
+        }
+        match stdin.write(bytes) {
+            Ok(0) => return Err(std::io::ErrorKind::WriteZero.into()),
+            Ok(length) => bytes = &bytes[length..],
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => continue,
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(())
+}
+
+fn drain_buffered_output(
+    stream: &mut (impl Read + AsRawFd),
+    output: &super::OutputTapeStream,
+    buffer: &mut [u8],
+) {
+    let mut remaining: libc::c_int = 0;
+    // SAFETY: `stream` remains open and `remaining` points to writable storage
+    // of the type expected by FIONREAD.
+    if unsafe { libc::ioctl(stream.as_raw_fd(), libc::FIONREAD, &mut remaining) } < 0 {
+        return;
+    }
+    let mut remaining = remaining.max(0) as usize;
+    while remaining > 0 {
+        let length = remaining.min(buffer.len());
+        match stream.read(&mut buffer[..length]) {
+            Ok(0) => break,
+            Ok(length) => {
+                output.push(&buffer[..length]);
+                remaining -= length;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(_) => break,
+        }
+    }
+}
+
+fn wait_for_worker_io(
+    descriptor: RawFd,
+    events: libc::c_short,
+    cancelled: &std::io::PipeReader,
+) -> std::io::Result<WorkerIoEvents> {
+    loop {
+        let mut descriptors = [
+            libc::pollfd {
+                fd: descriptor,
+                events,
+                revents: 0,
+            },
+            libc::pollfd {
+                fd: cancelled.as_raw_fd(),
+                events: libc::POLLIN,
+                revents: 0,
+            },
+        ];
+        // SAFETY: both descriptors remain open for the call, and the pointer and
+        // count describe the initialized array exactly.
+        if unsafe { libc::poll(descriptors.as_mut_ptr(), descriptors.len() as _, -1) } >= 0 {
+            return Ok(WorkerIoEvents {
+                ready: descriptors[0].revents != 0,
+                cancelled: descriptors[1].revents != 0,
+            });
+        }
+        let error = std::io::Error::last_os_error();
+        if error.kind() != std::io::ErrorKind::Interrupted {
+            return Err(error);
+        }
+    }
+}
+
+fn stop_worker_after_stdin_failure(child: &Arc<Mutex<crate::sandbox::SandboxedChild>>) {
+    if let Ok(mut child) = child.lock() {
+        let _ = child.force_stop();
+    }
+}
+
+fn cancellation_pipe(stream: &str) -> Result<(std::io::PipeReader, std::io::PipeWriter), String> {
+    std::io::pipe()
+        .map_err(|error| format!("failed to create worker {stream} cancellation pipe: {error}"))
+}
+
+fn set_nonblocking(descriptor: &impl AsRawFd) -> std::io::Result<()> {
+    let descriptor = descriptor.as_raw_fd();
+    // SAFETY: `descriptor` is an open worker pipe owned by the caller.
+    let flags = unsafe { libc::fcntl(descriptor, libc::F_GETFL) };
+    if flags < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    // SAFETY: this preserves the existing file status flags and adds O_NONBLOCK.
+    if unsafe { libc::fcntl(descriptor, libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(())
 }
 
 impl StdinSender {
@@ -287,18 +471,14 @@ impl StdinSender {
     }
 }
 
-impl Drop for Worker {
-    fn drop(&mut self) {
-        let _ = self.handle.force_stop();
-    }
-}
-
-impl WorkerHandle {
-    /// Attempts graceful shutdown while independently enforcing its deadline.
-    pub(super) fn shutdown(&self, deadline: Instant) -> Result<(), String> {
+impl WorkerShutdownHandle {
+    /// Closes worker input, requests protocol shutdown, and enforces the process deadline.
+    ///
+    /// The owning `Worker` separately joins the stdin and standard-stream tasks.
+    pub(super) fn shutdown(&self, deadline: Instant) -> Result<thread::JoinHandle<()>, String> {
         let writer = self.writer.clone();
         let stdin = self.stdin.clone();
-        let _ = thread::spawn(move || {
+        let shutdown = thread::spawn(move || {
             stdin.close();
             let _ = writer.send(&ServerMessage::Shutdown);
         });
@@ -311,13 +491,34 @@ impl WorkerHandle {
         if child.wait_timeout(remaining)?.is_none() {
             child.force_stop()?;
         }
-        Ok(())
+        Ok(shutdown)
     }
+}
 
-    fn force_stop(&self) -> Result<(), String> {
-        self.child
-            .lock()
-            .map_err(|_| "worker child lock poisoned".to_string())?
-            .force_stop()
+impl WorkerProcess {
+    fn finish_threads(&mut self) -> Result<(), String> {
+        let Some(threads) = self.threads.take() else {
+            return Ok(());
+        };
+        let stdin = threads.stdin.cancel();
+        let stdout = threads.stdout.cancel();
+        let stderr = threads.stderr.cancel();
+        let stdin = join_worker_thread(stdin, "stdin writer");
+        let stdout = join_worker_thread(stdout, "stdout reader");
+        let stderr = join_worker_thread(stderr, "stderr reader");
+        stdin.and(stdout).and(stderr)
     }
+}
+
+impl WorkerIoThread {
+    fn cancel(self) -> thread::JoinHandle<()> {
+        drop(self.cancel);
+        self.thread
+    }
+}
+
+fn join_worker_thread(thread: thread::JoinHandle<()>, name: &str) -> Result<(), String> {
+    thread
+        .join()
+        .map_err(|_| format!("worker {name} task failed"))
 }

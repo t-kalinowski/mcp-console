@@ -11,6 +11,7 @@ pub(super) struct Environment {
 pub(crate) enum PrepareResult {
     Prepared,
     RestartRequired,
+    WorkerStopped(super::Response),
 }
 
 pub(crate) struct Requirements {
@@ -53,12 +54,13 @@ impl Client {
 
     fn prepare_blocking(&self, requirements: Requirements) -> Result<PrepareResult, String> {
         let generation = self.admit()?;
+        let _preparation = self.admit_preparation()?;
         let environment = self
             .0
             .environment
             .as_ref()
             .ok_or_else(|| "requirements are unavailable with a custom worker".to_string())?;
-        let active_evaluation = self.try_evaluation()?;
+        let active_evaluation = self.evaluation()?.is_some();
         let mut environment = environment
             .lock()
             .map_err(|_| "worker environment lock poisoned".to_string())?;
@@ -77,7 +79,7 @@ impl Client {
         if python_candidate.is_none() && r_additions.is_subset(&current_r) {
             return Ok(PrepareResult::Prepared);
         }
-        if active_evaluation.is_some() {
+        if active_evaluation {
             return Err(
                 "worker is already evaluating a cell; poll it before preparing requirements"
                     .to_string(),
@@ -92,7 +94,7 @@ impl Client {
                 return Err("worker lock poisoned".to_string());
             }
         };
-        if matches!(*worker, WorkerState::ReplacementPending)
+        if matches!(*worker, WorkerState::Stopped)
             || (!matches!(*worker, WorkerState::Initial) && !r_additions.is_subset(&current_r))
         {
             return Ok(PrepareResult::RestartRequired);
@@ -102,9 +104,11 @@ impl Client {
                 return Ok(PrepareResult::RestartRequired);
             }
             drop(environment);
-            return self
-                .prepare_running_python(&generation, worker, python_additions.into_iter().collect())
-                .map(|()| PrepareResult::Prepared);
+            return self.prepare_running_python(
+                &generation,
+                worker,
+                python_additions.into_iter().collect(),
+            );
         }
 
         let r_requirements = current_r.union(&r_additions).cloned().collect::<Vec<_>>();
@@ -152,7 +156,7 @@ impl Client {
         generation: &WorkerGeneration,
         mut worker: std::sync::MutexGuard<'_, WorkerState>,
         packages: Vec<String>,
-    ) -> Result<(), String> {
+    ) -> Result<PrepareResult, String> {
         self.ensure_generation(generation)?;
         let WorkerState::Running(running) = &mut *worker else {
             return Err("worker state changed during Python preparation".to_string());
@@ -165,7 +169,7 @@ impl Client {
             },
         );
         let (infrastructure_failure, error) = match result {
-            Ok(Ok(())) => return Ok(()),
+            Ok(Ok(())) => return Ok(PrepareResult::Prepared),
             Ok(Err(error)) => (false, error),
             Err(error) => (true, error),
         };
@@ -173,7 +177,15 @@ impl Client {
             GenerationStatus::Changed => Err("Python preparation cancelled by restart".to_string()),
             GenerationStatus::CurrentReady => {
                 if infrastructure_failure {
-                    *worker = WorkerState::ReplacementPending;
+                    return match self.retire_failed_worker(&mut worker, generation)? {
+                        true => {
+                            self.0.output.push_failure(
+                                super::output::SendFailure::from(error).worker_stopped(),
+                            );
+                            Ok(PrepareResult::WorkerStopped(self.0.output.take()))
+                        }
+                        false => Err(error),
+                    };
                 }
                 Err(error)
             }

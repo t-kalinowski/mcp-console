@@ -3,16 +3,12 @@ pub(super) struct WorkerRuntime;
 
 pub(super) struct Worker;
 
-/// The unsupported-platform counterpart to the worker lifecycle handle.
-#[derive(Clone)]
-pub(super) struct WorkerHandle;
-
 impl WorkerRuntime {
     pub(super) fn spawn(
         &self,
         spec: super::WorkerSpec<'_>,
-        _output: super::CapturedOutput,
-        _on_started: impl FnOnce(WorkerHandle) -> Result<(), String>,
+        _output: super::OutputTape,
+        _on_started: impl FnOnce(WorkerShutdownHandle) -> Result<(), String>,
     ) -> Result<Worker, String> {
         let super::WorkerSpec {
             executable,
@@ -61,10 +57,28 @@ impl Worker {
     pub(super) fn write_stdin(&self, _stdin: String) -> Result<(), String> {
         unreachable!("unsupported workers cannot start")
     }
+
+    pub(super) fn shutdown(&mut self, _deadline: std::time::Instant) -> Result<(), String> {
+        Ok(())
+    }
+
+    pub(super) fn finish_retirement(&mut self) -> Result<(), String> {
+        Ok(())
+    }
+
+    pub(super) fn shutdown_handle(&self) -> WorkerShutdownHandle {
+        WorkerShutdownHandle
+    }
 }
 
-impl WorkerHandle {
-    pub(super) fn shutdown(&self, _deadline: std::time::Instant) -> Result<(), String> {
-        Ok(())
+#[derive(Clone)]
+pub(super) struct WorkerShutdownHandle;
+
+impl WorkerShutdownHandle {
+    pub(super) fn shutdown(
+        &self,
+        _deadline: std::time::Instant,
+    ) -> Result<std::thread::JoinHandle<()>, String> {
+        Ok(std::thread::spawn(|| {}))
     }
 }

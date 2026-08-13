@@ -72,11 +72,17 @@ def configure_startup(root: Path) -> None:
     mode = control.read_text(encoding="utf-8")
     if mode == "fail":
         os._exit(86)
+    if mode == "fail with stderr":
+        write_all(2, b"zod replacement startup failed\n")
+        os._exit(86)
     if mode == "block":
         (root / "zod-replacement-waiting-ready").touch()
         release = Path(os.environ["ZOD_STARTUP_RELEASE"])
         while not release.exists():
             time.sleep(0.01)
+        mode = "ready"
+    if mode == "ready with stdout":
+        write_all(1, b"zod replacement startup ready\n")
         mode = "ready"
     assert mode == "ready", f"unsupported Zod startup mode: {mode}"
 
@@ -134,6 +140,11 @@ def main() -> None:
             send(writer, {"kind": "ready"})
             continue
 
+        if source == "violate protocol after stdout":
+            emit_large_output(1, b"zod old stdout\n")
+            send(writer, {"kind": "ready"})
+            continue
+
         if source == "exit unexpectedly":
             os._exit(86)
 
@@ -147,14 +158,37 @@ def main() -> None:
 
         if source == "start background stderr":
             temporary = Path(os.environ["TMPDIR"])
-            if os.fork() == 0:
+            child = os.fork()
+            if child == 0:
                 reader.close()
                 writer.close()
                 emit_background_stderr(temporary)
                 os._exit(0)
+            (temporary / "zod-background-stderr-pid").write_text(
+                str(child),
+                encoding="utf-8",
+            )
             (temporary / "zod-background-stderr-started").touch()
             send(writer, {"kind": "completed"})
             continue
+
+        if source == "stall with detached stdin":
+            child = os.fork()
+            if child == 0:
+                os.setsid()
+                reader.close()
+                writer.close()
+                os.close(1)
+                os.close(2)
+                while True:
+                    time.sleep(60)
+            (temporary / "zod-detached-stdin-pid").write_text(
+                str(child),
+                encoding="utf-8",
+            )
+            (temporary / "zod-detached-stdin-started").touch()
+            while True:
+                time.sleep(60)
 
         if source == "request input":
             send(writer, {"kind": "input_requested", "prompt": "zod> "})
@@ -255,10 +289,15 @@ def main() -> None:
             send(writer, {"kind": "completed"})
             continue
 
-        if source == "emit image before completion":
+        if source in {
+            "emit image before completion",
+            "emit output and image before completion",
+        }:
             (temporary / "zod-image-evaluation-started").touch()
             while not (temporary / "zod-release-image").exists():
                 time.sleep(0.01)
+            if source == "emit output and image before completion":
+                send(writer, {"kind": "output", "data": "before pending image\n"})
             send(
                 writer,
                 {
@@ -267,6 +306,8 @@ def main() -> None:
                     "mime_type": "image/png",
                 },
             )
+            if source == "emit output and image before completion":
+                send(writer, {"kind": "output", "data": "after pending image\n"})
             wait_for_server_to_process_sideband(writer)
             (temporary / "zod-image-processed").touch()
             while not (temporary / "zod-release-image-completion").exists():

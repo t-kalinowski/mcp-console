@@ -3,12 +3,15 @@
 ---
 id: 3
 send:
-  r: exit unexpectedly
+  r: wait for stdin close
+  timeout_ms: 0
 result:
   content:
     - type: text
-      text: "worker sideband read failed: worker sideband closed"
-  isError: true
+      text: |-
+
+        [running]
+  isError: false
 ---
 id: 4
 session:
@@ -16,21 +19,16 @@ session:
 result:
   content:
     - type: text
-      text: "[restarted]"
+      text: |-
+        zod stdin closed
+        <large output>
+        [worker stopped: in-memory state lost]
+        [starting new worker]
+        zod replacement startup ready
+        [restarted]
   isError: false
 ---
 id: 5
-send:
-  r: echo
-result:
-  content:
-    - type: text
-      text: |
-        zod: echo
-        [worker restarted: in-memory state lost]
-  isError: false
----
-id: 6
 send:
   r: echo
 result:
