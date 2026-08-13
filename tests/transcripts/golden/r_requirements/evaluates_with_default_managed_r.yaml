@@ -9,6 +9,8 @@ send:
       identical(dirname(find.package("reticulate")), .libPaths()[[1L]]),
       identical(dirname(find.package("DBI")), .libPaths()[[1L]]),
       identical(dirname(find.package("duckdb")), .libPaths()[[1L]]),
+      identical(dirname(find.package("arrow")), .libPaths()[[1L]]),
+      identical(dirname(find.package("nanoarrow")), .libPaths()[[1L]]),
       identical(packageDescription("reticulate")$RemoteType, "github"),
       nzchar(packageDescription("reticulate")$RemoteSha),
       vapply(
@@ -36,6 +38,8 @@ session:
     r:
       - DBI
       - duckdb
+      - arrow
+      - nanoarrow
 result:
   content:
     - type: text

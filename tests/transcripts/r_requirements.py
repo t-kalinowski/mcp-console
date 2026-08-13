@@ -185,6 +185,8 @@ def test_evaluates_with_default_managed_r(binary: Path) -> Transcript:
               identical(dirname(find.package("reticulate")), .libPaths()[[1L]]),
               identical(dirname(find.package("DBI")), .libPaths()[[1L]]),
               identical(dirname(find.package("duckdb")), .libPaths()[[1L]]),
+              identical(dirname(find.package("arrow")), .libPaths()[[1L]]),
+              identical(dirname(find.package("nanoarrow")), .libPaths()[[1L]]),
               identical(packageDescription("reticulate")$RemoteType, "github"),
               nzchar(packageDescription("reticulate")$RemoteSha),
               vapply(
@@ -201,7 +203,10 @@ def test_evaluates_with_default_managed_r(binary: Path) -> Transcript:
             """)
         client.send(r=r)
         assert last_tool_text(client) == "[1] 42\n", client.transcript[-1]
-        client.session(action="prepare", requirements={"r": ["DBI", "duckdb"]})
+        client.session(
+            action="prepare",
+            requirements={"r": ["DBI", "duckdb", "arrow", "nanoarrow"]},
+        )
         assert last_tool_text(client) == "[prepared]", client.transcript[-1]
         return client._finish()
 

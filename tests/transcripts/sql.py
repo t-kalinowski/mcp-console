@@ -1,8 +1,6 @@
 #!/usr/bin/env -S uv run --script
 
 import os
-import subprocess
-import sys
 import tempfile
 from pathlib import Path
 
@@ -13,12 +11,21 @@ PLATFORMS = {"darwin"}
 
 
 def test_evaluates_queries_in_a_persistent_catalog(binary: Path) -> Transcript:
-    with tempfile.TemporaryDirectory() as home:
+    with tempfile.TemporaryDirectory() as temporary:
+        workspace = Path(temporary)
+        ambient_library = workspace / "ambient-library"
+        ambient_library.mkdir()
         environment = os.environ.copy()
-        environment["HOME"] = home
-        environment["R_LIBS"] = inherited_r_libraries()
-        environment["RETICULATE_PYTHON"] = sys.executable
-        client = McpClient(binary, ("serve",), environment)
+        environment["R_LIBS"] = str(ambient_library)
+        environment["R_LIBS_SITE"] = str(ambient_library)
+        environment["R_LIBS_USER"] = str(ambient_library)
+        environment["RETICULATE_PYTHON"] = ""
+        client = McpClient(
+            binary,
+            ("serve",),
+            environment,
+            current_directory=workspace,
+        )
         client._initialize_and_list_tools()
         sql = code(r"""
             CREATE TABLE answers AS SELECT CAST(42 AS INTEGER) AS answer
@@ -436,21 +443,6 @@ def last_tool_text(client: McpClient) -> str:
     result = client.transcript[-1]["result"]
     assert result.get("isError") is not True, result
     return result["content"][0]["text"]
-
-
-def inherited_r_libraries() -> str:
-    r_home = os.environ.get("R_HOME")
-    rscript = Path(r_home, "bin", "Rscript") if r_home else "Rscript"
-    source = code(r"""
-        writeLines(.libPaths())
-        """)
-    output = subprocess.run(
-        [rscript, "--vanilla", "-e", source],
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout
-    return os.pathsep.join(output.splitlines())
 
 
 if __name__ == "__main__":

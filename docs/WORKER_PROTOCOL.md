@@ -17,7 +17,7 @@ The hidden `serve --worker PATH` option replaces it with a development worker.
 
 ## Launch contract
 
-For the built-in worker on macOS, server initialization first asks IR to resolve the retained default R requirements `tidyverse`, `github::rstudio/reticulate`, `DBI`, and `duckdb` outside the sandbox.
+For the built-in worker on macOS, server initialization first asks IR to resolve the retained default R requirements `tidyverse`, `github::rstudio/reticulate`, `DBI`, `duckdb`, `arrow`, and `nanoarrow` outside the sandbox.
 The GitHub requirement supplies the fork-aware output-stream restoration required by the worker; the host R installation must also provide reticulate for the managed-Python resolver, which runs before the worker `R_LIBS` is applied.
 It requires `ir` 0.4.0 or later and uses the same Rscript selection and `IR_NO_LOCAL_SOURCES` policy described below.
 The returned library becomes the first worker `R_LIBS` entry for every generation.
@@ -41,7 +41,7 @@ They do not bypass default R resolution.
 Custom workers skip both managed default preflights.
 
 `session` with `action = "prepare"` can add R or Python requirements to the implicit session.
-Before worker startup, the server merges exact strings with the retained tidyverse, GitHub reticulate, DBI, and duckdb requirements and managed Python baseline, then resolves the complete candidates outside the sandbox.
+Before worker startup, the server merges exact strings with the retained tidyverse, GitHub reticulate, DBI, duckdb, arrow, and nanoarrow requirements and managed Python baseline, then resolves the complete candidates outside the sandbox.
 Before R resolution, the server requires `ir --version` from `PATH` to report 0.4.0 or later.
 It then runs `ir run` with the same Rscript selection as the worker, one `--with` argument per requirement, and a constant expression that prints the resolved library path.
 The server sets `IR_NO_LOCAL_SOURCES` for every invocation, so IR refuses package installation from direct or transitive local sources while retaining ownership of package-reference parsing.
@@ -560,11 +560,10 @@ It is a latency heuristic: scheduling can delay a receipt past the grace and exp
 Standard output and standard error are decoded as UTF-8 only when a response is assembled, with replacement for invalid sequences; arbitrary binary output is not preserved byte for byte.
 Worker failures are reported as plain-text MCP tool errors, not structured worker events.
 Concurrent MCP `send` calls are outside the current contract.
-The default IR library supplies tidyverse, including dplyr, pillar, and tibble, plus the worker's GitHub reticulate build, DBI, duckdb, and their dependency sets, without attaching packages automatically.
+The default IR library supplies tidyverse, including dplyr, pillar, and tibble, plus the worker's GitHub reticulate build, DBI, duckdb, arrow, nanoarrow, and their dependency sets, without attaching packages automatically.
 Managed-Python preflight also requires an installed reticulate R package in the host R library.
-SQL previews additionally require installed arrow and nanoarrow R packages.
-Lazy dplyr relations created from `sql_connection()` additionally require dbplyr.
-MCP Console does not automatically install host-bootstrap reticulate, arrow, nanoarrow, or dbplyr.
+Tidyverse supplies dbplyr for lazy dplyr relations created from `sql_connection()`.
+MCP Console does not automatically install that host-bootstrap package.
 The default preflights must be able to resolve or provision the R library, interpreter, and initial requirements outside the sandbox.
 An explicitly configured interpreter must be initializable under the offline worker policy.
 R requirements, the selected IR library, and Python requirements are retained only in server memory.

@@ -26,8 +26,14 @@ pub(crate) use output::{Content, Response, ResponseDelivery};
 use output::{OutputTape, SendFailure, SendResponse};
 
 #[cfg(target_os = "macos")]
-const DEFAULT_R_REQUIREMENTS: &[&str] =
-    &["tidyverse", "github::rstudio/reticulate", "DBI", "duckdb"];
+const DEFAULT_R_REQUIREMENTS: &[&str] = &[
+    "tidyverse",
+    "github::rstudio/reticulate",
+    "DBI",
+    "duckdb",
+    "arrow",
+    "nanoarrow",
+];
 
 /// A cloneable handle to one lazily started worker.
 #[derive(Clone)]
