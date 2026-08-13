@@ -10,8 +10,7 @@ server:
     cat("before crash\n")
 ---
 worker:
-  kind: output
-  channel: output
+  kind: console_output
   data: |
     before crash
 ---
@@ -40,8 +39,7 @@ server:
     cat("after crash\n")
 ---
 worker:
-  kind: output
-  channel: output
+  kind: console_output
   data: |
     after crash
 ---

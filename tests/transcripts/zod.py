@@ -19,7 +19,6 @@ from _support import (
     run_this_suite,
 )
 
-
 PLATFORMS = {"darwin"}
 LARGE_OUTPUT_SIZE = 2 * 1024 * 1024
 PNG_1X1 = (
@@ -41,14 +40,14 @@ def test_routes_send_over_sideband(binary: Path) -> Transcript:
     return client._finish()
 
 
-def test_projects_console_channels(binary: Path) -> Transcript:
+def test_projects_console_kinds(binary: Path) -> Transcript:
     zod = Path(__file__).resolve().parents[1] / "fixtures" / "zod"
     client = McpClient(
         binary,
         ("serve", "--worker", str(zod)),
     )
     client._initialize_and_list_tools()
-    result = client.send(r="emit console channels")
+    result = client.send(r="emit console kinds")
     assert result == {
         "content": [
             {
@@ -56,21 +55,6 @@ def test_projects_console_channels(binary: Path) -> Transcript:
                 "text": "zod output\nzod diagnostic\n",
             }
         ],
-        "isError": False,
-    }, result
-    return client._finish()
-
-
-def test_accepts_legacy_output_without_channel(binary: Path) -> Transcript:
-    zod = Path(__file__).resolve().parents[1] / "fixtures" / "zod"
-    client = McpClient(
-        binary,
-        ("serve", "--worker", str(zod)),
-    )
-    client._initialize_and_list_tools()
-    result = client.send(r="emit legacy output")
-    assert result == {
-        "content": [{"type": "text", "text": "zod legacy output\n"}],
         "isError": False,
     }, result
     return client._finish()

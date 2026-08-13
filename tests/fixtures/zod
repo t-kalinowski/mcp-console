@@ -6,9 +6,9 @@
 import json
 import os
 import time
+from enum import StrEnum
 from pathlib import Path
 from typing import Any, TextIO
-
 
 READ_FD_ENV = "MCP_CONSOLE_SIDEBAND_READ_FD"
 WRITE_FD_ENV = "MCP_CONSOLE_SIDEBAND_WRITE_FD"
@@ -17,6 +17,11 @@ PNG_1X1 = (
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42Y"
     "AAAAASUVORK5CYII="
 )
+
+
+class ConsoleKind(StrEnum):
+    OUTPUT = "console_output"
+    DIAGNOSTIC = "console_diagnostic"
 
 
 def open_sideband(name: str, mode: str) -> TextIO:
@@ -30,12 +35,15 @@ def send(stream: TextIO, message: dict[str, Any]) -> None:
     stream.flush()
 
 
-def send_output(stream: TextIO, data: str, channel: str = "output") -> None:
+def send_output(
+    stream: TextIO,
+    data: str,
+    kind: ConsoleKind = ConsoleKind.OUTPUT,
+) -> None:
     send(
         stream,
         {
-            "kind": "output",
-            "channel": channel,
+            "kind": kind,
             "data": data,
         },
     )
@@ -64,7 +72,7 @@ def emit_background_stderr(root: Path) -> None:
 def wait_for_server_to_process_sideband(stream: TextIO) -> None:
     """Block until the server has processed the preceding sideband frames."""
     frame = json.dumps(
-        {"kind": "output", "channel": "output", "data": ""},
+        {"kind": ConsoleKind.OUTPUT, "data": ""},
         separators=(",", ":"),
     )
     # Flushing a frame only proves that it entered the kernel pipe.
@@ -268,20 +276,9 @@ def main() -> None:
             send(writer, {"kind": "completed"})
             continue
 
-        if source == "emit console channels":
+        if source == "emit console kinds":
             send_output(writer, "zod output\n")
-            send_output(writer, "zod diagnostic\n", "diagnostic")
-            send(writer, {"kind": "completed"})
-            continue
-
-        if source == "emit legacy output":
-            send(
-                writer,
-                {
-                    "kind": "output",
-                    "data": "zod legacy output\n",
-                },
-            )
+            send_output(writer, "zod diagnostic\n", ConsoleKind.DIAGNOSTIC)
             send(writer, {"kind": "completed"})
             continue
 

@@ -406,11 +406,13 @@ mod platform {
         if WORKER_FAILURE.lock().is_ok_and(|failure| failure.is_some()) {
             return Ok(());
         }
+        let data = String::from_utf8_lossy(bytes).into_owned();
+        let message = match channel {
+            ConsoleChannel::Output => WorkerMessage::ConsoleOutput { data },
+            ConsoleChannel::Diagnostic => WorkerMessage::ConsoleDiagnostic { data },
+        };
         writer
-            .send(&WorkerMessage::Output {
-                channel,
-                data: String::from_utf8_lossy(bytes).into_owned(),
-            })
+            .send(&message)
             .map_err(|error| format!("R console output failed: {error}"))
     }
 

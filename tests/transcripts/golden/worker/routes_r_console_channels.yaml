@@ -14,20 +14,17 @@ server:
     )
 ---
 worker:
-  kind: output
-  channel: output
+  kind: console_output
   data: |
     R output
 ---
 worker:
-  kind: output
-  channel: diagnostic
+  kind: console_diagnostic
   data: |
     R diagnostic
 ---
 worker:
-  kind: output
-  channel: diagnostic
+  kind: console_diagnostic
   data: |
     WARNING: Only editing the first in the list of files
 ---

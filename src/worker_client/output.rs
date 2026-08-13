@@ -23,7 +23,7 @@ struct OutputTapeState {
 
 /// One publication from a directly captured worker file descriptor.
 ///
-/// These paths capture output that bypasses worker `output` frames, including
+/// These paths capture output that bypasses worker console-text frames, including
 /// Python `.buffer` writes, native fd writes, forked or execed descendants, and
 /// custom workers.
 enum DirectOutputEvent {
@@ -36,7 +36,7 @@ enum OutputEvent {
     DirectStdout(DirectOutputEvent),
     /// Raw bytes or closure from the worker's directly captured stderr (fd 2).
     DirectStderr(DirectOutputEvent),
-    /// Text from a worker `output` sideband frame.
+    /// Text from a worker console-text sideband frame.
     WorkerConsoleText {
         channel: crate::worker_protocol::ConsoleChannel,
         text: String,

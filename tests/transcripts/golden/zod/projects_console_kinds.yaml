@@ -3,7 +3,7 @@
 ---
 id: 3
 send:
-  r: emit console channels
+  r: emit console kinds
 result:
   content:
     - type: text
