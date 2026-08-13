@@ -21,6 +21,14 @@ impl ManagedPython {
     pub(crate) fn requirements(&self) -> &crate::worker_protocol::PythonRequirementManifest {
         &self.requirements
     }
+
+    pub(crate) fn with_retained_requirements(
+        mut self,
+        requirements: crate::worker_protocol::PythonRequirementManifest,
+    ) -> Self {
+        self.requirements = requirements;
+        self
+    }
 }
 
 impl ManagedR {

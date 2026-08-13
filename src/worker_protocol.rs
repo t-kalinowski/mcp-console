@@ -61,6 +61,7 @@ pub(crate) fn default_python_requirement_manifest() -> PythonRequirementManifest
 #[serde(deny_unknown_fields)]
 pub(crate) struct PythonResolveRequest {
     pub(crate) requirements: PythonRequirementManifest,
+    pub(crate) retained_requirements: PythonRequirementManifest,
     pub(crate) environment: BTreeMap<String, String>,
 }
 

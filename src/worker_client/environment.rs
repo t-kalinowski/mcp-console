@@ -207,7 +207,16 @@ impl Client {
             "runtime Python requirements require a server-managed interpreter".to_string()
         })?;
         let requirements = request.requirements.normalized();
-        if current.requirements() == &requirements {
+        let retained_requirements = request.retained_requirements.normalized();
+        if requirements.packages != retained_requirements.packages
+            || requirements.exclude_newer != retained_requirements.exclude_newer
+        {
+            return Err(
+                "Python resolution and retained requirements differ outside the Python version"
+                    .to_string(),
+            );
+        }
+        if current.requirements() == &retained_requirements {
             self.ensure_generation(&generation)?;
             return Ok(current);
         }
@@ -225,7 +234,7 @@ impl Client {
         };
         self.clear_resolver_stop_handle(&generation)?;
         self.ensure_generation(&generation)?;
-        Ok(managed)
+        Ok(managed.with_retained_requirements(retained_requirements))
     }
 
     pub(super) fn checkpoint_runtime_python(

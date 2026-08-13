@@ -87,10 +87,13 @@ id: 7
 send:
   r: |
     seed <- tail(reticulate::py_require()$history, 1L)[[1L]]
+    printed_requirements <- capture.output(print(reticulate::py_require()))
     stopifnot(
       identical(seed$requested_from, "mcp-console"),
       identical(seed$action, "set"),
-      identical(seed$packages, c("numpy", "pandas", "py-yaml12"))
+      isFALSE(seed$exclude_newer_supplied),
+      identical(seed$packages, c("numpy", "pandas", "py-yaml12")),
+      length(printed_requirements) > 0L
     )
 result:
   content:

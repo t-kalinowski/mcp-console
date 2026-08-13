@@ -35,10 +35,11 @@ base::local({
     ])
   }
 
-  request_json <- function(requirements) {
+  request_json <- function(requirements, retained_requirements) {
     jsonlite::toJSON(
       list(
         requirements = requirements,
+        retained_requirements = retained_requirements,
         environment = uv_environment()
       ),
       auto_unbox = TRUE,
@@ -49,18 +50,24 @@ base::local({
 
   install_managed_python <- function(...) {
     namespace <- asNamespace("reticulate")
-    current_requirement <- function(name) {
-      get("py_reqs_get", envir = namespace)(name)
+    current_requirements <- function() {
+      get("py_reqs_get", envir = namespace)()
     }
     resolve <- function(
-      packages = current_requirement("packages"),
-      python_version = current_requirement("python_version"),
-      exclude_newer = current_requirement("exclude_newer")
+      packages = current_requirements()$packages,
+      python_version = get("py_reqs_python_version", envir = namespace)(),
+      exclude_newer = current_requirements()$exclude_newer
     ) {
+      current <- current_requirements()
       requirements <- manifest(packages, python_version, exclude_newer)
+      retained_requirements <- manifest(
+        packages,
+        current$python_version,
+        exclude_newer
+      )
       .Call(
         "mcp_console_resolve_python",
-        request_json(requirements)
+        request_json(requirements, retained_requirements)
       )
     }
 
@@ -90,6 +97,7 @@ base::local({
         packages = packages,
         python_version = python_version,
         exclude_newer = seed$exclude_newer,
+        exclude_newer_supplied = !is.null(seed$exclude_newer),
         action = "set"
       )))
       globals$python_requirements <- requirements

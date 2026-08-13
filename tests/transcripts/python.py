@@ -149,10 +149,13 @@ def test_prepares_initial_python_requirements(binary: Path) -> Transcript:
     # fmt: r
     r = code(r"""
         seed <- tail(reticulate::py_require()$history, 1L)[[1L]]
+        printed_requirements <- capture.output(print(reticulate::py_require()))
         stopifnot(
           identical(seed$requested_from, "mcp-console"),
           identical(seed$action, "set"),
-          identical(seed$packages, c("numpy", "pandas", "py-yaml12"))
+          isFALSE(seed$exclude_newer_supplied),
+          identical(seed$packages, c("numpy", "pandas", "py-yaml12")),
+          length(printed_requirements) > 0L
         )
         """)
     client.send(r=r)
@@ -309,6 +312,8 @@ def test_prepares_python_requirements_after_worker_startup(binary: Path) -> Tran
     assert last_tool_text(client) == (
         "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
     )
+    client.send(r="is.null(reticulate::py_require()$python_version)")
+    assert last_tool_text(client) == "[1] TRUE\n"
     # fmt: python
     python = code("""
         import yaml12

@@ -278,7 +278,8 @@ It does not wrap `py_require()`, so reticulate retains its activation behavior.
 Idle explicit preparation passes structured additions through the same bridge and reports a checkpoint instead of completing a cell.
 It materializes an uninitialized manifest or activates a same-`libpython` environment while preserving live state.
 The server retains only a matching checkpoint; failure preserves the prior live and server manifests.
-Each runtime resolution uses the worker's current `UV_*` settings except `UV_OFFLINE`; those settings are not retained or replayed across worker generations.
+Each runtime resolution sends the physical resolver manifest and the logical manifest to retain if accepted, together with the worker's current `UV_*` settings except `UV_OFFLINE`; those settings are not retained or replayed across worker generations.
+After Python initializes, reticulate resolves late additions against the exact active Python patch version while leaving the logical `py_require()` Python constraints unchanged.
 The requirement strings and forwarded settings are structured data rather than R code, and the resolver does not evaluate the submitted cell.
 However, evaluated R code or an R package load can request this resolution, and reticulate and uv may access the network, write normal host caches, and execute a source distribution's build backend outside the worker sandbox.
 Startup preflight has no MCP timeout and cannot be cancelled by closing MCP input because it completes before that input is accepted.

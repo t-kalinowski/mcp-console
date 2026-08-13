@@ -75,6 +75,16 @@ result:
 ---
 id: 9
 send:
+  r: is.null(reticulate::py_require()$python_version)
+result:
+  content:
+    - type: text
+      text: |
+        [1] TRUE
+  isError: false
+---
+id: 10
+send:
   python: |
     import yaml12
 
