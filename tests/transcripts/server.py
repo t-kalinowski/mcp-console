@@ -25,6 +25,8 @@ def test_initializes_and_lists_tools(binary: Path) -> Transcript:
         "Use `session` to prepare missing packages",
         "Call `send` sequentially",
         "ordinary console output",
+        "cannot directly access the network",
+        "Managed Python requirement resolution triggered by R code",
     ):
         assert guidance in send["description"], guidance
     assert (

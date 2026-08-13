@@ -150,7 +150,8 @@ result:
 ---
 id: 15
 send:
-  python: assigned_from_r
+  python: |
+    assigned_from_r
 result:
   content:
     - type: text
