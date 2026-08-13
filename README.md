@@ -110,8 +110,10 @@ Initial lazy startup and retries before any worker reaches ready remain silent.
 
 ## A mixed-language analysis
 
-Choose the language that makes each step clearest and switch languages without exporting intermediate files.
-For example, prepare the packages you expect to use before the first cell:
+An MCP client can use R, Python, and DuckDB as one persistent workspace and choose the clearest language for each step without exporting intermediate files.
+After the `session` call below, each language-labeled block contains one complete cell for the named `send` field.
+
+First, call `session` to prepare the packages before the worker starts:
 
 ```json
 {
@@ -123,44 +125,59 @@ For example, prepare the packages you expect to use before the first cell:
 }
 ```
 
-Load and inspect data with Python:
+Load and inspect data with a `python` cell:
 
-```json
-{
-  "python": "import pandas as pd\nmeasurements = pd.read_csv('measurements.csv')\nmeasurements.describe()"
-}
+```python
+import pandas as pd
+
+measurements = pd.read_csv("measurements.csv")
+measurements.describe()
 ```
 
-Read that Python object from R, fit a model with `lm()`, and leave the augmented data in R global state:
+Read that Python object from an `r` cell, fit a model with `lm()`, and leave the augmented data in R global state:
 
-```json
-{
-  "r": "measurements <- tibble::as_tibble(py$measurements)\nfit <- lm(response ~ temperature + group, data = measurements)\nmeasurements <- dplyr::mutate(measurements, .fitted = fitted(fit), .residual = residuals(fit))\nsummary(fit)"
-}
+```r
+measurements <- tibble::as_tibble(py$measurements)
+fit <- lm(response ~ temperature + group, data = measurements)
+measurements <- dplyr::mutate(
+  measurements,
+  .fitted = fitted(fit),
+  .residual = residuals(fit)
+)
+summary(fit)
 ```
 
-DuckDB can query the R data frame directly by name:
+Query the R data frame directly by name with an `sql` cell:
 
-```json
-{
-  "sql": "SELECT \"group\", count(*) AS n, avg(abs(\".residual\")) AS mean_abs_residual FROM measurements GROUP BY \"group\" ORDER BY mean_abs_residual DESC"
-}
+```sql
+SELECT
+  "group",
+  count(*) AS n,
+  avg(abs(".residual")) AS mean_abs_residual
+FROM measurements
+GROUP BY "group"
+ORDER BY mean_abs_residual DESC
 ```
 
-Python can then read the updated R object and return a Matplotlib figure as an MCP image:
+Use another `python` cell to read the updated R object and return a Matplotlib figure as an MCP image:
 
-```json
-{
-  "python": "import matplotlib.pyplot as plt\nframe = r.measurements\nplt.scatter(frame['temperature'], frame['.residual'])\nplt.axhline(0, color='black', linewidth=1)"
-}
+```python
+import matplotlib.pyplot as plt
+
+frame = r.measurements
+plt.scatter(frame["temperature"], frame[".residual"])
+plt.axhline(0, color="black", linewidth=1)
 ```
 
-Switch back to R for a ggplot2 diagnostic:
+Switch back to an `r` cell for a ggplot2 diagnostic:
 
-```json
-{
-  "r": "ggplot2::ggplot(measurements, ggplot2::aes(.fitted, .residual, color = group)) + ggplot2::geom_point() + ggplot2::geom_hline(yintercept = 0)"
-}
+```r
+ggplot2::ggplot(
+  measurements,
+  ggplot2::aes(.fitted, .residual, color = group)
+) +
+  ggplot2::geom_point() +
+  ggplot2::geom_hline(yintercept = 0)
 ```
 
 Python reads R globals as `r.name`, and R reads Python globals as `py$name` without attaching reticulate.

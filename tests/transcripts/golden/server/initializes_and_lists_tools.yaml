@@ -25,9 +25,31 @@ input:
 result:
   tools:
     - name: send
-      description: "Persistent mixed-language data-analysis console. Use it for file and data inspection, wrangling, visualization, statistics, simulation, and modeling. Choose the clearest language for each step and switch freely between calls: base R or prepared packages such as dplyr and ggplot2; Python packages such as pandas, NumPy, scikit-learn, and Matplotlib; or DuckDB SQL. State persists across calls. Python reads R globals through `r.name`; R reads Python globals through `py$name`; SQL queries R data frames by name; R accesses the DuckDB catalog through `sql_connection()`. Use `session` to prepare missing packages before loading or importing them. R default-device plots and open `matplotlib.pyplot` figures return as PNG images. Send exactly one complete `r`, `python`, or `sql` cell. Call `send` sequentially; concurrent calls are unsupported. Use `stdin` for interactive reads or debugger commands; omit code and stdin to poll. A wait timeout does not stop computation, and running work must be collected before new code is sent. R errors, Python exceptions, and DuckDB errors are ordinary console output, so inspect result text and continue or correct the cell. Cells can read host files but have no network access and can write only within the worker's private temporary directory."
+      description: >-
+        Persistent mixed-language computational workbench. Use it whenever exact
+        computation or direct inspection would improve accuracy—from arithmetic,
+        string counting, parsing, and file or binary-data inspection to data
+        wrangling, exploratory analysis, visualization, statistics, simulation,
+        and model training or tuning. Choose the clearest language for each step
+        and switch freely between calls: base R or prepared packages such as
+        dplyr and ggplot2; Python packages such as pandas, NumPy, scikit-learn,
+        and Matplotlib; or DuckDB SQL. State persists across calls. Python reads
+        R globals through `r.name`; R reads Python globals through `py$name`;
+        SQL queries R data frames by name; R accesses the DuckDB catalog through
+        `sql_connection()`. Language-native help and introspection are
+        available. Use `session` to prepare missing packages before loading or
+        importing them. R default-device plots and open `matplotlib.pyplot`
+        figures return as PNG images. Send exactly one complete `r`, `python`,
+        or `sql` cell. Call `send` sequentially; concurrent calls are
+        unsupported. Use `stdin` for interactive reads or debugger commands;
+        omit code and stdin to poll. A wait timeout does not stop computation,
+        and running work must be collected before new code is sent. R errors,
+        Python exceptions, and DuckDB errors are ordinary console output, so
+        inspect result text and continue or correct the cell. Cells can read
+        host files but have no network access and can write only within the
+        worker's private temporary directory.
       inputSchema:
-        $schema: "https://json-schema.org/draft/2020-12/schema"
+        $schema: https://json-schema.org/draft/2020-12/schema
         additionalProperties: false
         type: object
         properties:
@@ -68,11 +90,11 @@ result:
               - "null"
           stdin:
             description: |-
-              Exact UTF-8 text for interactive reads and debugger commands such as R `readline()` or
-              `browser()` and Python `input()`, `breakpoint()`, or `pdb`. No newline is added. Send it with a
-              cell to prequeue input or on its own while the worker is running or idle. If output ends in
-              `[stdin needed]`, send the requested input here. Unread text can satisfy later reads and is
-              discarded by restart.
+              Text for interactive reads and debugger commands such as R `readline()` or `browser()` and
+              Python `input()`, `breakpoint()`, or `pdb`. Its UTF-8 encoding is queued to worker stdin
+              exactly; no newline is added. Send it with a cell to prequeue input or on its own while the
+              worker is running or idle. If output ends in `[stdin needed]`, send the requested input here.
+              Unread text can satisfy later reads and is discarded by restart.
             type:
               - string
               - "null"
@@ -86,9 +108,23 @@ result:
             minimum: 0
             default: 60000
     - name: session
-      description: "Make R or Python packages available, or restart the persistent console session. Use `prepare` before loading or importing missing packages. Packages are not imported or attached automatically. Prepare anticipated R packages before the worker starts. After startup, a `prepare` call containing any new R requirement returns `[restart required]` and applies none of that call's R or Python additions; start a fresh server to add R packages. An idle server-managed worker can add compatible Python requirements without losing live state. Requirements are additive, idempotent, and persist across restart. `restart` may optionally add Python requirements, then replaces the worker and loses all in-memory R, Python, and SQL state, debugger state, and unread stdin. Requirement resolution runs outside the execution sandbox and may download packages or execute installation or build code on the host; use only trusted requirements."
+      description: >-
+        Make R or Python packages available, or restart the persistent console
+        session. Use `prepare` before loading or importing missing packages.
+        Packages are not imported or attached automatically. Prepare anticipated
+        R packages before the worker starts. After startup, a `prepare` call
+        containing any new R requirement returns `[restart required]` and
+        applies none of that call's R or Python additions; start a fresh server
+        to add R packages. An idle server-managed worker can add compatible
+        Python requirements without losing live state. Requirements are
+        additive, idempotent, and persist across restart. `restart` may
+        optionally add Python requirements, then replaces the worker and loses
+        all in-memory R, Python, and SQL state, debugger state, and unread
+        stdin. Requirement resolution runs outside the execution sandbox and may
+        download packages or execute installation or build code on the host; use
+        only trusted requirements.
       inputSchema:
-        $schema: "https://json-schema.org/draft/2020-12/schema"
+        $schema: https://json-schema.org/draft/2020-12/schema
         required:
           - action
         type: object

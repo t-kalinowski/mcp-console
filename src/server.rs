@@ -52,11 +52,11 @@ struct SendArguments {
     /// a bounded preview. Use `SHOW TABLES`, `DESCRIBE`, `SUMMARIZE`, and `EXPLAIN` for discovery.
     /// DuckDB CLI dot commands are not supported. Omit to send stdin or poll.
     sql: Option<String>,
-    /// Exact UTF-8 text for interactive reads and debugger commands such as R `readline()` or
-    /// `browser()` and Python `input()`, `breakpoint()`, or `pdb`. No newline is added. Send it with a
-    /// cell to prequeue input or on its own while the worker is running or idle. If output ends in
-    /// `[stdin needed]`, send the requested input here. Unread text can satisfy later reads and is
-    /// discarded by restart.
+    /// Text for interactive reads and debugger commands such as R `readline()` or `browser()` and
+    /// Python `input()`, `breakpoint()`, or `pdb`. Its UTF-8 encoding is queued to worker stdin
+    /// exactly; no newline is added. Send it with a cell to prequeue input or on its own while the
+    /// worker is running or idle. If output ends in `[stdin needed]`, send the requested input here.
+    /// Unread text can satisfy later reads and is discarded by restart.
     stdin: Option<String>,
     /// Maximum time this call waits for an evaluation. On expiry, the call returns available output
     /// followed by `[running]` without stopping the computation. Poll by calling `send` again without
@@ -125,7 +125,7 @@ impl ConsoleServer {
 #[tool_router]
 impl ConsoleServer {
     #[tool(
-        description = "Persistent mixed-language data-analysis console. Use it for file and data inspection, wrangling, visualization, statistics, simulation, and modeling. Choose the clearest language for each step and switch freely between calls: base R or prepared packages such as dplyr and ggplot2; Python packages such as pandas, NumPy, scikit-learn, and Matplotlib; or DuckDB SQL. State persists across calls. Python reads R globals through `r.name`; R reads Python globals through `py$name`; SQL queries R data frames by name; R accesses the DuckDB catalog through `sql_connection()`. Use `session` to prepare missing packages before loading or importing them. R default-device plots and open `matplotlib.pyplot` figures return as PNG images. Send exactly one complete `r`, `python`, or `sql` cell. Call `send` sequentially; concurrent calls are unsupported. Use `stdin` for interactive reads or debugger commands; omit code and stdin to poll. A wait timeout does not stop computation, and running work must be collected before new code is sent. R errors, Python exceptions, and DuckDB errors are ordinary console output, so inspect result text and continue or correct the cell. Cells can read host files but have no network access and can write only within the worker's private temporary directory."
+        description = "Persistent mixed-language computational workbench. Use it whenever exact computation or direct inspection would improve accuracy—from arithmetic, string counting, parsing, and file or binary-data inspection to data wrangling, exploratory analysis, visualization, statistics, simulation, and model training or tuning. Choose the clearest language for each step and switch freely between calls: base R or prepared packages such as dplyr and ggplot2; Python packages such as pandas, NumPy, scikit-learn, and Matplotlib; or DuckDB SQL. State persists across calls. Python reads R globals through `r.name`; R reads Python globals through `py$name`; SQL queries R data frames by name; R accesses the DuckDB catalog through `sql_connection()`. Language-native help and introspection are available. Use `session` to prepare missing packages before loading or importing them. R default-device plots and open `matplotlib.pyplot` figures return as PNG images. Send exactly one complete `r`, `python`, or `sql` cell. Call `send` sequentially; concurrent calls are unsupported. Use `stdin` for interactive reads or debugger commands; omit code and stdin to poll. A wait timeout does not stop computation, and running work must be collected before new code is sent. R errors, Python exceptions, and DuckDB errors are ordinary console output, so inspect result text and continue or correct the cell. Cells can read host files but have no network access and can write only within the worker's private temporary directory."
     )]
     async fn send(
         &self,

@@ -14,7 +14,10 @@ def test_initializes_and_lists_tools(binary: Path) -> Transcript:
     tools = {tool["name"]: tool for tool in client.transcript[-1]["result"]["tools"]}
     send = tools["send"]
     for guidance in (
+        "Use it whenever exact computation or direct inspection would improve accuracy",
+        "arithmetic, string counting, parsing",
         "Choose the clearest language for each step",
+        "Language-native help and introspection are available",
         "`r.name`",
         "`py$name`",
         "SQL queries R data frames by name",
@@ -32,6 +35,10 @@ def test_initializes_and_lists_tools(binary: Path) -> Transcript:
         in send["inputSchema"]["properties"]["python"]["description"]
     )
     assert "bounded preview" in send["inputSchema"]["properties"]["sql"]["description"]
+    stdin_description = " ".join(
+        send["inputSchema"]["properties"]["stdin"]["description"].split()
+    )
+    assert "Its UTF-8 encoding is queued to worker stdin exactly" in stdin_description
 
     session = tools["session"]
     for guidance in (
