@@ -11,6 +11,7 @@ send:
       identical(python, "managed"),
       file.exists(config$python),
       isTRUE(config$ephemeral),
+      "pandas" %in% reticulate::py_require()$packages,
       !any(vapply(
         history,
         function(request) identical(request$requested_from, "base"),
@@ -26,7 +27,11 @@ result:
 id: 4
 send:
   python: |
-    40 + 2
+    import io
+    import pandas as pd
+
+    frame = pd.read_csv(io.StringIO("value\n40\n2\n"))
+    int(frame["value"].sum())
 result:
   content:
     - type: text

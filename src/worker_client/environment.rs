@@ -28,10 +28,7 @@ pub(super) fn merge_python_requirements(
         .unwrap_or_default();
     let mut candidate = current
         .map(|managed| managed.requirements().clone())
-        .unwrap_or_else(|| crate::worker_protocol::PythonRequirementManifest {
-            packages: vec!["numpy".to_string()],
-            ..Default::default()
-        });
+        .unwrap_or_else(crate::worker_protocol::default_python_requirement_manifest);
     let additions = additions.into_iter().collect::<BTreeSet<_>>();
     if additions.is_subset(&retained) {
         return None;

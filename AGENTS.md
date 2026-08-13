@@ -50,6 +50,9 @@ The server retains console channels and direct fd 1/2 identity until MCP project
 The server preserves sideband text and image order as MCP content blocks, coalesces adjacent text, and does not add `[done]` when an image is the only output.
 The implemented `session` surface accepts `action = "prepare"` with one or more R or Python requirement strings or `action = "restart"` with optional Python requirement strings for the implicit session.
 Requirements are exact, additive, and idempotent.
+On macOS, plain built-in `serve` resolves the retained default R requirements `tidyverse`, `github::rstudio/reticulate`, `DBI`, `duckdb`, `arrow`, and `nanoarrow` through IR before accepting MCP input.
+The GitHub reticulate requirement supplies the fork-aware output restoration required by the worker; host R must also provide reticulate to bootstrap managed Python before the worker library is applied.
+The resulting library is retained across worker generations; tidyverse packages, reticulate, DBI, duckdb, arrow, nanoarrow, and their dependency sets are available but are not attached automatically.
 Before the worker starts, each successful prepare resolves the complete candidate sets outside the sandbox, atomically retains them in server memory, and returns `[prepared]` without starting the worker.
 Before each R resolution, the server requires `ir --version` from `PATH` to report 0.4.0 or later; it then uses `ir run` with the worker's Rscript, and the result becomes the first worker `R_LIBS` entry.
 Python requirements use reticulate and uv and replace any inherited Python selection with the resolved interpreter.
@@ -57,7 +60,7 @@ The server sets `IR_NO_LOCAL_SOURCES` for every R resolution, so IR prevents dir
 A failed resolution leaves the prior requirements, R library, and interpreter unchanged.
 For a uv tool failure, the tool error reports a JSON manifest containing reticulate's selected Python and the complete candidate package set, followed by uv's stderr, while omitting the helper command, temporary output path, and reticulate's `py_require()`-oriented guidance.
 The direct resolver process defines its process-group lifetime: after it exits, the server force-stops any remaining in-group descendants before reaping it and collecting its standard streams.
-Closing MCP input cancels an in-flight explicit or runtime resolution by force-stopping its host resolver process group; startup preflight completes before MCP input is accepted and is not cancellable through that lifecycle.
+Closing MCP input cancels an in-flight explicit or runtime resolution by force-stopping its host resolver process group; startup preflights complete before MCP input is accepted and are not cancellable through that lifecycle.
 An idle server-managed worker can apply Python-only additions through reticulate without replacement.
 It materializes an uninitialized manifest or activates a same-`libpython` environment while preserving live state.
 The server returns `[prepared]` only after checkpointing the result; failure preserves the live and retained manifests.
@@ -77,7 +80,7 @@ Without a waiting `send`, the explicit restart response preserves old-worker out
 When a `send` is waiting on the interrupted cell, it exclusively receives old-worker output through retirement followed by `[stopped by session restart request before evaluation finished]` and, when restart retires a ready worker, `[worker stopped: in-memory state lost]`.
 The server writes that `send` reply before starting the replacement or returning the restart response, which contains `[active evaluation stopped by session restart request]`, its own stopped notice when it retires a ready worker, `[starting new worker]`, replacement startup output, and `[idle]` without repeating the old-worker output.
 Named sessions and runtime R requirement additions do not exist yet.
-On macOS, managed-Python preflight happens during `serve` startup when required; the first nonempty stdin submission or evaluation still lazily starts the built-in worker under the same sandbox policy as the `sandbox` command.
+On macOS, default R preflight and managed-Python preflight happen during `serve` startup when required; the first nonempty stdin submission or evaluation still lazily starts the built-in worker under the same sandbox policy as the `sandbox` command.
 The worker embeds R through `libr` and `harp`, retains global state, and feeds each complete R cell through R's DLL REPL iterator.
 R parses and evaluates its expressions sequentially, captures console output, prints visible values, and performs native top-level bookkeeping.
 Cell EOF while R requires continuation input is an error; earlier complete expressions from that cell remain applied.
@@ -119,9 +122,9 @@ After a Python cell calls `os.fork()`, the child cannot use the sideband, so ret
 Native extensions that fork without running CPython's registered fork callbacks and then resume Python are unsupported.
 Fork-child text capture requires reticulate from its `main` branch or a release containing fork-aware stream restoration.
 An exec descendant that retains fd 1/2 creates fresh standard streams backed by those descriptors, so its ordinary stdout and stderr are captured while that worker generation's output boundary remains open.
-When inherited `RETICULATE_PYTHON` is absent or exactly `managed`, built-in server startup calls reticulate's internal uv environment resolver with its NumPy baseline outside the sandbox and retains the resulting interpreter and normalized manifest for every worker generation.
-Other inherited values, including an empty value, are preserved and skip that startup preflight; a later successful explicit preparation takes precedence over them.
-Custom workers skip resolution and reject R and Python requirement preparation and restart requests with Python requirements.
+When inherited `RETICULATE_PYTHON` is absent or exactly `managed`, built-in server startup calls reticulate's internal uv environment resolver with its NumPy and pandas baseline outside the sandbox and retains the resulting interpreter and normalized manifest for every worker generation.
+Other inherited values, including an empty value, are preserved and skip the Python startup preflight but not default R resolution; a later successful explicit preparation takes precedence over them.
+Custom workers skip both managed default preflights and reject R and Python requirement preparation and restart requests with Python requirements.
 R and Python resolution may access the network, write normal host caches, and execute package installation or build code outside the sandbox; managed Python environment startup and the Matplotlib font-manager import also run there.
 Requirement strings remain process-argument or JSON data rather than R source, and no submitted cell is evaluated by the resolver.
 Before initializing R, the worker forces `UV_OFFLINE=1`, overwriting any inherited value to match the sandbox's network denial.

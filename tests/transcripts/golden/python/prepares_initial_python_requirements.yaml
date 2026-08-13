@@ -29,6 +29,7 @@ result:
           "python": "3.12.x (reticulate default)",
           "packages": [
             "numpy",
+            "pandas",
             "not a valid requirement !!!",
             "py-yaml12"
           ]
@@ -56,6 +57,7 @@ result:
           "python": "3.12.x (reticulate default)",
           "packages": [
             "numpy",
+            "pandas",
             "not a valid requirement !!!",
             "py-yaml12"
           ]
@@ -88,7 +90,7 @@ send:
     stopifnot(
       identical(seed$requested_from, "mcp-console"),
       identical(seed$action, "set"),
-      identical(seed$packages, c("numpy", "py-yaml12"))
+      identical(seed$packages, c("numpy", "pandas", "py-yaml12"))
     )
 result:
   content:

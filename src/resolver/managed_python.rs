@@ -16,7 +16,7 @@ base::local({
     warn = FALSE
   ), collapse = "\n")
   input <- jsonlite::fromJSON(input)
-  packages <- base::unique(c("numpy", input$packages))
+  packages <- base::unique(c("numpy", "pandas", input$packages))
   python_version <- input$python_version
   if (!base::length(python_version)) {
     python_version <- NULL
@@ -248,14 +248,9 @@ fn python_resolver_rscript() -> PathBuf {
 fn manifest_from_packages(
     requirements: &[String],
 ) -> crate::worker_protocol::PythonRequirementManifest {
-    crate::worker_protocol::PythonRequirementManifest {
-        packages: std::iter::once("numpy".to_string())
-            .chain(requirements.iter().cloned())
-            .collect(),
-        python_version: Vec::new(),
-        exclude_newer: None,
-    }
-    .normalized()
+    let mut manifest = crate::worker_protocol::default_python_requirement_manifest();
+    manifest.packages.extend(requirements.iter().cloned());
+    manifest.normalized()
 }
 
 fn uv_environment() -> BTreeMap<String, String> {

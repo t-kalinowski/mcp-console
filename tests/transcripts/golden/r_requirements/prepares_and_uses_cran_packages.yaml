@@ -6,7 +6,7 @@ session:
   action: prepare
   requirements:
     r:
-      - cli, dplyr
+      - praise, zeallot
 result:
   content:
     - type: text
@@ -17,14 +17,14 @@ id: 4
 send:
   r: |
     stopifnot(
-      identical(dirname(find.package("cli")), .libPaths()[[1L]]),
-      identical(dirname(find.package("dplyr")), .libPaths()[[1L]])
+      identical(dirname(find.package("praise")), .libPaths()[[1L]]),
+      identical(dirname(find.package("zeallot")), .libPaths()[[1L]])
     )
     result <- dplyr::summarise(
       data.frame(value = c(40L, 2L)),
       answer = sum(.data$value)
     )
-    cli::format_inline("answer: {result$answer}")
+    praise::praise(sprintf("answer: %d", result$answer))
 result:
   content:
     - type: text

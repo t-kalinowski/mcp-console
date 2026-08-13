@@ -41,5 +41,5 @@ Property descriptions:
 
 Descriptions should communicate facts that affect whether or how an agent calls the tools: breadth, persistence, interoperability, help and debugger support, cell/stdin/poll semantics, bounded outputs, environment persistence, and destructive lifecycle boundaries.
 
-Do not include internal facts that do not change agent behavior: Ark, Jupyter, `harp`, `libr`, reticulate, DBI, worker IPC, stack-frame implementation, the internal JSONL journal, or exact output limits.
+Do not include internal facts that do not change agent behavior: Ark, Jupyter, `harp`, `libr`, worker IPC, stack-frame implementation, the internal JSONL journal, or exact output limits.
 DuckDB is named because it defines the SQL dialect and discovery commands.

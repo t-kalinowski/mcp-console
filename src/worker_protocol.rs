@@ -5,6 +5,8 @@ use serde::{Deserialize, Serialize};
 #[cfg(target_os = "macos")]
 use crate::cell::Language;
 
+pub(crate) const DEFAULT_PYTHON_PACKAGES: &[&str] = &["numpy", "pandas"];
+
 #[cfg(target_os = "macos")]
 #[derive(Deserialize, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
@@ -29,12 +31,12 @@ pub(crate) struct PythonRequirementManifest {
 impl PythonRequirementManifest {
     pub(crate) fn normalized(mut self) -> Self {
         let mut packages = self.packages.into_iter().collect::<BTreeSet<_>>();
-        self.packages = packages
-            .remove("numpy")
-            .then(|| "numpy".to_string())
-            .into_iter()
-            .chain(packages)
+        self.packages = DEFAULT_PYTHON_PACKAGES
+            .iter()
+            .filter(|package| packages.remove(**package))
+            .map(|package| (*package).to_string())
             .collect();
+        self.packages.extend(packages);
         self.python_version = self
             .python_version
             .into_iter()
@@ -42,6 +44,16 @@ impl PythonRequirementManifest {
             .into_iter()
             .collect();
         self
+    }
+}
+
+pub(crate) fn default_python_requirement_manifest() -> PythonRequirementManifest {
+    PythonRequirementManifest {
+        packages: DEFAULT_PYTHON_PACKAGES
+            .iter()
+            .map(|package| (*package).to_string())
+            .collect(),
+        ..Default::default()
     }
 }
 

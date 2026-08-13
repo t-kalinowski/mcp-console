@@ -75,10 +75,16 @@ fn stdio_console_discovers_r_inside_the_worker_sandbox() {
     let fake_bin = test_directory.path().join("bin");
     let fake_r = fake_bin.join("R");
     let escaped = test_directory.path().join("escaped.txt");
+    let preflight_complete = test_directory.path().join("preflight-complete");
     fs::create_dir(&fake_bin).expect("fake bin directory should be created");
     fs::write(
         &fake_r,
         r#"#!/bin/sh
+if [ ! -e "$MCP_CONSOLE_PREFLIGHT_COMPLETE" ]; then
+  : > "$MCP_CONSOLE_PREFLIGHT_COMPLETE"
+  printf '%s\n' "$MCP_CONSOLE_REAL_R_HOME"
+  exit 0
+fi
 printf escaped > "$MCP_CONSOLE_ESCAPE_PATH"
 printf '%s\n' "$MCP_CONSOLE_REAL_R_HOME"
 "#,
@@ -105,6 +111,7 @@ printf '%s\n' "$MCP_CONSOLE_REAL_R_HOME"
         .env_remove("R_HOME")
         .env("PATH", path)
         .env("MCP_CONSOLE_ESCAPE_PATH", &escaped)
+        .env("MCP_CONSOLE_PREFLIGHT_COMPLETE", &preflight_complete)
         .env("MCP_CONSOLE_REAL_R_HOME", r_home.trim());
     let mut client = McpClient::spawn(command);
 
@@ -196,7 +203,7 @@ exit 99
             "name": "session",
             "arguments": {
                 "action": "prepare",
-                "requirements": {"r": ["cli"]}
+                "requirements": {"r": ["praise"]}
             }
         })),
     );
@@ -210,9 +217,9 @@ exit 99
 stopifnot(
   normalizePath(R.home()) ==
     normalizePath(Sys.getenv("MCP_CONSOLE_REAL_R_HOME")),
-  identical(dirname(find.package("cli")), .libPaths()[[1L]])
+  identical(dirname(find.package("praise")), .libPaths()[[1L]])
 )
-as.character(cli::format_inline("ready"))
+praise::praise("ready")
 "#})
         ),
         "[1] \"ready\"\n"
@@ -230,10 +237,16 @@ fn stdio_console_shutdown_is_bounded_during_r_preparation_discovery() {
     let fake_bin = test_directory.path().join("bin");
     let fake_r = fake_bin.join("R");
     let resolver_started = test_directory.path().join("resolver-started");
+    let preflight_complete = test_directory.path().join("preflight-complete");
     fs::create_dir(&fake_bin).expect("fake bin directory should be created");
     fs::write(
         &fake_r,
         r#"#!/bin/sh
+if [ ! -e "$MCP_CONSOLE_PREFLIGHT_COMPLETE" ]; then
+  : > "$MCP_CONSOLE_PREFLIGHT_COMPLETE"
+  printf '%s\n' "$MCP_CONSOLE_REAL_R_HOME"
+  exit 0
+fi
 printf '%s\n' "$$" > "$MCP_CONSOLE_RESOLVER_STARTED"
 exec /bin/sleep 4
 "#,
@@ -245,6 +258,15 @@ exec /bin/sleep 4
         &std::env::var_os("PATH").unwrap_or_default(),
     )))
     .expect("test PATH should be valid");
+    let real_r_home = Command::new("R")
+        .arg("RHOME")
+        .output()
+        .expect("test R should be discoverable");
+    assert!(real_r_home.status.success());
+    let real_r_home = String::from_utf8(real_r_home.stdout)
+        .expect("test R home should be valid UTF-8")
+        .trim()
+        .to_string();
 
     let mut command = Command::new(env!("CARGO_BIN_EXE_mcp-console"));
     command
@@ -252,6 +274,8 @@ exec /bin/sleep 4
         .env_remove("R_HOME")
         .env("RETICULATE_PYTHON", "")
         .env("PATH", path)
+        .env("MCP_CONSOLE_PREFLIGHT_COMPLETE", &preflight_complete)
+        .env("MCP_CONSOLE_REAL_R_HOME", &real_r_home)
         .env("MCP_CONSOLE_RESOLVER_STARTED", &resolver_started);
     let mut client = McpClient::spawn(command);
     client.send_tool(
@@ -259,7 +283,7 @@ exec /bin/sleep 4
         "session",
         json!({
             "action": "prepare",
-            "requirements": {"r": ["cli"]}
+            "requirements": {"r": ["praise"]}
         }),
     );
 
@@ -300,10 +324,16 @@ fn stdio_console_shutdown_is_bounded_during_r_discovery() {
     let test_directory = TestDirectory::new("native-worker-r-discovery-shutdown");
     let fake_bin = test_directory.path().join("bin");
     let fake_r = fake_bin.join("R");
+    let preflight_complete = test_directory.path().join("preflight-complete");
     fs::create_dir(&fake_bin).expect("fake bin directory should be created");
     fs::write(
         &fake_r,
         r#"#!/bin/sh
+if [ ! -e "$MCP_CONSOLE_PREFLIGHT_COMPLETE" ]; then
+  : > "$MCP_CONSOLE_PREFLIGHT_COMPLETE"
+  printf '%s\n' "$MCP_CONSOLE_REAL_R_HOME"
+  exit 0
+fi
 exec /bin/sleep 3
 "#,
     )
@@ -314,9 +344,23 @@ exec /bin/sleep 3
         &std::env::var_os("PATH").unwrap_or_default(),
     )))
     .expect("test PATH should be valid");
+    let real_r_home = Command::new("R")
+        .arg("RHOME")
+        .output()
+        .expect("test R should be discoverable");
+    assert!(real_r_home.status.success());
+    let real_r_home = String::from_utf8(real_r_home.stdout)
+        .expect("test R home should be valid UTF-8")
+        .trim()
+        .to_string();
 
     let mut command = Command::new(env!("CARGO_BIN_EXE_mcp-console"));
-    command.arg("serve").env_remove("R_HOME").env("PATH", path);
+    command
+        .arg("serve")
+        .env_remove("R_HOME")
+        .env("PATH", path)
+        .env("MCP_CONSOLE_PREFLIGHT_COMPLETE", &preflight_complete)
+        .env("MCP_CONSOLE_REAL_R_HOME", &real_r_home);
     let mut client = McpClient::spawn(command);
     client.send_console(2, json!({"r": "1 + 1"}));
 
@@ -332,10 +376,22 @@ exec /bin/sleep 3
 fn stdio_console_stops_resolver_descendants_when_leader_exits() {
     let test_directory = TestDirectory::new("python-resolver-descendant-cleanup");
     let fake_bin = test_directory.path().join("bin");
+    let fake_ir = fake_bin.join("ir");
     let fake_rscript = fake_bin.join("Rscript");
     let fake_python = test_directory.path().join("python");
     let resolver_started = test_directory.path().join("resolver-started");
     fs::create_dir(&fake_bin).expect("fake bin directory should be created");
+    fs::write(
+        &fake_ir,
+        r#"#!/bin/sh
+if [ "$#" -eq 1 ] && [ "$1" = "--version" ]; then
+  printf 'ir 0.4.0\n'
+else
+  printf '%s' "$MCP_CONSOLE_FAKE_R_LIBRARY"
+fi
+"#,
+    )
+    .expect("fake IR should be written");
     fs::write(&fake_python, "").expect("fake Python should be written");
     fs::write(
         &fake_rscript,
@@ -350,12 +406,20 @@ exit 0
     .expect("fake Rscript should be written");
     fs::set_permissions(&fake_rscript, fs::Permissions::from_mode(0o755))
         .expect("fake Rscript should be executable");
+    fs::set_permissions(&fake_ir, fs::Permissions::from_mode(0o755))
+        .expect("fake IR should be executable");
+    let path = std::env::join_paths(std::iter::once(fake_bin.clone()).chain(
+        std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
+    ))
+    .expect("test PATH should be valid");
 
     let mut command = Command::new(env!("CARGO_BIN_EXE_mcp-console"));
     command
         .arg("serve")
         .env("R_HOME", test_directory.path())
+        .env("PATH", path)
         .env("RETICULATE_PYTHON", "configured-by-user")
+        .env("MCP_CONSOLE_FAKE_R_LIBRARY", test_directory.path())
         .env("MCP_CONSOLE_RESOLVER_STARTED", &resolver_started)
         .env("MCP_CONSOLE_TEST_PYTHON", &fake_python);
     let mut client = McpClient::spawn(command);
@@ -413,9 +477,21 @@ exit 0
 fn stdio_console_shutdown_is_bounded_during_python_preparation() {
     let test_directory = TestDirectory::new("python-preparation-shutdown");
     let fake_bin = test_directory.path().join("bin");
+    let fake_ir = fake_bin.join("ir");
     let fake_rscript = fake_bin.join("Rscript");
     let resolver_started = test_directory.path().join("resolver-started");
     fs::create_dir(&fake_bin).expect("fake bin directory should be created");
+    fs::write(
+        &fake_ir,
+        r#"#!/bin/sh
+if [ "$#" -eq 1 ] && [ "$1" = "--version" ]; then
+  printf 'ir 0.4.0\n'
+else
+  printf '%s' "$MCP_CONSOLE_FAKE_R_LIBRARY"
+fi
+"#,
+    )
+    .expect("fake IR should be written");
     fs::write(
         &fake_rscript,
         r#"#!/bin/sh
@@ -426,12 +502,20 @@ exec /bin/sleep 3
     .expect("fake Rscript should be written");
     fs::set_permissions(&fake_rscript, fs::Permissions::from_mode(0o755))
         .expect("fake Rscript should be executable");
+    fs::set_permissions(&fake_ir, fs::Permissions::from_mode(0o755))
+        .expect("fake IR should be executable");
+    let path = std::env::join_paths(std::iter::once(fake_bin.clone()).chain(
+        std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
+    ))
+    .expect("test PATH should be valid");
 
     let mut command = Command::new(env!("CARGO_BIN_EXE_mcp-console"));
     command
         .arg("serve")
         .env("R_HOME", test_directory.path())
+        .env("PATH", path)
         .env("RETICULATE_PYTHON", "configured-by-user")
+        .env("MCP_CONSOLE_FAKE_R_LIBRARY", test_directory.path())
         .env("MCP_CONSOLE_RESOLVER_STARTED", &resolver_started);
     let mut client = McpClient::spawn(command);
     client.send_tool(

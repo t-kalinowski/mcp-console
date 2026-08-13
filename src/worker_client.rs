@@ -25,6 +25,16 @@ use output::DirectOutput;
 pub(crate) use output::{Content, Response, ResponseDelivery};
 use output::{OutputTape, SendFailure, SendResponse};
 
+#[cfg(target_os = "macos")]
+const DEFAULT_R_REQUIREMENTS: &[&str] = &[
+    "tidyverse",
+    "github::rstudio/reticulate",
+    "DBI",
+    "duckdb",
+    "arrow",
+    "nanoarrow",
+];
+
 /// A cloneable handle to one lazily started worker.
 #[derive(Clone)]
 pub(crate) struct Client(Arc<ClientInner>);
@@ -103,11 +113,21 @@ impl Client {
     pub(crate) fn builtin() -> Result<Self, String> {
         let program = std::env::current_exe()
             .map_err(|error| format!("failed to locate the R worker executable: {error}"))?;
+        #[cfg(target_os = "macos")]
+        let r = Some(crate::resolver::resolve_r(
+            DEFAULT_R_REQUIREMENTS
+                .iter()
+                .map(|requirement| (*requirement).to_string())
+                .collect(),
+            |_| Ok(()),
+        )?);
+        #[cfg(not(target_os = "macos"))]
+        let r = None;
         let python = crate::resolver::resolve_python(&[], |_| Ok(()))?;
         Ok(Self::with_arguments(
             program,
             vec![OsString::from("worker")],
-            Some(Environment { python, r: None }),
+            Some(Environment { python, r }),
         ))
     }
 

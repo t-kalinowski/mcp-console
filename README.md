@@ -51,19 +51,23 @@ An immediate `input_received` receipt retains the request record but suppresses 
 That receipt describes the runtime read, not a particular stdin payload; direct fd-0 reads emit no request or receipt.
 Payload end is not EOF, and queued input is not an acknowledgment of consumption.
 Unread bytes may be completed by later stdin or satisfy a later worker read or evaluation.
+On macOS, the built-in server resolves a default R library containing tidyverse, `github::rstudio/reticulate`, DBI, duckdb, arrow, and nanoarrow before it accepts MCP input.
+The GitHub reticulate requirement supplies the fork-aware output handling required by the worker; the host R installation must also provide reticulate to bootstrap managed Python before the worker library is applied.
+When Python is managed, its default environment contains NumPy and pandas.
+Packages are available but are not attached or imported automatically.
 The MCP client can prepare additive R and Python requirements for the implicit session:
 
 ```json
 {
   "action": "prepare",
   "requirements": {
-    "r": ["dplyr", "tidyr"],
-    "python": ["numpy<2", "pandas"]
+    "r": ["data.table"],
+    "python": ["polars>=1"]
   }
 }
 ```
 
-Requirement resolution is host-code execution: package installation or build hooks, managed Python environment startup, and Matplotlib cache warming run outside the worker sandbox.
+Default and explicit requirement resolution is host-code execution: package installation or build hooks, managed Python environment startup, and Matplotlib cache warming run outside the worker sandbox.
 Use only trusted requirements and host environment settings.
 MCP Console sets `IR_NO_LOCAL_SOURCES` for every R resolution, so IR refuses package installation from direct or transitive local sources while retaining its accepted package syntax.
 The policy prevents local package installation code from running; IR may still reuse an already materialized library.
@@ -71,7 +75,7 @@ The policy prevents local package installation code from running; IR may still r
 Before the worker starts, this `session` call resolves each complete requirement set outside the worker sandbox, using IR for R and reticulate with uv for Python, then returns `[prepared]`.
 When both languages are supplied, it retains the new configuration only after both resolutions succeed.
 It does not load packages into or start the worker.
-Before R preparation, the server requires `ir --version` from `PATH` to report 0.4.0 or later.
+Before each R resolution, the server requires `ir --version` from `PATH` to report 0.4.0 or later.
 The server runs IR with the same Rscript selection as the worker and prepends the returned library to the worker's inherited `R_LIBS`, leaving its other R libraries available.
 
 After a server-managed worker starts, a Python-only `prepare` applies additions while the worker is idle.
@@ -107,7 +111,7 @@ Without a waiting `send`, the restart response includes retained output from the
 If a `send` is waiting on the interrupted cell, that call receives the old worker's text and images through retirement, followed by `[stopped by session restart request before evaluation finished]` and, when restart retires a ready worker, `[worker stopped: in-memory state lost]`.
 The server writes that `send` reply before starting the replacement or returning the restart response.
 The restart response contains `[active evaluation stopped by session restart request]`, its own stopped notice when it retires a ready worker, `[starting new worker]`, replacement startup output, and `[idle]` without repeating the old worker's output.
-On macOS, the default managed-Python preflight happens during `serve` startup when required; a successful `prepare` replaces that initial selection before the first nonempty stdin submission or evaluation lazily starts the sandboxed embedded R worker.
+On macOS, the default R preflight and, when required, the managed-Python preflight happen during `serve` startup; a successful `prepare` extends those initial selections before the first nonempty stdin submission or evaluation lazily starts the sandboxed embedded R worker.
 Later calls reuse the same global R state, reticulate Python interpreter, and in-memory DuckDB catalog.
 An infrastructure or protocol failure stops that worker and discards its in-memory R, Python, and SQL state.
 The failed `send` includes retained worker output, the specific bracketed error, and `[worker stopped: in-memory state lost]`, then emits `[starting new worker]` and makes one replacement attempt within the same deadline.
@@ -121,31 +125,21 @@ Initial lazy startup and retries before any worker reaches ready remain silent.
 An MCP client can use R, Python, and DuckDB as one persistent workspace and choose the clearest language for each step without exporting intermediate files.
 After the `session` call below, each language-labeled block contains one complete cell for the named `send` field.
 
-First, call `session` to prepare the packages before the worker starts:
+First, call `session` to prepare Matplotlib, which is not part of the default environments:
 
 ```json
 {
   "action": "prepare",
   "requirements": {
-    "r": ["dplyr", "ggplot2"],
-    "python": ["pandas", "matplotlib"]
+    "python": ["matplotlib"]
   }
 }
 ```
 
-Load and inspect data with a `python` cell:
-
-```python
-import pandas as pd
-
-measurements = pd.read_csv("measurements.csv")
-measurements.describe()
-```
-
-Read that Python object from an `r` cell, fit a model with `lm()`, and leave the augmented data in R global state:
+Read data, fit a model, and keep the augmented data in R global state with an `r` cell:
 
 ```r
-measurements <- tibble::as_tibble(py$measurements)
+measurements <- readr::read_csv("measurements.csv", show_col_types = FALSE)
 fit <- lm(response ~ temperature + group, data = measurements)
 measurements <- dplyr::mutate(
   measurements,
@@ -153,6 +147,13 @@ measurements <- dplyr::mutate(
   .residual = residuals(fit)
 )
 summary(fit)
+```
+
+Read that R data frame as a pandas object from a `python` cell:
+
+```python
+frame = r.measurements
+frame.describe()
 ```
 
 Query the R data frame directly by name with an `sql` cell:
@@ -167,12 +168,11 @@ GROUP BY "group"
 ORDER BY mean_abs_residual DESC
 ```
 
-Use another `python` cell to read the updated R object and return a Matplotlib figure as an MCP image:
+Use another `python` cell to return a Matplotlib figure as an MCP image:
 
 ```python
 import matplotlib.pyplot as plt
 
-frame = r.measurements
 plt.scatter(frame["temperature"], frame[".residual"])
 plt.axhline(0, color="black", linewidth=1)
 ```
@@ -261,14 +261,16 @@ A silent successful R, Python, or SQL cell sends no sideband console-text frame,
 
 Python cells require the `reticulate` R package.
 Matplotlib figure capture requires the Python `matplotlib` package; prepare it before use when it is not already available.
-SQL cells require the `arrow`, `DBI`, `duckdb`, `nanoarrow`, `pillar`, and `tibble` R packages.
-Lazy dplyr relations created from `sql_connection()` additionally require `dplyr` and `dbplyr`.
-MCP Console does not automatically install these R runtime dependencies.
-Explicit R preparation runs `ir run` outside the sandbox with the requested package references as command arguments and a constant expression that prints the resolved library path.
+SQL cells use the default DBI and duckdb packages; previews use the default arrow and nanoarrow packages.
+Tidyverse supplies pillar, tibble, dplyr, and dbplyr for lazy relations created from `sql_connection()`.
+MCP Console installs tidyverse, GitHub reticulate, DBI, duckdb, arrow, and nanoarrow into its default IR library, but the host R installation still needs reticulate for managed-Python preflight.
+It does not automatically install that host-bootstrap package.
+Default and explicit R resolution runs `ir run` outside the sandbox with the requested package references as command arguments and a constant expression that prints the resolved library path.
 IR may access the network, write its normal host caches, and execute package installation code.
-If IR is absent, resolution fails, or its returned library is invalid, the `session` call is a tool error and leaves the prior configuration unchanged.
-When `RETICULATE_PYTHON` is unset or is `managed`, `mcp-console serve` runs reticulate's uv environment resolver outside the worker sandbox with its NumPy baseline, where it can use the normal host caches and network access.
-Other configured values, including an empty value, are preserved when no requirements are prepared and skip this startup preflight.
+If IR is absent, too old, or cannot resolve the default library, built-in `serve` exits before accepting MCP requests.
+A later explicit R resolution failure is a tool error and leaves the prior configuration unchanged.
+When `RETICULATE_PYTHON` is unset or is `managed`, `mcp-console serve` runs reticulate's uv environment resolver outside the worker sandbox with its NumPy and pandas baseline, where it can use the normal host caches and network access.
+Other configured values, including an empty value, are preserved when no Python requirements are prepared and skip the Python startup preflight; they do not skip the default R preflight.
 An explicit `session` preparation selects its resolved managed environment even when `RETICULATE_PYTHON` was configured, so a successful call guarantees that its requirements are present.
 The server retains the selected interpreter and normalized manifest and applies them to each sandboxed worker; the worker forces `UV_OFFLINE=1` and otherwise uses the existing sandbox policy unchanged.
 For a server-managed worker, MCP Console seeds reticulate's requirement manifest and replaces only its internal uv environment lookup.
@@ -279,7 +281,8 @@ The server retains only a matching checkpoint; failure preserves the prior live 
 Each runtime resolution uses the worker's current `UV_*` settings except `UV_OFFLINE`; those settings are not retained or replayed across worker generations.
 The requirement strings and forwarded settings are structured data rather than R code, and the resolver does not evaluate the submitted cell.
 However, evaluated R code or an R package load can request this resolution, and reticulate and uv may access the network, write normal host caches, and execute a source distribution's build backend outside the worker sandbox.
-If the preflight cannot select an interpreter, `serve` exits before accepting MCP requests.
+Startup preflight has no MCP timeout and cannot be cancelled by closing MCP input because it completes before that input is accepted.
+If the Python preflight cannot select an interpreter, `serve` exits before accepting MCP requests.
 A failed Python resolution is a tool error and leaves the prior configuration unchanged.
 For uv tool failures, the error includes a JSON resolver-input manifest with reticulate's Python selection and the complete candidate package set, followed by uv's stderr.
 It omits reticulate's helper command, temporary output path, and interactive `py_require()` guidance.

@@ -55,6 +55,22 @@ jobs:
           uv tool install yamark
           uv tool dir --bin >> "$GITHUB_PATH"
 
+      - name: Prewarm default R environment
+        env:
+          GITHUB_PAT: ${{ github.token }}
+          IR_NO_LOCAL_SOURCES: "1"
+        run: |
+          ir run \
+            --with tidyverse \
+            --with github::rstudio/reticulate \
+            --with DBI \
+            --with duckdb \
+            --with arrow \
+            --with nanoarrow \
+            --isolated \
+            --vanilla \
+            -e 'invisible(NULL)'
+
       - name: Cache Rust build data
         uses: Swatinem/rust-cache@v2
 

@@ -74,6 +74,7 @@ def managed_python_transcript(binary: Path, configured: bool) -> Transcript:
           identical(python, "managed"),
           file.exists(config$python),
           isTRUE(config$ephemeral),
+          "pandas" %in% reticulate::py_require()$packages,
           !any(vapply(
             history,
             function(request) identical(request$requested_from, "base"),
@@ -82,10 +83,14 @@ def managed_python_transcript(binary: Path, configured: bool) -> Transcript:
         )
         """)
     client.send(r=r)
-    assert last_tool_text(client) == "[done]"
+    assert last_tool_text(client) == "[done]", client.transcript[-1]
     # fmt: python
-    python = code(r"""
-        40 + 2
+    python = code("""
+        import io
+        import pandas as pd
+
+        frame = pd.read_csv(io.StringIO("value\\n40\\n2\\n"))
+        int(frame["value"].sum())
         """)
     client.send(python=python)
     output = last_tool_text(client)
@@ -147,7 +152,7 @@ def test_prepares_initial_python_requirements(binary: Path) -> Transcript:
         stopifnot(
           identical(seed$requested_from, "mcp-console"),
           identical(seed$action, "set"),
-          identical(seed$packages, c("numpy", "py-yaml12"))
+          identical(seed$packages, c("numpy", "pandas", "py-yaml12"))
         )
         """)
     client.send(r=r)
