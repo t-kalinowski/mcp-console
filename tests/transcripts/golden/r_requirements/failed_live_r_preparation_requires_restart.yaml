@@ -38,6 +38,8 @@ session:
   requirements:
     r:
       - praise
+    python:
+      - py-yaml12
 result:
   content:
     - type: text
@@ -105,6 +107,7 @@ send:
   r: |
     stopifnot(
       !exists("sentinel", inherits = FALSE),
+      !"py-yaml12" %in% reticulate::py_require()$packages,
       identical(dirname(find.package("zeallot")), .libPaths()[[1L]])
     )
 result:

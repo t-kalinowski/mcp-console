@@ -96,7 +96,8 @@ impl Client {
         if python_candidate.is_none() && r_additions.is_subset(&current_r) {
             return Ok(PrepareResult::Prepared);
         }
-        if self.requirement_changes(&generation)? == RequirementChangeState::RestartRequired {
+        if self.requirement_change_state(&generation)?.0 == RequirementChangeState::RestartRequired
+        {
             return Ok(PrepareResult::RestartRequired);
         }
         if active_evaluation {
@@ -211,8 +212,13 @@ impl Client {
                     match select_python_checkpoint(current_python, checkpoint, candidates) {
                         Ok(managed) => Some(managed),
                         Err(error) => {
-                            self.require_restart_for_requirement_changes(generation)?;
-                            return Err(requirement_restart_error(error));
+                            return self.fail_running_preparation(
+                                &mut worker,
+                                generation,
+                                true,
+                                error,
+                                includes_r,
+                            );
                         }
                     }
                 }
@@ -240,7 +246,10 @@ impl Client {
             match running.prepare_r(managed_r.library()) {
                 Ok(Ok(())) => {}
                 Ok(Err(error)) => {
-                    self.require_restart_for_requirement_changes(generation)?;
+                    self.require_restart_for_requirement_changes(
+                        generation,
+                        managed_python.clone(),
+                    )?;
                     return Err(requirement_restart_error(error));
                 }
                 Err(error) => {
@@ -329,19 +338,26 @@ impl Client {
         }
     }
 
-    fn requirement_changes(
+    fn requirement_change_state(
         &self,
         generation: &WorkerGeneration,
-    ) -> Result<RequirementChangeState, String> {
+    ) -> Result<
+        (
+            RequirementChangeState,
+            Option<crate::resolver::ManagedPython>,
+        ),
+        String,
+    > {
         let lifecycle = self
             .0
             .lifecycle
             .lock()
             .map_err(|_| "worker lifecycle lock poisoned".to_string())?;
         match lifecycle.state {
-            LifecycleState::Ready if lifecycle.generation.is(generation) => {
-                Ok(lifecycle.requirement_changes)
-            }
+            LifecycleState::Ready if lifecycle.generation.is(generation) => Ok((
+                lifecycle.requirement_changes,
+                lifecycle.provisional_python.clone(),
+            )),
             LifecycleState::Ready => {
                 Err("session restarted before the operation began".to_string())
             }
@@ -353,6 +369,7 @@ impl Client {
     fn require_restart_for_requirement_changes(
         &self,
         generation: &WorkerGeneration,
+        provisional_python: Option<crate::resolver::ManagedPython>,
     ) -> Result<(), String> {
         let mut lifecycle = self
             .0
@@ -362,6 +379,7 @@ impl Client {
         match lifecycle.state {
             LifecycleState::Ready if lifecycle.generation.is(generation) => {
                 lifecycle.requirement_changes = RequirementChangeState::RestartRequired;
+                lifecycle.provisional_python = provisional_python;
                 Ok(())
             }
             LifecycleState::Ready => {
@@ -402,8 +420,17 @@ impl Client {
             self.ensure_generation(&generation)?;
             return Ok(current);
         }
-        if self.requirement_changes(&generation)? == RequirementChangeState::RestartRequired {
-            return Err("requirement changes are unavailable until session restart".to_string());
+        match self.requirement_change_state(&generation)? {
+            (RequirementChangeState::Available, _) => {}
+            (RequirementChangeState::RestartRequired, Some(provisional))
+                if provisional.requirements() == &retained_requirements =>
+            {
+                self.ensure_generation(&generation)?;
+                return Ok(provisional);
+            }
+            (RequirementChangeState::RestartRequired, _) => {
+                return Err("requirement changes are unavailable until session restart".to_string());
+            }
         }
 
         let managed = match crate::resolver::resolve_python_manifest(
@@ -457,7 +484,8 @@ impl Client {
         candidates: Vec<crate::resolver::ManagedPython>,
     ) -> Result<(), String> {
         self.ensure_generation(&generation)?;
-        if self.requirement_changes(&generation)? == RequirementChangeState::RestartRequired {
+        if self.requirement_change_state(&generation)?.0 == RequirementChangeState::RestartRequired
+        {
             return Ok(());
         }
         let Some(checkpoint) = checkpoint else {

@@ -25,6 +25,7 @@ pub(super) struct LifecycleControl {
     pub(super) state: LifecycleState,
     pub(super) generation: WorkerGeneration,
     pub(super) requirement_changes: RequirementChangeState,
+    pub(super) provisional_python: Option<crate::resolver::ManagedPython>,
     pub(super) processes: ProcessStopHandles,
 }
 
@@ -34,6 +35,7 @@ impl LifecycleControl {
             state: LifecycleState::Ready,
             generation: WorkerGeneration::new(),
             requirement_changes: RequirementChangeState::Available,
+            provisional_python: None,
             processes: ProcessStopHandles::default(),
         }
     }
@@ -402,6 +404,7 @@ impl Client {
             LifecycleState::Restarting { .. } => {
                 lifecycle.state = LifecycleState::Ready;
                 lifecycle.requirement_changes = RequirementChangeState::Available;
+                lifecycle.provisional_python = None;
                 Ok(())
             }
             LifecycleState::ShuttingDown { .. } => Err("worker is shutting down".to_string()),
@@ -448,6 +451,7 @@ impl Client {
             return Err(error);
         }
         lifecycle.processes.worker = None;
+        lifecycle.provisional_python = None;
         Ok(FailedWorkerStop::Stopped)
     }
 

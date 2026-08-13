@@ -231,7 +231,10 @@ def test_failed_live_r_preparation_requires_restart(binary: Path) -> Transcript:
     client.send(r=setup)
     assert last_tool_text(client) == "[done]", client.transcript[-1]
 
-    client.session(action="prepare", requirements={"r": ["praise"]})
+    client.session(
+        action="prepare",
+        requirements={"r": ["praise"], "python": ["py-yaml12"]},
+    )
     result = client.transcript[-1]["result"]
     assert result["isError"] is True, result
     failure = result["content"][0]["text"]
@@ -269,6 +272,7 @@ def test_failed_live_r_preparation_requires_restart(binary: Path) -> Transcript:
     restarted = code(r"""
         stopifnot(
           !exists("sentinel", inherits = FALSE),
+          !"py-yaml12" %in% reticulate::py_require()$packages,
           identical(dirname(find.package("zeallot")), .libPaths()[[1L]])
         )
         """)

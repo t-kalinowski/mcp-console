@@ -19,11 +19,13 @@ send:
     sentinel <- 42L
     worker_pid <- Sys.getpid()
     initial_library <- .libPaths()[[1L]]
-    stopifnot(!requireNamespace(
-      "zeallot",
-      lib.loc = initial_library,
-      quietly = TRUE
-    ))
+    stopifnot(
+      !requireNamespace(
+        "zeallot",
+        lib.loc = initial_library,
+        quietly = TRUE
+      )
+    )
 result:
   content:
     - type: text

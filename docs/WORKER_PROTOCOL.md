@@ -259,7 +259,7 @@ The bridge tracks the current managed path, prepends the new library, removes it
 The resolved library contains the complete retained R requirement set, so the predecessor is not needed by later worker generations.
 The server accepts only an acknowledgment for the requested normalized path and retains the candidate for future worker generations only after the complete public preparation succeeds.
 `r_preparation_failed` leaves the worker evaluable but prevents new requirement additions until explicit restart because its live search path may have changed without a retained checkpoint.
-While requirement changes are blocked, completed-cell Python checkpoints remain live-only and are not retained.
+While requirement changes are blocked, the server may return the provisional Python environment already activated by the failed mixed operation so the worker can remain evaluable, but completed-cell Python checkpoints remain live-only and are not retained.
 An R bridge infrastructure error or protocol failure still stops the worker and leaves the retained environment unchanged.
 
 An explicit live Python preparation has this shape:

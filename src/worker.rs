@@ -170,6 +170,9 @@ mod platform {
             ServerMessage::PreparePython { .. } => Err(infrastructure_failure(
                 "worker received Python preparation while resolving a Python version".to_string(),
             )),
+            ServerMessage::PrepareR { .. } => Err(infrastructure_failure(
+                "worker received R preparation while resolving a Python version".to_string(),
+            )),
             ServerMessage::PythonResolved { .. } | ServerMessage::PythonResolutionFailed { .. } => {
                 Err(infrastructure_failure(
                     "worker received a Python environment response while resolving a Python version"
