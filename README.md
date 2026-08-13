@@ -79,6 +79,7 @@ Exact repeats are idempotent.
 
 Preparation during an evaluation is an error.
 A call with a new R requirement after startup returns `[restart required]` and applies none of that call's additions.
+No session action can add a new R requirement after startup; start a fresh `mcp-console serve` process and prepare it before its worker starts.
 Caller-selected Python environments and custom workers cannot use managed live preparation.
 
 The client can explicitly replace the worker, retain the prepared R library, and add Python requirements in the same call:
@@ -106,6 +107,66 @@ An infrastructure or protocol failure stops that worker and discards its in-memo
 The failure response includes retained worker output, the specific bracketed error, and `[worker stopped: in-memory state lost]`.
 The next replacement attempt emits `[starting new worker]` before launch, so its startup output or startup error follows that notice.
 Initial lazy startup and retries before any worker reaches ready remain silent.
+
+## A mixed-language analysis
+
+Choose the language that makes each step clearest and switch languages without exporting intermediate files.
+For example, prepare the packages you expect to use before the first cell:
+
+```json
+{
+  "action": "prepare",
+  "requirements": {
+    "r": ["dplyr", "ggplot2"],
+    "python": ["pandas", "matplotlib"]
+  }
+}
+```
+
+Load and inspect data with Python:
+
+```json
+{
+  "python": "import pandas as pd\nmeasurements = pd.read_csv('measurements.csv')\nmeasurements.describe()"
+}
+```
+
+Read that Python object from R, fit a model with `lm()`, and leave the augmented data in R global state:
+
+```json
+{
+  "r": "measurements <- tibble::as_tibble(py$measurements)\nfit <- lm(response ~ temperature + group, data = measurements)\nmeasurements <- dplyr::mutate(measurements, .fitted = fitted(fit), .residual = residuals(fit))\nsummary(fit)"
+}
+```
+
+DuckDB can query the R data frame directly by name:
+
+```json
+{
+  "sql": "SELECT \"group\", count(*) AS n, avg(abs(\".residual\")) AS mean_abs_residual FROM measurements GROUP BY \"group\" ORDER BY mean_abs_residual DESC"
+}
+```
+
+Python can then read the updated R object and return a Matplotlib figure as an MCP image:
+
+```json
+{
+  "python": "import matplotlib.pyplot as plt\nframe = r.measurements\nplt.scatter(frame['temperature'], frame['.residual'])\nplt.axhline(0, color='black', linewidth=1)"
+}
+```
+
+Switch back to R for a ggplot2 diagnostic:
+
+```json
+{
+  "r": "ggplot2::ggplot(measurements, ggplot2::aes(.fitted, .residual, color = group)) + ggplot2::geom_point() + ggplot2::geom_hline(yintercept = 0)"
+}
+```
+
+Python reads R globals as `r.name`, and R reads Python globals as `py$name` without attaching reticulate.
+SQL can scan data frames in R global state; Python data frames become visible to SQL after they are bound to an R name, as above.
+Requirements make packages available but do not import or attach them.
+
 The worker runs each R cell through R's native top-level loop, captures R console output, prints each visible value, and maintains `.Last.value`.
 If a cell ends while an expression is incomplete, earlier complete expressions from that cell remain applied.
 The worker installs a worker-owned `grDevices::png()` function as R's default graphics device and opens it lazily when a cell draws.
@@ -127,7 +188,7 @@ plot(1:10)
 
 Graphics devices opened explicitly by evaluated code, such as with `grDevices::png()`, are user-owned: the worker does not close them, read their files, or return them as MCP images.
 Python cells execute statements in persistent `__main__` state and display their final expression through Python's display hook.
-R and Python can exchange objects through reticulate's `py` and `r` bridges.
+Python reads R globals through reticulate's `r.name` bridge, and R reads Python globals through the attached `py$name` binding.
 R plots invoked from a Python cell through reticulate's `r` bridge use the same managed default device, sizing options, cell scope, and MCP image output as plots invoked from an R cell.
 At the end of each Python cell, including after a Python error, every open figure managed by `matplotlib.pyplot` is rendered in memory, returned once as a PNG image, and closed.
 `plt.show()` is optional, and calling `savefig()` does not suppress this capture while the figure remains open.
@@ -160,7 +221,7 @@ DuckDB first resolves unqualified relation names in its persistent catalog.
 When no catalog table or view matches, it can scan a data frame bound in the persistent R global environment.
 An SQL view over a scanned name observes later changes to that R binding.
 R code can call `sql_connection()` to borrow the worker-owned DBI connection for established DuckDB, DBI, and dplyr interfaces.
-The helper remains available after clearing the global R workspace with `rm(list = ls())`; callers must not disconnect the returned connection.
+The worker exposes `py` and `sql_connection()` in its attached `tools:mcp-console` environment, so both remain available after clearing the global R workspace with `rm(list = ls())`; callers must not disconnect the returned connection.
 For example, `dplyr::tbl(sql_connection(), "answers")` creates a lazy relation that observes later catalog changes until it is collected.
 These paths avoid an eager snapshot transfer, but do not promise end-to-end zero-copy behavior: DuckDB converts R values during execution, and collecting a lazy relation materializes its result in R.
 Automatic Python relation sharing and affected-row summaries do not exist yet.

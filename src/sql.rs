@@ -50,6 +50,7 @@ base::local({
     name = "tools:mcp-console",
     warn.conflicts = FALSE
   )
+  base::makeActiveBinding("py", function() reticulate::py, tools)
   base::assign("sql_connection", sql_connection, envir = tools)
 
   ensure_printer <- function() {
