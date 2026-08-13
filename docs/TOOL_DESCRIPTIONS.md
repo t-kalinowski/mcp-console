@@ -1,10 +1,10 @@
 # Registered MCP Tool Descriptions
 
-**Status:** Draft v0.3 \
+**Status:** Implemented v0.3 \
 **Date:** 2026-08-13
 
 This document contains the exact descriptions registered with the MCP server.
-Keep these synchronized with the implementation; [`MCP_INTERFACE.md`](MCP_INTERFACE.md) describes a broader intended surface that includes unimplemented fields and actions.
+Keep these synchronized with the implementation; [`MCP_INTERFACE.md`](../design-sketches/docs/MCP_INTERFACE.md) describes a broader intended surface that includes unimplemented fields and actions.
 These strings are part of the agent-facing interface and should change only when the added context materially improves tool selection or correct use.
 
 ## `send`

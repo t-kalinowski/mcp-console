@@ -161,13 +161,14 @@ Complete text, plots, live table batches, and snapshots are fetched separately b
 
 - [`VISION.md`](VISION.md) — product purpose, design goals, non-goals, and success criteria.
 - [`docs/MCP_INTERFACE.md`](docs/MCP_INTERFACE.md) — proposed MCP tools and normative observable behavior.
-- [`docs/TOOL_DESCRIPTIONS.md`](docs/TOOL_DESCRIPTIONS.md) — exact descriptions registered for the two MCP tools.
 - [`docs/CLI.md`](docs/CLI.md) — standalone binary, installation, diagnostics, viewer, watch, and sidecar-control commands.
 - [`docs/SIDECAR_API.md`](docs/SIDECAR_API.md) — process-scoped local API, event subscriptions, inspection boundary, data explorer, plots, and external evaluation semantics.
 - [`docs/RUNTIME_BACKEND.md`](docs/RUNTIME_BACKEND.md) — initial Ark-versus-native evaluation, remaining full-runtime work, and decision criteria.
 - [`docs/R_REPL_DLL_ITERATOR.md`](docs/R_REPL_DLL_ITERATOR.md) — native DLL-REPL findings, decision, and implementation record.
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — process model, runtime internals, output, viewer architecture, testing strategy, and implementation plan.
 - [`AGENTS.md`](AGENTS.md) — durable project context, key decisions, repository sitemap, and rules for coding agents.
+
+For the exact descriptions registered by the current implementation, see [`../docs/TOOL_DESCRIPTIONS.md`](../docs/TOOL_DESCRIPTIONS.md).
 
 ## Core decisions
 

@@ -322,6 +322,7 @@ The `worker` suite drives `serve` through a transparent proxy, asserts the publi
 The `zod` suite uses the hidden `serve --worker PATH` development option to exercise the same protocol with an executable Python fixture.
 These built-in-worker and protocol suites run on macOS, where the sandbox policy is implemented.
 See [`docs/WORKER_PROTOCOL.md`](docs/WORKER_PROTOCOL.md) for the exact implemented launch and message contract.
+See [`docs/TOOL_DESCRIPTIONS.md`](docs/TOOL_DESCRIPTIONS.md) for the exact descriptions registered for the MCP tools.
 
 ## License
 

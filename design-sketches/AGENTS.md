@@ -167,12 +167,13 @@ Update this map whenever ownership moves.
 - `VISION.md` — product purpose, goals, non-goals, and success criteria.
 - `AGENTS.md` — durable agent context, settled decisions, repository map, and working rules.
 - `docs/MCP_INTERFACE.md` — normative agent-facing schema and observable behavior.
-- `docs/TOOL_DESCRIPTIONS.md` — exact registered tool and property descriptions.
 - `docs/CLI.md` — standalone binary, installation, diagnostics, viewer, watch, and sidecar-control commands.
 - `docs/SIDECAR_API.md` — process-scoped local API, event model, inspection, live and snapshot data views, plots, and external control.
 - `docs/RUNTIME_BACKEND.md` — initial Ark-versus-native worker evaluation, remaining full-runtime work, and decision gate.
 - `docs/R_REPL_DLL_ITERATOR.md` — native DLL-REPL findings, decision, and implementation record.
 - `docs/ARCHITECTURE.md` — implementation architecture and staged plan.
+
+The exact descriptions registered by the current implementation live outside the design sketches in `../docs/TOOL_DESCRIPTIONS.md`.
 
 Create focused documents only when a subsystem has enough detail to justify a separate source of truth:
 
