@@ -182,8 +182,12 @@ impl Evaluation {
     }
 
     #[cfg(target_os = "macos")]
-    pub(super) fn output(&self, output: String) -> Result<(), String> {
-        self.output.push_console_text(output);
+    pub(super) fn output(
+        &self,
+        channel: crate::worker_protocol::ConsoleChannel,
+        output: String,
+    ) -> Result<(), String> {
+        self.output.push_console_text(channel, output);
         Ok(())
     }
 

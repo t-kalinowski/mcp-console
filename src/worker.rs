@@ -8,7 +8,7 @@ mod platform {
     use std::thread;
 
     use crate::cell::{Cell, Language};
-    use crate::worker_protocol::{ServerMessage, WorkerMessage};
+    use crate::worker_protocol::{ConsoleChannel, ServerMessage, WorkerMessage};
 
     static R_MAIN_ARGS: OnceLock<Vec<CString>> = OnceLock::new();
     static WORKER_READER: OnceLock<Mutex<crate::sideband::Reader>> = OnceLock::new();
@@ -168,7 +168,10 @@ mod platform {
 
     fn evaluate_r_cell(r: String, graphics: &crate::r_graphics::Bridge) -> Result<(), String> {
         if r.contains('\0') {
-            emit_output(b"Error: R source cannot contain NUL\n");
+            emit_output(
+                ConsoleChannel::Diagnostic,
+                b"Error: R source cannot contain NUL\n",
+            );
             return Ok(());
         }
 
@@ -179,7 +182,7 @@ mod platform {
         let result = match status {
             0 | 1 => Ok(()),
             2 => {
-                emit_output(b"Error: Incomplete code\n");
+                emit_output(ConsoleChannel::Diagnostic, b"Error: Incomplete code\n");
                 Ok(())
             }
             status => Err(format!(
@@ -196,7 +199,10 @@ mod platform {
         python: &mut crate::python::Bridge,
     ) -> Result<(), String> {
         if source.contains('\0') {
-            emit_output(b"SyntaxError: source code string cannot contain null bytes\n");
+            emit_output(
+                ConsoleChannel::Diagnostic,
+                b"SyntaxError: source code string cannot contain null bytes\n",
+            );
             return Ok(());
         }
         graphics.begin()?;
@@ -209,7 +215,10 @@ mod platform {
 
     fn evaluate_sql_cell(source: String, sql: &mut crate::sql::Bridge) -> Result<(), String> {
         if source.contains('\0') {
-            emit_output(b"Error: SQL source cannot contain NUL\n");
+            emit_output(
+                ConsoleChannel::Diagnostic,
+                b"Error: SQL source cannot contain NUL\n",
+            );
             return Ok(());
         }
         EVALUATION_STARTED.store(true, Ordering::SeqCst);
@@ -381,13 +390,13 @@ mod platform {
             .take()
     }
 
-    fn emit_output(bytes: &[u8]) {
-        if let Err(error) = send_output(bytes) {
+    fn emit_output(channel: ConsoleChannel, bytes: &[u8]) {
+        if let Err(error) = send_output(channel, bytes) {
             record_worker_failure(error);
         }
     }
 
-    fn send_output(bytes: &[u8]) -> Result<(), String> {
+    fn send_output(channel: ConsoleChannel, bytes: &[u8]) -> Result<(), String> {
         if !crate::sideband::available_in_process() {
             return Ok(());
         }
@@ -399,17 +408,23 @@ mod platform {
         }
         writer
             .send(&WorkerMessage::Output {
+                channel,
                 data: String::from_utf8_lossy(bytes).into_owned(),
             })
             .map_err(|error| format!("R console output failed: {error}"))
     }
 
-    extern "C-unwind" fn r_write_console(buf: *const c_char, buflen: c_int, _otype: c_int) {
+    extern "C-unwind" fn r_write_console(buf: *const c_char, buflen: c_int, otype: c_int) {
         if buf.is_null() || buflen <= 0 {
             return;
         }
         let bytes = unsafe { std::slice::from_raw_parts(buf.cast::<u8>(), buflen as usize) };
-        emit_output(bytes);
+        let channel = if otype == 0 {
+            ConsoleChannel::Output
+        } else {
+            ConsoleChannel::Diagnostic
+        };
+        emit_output(channel, bytes);
     }
 
     extern "C-unwind" fn r_show_message(buf: *const c_char) {
@@ -418,7 +433,7 @@ mod platform {
         }
         let mut message = unsafe { CStr::from_ptr(buf) }.to_bytes().to_vec();
         message.push(b'\n');
-        emit_output(&message);
+        emit_output(ConsoleChannel::Diagnostic, &message);
     }
 
     extern "C-unwind" fn r_read_console(

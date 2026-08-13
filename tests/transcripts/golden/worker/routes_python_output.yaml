@@ -26,34 +26,41 @@ server:
 ---
 worker:
   kind: output
+  channel: output
   data: Python stdout
 ---
 worker:
   kind: output
+  channel: output
   data: "\n"
 ---
 worker:
   kind: output
+  channel: diagnostic
   data: |
     Python stderr
 ---
 worker:
   kind: output
+  channel: diagnostic
   data: |
     Traceback (most recent call last):
 ---
 worker:
   kind: output
+  channel: diagnostic
   data: |2
       File "<string>", line 83, in _mcp_console_eval_cell
 ---
 worker:
   kind: output
+  channel: diagnostic
   data: |2
       File "<mcp-console:python:e1>", line 6, in <module>
 ---
 worker:
   kind: output
+  channel: diagnostic
   data: |
     ValueError: boom
 ---

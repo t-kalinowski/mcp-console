@@ -11,6 +11,7 @@ server:
 ---
 worker:
   kind: output
+  channel: output
   data: |
     before crash
 ---
@@ -40,6 +41,7 @@ server:
 ---
 worker:
   kind: output
+  channel: output
   data: |
     after crash
 ---

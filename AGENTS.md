@@ -45,6 +45,8 @@ Its outstanding state is provisional for up to 10 milliseconds; a matching `inpu
 The receipt describes that runtime read, not a submitted payload or byte count, and direct fd-0 reads emit neither frame.
 New code is rejected until the running evaluation's result has been collected.
 Worker `image` frames carry base64 data and a MIME type.
+Worker `output` frames carry `output` or `diagnostic` console channels; an omitted channel defaults to `output` for compatibility with existing custom workers.
+The server retains console channels and direct fd 1/2 identity until MCP projection.
 The server preserves sideband text and image order as MCP content blocks, coalesces adjacent text, and does not add `[done]` when an image is the only output.
 The implemented `session` surface accepts `action = "prepare"` with one or more R or Python requirement strings or `action = "restart"` with optional Python requirement strings for the implicit session.
 Requirements are exact, additive, and idempotent.
@@ -80,6 +82,7 @@ The worker embeds R through `libr` and `harp`, retains global state, and feeds e
 R parses and evaluates its expressions sequentially, captures console output, prints visible values, and performs native top-level bookkeeping.
 Cell EOF while R requires continuation input is an error; earlier complete expressions from that cell remain applied.
 R parse, evaluation, and auto-print failures are normal language outcomes with `isError: false`.
+The worker maps `R_WriteConsoleEx` type 0 to the `output` channel, nonzero types and `R_ShowMessage` to `diagnostic`, and currently renders both as ordinary MCP text.
 The worker installs a worker-owned `grDevices::png()` function as R's default graphics device and opens it lazily during plotting.
 After a managed device's new-page or close callback returns normally, the worker immediately reads, removes, and emits the finalized PNG as `image/png` MCP content.
 R console text is emitted immediately rather than deferred for unfinished plots.
@@ -110,7 +113,7 @@ Caller-selected non-managed Python skips host prewarming, but a built-in worker 
 The resolver import executes the selected Matplotlib package outside the worker sandbox as part of managed Python preparation and remains under the resolver process-group lifecycle.
 Matplotlib remains optional, and capture inspects only modules already loaded by evaluated code.
 At worker startup, MCP Console sets `RETICULATE_REMAP_OUTPUT_STREAMS=1` once, before user R can initialize Python.
-Within the worker process, reticulate then routes Python text writes, including `print()`, `sys.stderr.write()`, and tracebacks, through the R console callback as sideband `output` frames.
+Within the worker process, reticulate then routes Python standard output through R's `output` console channel and Python standard error, including tracebacks, through `diagnostic` sideband `output` frames.
 Writes through `sys.stdout.buffer`, `sys.stderr.buffer`, or native fd 1/2 bypass that remap and use the captured standard streams.
 After a Python cell calls `os.fork()`, the child cannot use the sideband, so reticulate's registered CPython fork callback restores the original fd-backed text streams and ordinary stdout and stderr writes remain captured.
 Native extensions that fork without running CPython's registered fork callbacks and then resume Python are unsupported.

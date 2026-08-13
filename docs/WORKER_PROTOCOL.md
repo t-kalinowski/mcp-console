@@ -151,13 +151,15 @@ There is no sideband input frame.
 
 Each frame is one UTF-8 JSON object followed by `\n`.
 The sender flushes every frame.
-Output text is carried directly in a JSON string.
+Output text is carried directly in a JSON string, with a separate console channel field.
 JSON escaping represents newlines, quotes, and other control characters on the wire.
 
 Worker standard output and standard error are not protocol frames.
 Each pipe reader queues raw byte chunks without decoding them.
-The server appends those chunks, sideband text and images, failures, and lifecycle notices to one pending output tape as it accepts them.
+The server appends those chunks, channel-bearing sideband text, images, failures, and lifecycle notices to one pending output tape as it accepts them.
 When a response drains the tape, the server decodes queued chunks for each pipe as UTF-8, retains an incomplete trailing sequence for a later response, and replaces invalid sequences.
+Direct standard output, direct standard error, console output, and console diagnostics remain distinct until this projection step.
+The current MCP projection renders both console channels as ordinary text and coalesces adjacent text exactly as it did before channels were retained.
 It preserves order within each stream, but makes no relative ordering guarantee between standard output, standard error, and sideband output.
 Descendants that inherit fd 1 or fd 2 write into the same pipes even when the interpreter is idle, until retirement closes that worker generation's capture boundary.
 
@@ -173,7 +175,8 @@ The complete implemented message set is:
 | server → worker | `{"kind":"python_resolution_failed","message":"..."}` | Return the failure from one host resolution request. |
 | server → worker | `{"kind":"shutdown"}` | Exit without replying. |
 | worker → server | `{"kind":"ready"}` | Startup is complete. |
-| worker → server | `{"kind":"output","data":"..."}` | Append one output text chunk. |
+| worker → server | `{"kind":"output","channel":"output","data":"..."}` | Append one ordinary console-text chunk. |
+| worker → server | `{"kind":"output","channel":"diagnostic","data":"..."}` | Append one diagnostic console-text chunk. |
 | worker → server | `{"kind":"image","data":"...","mime_type":"image/png"}` | Append one base64-encoded image. |
 | worker → server | `{"kind":"input_requested","prompt":"..."}` | Report that the runtime requested input. |
 | worker → server | `{"kind":"input_received"}` | Report that the current read succeeded. |
@@ -185,6 +188,10 @@ The complete implemented message set is:
 
 Every frame uses `kind` to select its message variant.
 Unknown fields are rejected in either direction.
+The `channel` value on an `output` frame is `output` or `diagnostic`.
+For compatibility with existing custom workers, the server treats an omitted `channel` as `output`.
+The built-in worker and current Zod fixture include it, apart from Zod's explicit legacy-compatibility case.
+Because older servers reject unknown fields and the protocol has no version negotiation, a channel-bearing worker cannot connect to an older server; compatibility is preserved only from an older worker to the current server.
 The `language` value is `r`, `python`, or `sql`.
 Python manifests contain `packages` and may contain `python_version` and `exclude_newer`; empty optional fields are omitted.
 The `environment` object may contain only `UV_*` settings other than `UV_OFFLINE`.
@@ -202,13 +209,13 @@ One evaluation has this shape:
 worker -> server  {"kind":"ready"}
 
 server -> worker  {"kind":"evaluate","language":"r","source":"echo"}
-worker -> server  {"kind":"output","data":"zod: "}
-worker -> server  {"kind":"output","data":"echo\n"}
+worker -> server  {"kind":"output","channel":"output","data":"zod: "}
+worker -> server  {"kind":"output","channel":"output","data":"echo\n"}
 worker -> server  {"kind":"completed"}
 ```
 
 The worker may send zero or more `output` or `image` messages.
-The server preserves their arrival order as MCP content blocks and concatenates adjacent text chunks.
+The server retains each output channel, preserves frame arrival order as MCP content blocks, and concatenates adjacent text chunks without exposing the channel in MCP content.
 An image frame's `data` must be valid base64.
 The recorder decodes it byte-for-byte into an artifact, while the MCP image retains the original string.
 The frame's `mime_type` becomes the MCP image `mimeType` unchanged; only `image/png` receives a format-specific `.png` artifact suffix, and other MIME types use `.bin`.
@@ -309,7 +316,7 @@ server -> MCP     [input requested: "name> "]\n[stdin needed]
 
 server -> fd 0    Ada\n
 worker -> server  {"kind":"input_received"}
-worker -> server  {"kind":"output","data":"[1] \"Ada\"\n"}
+worker -> server  {"kind":"output","channel":"output","data":"[1] \"Ada\"\n"}
 worker -> server  {"kind":"completed"}
 ```
 
@@ -423,6 +430,8 @@ It uses R's busy callback rather than prompt text to distinguish cell source fro
 Unread fd-0 input remains available across evaluation boundaries.
 Submitted source references are not retained.
 Parse, evaluation, and print errors are returned as console text followed by `completed`, so the worker remains available even though the protocol has no structured language-error message.
+The worker maps `R_WriteConsoleEx` type 0 to the `output` channel and every nonzero type to `diagnostic`.
+It also maps `R_ShowMessage` and worker-generated language diagnostics to `diagnostic`.
 Subprocesses and descendants that write directly to retained fd 1 or fd 2 bypass the R console callbacks, but their output is still collected through the standard-stream pipes.
 
 At startup, the worker installs a managed function as R's default graphics device.
@@ -445,7 +454,8 @@ Graphics devices opened explicitly by evaluated code, such as with `grDevices::p
 The worker embeds one persistent Python `__main__` interpreter through reticulate.
 At worker startup, it sets `RETICULATE_REMAP_OUTPUT_STREAMS=1` once, before user R can initialize Python.
 Within the worker process, reticulate then routes Python text writes through R's console callbacks, including when user R initializes Python before the first Python cell.
-Calls such as `print()`, `sys.stderr.write()`, and traceback printing therefore produce sideband `output` frames in call order.
+Python standard output uses R's ordinary console path and produces `output`-channel frames.
+Python standard error, including `sys.stderr.write()` and traceback printing, uses R's diagnostic console path and produces `diagnostic`-channel frames in call order.
 Writes through `sys.stdout.buffer`, `sys.stderr.buffer`, or native fd 1/2 bypass that remap and use the captured standard-stream pipes.
 When a Python cell calls `os.fork()`, reticulate's registered CPython child callback replaces its inherited remappers with their original fd-backed streams after the worker disables the child's sideband.
 Ordinary `print()` and `sys.stderr.write()` calls in that child therefore use the captured standard-stream pipes without sharing the parent-only sideband.
@@ -564,6 +574,8 @@ The current sandbox child does not yet supervise descendants after its direct pr
 
 Zod implements the protocol as an executable uv script requiring Python 3.11 or newer.
 As a custom worker, it omits `python_checkpoint` from every `completed` frame.
+It includes `channel` on ordinary output frames.
+The `emit console channels` mode sends adjacent `output` and `diagnostic` chunks to verify that MCP still returns one merged text block, while `emit legacy output` omits the field to verify older-worker compatibility.
 When an R `source` is exactly `echo`, it sends two output chunks followed by `completed`:
 
 ```text

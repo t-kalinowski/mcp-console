@@ -138,7 +138,7 @@ impl WorkerRuntime {
         };
         let error = match ready {
             WorkerMessage::Ready => None,
-            WorkerMessage::Output { data } => {
+            WorkerMessage::Output { data, .. } => {
                 Some(format!("worker emitted output before readiness: {data}"))
             }
             WorkerMessage::Image { .. } => {
@@ -213,7 +213,7 @@ impl Worker {
 
         loop {
             match self.receive()? {
-                WorkerMessage::Output { data } => evaluation.output(data)?,
+                WorkerMessage::Output { channel, data } => evaluation.output(channel, data)?,
                 WorkerMessage::Image { data, mime_type } => {
                     evaluation.image(data, mime_type)?;
                 }

@@ -41,6 +41,41 @@ def test_routes_send_over_sideband(binary: Path) -> Transcript:
     return client._finish()
 
 
+def test_projects_console_channels(binary: Path) -> Transcript:
+    zod = Path(__file__).resolve().parents[1] / "fixtures" / "zod"
+    client = McpClient(
+        binary,
+        ("serve", "--worker", str(zod)),
+    )
+    client._initialize_and_list_tools()
+    result = client.send(r="emit console channels")
+    assert result == {
+        "content": [
+            {
+                "type": "text",
+                "text": "zod output\nzod diagnostic\n",
+            }
+        ],
+        "isError": False,
+    }, result
+    return client._finish()
+
+
+def test_accepts_legacy_output_without_channel(binary: Path) -> Transcript:
+    zod = Path(__file__).resolve().parents[1] / "fixtures" / "zod"
+    client = McpClient(
+        binary,
+        ("serve", "--worker", str(zod)),
+    )
+    client._initialize_and_list_tools()
+    result = client.send(r="emit legacy output")
+    assert result == {
+        "content": [{"type": "text", "text": "zod legacy output\n"}],
+        "isError": False,
+    }, result
+    return client._finish()
+
+
 def test_returns_worker_images(binary: Path) -> Transcript:
     zod = Path(__file__).resolve().parents[1] / "fixtures" / "zod"
     client = McpClient(

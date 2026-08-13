@@ -41,14 +41,17 @@ stderr: |
 ---
 worker:
   kind: output
+  channel: output
   data: parent stdout
 ---
 worker:
   kind: output
+  channel: output
   data: "\n"
 ---
 worker:
   kind: output
+  channel: diagnostic
   data: |
     parent stderr
 ---

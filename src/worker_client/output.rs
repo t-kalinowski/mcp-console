@@ -37,7 +37,10 @@ enum OutputEvent {
     /// Raw bytes or closure from the worker's directly captured stderr (fd 2).
     DirectStderr(DirectOutputEvent),
     /// Text from a worker `output` sideband frame.
-    WorkerConsoleText(String),
+    WorkerConsoleText {
+        channel: crate::worker_protocol::ConsoleChannel,
+        text: String,
+    },
     /// An image from a worker `image` sideband frame, already persisted when enabled.
     WorkerImage {
         data: String,
@@ -282,12 +285,16 @@ impl OutputTape {
         }
     }
 
-    pub(super) fn push_console_text(&self, text: impl Into<String>) {
+    pub(super) fn push_console_text(
+        &self,
+        channel: crate::worker_protocol::ConsoleChannel,
+        text: impl Into<String>,
+    ) {
         let text = text.into();
         if !text.is_empty() {
             self.lock()
                 .events
-                .push(OutputEvent::WorkerConsoleText(text));
+                .push(OutputEvent::WorkerConsoleText { channel, text });
         }
     }
 
@@ -329,7 +336,10 @@ impl OutputTape {
                 OutputEvent::DirectStderr(event) => {
                     append_direct_output(&mut output, &mut state.direct_stderr, event);
                 }
-                OutputEvent::WorkerConsoleText(text) => output.push_text(text),
+                OutputEvent::WorkerConsoleText { channel, text } => match channel {
+                    crate::worker_protocol::ConsoleChannel::Output
+                    | crate::worker_protocol::ConsoleChannel::Diagnostic => output.push_text(text),
+                },
                 OutputEvent::WorkerImage {
                     data,
                     mime_type,

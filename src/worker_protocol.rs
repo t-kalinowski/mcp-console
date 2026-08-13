@@ -52,12 +52,22 @@ pub(crate) struct PythonResolveRequest {
     pub(crate) environment: BTreeMap<String, String>,
 }
 
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum ConsoleChannel {
+    #[default]
+    Output,
+    Diagnostic,
+}
+
 #[cfg(target_os = "macos")]
 #[derive(Deserialize, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum WorkerMessage {
     Ready,
     Output {
+        #[serde(default)]
+        channel: ConsoleChannel,
         data: String,
     },
     Image {
