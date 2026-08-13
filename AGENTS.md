@@ -63,7 +63,7 @@ A failed restart resolution leaves the current worker, its in-memory state, requ
 After successful resolution, restart retains the prepared R library and candidate Python environment, loses all worker-owned in-memory state and unread stdin, eagerly starts a replacement, and returns `[restarted]` after it reports ready.
 The implicit session exists for the server lifetime, so restart starts its first worker if none exists yet.
 It first queues worker-stdin closure and the sideband shutdown message without waiting behind an evaluation, then force-stops the process group and reaps the direct sandbox process at the one-second deadline if that process remains live.
-It then waits for the active sideband operation to end and joins the worker's stdin writer and standard-stream readers before reporting `[worker stopped: in-memory state lost]` or launching the replacement.
+It then waits for the active sideband operation to end, cancels the worker's stdin writer and standard-stream readers, and joins them before reporting `[worker stopped: in-memory state lost]` or launching the replacement.
 Each admitted evaluation or idle stdin write carries its worker generation, so work admitted before restart cannot reach the replacement.
 A live Python preparation invalidated by restart returns `Python preparation cancelled by restart`; active-generation sideband failures retain their transport diagnostics.
 The explicit restart response preserves old-worker output, the stopped notice when a worker existed, `[starting new worker]`, replacement startup output, and `[restarted]` in that order.
@@ -161,7 +161,8 @@ A failed evaluation likewise returns all pending output before its infrastructur
 When worker output or a lifecycle notice shares that response, the server starts the bracketed error on a new line; an error returned alone remains bare.
 Ordering between the two standard streams and sideband output is best effort; incomplete UTF-8 remains with its pipe until a later response, and invalid UTF-8 is replaced when output is rendered.
 The built-in worker and custom workers send console prompt fields verbatim; the server preserves each value without trimming it and renders it as a JSON-quoted `[input requested: ...]` record.
-Writes to inherited fd 1 or fd 2 from descendants follow the same path until worker retirement cancels those pipe readers; this does not add descendant supervision, and forked descendants cannot use the inherited sideband.
+Writes to inherited fd 1 or fd 2 from descendants follow the same path until worker retirement cancels those pipe readers; a descendant retaining fd 0 likewise cannot keep a blocked server write alive past retirement.
+This does not add descendant supervision, and forked descendants cannot use the inherited sideband.
 The hidden `worker` command takes ownership of the sideband, discovers `R_HOME` through the selected R executable inside the sandbox, and opens `R_HOME/lib/libR.dylib` by its absolute path.
 It does not self-execute or set a dynamic-loader environment variable.
 The worker command runs synchronously on the process main thread; only `serve` creates a Tokio runtime.

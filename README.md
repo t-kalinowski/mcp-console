@@ -95,7 +95,7 @@ Restart returns `[restarted]` after the replacement reports ready.
 It loses all in-memory R, Python, SQL, debugger, and unread-stdin state.
 The implicit session exists for the server lifetime, so restart starts its first worker if none exists yet.
 The server closes worker stdin and sends the sideband shutdown message, then force-stops the worker process group and reaps the direct sandbox process if that process has not exited after one second.
-It waits for the active sideband operation to end and joins the worker's stdin writer and standard-stream readers before reporting that the worker stopped or launching a replacement.
+It waits for the active sideband operation to end, cancels the worker's stdin writer and standard-stream readers, and joins them before reporting that the worker stopped or launching a replacement.
 Code and idle stdin remain associated with the worker that admitted them and cannot run in the replacement.
 The restart response includes retained output from the old worker, `[worker stopped: in-memory state lost]` when a worker existed, `[starting new worker]`, startup output, and finally `[restarted]`, in that order.
 On macOS, the default managed-Python preflight happens during `serve` startup when required; a successful `prepare` replaces that initial selection before the first nonempty stdin submission or evaluation lazily starts the sandboxed embedded R worker.

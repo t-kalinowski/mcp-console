@@ -380,8 +380,8 @@ The shutdown task queues worker-stdin closure, then attempts the sideband write.
 It runs independently of the deadline so a blocked stdin writer or full sideband pipe cannot postpone forced termination.
 The sandbox child waits only for the time remaining before the original deadline.
 If its direct process is still running at the deadline, the sandbox force-stops its process group and reaps that direct process.
-After the process stops and the active sideband operation returns, shutdown cancels and joins its standard-stream readers and joins its stdin writer.
-This closes the old generation's server-side output boundary before shutdown returns, even when a background descendant retains a pipe descriptor.
+After the process stops and the active sideband operation returns, shutdown cancels and joins its stdin writer and standard-stream readers.
+This closes the old generation's server-side pipe boundary before shutdown returns, even when a background descendant retains a pipe descriptor or a blocked stdin write.
 The descendant itself remains unsupervised as described below, and any later write to the closed pipe is not captured.
 
 Shutdown owns stop handles independently of the evaluation lock, including simultaneous handles for the worker and its nested host resolver.
@@ -563,6 +563,7 @@ When the source is `complete after timeout`, it pauses briefly before returning 
 When the source is `violate protocol`, it sends an unexpected second `ready` message.
 When the source is `exit unexpectedly`, it exits with status 86 without replying.
 The `emit stdout` and `start background stderr` modes exercise continuous standard-stream capture during evaluation and after completion.
+The `stall with detached stdin` mode leaves fd 0 open in a session-detached child without reading it so shutdown coverage can fill the pipe and verify bounded writer cancellation.
 When the source is `request input`, it sends `input_requested`, calls Python `input()` to consume one line from fd 0, and sends `input_received` after that call returns.
 The `request input after timeout` mode gates that request until an earlier MCP wait expires, consumes prequeued stdin, emits output while the request remains provisional, then checkpoints after its receipt is processed to cover retention and delimiting of that still-unexposed request record.
 The `input without request` and `input length without request` modes call `input()` without first sending a frame, covering proactive fd-0 delivery, including input queued while Zod is idle.

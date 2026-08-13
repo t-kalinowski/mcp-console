@@ -1,5 +1,5 @@
 use std::io::{Read, Write};
-use std::os::fd::AsRawFd;
+use std::os::fd::{AsRawFd, RawFd};
 use std::process::Stdio;
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
@@ -31,12 +31,12 @@ struct WorkerProcess {
 }
 
 struct WorkerThreads {
-    stdin: thread::JoinHandle<()>,
-    stdout: OutputReader,
-    stderr: OutputReader,
+    stdin: WorkerIoThread,
+    stdout: WorkerIoThread,
+    stderr: WorkerIoThread,
 }
 
-struct OutputReader {
+struct WorkerIoThread {
     cancel: std::io::PipeWriter,
     thread: thread::JoinHandle<()>,
 }
@@ -80,6 +80,9 @@ impl WorkerRuntime {
             .stderr(Stdio::piped())
             .new_process_group();
         child_fds.configure(&mut command);
+        let stdin_cancel = cancellation_pipe("stdin")?;
+        let stdout_cancel = cancellation_pipe("stdout")?;
+        let stderr_cancel = cancellation_pipe("stderr")?;
         let mut child = command
             .spawn()
             .map_err(|error| format!("failed to launch worker: {error}"))?;
@@ -93,10 +96,19 @@ impl WorkerRuntime {
         let stderr = child
             .take_stderr()
             .expect("piped worker stderr should be available");
-        let stdout = start_output_reader(stdout, output.stream());
-        let stderr = start_output_reader(stderr, output.stream());
+        if let Err(error) = set_nonblocking(&stdin) {
+            let error = format!("failed to configure worker stdin: {error}");
+            return match child.force_stop() {
+                Ok(()) => Err(error),
+                Err(stop_error) => Err(format!(
+                    "{error}; additionally failed to stop the worker: {stop_error}"
+                )),
+            };
+        }
+        let stdout = start_output_reader(stdout, output.stream(), stdout_cancel);
+        let stderr = start_output_reader(stderr, output.stream(), stderr_cancel);
         let child = Arc::new(Mutex::new(child));
-        let (stdin, stdin_thread) = start_stdin_writer(stdin, child.clone());
+        let (stdin, stdin_thread) = start_stdin_writer(stdin, child.clone(), stdin_cancel);
         let process = WorkerProcess {
             child,
             threads: Some(WorkerThreads {
@@ -287,63 +299,42 @@ impl Worker {
 fn start_output_reader(
     stream: impl Read + AsRawFd + Send + 'static,
     output: super::OutputTapeStream,
-) -> OutputReader {
-    let (cancelled, cancel) = std::io::pipe().expect("output cancellation pipe should open");
+    (cancelled, cancel): (std::io::PipeReader, std::io::PipeWriter),
+) -> WorkerIoThread {
     let thread = thread::spawn(move || {
         let mut stream = stream;
         let mut buffer = [0; 8 * 1024];
         loop {
-            let mut descriptors = [
-                libc::pollfd {
-                    fd: stream.as_raw_fd(),
-                    events: libc::POLLIN,
-                    revents: 0,
-                },
-                libc::pollfd {
-                    fd: cancelled.as_raw_fd(),
-                    events: libc::POLLIN,
-                    revents: 0,
-                },
-            ];
-            // SAFETY: both descriptors remain open for the call, and the pointer and
-            // count describe the initialized array exactly.
-            let ready = unsafe { libc::poll(descriptors.as_mut_ptr(), descriptors.len() as _, -1) };
-            if ready < 0 {
-                if std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted {
-                    continue;
-                }
+            if !matches!(
+                wait_for_worker_io(stream.as_raw_fd(), libc::POLLIN, &cancelled),
+                Ok(true)
+            ) {
                 break;
             }
-            if descriptors[1].revents != 0 {
-                break;
-            }
-            if descriptors[0].revents != 0 {
-                match stream.read(&mut buffer) {
-                    Ok(0) => break,
-                    Ok(length) => output.push(&buffer[..length]),
-                    Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
-                    Err(_) => break,
-                }
+            match stream.read(&mut buffer) {
+                Ok(0) => break,
+                Ok(length) => output.push(&buffer[..length]),
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(_) => break,
             }
         }
         output.close();
     });
-    OutputReader { cancel, thread }
+    WorkerIoThread { cancel, thread }
 }
 
 fn start_stdin_writer(
     mut stdin: std::process::ChildStdin,
     child: Arc<Mutex<crate::sandbox::SandboxedChild>>,
-) -> (StdinSender, thread::JoinHandle<()>) {
+    (cancelled, cancel): (std::io::PipeReader, std::io::PipeWriter),
+) -> (StdinSender, WorkerIoThread) {
     let (sender, receiver) = mpsc::channel();
     let thread = thread::spawn(move || {
         for message in receiver {
             match message {
                 StdinMessage::Write(bytes) => {
-                    if stdin.write_all(&bytes).is_err() {
-                        if let Ok(mut child) = child.lock() {
-                            let _ = child.force_stop();
-                        }
+                    if write_worker_stdin(&mut stdin, &cancelled, &bytes).is_err() {
+                        stop_worker_after_stdin_failure(&child);
                         return;
                     }
                 }
@@ -351,7 +342,82 @@ fn start_stdin_writer(
             }
         }
     });
-    (StdinSender(sender), thread)
+    (StdinSender(sender), WorkerIoThread { cancel, thread })
+}
+
+fn write_worker_stdin(
+    stdin: &mut std::process::ChildStdin,
+    cancelled: &std::io::PipeReader,
+    mut bytes: &[u8],
+) -> std::io::Result<()> {
+    while !bytes.is_empty() {
+        if !wait_for_worker_io(stdin.as_raw_fd(), libc::POLLOUT, cancelled)? {
+            return Ok(());
+        }
+        match stdin.write(bytes) {
+            Ok(0) => return Err(std::io::ErrorKind::WriteZero.into()),
+            Ok(length) => bytes = &bytes[length..],
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => continue,
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(())
+}
+
+fn wait_for_worker_io(
+    descriptor: RawFd,
+    events: libc::c_short,
+    cancelled: &std::io::PipeReader,
+) -> std::io::Result<bool> {
+    loop {
+        let mut descriptors = [
+            libc::pollfd {
+                fd: descriptor,
+                events,
+                revents: 0,
+            },
+            libc::pollfd {
+                fd: cancelled.as_raw_fd(),
+                events: libc::POLLIN,
+                revents: 0,
+            },
+        ];
+        // SAFETY: both descriptors remain open for the call, and the pointer and
+        // count describe the initialized array exactly.
+        if unsafe { libc::poll(descriptors.as_mut_ptr(), descriptors.len() as _, -1) } >= 0 {
+            return Ok(descriptors[1].revents == 0);
+        }
+        let error = std::io::Error::last_os_error();
+        if error.kind() != std::io::ErrorKind::Interrupted {
+            return Err(error);
+        }
+    }
+}
+
+fn stop_worker_after_stdin_failure(child: &Arc<Mutex<crate::sandbox::SandboxedChild>>) {
+    if let Ok(mut child) = child.lock() {
+        let _ = child.force_stop();
+    }
+}
+
+fn cancellation_pipe(stream: &str) -> Result<(std::io::PipeReader, std::io::PipeWriter), String> {
+    std::io::pipe()
+        .map_err(|error| format!("failed to create worker {stream} cancellation pipe: {error}"))
+}
+
+fn set_nonblocking(descriptor: &impl AsRawFd) -> std::io::Result<()> {
+    let descriptor = descriptor.as_raw_fd();
+    // SAFETY: `descriptor` is an open worker pipe owned by the caller.
+    let flags = unsafe { libc::fcntl(descriptor, libc::F_GETFL) };
+    if flags < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    // SAFETY: this preserves the existing file status flags and adds O_NONBLOCK.
+    if unsafe { libc::fcntl(descriptor, libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(())
 }
 
 impl StdinSender {
@@ -395,16 +461,17 @@ impl WorkerProcess {
         let Some(threads) = self.threads.take() else {
             return Ok(());
         };
+        let stdin = threads.stdin.cancel();
         let stdout = threads.stdout.cancel();
         let stderr = threads.stderr.cancel();
-        let stdin = join_worker_thread(threads.stdin, "stdin writer");
+        let stdin = join_worker_thread(stdin, "stdin writer");
         let stdout = join_worker_thread(stdout, "stdout reader");
         let stderr = join_worker_thread(stderr, "stderr reader");
         stdin.and(stdout).and(stderr)
     }
 }
 
-impl OutputReader {
+impl WorkerIoThread {
     fn cancel(self) -> thread::JoinHandle<()> {
         drop(self.cancel);
         self.thread

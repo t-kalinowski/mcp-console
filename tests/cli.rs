@@ -630,6 +630,48 @@ fn stdio_console_shutdown_is_bounded_with_background_stderr_descendants() {
     );
 }
 
+#[cfg(target_os = "macos")]
+#[test]
+fn stdio_console_shutdown_is_bounded_with_detached_stdin_descendants() {
+    let zod = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/zod");
+    let test_directory = TestDirectory::new("detached-stdin-shutdown");
+    let temporary_path = test_directory.path().to_path_buf();
+    let mut environment = std::env::vars().collect::<std::collections::HashMap<_, _>>();
+    environment.insert("TMPDIR".to_string(), temporary_path.display().to_string());
+
+    let mut command = Command::new(env!("CARGO_BIN_EXE_mcp-console"));
+    command
+        .arg("serve")
+        .arg("--worker")
+        .arg(zod)
+        .envs(environment);
+    let mut client = McpClient::spawn(command);
+    client.send_console(
+        2,
+        json!({
+            "r": "stall with detached stdin",
+            "stdin": "x".repeat(2 * 1024 * 1024),
+        }),
+    );
+
+    let marker = wait_for_file(
+        &temporary_path,
+        "zod-detached-stdin-pid",
+        Duration::from_secs(2),
+    );
+    let descendant = fs::read_to_string(marker)
+        .expect("detached stdin PID should be readable")
+        .parse()
+        .expect("detached stdin PID should be numeric");
+    let _descendant = KillOnDrop(descendant);
+
+    let elapsed = client.close_within(Duration::from_secs(2));
+    assert!(
+        elapsed < Duration::from_secs(2),
+        "server shutdown took {elapsed:?}"
+    );
+}
+
 #[cfg(not(target_os = "macos"))]
 #[test]
 fn stdio_console_does_not_start_an_unsandboxed_r_session() {
@@ -827,6 +869,26 @@ impl Drop for McpClient {
         } else {
             self.close_within(Duration::from_secs(3));
         }
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn wait_for_file(root: &Path, name: &str, timeout: Duration) -> PathBuf {
+    let started = Instant::now();
+    loop {
+        if let Some(path) = fs::read_dir(root)
+            .expect("test directory should be readable")
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .find_map(|path| {
+                let marker = path.join(name);
+                marker.is_file().then_some(marker)
+            })
+        {
+            return path;
+        }
+        assert!(started.elapsed() < timeout, "{name} was not created");
+        std::thread::sleep(Duration::from_millis(10));
     }
 }
 

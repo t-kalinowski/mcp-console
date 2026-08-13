@@ -172,6 +172,24 @@ def main() -> None:
             send(writer, {"kind": "completed"})
             continue
 
+        if source == "stall with detached stdin":
+            child = os.fork()
+            if child == 0:
+                os.setsid()
+                reader.close()
+                writer.close()
+                os.close(1)
+                os.close(2)
+                while True:
+                    time.sleep(60)
+            (temporary / "zod-detached-stdin-pid").write_text(
+                str(child),
+                encoding="utf-8",
+            )
+            (temporary / "zod-detached-stdin-started").touch()
+            while True:
+                time.sleep(60)
+
         if source == "request input":
             send(writer, {"kind": "input_requested", "prompt": "zod> "})
             stdin = input()
