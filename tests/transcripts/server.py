@@ -7,8 +7,12 @@ from _support import McpClient, Transcript, code, run_this_suite
 
 def test_initializes_and_lists_tools(binary: Path) -> Transcript:
     client = McpClient(binary, ("serve",))
+    assert client.temporary_directory is not None
+    workspace = Path(client.temporary_directory.name)
     client._initialize_and_list_tools()
-    return client._finish()
+    transcript = client._finish()
+    assert not (workspace / ".mcp-console").exists(), workspace
+    return transcript
 
 
 def test_validates_send_arguments(binary: Path) -> Transcript:

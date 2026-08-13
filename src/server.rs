@@ -1,6 +1,7 @@
 use std::error::Error;
 use std::path::PathBuf;
 use std::pin::Pin;
+use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 
@@ -93,7 +94,7 @@ fn default_timeout_ms() -> u64 {
 
 impl ConsoleServer {
     fn new(worker: Option<PathBuf>) -> Result<Self, String> {
-        let transcript = crate::transcript::Transcript::create()?;
+        let transcript = crate::transcript::Transcript::new();
         let worker = match worker {
             Some(program) => crate::worker_client::Client::new(program),
             None => crate::worker_client::Client::builtin()?,
@@ -146,7 +147,7 @@ impl ConsoleServer {
                 call.id(),
             )
             .await;
-        response_to_tool_result(response, &call)
+        Ok(response_to_tool_result(response, &call, &self.transcript))
     }
 
     #[tool(
@@ -181,7 +182,7 @@ impl ConsoleServer {
                     crate::worker_client::PrepareResult::Prepared => "[prepared]",
                     crate::worker_client::PrepareResult::RestartRequired => "[restart required]",
                     crate::worker_client::PrepareResult::WorkerStopped(response) => {
-                        return response_to_tool_result(response, &call);
+                        return Ok(response_to_tool_result(response, &call, &self.transcript));
                     }
                 }
             }
@@ -205,7 +206,7 @@ impl ConsoleServer {
                     None => Vec::new(),
                 };
                 let response = self.worker.restart(python, WORKER_SHUTDOWN_GRACE).await?;
-                return response_to_tool_result(response, &call);
+                return Ok(response_to_tool_result(response, &call, &self.transcript));
             }
         };
         Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
@@ -215,7 +216,8 @@ impl ConsoleServer {
 fn response_to_tool_result(
     response: crate::worker_client::Response,
     call: &crate::transcript::Call,
-) -> Result<CallToolResult, String> {
+    transcript: &crate::transcript::Transcript,
+) -> CallToolResult {
     let (content, is_error) = response.into_parts();
     let mut result_images = Vec::new();
     let content = content
@@ -227,17 +229,19 @@ fn response_to_tool_result(
                 mime_type,
                 artifact,
             } => {
-                result_images.push(artifact);
+                result_images.extend(artifact);
                 ContentBlock::image(data, mime_type)
             }
         })
         .collect();
-    call.record_result_images(result_images)?;
-    Ok(if is_error {
+    if let Err(error) = call.record_result_images(result_images) {
+        transcript.disable(error);
+    }
+    if is_error {
         CallToolResult::error(content)
     } else {
         CallToolResult::success(content)
-    })
+    }
 }
 
 fn validate_r_requirements(r: &[String]) -> Result<(), String> {
@@ -283,38 +287,46 @@ impl ServerHandler for ConsoleServer {
         request: CallToolRequestParams,
         mut context: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
+        if !matches!(request.name.as_ref(), "send" | "session") {
+            return Self::tool_router()
+                .call(ToolCallContext::new(self, request, context))
+                .await;
+        }
         let transcript = self.transcript.clone();
         let request_id = context.id.clone();
         let request_meta = context.meta.clone();
-        let (request, call) = tokio::task::spawn_blocking(move || {
-            let call = transcript.begin(&request_id, &request_meta, &request);
-            (request, call)
+        let request = Arc::new(request);
+        let recording_request = Arc::clone(&request);
+        let recorder = transcript.clone();
+        let call = match tokio::task::spawn_blocking(move || {
+            recorder.begin(&request_id, &request_meta, &recording_request)
         })
         .await
-        .map_err(|error| {
-            ErrorData::internal_error(format!("transcript task failed: {error}"), None)
-        })?;
-        let call = call.map_err(|error| ErrorData::internal_error(error, None))?;
+        {
+            Ok(call) => call,
+            Err(error) => {
+                transcript.disable(format!("transcript task failed: {error}"));
+                crate::transcript::Call::unrecorded()
+            }
+        };
+        let request =
+            Arc::into_inner(request).expect("transcript task should release the tool request");
         context.extensions.insert(call.clone());
-        let result = Self::tool_router()
-            .call(ToolCallContext::new(self, request, context))
-            .await;
-        let transcript = self.transcript.clone();
-        let (result, recording) = tokio::task::spawn_blocking(move || {
-            let recording = transcript.finish(call, &result);
-            (result, recording)
+        let result = Arc::new(
+            Self::tool_router()
+                .call(ToolCallContext::new(self, request, context))
+                .await,
+        );
+        let recorder = transcript.clone();
+        let recording_result = Arc::clone(&result);
+        if let Err(error) = tokio::task::spawn_blocking(move || {
+            recorder.finish(call, recording_result.as_ref());
         })
         .await
-        .map_err(|error| {
-            ErrorData::internal_error(format!("transcript task failed: {error}"), None)
-        })?;
-        recording.map_err(|error| {
-            ErrorData::internal_error(
-                format!("tool call completed but transcript recording failed: {error}"),
-                None,
-            )
-        })?;
-        result
+        {
+            transcript.disable(format!("transcript task failed: {error}"));
+        }
+        Arc::into_inner(result).expect("transcript task should release the tool result")
     }
 }
 

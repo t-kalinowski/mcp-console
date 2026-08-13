@@ -127,7 +127,7 @@ impl Client {
         stdin: Option<String>,
         timeout: Duration,
         transcript: crate::transcript::Transcript,
-        call_id: u64,
+        call_id: Option<u64>,
     ) -> Response {
         match self
             .send_inner(cell, stdin, timeout, transcript, call_id)
@@ -144,7 +144,7 @@ impl Client {
         stdin: Option<String>,
         timeout: Duration,
         transcript: crate::transcript::Transcript,
-        call_id: u64,
+        call_id: Option<u64>,
     ) -> Result<SendResponse, SendFailure> {
         let generation = self.admit()?;
         let preparation = self.admit_send()?;
@@ -200,7 +200,7 @@ impl Client {
         stdin: Option<String>,
         generation: WorkerGeneration,
         transcript: crate::transcript::Transcript,
-        call_id: u64,
+        call_id: Option<u64>,
     ) -> Result<Arc<Evaluation>, String> {
         self.ensure_generation(&generation)?;
 
