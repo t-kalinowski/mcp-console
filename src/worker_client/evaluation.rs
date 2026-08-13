@@ -9,7 +9,7 @@ pub(super) struct Evaluation {
     state: Mutex<EvaluationState>,
     changed: tokio::sync::Notify,
     transcript: crate::transcript::Transcript,
-    call_id: u64,
+    call_id: Option<u64>,
     output: OutputTape,
 }
 
@@ -73,7 +73,7 @@ pub(super) struct WaitClaim {
 impl Evaluation {
     pub(super) fn new(
         transcript: crate::transcript::Transcript,
-        call_id: u64,
+        call_id: Option<u64>,
         output: OutputTape,
     ) -> Self {
         Self {

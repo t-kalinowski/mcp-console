@@ -18,18 +18,23 @@ const SCHEMA_VERSION: u64 = 1;
 pub(crate) struct Transcript(Arc<Mutex<TranscriptState>>);
 
 struct TranscriptState {
+    working_directory: Result<PathBuf, String>,
+    active: Option<ActiveTranscript>,
+    failure: Option<String>,
+}
+
+struct ActiveTranscript {
     directory: PathBuf,
     writer: BufWriter<File>,
     run_id: String,
     sequence: u64,
     next_call_id: u64,
     next_artifact_id: u64,
-    failure: Option<String>,
 }
 
 #[derive(Clone)]
 pub(crate) struct Call {
-    id: u64,
+    id: Option<u64>,
     result_images: Arc<Mutex<Option<Vec<Artifact>>>>,
 }
 
@@ -40,9 +45,143 @@ pub(crate) struct Artifact {
 }
 
 impl Transcript {
-    pub(crate) fn create() -> Result<Self, String> {
-        let working_directory = std::env::current_dir()
-            .map_err(|error| format!("failed to find the current working directory: {error}"))?;
+    pub(crate) fn new() -> Self {
+        Self(Arc::new(Mutex::new(TranscriptState {
+            working_directory: std::env::current_dir()
+                .map_err(|error| format!("failed to find the current working directory: {error}")),
+            active: None,
+            failure: None,
+        })))
+    }
+
+    pub(crate) fn begin(
+        &self,
+        request_id: &RequestId,
+        request_meta: &Meta,
+        request: &CallToolRequestParams,
+    ) -> Call {
+        self.update(|state| {
+            let active = state.materialize()?;
+            active.next_call_id += 1;
+            let call_id = active.next_call_id;
+            let call = Call {
+                id: Some(call_id),
+                result_images: Arc::new(Mutex::new(None)),
+            };
+            let mut request = request.clone();
+            if !request_meta.is_empty() {
+                request.meta = Some(request_meta.clone());
+            }
+            active.append(
+                json!({
+                    "event": "tool_call",
+                    "call_id": call_id,
+                    "request_id": request_id,
+                    "request": request,
+                }),
+                Utc::now(),
+            )?;
+            Ok(call)
+        })
+        .unwrap_or_else(Call::unrecorded)
+    }
+
+    pub(crate) fn persist_image(
+        &self,
+        call_id: Option<u64>,
+        data: &str,
+        mime_type: &str,
+    ) -> Result<Option<Artifact>, String> {
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(data)
+            .map_err(|error| format!("worker returned invalid base64 image data: {error}"))?;
+        let Some(call_id) = call_id else {
+            return Ok(None);
+        };
+        Ok(self.update(|state| state.active()?.persist_image(call_id, &bytes, mime_type)))
+    }
+
+    pub(crate) fn finish(&self, call: Call, response: &Result<CallToolResult, ErrorData>) {
+        let Some(call_id) = call.id else {
+            return;
+        };
+        self.update(|state| {
+            let images = call.take_result_images()?;
+            state.active()?.finish(call_id, images, response)
+        });
+    }
+
+    pub(crate) fn disable(&self, error: String) {
+        let (mut state, _) = self.lock();
+        let should_report = state.disable(error.clone());
+        drop(state);
+        if should_report {
+            report_failure(&error);
+        }
+    }
+
+    fn lock(&self) -> (std::sync::MutexGuard<'_, TranscriptState>, bool) {
+        match self.0.lock() {
+            Ok(state) => (state, false),
+            Err(poisoned) => (poisoned.into_inner(), true),
+        }
+    }
+
+    fn update<T>(
+        &self,
+        operation: impl FnOnce(&mut TranscriptState) -> Result<T, String>,
+    ) -> Option<T> {
+        let (mut state, poisoned) = self.lock();
+        if state.failure.is_some() {
+            return None;
+        }
+        if poisoned {
+            let error = "transcript lock poisoned".to_string();
+            state.disable(error.clone());
+            drop(state);
+            report_failure(&error);
+            return None;
+        }
+        let result = operation(&mut state);
+        match result {
+            Ok(value) => Some(value),
+            Err(error) => {
+                state.disable(error.clone());
+                drop(state);
+                report_failure(&error);
+                None
+            }
+        }
+    }
+}
+
+impl TranscriptState {
+    fn materialize(&mut self) -> Result<&mut ActiveTranscript, String> {
+        if self.active.is_none() {
+            let working_directory = self.working_directory.clone()?;
+            self.active = Some(ActiveTranscript::create(&working_directory)?);
+        }
+        self.active()
+    }
+
+    fn active(&mut self) -> Result<&mut ActiveTranscript, String> {
+        self.active
+            .as_mut()
+            .ok_or_else(|| "transcript was not materialized before recording output".to_string())
+    }
+
+    fn disable(&mut self, error: String) -> bool {
+        if self.failure.is_some() {
+            return false;
+        }
+        self.active = None;
+        self.failure = Some(error);
+        true
+    }
+}
+
+impl ActiveTranscript {
+    fn create(working_directory: &Path) -> Result<Self, String> {
         let working_directory_text = working_directory.to_string_lossy();
         let started_at = Utc::now();
         let run_id = format!(
@@ -70,15 +209,14 @@ impl Transcript {
             .map(BufWriter::new)
             .map_err(|error| format!("failed to create {}: {error}", journal.display()))?;
 
-        let transcript = Self(Arc::new(Mutex::new(TranscriptState {
+        let mut transcript = Self {
             directory,
             writer,
             run_id,
             sequence: 0,
             next_call_id: 0,
             next_artifact_id: 0,
-            failure: None,
-        })));
+        };
         transcript.append(
             json!({
                 "event": "session_started",
@@ -89,89 +227,17 @@ impl Transcript {
         )?;
         Ok(transcript)
     }
-
-    pub(crate) fn begin(
-        &self,
-        request_id: &RequestId,
-        request_meta: &Meta,
-        request: &CallToolRequestParams,
-    ) -> Result<Call, String> {
-        self.update(|state| {
-            state.next_call_id += 1;
-            let call = Call {
-                id: state.next_call_id,
-                result_images: Arc::new(Mutex::new(None)),
-            };
-            let mut request = request.clone();
-            if !request_meta.is_empty() {
-                request.meta = Some(request_meta.clone());
-            }
-            state.append(
-                json!({
-                    "event": "tool_call",
-                    "call_id": call.id,
-                    "request_id": request_id,
-                    "request": request,
-                }),
-                Utc::now(),
-            )?;
-            Ok(call)
-        })
-    }
-
-    pub(crate) fn persist_image(
-        &self,
-        call_id: u64,
-        data: &str,
-        mime_type: &str,
-    ) -> Result<Artifact, String> {
-        let bytes = base64::engine::general_purpose::STANDARD
-            .decode(data)
-            .map_err(|error| format!("worker returned invalid base64 image data: {error}"));
-        match bytes {
-            Ok(bytes) => self.update(|state| state.persist_image(call_id, &bytes, mime_type)),
-            Err(error) => self.update(|_| Err(error)),
-        }
-    }
-
-    pub(crate) fn finish(
-        &self,
-        call: Call,
-        response: &Result<CallToolResult, ErrorData>,
-    ) -> Result<(), String> {
-        let result_images = call.take_result_images();
-        match result_images {
-            Ok(images) => self.update(|state| state.finish(call.id, images, response)),
-            Err(error) => self.update(|_| Err(error)),
-        }
-    }
-
-    fn append(&self, event: Value, at: DateTime<Utc>) -> Result<(), String> {
-        self.update(|state| state.append(event, at))
-    }
-
-    fn lock(&self) -> Result<std::sync::MutexGuard<'_, TranscriptState>, String> {
-        self.0
-            .lock()
-            .map_err(|_| "transcript lock poisoned".to_string())
-    }
-
-    fn update<T>(
-        &self,
-        operation: impl FnOnce(&mut TranscriptState) -> Result<T, String>,
-    ) -> Result<T, String> {
-        let mut state = self.lock()?;
-        state.ensure_active()?;
-        let result = operation(&mut state);
-        if let Err(error) = &result {
-            state.failure = Some(error.clone());
-        }
-        result
-    }
 }
 
 impl Call {
-    pub(crate) fn id(&self) -> u64 {
+    pub(crate) fn unrecorded() -> Self {
+        Self {
+            id: None,
+            result_images: Arc::new(Mutex::new(None)),
+        }
+    }
+
+    pub(crate) fn id(&self) -> Option<u64> {
         self.id
     }
 
@@ -183,7 +249,7 @@ impl Call {
         if result_images.is_some() {
             return Err(format!(
                 "tool call {} already retained result images",
-                self.id
+                self.id.unwrap_or_default()
             ));
         }
         *result_images = Some(images);
@@ -200,7 +266,7 @@ impl Call {
     }
 }
 
-impl TranscriptState {
+impl ActiveTranscript {
     fn append(&mut self, mut event: Value, at: DateTime<Utc>) -> Result<(), String> {
         let sequence = self.sequence + 1;
         let fields = event
@@ -322,19 +388,17 @@ impl TranscriptState {
         }
         Ok(value)
     }
-
-    fn ensure_active(&self) -> Result<(), String> {
-        match &self.failure {
-            Some(error) => Err(format!(
-                "transcript is unavailable after a recording failure: {error}"
-            )),
-            None => Ok(()),
-        }
-    }
 }
 
 fn timestamp(at: DateTime<Utc>) -> String {
     at.to_rfc3339_opts(SecondsFormat::Nanos, true)
+}
+
+fn report_failure(error: &str) {
+    let _ = writeln!(
+        std::io::stderr().lock(),
+        "mcp-console: transcript recording disabled: {error}"
+    );
 }
 
 fn create_private_directory(path: &Path, recursive: bool) -> std::io::Result<()> {

@@ -305,6 +305,11 @@ class McpClient:
         return self._start_tool_call("session", **arguments)
 
     def _finish(self) -> Transcript:
+        transcript, standard_error = self._finish_with_standard_error()
+        assert standard_error == "", standard_error
+        return transcript
+
+    def _finish_with_standard_error(self) -> tuple[Transcript, str]:
         self.stdin.close()
         with ThreadPoolExecutor(max_workers=2) as executor:
             stdout = executor.submit(self.stdout.read)
@@ -315,6 +320,4 @@ class McpClient:
 
         assert return_code == 0, standard_error
         assert extra_output == "", f"unexpected extra output: {extra_output}"
-        assert standard_error == "", standard_error
-
-        return self.transcript
+        return self.transcript, standard_error

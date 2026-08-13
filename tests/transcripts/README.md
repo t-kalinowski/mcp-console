@@ -26,6 +26,8 @@ The crash-recovery case does the same across an unexpected worker exit and recor
 The suite asserts the public `send` result and records the wire events as YAML mappings in approximate order.
 Pending standard-output and standard-error chunks are grouped into one event without defining their relative order.
 The `r`, `python`, and `sql` suites exercise the built-in worker through the public `send` tool.
+The Zod materialization case verifies that initialization and unknown tool calls create no run, while a first `send` or `session` call does.
+The recording-failure cases verify that recording disables itself with one standard-error diagnostic while console calls and images continue normally.
 The Zod recording case projects `events.jsonl` into a readable YAML sequence in `records_tool_calls_and_images.events.yaml`, followed by the produced session root and file list.
 
 Run commands from the repository root:

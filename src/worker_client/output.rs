@@ -31,7 +31,7 @@ enum OutputEvent {
     SidebandImage {
         data: String,
         mime_type: String,
-        artifact: crate::transcript::Artifact,
+        artifact: Option<crate::transcript::Artifact>,
     },
     /// An unbracketed server-owned lifecycle, state, or input notice.
     ServerNotice {
@@ -68,7 +68,7 @@ pub(crate) enum Content {
     Image {
         data: String,
         mime_type: String,
-        artifact: crate::transcript::Artifact,
+        artifact: Option<crate::transcript::Artifact>,
     },
 }
 
@@ -170,7 +170,7 @@ impl Response {
         &mut self,
         data: String,
         mime_type: String,
-        artifact: crate::transcript::Artifact,
+        artifact: Option<crate::transcript::Artifact>,
     ) {
         self.content.push(Content::Image {
             data,
@@ -258,7 +258,7 @@ impl OutputTape {
         &self,
         data: String,
         mime_type: String,
-        artifact: crate::transcript::Artifact,
+        artifact: Option<crate::transcript::Artifact>,
     ) {
         self.lock().events.push(OutputEvent::SidebandImage {
             data,
