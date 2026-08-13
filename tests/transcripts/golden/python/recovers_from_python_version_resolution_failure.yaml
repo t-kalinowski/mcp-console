@@ -7,11 +7,13 @@ send:
     worker_pid <- Sys.getpid()
     base::local({
       old_cache <- Sys.getenv("UV_CACHE_DIR", unset = NA_character_)
-      on.exit(if (is.na(old_cache)) {
-        Sys.unsetenv("UV_CACHE_DIR")
-      } else {
-        Sys.setenv(UV_CACHE_DIR = old_cache)
-      })
+      on.exit(
+        if (is.na(old_cache)) {
+          Sys.unsetenv("UV_CACHE_DIR")
+        } else {
+          Sys.setenv(UV_CACHE_DIR = old_cache)
+        }
+      )
       Sys.setenv(UV_CACHE_DIR = "/dev/null")
       print(reticulate::py_require())
     })
