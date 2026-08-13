@@ -160,6 +160,93 @@ def test_prepares_and_uses_cran_packages(binary: Path) -> Transcript:
     return client._finish()
 
 
+def test_prepares_r_requirements_after_worker_startup(binary: Path) -> Transcript:
+    environment, _ = r_test_environment()
+    environment["RETICULATE_PYTHON"] = ""
+    client = McpClient(binary, ("serve",), environment)
+    client._initialize_and_list_tools()
+    client.session(action="prepare", requirements={"r": ["praise"]})
+    assert last_tool_text(client) == "[prepared]"
+
+    # fmt: r
+    r = code(r"""
+        sentinel <- 42L
+        worker_pid <- Sys.getpid()
+        initial_library <- .libPaths()[[1L]]
+        stopifnot(
+          !file.exists(file.path(initial_library, "zeallot", "DESCRIPTION"))
+        )
+        """)
+    client.send(r=r)
+    assert last_tool_text(client) == "[done]"
+
+    client.session(action="prepare", requirements={"r": ["zeallot"]})
+    assert last_tool_text(client) == "[prepared]"
+
+    # fmt: r
+    r = code(r"""
+        stopifnot(
+          identical(sentinel, 42L),
+          identical(Sys.getpid(), worker_pid),
+          identical(dirname(find.package("zeallot")), .libPaths()[[1L]])
+        )
+        42L
+        """)
+    client.send(r=r)
+    assert last_tool_text(client) == "[1] 42\n"
+    return client._finish()
+
+
+def test_failed_late_mixed_preparation_preserves_worker(binary: Path) -> Transcript:
+    environment, _ = r_test_environment()
+    client = McpClient(binary, ("serve",), environment)
+    client._initialize_and_list_tools()
+    client.session(action="prepare", requirements={"r": ["praise"]})
+    assert last_tool_text(client) == "[prepared]"
+
+    # fmt: r
+    r = code(r"""
+        sentinel <- 42L
+        worker_pid <- Sys.getpid()
+        initial_library <- .libPaths()[[1L]]
+        stopifnot(
+          !file.exists(file.path(initial_library, "zeallot", "DESCRIPTION"))
+        )
+        """)
+    client.send(r=r)
+    assert last_tool_text(client) == "[done]"
+
+    invalid_python = "not a valid requirement !!!"
+    client.session(
+        action="prepare",
+        requirements={
+            "r": ["zeallot"],
+            "python": [invalid_python],
+        },
+    )
+    result = client.transcript[-1]["result"]
+    assert result["isError"] is True, result
+    result["content"][0]["text"] = normalize_python_resolution_error(
+        result["content"][0]["text"], invalid_python
+    )
+
+    # fmt: r
+    r = code(r"""
+        stopifnot(
+          identical(sentinel, 42L),
+          identical(Sys.getpid(), worker_pid),
+          identical(.libPaths()[[1L]], initial_library),
+          !file.exists(file.path(initial_library, "zeallot", "DESCRIPTION")),
+          !"not a valid requirement !!!" %in%
+            reticulate::py_require()$packages
+        )
+        42L
+        """)
+    client.send(r=r)
+    assert last_tool_text(client) == "[1] 42\n"
+    return client._finish()
+
+
 def test_evaluates_with_default_managed_r(binary: Path) -> Transcript:
     environment, _ = r_test_environment()
     environment["RETICULATE_PYTHON"] = ""
@@ -300,20 +387,33 @@ def test_prepares_initial_r_requirements(binary: Path) -> Transcript:
                 "python": ["py-yaml12"],
             },
         )
-        assert last_tool_text(client) == "[restart required]"
+        assert last_tool_text(client) == "[prepared]"
 
         # fmt: r
-        manifest_r = code(r"""
-            stopifnot(!"py-yaml12" %in% reticulate::py_require()$packages)
+        prepared_r = code(r"""
+            stopifnot(
+              "py-yaml12" %in% reticulate::py_require()$packages,
+              identical(
+                dirname(find.package("praise")),
+                .libPaths()[[1L]]
+              ),
+              identical(
+                dirname(find.package("zeallot")),
+                .libPaths()[[1L]]
+              ),
+              normalizePath(.libPaths()[[2L]]) ==
+                normalizePath(Sys.getenv("MCP_CONSOLE_AMBIENT_R_LIBRARY"))
+            )
+            42L
             """)
-        client.send(r=manifest_r)
-        assert last_tool_text(client) == "[done]"
+        client.send(r=prepared_r)
+        assert last_tool_text(client) == "[1] 42\n"
 
         client.session(action="restart")
         assert last_tool_text(client) == (
             "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
         )
-        client.send(r=r)
+        client.send(r=prepared_r)
         assert last_tool_text(client) == "[1] 42\n"
         return client._finish()
 

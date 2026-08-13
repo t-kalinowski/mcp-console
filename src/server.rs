@@ -83,10 +83,8 @@ enum SessionAction {
 #[serde(deny_unknown_fields)]
 struct Requirements {
     /// Additive, single-line IR package references for `prepare`, for example `data.table`, `sf`, or
-    /// `yaml12`. Prepare new R requirements before the worker starts. After startup, a `prepare`
-    /// call containing any new R requirement returns `[restart required]` and applies none of that
-    /// call's R or Python additions; start a fresh server to add R packages. Local package sources
-    /// are rejected because resolution runs with server permissions.
+    /// `yaml12`. An idle server-managed worker can add R requirements without losing live state.
+    /// Local package sources are rejected because resolution runs with server permissions.
     #[serde(default)]
     #[schemars(length(max = 64), inner(length(min = 1)))]
     r: Vec<String>,
@@ -102,9 +100,8 @@ struct Requirements {
 #[serde(deny_unknown_fields)]
 struct SessionArguments {
     /// `prepare` adds R or Python requirements before a server-managed worker starts. After startup,
-    /// it can add compatible Python requirements while the worker is idle; a new R requirement
-    /// instead returns `[restart required]` and applies none of that call's additions. `restart`
-    /// replaces the worker, optionally adds Python requirements, and starts it if needed.
+    /// it can add R and compatible Python requirements while the worker is idle. `restart` replaces
+    /// the worker, optionally adds Python requirements, and starts it if needed.
     action: SessionAction,
     /// Additive packages to make available. `prepare` requires at least one R or Python entry.
     /// `restart` accepts Python entries only; omit `requirements` to restart unchanged. Requirements
@@ -189,7 +186,7 @@ impl ConsoleServer {
     }
 
     #[tool(
-        description = "Make additional R or Python packages available, or restart the persistent console session. Use `prepare` for packages not included in the built-in environments. Packages are not imported or attached automatically. Prepare anticipated R packages before the worker starts. After startup, a `prepare` call containing any new R requirement returns `[restart required]` and applies none of that call's R or Python additions; start a fresh server to add R packages. An idle server-managed worker can add compatible Python requirements without losing live state. Requirements are additive, idempotent, and persist across restart. `restart` may optionally add Python requirements, then replaces the worker and loses all in-memory R, Python, and SQL state, debugger state, and unread stdin. Requirement resolution runs outside the execution sandbox and may download packages or execute installation or build code on the host; use only trusted requirements."
+        description = "Make additional R or Python packages available, or restart the persistent console session. Use `prepare` for packages not included in the built-in environments. Packages are not imported or attached automatically. An idle server-managed worker can add R and compatible Python requirements without losing live state. Requirements are additive, idempotent, and persist across restart. `restart` may optionally add Python requirements, then replaces the worker and loses all in-memory R, Python, and SQL state, debugger state, and unread stdin. Requirement resolution runs outside the execution sandbox and may download packages or execute installation or build code on the host; use only trusted requirements."
     )]
     async fn session(
         &self,

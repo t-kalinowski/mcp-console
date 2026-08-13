@@ -1,0 +1,58 @@
+---
+!same-as tests/transcripts/golden/server/initializes_and_lists_tools.yaml
+---
+id: 3
+session:
+  action: prepare
+  requirements:
+    r:
+      - praise
+result:
+  content:
+    - type: text
+      text: "[prepared]"
+  isError: false
+---
+id: 4
+send:
+  r: |
+    sentinel <- 42L
+    worker_pid <- Sys.getpid()
+    initial_library <- .libPaths()[[1L]]
+    stopifnot(
+      !file.exists(file.path(initial_library, "zeallot", "DESCRIPTION"))
+    )
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+id: 5
+session:
+  action: prepare
+  requirements:
+    r:
+      - zeallot
+result:
+  content:
+    - type: text
+      text: "[prepared]"
+  isError: false
+---
+id: 6
+send:
+  r: |
+    stopifnot(
+      identical(sentinel, 42L),
+      identical(Sys.getpid(), worker_pid),
+      identical(dirname(find.package("zeallot")), .libPaths()[[1L]])
+    )
+    42L
+result:
+  content:
+    - type: text
+      text: |
+        [1] 42
+  isError: false
+...

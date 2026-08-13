@@ -51,6 +51,7 @@ mod platform {
             .set(writer.clone())
             .map_err(|_| io::Error::other("R worker sideband was already initialized"))?;
         let graphics = crate::r_graphics::Bridge::initialize()?;
+        let r_environment = crate::r_environment::Bridge::initialize()?;
         let mut python = crate::python::Bridge::initialize()?;
         let mut sql = crate::sql::Bridge::initialize()?;
         writer.send(&WorkerMessage::Ready)?;
@@ -91,6 +92,17 @@ mod platform {
                         Err(message) => return Err(io::Error::other(message).into()),
                     }
                 }
+                ServerMessage::PrepareR { library } => {
+                    let result = r_environment.prepare(std::path::Path::new(&library));
+                    if WORKER_SHUTDOWN.load(Ordering::SeqCst) {
+                        return Ok(());
+                    }
+                    if let Some(message) = take_worker_failure() {
+                        return Err(io::Error::other(message).into());
+                    }
+                    let library = result.map_err(io::Error::other)?;
+                    writer.send(&WorkerMessage::RPrepared { library })?;
+                }
                 ServerMessage::Shutdown => return Ok(()),
                 ServerMessage::PythonResolved { .. }
                 | ServerMessage::PythonResolutionFailed { .. } => {
@@ -122,6 +134,9 @@ mod platform {
             )),
             ServerMessage::PreparePython { .. } => Err(infrastructure_failure(
                 "worker received Python preparation while resolving Python".to_string(),
+            )),
+            ServerMessage::PrepareR { .. } => Err(infrastructure_failure(
+                "worker received R preparation while resolving Python".to_string(),
             )),
         }
     }

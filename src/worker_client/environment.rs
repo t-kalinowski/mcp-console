@@ -37,6 +37,24 @@ pub(super) fn merge_python_requirements(
     Some(candidate.normalized())
 }
 
+fn select_python_checkpoint(
+    current: Option<&crate::resolver::ManagedPython>,
+    checkpoint: crate::worker_protocol::PythonRequirementManifest,
+    candidates: Vec<crate::resolver::ManagedPython>,
+) -> Result<crate::resolver::ManagedPython, String> {
+    let requirements = checkpoint.normalized();
+    candidates
+        .into_iter()
+        .rev()
+        .find(|candidate| candidate.requirements() == &requirements)
+        .or_else(|| {
+            current
+                .cloned()
+                .filter(|current| current.requirements() == &requirements)
+        })
+        .ok_or_else(|| "worker checkpoint does not match a resolved Python environment".to_string())
+}
+
 impl Client {
     /// Adds requirements to the managed environment.
     pub(crate) async fn prepare(
@@ -91,20 +109,36 @@ impl Client {
                 return Err("worker lock poisoned".to_string());
             }
         };
-        if matches!(*worker, WorkerState::Stopped)
-            || (!matches!(*worker, WorkerState::Initial) && !r_additions.is_subset(&current_r))
-        {
+        if matches!(*worker, WorkerState::Stopped) {
             return Ok(PrepareResult::RestartRequired);
         }
         if matches!(*worker, WorkerState::Running(_)) {
-            if environment.python.is_none() {
+            if python_candidate.is_some() && environment.python.is_none() {
                 return Ok(PrepareResult::RestartRequired);
             }
+            let current_python = environment.python.clone();
+            let managed_r = if r_additions.is_subset(&current_r) {
+                None
+            } else {
+                let requirements = current_r.union(&r_additions).cloned().collect();
+                let result = crate::resolver::resolve_r(requirements, |handle| {
+                    self.register_resolver_stop_handle(&generation, handle)
+                });
+                self.clear_resolver_stop_handle(&generation)?;
+                Some(result?)
+            };
+            let python_packages = if python_candidate.is_some() {
+                python_additions.into_iter().collect()
+            } else {
+                Vec::new()
+            };
             drop(environment);
-            return self.prepare_running_python(
+            return self.prepare_running(
                 &generation,
                 worker,
-                python_additions.into_iter().collect(),
+                python_packages,
+                current_python.as_ref(),
+                managed_r,
             );
         }
 
@@ -148,33 +182,88 @@ impl Client {
         }
     }
 
-    fn prepare_running_python(
+    fn prepare_running(
         &self,
         generation: &WorkerGeneration,
         mut worker: std::sync::MutexGuard<'_, WorkerState>,
-        packages: Vec<String>,
+        python_packages: Vec<String>,
+        current_python: Option<&crate::resolver::ManagedPython>,
+        managed_r: Option<crate::resolver::ManagedR>,
     ) -> Result<PrepareResult, String> {
         self.ensure_generation(generation)?;
         let WorkerState::Running(running) = &mut *worker else {
-            return Err("worker state changed during Python preparation".to_string());
+            return Err("worker state changed during requirement preparation".to_string());
         };
-        let result = running.prepare_python(
-            packages,
-            |request| self.resolve_runtime_python(generation.clone(), request),
-            |checkpoint, candidates| {
-                self.checkpoint_runtime_python(generation.clone(), Some(checkpoint), candidates)
-            },
-        );
-        let (infrastructure_failure, error) = match result {
-            Ok(Ok(())) => return Ok(PrepareResult::Prepared),
-            Ok(Err(error)) => (false, error),
-            Err(error) => (true, error),
+        let includes_r = managed_r.is_some();
+        let managed_python = if python_packages.is_empty() {
+            None
+        } else {
+            let result = running.prepare_python(python_packages, |request| {
+                self.resolve_runtime_python(generation.clone(), request)
+            });
+            match result {
+                Ok(Ok((checkpoint, candidates))) => {
+                    match select_python_checkpoint(current_python, checkpoint, candidates) {
+                        Ok(managed) => Some(managed),
+                        Err(error) => {
+                            return self.fail_running_preparation(
+                                &mut worker,
+                                generation,
+                                true,
+                                error,
+                                includes_r,
+                            );
+                        }
+                    }
+                }
+                Ok(Err(error)) => {
+                    return self.fail_running_preparation(
+                        &mut worker,
+                        generation,
+                        false,
+                        error,
+                        includes_r,
+                    );
+                }
+                Err(error) => {
+                    return self.fail_running_preparation(
+                        &mut worker,
+                        generation,
+                        true,
+                        error,
+                        includes_r,
+                    );
+                }
+            }
         };
+        if let Some(managed_r) = managed_r.as_ref()
+            && let Err(error) = running.prepare_r(managed_r.library())
+        {
+            return self.fail_running_preparation(&mut worker, generation, true, error, true);
+        }
+        if let Err(error) = self.commit_running_environment(generation, managed_python, managed_r) {
+            return self.fail_running_preparation(&mut worker, generation, true, error, includes_r);
+        }
+        Ok(PrepareResult::Prepared)
+    }
+
+    fn fail_running_preparation(
+        &self,
+        worker: &mut std::sync::MutexGuard<'_, WorkerState>,
+        generation: &WorkerGeneration,
+        stop_worker: bool,
+        error: String,
+        includes_r: bool,
+    ) -> Result<PrepareResult, String> {
         match self.generation_status(generation)? {
-            GenerationStatus::Changed => Err("Python preparation cancelled by restart".to_string()),
+            GenerationStatus::Changed => Err(if includes_r {
+                "R preparation cancelled by restart".to_string()
+            } else {
+                "Python preparation cancelled by restart".to_string()
+            }),
             GenerationStatus::CurrentReady => {
-                if infrastructure_failure {
-                    return match self.stop_failed_worker(&mut worker, generation)? {
+                if stop_worker {
+                    return match self.stop_failed_worker(worker, generation)? {
                         FailedWorkerStop::Stopped => {
                             self.0.output.push_failure(
                                 super::output::SendFailure::from(error).worker_stopped(),
@@ -187,6 +276,43 @@ impl Client {
                 Err(error)
             }
             GenerationStatus::CurrentClosing => Err(error),
+        }
+    }
+
+    fn commit_running_environment(
+        &self,
+        generation: &WorkerGeneration,
+        managed_python: Option<crate::resolver::ManagedPython>,
+        managed_r: Option<crate::resolver::ManagedR>,
+    ) -> Result<(), String> {
+        let environment = self
+            .0
+            .environment
+            .as_ref()
+            .expect("running managed preparation requires an environment");
+        let mut environment = environment
+            .lock()
+            .map_err(|_| "worker environment lock poisoned".to_string())?;
+        let lifecycle = self
+            .0
+            .lifecycle
+            .lock()
+            .map_err(|_| "worker lifecycle lock poisoned".to_string())?;
+        match lifecycle.state {
+            LifecycleState::Ready if lifecycle.generation.is(generation) => {
+                if let Some(managed_python) = managed_python {
+                    environment.python = Some(managed_python);
+                }
+                if let Some(managed_r) = managed_r {
+                    environment.r = Some(managed_r);
+                }
+                Ok(())
+            }
+            LifecycleState::Ready => {
+                Err("session restarted before the operation began".to_string())
+            }
+            LifecycleState::Restarting { .. } => Err("worker is restarting".to_string()),
+            LifecycleState::ShuttingDown { .. } => Err("worker is shutting down".to_string()),
         }
     }
 
@@ -247,23 +373,11 @@ impl Client {
             .environment
             .as_ref()
             .ok_or_else(|| "custom worker reported a managed Python checkpoint".to_string())?;
-        let requirements = checkpoint.normalized();
         let mut environment = environment
             .lock()
             .map_err(|_| "worker environment lock poisoned".to_string())?;
-        let managed = candidates
-            .into_iter()
-            .rev()
-            .find(|candidate| candidate.requirements() == &requirements)
-            .or_else(|| {
-                environment
-                    .python
-                    .clone()
-                    .filter(|current| current.requirements() == &requirements)
-            })
-            .ok_or_else(|| {
-                "worker checkpoint does not match a resolved Python environment".to_string()
-            })?;
+        let managed =
+            select_python_checkpoint(environment.python.as_ref(), checkpoint, candidates)?;
         let lifecycle = self
             .0
             .lifecycle

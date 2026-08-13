@@ -154,6 +154,26 @@ impl WorkerRuntime {
 }
 
 impl Worker {
+    /// Adds a resolved R library to the live worker's library search path.
+    pub(super) fn prepare_r(&mut self, library: &std::path::Path) -> Result<(), String> {
+        let library = library
+            .to_str()
+            .ok_or_else(|| "resolved R library path is not UTF-8".to_string())?
+            .to_string();
+        self.writer
+            .send(&ServerMessage::PrepareR {
+                library: library.clone(),
+            })
+            .map_err(|error| format!("worker sideband write failed: {error}"))?;
+        match self.receive()? {
+            WorkerMessage::RPrepared { library: prepared } if prepared == library => Ok(()),
+            WorkerMessage::RPrepared { .. } => {
+                Err("worker prepared an unexpected R library".to_string())
+            }
+            _ => Err("worker sent an unexpected R preparation message".to_string()),
+        }
+    }
+
     /// Adds Python packages through the live worker's reticulate manifest.
     pub(super) fn prepare_python(
         &mut self,
@@ -161,11 +181,16 @@ impl Worker {
         mut resolve_python: impl FnMut(
             crate::worker_protocol::PythonResolveRequest,
         ) -> Result<crate::resolver::ManagedPython, String>,
-        mut checkpoint_python: impl FnMut(
-            crate::worker_protocol::PythonRequirementManifest,
-            Vec<crate::resolver::ManagedPython>,
-        ) -> Result<(), String>,
-    ) -> Result<Result<(), String>, String> {
+    ) -> Result<
+        Result<
+            (
+                crate::worker_protocol::PythonRequirementManifest,
+                Vec<crate::resolver::ManagedPython>,
+            ),
+            String,
+        >,
+        String,
+    > {
         self.writer
             .send(&ServerMessage::PreparePython { packages })
             .map_err(|error| format!("worker sideband write failed: {error}"))?;
@@ -178,8 +203,7 @@ impl Worker {
                         .extend(self.resolve_python_request(request, &mut resolve_python)?);
                 }
                 WorkerMessage::PythonPrepared { python_checkpoint } => {
-                    checkpoint_python(python_checkpoint, python_candidates)?;
-                    return Ok(Ok(()));
+                    return Ok(Ok((python_checkpoint, python_candidates)));
                 }
                 WorkerMessage::PythonPreparationFailed { message } => {
                     return Ok(Err(message));
@@ -239,7 +263,8 @@ impl Worker {
                     return Err("worker sent an unexpected ready message".to_string());
                 }
                 WorkerMessage::PythonPrepared { .. }
-                | WorkerMessage::PythonPreparationFailed { .. } => {
+                | WorkerMessage::PythonPreparationFailed { .. }
+                | WorkerMessage::RPrepared { .. } => {
                     return Err("worker sent an unexpected Python preparation result".to_string());
                 }
             }

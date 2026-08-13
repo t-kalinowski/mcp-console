@@ -2,7 +2,7 @@
 
 This document describes the worker protocol implemented by `mcp-console serve`, the built-in worker, and `tests/fixtures/zod`.
 It describes the current code, not the broader design under `design-sketches/`.
-The message enums in `src/worker_protocol.rs`, the framing in `src/sideband.rs`, the language bridges in `src/python.rs`, `src/r_bridge.rs`, `src/r_graphics.rs`, and `src/sql.rs`, and the worker-client orchestration, platform runtime, evaluation state, and output assembly in `src/worker_client.rs` and `src/worker_client/` are the source of truth.
+The message enums in `src/worker_protocol.rs`, the framing in `src/sideband.rs`, the language bridges in `src/python.rs`, `src/r_bridge.rs`, `src/r_environment.rs`, `src/r_graphics.rs`, and `src/sql.rs`, and the worker-client orchestration, platform runtime, evaluation state, and output assembly in `src/worker_client.rs` and `src/worker_client/` are the source of truth.
 
 ## Scope
 
@@ -49,8 +49,11 @@ Python requirements use the host resolver described above and take precedence ov
 The server commits both candidates together only after every requested resolution succeeds.
 It returns `[prepared]` without creating sideband pipes or starting the worker.
 
-After startup, an idle server-managed worker accepts Python-only additions through `prepare_python`, specified below.
-New R additions require restart; custom workers reject managed requirements.
+After startup, an idle built-in worker accepts a resolved R library through `prepare_r`, updates its live `.libPaths()`, and preserves in-memory state.
+An idle server-managed worker accepts compatible Python additions through `prepare_python`.
+For a mixed request, the server keeps both candidates provisional until both live operations succeed, then commits the retained R and Python environments together.
+If a partial live change cannot be rolled back, the server stops the worker and leaves the retained configuration unchanged.
+Custom workers reject managed requirements.
 If preparation overlaps worker startup, the server returns `[requirements not prepared: worker is starting]` without resolving the additions or changing the retained requirements, R library, or Python manifest.
 
 `session` with `action = "restart"` may include additive Python requirements or omit them to retain the current manifest.
@@ -66,7 +69,8 @@ These boundary details apply:
 
 - Evaluations and idle stdin writes stay associated with the worker that admitted them.
   Work from the old worker is rejected rather than delivered to the replacement.
-- A live Python preparation invalidated by restart returns `Python preparation cancelled by restart`, regardless of whether resolver cancellation or worker shutdown completes first.
+- An R preparation cancelled while its IR resolver is active reports resolver cancellation.
+  After preparation reaches the live worker, restart cancellation returns `R preparation cancelled by restart` when the call includes R and `Python preparation cancelled by restart` otherwise, regardless of whether resolver cancellation or worker shutdown completes first.
   Sideband failures from the active generation remain infrastructure errors.
 - Standard-output and standard-error bytes collected from the old worker are retained through retirement.
 - When a `send` is waiting on an unfinished evaluation, that call owns the old worker's text and images.
@@ -177,6 +181,7 @@ The complete implemented message set is:
 | Direction | Frame | Meaning |
 | --- | --- | --- |
 | server → worker | `{"kind":"evaluate","language":"r","source":"..."}` | Evaluate one complete source string in the selected language. |
+| server → worker | `{"kind":"prepare_r","library":"..."}` | Replace the prior managed R library in the live search path. |
 | server → worker | `{"kind":"prepare_python","packages":["py-yaml12"]}` | Add packages through reticulate in an idle server-managed worker. |
 | server → worker | `{"kind":"python_resolved","python":"..."}` | Return the interpreter from one host resolution request. |
 | server → worker | `{"kind":"python_resolution_failed","message":"..."}` | Return the failure from one host resolution request. |
@@ -187,6 +192,7 @@ The complete implemented message set is:
 | worker → server | `{"kind":"image","data":"...","mime_type":"image/png"}` | Append one base64-encoded image. |
 | worker → server | `{"kind":"input_requested","prompt":"..."}` | Report that the runtime requested input. |
 | worker → server | `{"kind":"input_received"}` | Report that the current read succeeded. |
+| worker → server | `{"kind":"r_prepared","library":"..."}` | Confirm the normalized live R library path. |
 | worker → server | `{"kind":"resolve_python","request":{"requirements":{"packages":["numpy","pandas"]},"environment":{}}}` | Resolve the complete proposed reticulate manifest outside the sandbox. |
 | worker → server | `{"kind":"python_prepared","python_checkpoint":{"packages":["numpy","pandas","py-yaml12"]}}` | Finish explicit Python preparation and report its normalized manifest. |
 | worker → server | `{"kind":"python_preparation_failed","message":"..."}` | Report an ordinary explicit-preparation failure without discarding the worker. |
@@ -229,6 +235,19 @@ Only one request may be outstanding: a second request, a receipt without a reque
 `completed` ends the sideband evaluation.
 The server must accept its optional Python checkpoint before the MCP evaluation completes and the next cell is permitted.
 
+An explicit live R preparation has this shape after the server resolves the complete R requirement set:
+
+```text
+server -> worker  {"kind":"prepare_r","library":"..."}
+worker -> server  {"kind":"r_prepared","library":"..."}
+```
+
+`prepare_r` is idle-only.
+The built-in worker passes the path to a fixed private R bridge rather than evaluating submitted source.
+The bridge tracks the current managed path, prepends the new library, removes its predecessor, and preserves every other live library path.
+The server accepts only an acknowledgment for the requested normalized path and retains the candidate for future worker generations only after the complete public preparation succeeds.
+An R bridge or protocol failure stops the worker and leaves the retained environment unchanged.
+
 An explicit live Python preparation has this shape:
 
 ```text
@@ -240,7 +259,8 @@ worker -> server  {"kind":"python_prepared","python_checkpoint":{"packages":["nu
 
 `prepare_python` is idle-only and calls additive `reticulate::py_require()`.
 Before initialization it materializes the manifest; afterward reticulate validates the live `libpython` and activates the candidate.
-Resolver replies remain candidates until `python_prepared` commits a matching checkpoint.
+Resolver replies remain candidates until `python_prepared` reports a matching checkpoint.
+For a mixed public preparation, that checkpoint remains provisional until the R update also succeeds.
 `python_preparation_failed` restores the live manifest, discards candidates, and leaves the worker usable.
 
 A server-managed worker may send `resolve_python` during an evaluation when reticulate invokes its internal `uv_get_or_create_env` binding.
@@ -259,7 +279,7 @@ An infrastructure or protocol failure before `completed` leaves the prior server
 If no sideband content or input-request record remains pending at `completed` and no standard-stream text is pending, the current MCP projection returns `[done]`.
 That marker is produced by the server; it is not a sideband message.
 
-The protocol has no request IDs because only one evaluation or explicit Python preparation can be in flight over this sideband, with at most one synchronous nested Python resolution.
+The protocol has no request IDs because only one evaluation or explicit requirement preparation can be in flight over this sideband, with at most one synchronous nested Python resolution.
 New code is rejected while an evaluation or its uncollected result is active.
 
 ## MCP waiting and polling
@@ -357,9 +377,10 @@ New code is rejected while an evaluation or its uncollected result is active.
 | From | Frame | To |
 | --- | --- | --- |
 | starting | worker → server `ready` | idle |
-| starting, idle, evaluating, or preparing Python | worker or descendant → fd 1 or fd 2 | unchanged |
+| starting, idle, evaluating, preparing R, or preparing Python | worker or descendant → fd 1 or fd 2 | unchanged |
 | absent or idle | MCP stdin submission | idle |
 | idle | server → worker `evaluate` | evaluating |
+| idle | server → worker `prepare_r` | preparing R |
 | idle | server → worker `prepare_python` | preparing Python |
 | evaluating | worker → server `output` | evaluating |
 | evaluating | worker → server `image` | evaluating |
@@ -370,10 +391,11 @@ New code is rejected while an evaluation or its uncollected result is active.
 | host resolving | server → worker `python_resolution_failed` | prior operation; prior checkpoint unchanged |
 | evaluating, with or without input reported | MCP stdin submission | evaluating |
 | evaluating, no provisional input | worker → server `completed` | validate checkpoint, then idle |
+| preparing R | worker → server `r_prepared` | validate library path, then idle |
 | preparing Python | worker → server `python_prepared` | validate checkpoint, then idle |
 | preparing Python | worker → server `python_preparation_failed` | discard candidates, then idle |
-| starting, idle, evaluating, preparing Python, or host resolving | server → worker `shutdown` | terminal |
-| starting, idle, evaluating, preparing Python, or host resolving | MCP `session` restart | starting in a new generation |
+| starting, idle, evaluating, preparing R or Python, or host resolving | server → worker `shutdown` | terminal |
+| starting, idle, evaluating, preparing R or Python, or host resolving | MCP `session` restart | starting in a new generation |
 
 Malformed JSON, invalid UTF-8, an unexpected message, or sideband EOF fails the active operation.
 `python_resolution_failed` is a reply to a valid resolution request, not a general protocol error message.

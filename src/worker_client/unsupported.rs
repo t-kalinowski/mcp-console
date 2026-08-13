@@ -22,17 +22,26 @@ impl WorkerRuntime {
 }
 
 impl Worker {
+    pub(super) fn prepare_r(&mut self, _library: &std::path::Path) -> Result<(), String> {
+        unreachable!("unsupported workers cannot start")
+    }
+
     pub(super) fn prepare_python(
         &mut self,
         packages: Vec<String>,
         _resolve_python: impl FnMut(
             crate::worker_protocol::PythonResolveRequest,
         ) -> Result<crate::resolver::ManagedPython, String>,
-        _checkpoint_python: impl FnMut(
-            crate::worker_protocol::PythonRequirementManifest,
-            Vec<crate::resolver::ManagedPython>,
-        ) -> Result<(), String>,
-    ) -> Result<Result<(), String>, String> {
+    ) -> Result<
+        Result<
+            (
+                crate::worker_protocol::PythonRequirementManifest,
+                Vec<crate::resolver::ManagedPython>,
+            ),
+            String,
+        >,
+        String,
+    > {
         let _ = packages;
         unreachable!("unsupported workers cannot start")
     }

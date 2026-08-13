@@ -12,6 +12,7 @@ pub(crate) const DEFAULT_PYTHON_PACKAGES: &[&str] = &["numpy", "pandas"];
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum ServerMessage {
     Evaluate { language: Language, source: String },
+    PrepareR { library: String },
     PreparePython { packages: Vec<String> },
     PythonResolved { python: String },
     PythonResolutionFailed { message: String },
@@ -89,6 +90,9 @@ pub(crate) enum WorkerMessage {
         prompt: String,
     },
     InputReceived,
+    RPrepared {
+        library: String,
+    },
     ResolvePython {
         request: PythonResolveRequest,
     },
