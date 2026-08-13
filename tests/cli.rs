@@ -398,7 +398,8 @@ fi
         r#"#!/bin/sh
 /bin/cat >/dev/null
 /bin/sleep 30 &
-printf '%s\n' "$$" > "$MCP_CONSOLE_RESOLVER_STARTED"
+printf '%s\n' "$$" > "${MCP_CONSOLE_RESOLVER_STARTED}.tmp"
+/bin/mv "${MCP_CONSOLE_RESOLVER_STARTED}.tmp" "$MCP_CONSOLE_RESOLVER_STARTED"
 printf '%s\n' "$MCP_CONSOLE_TEST_PYTHON"
 exit 0
 "#,
