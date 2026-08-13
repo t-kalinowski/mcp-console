@@ -10,6 +10,7 @@ mod unsupported;
 #[cfg(target_os = "macos")]
 pub(crate) use managed_python::{
     ManagedPython, resolve_python, resolve_python_host, resolve_python_manifest,
+    resolve_python_version,
 };
 #[cfg(target_os = "macos")]
 pub(crate) use managed_r::{ManagedR, resolve_r};
@@ -18,5 +19,5 @@ pub(crate) use process::ResolverStopHandle;
 #[cfg(not(target_os = "macos"))]
 pub(crate) use unsupported::{
     ManagedPython, ManagedR, ResolverStopHandle, resolve_python, resolve_python_host,
-    resolve_python_manifest, resolve_r,
+    resolve_python_manifest, resolve_python_version, resolve_r,
 };

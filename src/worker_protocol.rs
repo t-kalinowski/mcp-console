@@ -16,6 +16,8 @@ pub(crate) enum ServerMessage {
     PreparePython { packages: Vec<String> },
     PythonResolved { python: String },
     PythonResolutionFailed { message: String },
+    PythonVersionResolved { version: String },
+    PythonVersionResolutionFailed { message: String },
     Shutdown,
 }
 
@@ -62,6 +64,14 @@ pub(crate) fn default_python_requirement_manifest() -> PythonRequirementManifest
 #[serde(deny_unknown_fields)]
 pub(crate) struct PythonResolveRequest {
     pub(crate) requirements: PythonRequirementManifest,
+    pub(crate) retained_requirements: PythonRequirementManifest,
+    pub(crate) environment: BTreeMap<String, String>,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct PythonVersionResolveRequest {
+    pub(crate) constraints: Vec<String>,
     pub(crate) environment: BTreeMap<String, String>,
 }
 
@@ -98,6 +108,9 @@ pub(crate) enum WorkerMessage {
     },
     ResolvePython {
         request: PythonResolveRequest,
+    },
+    ResolvePythonVersion {
+        request: PythonVersionResolveRequest,
     },
     PythonPrepared {
         python_checkpoint: PythonRequirementManifest,

@@ -135,8 +135,11 @@ R and Python resolution may access the network, write normal host caches, and ex
 Requirement strings remain process-argument or JSON data rather than R source, and no submitted cell is evaluated by the resolver.
 Before initializing R, the worker forces `UV_OFFLINE=1`, overwriting any inherited value to match the sandbox's network denial.
 Reticulate reuses the server-resolved or caller-selected interpreter.
-For a server-managed worker, MCP Console seeds reticulate's requirement manifest and intercepts only its internal `uv_get_or_create_env` binding, without wrapping `py_require()`.
-Each runtime or explicit-preparation request sends the complete proposed manifest and the worker's current `UV_*` settings except `UV_OFFLINE` to the host resolver; those settings are transient inputs and are not retained or replayed.
+For a server-managed worker, MCP Console seeds reticulate's requirement manifest and intercepts its internal `uv_get_or_create_env` and `resolve_python_version` bindings, without wrapping `py_require()`.
+Environment resolution and Python-version selection become separate typed sideband requests, and the host resolver runs reticulate and uv with the requested `UV_*` settings outside the sandbox.
+Version selection returns only the selected version and does not create a candidate environment or alter checkpoint state.
+Each environment-resolution request sends the physical resolver manifest, the logical manifest to retain if accepted, and the worker's current `UV_*` settings except `UV_OFFLINE` to the host resolver; those settings are transient inputs and are not retained or replayed.
+After Python initializes, reticulate resolves late additions against the exact active Python patch version while leaving the logical `py_require()` Python constraints unchanged.
 Explicit preparation sends structured additions and reports a separate checkpoint or failure without evaluating a cell.
 If managed reticulate is loaded but Python remains uninitialized at cell end or after explicit preparation, the worker invokes the resolver once to materialize the final manifest.
 After initialization, additive package requirements resolve to candidate environments outside the sandbox, and reticulate performs its exact-`libpython` check, `activate_this.py`, configuration swap, and manifest assignment.

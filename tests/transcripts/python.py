@@ -106,6 +106,67 @@ def test_evaluates_with_explicit_managed_python(binary: Path) -> Transcript:
     return managed_python_transcript(binary, configured=True)
 
 
+def test_prints_requirements_with_host_uv_cache(binary: Path) -> Transcript:
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        temporary = Path(temporary_directory)
+        environment = os.environ.copy()
+        uv_cache = str(temporary / "uv-cache")
+        environment["UV_CACHE_DIR"] = str(temporary / "startup-uv-cache")
+        environment["MCP_CONSOLE_TEST_UV_CACHE_DIR"] = uv_cache
+        client = McpClient(
+            binary,
+            ("serve",),
+            environment,
+            current_directory=temporary,
+        )
+        client._initialize_and_list_tools()
+        # fmt: r
+        r = code(r"""
+            cache <- Sys.getenv("MCP_CONSOLE_TEST_UV_CACHE_DIR")
+            stopifnot(!file.exists(cache))
+            Sys.setenv(UV_CACHE_DIR = cache)
+            printed <- capture.output(print(reticulate::py_require()))
+            stopifnot(
+              length(printed) > 0L,
+              dir.exists(cache),
+              identical(Sys.getenv("UV_CACHE_DIR"), cache)
+            )
+            """)
+        client.send(r=r)
+        assert last_tool_text(client) == "[done]", client.transcript[-1]
+        return client._finish()
+
+
+def test_recovers_from_python_version_resolution_failure(binary: Path) -> Transcript:
+    client = McpClient(binary, ("serve",))
+    client._initialize_and_list_tools()
+    # fmt: r
+    r = code(r"""
+        worker_pid <- Sys.getpid()
+        base::local({
+          old_cache <- Sys.getenv("UV_CACHE_DIR", unset = NA_character_)
+          on.exit(
+            if (is.na(old_cache)) {
+              Sys.unsetenv("UV_CACHE_DIR")
+            } else {
+              Sys.setenv(UV_CACHE_DIR = old_cache)
+            }
+          )
+          Sys.setenv(UV_CACHE_DIR = "/dev/null")
+          print(reticulate::py_require())
+        })
+        """)
+    client.send(r=r)
+    result = client.transcript[-1]["result"]
+    assert result["isError"] is False, result
+    assert "managed Python version resolution failed" in result["content"][0]["text"]
+    result["content"][0]["text"] = "<Python version resolution failed>\n"
+
+    client.send(r="identical(Sys.getpid(), worker_pid)")
+    assert last_tool_text(client) == "[1] TRUE\n"
+    return client._finish()
+
+
 def test_prepares_initial_python_requirements(binary: Path) -> Transcript:
     environment = os.environ.copy()
     environment["RETICULATE_PYTHON"] = "/mcp-console-prepare-must-replace-python"
@@ -149,10 +210,13 @@ def test_prepares_initial_python_requirements(binary: Path) -> Transcript:
     # fmt: r
     r = code(r"""
         seed <- tail(reticulate::py_require()$history, 1L)[[1L]]
+        printed_requirements <- capture.output(print(reticulate::py_require()))
         stopifnot(
           identical(seed$requested_from, "mcp-console"),
           identical(seed$action, "set"),
-          identical(seed$packages, c("numpy", "pandas", "py-yaml12"))
+          isFALSE(seed$exclude_newer_supplied),
+          identical(seed$packages, c("numpy", "pandas", "py-yaml12")),
+          length(printed_requirements) > 0L
         )
         """)
     client.send(r=r)
@@ -309,6 +373,8 @@ def test_prepares_python_requirements_after_worker_startup(binary: Path) -> Tran
     assert last_tool_text(client) == (
         "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
     )
+    client.send(r="is.null(reticulate::py_require()$python_version)")
+    assert last_tool_text(client) == "[1] TRUE\n"
     # fmt: python
     python = code("""
         import yaml12

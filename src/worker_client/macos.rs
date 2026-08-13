@@ -227,6 +227,9 @@ impl Worker {
         mut resolve_python: impl FnMut(
             crate::worker_protocol::PythonResolveRequest,
         ) -> Result<crate::resolver::ManagedPython, String>,
+        mut resolve_python_version: impl FnMut(
+            crate::worker_protocol::PythonVersionResolveRequest,
+        ) -> Result<String, String>,
         mut checkpoint_python: impl FnMut(
             Option<crate::worker_protocol::PythonRequirementManifest>,
             Vec<crate::resolver::ManagedPython>,
@@ -258,6 +261,9 @@ impl Worker {
                     python_candidates
                         .extend(self.resolve_python_request(request, &mut resolve_python)?);
                 }
+                WorkerMessage::ResolvePythonVersion { request } => {
+                    self.resolve_python_version_request(request, &mut resolve_python_version)?;
+                }
                 WorkerMessage::Completed { python_checkpoint } => {
                     evaluation.input_complete()?;
                     checkpoint_python(python_checkpoint, python_candidates)?;
@@ -274,6 +280,22 @@ impl Worker {
                 }
             }
         }
+    }
+
+    fn resolve_python_version_request(
+        &mut self,
+        request: crate::worker_protocol::PythonVersionResolveRequest,
+        resolve_python_version: &mut impl FnMut(
+            crate::worker_protocol::PythonVersionResolveRequest,
+        ) -> Result<String, String>,
+    ) -> Result<(), String> {
+        let message = match resolve_python_version(request) {
+            Ok(version) => ServerMessage::PythonVersionResolved { version },
+            Err(message) => ServerMessage::PythonVersionResolutionFailed { message },
+        };
+        self.writer
+            .send(&message)
+            .map_err(|error| format!("worker sideband write failed: {error}"))
     }
 
     fn resolve_python_request(
