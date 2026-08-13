@@ -53,6 +53,17 @@ def test_initializes_and_lists_tools(binary: Path) -> Transcript:
     session_schema = json.dumps(session["inputSchema"])
     assert '"$defs"' not in session_schema, session["inputSchema"]
     assert '"$ref"' not in session_schema, session["inputSchema"]
+    action_description = " ".join(
+        session["inputSchema"]["properties"]["action"]["description"].split()
+    )
+    assert "before a server-managed worker starts" in action_description, (
+        action_description
+    )
+    assert (
+        "After startup, it can add compatible Python requirements while the worker is idle"
+        in action_description
+    ), action_description
+    assert "returns `[restart required]`" in action_description, action_description
     transcript = client._finish()
     assert not (workspace / ".mcp-console").exists(), workspace
     return transcript

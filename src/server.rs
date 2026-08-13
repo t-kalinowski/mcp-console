@@ -96,8 +96,10 @@ struct Requirements {
 #[derive(Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct SessionArguments {
-    /// `prepare` makes additive R or Python packages available without restarting the worker.
-    /// `restart` replaces the worker, optionally adds Python requirements, and starts it if needed.
+    /// `prepare` adds R or Python requirements before a server-managed worker starts. After startup,
+    /// it can add compatible Python requirements while the worker is idle; a new R requirement
+    /// instead returns `[restart required]` and applies none of that call's additions. `restart`
+    /// replaces the worker, optionally adds Python requirements, and starts it if needed.
     action: SessionAction,
     /// Additive packages to make available. `prepare` requires at least one R or Python entry.
     /// `restart` accepts Python entries only; omit `requirements` to restart unchanged. Requirements
