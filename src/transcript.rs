@@ -18,13 +18,18 @@ const SCHEMA_VERSION: u64 = 1;
 pub(crate) struct Transcript(Arc<Mutex<TranscriptState>>);
 
 struct TranscriptState {
+    working_directory: PathBuf,
+    active: Option<ActiveTranscript>,
+    failure: Option<String>,
+}
+
+struct ActiveTranscript {
     directory: PathBuf,
     writer: BufWriter<File>,
     run_id: String,
     sequence: u64,
     next_call_id: u64,
     next_artifact_id: u64,
-    failure: Option<String>,
 }
 
 #[derive(Clone)]
@@ -40,9 +45,121 @@ pub(crate) struct Artifact {
 }
 
 impl Transcript {
-    pub(crate) fn create() -> Result<Self, String> {
+    pub(crate) fn new() -> Result<Self, String> {
         let working_directory = std::env::current_dir()
             .map_err(|error| format!("failed to find the current working directory: {error}"))?;
+        Ok(Self(Arc::new(Mutex::new(TranscriptState {
+            working_directory,
+            active: None,
+            failure: None,
+        }))))
+    }
+
+    pub(crate) fn begin(
+        &self,
+        request_id: &RequestId,
+        request_meta: &Meta,
+        request: &CallToolRequestParams,
+    ) -> Result<Call, String> {
+        self.update(|state| {
+            let active = state.materialize()?;
+            active.next_call_id += 1;
+            let call = Call {
+                id: active.next_call_id,
+                result_images: Arc::new(Mutex::new(None)),
+            };
+            let mut request = request.clone();
+            if !request_meta.is_empty() {
+                request.meta = Some(request_meta.clone());
+            }
+            active.append(
+                json!({
+                    "event": "tool_call",
+                    "call_id": call.id,
+                    "request_id": request_id,
+                    "request": request,
+                }),
+                Utc::now(),
+            )?;
+            Ok(call)
+        })
+    }
+
+    pub(crate) fn persist_image(
+        &self,
+        call_id: u64,
+        data: &str,
+        mime_type: &str,
+    ) -> Result<Artifact, String> {
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(data)
+            .map_err(|error| format!("worker returned invalid base64 image data: {error}"));
+        match bytes {
+            Ok(bytes) => {
+                self.update(|state| state.active()?.persist_image(call_id, &bytes, mime_type))
+            }
+            Err(error) => self.update(|_| Err(error)),
+        }
+    }
+
+    pub(crate) fn finish(
+        &self,
+        call: Call,
+        response: &Result<CallToolResult, ErrorData>,
+    ) -> Result<(), String> {
+        let result_images = call.take_result_images();
+        match result_images {
+            Ok(images) => self.update(|state| state.active()?.finish(call.id, images, response)),
+            Err(error) => self.update(|_| Err(error)),
+        }
+    }
+
+    fn lock(&self) -> Result<std::sync::MutexGuard<'_, TranscriptState>, String> {
+        self.0
+            .lock()
+            .map_err(|_| "transcript lock poisoned".to_string())
+    }
+
+    fn update<T>(
+        &self,
+        operation: impl FnOnce(&mut TranscriptState) -> Result<T, String>,
+    ) -> Result<T, String> {
+        let mut state = self.lock()?;
+        state.ensure_available()?;
+        let result = operation(&mut state);
+        if let Err(error) = &result {
+            state.failure = Some(error.clone());
+        }
+        result
+    }
+}
+
+impl TranscriptState {
+    fn materialize(&mut self) -> Result<&mut ActiveTranscript, String> {
+        if self.active.is_none() {
+            self.active = Some(ActiveTranscript::create(&self.working_directory)?);
+        }
+        self.active()
+    }
+
+    fn active(&mut self) -> Result<&mut ActiveTranscript, String> {
+        self.active
+            .as_mut()
+            .ok_or_else(|| "transcript was not materialized before recording output".to_string())
+    }
+
+    fn ensure_available(&self) -> Result<(), String> {
+        match &self.failure {
+            Some(error) => Err(format!(
+                "transcript is unavailable after a recording failure: {error}"
+            )),
+            None => Ok(()),
+        }
+    }
+}
+
+impl ActiveTranscript {
+    fn create(working_directory: &Path) -> Result<Self, String> {
         let working_directory_text = working_directory.to_string_lossy();
         let started_at = Utc::now();
         let run_id = format!(
@@ -70,15 +187,14 @@ impl Transcript {
             .map(BufWriter::new)
             .map_err(|error| format!("failed to create {}: {error}", journal.display()))?;
 
-        let transcript = Self(Arc::new(Mutex::new(TranscriptState {
+        let mut transcript = Self {
             directory,
             writer,
             run_id,
             sequence: 0,
             next_call_id: 0,
             next_artifact_id: 0,
-            failure: None,
-        })));
+        };
         transcript.append(
             json!({
                 "event": "session_started",
@@ -88,85 +204,6 @@ impl Transcript {
             started_at,
         )?;
         Ok(transcript)
-    }
-
-    pub(crate) fn begin(
-        &self,
-        request_id: &RequestId,
-        request_meta: &Meta,
-        request: &CallToolRequestParams,
-    ) -> Result<Call, String> {
-        self.update(|state| {
-            state.next_call_id += 1;
-            let call = Call {
-                id: state.next_call_id,
-                result_images: Arc::new(Mutex::new(None)),
-            };
-            let mut request = request.clone();
-            if !request_meta.is_empty() {
-                request.meta = Some(request_meta.clone());
-            }
-            state.append(
-                json!({
-                    "event": "tool_call",
-                    "call_id": call.id,
-                    "request_id": request_id,
-                    "request": request,
-                }),
-                Utc::now(),
-            )?;
-            Ok(call)
-        })
-    }
-
-    pub(crate) fn persist_image(
-        &self,
-        call_id: u64,
-        data: &str,
-        mime_type: &str,
-    ) -> Result<Artifact, String> {
-        let bytes = base64::engine::general_purpose::STANDARD
-            .decode(data)
-            .map_err(|error| format!("worker returned invalid base64 image data: {error}"));
-        match bytes {
-            Ok(bytes) => self.update(|state| state.persist_image(call_id, &bytes, mime_type)),
-            Err(error) => self.update(|_| Err(error)),
-        }
-    }
-
-    pub(crate) fn finish(
-        &self,
-        call: Call,
-        response: &Result<CallToolResult, ErrorData>,
-    ) -> Result<(), String> {
-        let result_images = call.take_result_images();
-        match result_images {
-            Ok(images) => self.update(|state| state.finish(call.id, images, response)),
-            Err(error) => self.update(|_| Err(error)),
-        }
-    }
-
-    fn append(&self, event: Value, at: DateTime<Utc>) -> Result<(), String> {
-        self.update(|state| state.append(event, at))
-    }
-
-    fn lock(&self) -> Result<std::sync::MutexGuard<'_, TranscriptState>, String> {
-        self.0
-            .lock()
-            .map_err(|_| "transcript lock poisoned".to_string())
-    }
-
-    fn update<T>(
-        &self,
-        operation: impl FnOnce(&mut TranscriptState) -> Result<T, String>,
-    ) -> Result<T, String> {
-        let mut state = self.lock()?;
-        state.ensure_active()?;
-        let result = operation(&mut state);
-        if let Err(error) = &result {
-            state.failure = Some(error.clone());
-        }
-        result
     }
 }
 
@@ -200,7 +237,7 @@ impl Call {
     }
 }
 
-impl TranscriptState {
+impl ActiveTranscript {
     fn append(&mut self, mut event: Value, at: DateTime<Utc>) -> Result<(), String> {
         let sequence = self.sequence + 1;
         let fields = event
@@ -321,15 +358,6 @@ impl TranscriptState {
             ));
         }
         Ok(value)
-    }
-
-    fn ensure_active(&self) -> Result<(), String> {
-        match &self.failure {
-            Some(error) => Err(format!(
-                "transcript is unavailable after a recording failure: {error}"
-            )),
-            None => Ok(()),
-        }
     }
 }
 

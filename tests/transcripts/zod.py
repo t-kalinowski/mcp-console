@@ -61,6 +61,103 @@ def test_returns_worker_images(binary: Path) -> Transcript:
     return client._finish()
 
 
+def test_materializes_records_only_for_console_use(binary: Path) -> Transcript:
+    zod = Path(__file__).resolve().parents[1] / "fixtures" / "zod"
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        temporary = Path(temporary_directory)
+        unused_workspace = temporary / "unused"
+        unused_workspace.mkdir()
+        client = McpClient(
+            binary,
+            ("serve", "--worker", str(zod)),
+            current_directory=unused_workspace,
+        )
+        client._initialize_and_list_tools()
+        assert not (unused_workspace / ".mcp-console").exists(), unused_workspace
+        client._request("tools/call", name="missing", arguments={})
+        assert not (unused_workspace / ".mcp-console").exists(), unused_workspace
+        transcript = client._finish()
+        assert not (unused_workspace / ".mcp-console").exists(), unused_workspace
+
+        materialized_by = {}
+        for tool in ("send", "session"):
+            workspace = temporary / tool
+            workspace.mkdir()
+            client = McpClient(
+                binary,
+                ("serve", "--worker", str(zod)),
+                current_directory=workspace,
+            )
+            client._initialize_and_list_tools()
+            assert not (workspace / ".mcp-console").exists(), workspace
+            if tool == "send":
+                client.send(r="echo")
+            else:
+                client.session(action="restart")
+
+            sessions = list((workspace / ".mcp-console" / "sessions").iterdir())
+            assert len(sessions) == 1, sessions
+            events = [
+                json.loads(line)
+                for line in (sessions[0] / "internal" / "events.jsonl")
+                .read_text(encoding="utf-8")
+                .splitlines()
+            ]
+            assert [event["event"] for event in events] == [
+                "session_started",
+                "tool_call",
+                "tool_result",
+            ], events
+            assert events[1]["request"]["name"] == tool, events[1]
+            materialized_by[tool] = [event["event"] for event in events]
+            client._finish()
+
+        transcript.append(
+            {
+                "recording": {
+                    "initialization and unknown tool only": "absent",
+                    "materialized by": materialized_by,
+                }
+            }
+        )
+        return transcript
+
+
+def test_rejects_console_use_when_record_cannot_be_created(
+    binary: Path,
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        workspace = Path(temporary_directory)
+        (workspace / ".mcp-console").write_text("occupied", encoding="utf-8")
+        client = McpClient(
+            binary,
+            ("serve", "--worker", str(workspace / "must-not-start")),
+            current_directory=workspace,
+        )
+        client._initialize_and_list_tools()
+
+        client._request("tools/call", name="send", arguments={"r": "echo"})
+        first_error = client.transcript[-1]["error"]
+        assert first_error["code"] == -32603, first_error
+        assert "failed to create" in first_error["message"], first_error
+        assert ".mcp-console/sessions" in first_error["message"], first_error
+        first_error["message"] = "<run record creation failed>"
+
+        client._request("tools/call", name="session", arguments={"action": "restart"})
+        second_error = client.transcript[-1]["error"]
+        assert second_error["code"] == -32603, second_error
+        assert "transcript is unavailable" in second_error["message"], second_error
+        second_error["message"] = "<transcript unavailable after recording failure>"
+
+        client._request("tools/call", name="missing", arguments={})
+        assert client.transcript[-1]["error"] == {
+            "code": -32602,
+            "message": "tool not found",
+        }, client.transcript[-1]
+        assert (workspace / ".mcp-console").read_text(encoding="utf-8") == "occupied"
+        return client._finish()
+
+
 def test_records_tool_calls_and_images(binary: Path) -> TranscriptWithCompanion:
     zod = Path(__file__).resolve().parents[1] / "fixtures" / "zod"
     with tempfile.TemporaryDirectory() as temporary_directory:
@@ -85,7 +182,6 @@ def test_records_tool_calls_and_images(binary: Path) -> TranscriptWithCompanion:
         )
         session_result = client.transcript[-1]["result"]
         client._request("tools/call", name="missing", arguments={})
-        missing_error = client.transcript[-1]["error"]
 
         sessions = list((workspace / ".mcp-console" / "sessions").iterdir())
         assert len(sessions) == 1, sessions
@@ -104,8 +200,6 @@ def test_records_tool_calls_and_images(binary: Path) -> TranscriptWithCompanion:
             "tool_result",
             "tool_call",
             "tool_result",
-            "tool_call",
-            "tool_result",
         ], events
         run_id = events[0]["run_id"]
         assert run_id
@@ -114,7 +208,7 @@ def test_records_tool_calls_and_images(binary: Path) -> TranscriptWithCompanion:
         assert Path(events[0]["working_directory"]).samefile(workspace), events[0]
         assert all(event["run_id"] == run_id for event in events), events
         assert all(event["schema_version"] == 1 for event in events), events
-        assert [event["sequence"] for event in events] == list(range(1, 11)), events
+        assert [event["sequence"] for event in events] == list(range(1, 9)), events
         assert events[1]["call_id"] == events[2]["call_id"] == 1, events
         assert events[1]["request_id"] == 3, events[1]
         assert events[1]["request"] == {
@@ -170,13 +264,9 @@ def test_records_tool_calls_and_images(binary: Path) -> TranscriptWithCompanion:
             },
         }, events[6]
         assert events[7]["result"] == session_result, events[7]
-        assert events[8]["call_id"] == events[9]["call_id"] == 4, events
-        assert events[8]["request_id"] == 6, events[8]
-        assert events[8]["request"] == {
-            "name": "missing",
-            "arguments": {},
-        }, events[8]
-        assert events[9]["error"] == missing_error, events[9]
+        assert all(
+            event.get("request", {}).get("name") != "missing" for event in events
+        ), events
 
         image_path = session / events[3]["result"]["content"][1]["path"]
         image_bytes = image_path.read_bytes()
@@ -235,6 +325,7 @@ def test_stops_after_transcript_failure(binary: Path) -> Transcript:
             current_directory=workspace,
         )
         client._initialize_and_list_tools()
+        client.send(r="echo")
         session = next((workspace / ".mcp-console" / "sessions").iterdir())
         artifacts = session / "artifacts"
         artifacts.rmdir()
@@ -255,6 +346,8 @@ def test_stops_after_transcript_failure(binary: Path) -> Transcript:
         events = [json.loads(line) for line in journal_after_failure.splitlines()]
         assert [event["event"] for event in events] == [
             "session_started",
+            "tool_call",
+            "tool_result",
             "tool_call",
         ], events
         assert journal_after_failure.endswith("\n"), journal_after_failure

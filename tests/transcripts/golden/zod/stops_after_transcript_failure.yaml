@@ -3,12 +3,22 @@
 ---
 id: 3
 send:
+  r: echo
+result:
+  content:
+    - type: text
+      text: |
+        zod: echo
+  isError: false
+---
+id: 4
+send:
   r: emit image
 error:
   code: -32603
   message: <artifact persistence failed>
 ---
-id: 4
+id: 5
 send:
   r: echo
 error:
@@ -17,6 +27,8 @@ error:
 ---
 journal after failure:
   - session_started
+  - tool_call
+  - tool_result
   - tool_call
 complete final line: true
 post-failure append: false

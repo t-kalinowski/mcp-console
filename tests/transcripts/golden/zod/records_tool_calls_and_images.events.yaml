@@ -96,25 +96,6 @@
   run_id: <run ID>
   sequence: 8
   at: <UTC timestamp>
-- event: tool_call
-  call_id: 4
-  request_id: 6
-  request:
-    name: missing
-    arguments: {}
-  schema_version: 1
-  run_id: <run ID>
-  sequence: 9
-  at: <UTC timestamp>
-- event: tool_result
-  call_id: 4
-  error:
-    code: -32602
-    message: tool not found
-  schema_version: 1
-  run_id: <run ID>
-  sequence: 10
-  at: <UTC timestamp>
 ---
 produced session:
   root: .mcp-console/sessions/<run ID>

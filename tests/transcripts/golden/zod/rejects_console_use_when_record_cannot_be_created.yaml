@@ -1,0 +1,27 @@
+---
+!same-as tests/transcripts/golden/server/initializes_and_lists_tools.yaml
+---
+id: 3
+send:
+  r: echo
+error:
+  code: -32603
+  message: <run record creation failed>
+---
+id: 4
+session:
+  action: restart
+error:
+  code: -32603
+  message: <transcript unavailable after recording failure>
+---
+id: 5
+input:
+  method: tools/call
+  params:
+    name: missing
+    arguments: {}
+error:
+  code: -32602
+  message: tool not found
+...

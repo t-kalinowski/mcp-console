@@ -93,7 +93,7 @@ fn default_timeout_ms() -> u64 {
 
 impl ConsoleServer {
     fn new(worker: Option<PathBuf>) -> Result<Self, String> {
-        let transcript = crate::transcript::Transcript::create()?;
+        let transcript = crate::transcript::Transcript::new()?;
         let worker = match worker {
             Some(program) => crate::worker_client::Client::new(program),
             None => crate::worker_client::Client::builtin()?,
@@ -283,6 +283,11 @@ impl ServerHandler for ConsoleServer {
         request: CallToolRequestParams,
         mut context: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
+        if !matches!(request.name.as_ref(), "send" | "session") {
+            return Self::tool_router()
+                .call(ToolCallContext::new(self, request, context))
+                .await;
+        }
         let transcript = self.transcript.clone();
         let request_id = context.id.clone();
         let request_meta = context.meta.clone();
