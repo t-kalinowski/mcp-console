@@ -22,9 +22,10 @@ result:
       text: |-
         zod stdin closed
         <large output>
+        [active evaluation stopped]
         [worker stopped: in-memory state lost]
         [starting new worker]
-        [restarted]
+        [idle]
   isError: false
 ---
 id: 5

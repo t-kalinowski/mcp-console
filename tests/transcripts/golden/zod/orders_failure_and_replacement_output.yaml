@@ -3,6 +3,15 @@
 ---
 id: 3
 send:
+  r: complete silently
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+id: 4
+send:
   r: violate protocol after stdout
 result:
   content:
@@ -12,17 +21,18 @@ result:
         <large output>
         [worker sent an unexpected ready message]
         [worker stopped: in-memory state lost]
+        [starting new worker]
+        zod replacement startup ready
+        [idle]
   isError: true
 ---
-id: 4
+id: 5
 send:
   r: echo
 result:
   content:
     - type: text
       text: |
-        [starting new worker]
-        zod replacement startup ready
         zod: echo
   isError: false
 ...

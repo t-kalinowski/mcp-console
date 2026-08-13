@@ -22,7 +22,7 @@ session:
 result:
   content:
     - type: text
-      text: worker is busy
+      text: "[requirements not prepared: worker is starting]"
   isError: true
 ---
 id: 5

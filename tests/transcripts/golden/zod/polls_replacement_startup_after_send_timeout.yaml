@@ -3,39 +3,35 @@
 ---
 id: 3
 send:
-  r: wait for stdin close
-  timeout_ms: 0
+  r: complete silently
 result:
   content:
     - type: text
-      text: |-
-
-        [running]
+      text: "[done]"
   isError: false
 ---
 id: 4
-session:
-  action: restart
+send:
+  r: exit unexpectedly
+  timeout_ms: 1000
 result:
   content:
     - type: text
       text: |-
-        zod stdin closed
-        <large output>
-        [active evaluation stopped]
+        [worker sideband read failed: worker sideband closed]
         [worker stopped: in-memory state lost]
         [starting new worker]
-        zod replacement startup ready
-        [idle]
-  isError: false
+        [worker starting]
+  isError: true
 ---
 id: 5
 send:
-  r: echo
+  timeout_ms: 3000
 result:
   content:
     - type: text
-      text: |
-        zod: echo
+      text: |-
+        zod replacement startup ready
+        [idle]
   isError: false
 ...

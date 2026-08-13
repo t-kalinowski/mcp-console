@@ -44,7 +44,8 @@ struct SendArguments {
     sql: Option<String>,
     /// Exact UTF-8 text queued to worker fd 0 without adding a newline.
     stdin: Option<String>,
-    /// Maximum time this call waits for an evaluation. It does not limit or stop the computation.
+    /// Maximum time this call waits for evaluation or one automatic worker replacement attempt.
+    /// Expiry reports the current state without stopping the computation or startup.
     #[serde(default = "default_timeout_ms")]
     timeout_ms: u64,
 }
@@ -78,7 +79,7 @@ struct SessionArguments {
     /// Additive R or Python requirements for prepare.
     /// After startup, an idle server-managed worker can apply Python-only additions.
     /// A new R addition requires restart and applies none of that call's additions.
-    /// New additions also require restart while a failed worker awaits replacement.
+    /// New additions also require restart after an automatic replacement attempt fails.
     /// Restart accepts only Python requirements.
     /// Resolution runs outside the worker sandbox.
     /// Package installation, build code, managed Python startup, or Matplotlib

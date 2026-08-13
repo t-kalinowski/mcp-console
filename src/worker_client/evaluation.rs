@@ -1,7 +1,7 @@
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
 
-use super::output::{OutputTape, Response, SendFailure};
+use super::output::{OutputTape, Response, ResponseAcknowledgment, SendFailure};
 
 const INPUT_REQUEST_GRACE: Duration = Duration::from_millis(10);
 
@@ -14,26 +14,60 @@ pub(super) struct Evaluation {
 }
 
 struct EvaluationState {
-    completed: bool,
+    phase: EvaluationPhase,
     input_report_at: Option<Instant>,
+    /// Whether one `send` currently owns the right to drain this evaluation's response.
     waiting: bool,
-    cancelled_by_restart: bool,
+    restart_reserved: bool,
+    restart_handoff: Option<Response>,
     #[cfg(target_os = "macos")]
     stdin: Option<super::platform::StdinSender>,
     pending_stdin: Vec<u8>,
+}
+
+#[derive(Clone, Copy)]
+enum EvaluationPhase {
+    Evaluating,
+    ReplacementStarting,
+    Complete(CompletionKind),
+}
+
+#[derive(Clone, Copy)]
+enum CompletionKind {
+    Cell,
+    ReplacementReady,
+    ReplacementFailed,
 }
 
 pub(super) enum EvaluationWait {
     Running(Response),
     InputRequested(Response),
     Completed(Response),
-    Restarted,
+    ReplacementStarting(Response),
+    ReplacementReady(Response),
+    Restarted(Response),
 }
 
 enum EvaluationStatus {
     Waiting,
     Grace(Duration),
     Report(EvaluationWait),
+}
+
+pub(super) struct RestartReservation {
+    evaluation: Arc<Evaluation>,
+    pub(super) unfinished: bool,
+    pub(super) waiting: bool,
+}
+
+pub(super) enum RestartDelivery {
+    Waiting(mpsc::Receiver<ResponseAcknowledgment>),
+    Unclaimed(Response),
+}
+
+/// Releases one response-draining claim whenever its `send` path exits.
+pub(super) struct WaitClaim {
+    evaluation: Arc<Evaluation>,
 }
 
 impl Evaluation {
@@ -44,10 +78,11 @@ impl Evaluation {
     ) -> Self {
         Self {
             state: Mutex::new(EvaluationState {
-                completed: false,
+                phase: EvaluationPhase::Evaluating,
                 input_report_at: None,
                 waiting: false,
-                cancelled_by_restart: false,
+                restart_reserved: false,
+                restart_handoff: None,
                 #[cfg(target_os = "macos")]
                 stdin: None,
                 pending_stdin: Vec::new(),
@@ -59,30 +94,37 @@ impl Evaluation {
         }
     }
 
-    pub(super) fn claim_wait(&self) -> Result<(), String> {
+    fn claim_wait(self: &Arc<Self>) -> Result<WaitClaim, String> {
         let mut state = self
             .state
             .lock()
             .map_err(|_| "worker evaluation state lock poisoned".to_string())?;
-        if state.cancelled_by_restart {
-            return Err("session restarted before the operation completed".to_string());
+        if state.restart_reserved {
+            return Err("session restart began before this send could wait".to_string());
         }
         if state.waiting {
             return Err("worker evaluation is already being polled".to_string());
         }
         state.waiting = true;
-        Ok(())
+        Ok(WaitClaim {
+            evaluation: self.clone(),
+        })
     }
 
-    /// Prevents this evaluation from draining output after restart takes ownership.
-    pub(super) fn cancel_for_restart(&self) -> Result<(), String> {
+    /// Reserves an open response until restart finishes retiring the worker.
+    pub(super) fn reserve_for_restart(self: &Arc<Self>) -> Result<RestartReservation, String> {
         let mut state = self
             .state
             .lock()
             .map_err(|_| "worker evaluation state lock poisoned".to_string())?;
-        state.cancelled_by_restart = true;
-        self.changed.notify_one();
-        Ok(())
+        state.restart_reserved = true;
+        let unfinished = !matches!(state.phase, EvaluationPhase::Complete(_));
+        let waiting = state.waiting;
+        Ok(RestartReservation {
+            evaluation: self.clone(),
+            unfinished,
+            waiting,
+        })
     }
 
     /// Queues bytes and briefly defers any outstanding input report for its receipt.
@@ -151,7 +193,7 @@ impl Evaluation {
         let prompt = serde_json::to_string(&prompt)
             .map_err(|error| format!("failed to render worker input prompt: {error}"))?;
         self.output
-            .push_line(format!("[input requested: {prompt}]\n"));
+            .push_notice_line(format!("input requested: {prompt}"));
         state.input_report_at = Some(Instant::now() + INPUT_REQUEST_GRACE);
         self.changed.notify_one();
         Ok(())
@@ -183,17 +225,40 @@ impl Evaluation {
         Ok(())
     }
 
-    pub(super) fn complete(&self, result: Result<(), SendFailure>) {
+    pub(super) fn complete_cell(&self, result: Result<(), SendFailure>) {
+        self.complete(result, CompletionKind::Cell);
+    }
+
+    pub(super) fn start_replacement(&self, failure: SendFailure) {
+        let Ok(mut state) = self.state.lock() else {
+            return;
+        };
+        state.input_report_at = None;
+        self.output.push_failure(failure);
+        state.phase = EvaluationPhase::ReplacementStarting;
+        self.changed.notify_one();
+    }
+
+    pub(super) fn finish_replacement(&self, result: Result<(), SendFailure>) {
+        let completion = if result.is_ok() {
+            CompletionKind::ReplacementReady
+        } else {
+            CompletionKind::ReplacementFailed
+        };
+        self.complete(result, completion);
+    }
+
+    fn complete(&self, result: Result<(), SendFailure>, completion: CompletionKind) {
         let Ok(mut state) = self.state.lock() else {
             return;
         };
         state.input_report_at = None;
         if let Err(failure) = result
-            && (!state.cancelled_by_restart || failure.should_survive_restart())
+            && (!state.restart_reserved || failure.should_survive_restart())
         {
             self.output.push_failure(failure);
         }
-        state.completed = true;
+        state.phase = EvaluationPhase::Complete(completion);
         self.changed.notify_one();
     }
 
@@ -202,12 +267,20 @@ impl Evaluation {
     pub(super) fn classify_failure(&self, message: String) -> SendFailure {
         let failure = SendFailure::from(message);
         match self.state.lock() {
-            Ok(state) if !state.cancelled_by_restart => failure.preceded_restart(),
+            Ok(state) if !state.restart_reserved => failure.preceded_restart(),
             Ok(_) | Err(_) => failure,
         }
     }
 
-    pub(super) async fn wait(&self, timeout: Duration) -> Result<EvaluationWait, String> {
+    pub(super) fn claim(self: &Arc<Self>) -> Result<WaitClaim, String> {
+        self.claim_wait()
+    }
+
+    pub(super) async fn wait(
+        &self,
+        _claim: WaitClaim,
+        timeout: Duration,
+    ) -> Result<EvaluationWait, String> {
         let started = Instant::now();
         loop {
             let changed = self.changed.notified();
@@ -218,23 +291,29 @@ impl Evaluation {
             };
             let remaining = timeout.saturating_sub(started.elapsed());
             if remaining.is_zero() {
-                break self.state_at_deadline();
+                match self.reported_state(true)? {
+                    EvaluationStatus::Report(state) => break Ok(state),
+                    EvaluationStatus::Waiting => {
+                        changed.await;
+                        continue;
+                    }
+                    EvaluationStatus::Grace(_) => {
+                        unreachable!("the deadline makes input state reportable")
+                    }
+                }
             }
             let wait = grace.map_or(remaining, |grace| grace.min(remaining));
             if tokio::time::timeout(wait, changed).await.is_err() {
                 if grace.is_some_and(|grace| grace <= remaining) {
                     continue;
                 }
-                break self.state_at_deadline();
-            }
-        }
-    }
-
-    fn state_at_deadline(&self) -> Result<EvaluationWait, String> {
-        match self.reported_state(true)? {
-            EvaluationStatus::Report(state) => Ok(state),
-            EvaluationStatus::Waiting | EvaluationStatus::Grace(_) => {
-                unreachable!("the deadline makes every evaluation state reportable")
+                match self.reported_state(true)? {
+                    EvaluationStatus::Report(state) => break Ok(state),
+                    EvaluationStatus::Waiting => continue,
+                    EvaluationStatus::Grace(_) => {
+                        unreachable!("the deadline makes input state reportable")
+                    }
+                }
             }
         }
     }
@@ -244,19 +323,33 @@ impl Evaluation {
             .state
             .lock()
             .map_err(|_| "worker evaluation state lock poisoned".to_string())?;
-        if state.cancelled_by_restart {
-            state.waiting = false;
-            return Ok(EvaluationStatus::Report(EvaluationWait::Restarted));
+        if state.restart_reserved {
+            return Ok(match state.restart_handoff.take() {
+                Some(response) => EvaluationStatus::Report(EvaluationWait::Restarted(response)),
+                None => EvaluationStatus::Waiting,
+            });
         }
-        if state.completed {
-            state.waiting = false;
-            return Ok(EvaluationStatus::Report(EvaluationWait::Completed(
-                self.output.take(),
-            )));
+        match state.phase {
+            EvaluationPhase::Complete(CompletionKind::Cell)
+            | EvaluationPhase::Complete(CompletionKind::ReplacementFailed) => {
+                return Ok(EvaluationStatus::Report(EvaluationWait::Completed(
+                    self.output.take(),
+                )));
+            }
+            EvaluationPhase::Complete(CompletionKind::ReplacementReady) => {
+                return Ok(EvaluationStatus::Report(EvaluationWait::ReplacementReady(
+                    self.output.take(),
+                )));
+            }
+            EvaluationPhase::ReplacementStarting if at_deadline => {
+                return Ok(EvaluationStatus::Report(
+                    EvaluationWait::ReplacementStarting(self.output.take()),
+                ));
+            }
+            EvaluationPhase::Evaluating | EvaluationPhase::ReplacementStarting => {}
         }
         let Some(report_at) = state.input_report_at else {
             if at_deadline {
-                state.waiting = false;
                 return Ok(EvaluationStatus::Report(EvaluationWait::Running(
                     self.output.take(),
                 )));
@@ -267,9 +360,52 @@ impl Evaluation {
         if !at_deadline && !grace.is_zero() {
             return Ok(EvaluationStatus::Grace(grace));
         }
-        state.waiting = false;
         Ok(EvaluationStatus::Report(EvaluationWait::InputRequested(
             self.output.take(),
         )))
+    }
+}
+
+impl RestartReservation {
+    pub(super) fn deliver(self, mut response: Response) -> Result<RestartDelivery, String> {
+        let mut state = self
+            .evaluation
+            .state
+            .lock()
+            .map_err(|_| "worker evaluation state lock poisoned".to_string())?;
+        if !state.waiting {
+            state.restart_reserved = false;
+            return Ok(RestartDelivery::Unclaimed(response));
+        }
+        let (acknowledged, wait_for_acknowledgment) = mpsc::sync_channel(0);
+        response.acknowledge_with(acknowledged);
+        state.restart_handoff = Some(response);
+        self.evaluation.changed.notify_one();
+        Ok(RestartDelivery::Waiting(wait_for_acknowledgment))
+    }
+}
+
+impl Drop for RestartReservation {
+    fn drop(&mut self) {
+        let Ok(mut state) = self.evaluation.state.lock() else {
+            return;
+        };
+        if state.restart_handoff.is_none() {
+            state.restart_reserved = false;
+            self.evaluation.changed.notify_one();
+        }
+    }
+}
+
+impl Drop for WaitClaim {
+    fn drop(&mut self) {
+        let Ok(mut state) = self.evaluation.state.lock() else {
+            return;
+        };
+        state.waiting = false;
+        let handoff = state.restart_handoff.take();
+        self.evaluation.changed.notify_one();
+        drop(state);
+        drop(handoff);
     }
 }

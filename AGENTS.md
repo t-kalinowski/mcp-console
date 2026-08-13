@@ -31,7 +31,9 @@ Startup fails when the run record cannot be created, and any later recording fai
 Submitted source, stdin, and tool-result output are recorded without redaction.
 Generated Quarto transcripts and complete output spools do not exist yet.
 Supplying exactly one of `r`, `python`, or `sql` starts one complete cell and waits for up to `timeout_ms`, which defaults to 60 seconds.
-If that wait expires, `send` drains output produced so far, appends the newline-prefixed banner `\n[running]`, and leaves the computation running; a later call without a code field polls it, and a poll while idle returns `\n[idle]`.
+If an established worker fails, the same `send` makes one automatic replacement attempt within that deadline.
+If the wait expires while the cell is still evaluating, `send` drains output produced so far, appends the newline-prefixed banner `\n[running]`, and leaves the computation running.
+If it expires while the replacement is starting, the response instead ends with `[worker starting]`; later polls report the same state until the worker reports ready, then return startup output followed by `[idle]`.
 Concurrent `send` calls are unsupported.
 Supplying `stdin` with a code cell, during an evaluation, or while idle queues exact UTF-8 bytes to worker fd 0 without adding a newline, inspecting, echoing, or limiting the text, or waiting for an input request.
 A nonempty idle stdin call lazily starts the worker when needed, queues the bytes, and returns `\n[idle]`; `timeout_ms` does not bound that startup because the call does not wait on an evaluation.
@@ -56,17 +58,19 @@ An idle server-managed worker can apply Python-only additions through reticulate
 It materializes an uninitialized manifest or activates a same-`libpython` environment while preserving live state.
 The server returns `[prepared]` only after checkpointing the result; failure preserves the live and retained manifests.
 Preparation during evaluation is rejected.
+Preparation that overlaps worker startup returns `[requirements not prepared: worker is starting]` without resolving the additions or changing the retained requirements, R library, or Python manifest.
 A call with a new R requirement after startup returns `[restart required]` and applies none of that call's additions.
-New requirements also return that marker while a failed worker awaits replacement; prepare does not start or configure the replacement.
+A failed automatic replacement leaves the worker stopped; new requirements then return that marker, and prepare does not start or configure the next replacement attempt.
 Restart retains the prepared R library, merges any supplied Python additions into the complete checkpointed manifest, and resolves the candidate before terminating the current worker.
 A failed restart resolution leaves the current worker, its in-memory state, requirements, R library, and Python interpreter unchanged.
-After successful resolution, restart retains the prepared R library and candidate Python environment, loses all worker-owned in-memory state and unread stdin, eagerly starts a replacement, and returns `[restarted]` after it reports ready.
+After successful resolution, restart retains the prepared R library and candidate Python environment, loses all worker-owned in-memory state and unread stdin, eagerly starts a replacement, and returns `[idle]` after it reports ready.
 The implicit session exists for the server lifetime, so restart starts its first worker if none exists yet.
 It first queues worker-stdin closure and the sideband shutdown message without waiting behind an evaluation, then force-stops the process group and reaps the direct sandbox process at the one-second deadline if that process remains live.
 It then waits for the active sideband operation to end, cancels the worker's stdin writer and standard-stream readers, drains standard-stream bytes already buffered at that boundary, and joins the tasks before reporting `[worker stopped: in-memory state lost]` or launching the replacement.
 Each admitted evaluation or idle stdin write carries its worker generation, so work admitted before restart cannot reach the replacement.
 A live Python preparation invalidated by restart returns `Python preparation cancelled by restart`; active-generation sideband failures retain their transport diagnostics.
-The explicit restart response preserves old-worker output, the stopped notice when a worker existed, `[starting new worker]`, replacement startup output, and `[restarted]` in that order.
+Without a waiting `send`, the explicit restart response preserves old-worker output, reports `[active evaluation stopped]` when it interrupts an unfinished cell, and then returns the stopped notice, `[starting new worker]`, replacement startup output, and `[idle]` in that order.
+When a `send` is waiting on the interrupted cell, it exclusively receives old-worker output through retirement followed by `[stopped by session restart request before evaluation finished]` and `[worker stopped: in-memory state lost]`; the restart response returns `[active evaluation stopped]`, its own stopped notice, `[starting new worker]`, replacement startup output, and `[idle]` without repeating that worker output.
 Named sessions and runtime R requirement additions do not exist yet.
 On macOS, managed-Python preflight happens during `serve` startup when required; the first nonempty stdin submission or evaluation still lazily starts the built-in worker under the same sandbox policy as the `sandbox` command.
 The worker embeds R through `libr` and `harp`, retains global state, and feeds each complete R cell through R's DLL REPL iterator.
@@ -154,11 +158,13 @@ Sideband text and images, worker standard-output and standard-error bytes, failu
 Each pipe reader queues raw byte chunks, and each successful `send` response drains all tape events available at its response boundary, decoding complete UTF-8 prefixes and retaining incomplete suffixes for a later response.
 Idle, running, and outstanding-input responses append the literal `\n[idle]`, `\n[running]`, or `\n[stdin needed]` banner; its leading newline is present even when no output precedes it.
 After an infrastructure failure, the server finishes worker shutdown and its I/O readers before appending `[worker stopped: in-memory state lost]` after the specific error.
-Each replacement attempt appends `[starting new worker]\n` before launch, so its startup output or error follows that fact.
+After an established worker fails during evaluation, the same `send` appends `[starting new worker]\n` and makes one replacement attempt.
+If that attempt reports ready before the call deadline, its startup output and `[idle]` complete the failed response; if the deadline expires first, the call returns `[worker starting]` and later polls continue waiting for that same attempt.
+A failed replacement remains stopped; a later call may make a new attempt, which emits its own starting notice.
 Initial lazy startup and retries before a worker reaches ready are silent.
 Completion returns pending text, images, and input-request records instead of `[done]` when any content was produced.
 A failed evaluation likewise returns all pending output before its infrastructure or protocol error.
-When worker output or a lifecycle notice shares that response, the server starts the bracketed error on a new line; an error returned alone remains bare.
+Server-owned timeline, state, and admission facts are bracketed and separated from worker output; request-validation and standalone resolver diagnostics remain ordinary MCP tool errors.
 Ordering between the two standard streams and sideband output is best effort; incomplete UTF-8 remains with its pipe until a later response, and invalid UTF-8 is replaced when output is rendered.
 The built-in worker and custom workers send console prompt fields verbatim; the server preserves each value without trimming it and renders it as a JSON-quoted `[input requested: ...]` record.
 Writes to inherited fd 1 or fd 2 from descendants follow the same path until worker retirement cancels those pipe readers; a descendant retaining fd 0 likewise cannot keep a blocked server write alive past retirement.
@@ -168,7 +174,6 @@ It does not self-execute or set a dynamic-loader environment variable.
 The worker command runs synchronously on the process main thread; only `serve` creates a Tokio runtime.
 The hidden development option `serve --worker PATH` replaces the built-in worker with an executable that implements the same sideband request/receipt protocol and fd-0 input contract.
 The Python fixture `tests/fixtures/zod` provides deterministic acceptance coverage for R, Python, and SQL language tags at that boundary, MCP image content, direct fd-0 input, captured standard streams, and server-owned timeout and polling mechanics.
-An infrastructure or protocol failure is returned as a tool error, fully retires that worker, and lets the next evaluation or nonempty idle stdin submission start a fresh worker with the starting notice above.
 When MCP input closes, the server cancels any active host resolver and starts a one-second deadline for graceful sideband shutdown without delaying it.
 If the direct sandbox process is still running when time expires, the sandbox boundary force-stops its process group and reaps that direct process.
 The version command prints the package name and version.

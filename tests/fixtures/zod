@@ -75,12 +75,12 @@ def configure_startup(root: Path) -> None:
     if mode == "fail with stderr":
         write_all(2, b"zod replacement startup failed\n")
         os._exit(86)
-    if mode == "block":
+    if mode in {"block", "block then ready with stdout"}:
         (root / "zod-replacement-waiting-ready").touch()
         release = Path(os.environ["ZOD_STARTUP_RELEASE"])
         while not release.exists():
             time.sleep(0.01)
-        mode = "ready"
+        mode = "ready with stdout" if mode.endswith("with stdout") else "ready"
     if mode == "ready with stdout":
         write_all(1, b"zod replacement startup ready\n")
         mode = "ready"

@@ -241,7 +241,7 @@ def test_prepares_initial_r_requirements(binary: Path) -> Transcript:
 
         client.session(action="restart")
         assert last_tool_text(client) == (
-            "[worker stopped: in-memory state lost]\n[starting new worker]\n[restarted]"
+            "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
         )
         client.send(r=r)
         assert last_tool_text(client) == "[1] 42\n"

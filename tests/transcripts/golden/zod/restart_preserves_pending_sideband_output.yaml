@@ -27,8 +27,9 @@ result:
     - type: text
       text: |-
         after pending image
+        [active evaluation stopped]
         [worker stopped: in-memory state lost]
         [starting new worker]
-        [restarted]
+        [idle]
   isError: false
 ...

@@ -1,7 +1,13 @@
+use std::sync::mpsc::SyncSender;
 use std::sync::{Arc, Mutex};
 
-pub(super) const WORKER_STARTING_NOTICE: &str = "[starting new worker]\n";
-pub(super) const WORKER_STOPPED_NOTICE: &str = "[worker stopped: in-memory state lost]";
+pub(super) const WORKER_STARTING_NOTICE: &str = "starting new worker";
+const WORKER_STARTING_STATE: &str = "worker starting";
+pub(super) const WORKER_STOPPED_NOTICE: &str = "worker stopped: in-memory state lost";
+pub(super) const WORKER_IDLE_NOTICE: &str = "idle";
+pub(super) const EVALUATION_STOPPED_BY_RESTART_NOTICE: &str =
+    "stopped by session restart request before evaluation finished";
+pub(super) const ACTIVE_EVALUATION_STOPPED_NOTICE: &str = "active evaluation stopped";
 
 /// Stores pending session output in publication order until one response drains it.
 #[derive(Clone)]
@@ -14,21 +20,29 @@ struct OutputTapeState {
 }
 
 enum OutputEvent {
-    StreamData {
-        stream: usize,
-        bytes: Vec<u8>,
-    },
-    StreamClosed {
-        stream: usize,
-    },
-    Text(String),
-    Image {
+    /// Raw worker stdout or stderr bytes, decoded only when the tape is drained.
+    /// Incomplete UTF-8 therefore remains buffered independently for each pipe.
+    PipeBytes { stream: usize, bytes: Vec<u8> },
+    /// Reader EOF or cancellation, which flushes that pipe's incomplete UTF-8 suffix.
+    PipeClosed { stream: usize },
+    /// Text from a worker `output` sideband frame.
+    SidebandText(String),
+    /// An image from a worker `image` sideband frame, already persisted when enabled.
+    SidebandImage {
         data: String,
         mime_type: String,
         artifact: crate::transcript::Artifact,
     },
-    Line(String),
-    Failure(SendFailure),
+    /// An unbracketed server-owned lifecycle, state, or input notice.
+    ServerNotice {
+        message: String,
+        /// End the notice with a newline before later worker output arrives.
+        terminate_line: bool,
+    },
+    /// A server infrastructure, transport, or protocol failure.
+    ///
+    /// Language errors are normal evaluation output and do not use this event.
+    ServerFailure(SendFailure),
 }
 
 #[cfg(target_os = "macos")]
@@ -41,6 +55,12 @@ pub(super) struct OutputTapeStream {
 pub(crate) struct Response {
     content: Vec<Content>,
     is_error: bool,
+    acknowledgment: Option<SyncSender<ResponseAcknowledgment>>,
+}
+
+pub(super) enum ResponseAcknowledgment {
+    Delivered,
+    Unclaimed(Response),
 }
 
 pub(crate) enum Content {
@@ -57,7 +77,9 @@ pub(super) enum SendResponse {
     Running(Response),
     InputRequested(Response),
     Completed(Response),
-    Restarted,
+    ReplacementStarting(Response),
+    ReplacementReady(Response),
+    Restarted(Response),
 }
 
 pub(super) struct SendFailure {
@@ -93,11 +115,46 @@ impl SendFailure {
 }
 
 impl Response {
-    pub(crate) fn into_parts(self) -> (Vec<Content>, bool) {
-        (self.content, self.is_error)
+    /// Consumes the response and acknowledges that the MCP adapter received it.
+    pub(crate) fn into_parts(mut self) -> (Vec<Content>, bool) {
+        let content = std::mem::take(&mut self.content);
+        let is_error = self.is_error;
+        if let Some(acknowledgment) = self.acknowledgment.take() {
+            let _ = acknowledgment.send(ResponseAcknowledgment::Delivered);
+        }
+        (content, is_error)
     }
 
-    pub(super) fn push_text(&mut self, text: impl Into<String>) {
+    pub(super) fn extend(&mut self, mut other: Self) {
+        if other.acknowledgment.is_some() {
+            assert!(
+                self.acknowledgment.is_none(),
+                "a response can carry only one acknowledgment"
+            );
+            self.acknowledgment = other.acknowledgment.take();
+        }
+        for content in std::mem::take(&mut other.content) {
+            match content {
+                Content::Text(text) => self.push_text(text),
+                Content::Image {
+                    data,
+                    mime_type,
+                    artifact,
+                } => self.push_image(data, mime_type, artifact),
+            }
+        }
+        self.is_error |= other.is_error;
+    }
+
+    pub(super) fn acknowledge_with(&mut self, acknowledgment: SyncSender<ResponseAcknowledgment>) {
+        assert!(
+            self.acknowledgment.is_none(),
+            "a response can carry only one acknowledgment"
+        );
+        self.acknowledgment = Some(acknowledgment);
+    }
+
+    fn push_text(&mut self, text: impl Into<String>) {
         let text = text.into();
         if text.is_empty() {
             return;
@@ -109,7 +166,7 @@ impl Response {
         }
     }
 
-    pub(super) fn push_image(
+    fn push_image(
         &mut self,
         data: String,
         mime_type: String,
@@ -122,23 +179,55 @@ impl Response {
         });
     }
 
-    pub(super) fn is_empty(&self) -> bool {
+    fn is_empty(&self) -> bool {
         self.content.is_empty()
     }
 
-    pub(super) fn is_error(&self) -> bool {
+    fn is_error(&self) -> bool {
         self.is_error
     }
 
-    pub(super) fn text_needs_newline(&self) -> bool {
+    fn text_needs_newline(&self) -> bool {
         !matches!(self.content.last(), Some(Content::Text(text)) if text.ends_with('\n'))
     }
 
-    pub(super) fn push_line(&mut self, text: impl Into<String>) {
+    fn push_line(&mut self, text: impl Into<String>) {
         if !self.is_empty() && self.text_needs_newline() {
             self.push_text("\n");
         }
         self.push_text(text);
+    }
+
+    pub(super) fn push_notice(&mut self, message: impl Into<String>) {
+        self.push_line(render_notice(message));
+    }
+
+    /// Adds a server notice and ends its line for any output appended later.
+    pub(super) fn push_notice_line(&mut self, message: impl Into<String>) {
+        self.push_notice(message);
+        self.push_text("\n");
+    }
+
+    pub(super) fn push_server_failure(&mut self, message: impl Into<String>) {
+        self.push_notice(message);
+        self.mark_error();
+    }
+
+    pub(super) fn mark_error(&mut self) {
+        self.is_error = true;
+    }
+}
+
+impl Drop for Response {
+    fn drop(&mut self) {
+        if let Some(acknowledgment) = self.acknowledgment.take() {
+            let response = Self {
+                content: std::mem::take(&mut self.content),
+                is_error: self.is_error,
+                acknowledgment: None,
+            };
+            let _ = acknowledgment.send(ResponseAcknowledgment::Unclaimed(response));
+        }
     }
 }
 
@@ -161,7 +250,7 @@ impl OutputTape {
     pub(super) fn push_text(&self, text: impl Into<String>) {
         let text = text.into();
         if !text.is_empty() {
-            self.lock().events.push(OutputEvent::Text(text));
+            self.lock().events.push(OutputEvent::SidebandText(text));
         }
     }
 
@@ -171,19 +260,23 @@ impl OutputTape {
         mime_type: String,
         artifact: crate::transcript::Artifact,
     ) {
-        self.lock().events.push(OutputEvent::Image {
+        self.lock().events.push(OutputEvent::SidebandImage {
             data,
             mime_type,
             artifact,
         });
     }
 
-    pub(super) fn push_line(&self, line: impl Into<String>) {
-        self.lock().events.push(OutputEvent::Line(line.into()));
+    /// Publishes a server notice that ends its line before later worker output.
+    pub(super) fn push_notice_line(&self, message: impl Into<String>) {
+        self.lock().events.push(OutputEvent::ServerNotice {
+            message: message.into(),
+            terminate_line: true,
+        });
     }
 
     pub(super) fn push_failure(&self, failure: SendFailure) {
-        self.lock().events.push(OutputEvent::Failure(failure));
+        self.lock().events.push(OutputEvent::ServerFailure(failure));
     }
 
     pub(super) fn take(&self) -> Response {
@@ -193,7 +286,7 @@ impl OutputTape {
 
         for event in events {
             match event {
-                OutputEvent::StreamData { stream, bytes } => {
+                OutputEvent::PipeBytes { stream, bytes } => {
                     let pending = state.streams[stream]
                         .as_mut()
                         .expect("output tape stream should be open");
@@ -203,33 +296,37 @@ impl OutputTape {
                     let complete = std::mem::replace(pending, incomplete);
                     output.push_text(String::from_utf8_lossy(&complete));
                 }
-                OutputEvent::StreamClosed { stream } => {
+                OutputEvent::PipeClosed { stream } => {
                     let pending = state.streams[stream]
                         .take()
                         .expect("output tape stream should be open");
                     output.push_text(String::from_utf8_lossy(&pending));
                 }
-                OutputEvent::Text(text) => output.push_text(text),
-                OutputEvent::Image {
+                OutputEvent::SidebandText(text) => output.push_text(text),
+                OutputEvent::SidebandImage {
                     data,
                     mime_type,
                     artifact,
                 } => output.push_image(data, mime_type, artifact),
-                OutputEvent::Line(line) => output.push_line(line),
-                OutputEvent::Failure(SendFailure {
+                OutputEvent::ServerNotice {
+                    message,
+                    terminate_line,
+                } => {
+                    if terminate_line {
+                        output.push_notice_line(message);
+                    } else {
+                        output.push_notice(message);
+                    }
+                }
+                OutputEvent::ServerFailure(SendFailure {
                     message,
                     worker_stopped,
                     ..
                 }) => {
-                    if output.is_empty() && !worker_stopped {
-                        output.push_text(message);
-                    } else {
-                        output.push_line(format!("[{message}]"));
-                    }
+                    output.push_server_failure(message);
                     if worker_stopped {
-                        output.push_line(WORKER_STOPPED_NOTICE);
+                        output.push_notice(WORKER_STOPPED_NOTICE);
                     }
-                    output.is_error = true;
                 }
             }
         }
@@ -247,14 +344,14 @@ impl OutputTape {
 #[cfg(target_os = "macos")]
 impl OutputTapeStream {
     pub(super) fn push(&self, bytes: &[u8]) {
-        self.output.lock().events.push(OutputEvent::StreamData {
+        self.output.lock().events.push(OutputEvent::PipeBytes {
             stream: self.stream,
             bytes: bytes.to_vec(),
         });
     }
 
     pub(super) fn close(&self) {
-        self.output.lock().events.push(OutputEvent::StreamClosed {
+        self.output.lock().events.push(OutputEvent::PipeClosed {
             stream: self.stream,
         });
     }
@@ -264,7 +361,7 @@ pub(super) fn render_response(response: SendResponse) -> Response {
     match response {
         SendResponse::Completed(mut output) => {
             if output.is_empty() {
-                output.push_text("[done]");
+                output.push_notice("done");
             }
             output
         }
@@ -273,25 +370,30 @@ pub(super) fn render_response(response: SendResponse) -> Response {
             output
         }
         SendResponse::Running(mut output) => {
-            append_state_banner(&mut output, "[running]");
+            append_state_banner(&mut output, "running");
             output
         }
         SendResponse::Idle(mut output) => {
             if !output.is_error() {
-                append_state_banner(&mut output, "[idle]");
+                append_state_banner(&mut output, "idle");
             }
             output
         }
-        SendResponse::Restarted => {
-            direct_failure("session restarted before the operation completed")
+        SendResponse::ReplacementStarting(mut output) => {
+            output.push_notice(WORKER_STARTING_STATE);
+            output
         }
+        SendResponse::ReplacementReady(mut output) => {
+            output.push_notice(WORKER_IDLE_NOTICE);
+            output
+        }
+        SendResponse::Restarted(output) => output,
     }
 }
 
 pub(super) fn direct_failure(message: impl Into<String>) -> Response {
     let mut output = Response::default();
-    output.push_text(message);
-    output.is_error = true;
+    output.push_server_failure(message);
     output
 }
 
@@ -299,12 +401,16 @@ fn append_input_banner(output: &mut Response) {
     if output.text_needs_newline() {
         output.push_text("\n");
     }
-    output.push_text("[stdin needed]");
+    output.push_text(render_notice("stdin needed"));
 }
 
-fn append_state_banner(output: &mut Response, banner: &str) {
+fn append_state_banner(output: &mut Response, state: &str) {
     output.push_text("\n");
-    output.push_text(banner);
+    output.push_text(render_notice(state));
+}
+
+fn render_notice(message: impl Into<String>) -> String {
+    format!("[{}]", message.into())
 }
 
 fn complete_utf8_prefix(bytes: &[u8]) -> usize {

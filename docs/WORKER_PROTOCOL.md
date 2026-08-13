@@ -44,11 +44,12 @@ It returns `[prepared]` without creating sideband pipes or starting the worker.
 
 After startup, an idle server-managed worker accepts Python-only additions through `prepare_python`, specified below.
 New R additions require restart; custom workers reject managed requirements.
+If preparation overlaps worker startup, the server returns `[requirements not prepared: worker is starting]` without resolving the additions or changing the retained requirements, R library, or Python manifest.
 
 `session` with `action = "restart"` may include additive Python requirements or omit them to retain the current manifest.
 The server merges additions into its complete Python checkpoint and resolves the candidate before terminating the current worker.
 A resolution failure leaves the current worker and environment unchanged.
-After successful resolution, the server retains the prepared R library and candidate Python environment, terminates the current worker generation, eagerly starts its replacement, and returns `[restarted]` after `ready`.
+After successful resolution, the server retains the prepared R library and candidate Python environment, terminates the current worker generation, eagerly starts its replacement, and returns `[idle]` after `ready`.
 All worker-owned R, Python, SQL, debugger, and unread-stdin state is lost.
 The implicit session exists for the server lifetime, so restart starts its first worker if none exists yet.
 After any requirement resolution succeeds, restart starts the same one-second stdin-close, sideband-shutdown, and process-group escalation path described below.
@@ -60,8 +61,11 @@ These boundary details apply:
   Work from the old worker is rejected rather than delivered to the replacement.
 - A live Python preparation invalidated by restart returns `Python preparation cancelled by restart`, regardless of whether resolver cancellation or worker shutdown completes first.
   Sideband failures from the active generation remain infrastructure errors.
-- Standard-output and standard-error bytes already collected from the old worker are retained.
-  A later `send` after restart may return those bytes, including alongside output from the replacement.
+- Standard-output and standard-error bytes collected from the old worker are retained through retirement.
+- When a `send` is waiting on an unfinished evaluation, that call owns the old worker's text and images.
+  Restart releases it only after retirement with `[stopped by session restart request before evaluation finished]` and `[worker stopped: in-memory state lost]`.
+  The restart response reports `[active evaluation stopped]` and its own worker lifecycle facts without repeating that worker output.
+- Without a waiting `send`, restart returns retained old-worker output itself.
 
 The IR resolver receives R package references as process arguments and the Python resolver receives only a requirement manifest on standard input; neither receives submitted cells or `send` stdin.
 Both may use the network, write normal host caches, and execute package installation or build code outside the sandbox; managed Python environment startup and the Matplotlib font-manager import also run there.
@@ -262,25 +266,31 @@ A later `send` call without a code field polls that evaluation with its own `tim
 Every successful `send` response drains pending tape events available when that response is assembled, including sideband text and images and complete UTF-8 prefixes from standard-stream bytes.
 Events accepted after that snapshot and incomplete trailing byte sequences remain for the next response; new output does not itself wake a waiting call.
 Completion returns the pending content in tape order, including input-request records not already delivered at an earlier boundary, or `[done]` when the tape is empty.
-If evaluation instead ends in an infrastructure or protocol failure, all pending evaluation output received before the failure precedes the tool error.
-When runtime output shares that response, the server starts the bracketed error on a new line, inserting a newline only when the output does not already end with one.
+If evaluation instead ends in an infrastructure or protocol failure, all pending evaluation output received before the failure precedes the bracketed tool error.
+The server inserts a newline before that error only when the preceding output does not already end with one.
 A worker failure adds `[worker stopped: in-memory state lost]` after that error once shutdown has finished and no standard-stream reader can append more output.
-A tool error returned without runtime output or a worker-stopped notice remains bare.
+The same `send` then emits `[starting new worker]`, makes one automatic replacement attempt, and waits for it within the call's original deadline.
+If the replacement reports `ready`, startup output and `[idle]` complete the response; the response remains an MCP tool error because the submitted cell failed.
+If the deadline expires first, the response ends with `[worker starting]`; a later poll waits on the same attempt and reports `[worker starting]` again if its own deadline expires.
+If startup fails, that error ends the automatic attempt and the worker remains stopped.
+Server-owned timeline, state, and admission facts are bracketed; request-validation and standalone resolver diagnostics remain ordinary MCP tool-error text.
 If the poll wait expires first, the literal `\n[running]` banner is appended to any collected standard-stream text.
 A call without a code field or `stdin` while no evaluation is active appends the literal `\n[idle]` banner to collected standard-stream text.
 A stdin-only call in that state queues the bytes and uses the same idle response projection.
 
-Before each replacement attempt, the server appends `[starting new worker]\n` to that same pending output tape.
+The server adds `[starting new worker]\n` before each announced replacement attempt, in the `send` or `session` response that waits for it.
 The notice is recorded before launch, so startup output and startup errors follow it.
 A failed replacement remains stopped, and each retry emits a new starting notice.
-Initial lazy startup and retries after a failure before `ready` remain silent because no established worker state was lost.
-An explicit restart reports retained old-worker output, the stopped notice when a worker existed, the starting notice, replacement startup output, and `[restarted]` in its `session` response.
-Once restart begins, an active waiting `send` returns a restart-cancellation error without draining the tape; the restart response is the next output boundary.
+Initial lazy startup and its retries before any worker has reached `ready` remain silent because no established worker state was lost.
+Without a waiting `send`, an explicit restart reports retained old-worker output, `[active evaluation stopped]` when it interrupts an unfinished cell, the stopped notice when a worker existed, the starting notice, replacement startup output, and `[idle]` in its `session` response.
+If an unfinished evaluation has a waiting `send`, restart retires the worker and gives that response the old-worker tape content, its restart-cancellation notice, and its worker-stopped notice.
+The restart call waits for that response to be assembled, then reports `[active evaluation stopped]`, its own worker-stopped and starting notices, replacement startup output, and `[idle]`.
 
-A `[running]`, `[stdin needed]`, or `[idle]` response drains all pending tape content before appending its state banner.
-Each state banner has a newline before it, including when no worker or evaluation output precedes it.
-An existing trailing newline supplies that boundary for `[stdin needed]`; `[running]` and `[idle]` always add one, so their preceding output may leave a blank line.
-When a tool error shares the response with runtime output or a lifecycle notice, brackets distinguish it from worker text and the server inserts a newline before it only when needed.
+An ordinary `[running]`, `[stdin needed]`, or idle-poll `[idle]` response drains all pending tape content before appending its state banner.
+Each ordinary state banner has a newline before it, including when no worker or evaluation output precedes it.
+An existing trailing newline supplies that boundary for `[stdin needed]`; `[running]` and idle-poll `[idle]` always add one, so their preceding output may leave a blank line.
+Replacement readiness appends `[idle]` with one line boundary after startup output.
+Brackets distinguish server timeline facts and operational failures from worker text, and the server inserts a newline before them only when needed.
 Output cursors and general incremental polling remain unimplemented.
 
 ### Interactive input
@@ -358,7 +368,7 @@ Malformed JSON, invalid UTF-8, an unexpected message, or sideband EOF fails the 
 There is no structured message for other protocol or infrastructure failures.
 Initial startup failure leaves no cached worker, so a later evaluation retries startup silently.
 After `ready`, a sideband failure retires the worker before its tool error reports `[worker stopped: in-memory state lost]`.
-A later evaluation or nonempty idle stdin submission emits `[starting new worker]` before attempting the replacement.
+The failed `send` then makes one announced replacement attempt before its deadline; a later call starts a new announced attempt only if that replacement failed.
 Sideband content received before that failure is retained and precedes the tool error.
 Worker retirement waits for the standard-stream readers, so all accepted standard-stream text precedes the tool error and stopped notice.
 If either output path contributed text, the server starts the bracketed error on a new line.
@@ -520,11 +530,13 @@ SQL source containing NUL is rejected as a normal language error before it reach
 
 ## Current limits
 
-No timeout bounds managed-Python startup preflight, worker startup, host resolution, or execution.
+No `timeout_ms` deadline terminates managed-Python startup preflight, worker startup, host resolution, or execution.
 R and Python requirement resolution have no per-call timeout; MCP shutdown cancels an in-flight explicit or runtime resolution.
 The current implementation has no general frame-size limit, stdin queue limit, or accumulated-output limit.
 The 12 KiB cap applies only to a recognized SQL query preview; arbitrary R and Python console text, worker standard streams, and text accompanying that preview remain uncapped.
-`timeout_ms` limits one MCP wait without terminating the worker or a blocked stdin write; server shutdown and explicit restart use a process deadline.
+`timeout_ms` limits one MCP wait through evaluation and one automatic replacement attempt without terminating either operation.
+If replacement startup outlives that wait, later polls continue waiting on it.
+Server shutdown and explicit restart use a process deadline.
 An idle stdin-only call does not wait on an evaluation, so `timeout_ms` does not bound lazy worker startup for that call.
 The 10-millisecond input grace controls when provisional state becomes visible as `[stdin needed]`; it does not control request-record retention or limit evaluation or stdin reads.
 It is a latency heuristic: scheduling can delay a receipt past the grace and expose an extra `[stdin needed]` boundary even when queued bytes subsequently satisfy the read.

@@ -29,7 +29,7 @@ send: {}
 result:
   content:
     - type: text
-      text: session is preparing requirements
+      text: "[session is preparing requirements]"
   isError: true
 ---
 id: 6
@@ -53,7 +53,7 @@ result:
       text: |-
         [worker stopped: in-memory state lost]
         [starting new worker]
-        [restarted]
+        [idle]
   isError: false
 ---
 id: 8
