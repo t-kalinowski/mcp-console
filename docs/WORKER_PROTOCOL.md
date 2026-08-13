@@ -190,7 +190,7 @@ The complete implemented message set is:
 | worker → server | `{"kind":"image","data":"...","mime_type":"image/png"}` | Append one base64-encoded image. |
 | worker → server | `{"kind":"input_requested","prompt":"..."}` | Report that the runtime requested input. |
 | worker → server | `{"kind":"input_received"}` | Report that the current read succeeded. |
-| worker → server | `{"kind":"resolve_python","request":{"requirements":{"packages":["numpy","pandas"]},"environment":{}}}` | Resolve the complete proposed reticulate manifest outside the sandbox. |
+| worker → server | `{"kind":"resolve_python","request":{"requirements":{"packages":["numpy","pandas"]},"retained_requirements":{"packages":["numpy","pandas"]},"environment":{}}}` | Resolve the complete proposed reticulate manifest outside the sandbox. |
 | worker → server | `{"kind":"resolve_python_version","request":{"constraints":[],"environment":{}}}` | Select a Python version with reticulate and uv outside the sandbox. |
 | worker → server | `{"kind":"python_prepared","python_checkpoint":{"packages":["numpy","pandas","py-yaml12"]}}` | Finish explicit Python preparation and report its normalized manifest. |
 | worker → server | `{"kind":"python_preparation_failed","message":"..."}` | Report an ordinary explicit-preparation failure without discarding the worker. |
@@ -202,6 +202,8 @@ Unknown kinds and fields are rejected in either direction.
 The server maps `console_output` and `console_diagnostic` to distinct internal console channels.
 The `language` value is `r`, `python`, or `sql`.
 Python manifests contain `packages` and may contain `python_version` and `exclude_newer`; empty optional fields are omitted.
+For `resolve_python`, `requirements` is the physical manifest submitted to the host resolver and `retained_requirements` is the logical manifest that a successful activation will retain and checkpoint.
+Their packages and `exclude_newer` must match; only `python_version` may differ when reticulate resolves a late addition against the exact active Python patch version while preserving the user's logical constraint.
 The `environment` object may contain only `UV_*` settings other than `UV_OFFLINE`.
 The optional `python_checkpoint` is the complete normalized manifest, not reticulate's request history.
 Custom workers, caller-configured Python workers, and server-managed workers that never load reticulate omit it.
@@ -237,7 +239,7 @@ An explicit live Python preparation has this shape:
 
 ```text
 server -> worker  {"kind":"prepare_python","packages":["py-yaml12"]}
-worker -> server  {"kind":"resolve_python","request":{"requirements":{"packages":["numpy","pandas","py-yaml12"]},"environment":{}}}
+worker -> server  {"kind":"resolve_python","request":{"requirements":{"packages":["numpy","pandas","py-yaml12"]},"retained_requirements":{"packages":["numpy","pandas","py-yaml12"]},"environment":{}}}
 server -> worker  {"kind":"python_resolved","python":"..."}
 worker -> server  {"kind":"python_prepared","python_checkpoint":{"packages":["numpy","pandas","py-yaml12"]}}
 ```
@@ -248,7 +250,8 @@ Resolver replies remain candidates until `python_prepared` commits a matching ch
 `python_preparation_failed` restores the live manifest, discards candidates, and leaves the worker usable.
 
 A server-managed worker may send `resolve_python` during an evaluation when reticulate invokes its internal `uv_get_or_create_env` binding.
-The request contains the complete proposed manifest, not a history delta.
+The request contains both the complete physical resolver manifest and the complete logical retained manifest, not a history delta.
+Their packages and `exclude_newer` must match, while the physical manifest may select the exact active Python patch version without replacing the logical constraint that will be checkpointed.
 The server performs the resolution while the worker waits and replies with exactly one `python_resolved` or `python_resolution_failed` frame on the same sideband.
 No request ID is needed because the worker can have only one such synchronous request in flight.
 Every successful reply remains a candidate until the evaluation completes.
@@ -483,10 +486,11 @@ There is no relative ordering guarantee between those pipes and sideband output,
 
 The built-in worker receives either a server-managed requirement manifest selected by startup or explicit preparation, or the caller's existing `RETICULATE_PYTHON` value when no managed resolution occurred.
 Before initializing R, it forces `UV_OFFLINE=1`, overwriting any inherited value before user code runs.
-For a server-managed worker, MCP Console seeds reticulate's manifest and replaces only the namespace binding for its internal `uv_get_or_create_env` function.
+For a server-managed worker, MCP Console seeds reticulate's manifest and replaces the namespace bindings for its internal `uv_get_or_create_env` and `resolve_python_version` functions.
 It does not replace `py_require()`, so reticulate retains its package attribution, manifest history, compatibility checks, activation, and configuration behavior within the live R process.
 When Python is already initialized, only additive package requirements are supported.
-The worker sends the complete proposed manifest and its current `UV_*` settings except `UV_OFFLINE`, then waits for the server's resolver reply within the same evaluation.
+The worker sends the complete physical resolver manifest, the logical manifest to retain after successful activation, and its current `UV_*` settings except `UV_OFFLINE`, then waits for the server's resolver reply within the same evaluation.
+The two manifests must agree on packages and `exclude_newer`; only the physical manifest may substitute the exact active Python patch version.
 Those settings are not retained after the resolution.
 Reticulate checks that each candidate uses the exact live `libpython`, runs `activate_this.py`, swaps its configuration, and updates its manifest.
 The interpreter is not restarted, so its `__main__` namespace and existing Python objects remain available.
