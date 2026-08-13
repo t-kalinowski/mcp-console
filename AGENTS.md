@@ -128,7 +128,7 @@ The server accepts the last candidate matching its reported checkpoint, or the p
 Normal language outcomes reach the evaluation checkpoint; an infrastructure or protocol failure leaves the prior checkpoint unchanged.
 The live Python interpreter and its state are retained during successful activation.
 Evaluated R code or an R package load can therefore trigger host resolution, which may use the network, write host caches, and execute package build backends outside the worker sandbox; the structured requirements and forwarded settings are data, and the submitted cell is not evaluated by the resolver.
-R and Python share objects through reticulate's `py` and `r` bridges.
+Python reads R globals through reticulate's `r.name` bridge, and R reads Python globals through the worker-attached `py$name` binding.
 A silent successful Python cell sends `completed` without an `output` frame and projects to `[done]` when no other response text is pending.
 Python `input()` and `breakpoint()`/`pdb` use reticulate's R console bridge, so they emit `input_requested` before a read and `input_received` after it succeeds.
 They accept proactively queued or follow-up stdin, including repeated debugger commands.
@@ -140,7 +140,7 @@ The connection disables DuckDB progress output so previews contain only query re
 The worker stores SQL source in private R state and calls the bridge with a short evaluation ID.
 The bridge sends queries through a zero-argument closure enclosed by R's global environment, so DuckDB searches the persistent R session rather than the private bridge environment.
 An unqualified catalog table or view takes precedence over a same-named R binding; otherwise DuckDB can scan a data frame in the R global environment, and an SQL view over that name observes later rebinding.
-The bridge installs only `sql_connection()` in a worker-owned `tools:mcp-console` environment at search position 2, so clearing R's global environment does not remove it and a same-named global binding still takes precedence.
+The bridge installs a forwarding active binding for reticulate's `py` and the `sql_connection()` helper in a worker-owned `tools:mcp-console` environment at search position 2, so clearing R's global environment does not remove them and same-named global bindings still take precedence.
 It returns a borrowed reference to the same worker-owned connection; callers must not disconnect it.
 Established DuckDB, DBI, and dplyr interfaces can use that connection, and lazy dplyr relations observe later catalog changes until collection.
 Prepared queries retain scanned data frames until their DBI results are cleared.
@@ -251,6 +251,7 @@ See `design-sketches/README.md` for the product overview and `design-sketches/do
 - `scripts/format` — attempts each repository-wide formatter without requiring it.
 - `scripts/check` — local formatting, Clippy, and test checks.
 - `.github/workflows/ci.yaml` — formatting, Clippy, and test checks.
+- `docs/TOOL_DESCRIPTIONS.md` — exact registered MCP tool and property descriptions.
 - `docs/WORKER_PROTOCOL.md` — exact implemented worker launch and sideband protocol.
 - `design-sketches/` — tentative product and architecture documents.
 - `README.md` — current user-facing project status.
