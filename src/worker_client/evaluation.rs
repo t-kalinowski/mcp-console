@@ -189,12 +189,22 @@ impl Evaluation {
         };
         state.input_report_at = None;
         if let Err(failure) = result
-            && (!state.cancelled_by_restart || failure.worker_stopped)
+            && (!state.cancelled_by_restart || failure.should_survive_restart())
         {
             self.output.push_failure(failure);
         }
         state.completed = true;
         self.changed.notify_one();
+    }
+
+    /// Records whether a worker failure became observable before restart
+    /// cancellation took ownership of this evaluation's response.
+    pub(super) fn classify_failure(&self, message: String) -> SendFailure {
+        let failure = SendFailure::from(message);
+        match self.state.lock() {
+            Ok(state) if !state.cancelled_by_restart => failure.preceded_restart(),
+            Ok(_) | Err(_) => failure,
+        }
     }
 
     pub(super) async fn wait(&self, timeout: Duration) -> Result<EvaluationWait, String> {

@@ -290,7 +290,7 @@ impl Client {
     ) -> Result<(), SendFailure> {
         self.with_worker(
             &generation,
-            |worker| worker.write_stdin(stdin),
+            |worker| worker.write_stdin(stdin).map_err(SendFailure::from),
             std::convert::identity,
         )
     }
@@ -342,20 +342,22 @@ impl Client {
         self.with_worker(
             &generation,
             |worker| {
-                worker.evaluate(
-                    cell,
-                    evaluation,
-                    move |request| {
-                        resolver.resolve_runtime_python(resolver_generation.clone(), request)
-                    },
-                    move |checkpoint, candidates| {
-                        checkpointer.checkpoint_runtime_python(
-                            checkpoint_generation.clone(),
-                            checkpoint,
-                            candidates,
-                        )
-                    },
-                )
+                worker
+                    .evaluate(
+                        cell,
+                        evaluation,
+                        move |request| {
+                            resolver.resolve_runtime_python(resolver_generation.clone(), request)
+                        },
+                        move |checkpoint, candidates| {
+                            checkpointer.checkpoint_runtime_python(
+                                checkpoint_generation.clone(),
+                                checkpoint,
+                                candidates,
+                            )
+                        },
+                    )
+                    .map_err(|message| evaluation.classify_failure(message))
             },
             |result| evaluation.complete(result),
         )
@@ -364,7 +366,7 @@ impl Client {
     fn with_worker<T, U>(
         &self,
         generation: &WorkerGeneration,
-        operation: impl FnOnce(&mut platform::Worker) -> Result<T, String>,
+        operation: impl FnOnce(&mut platform::Worker) -> Result<T, SendFailure>,
         finish: impl FnOnce(Result<T, SendFailure>) -> U,
     ) -> U {
         if let Err(error) = self.ensure_generation(generation) {
@@ -397,12 +399,15 @@ impl Client {
         };
         let result = match operation(running) {
             Ok(result) => Ok(result),
-            Err(message) => match self.retire_failed_worker(&mut worker, generation) {
-                Ok(true) => Err(SendFailure::from(message).worker_stopped()),
-                Ok(false) => Err(SendFailure::from(message)),
-                Err(stop_error) => Err(SendFailure::from(format!(
-                    "{message}; additionally failed to stop the worker: {stop_error}"
-                ))),
+            Err(mut failure) => match self.retire_failed_worker(&mut worker, generation) {
+                Ok(true) => Err(failure.worker_stopped()),
+                Ok(false) => Err(failure),
+                Err(stop_error) => {
+                    failure.message.push_str(&format!(
+                        "; additionally failed to stop the worker: {stop_error}"
+                    ));
+                    Err(failure)
+                }
             },
         };
         let output = finish(result);

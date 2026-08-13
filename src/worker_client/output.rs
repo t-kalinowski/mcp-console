@@ -63,6 +63,7 @@ pub(super) enum SendResponse {
 pub(super) struct SendFailure {
     pub(super) message: String,
     pub(super) worker_stopped: bool,
+    preceded_restart: bool,
 }
 
 impl From<String> for SendFailure {
@@ -70,6 +71,7 @@ impl From<String> for SendFailure {
         Self {
             message,
             worker_stopped: false,
+            preceded_restart: false,
         }
     }
 }
@@ -78,6 +80,15 @@ impl SendFailure {
     pub(super) fn worker_stopped(mut self) -> Self {
         self.worker_stopped = true;
         self
+    }
+
+    pub(super) fn preceded_restart(mut self) -> Self {
+        self.preceded_restart = true;
+        self
+    }
+
+    pub(super) fn should_survive_restart(&self) -> bool {
+        self.worker_stopped || self.preceded_restart
     }
 }
 
@@ -208,6 +219,7 @@ impl OutputTape {
                 OutputEvent::Failure(SendFailure {
                     message,
                     worker_stopped,
+                    ..
                 }) => {
                     if output.is_empty() && !worker_stopped {
                         output.push_text(message);
