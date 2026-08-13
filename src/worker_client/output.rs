@@ -63,6 +63,9 @@ pub(super) enum ResponseAcknowledgment {
     Unclaimed(Response),
 }
 
+/// Releases an explicit restart after the interrupted `send` reply is written.
+pub(crate) struct ResponseDelivery(Option<SyncSender<ResponseAcknowledgment>>);
+
 pub(crate) enum Content {
     Text(String),
     Image {
@@ -115,14 +118,15 @@ impl SendFailure {
 }
 
 impl Response {
-    /// Consumes the response and acknowledges that the MCP adapter received it.
-    pub(crate) fn into_parts(mut self) -> (Vec<Content>, bool) {
+    /// Consumes the response for the MCP adapter.
+    pub(crate) fn into_parts(mut self) -> (Vec<Content>, bool, Option<ResponseDelivery>) {
         let content = std::mem::take(&mut self.content);
         let is_error = self.is_error;
-        if let Some(acknowledgment) = self.acknowledgment.take() {
-            let _ = acknowledgment.send(ResponseAcknowledgment::Delivered);
-        }
-        (content, is_error)
+        let delivery = self
+            .acknowledgment
+            .take()
+            .map(|acknowledgment| ResponseDelivery(Some(acknowledgment)));
+        (content, is_error, delivery)
     }
 
     pub(super) fn extend(&mut self, mut other: Self) {
@@ -215,6 +219,14 @@ impl Response {
 
     pub(super) fn mark_error(&mut self) {
         self.is_error = true;
+    }
+}
+
+impl ResponseDelivery {
+    pub(crate) fn complete(mut self) {
+        if let Some(acknowledgment) = self.0.take() {
+            let _ = acknowledgment.send(ResponseAcknowledgment::Delivered);
+        }
     }
 }
 

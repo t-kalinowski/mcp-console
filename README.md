@@ -104,7 +104,8 @@ It waits for the active sideband operation to end, cancels the worker's stdin wr
 Code and idle stdin remain associated with the worker that admitted them and cannot run in the replacement.
 Without a waiting `send`, the restart response includes retained output from the old worker, `[active evaluation stopped]` when restart interrupts an unfinished cell, `[worker stopped: in-memory state lost]` when a worker existed, `[starting new worker]`, startup output, and finally `[idle]`, in that order.
 If a `send` is waiting on the interrupted cell, that call receives the old worker's text and images through retirement, followed by `[stopped by session restart request before evaluation finished]` and `[worker stopped: in-memory state lost]`.
-The restart response then returns `[active evaluation stopped]`, its own stopped notice, `[starting new worker]`, replacement startup output, and `[idle]` without repeating the old worker's output.
+The server writes that `send` reply before starting the replacement or returning the restart response.
+The restart response contains `[active evaluation stopped]`, its own stopped notice, `[starting new worker]`, replacement startup output, and `[idle]` without repeating the old worker's output.
 On macOS, the default managed-Python preflight happens during `serve` startup when required; a successful `prepare` replaces that initial selection before the first nonempty stdin submission or evaluation lazily starts the sandboxed embedded R worker.
 Later calls reuse the same global R state, reticulate Python interpreter, and in-memory DuckDB catalog.
 An infrastructure or protocol failure stops that worker and discards its in-memory R, Python, and SQL state.

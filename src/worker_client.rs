@@ -22,7 +22,7 @@ use evaluation::{Evaluation, EvaluationWait};
 use lifecycle::{LifecycleControl, WorkerGeneration};
 #[cfg(target_os = "macos")]
 use output::OutputTapeStream;
-pub(crate) use output::{Content, Response};
+pub(crate) use output::{Content, Response, ResponseDelivery};
 use output::{OutputTape, SendFailure, SendResponse};
 
 /// A cloneable handle to one lazily started worker.

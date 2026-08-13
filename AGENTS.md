@@ -72,7 +72,8 @@ It then waits for the active sideband operation to end, cancels the worker's std
 Each admitted evaluation or idle stdin write carries its worker generation, so work admitted before restart cannot reach the replacement.
 A live Python preparation invalidated by restart returns `Python preparation cancelled by restart`; active-generation sideband failures retain their transport diagnostics.
 Without a waiting `send`, the explicit restart response preserves old-worker output, reports `[active evaluation stopped]` when it interrupts an unfinished cell, and then returns the stopped notice, `[starting new worker]`, replacement startup output, and `[idle]` in that order.
-When a `send` is waiting on the interrupted cell, it exclusively receives old-worker output through retirement followed by `[stopped by session restart request before evaluation finished]` and `[worker stopped: in-memory state lost]`; the restart response returns `[active evaluation stopped]`, its own stopped notice, `[starting new worker]`, replacement startup output, and `[idle]` without repeating that worker output.
+When a `send` is waiting on the interrupted cell, it exclusively receives old-worker output through retirement followed by `[stopped by session restart request before evaluation finished]` and `[worker stopped: in-memory state lost]`.
+The server writes that `send` reply before starting the replacement or returning the restart response, which contains `[active evaluation stopped]`, its own stopped notice, `[starting new worker]`, replacement startup output, and `[idle]` without repeating the old-worker output.
 Named sessions and runtime R requirement additions do not exist yet.
 On macOS, managed-Python preflight happens during `serve` startup when required; the first nonempty stdin submission or evaluation still lazily starts the built-in worker under the same sandbox policy as the `sandbox` command.
 The worker embeds R through `libr` and `harp`, retains global state, and feeds each complete R cell through R's DLL REPL iterator.
@@ -222,6 +223,7 @@ See `design-sketches/README.md` for the product overview and `design-sketches/do
 - `src/r_graphics.c` — C-owned forwarding boundary for managed graphics-device callbacks that may long-jump.
 - `src/r_graphics.rs` — cell-scoped managed R graphics device and PNG image publication.
 - `src/server.rs` — MCP stdio server, `send` tool, and worker selection.
+- `src/server_transport.rs` — stdio response delivery and interrupted-restart ordering.
 - `src/sql.rs` — persistent DuckDB/DBI SQL bridge and bounded streaming Arrow previews.
 - `src/transcript.rs` — append-only MCP tool journal and image artifact persistence.
 - `src/r_repl.c` — C-owned per-cell DLL-REPL iterator and long-jump boundary.
