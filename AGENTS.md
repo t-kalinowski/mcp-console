@@ -28,7 +28,8 @@ Tool records preserve timestamps, MCP request IDs, normalized parsed call parame
 `tool_result` records server assembly, not delivery; cancellation or disconnection may suppress the response.
 Image blocks remain in MCP results and are also decoded byte-for-byte under the run's `artifacts/` directory as soon as the worker publishes them, including when the evaluation is never polled again; the journal replaces their base64 data with relative paths.
 Journal writes are flushed before a tool begins and after its result is assembled.
-The first `send` or `session` call fails before execution when its run record cannot be created, and any later recording failure makes the journal terminal and rejects subsequent console calls.
+If the run record cannot be created or a later recording write fails, the server disables recording, emits one diagnostic to standard error, and continues serving console calls.
+An existing journal may therefore end with the last successfully flushed event.
 Submitted source, stdin, and tool-result output are recorded without redaction.
 Generated Quarto transcripts and complete output spools do not exist yet.
 Supplying exactly one of `r`, `python`, or `sql` starts one complete cell and waits for up to `timeout_ms`, which defaults to 60 seconds.

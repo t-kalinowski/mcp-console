@@ -123,31 +123,22 @@ def test_materializes_records_only_for_console_use(binary: Path) -> Transcript:
         return transcript
 
 
-def test_rejects_console_use_when_record_cannot_be_created(
+def test_continues_without_record_when_record_cannot_be_created(
     binary: Path,
 ) -> Transcript:
+    zod = Path(__file__).resolve().parents[1] / "fixtures" / "zod"
     with tempfile.TemporaryDirectory() as temporary_directory:
         workspace = Path(temporary_directory)
         (workspace / ".mcp-console").write_text("occupied", encoding="utf-8")
         client = McpClient(
             binary,
-            ("serve", "--worker", str(workspace / "must-not-start")),
+            ("serve", "--worker", str(zod)),
             current_directory=workspace,
         )
         client._initialize_and_list_tools()
 
-        client._request("tools/call", name="send", arguments={"r": "echo"})
-        first_error = client.transcript[-1]["error"]
-        assert first_error["code"] == -32603, first_error
-        assert "failed to create" in first_error["message"], first_error
-        assert ".mcp-console/sessions" in first_error["message"], first_error
-        first_error["message"] = "<run record creation failed>"
-
-        client._request("tools/call", name="session", arguments={"action": "restart"})
-        second_error = client.transcript[-1]["error"]
-        assert second_error["code"] == -32603, second_error
-        assert "transcript is unavailable" in second_error["message"], second_error
-        second_error["message"] = "<transcript unavailable after recording failure>"
+        client.send(r="echo")
+        client.session(action="restart")
 
         client._request("tools/call", name="missing", arguments={})
         assert client.transcript[-1]["error"] == {
@@ -155,7 +146,21 @@ def test_rejects_console_use_when_record_cannot_be_created(
             "message": "tool not found",
         }, client.transcript[-1]
         assert (workspace / ".mcp-console").read_text(encoding="utf-8") == "occupied"
-        return client._finish()
+        transcript, standard_error = client._finish_with_standard_error()
+        assert standard_error.count("\n") == 1, standard_error
+        assert standard_error.startswith(
+            "mcp-console: transcript recording disabled: failed to create "
+        ), standard_error
+        assert ".mcp-console/sessions" in standard_error, standard_error
+        transcript.append(
+            {
+                "server stderr": (
+                    "mcp-console: transcript recording disabled: "
+                    "<run record creation failed>"
+                )
+            }
+        )
+        return transcript
 
 
 def test_records_tool_calls_and_images(binary: Path) -> TranscriptWithCompanion:
@@ -315,7 +320,7 @@ def test_records_tool_calls_and_images(binary: Path) -> TranscriptWithCompanion:
         )
 
 
-def test_stops_after_transcript_failure(binary: Path) -> Transcript:
+def test_disables_recording_after_transcript_failure(binary: Path) -> Transcript:
     zod = Path(__file__).resolve().parents[1] / "fixtures" / "zod"
     with tempfile.TemporaryDirectory() as temporary_directory:
         workspace = Path(temporary_directory)
@@ -331,15 +336,16 @@ def test_stops_after_transcript_failure(binary: Path) -> Transcript:
         artifacts.rmdir()
         artifacts.write_text("not a directory", encoding="utf-8")
 
-        client._request(
-            "tools/call",
-            name="send",
-            arguments={"r": "emit image"},
-        )
-        first_error = client.transcript[-1]["error"]
-        assert first_error["code"] == -32603, first_error
-        assert "transcript recording failed" in first_error["message"], first_error
-        assert "failed to create" in first_error["message"], first_error
+        client.send(r="emit image")
+        image_result = client.transcript[-1]["result"]
+        assert image_result == {
+            "content": [
+                {"type": "text", "text": "before image\n"},
+                {"type": "image", "data": PNG_1X1, "mimeType": "image/png"},
+                {"type": "text", "text": "after image\n"},
+            ],
+            "isError": False,
+        }, image_result
 
         journal = session / "internal" / "events.jsonl"
         journal_after_failure = journal.read_text(encoding="utf-8")
@@ -352,24 +358,24 @@ def test_stops_after_transcript_failure(binary: Path) -> Transcript:
         ], events
         assert journal_after_failure.endswith("\n"), journal_after_failure
 
-        client._request(
-            "tools/call",
-            name="send",
-            arguments={"r": "echo"},
-        )
-        second_error = client.transcript[-1]["error"]
-        assert second_error["code"] == -32603, second_error
-        assert "transcript is unavailable" in second_error["message"], second_error
+        client.send(r="echo")
         assert journal.read_text(encoding="utf-8") == journal_after_failure
 
-        first_error["message"] = "<artifact persistence failed>"
-        second_error["message"] = "<transcript unavailable after recording failure>"
-        transcript = client._finish()
+        transcript, standard_error = client._finish_with_standard_error()
+        assert standard_error.count("\n") == 1, standard_error
+        assert standard_error.startswith(
+            "mcp-console: transcript recording disabled: failed to create "
+        ), standard_error
+        assert "/artifacts/" in standard_error, standard_error
         transcript.append(
             {
                 "journal after failure": [event["event"] for event in events],
                 "complete final line": True,
                 "post-failure append": False,
+                "server stderr": (
+                    "mcp-console: transcript recording disabled: "
+                    "<artifact persistence failed>"
+                ),
             }
         )
         return transcript

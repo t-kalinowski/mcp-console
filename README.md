@@ -29,7 +29,8 @@ It appends `session_started`, `tool_call`, `artifact_created`, and `tool_result`
 Image bytes are decoded and flushed under `artifacts/` as soon as the worker publishes them, including images from an evaluation that is never polled again.
 The JSONL result refers to each image's relative artifact path while the MCP response remains unchanged.
 The result record captures server assembly, not delivery; cancellation or disconnection may suppress the response.
-Recording is mandatory for console use: if the run record cannot be created, the first `send` or `session` call is rejected before execution; a later recording failure rejects subsequent console calls rather than append after a potentially partial record.
+Recording is optional: if the run record cannot be created or a later write fails, MCP Console disables recording for that server process, emits one diagnostic to standard error, and continues serving console calls.
+An existing journal may therefore end with the last successfully flushed event.
 Submitted source, stdin, and tool-result output are recorded without redaction.
 Complete evaluation-output spools and the generated Quarto projection described in the design sketches are not yet implemented.
 Supplying exactly one of `r`, `python`, or `sql` evaluates one complete code cell and waits up to the optional `timeout_ms`, which defaults to 60 seconds.
