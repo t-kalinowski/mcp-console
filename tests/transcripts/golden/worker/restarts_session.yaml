@@ -10,7 +10,7 @@ server:
     cat("before restart\n")
 ---
 worker:
-  kind: output
+  kind: console_output
   data: |
     before restart
 ---
@@ -37,7 +37,7 @@ server:
     cat("after restart\n")
 ---
 worker:
-  kind: output
+  kind: console_output
   data: |
     after restart
 ---

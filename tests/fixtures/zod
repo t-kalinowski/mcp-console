@@ -6,9 +6,9 @@
 import json
 import os
 import time
+from enum import StrEnum
 from pathlib import Path
 from typing import Any, TextIO
-
 
 READ_FD_ENV = "MCP_CONSOLE_SIDEBAND_READ_FD"
 WRITE_FD_ENV = "MCP_CONSOLE_SIDEBAND_WRITE_FD"
@@ -17,6 +17,11 @@ PNG_1X1 = (
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42Y"
     "AAAAASUVORK5CYII="
 )
+
+
+class ConsoleKind(StrEnum):
+    OUTPUT = "console_output"
+    DIAGNOSTIC = "console_diagnostic"
 
 
 def open_sideband(name: str, mode: str) -> TextIO:
@@ -28,6 +33,20 @@ def open_sideband(name: str, mode: str) -> TextIO:
 def send(stream: TextIO, message: dict[str, Any]) -> None:
     stream.write(json.dumps(message, separators=(",", ":")) + "\n")
     stream.flush()
+
+
+def send_output(
+    stream: TextIO,
+    data: str,
+    kind: ConsoleKind = ConsoleKind.OUTPUT,
+) -> None:
+    send(
+        stream,
+        {
+            "kind": kind,
+            "data": data,
+        },
+    )
 
 
 def write_all(descriptor: int, data: bytes) -> None:
@@ -53,7 +72,7 @@ def emit_background_stderr(root: Path) -> None:
 def wait_for_server_to_process_sideband(stream: TextIO) -> None:
     """Block until the server has processed the preceding sideband frames."""
     frame = json.dumps(
-        {"kind": "output", "data": ""},
+        {"kind": ConsoleKind.OUTPUT, "data": ""},
         separators=(",", ":"),
     )
     # Flushing a frame only proves that it entered the kernel pipe.
@@ -119,7 +138,7 @@ def main() -> None:
         if language in {"python", "sql"}:
             assert source == "echo"
             for output in (f"zod {language}: ", f"{source}\n"):
-                send(writer, {"kind": "output", "data": output})
+                send_output(writer, output)
             send(writer, {"kind": "completed"})
             continue
 
@@ -130,13 +149,7 @@ def main() -> None:
                 time.sleep(60)
 
         if source == "violate protocol":
-            send(
-                writer,
-                {
-                    "kind": "output",
-                    "data": "zod output before protocol failure",
-                },
-            )
+            send_output(writer, "zod output before protocol failure")
             send(writer, {"kind": "ready"})
             continue
 
@@ -194,13 +207,7 @@ def main() -> None:
             send(writer, {"kind": "input_requested", "prompt": "zod> "})
             stdin = input()
             send(writer, {"kind": "input_received"})
-            send(
-                writer,
-                {
-                    "kind": "output",
-                    "data": f"zod stdin: {stdin}\n",
-                },
-            )
+            send_output(writer, f"zod stdin: {stdin}\n")
             send(writer, {"kind": "completed"})
             continue
 
@@ -217,13 +224,13 @@ def main() -> None:
             waiting.touch()
             while not (temporary / "zod-release-input-request").exists():
                 time.sleep(0.01)
-            send(writer, {"kind": "output", "data": "before"})
+            send_output(writer, "before")
             send(writer, {"kind": "input_requested", "prompt": "late> "})
-            send(writer, {"kind": "output", "data": "during"})
-            send(writer, {"kind": "output", "data": " request\n"})
+            send_output(writer, "during")
+            send_output(writer, " request\n")
             stdin = input()
             send(writer, {"kind": "input_received"})
-            send(writer, {"kind": "output", "data": f"zod stdin: {stdin}\n"})
+            send_output(writer, f"zod stdin: {stdin}\n")
             # Prove that the receipt has cleared the provisional request before
             # the client polls, so the fixed grace cannot add another boundary.
             wait_for_server_to_process_sideband(writer)
@@ -236,13 +243,7 @@ def main() -> None:
             send(writer, {"kind": "input_requested", "prompt": "second> "})
             second = input()
             send(writer, {"kind": "input_received"})
-            send(
-                writer,
-                {
-                    "kind": "output",
-                    "data": f"zod stdin: {first}|{second}\n",
-                },
-            )
+            send_output(writer, f"zod stdin: {first}|{second}\n")
             send(writer, {"kind": "completed"})
             continue
 
@@ -253,7 +254,7 @@ def main() -> None:
                 if source == "input without request"
                 else f"zod stdin length: {len(stdin.encode())}\n"
             )
-            send(writer, {"kind": "output", "data": output})
+            send_output(writer, output)
             send(writer, {"kind": "completed"})
             continue
 
@@ -267,7 +268,7 @@ def main() -> None:
                 output = "sandbox blocked host write\n"
             else:
                 output = "worker escaped sandbox\n"
-            send(writer, {"kind": "output", "data": output})
+            send_output(writer, output)
             send(writer, {"kind": "completed"})
             continue
 
@@ -275,8 +276,14 @@ def main() -> None:
             send(writer, {"kind": "completed"})
             continue
 
+        if source == "emit console kinds":
+            send_output(writer, "zod output\n")
+            send_output(writer, "zod diagnostic\n", ConsoleKind.DIAGNOSTIC)
+            send(writer, {"kind": "completed"})
+            continue
+
         if source == "emit image":
-            send(writer, {"kind": "output", "data": "before image\n"})
+            send_output(writer, "before image\n")
             send(
                 writer,
                 {
@@ -285,7 +292,7 @@ def main() -> None:
                     "mime_type": "image/png",
                 },
             )
-            send(writer, {"kind": "output", "data": "after image\n"})
+            send_output(writer, "after image\n")
             send(writer, {"kind": "completed"})
             continue
 
@@ -297,7 +304,7 @@ def main() -> None:
             while not (temporary / "zod-release-image").exists():
                 time.sleep(0.01)
             if source == "emit output and image before completion":
-                send(writer, {"kind": "output", "data": "before pending image\n"})
+                send_output(writer, "before pending image\n")
             send(
                 writer,
                 {
@@ -307,7 +314,7 @@ def main() -> None:
                 },
             )
             if source == "emit output and image before completion":
-                send(writer, {"kind": "output", "data": "after pending image\n"})
+                send_output(writer, "after pending image\n")
             wait_for_server_to_process_sideband(writer)
             (temporary / "zod-image-processed").touch()
             while not (temporary / "zod-release-image-completion").exists():
@@ -325,13 +332,7 @@ def main() -> None:
             raise AssertionError(f"unsupported Zod command: {source}")
 
         for output in ("zod: ", f"{source}\n"):
-            send(
-                writer,
-                {
-                    "kind": "output",
-                    "data": output,
-                },
-            )
+            send_output(writer, output)
         send(writer, {"kind": "completed"})
 
 

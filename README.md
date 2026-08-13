@@ -257,7 +257,7 @@ Standard-stream bytes remain undecoded until a response drains them, so incomple
 Ordering among standard output, standard error, and sideband console or image output is best effort.
 R language failures, uncaught Python exceptions, and DuckDB errors remain ordinary console results rather than MCP tool errors.
 Server-owned timeline, state, and admission facts are bracketed; worker console text remains unchanged.
-A silent successful R, Python, or SQL cell sends no sideband `output` frame, still sends `completed`, and projects to `[done]` when no other response text is pending.
+A silent successful R, Python, or SQL cell sends no sideband console-text frame, still sends `completed`, and projects to `[done]` when no other response text is pending.
 
 Python cells require the `reticulate` R package.
 Matplotlib figure capture requires the Python `matplotlib` package; prepare it before use when it is not already available.

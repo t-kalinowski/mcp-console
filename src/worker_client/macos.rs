@@ -138,7 +138,7 @@ impl WorkerRuntime {
         };
         let error = match ready {
             WorkerMessage::Ready => None,
-            WorkerMessage::Output { data } => {
+            WorkerMessage::ConsoleOutput { data } | WorkerMessage::ConsoleDiagnostic { data } => {
                 Some(format!("worker emitted output before readiness: {data}"))
             }
             WorkerMessage::Image { .. } => {
@@ -213,7 +213,12 @@ impl Worker {
 
         loop {
             match self.receive()? {
-                WorkerMessage::Output { data } => evaluation.output(data)?,
+                WorkerMessage::ConsoleOutput { data } => {
+                    evaluation.output(crate::worker_protocol::ConsoleChannel::Output, data)?;
+                }
+                WorkerMessage::ConsoleDiagnostic { data } => {
+                    evaluation.output(crate::worker_protocol::ConsoleChannel::Diagnostic, data)?;
+                }
                 WorkerMessage::Image { data, mime_type } => {
                     evaluation.image(data, mime_type)?;
                 }

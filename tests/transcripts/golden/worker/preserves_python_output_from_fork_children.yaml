@@ -40,15 +40,15 @@ stderr: |
   fork child stderr
 ---
 worker:
-  kind: output
+  kind: console_output
   data: parent stdout
 ---
 worker:
-  kind: output
+  kind: console_output
   data: "\n"
 ---
 worker:
-  kind: output
+  kind: console_diagnostic
   data: |
     parent stderr
 ---
