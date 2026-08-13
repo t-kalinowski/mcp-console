@@ -17,7 +17,8 @@ def test_initializes_and_lists_tools(binary: Path) -> Transcript:
         "Use it whenever exact computation or direct inspection would improve accuracy",
         "arithmetic, string counting, parsing",
         "Choose the clearest language for each step",
-        "The built-in R environment includes tidyverse and reticulate",
+        "The default R environment includes tidyverse, reticulate, DBI, and duckdb",
+        "their full dependency sets",
         "The built-in managed Python environment includes NumPy and pandas",
         "Language-native help and introspection are available",
         "`r.name`",
@@ -34,15 +35,18 @@ def test_initializes_and_lists_tools(binary: Path) -> Transcript:
     assert (
         "Default-device plots" in send["inputSchema"]["properties"]["r"]["description"]
     )
-    r_description = send["inputSchema"]["properties"]["r"]["description"]
+    r_description = " ".join(
+        send["inputSchema"]["properties"]["r"]["description"].split()
+    )
     for guidance in (
-        "packages are not attached automatically",
-        "`ggplot2::ggplot()`",
-        "`dplyr::mutate()`",
-        "`readr::read_csv()`",
-        "`jsonlite::fromJSON()`",
+        "tidyverse, reticulate, DBI, duckdb, and their full dependency sets",
+        "Packages are not attached automatically",
     ):
         assert guidance in r_description, guidance
+    assert "ggplot2::" not in r_description
+    assert "dplyr::" not in r_description
+    assert "readr::" not in r_description
+    assert "jsonlite::" not in r_description
     assert (
         "`matplotlib.pyplot`"
         in send["inputSchema"]["properties"]["python"]["description"]

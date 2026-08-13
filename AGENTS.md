@@ -48,9 +48,9 @@ Worker `image` frames carry base64 data and a MIME type.
 The server preserves sideband text and image order as MCP content blocks, coalesces adjacent text, and does not add `[done]` when an image is the only output.
 The implemented `session` surface accepts `action = "prepare"` with one or more R or Python requirement strings or `action = "restart"` with optional Python requirement strings for the implicit session.
 Requirements are exact, additive, and idempotent.
-On macOS, plain built-in `serve` resolves the retained default R requirements `tidyverse` and `github::rstudio/reticulate` through IR before accepting MCP input.
+On macOS, plain built-in `serve` resolves the retained default R requirements `tidyverse`, `github::rstudio/reticulate`, `DBI`, and `duckdb` through IR before accepting MCP input.
 The GitHub reticulate requirement supplies the fork-aware output restoration required by the worker; host R must also provide reticulate to bootstrap managed Python before the worker library is applied.
-The resulting library is retained across worker generations; tidyverse packages and reticulate are available but are not attached automatically.
+The resulting library is retained across worker generations; tidyverse packages, reticulate, DBI, duckdb, and their dependency sets are available but are not attached automatically.
 Before the worker starts, each successful prepare resolves the complete candidate sets outside the sandbox, atomically retains them in server memory, and returns `[prepared]` without starting the worker.
 Before each R resolution, the server requires `ir --version` from `PATH` to report 0.4.0 or later; it then uses `ir run` with the worker's Rscript, and the result becomes the first worker `R_LIBS` entry.
 Python requirements use reticulate and uv and replace any inherited Python selection with the resolved interpreter.

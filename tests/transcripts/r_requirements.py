@@ -119,6 +119,10 @@ def test_rejects_local_r_installation(binary: Path) -> Transcript:
         assert "IR_NO_LOCAL_SOURCES is set" in error, error
         assert "mcpconsolerinstallescape" in error, error
         assert "Use a remote package source" in error, error
+        diagnostic = "Error: IR_NO_LOCAL_SOURCES is set"
+        _, separator, error = error.partition(diagnostic)
+        assert separator, error
+        error = f"R package resolution failed with exit status: 1: {diagnostic}{error}"
         client.transcript[-1]["session"]["requirements"]["r"] = [
             reference.replace(str(package), "<absolute package path>")
         ]
@@ -179,6 +183,8 @@ def test_evaluates_with_default_managed_r(binary: Path) -> Transcript:
             stopifnot(
               identical(dirname(find.package("tidyverse")), .libPaths()[[1L]]),
               identical(dirname(find.package("reticulate")), .libPaths()[[1L]]),
+              identical(dirname(find.package("DBI")), .libPaths()[[1L]]),
+              identical(dirname(find.package("duckdb")), .libPaths()[[1L]]),
               identical(packageDescription("reticulate")$RemoteType, "github"),
               nzchar(packageDescription("reticulate")$RemoteSha),
               vapply(
@@ -195,6 +201,8 @@ def test_evaluates_with_default_managed_r(binary: Path) -> Transcript:
             """)
         client.send(r=r)
         assert last_tool_text(client) == "[1] 42\n", client.transcript[-1]
+        client.session(action="prepare", requirements={"r": ["DBI", "duckdb"]})
+        assert last_tool_text(client) == "[prepared]", client.transcript[-1]
         return client._finish()
 
 

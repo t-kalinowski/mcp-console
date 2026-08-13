@@ -51,7 +51,7 @@ An immediate `input_received` receipt retains the request record but suppresses 
 That receipt describes the runtime read, not a particular stdin payload; direct fd-0 reads emit no request or receipt.
 Payload end is not EOF, and queued input is not an acknowledgment of consumption.
 Unread bytes may be completed by later stdin or satisfy a later worker read or evaluation.
-On macOS, the built-in server resolves a default R library containing tidyverse and `github::rstudio/reticulate` before it accepts MCP input.
+On macOS, the built-in server resolves a default R library containing tidyverse, `github::rstudio/reticulate`, DBI, and duckdb before it accepts MCP input.
 The GitHub reticulate requirement supplies the fork-aware output handling required by the worker; the host R installation must also provide reticulate to bootstrap managed Python before the worker library is applied.
 When Python is managed, its default environment contains NumPy and pandas.
 Packages are available but are not attached or imported automatically.
@@ -261,10 +261,10 @@ A silent successful R, Python, or SQL cell sends no sideband `output` frame, sti
 
 Python cells require the `reticulate` R package.
 Matplotlib figure capture requires the Python `matplotlib` package; prepare it before use when it is not already available.
-SQL cells require the `arrow`, `DBI`, `duckdb`, `nanoarrow`, `pillar`, and `tibble` R packages.
-Lazy dplyr relations created from `sql_connection()` additionally require `dplyr` and `dbplyr`.
-MCP Console installs tidyverse and GitHub reticulate into its default IR library, but the host R installation still needs reticulate for managed-Python preflight.
-It does not automatically install the remaining SQL runtime dependencies.
+SQL cells use the default DBI and duckdb packages; previews additionally require the `arrow` and `nanoarrow` R packages.
+Tidyverse supplies pillar, tibble, and dplyr; lazy dplyr relations created from `sql_connection()` additionally require `dbplyr`.
+MCP Console installs tidyverse, GitHub reticulate, DBI, and duckdb into its default IR library, but the host R installation still needs reticulate for managed-Python preflight.
+It does not automatically install arrow, nanoarrow, or dbplyr.
 Default and explicit R resolution runs `ir run` outside the sandbox with the requested package references as command arguments and a constant expression that prints the resolved library path.
 IR may access the network, write its normal host caches, and execute package installation code.
 If IR is absent, too old, or cannot resolve the default library, built-in `serve` exits before accepting MCP requests.
