@@ -19,7 +19,6 @@ from _support import (
     run_this_suite,
 )
 
-
 PLATFORMS = {"darwin"}
 LARGE_OUTPUT_SIZE = 2 * 1024 * 1024
 PNG_1X1 = (
@@ -38,6 +37,26 @@ def test_routes_send_over_sideband(binary: Path) -> Transcript:
     client.send(r="echo")
     client.send(python="echo")
     client.send(sql="echo")
+    return client._finish()
+
+
+def test_projects_console_kinds(binary: Path) -> Transcript:
+    zod = Path(__file__).resolve().parents[1] / "fixtures" / "zod"
+    client = McpClient(
+        binary,
+        ("serve", "--worker", str(zod)),
+    )
+    client._initialize_and_list_tools()
+    result = client.send(r="emit console kinds")
+    assert result == {
+        "content": [
+            {
+                "type": "text",
+                "text": "zod output\nzod diagnostic\n",
+            }
+        ],
+        "isError": False,
+    }, result
     return client._finish()
 
 

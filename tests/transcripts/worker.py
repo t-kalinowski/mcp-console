@@ -245,6 +245,23 @@ def test_routes_python_output(binary: Path) -> Transcript:
     return client._finish()
 
 
+def test_routes_r_console_channels(binary: Path) -> Transcript:
+    client = WorkerWireClient(binary)
+    # fmt: r
+    r = code(r"""
+        cat("R output\n")
+        message("R diagnostic")
+        utils::file.edit(
+          c("/dev/null", "/dev/null"),
+          editor = Sys.which("true")
+        )
+        """)
+    assert _tool_text(client.send(r=r)) == (
+        "R output\nR diagnostic\nWARNING: Only editing the first in the list of files\n"
+    )
+    return client._finish()
+
+
 def test_preserves_python_output_from_fork_children(binary: Path) -> Transcript:
     client = WorkerWireClient(binary)
     # fmt: r

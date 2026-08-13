@@ -25,35 +25,35 @@ server:
     raise ValueError("boom")
 ---
 worker:
-  kind: output
+  kind: console_output
   data: Python stdout
 ---
 worker:
-  kind: output
+  kind: console_output
   data: "\n"
 ---
 worker:
-  kind: output
+  kind: console_diagnostic
   data: |
     Python stderr
 ---
 worker:
-  kind: output
+  kind: console_diagnostic
   data: |
     Traceback (most recent call last):
 ---
 worker:
-  kind: output
+  kind: console_diagnostic
   data: |2
       File "<string>", line 83, in _mcp_console_eval_cell
 ---
 worker:
-  kind: output
+  kind: console_diagnostic
   data: |2
       File "<mcp-console:python:e1>", line 6, in <module>
 ---
 worker:
-  kind: output
+  kind: console_diagnostic
   data: |
     ValueError: boom
 ---
