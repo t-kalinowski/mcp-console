@@ -141,7 +141,7 @@ def test_prepares_and_uses_cran_packages(binary: Path) -> Transcript:
         action="prepare",
         requirements={"r": ["praise, zeallot"]},
     )
-    assert last_tool_text(client) == "[prepared]"
+    assert last_tool_text(client) == "[prepared]", client.transcript[-1]
 
     # fmt: r
     r = code(r"""
