@@ -50,6 +50,8 @@ base::local({
     name = "tools:mcp-console",
     warn.conflicts = FALSE
   )
+  # Match reticulate's getter-only `py` binding. Attribute assignment such as
+  # `py$name <- value` already writes through the returned Python module proxy.
   base::makeActiveBinding("py", function() reticulate::py, tools)
   base::assign("sql_connection", sql_connection, envir = tools)
 

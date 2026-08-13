@@ -137,11 +137,24 @@ result:
 ---
 id: 14
 send:
-  r: rm(list = ls()); py$answer
+  r: |
+    rm(list = ls())
+    py$assigned_from_r <- 43L
+    py$answer
 result:
   content:
     - type: text
       text: |
         [1] 41
+  isError: false
+---
+id: 15
+send:
+  python: assigned_from_r
+result:
+  content:
+    - type: text
+      text: |
+        43
   isError: false
 ...

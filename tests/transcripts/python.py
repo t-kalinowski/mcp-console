@@ -817,8 +817,16 @@ def test_evaluates_cells_in_persistent_reticulate_state(binary: Path) -> Transcr
     assert last_tool_text(client) == "42\n"
     client.send(python="silent = True")
     assert last_tool_text(client) == "[done]"
-    client.send(r="rm(list = ls()); py$answer")
+    # fmt: r
+    r = code(r"""
+        rm(list = ls())
+        py$assigned_from_r <- 43L
+        py$answer
+        """)
+    client.send(r=r)
     assert last_tool_text(client) == "[1] 41\n"
+    client.send(python="assigned_from_r")
+    assert last_tool_text(client) == "43\n"
     return client._finish()
 
 
