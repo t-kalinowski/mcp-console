@@ -369,14 +369,19 @@ impl Client {
         generation: WorkerGeneration,
     ) {
         let resolver = self.clone();
+        let version_resolver = self.clone();
         let checkpointer = self.clone();
         let resolver_generation = generation.clone();
+        let version_generation = generation.clone();
         let checkpoint_generation = generation.clone();
         let result = self.evaluate_with_worker(
             cell,
             evaluation,
             generation,
             move |request| resolver.resolve_runtime_python(resolver_generation.clone(), request),
+            move |request| {
+                version_resolver.resolve_runtime_python_version(version_generation.clone(), request)
+            },
             move |checkpoint, candidates| {
                 checkpointer.checkpoint_runtime_python(
                     checkpoint_generation.clone(),
@@ -398,6 +403,9 @@ impl Client {
         resolve_python: impl FnMut(
             crate::worker_protocol::PythonResolveRequest,
         ) -> Result<crate::resolver::ManagedPython, String>,
+        resolve_python_version: impl FnMut(
+            crate::worker_protocol::PythonVersionResolveRequest,
+        ) -> Result<String, String>,
         checkpoint_python: impl FnMut(
             Option<crate::worker_protocol::PythonRequirementManifest>,
             Vec<crate::resolver::ManagedPython>,
@@ -427,7 +435,13 @@ impl Client {
             unreachable!("worker should be running");
         };
         let result = running
-            .evaluate(cell, evaluation, resolve_python, checkpoint_python)
+            .evaluate(
+                cell,
+                evaluation,
+                resolve_python,
+                resolve_python_version,
+                checkpoint_python,
+            )
             .map_err(|message| evaluation.classify_failure(message));
         let failure = match result {
             Ok(()) => {

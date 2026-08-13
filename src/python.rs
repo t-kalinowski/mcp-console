@@ -35,10 +35,23 @@ base::local({
     ])
   }
 
-  request_json <- function(requirements) {
+  request_json <- function(requirements, retained_requirements) {
     jsonlite::toJSON(
       list(
         requirements = requirements,
+        retained_requirements = retained_requirements,
+        environment = uv_environment()
+      ),
+      auto_unbox = TRUE,
+      null = "null",
+      na = "null"
+    )
+  }
+
+  version_request_json <- function(constraints) {
+    jsonlite::toJSON(
+      list(
+        constraints = I(as.character(constraints %||% character())),
         environment = uv_environment()
       ),
       auto_unbox = TRUE,
@@ -49,18 +62,32 @@ base::local({
 
   install_managed_python <- function(...) {
     namespace <- asNamespace("reticulate")
-    current_requirement <- function(name) {
-      get("py_reqs_get", envir = namespace)(name)
+    current_requirements <- function() {
+      get("py_reqs_get", envir = namespace)()
     }
     resolve <- function(
-      packages = current_requirement("packages"),
-      python_version = current_requirement("python_version"),
-      exclude_newer = current_requirement("exclude_newer")
+      packages = current_requirements()$packages,
+      python_version = get("py_reqs_python_version", envir = namespace)(),
+      exclude_newer = current_requirements()$exclude_newer
     ) {
+      current <- current_requirements()
       requirements <- manifest(packages, python_version, exclude_newer)
+      retained_requirements <- manifest(
+        packages,
+        current$python_version,
+        exclude_newer
+      )
       .Call(
         "mcp_console_resolve_python",
-        request_json(requirements)
+        request_json(requirements, retained_requirements)
+      )
+    }
+    resolve_version <- function(constraints = NULL, uv = NULL) {
+      # The host resolver owns the executable; worker code supplies only
+      # version constraints and supported UV settings.
+      .Call(
+        "mcp_console_resolve_python_version",
+        version_request_json(constraints)
       )
     }
 
@@ -90,6 +117,7 @@ base::local({
         packages = packages,
         python_version = python_version,
         exclude_newer = seed$exclude_newer,
+        exclude_newer_supplied = !is.null(seed$exclude_newer),
         action = "set"
       )))
       globals$python_requirements <- requirements
@@ -108,6 +136,7 @@ base::local({
       invisible()
     }
     replace_binding("uv_get_or_create_env", resolve)
+    replace_binding("resolve_python_version", resolve_version)
     invisible()
   }
 
@@ -470,6 +499,18 @@ def _mcp_console_eval_cell(
         let python =
             crate::worker::resolve_python(request).map_err(|error| harp::anyhow!("{error}"))?;
         Ok(harp::object::RObject::from(python).sexp)
+    }
+
+    #[allow(clippy::result_large_err)]
+    #[harp::register]
+    pub extern "C-unwind" fn mcp_console_resolve_python_version(
+        request: SEXP,
+    ) -> harp::Result<SEXP> {
+        let request = String::try_from(harp::object::RObject::view(request))?;
+        let request = serde_json::from_str(&request).map_err(|error| harp::anyhow!("{error}"))?;
+        let version = crate::worker::resolve_python_version(request)
+            .map_err(|error| harp::anyhow!("{error}"))?;
+        Ok(harp::object::RObject::from(version).sexp)
     }
 }
 

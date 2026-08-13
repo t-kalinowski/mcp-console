@@ -1,0 +1,36 @@
+---
+!same-as tests/transcripts/golden/server/initializes_and_lists_tools.yaml
+---
+id: 3
+send:
+  r: |
+    worker_pid <- Sys.getpid()
+    base::local({
+      old_cache <- Sys.getenv("UV_CACHE_DIR", unset = NA_character_)
+      on.exit(
+        if (is.na(old_cache)) {
+          Sys.unsetenv("UV_CACHE_DIR")
+        } else {
+          Sys.setenv(UV_CACHE_DIR = old_cache)
+        }
+      )
+      Sys.setenv(UV_CACHE_DIR = "/dev/null")
+      print(reticulate::py_require())
+    })
+result:
+  content:
+    - type: text
+      text: |
+        <Python version resolution failed>
+  isError: false
+---
+id: 4
+send:
+  r: identical(Sys.getpid(), worker_pid)
+result:
+  content:
+    - type: text
+      text: |
+        [1] TRUE
+  isError: false
+...

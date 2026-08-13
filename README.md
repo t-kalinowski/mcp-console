@@ -273,12 +273,14 @@ When `RETICULATE_PYTHON` is unset or is `managed`, `mcp-console serve` runs reti
 Other configured values, including an empty value, are preserved when no Python requirements are prepared and skip the Python startup preflight; they do not skip the default R preflight.
 An explicit `session` preparation selects its resolved managed environment even when `RETICULATE_PYTHON` was configured, so a successful call guarantees that its requirements are present.
 The server retains the selected interpreter and normalized manifest and applies them to each sandboxed worker; the worker forces `UV_OFFLINE=1` and otherwise uses the existing sandbox policy unchanged.
-For a server-managed worker, MCP Console seeds reticulate's requirement manifest and replaces only its internal uv environment lookup.
+For a server-managed worker, MCP Console seeds reticulate's requirement manifest and intercepts its internal uv environment and Python-version resolution.
 It does not wrap `py_require()`, so reticulate retains its activation behavior.
 Idle explicit preparation passes structured additions through the same bridge and reports a checkpoint instead of completing a cell.
 It materializes an uninitialized manifest or activates a same-`libpython` environment while preserving live state.
 The server retains only a matching checkpoint; failure preserves the prior live and server manifests.
-Each runtime resolution uses the worker's current `UV_*` settings except `UV_OFFLINE`; those settings are not retained or replayed across worker generations.
+Each runtime environment resolution sends the physical resolver manifest and the logical manifest to retain if accepted, together with the worker's current `UV_*` settings except `UV_OFFLINE`; those settings are not retained or replayed across worker generations.
+Runtime Python-version selection sends only version constraints and the same transient settings, and creates no environment candidate.
+After Python initializes, reticulate resolves late additions against the exact active Python patch version while leaving the logical `py_require()` Python constraints unchanged.
 The requirement strings and forwarded settings are structured data rather than R code, and the resolver does not evaluate the submitted cell.
 However, evaluated R code or an R package load can request this resolution, and reticulate and uv may access the network, write normal host caches, and execute a source distribution's build backend outside the worker sandbox.
 Startup preflight has no MCP timeout and cannot be cancelled by closing MCP input because it completes before that input is accepted.

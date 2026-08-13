@@ -75,7 +75,8 @@ These boundary details apply:
   The restart response reports `[active evaluation stopped by session restart request]` and its own worker lifecycle facts without repeating that worker output.
 - Without a waiting `send`, restart returns retained old-worker output itself.
 
-The IR resolver receives R package references as process arguments and the Python resolver receives only a requirement manifest on standard input; neither receives submitted cells or `send` stdin.
+The IR resolver receives R package references as process arguments.
+The Python environment resolver receives only a requirement manifest on standard input, and the Python version resolver receives only version constraints; neither receives submitted cells or `send` stdin.
 Both may use the network, write normal host caches, and execute package installation or build code outside the sandbox; managed Python environment startup and the Matplotlib font-manager import also run there.
 `IR_NO_LOCAL_SOURCES` prevents IR from running package installation code for local sources; it may reuse a library that was already materialized.
 Runtime requests also supply the worker's current `UV_*` settings except `UV_OFFLINE`; the server removes its own `UV_*` settings before applying that exact set to the resolver.
@@ -180,6 +181,8 @@ The complete implemented message set is:
 | server → worker | `{"kind":"prepare_python","packages":["py-yaml12"]}` | Add packages through reticulate in an idle server-managed worker. |
 | server → worker | `{"kind":"python_resolved","python":"..."}` | Return the interpreter from one host resolution request. |
 | server → worker | `{"kind":"python_resolution_failed","message":"..."}` | Return the failure from one host resolution request. |
+| server → worker | `{"kind":"python_version_resolved","version":"3.12.11"}` | Return the version selected by one host version request. |
+| server → worker | `{"kind":"python_version_resolution_failed","message":"..."}` | Return the failure from one host version request. |
 | server → worker | `{"kind":"shutdown"}` | Exit without replying. |
 | worker → server | `{"kind":"ready"}` | Startup is complete. |
 | worker → server | `{"kind":"console_output","data":"..."}` | Append one ordinary console-text chunk. |
@@ -187,7 +190,8 @@ The complete implemented message set is:
 | worker → server | `{"kind":"image","data":"...","mime_type":"image/png"}` | Append one base64-encoded image. |
 | worker → server | `{"kind":"input_requested","prompt":"..."}` | Report that the runtime requested input. |
 | worker → server | `{"kind":"input_received"}` | Report that the current read succeeded. |
-| worker → server | `{"kind":"resolve_python","request":{"requirements":{"packages":["numpy","pandas"]},"environment":{}}}` | Resolve the complete proposed reticulate manifest outside the sandbox. |
+| worker → server | `{"kind":"resolve_python","request":{"requirements":{"packages":["numpy","pandas"]},"retained_requirements":{"packages":["numpy","pandas"]},"environment":{}}}` | Resolve the complete proposed reticulate manifest outside the sandbox. |
+| worker → server | `{"kind":"resolve_python_version","request":{"constraints":[],"environment":{}}}` | Select a Python version with reticulate and uv outside the sandbox. |
 | worker → server | `{"kind":"python_prepared","python_checkpoint":{"packages":["numpy","pandas","py-yaml12"]}}` | Finish explicit Python preparation and report its normalized manifest. |
 | worker → server | `{"kind":"python_preparation_failed","message":"..."}` | Report an ordinary explicit-preparation failure without discarding the worker. |
 | worker → server | `{"kind":"completed","python_checkpoint":{"packages":["numpy","pandas","py-yaml12"]}}` | Complete the evaluation and report its normalized Python manifest. |
@@ -198,6 +202,8 @@ Unknown kinds and fields are rejected in either direction.
 The server maps `console_output` and `console_diagnostic` to distinct internal console channels.
 The `language` value is `r`, `python`, or `sql`.
 Python manifests contain `packages` and may contain `python_version` and `exclude_newer`; empty optional fields are omitted.
+For `resolve_python`, `requirements` is the physical manifest submitted to the host resolver and `retained_requirements` is the logical manifest that a successful activation will retain and checkpoint.
+Their packages and `exclude_newer` must match; only `python_version` may differ when reticulate resolves a late addition against the exact active Python patch version while preserving the user's logical constraint.
 The `environment` object may contain only `UV_*` settings other than `UV_OFFLINE`.
 The optional `python_checkpoint` is the complete normalized manifest, not reticulate's request history.
 Custom workers, caller-configured Python workers, and server-managed workers that never load reticulate omit it.
@@ -233,7 +239,7 @@ An explicit live Python preparation has this shape:
 
 ```text
 server -> worker  {"kind":"prepare_python","packages":["py-yaml12"]}
-worker -> server  {"kind":"resolve_python","request":{"requirements":{"packages":["numpy","pandas","py-yaml12"]},"environment":{}}}
+worker -> server  {"kind":"resolve_python","request":{"requirements":{"packages":["numpy","pandas","py-yaml12"]},"retained_requirements":{"packages":["numpy","pandas","py-yaml12"]},"environment":{}}}
 server -> worker  {"kind":"python_resolved","python":"..."}
 worker -> server  {"kind":"python_prepared","python_checkpoint":{"packages":["numpy","pandas","py-yaml12"]}}
 ```
@@ -244,7 +250,8 @@ Resolver replies remain candidates until `python_prepared` commits a matching ch
 `python_preparation_failed` restores the live manifest, discards candidates, and leaves the worker usable.
 
 A server-managed worker may send `resolve_python` during an evaluation when reticulate invokes its internal `uv_get_or_create_env` binding.
-The request contains the complete proposed manifest, not a history delta.
+The request contains both the complete physical resolver manifest and the complete logical retained manifest, not a history delta.
+Their packages and `exclude_newer` must match, while the physical manifest may select the exact active Python patch version without replacing the logical constraint that will be checkpointed.
 The server performs the resolution while the worker waits and replies with exactly one `python_resolved` or `python_resolution_failed` frame on the same sideband.
 No request ID is needed because the worker can have only one such synchronous request in flight.
 Every successful reply remains a candidate until the evaluation completes.
@@ -256,10 +263,16 @@ Any other checkpoint is a protocol failure, and unmatched candidates are discard
 Normal R, Python, and SQL language outcomes reach this checkpoint because their side effects remain live in the worker.
 An infrastructure or protocol failure before `completed` leaves the prior server checkpoint unchanged.
 
+A server-managed worker may send `resolve_python_version` during an evaluation when reticulate invokes its internal `resolve_python_version` binding.
+The request contains only version constraints and the current `UV_*` settings other than `UV_OFFLINE`.
+The server runs reticulate's version selection while the worker waits and replies with exactly one `python_version_resolved` or `python_version_resolution_failed` frame.
+This request returns no interpreter, creates no environment candidate, and does not affect the Python checkpoint.
+The selected version can support managed-Python operations such as displaying or writing the current requirements; an eventual tool command from `uv_run_tool()` still executes inside the worker sandbox.
+
 If no sideband content or input-request record remains pending at `completed` and no standard-stream text is pending, the current MCP projection returns `[done]`.
 That marker is produced by the server; it is not a sideband message.
 
-The protocol has no request IDs because only one evaluation or explicit Python preparation can be in flight over this sideband, with at most one synchronous nested Python resolution.
+The protocol has no request IDs because only one evaluation or explicit Python preparation can be in flight over this sideband, with at most one synchronous nested Python resolver request.
 New code is rejected while an evaluation or its uncollected result is active.
 
 ## MCP waiting and polling
@@ -368,15 +381,18 @@ New code is rejected while an evaluation or its uncollected result is active.
 | evaluating or preparing Python | worker → server `resolve_python` | host resolving; worker waiting |
 | host resolving | server → worker `python_resolved` | prior operation; retain candidate |
 | host resolving | server → worker `python_resolution_failed` | prior operation; prior checkpoint unchanged |
+| evaluating | worker → server `resolve_python_version` | host selecting version; worker waiting |
+| host selecting version | server → worker `python_version_resolved` | evaluating; no candidate created |
+| host selecting version | server → worker `python_version_resolution_failed` | evaluating; no checkpoint change |
 | evaluating, with or without input reported | MCP stdin submission | evaluating |
 | evaluating, no provisional input | worker → server `completed` | validate checkpoint, then idle |
 | preparing Python | worker → server `python_prepared` | validate checkpoint, then idle |
 | preparing Python | worker → server `python_preparation_failed` | discard candidates, then idle |
-| starting, idle, evaluating, preparing Python, or host resolving | server → worker `shutdown` | terminal |
-| starting, idle, evaluating, preparing Python, or host resolving | MCP `session` restart | starting in a new generation |
+| starting, idle, evaluating, preparing Python, host resolving, or host selecting version | server → worker `shutdown` | terminal |
+| starting, idle, evaluating, preparing Python, host resolving, or host selecting version | MCP `session` restart | starting in a new generation |
 
 Malformed JSON, invalid UTF-8, an unexpected message, or sideband EOF fails the active operation.
-`python_resolution_failed` is a reply to a valid resolution request, not a general protocol error message.
+`python_resolution_failed` and `python_version_resolution_failed` reply to valid resolver requests; they are not general protocol error messages.
 There is no structured message for other protocol or infrastructure failures.
 Initial startup failure leaves no cached worker, so a later evaluation retries startup silently.
 After `ready`, a sideband failure retires the worker before its tool error reports `[worker stopped: in-memory state lost]`.
@@ -470,10 +486,11 @@ There is no relative ordering guarantee between those pipes and sideband output,
 
 The built-in worker receives either a server-managed requirement manifest selected by startup or explicit preparation, or the caller's existing `RETICULATE_PYTHON` value when no managed resolution occurred.
 Before initializing R, it forces `UV_OFFLINE=1`, overwriting any inherited value before user code runs.
-For a server-managed worker, MCP Console seeds reticulate's manifest and replaces only the namespace binding for its internal `uv_get_or_create_env` function.
+For a server-managed worker, MCP Console seeds reticulate's manifest and replaces the namespace bindings for its internal `uv_get_or_create_env` and `resolve_python_version` functions.
 It does not replace `py_require()`, so reticulate retains its package attribution, manifest history, compatibility checks, activation, and configuration behavior within the live R process.
 When Python is already initialized, only additive package requirements are supported.
-The worker sends the complete proposed manifest and its current `UV_*` settings except `UV_OFFLINE`, then waits for the server's resolver reply within the same evaluation.
+The worker sends the complete physical resolver manifest, the logical manifest to retain after successful activation, and its current `UV_*` settings except `UV_OFFLINE`, then waits for the server's resolver reply within the same evaluation.
+The two manifests must agree on packages and `exclude_newer`; only the physical manifest may substitute the exact active Python patch version.
 Those settings are not retained after the resolution.
 Reticulate checks that each candidate uses the exact live `libpython`, runs `activate_this.py`, swaps its configuration, and updates its manifest.
 The interpreter is not restarted, so its `__main__` namespace and existing Python objects remain available.

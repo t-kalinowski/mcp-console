@@ -75,4 +75,6 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Run checks
+        env:
+          GITHUB_PAT: ${{ github.token }}
         run: scripts/check
