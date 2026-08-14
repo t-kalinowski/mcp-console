@@ -64,6 +64,7 @@ def test_initializes_and_lists_tools(binary: Path) -> Transcript:
     session = tools["session"]
     for guidance in (
         "Make additional R or Python packages and DuckDB extensions available",
+        "prepares DuckDB's JSON and ICU extensions by default",
         "packages not included in the built-in environments",
         "idle worker can add R requirements or DuckDB extensions",
         "compatible Python additions require a server-managed worker",
@@ -85,11 +86,20 @@ def test_initializes_and_lists_tools(binary: Path) -> Transcript:
         "After startup, it can add R requirements or DuckDB extensions while the worker is idle"
         in action_description
     ), action_description
+    assert "`restart` can add any of the same requirements" in action_description, (
+        action_description
+    )
     requirements_description = session["inputSchema"]["properties"]["requirements"][
         "description"
     ]
     assert "return `[restart required]` until restart" in requirements_description, (
         requirements_description
+    )
+    duckdb_description = session["inputSchema"]["properties"]["requirements"][
+        "properties"
+    ]["duckdb"]["description"]
+    assert (
+        "JSON and ICU are already prepared for built-in workers" in duckdb_description
     )
     transcript = client._finish()
     assert not (workspace / ".mcp-console").exists(), workspace
@@ -157,32 +167,34 @@ def test_validates_session_arguments(binary: Path) -> Transcript:
 
     client.session(
         action="restart",
-        requirements={"python": []},
+        requirements={},
     )
     result = client.transcript[-1]["result"]
     assert result["isError"] is True
     assert result["content"][0]["text"] == (
-        "`requirements.python` must contain at least one requirement"
+        "at least one of `requirements.r`, `requirements.python`, or "
+        "`requirements.duckdb` is required"
     )
 
     client.session(
         action="restart",
-        requirements={"r": ["cli"]},
+        requirements={"r": ["cli\ndplyr"]},
     )
     result = client.transcript[-1]["result"]
     assert result["isError"] is True
     assert result["content"][0]["text"] == (
-        "`requirements.r` is not supported with `restart`"
+        "R requirement strings must not contain NUL or line breaks"
     )
 
     client.session(
         action="restart",
-        requirements={"duckdb": ["json"]},
+        requirements={"duckdb": ["spatial FROM community"]},
     )
     result = client.transcript[-1]["result"]
     assert result["isError"] is True
     assert result["content"][0]["text"] == (
-        "`requirements.duckdb` is not supported with `restart`"
+        "DuckDB extension names must start with a lowercase ASCII letter and "
+        "contain only lowercase ASCII letters, digits, and underscores"
     )
     return client._finish()
 

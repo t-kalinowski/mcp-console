@@ -274,7 +274,7 @@ impl Client {
         }
     }
 
-    fn resolve_duckdb_extensions(
+    pub(super) fn resolve_duckdb_extensions(
         &self,
         generation: &WorkerGeneration,
         managed_r: &[crate::resolver::ManagedR],
