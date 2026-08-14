@@ -383,7 +383,7 @@ _sys.modules[_mcp_console_runtime.__name__] = _mcp_console_runtime
         paste0(
           "exec(",
           jsonlite::toJSON(script, auto_unbox = TRUE),
-          ")"
+          ", {'__name__': '_mcp_console_runtime'})"
         ),
         convert = TRUE
       )
