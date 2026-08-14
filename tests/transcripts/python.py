@@ -592,12 +592,13 @@ def test_resolves_package_requirements_before_python_initializes(
         client.send(r=r)
         result = client.transcript[-1]["result"]
         assert result["isError"] is True
-        assert result["content"][0]["text"] == (
+        actual = result["content"][0]["text"]
+        assert actual == (
             "[worker sideband read failed: worker sideband closed]\n"
             "[worker stopped: in-memory state lost]\n"
             "[starting new worker]\n"
             "[idle]"
-        )
+        ), repr(actual)
 
         # fmt: r
         r = code(r"""

@@ -29,6 +29,173 @@ PNG_1X1 = (
 )
 
 
+def build_killpg_denial_interposer(directory: Path) -> Path:
+    source = directory / "deny-killpg.c"
+    library = directory / "deny-killpg.dylib"
+    source.write_text(
+        r"""
+#include <errno.h>
+#include <fcntl.h>
+#include <signal.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <sys/syscall.h>
+#include <sys/wait.h>
+#include <sys/types.h>
+#include <unistd.h>
+
+static pid_t denied_process_group = 0;
+static int added_late_member = 0;
+static pid_t late_member = 0;
+
+static void write_pid_marker(const char *name, pid_t process_id) {
+    const char *marker = getenv(name);
+    if (marker == NULL) {
+        return;
+    }
+    int descriptor = open(marker, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    if (descriptor >= 0) {
+        dprintf(descriptor, "%d\n", process_id);
+        close(descriptor);
+    }
+}
+
+static void write_member_marker(pid_t process_id, pid_t process_group) {
+    const char *marker = getenv("MCP_CONSOLE_TEST_LATE_MEMBER_MARKER");
+    if (marker == NULL) {
+        return;
+    }
+    int descriptor = open(marker, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    if (descriptor >= 0) {
+        dprintf(descriptor, "%d %d\n", process_id, process_group);
+        close(descriptor);
+    }
+}
+
+static int deny_killpg(pid_t process_group, int signal) {
+    if (signal == SIGKILL) {
+        denied_process_group = process_group;
+        write_pid_marker("MCP_CONSOLE_TEST_KILLPG_MARKER", process_group);
+        errno = EPERM;
+        return -1;
+    }
+    return (int)syscall(SYS_kill, -process_group, signal);
+}
+
+static pid_t add_process_group_member(pid_t process_group) {
+    int descriptors[2];
+    if (pipe(descriptors) != 0) {
+        return -1;
+    }
+
+    pid_t member = fork();
+    if (member < 0) {
+        close(descriptors[0]);
+        close(descriptors[1]);
+        return -1;
+    }
+    if (member == 0) {
+        close(descriptors[0]);
+        if (setpgid(0, process_group) != 0) {
+            _exit(1);
+        }
+        pid_t process_id = getpid();
+        if (write(descriptors[1], &process_id, sizeof(process_id))
+            != sizeof(process_id)) {
+            _exit(1);
+        }
+        close(descriptors[1]);
+        for (;;) {
+            pause();
+        }
+    }
+
+    close(descriptors[1]);
+    pid_t acknowledged_member = 0;
+    ssize_t bytes_read;
+    do {
+        bytes_read = read(
+            descriptors[0],
+            &acknowledged_member,
+            sizeof(acknowledged_member)
+        );
+    } while (bytes_read < 0 && errno == EINTR);
+    int read_error = bytes_read < 0 ? errno : EIO;
+    close(descriptors[0]);
+
+    if (bytes_read != sizeof(acknowledged_member)
+        || acknowledged_member != member) {
+        syscall(SYS_kill, member, SIGKILL);
+        while (waitpid(member, NULL, 0) < 0 && errno == EINTR) {
+        }
+        errno = read_error;
+        return -1;
+    }
+    return member;
+}
+
+static pid_t getpgid_and_add_member(pid_t process_id) {
+    pid_t process_group = (pid_t)syscall(SYS_getpgid, process_id);
+    // Rust rechecks group membership only after taking its kernel snapshot.
+    // Join the group here so a one-pass fallback cannot observe this child.
+    if (process_group == denied_process_group && !added_late_member) {
+        added_late_member = 1;
+        pid_t member = add_process_group_member(process_group);
+        if (member < 0) {
+            return -1;
+        }
+        late_member = member;
+        write_member_marker(member, process_group);
+    }
+    return process_group;
+}
+
+static int kill_and_reap_late_member(pid_t process_id, int signal) {
+    int result = (int)syscall(SYS_kill, process_id, signal);
+    int signal_error = errno;
+    if (result == 0 && signal == SIGKILL && process_id == late_member) {
+        // Keep the final assertion independent of launchd's orphan reaping.
+        int status = 0;
+        pid_t waited;
+        do {
+            waited = waitpid(process_id, &status, 0);
+        } while (waited < 0 && errno == EINTR);
+        if (waited != process_id) {
+            return -1;
+        }
+        write_pid_marker("MCP_CONSOLE_TEST_LATE_MEMBER_REAP_MARKER", process_id);
+        late_member = 0;
+    }
+    errno = signal_error;
+    return result;
+}
+
+__attribute__((constructor))
+static void remove_interposer_from_child_environment(void) {
+    unsetenv("DYLD_INSERT_LIBRARIES");
+}
+
+__attribute__((used))
+static struct {
+    const void *replacement;
+    const void *replacee;
+} interposers[] __attribute__((section("__DATA,__interpose"))) = {
+    {(const void *)&deny_killpg, (const void *)&killpg},
+    {(const void *)&getpgid_and_add_member, (const void *)&getpgid},
+    {(const void *)&kill_and_reap_late_member, (const void *)&kill},
+};
+""".removeprefix("\n"),
+        encoding="utf-8",
+    )
+    subprocess.run(
+        ["cc", "-dynamiclib", "-o", library, source],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return library
+
+
 def test_routes_send_over_sideband(binary: Path) -> Transcript:
     zod = Path(__file__).resolve().parents[1] / "fixtures" / "zod"
     client = McpClient(
@@ -1364,9 +1531,21 @@ def test_restarts_after_unexpected_sideband_message(binary: Path) -> Transcript:
     zod = Path(__file__).resolve().parents[1] / "fixtures" / "zod"
     with tempfile.TemporaryDirectory() as temporary_directory:
         temporary_path = Path(temporary_directory)
+        killpg_marker = temporary_path / "killpg-denied"
+        late_member_marker = temporary_path / "late-process-group-member"
+        late_member_reap_marker = temporary_path / "late-process-group-member-reaped"
         environment = os.environ.copy()
         environment["TMPDIR"] = temporary_directory
-        environment["ZOD_REPORT_PROCESS_GROUP"] = "1"
+        environment["MCP_CONSOLE_TEST_KILLPG_MARKER"] = str(killpg_marker)
+        environment["MCP_CONSOLE_TEST_LATE_MEMBER_MARKER"] = str(late_member_marker)
+        environment["MCP_CONSOLE_TEST_LATE_MEMBER_REAP_MARKER"] = str(
+            late_member_reap_marker
+        )
+        # The interposer removes its loader variable after reaching the server,
+        # so sandbox-exec and Zod do not inherit it.
+        environment["DYLD_INSERT_LIBRARIES"] = str(
+            build_killpg_denial_interposer(temporary_path)
+        )
         client = McpClient(
             binary,
             ("serve", "--worker", str(zod)),
@@ -1376,26 +1555,57 @@ def test_restarts_after_unexpected_sideband_message(binary: Path) -> Transcript:
         passed = False
         try:
             client._initialize_and_list_tools()
-            client.send(r="complete silently")
-            group_marker = wait_for_marker(
-                temporary_path,
-                "zod-process-group",
-                client,
+            client.send(r="report process group")
+            process_group_output = last_tool_text(client)
+            process_group_prefix = "zod process group: "
+            assert process_group_output.startswith(process_group_prefix), (
+                process_group_output
             )
-            worker_group = read_worker_group(group_marker)
+            worker_group = int(
+                process_group_output.removeprefix(process_group_prefix).removesuffix(
+                    "\n"
+                )
+            )
+            assert process_group_output == f"{process_group_prefix}{worker_group}\n"
+            assert worker_group != os.getpgrp(), (
+                "Zod did not enter a dedicated process group"
+            )
+            client.transcript[-1]["result"]["content"][0]["text"] = (
+                "zod process group: <process group>\n"
+            )
             failed_call = client._start_send(r="violate protocol")
             client._receive(failed_call)
+            assert killpg_marker.is_file(), "killpg denial interposer did not run"
+            assert int(killpg_marker.read_text(encoding="utf-8")) == worker_group, (
+                "killpg denial targeted a different process group"
+            )
+            assert late_member_marker.is_file(), (
+                "process-group snapshot interposer did not add a late member"
+            )
+            late_member, late_member_group = map(
+                int,
+                late_member_marker.read_text(encoding="utf-8").split(),
+            )
+            assert late_member > 0, "invalid late process-group member PID"
+            assert late_member_group == worker_group, (
+                "late member joined a different process group"
+            )
+            assert late_member_reap_marker.is_file(), (
+                "late process-group member was not reaped"
+            )
+            assert int(late_member_reap_marker.read_text(encoding="utf-8")) == (
+                late_member
+            ), "a different late process-group member was reaped"
             result = failed_call["result"]
             assert result["isError"] is True
-            assert result["content"][0]["text"] == (
+            actual = result["content"][0]["text"]
+            assert actual == (
                 "zod output before protocol failure\n"
                 "[worker sent an unexpected ready message]\n"
                 "[worker stopped: in-memory state lost]\n"
                 "[starting new worker]\n"
                 "[idle]"
-            )
-            assert not process_group_exists(worker_group), "Zod outlived its failure"
-
+            ), repr(actual)
             restarted_call = client._start_send(r="complete silently")
             client._receive(restarted_call)
             assert last_tool_text(client) == "[done]"

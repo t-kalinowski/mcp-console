@@ -294,6 +294,11 @@ def main() -> None:
             send(writer, {"kind": "completed"})
             continue
 
+        if source == "report process group":
+            send_output(writer, f"zod process group: {os.getpgrp()}\n")
+            send(writer, {"kind": "completed"})
+            continue
+
         if source == "report managed requirements":
             r_prepared = str(
                 prepared_r_library is not None
