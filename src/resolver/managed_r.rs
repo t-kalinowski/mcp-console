@@ -1,10 +1,9 @@
-use std::os::unix::process::CommandExt as _;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 
 use super::process::{
     ResolverOutput, ResolverProcess, ResolverStopHandle, completed_write, read_output,
-    stop_resolver,
+    resolver_command, stop_resolver,
 };
 
 const R_LIBRARY_RESOLVER: &str = r#"
@@ -73,13 +72,12 @@ pub(crate) fn resolve_r(
         Ok(r_home) => PathBuf::from(r_home).join("bin/Rscript"),
         Err(_) => {
             let program = Path::new("R");
-            let mut command = Command::new(program);
+            let mut command = resolver_command(program);
             command
                 .arg("RHOME")
                 .stdin(Stdio::null())
                 .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .process_group(0);
+                .stderr(Stdio::piped());
             let mut child = command.spawn().map_err(|error| {
                 format!(
                     "failed to discover the worker R home with `{}`: {error}",
@@ -112,7 +110,7 @@ pub(crate) fn resolve_r(
     };
     let program = Path::new("ir");
     validate_ir_version(&resolver, &mut on_started, program)?;
-    let mut command = Command::new(program);
+    let mut command = resolver_command(program);
     command.arg("run").arg("--rscript").arg(&rscript);
     for requirement in &requirements {
         command.arg("--with").arg(requirement);
@@ -122,8 +120,7 @@ pub(crate) fn resolve_r(
         .args(["--isolated", "--vanilla", "-e", R_LIBRARY_RESOLVER])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .process_group(0);
+        .stderr(Stdio::piped());
     // IR resolves and installs remote packages with normal host cache and
     // network access. Requirement strings are process arguments, never R source.
     let mut child = command.spawn().map_err(|error| {
@@ -177,13 +174,12 @@ fn validate_ir_version(
     on_started: &mut Option<impl FnOnce(ResolverStopHandle) -> Result<(), String>>,
     program: &Path,
 ) -> Result<(), String> {
-    let mut command = Command::new(program);
+    let mut command = resolver_command(program);
     command
         .arg("--version")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .process_group(0);
+        .stderr(Stdio::piped());
     let mut child = command.spawn().map_err(|error| {
         format!(
             "failed to check R package resolver version with `{}`: {error}",

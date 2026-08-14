@@ -1,7 +1,8 @@
 use std::io::{self, Write};
 use std::mem::MaybeUninit;
+use std::os::unix::process::CommandExt as _;
 use std::path::Path;
-use std::process::{Child, ChildStdin, ExitStatus};
+use std::process::{Child, ChildStdin, Command, ExitStatus};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 
@@ -10,6 +11,7 @@ pub(crate) struct ResolverStopHandle(Sender<ResolverEvent>);
 
 enum ResolverEvent {
     Cancel,
+    Interrupt,
     Exited(io::Result<()>),
 }
 
@@ -68,6 +70,10 @@ impl ResolverStopHandle {
         let _ = self.0.send(ResolverEvent::Cancel);
         Ok(())
     }
+
+    pub(crate) fn interrupt(&self) -> bool {
+        self.0.send(ResolverEvent::Interrupt).is_ok()
+    }
 }
 
 pub(super) fn completed_write() -> Receiver<io::Result<()>> {
@@ -96,6 +102,30 @@ pub(super) fn write_input(mut input: ChildStdin, bytes: Vec<u8>) -> Receiver<io:
         let _ = sender.send(input.write_all(&bytes));
     });
     receiver
+}
+
+pub(super) fn resolver_command(program: &Path) -> Command {
+    let mut command = Command::new(program);
+    command.process_group(0);
+    // SAFETY: the closure calls only libc signal functions after fork and
+    // before exec. Resolver programs must not inherit an ignored or blocked
+    // SIGINT from the MCP host.
+    unsafe {
+        command.pre_exec(|| {
+            if libc::signal(libc::SIGINT, libc::SIG_DFL) == libc::SIG_ERR {
+                return Err(io::Error::last_os_error());
+            }
+            let mut signals = std::mem::zeroed();
+            if libc::sigemptyset(&mut signals) != 0
+                || libc::sigaddset(&mut signals, libc::SIGINT) != 0
+                || libc::sigprocmask(libc::SIG_UNBLOCK, &signals, std::ptr::null_mut()) != 0
+            {
+                return Err(io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    command
 }
 
 fn watch_resolver_exit(pid: u32, events: Sender<ResolverEvent>) {
@@ -140,22 +170,35 @@ fn wait_for_resolver_exit(
     program: &Path,
     kind: &str,
 ) -> Result<ExitStatus, String> {
-    match events.recv() {
-        Ok(ResolverEvent::Cancel) => {
-            stop_resolver(child, program, kind)?;
-            Err(format!("{kind} resolution cancelled"))
-        }
-        Ok(ResolverEvent::Exited(Ok(()))) => stop_resolver(child, program, kind),
-        Ok(ResolverEvent::Exited(Err(error))) => {
-            let _ = stop_resolver(child, program, kind);
-            Err(format!(
-                "failed to wait for {kind} resolver `{}`: {error}",
-                program.display()
-            ))
-        }
-        Err(_) => {
-            let _ = stop_resolver(child, program, kind);
-            Err(format!("{kind} resolver exit task stopped"))
+    loop {
+        match events.recv() {
+            Ok(ResolverEvent::Cancel) => {
+                stop_resolver(child, program, kind)?;
+                return Err(format!("{kind} resolution cancelled"));
+            }
+            Ok(ResolverEvent::Interrupt) => {
+                if let Err(error) = interrupt_resolver(child.id()) {
+                    let _ = stop_resolver(child, program, kind);
+                    return Err(format!(
+                        "failed to interrupt {kind} resolver `{}`: {error}",
+                        program.display()
+                    ));
+                }
+            }
+            Ok(ResolverEvent::Exited(Ok(()))) => {
+                return stop_resolver(child, program, kind);
+            }
+            Ok(ResolverEvent::Exited(Err(error))) => {
+                let _ = stop_resolver(child, program, kind);
+                return Err(format!(
+                    "failed to wait for {kind} resolver `{}`: {error}",
+                    program.display()
+                ));
+            }
+            Err(_) => {
+                let _ = stop_resolver(child, program, kind);
+                return Err(format!("{kind} resolver exit task stopped"));
+            }
         }
     }
 }
@@ -181,6 +224,18 @@ fn wait_for_resolver(
         stdout,
         stderr,
     })
+}
+
+fn interrupt_resolver(pid: u32) -> io::Result<()> {
+    // SAFETY: `process_group(0)` made the resolver PID its process-group ID.
+    if unsafe { libc::killpg(pid as libc::pid_t, libc::SIGINT) } == 0 {
+        return Ok(());
+    }
+    let error = io::Error::last_os_error();
+    if matches!(error.raw_os_error(), Some(libc::EPERM) | Some(libc::ESRCH)) {
+        return Ok(());
+    }
+    Err(error)
 }
 
 pub(super) fn stop_resolver(

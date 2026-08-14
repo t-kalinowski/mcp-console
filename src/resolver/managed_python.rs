@@ -1,12 +1,12 @@
 use std::collections::BTreeMap;
-use std::os::unix::process::CommandExt as _;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 
 use serde::Serialize;
 
 use super::process::{
-    ResolverOutput, ResolverProcess, ResolverStopHandle, read_output, stop_resolver, write_input,
+    ResolverOutput, ResolverProcess, ResolverStopHandle, read_output, resolver_command,
+    stop_resolver, write_input,
 };
 
 const PYTHON_RESOLVER: &str = r#"
@@ -277,13 +277,12 @@ fn run_python_resolver(
 ) -> Result<ResolverOutput, String> {
     validate_environment(&environment)?;
     let rscript = python_resolver_rscript();
-    let mut command = Command::new(&rscript);
+    let mut command = resolver_command(&rscript);
     command
         .args(["--vanilla", "-e", source])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .process_group(0);
+        .stderr(Stdio::piped());
     for name in std::env::vars_os()
         .filter_map(|(name, _)| name.into_string().ok())
         .filter(|name| name.starts_with("UV_"))
