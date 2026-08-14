@@ -41,7 +41,7 @@ static void run_ready_handlers(void *data) {
     }
 }
 
-int mcp_r_run_ready_handlers(
+void mcp_r_run_ready_handlers(
     top_level_exec_fn top_level_exec,
     check_activity_fn check_activity,
     run_handlers_fn run_handlers,
@@ -52,7 +52,8 @@ int mcp_r_run_ready_handlers(
         run_handlers,
         input_handlers,
     };
-    return top_level_exec(run_ready_handlers, &handlers);
+    /* Contain handler long jumps without promoting them to worker failures. */
+    (void) top_level_exec(run_ready_handlers, &handlers);
 }
 
 int mcp_r_repl_run_cell(
