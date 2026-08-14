@@ -49,11 +49,12 @@ Worker `console_output` and `console_diagnostic` frames carry ordinary and diagn
 The server retains console channels and direct fd 1/2 identity until MCP projection.
 The server preserves sideband text and image order as MCP content blocks, coalesces adjacent text, and does not add `[done]` when an image is the only output.
 The implemented `session` surface accepts `action = "prepare"` with one or more R or Python requirement strings, `action = "interrupt"` without requirements, or `action = "restart"` with optional Python requirement strings for the implicit session.
-Interrupt requires a live worker, sends `SIGINT` directly to that process, and returns `[interrupt sent]` without waiting for a sideband acknowledgment or evaluation result.
-It does not start a lazy worker, and the signal is not assigned to a cell.
+Interrupt requests `SIGINT` for an active host resolver process group, or otherwise sends it to the live worker, and returns `[interrupt sent]` without waiting for an acknowledgment or result.
+It does not start a process, and a worker signal is not assigned to a cell.
 The built-in worker checks pending interrupts at managed evaluation boundaries, while R, reticulate Python, and DuckDB retain their native in-evaluation handling.
 User code can catch or delay the signal.
-Managed console input waits and host-side requirement resolution do not add periodic interrupt checks; restart remains the bounded recovery path.
+An interrupted host resolver reports its ordinary resolution failure.
+Managed console input waits do not add periodic interrupt checks; restart remains the bounded recovery path.
 Requirements are exact, additive, and idempotent.
 On macOS, plain built-in `serve` resolves the retained default R requirements `tidyverse`, `github::rstudio/reticulate`, `DBI`, `duckdb`, `arrow`, and `nanoarrow` through IR before accepting MCP input.
 The GitHub reticulate requirement supplies the fork-aware output restoration required by the worker; host R must also provide reticulate to bootstrap managed Python before the worker library is applied.
@@ -65,6 +66,7 @@ The server sets `IR_NO_LOCAL_SOURCES` for every R resolution, so IR prevents dir
 A failed resolution leaves the prior requirements, R library, and interpreter unchanged.
 For a uv tool failure, the tool error reports a JSON manifest containing reticulate's selected Python and the complete candidate package set, followed by uv's stderr, while omitting the helper command, temporary output path, and reticulate's `py_require()`-oriented guidance.
 The direct resolver process defines its process-group lifetime: after it exits, the server force-stops any remaining in-group descendants before reaping it and collecting its standard streams.
+Each resolver child restores the default `SIGINT` disposition and unblocks the signal before exec.
 Closing MCP input cancels an in-flight explicit or runtime resolution by force-stopping its host resolver process group; startup preflights complete before MCP input is accepted and are not cancellable through that lifecycle.
 An idle built-in worker can apply new R requirements without replacement.
 The server resolves the complete R requirement set outside the sandbox, prepends the new library to the live `.libPaths()`, removes the previous managed IR entry, preserves the other live library paths and in-memory state, and retains the confirmed library for later worker generations.
@@ -217,7 +219,7 @@ The public MCP surface has two tools:
 - `send` evaluates complete R, Python, or SQL cells, writes to the session's stdin stream, and polls for output.
 - `session` manages session requirements and lifecycle operations.
 
-R and Python requirement preparation, live late R and Python additions, best-effort worker interruption, and explicit restart with optional additive Python requirements are implemented for `session`; its broader lifecycle surface remains planned.
+R and Python requirement preparation, live late R and Python additions, best-effort resolver or worker interruption, and explicit restart with optional additive Python requirements are implemented for `session`; its broader lifecycle surface remains planned.
 
 The MCP initialization identity remains `mcp-console`.
 The intended default client registration name is `console`, for example `codex mcp add console -- mcp-console serve`.

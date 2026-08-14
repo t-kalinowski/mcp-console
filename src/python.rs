@@ -350,11 +350,16 @@ def _mcp_console_eval_cell(
     invisible()
   }
 
+  interrupted <- FALSE
+
   evaluate <- function(id) {
-    tryCatch(evaluate_impl(id), interrupt = function(condition) {
-      cat("Error: interrupted\n")
-    })
-    invisible()
+    interrupted <<- FALSE
+    # Observe the condition without handling it; R_tryEval remains the boundary.
+    withCallingHandlers(
+      evaluate_impl(id),
+      interrupt = function(condition) interrupted <<- TRUE,
+      error = function(condition) interrupted <<- FALSE
+    )
   }
 
   environment()

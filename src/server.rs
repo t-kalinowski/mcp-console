@@ -101,9 +101,9 @@ struct Requirements {
 #[serde(deny_unknown_fields)]
 struct SessionArguments {
     /// `prepare` adds R or Python requirements before a server-managed worker starts. After startup,
-    /// it can add R and compatible Python requirements while the worker is idle. `interrupt` sends
-    /// SIGINT to the live worker process. `restart` replaces the worker, optionally adds Python
-    /// requirements, and starts it if needed.
+    /// it can add R and compatible Python requirements while the worker is idle. `interrupt`
+    /// requests SIGINT for an active host resolver, or otherwise sends it to the live worker.
+    /// `restart` replaces the worker, optionally adds Python requirements, and starts it if needed.
     action: SessionAction,
     /// Additive packages to make available. `prepare` requires at least one R or Python entry.
     /// `interrupt` accepts no requirements. `restart` accepts Python entries only; omit
@@ -191,7 +191,7 @@ impl ConsoleServer {
     }
 
     #[tool(
-        description = "Make additional R or Python packages available, send SIGINT to the live worker process, or restart the persistent console session. Use `prepare` for packages not included in the built-in environments. Packages are not imported or attached automatically. An idle server-managed worker can add R and compatible Python requirements without losing live state. After a recoverable live preparation failure, evaluation remains available so state can be saved, but new requirement additions require restart. Requirements are additive, idempotent, and persist across restart. `interrupt` returns after sending the signal; user code may catch or delay it. `restart` may optionally add Python requirements, then replaces the worker and loses all in-memory R, Python, and SQL state, debugger state, and unread stdin. Requirement resolution runs outside the execution sandbox and may download packages or execute installation or build code on the host; use only trusted requirements."
+        description = "Make additional R or Python packages available, request SIGINT for an active host resolver or send it to a live worker, or restart the persistent console session. Use `prepare` for packages not included in the built-in environments. Packages are not imported or attached automatically. An idle server-managed worker can add R and compatible Python requirements without losing live state. After a recoverable live preparation failure, evaluation remains available so state can be saved, but new requirement additions require restart. Requirements are additive, idempotent, and persist across restart. `interrupt` returns after sending the request or signal; user code may catch or delay it. `restart` may optionally add Python requirements, then replaces the worker and loses all in-memory R, Python, and SQL state, debugger state, and unread stdin. Requirement resolution runs outside the execution sandbox and may download packages or execute installation or build code on the host; use only trusted requirements."
     )]
     async fn session(
         &self,

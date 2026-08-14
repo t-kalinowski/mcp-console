@@ -78,6 +78,8 @@ mod platform {
                         defer_interrupts(|| python.checkpoint(), check_interrupts)?;
                     writer.send(&WorkerMessage::Completed { python_checkpoint })?;
                 }
+                // Keep worker-owned preparation state transitions atomic. Any
+                // nested host resolver registers its own interrupt target.
                 ServerMessage::PreparePython { packages } => {
                     let result = defer_interrupts(|| python.prepare(packages), discard_interrupts);
                     if WORKER_SHUTDOWN.load(Ordering::SeqCst) {

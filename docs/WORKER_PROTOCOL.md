@@ -11,7 +11,7 @@ It evaluates one complete R, Python, or SQL cell at a time and accepts exact `st
 Evaluations run sequentially.
 
 The sideband protocol does not include interrupt frames, request IDs, general structured errors, sessions, capabilities, or protocol version negotiation.
-MCP `session` interrupt is out of band: the server sends `SIGINT` directly to the worker process.
+MCP `session` interrupt is out of band: the server requests `SIGINT` for an active host resolver process group, or otherwise sends it to the live worker process.
 
 Plain `serve` selects the built-in worker.
 The hidden `serve --worker PATH` option replaces it with a development worker.
@@ -68,12 +68,14 @@ The implicit session exists for the server lifetime, so restart starts its first
 After any requirement resolution succeeds, restart starts the same one-second stdin-close, sideband-shutdown, and process-group escalation path described below.
 It reopens the lifecycle for the new worker instead of ending the MCP server.
 
-`session` with `action = "interrupt"` accepts no requirements and requires a registered live worker; it does not start the lazy worker.
-The server sends `SIGINT` to that direct worker PID and returns `[interrupt sent]` without waiting for a sideband reply or evaluation result.
-The registered process handle and child-status check keep the signal on that exact process rather than retrying it against a replacement.
-The signal is not assigned to an evaluation and remains best-effort runtime input: code can catch or delay it.
-An absent or exited worker returns `worker is not running`.
-Custom workers receive the same process signal and are responsible for their own signal behavior.
+`session` with `action = "interrupt"` accepts no requirements and requires an active registered resolver or live worker; it does not start a process.
+The server queues an interrupt for the active resolver operation when one exists, or otherwise sends `SIGINT` to the direct worker PID, and returns `[interrupt sent]` without waiting for a sideband reply or result.
+The resolver owner sends `SIGINT` to its current process group.
+The registered resolver operation and worker process handle keep the request on that resolver or worker rather than retrying it against a replacement.
+An interrupted resolver reports its ordinary resolution failure.
+A worker signal is not assigned to an evaluation and remains best-effort runtime input: code can catch or delay it.
+When neither target exists, the call returns `worker is not running`.
+Custom workers receive the worker process signal and are responsible for their own signal behavior.
 
 These boundary details apply:
 
@@ -103,6 +105,9 @@ For a uv tool failure, `Rscript` captures reticulate's message stream and sends 
 The server combines that selection with the complete candidate package set it submitted and renders them as a JSON resolver-input manifest before uv's stderr.
 It discards reticulate's helper command, temporary output path, hints, and R call information.
 Each resolver leads a dedicated process group registered with the server lifecycle control before requirement input is written.
+Before exec, each resolver child restores the default `SIGINT` disposition and unblocks the signal.
+A session interrupt asks the resolver owner to send `SIGINT` to its current group and lets the resolution return its ordinary failure.
+Restart, shutdown, and transport cancellation retain the bounded cancellation path, which force-stops the group.
 The server waits for either lifecycle cancellation or a non-reaping notification that the direct resolver process exited.
 Direct-process exit ends the resolver-group lifetime: the server force-stops any remaining in-group descendants, reaps the direct process, and then collects the resolver's standard streams.
 Closing MCP input force-stops an active explicit or runtime resolver group and reaps its direct process; startup preflights finish before MCP input is accepted and do not participate in this cancellation path.
@@ -415,7 +420,7 @@ New code is rejected while an evaluation or its uncollected result is active.
 | idle | server → worker `evaluate` | evaluating |
 | idle | server → worker `prepare_r` | preparing R |
 | idle | server → worker `prepare_python` | preparing Python |
-| any phase with a registered live worker | MCP `session` interrupt | unchanged; send `SIGINT` outside sideband |
+| any phase with an active resolver or registered live worker | MCP `session` interrupt | unchanged; request `SIGINT` outside sideband |
 | evaluating | worker → server `output` | evaluating |
 | evaluating | worker → server `image` | evaluating |
 | evaluating | worker → server `input_requested` | append request record; evaluating, input provisional |
@@ -487,11 +492,11 @@ The CLI runs `worker` synchronously without a Tokio runtime, so R initialization
 
 Before R initializes, the worker restores the default `SIGINT` disposition and unblocks the signal so R can install its handler.
 The worker checks `R_CheckUserInterrupt()` before and after every `R_ReplDLLdo1()` call and at cell boundaries.
-It temporarily suspends runtime interrupt handling during worker-owned graphics setup and cleanup, Python checkpointing, and explicit preparation, then handles any pending interrupt immediately afterward, so those internal calls do not turn a normal or late interrupt into an infrastructure failure.
-Graphics and checkpoint boundaries report the normal runtime outcome; explicit preparation silently discards the late signal so it does not introduce an unexpected console frame into the preparation exchange.
+It temporarily suspends runtime interrupt handling during worker-owned graphics setup and cleanup, Python checkpointing, and worker-local preparation, then handles or discards any pending interrupt immediately afterward, so those internal calls do not turn a normal or late interrupt into an infrastructure failure.
 Checks that may jump remain inside the C REPL shim or `R_ToplevelExec`; their callback frames hold no Rust values that require destruction.
 R, reticulate, and DuckDB perform their own checks during managed execution.
-Python and SQL bridge interrupt conditions are ordinary language outcomes, so a handled interrupt does not retire the worker.
+The Python and SQL bridges observe escaping R interrupt conditions without handling them; the shared top-level R boundary classifies them as ordinary language outcomes after they propagate, so they do not retire the worker.
+Host resolution remains interruptible through its own process-group target while worker-side runtime interrupt handling stays suspended across preparation.
 
 The worker supplies cell source through `ReadConsole` before each top-level evaluation starts.
 For every evaluation-time `ReadConsole` call, the callback sends `input_requested`, then reads fd 0 directly until one newline arrives or R's supplied buffer is full.
@@ -644,7 +649,7 @@ An explicitly configured interpreter must be initializable under the offline wor
 R requirements, the selected IR library, and Python requirements are retained only in server memory.
 Server-managed workers can activate additive package requirements and checkpoint their final manifest after startup through evaluated `py_require()` calls or idle explicit preparation.
 Runtime Python version changes, `exclude_newer` changes, and non-additive package changes after initialization are not supported by the layering path.
-Worker `SIGINT` does not cancel a host-side requirement resolver; the worker observes the signal after resolution returns.
+A session interrupt targets an active host resolver before the worker; the resolver owner sends `SIGINT` to its current process group, and the resolver reports its ordinary failure.
 Evaluated code that replaces or blocks the `SIGINT` handler is outside the interrupt contract.
 An interrupt sent during worker startup is best effort and can terminate the process before the runtime installs its handler.
 Named sessions and environment provenance do not exist.

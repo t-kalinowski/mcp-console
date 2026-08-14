@@ -117,7 +117,12 @@ def test_interrupts_running_sql_query(binary: Path) -> Transcript:
             client.session(action="interrupt")
             assert last_tool_text(client) == "[interrupt sent]"
             client.send(timeout_ms=5_000)
-            assert "Error: interrupted" in last_tool_text(client)
+            result = client.transcript[-1]["result"]
+            assert result["isError"] is False, result
+            output = last_tool_text(client)
+            assert output in {"\n", "\n\n"}, repr(output)
+            # DuckDB and R can each publish the native interrupt newline.
+            result["content"][0]["text"] = "\n"
 
             client.send(sql="SELECT answer FROM interrupt_state")
             assert "42" in last_tool_text(client)

@@ -3,6 +3,70 @@
 ---
 id: 3
 send:
+  r: |
+    invisible(suppressMessages(base::trace(
+      "py_run_string",
+      tracer = quote({
+        invisible(file.create(file.path(
+          tempdir(),
+          "python-r-interrupt-started"
+        )))
+        repeat {}
+      }),
+      print = FALSE,
+      where = asNamespace("reticulate")
+    )))
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+id: 4
+send:
+  python: "42"
+  timeout_ms: 0
+result:
+  content:
+    - type: text
+      text: |-
+
+        [running]
+  isError: false
+---
+id: 5
+session:
+  action: interrupt
+result:
+  content:
+    - type: text
+      text: "[interrupt sent]"
+  isError: false
+---
+id: 6
+send:
+  timeout_ms: 3000
+result:
+  content:
+    - type: text
+      text: "\n"
+  isError: false
+---
+id: 7
+send:
+  r: |
+    invisible(suppressMessages(base::untrace(
+      "py_run_string",
+      where = asNamespace("reticulate")
+    )))
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+id: 8
+send:
   python: |
     import os
     from pathlib import Path
@@ -19,11 +83,11 @@ result:
   content:
     - type: text
       text: |-
-        
+
         [running]
   isError: false
 ---
-id: 4
+id: 9
 session:
   action: interrupt
 result:
@@ -32,7 +96,7 @@ result:
       text: "[interrupt sent]"
   isError: false
 ---
-id: 5
+id: 10
 send:
   timeout_ms: 3000
 result:
@@ -41,11 +105,11 @@ result:
       text: |
         Traceback (most recent call last):
           File "<string>", line 83, in _mcp_console_eval_cell
-          File "<mcp-console:python:e1>", line 9, in <module>
+          File "<mcp-console:python:e2>", line 9, in <module>
         KeyboardInterrupt
   isError: false
 ---
-id: 6
+id: 11
 send:
   python: python_interrupt_state + 1
 result:
