@@ -118,6 +118,10 @@ pub(crate) enum WorkerMessage {
     PythonPreparationFailed {
         message: String,
     },
+    ActivityCompleted {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        python_checkpoint: Option<PythonRequirementManifest>,
+    },
     Completed {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         python_checkpoint: Option<PythonRequirementManifest>,
