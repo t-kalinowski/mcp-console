@@ -273,6 +273,9 @@ mod platform {
         if WORKER_SHUTDOWN.load(Ordering::SeqCst) {
             return Ok(());
         }
+        if let Some(message) = take_worker_failure() {
+            return Err(message);
+        }
         let result = match cell.language {
             Language::R => evaluate_r_cell(cell.source, graphics),
             Language::Python => evaluate_python_cell(cell.source, graphics, python),

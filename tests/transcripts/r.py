@@ -72,6 +72,49 @@ def test_services_later_callbacks_at_cell_boundaries(binary: Path) -> Transcript
     return client._finish()
 
 
+def test_stops_cell_after_boundary_callback_failure(binary: Path) -> Transcript:
+    client = McpClient(binary, ("serve",))
+    client._initialize_and_list_tools()
+    client.session(action="prepare", requirements={"r": ["later"]})
+
+    # Create the finalized page without read permissions. The PNG device can
+    # write through its open descriptor, but publication cannot reopen it.
+    # fmt: r
+    r = code(r"""
+        later::later(
+          function() {
+            plot(1)
+            old_umask <- Sys.umask("0777")
+            on.exit(Sys.umask(old_umask), add = TRUE)
+            grDevices::dev.off()
+            Sys.umask(old_umask)
+            on.exit(NULL)
+          },
+          delay = 1
+        )
+        """)
+    client.send(r=r)
+    assert last_tool_text(client) == "[done]"
+    time.sleep(1.1)
+
+    client.send(r='system("printf boundary-cell-ran")')
+    result = client.transcript[-1]["result"]
+    assert result["isError"] is True, result
+    output = result["content"][0]["text"]
+    assert "boundary-cell-ran" not in output, output
+    assert "failed to read managed plot" in output, output
+    assert output.endswith(
+        "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
+    ), output
+    result["content"][0]["text"] = (
+        "[failed to read managed plot `<worker plot>`: permission denied]\n"
+        "[worker stopped: in-memory state lost]\n"
+        "[starting new worker]\n"
+        "[idle]"
+    )
+    return client._finish()
+
+
 def test_uses_200_column_default(binary: Path) -> Transcript:
     client = McpClient(binary, ("serve",))
     client._initialize_and_list_tools()
