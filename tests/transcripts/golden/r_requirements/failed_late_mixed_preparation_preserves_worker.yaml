@@ -19,17 +19,16 @@ send:
     sentinel <- 42L
     worker_pid <- Sys.getpid()
     initial_library <- .libPaths()[[1L]]
-    stopifnot(
-      !requireNamespace(
-        "zeallot",
-        lib.loc = initial_library,
-        quietly = TRUE
-      )
-    )
+    .libPaths(initial_library, include.site = FALSE)
+    stopifnot(isFALSE(require(zeallot)))
 result:
   content:
     - type: text
-      text: "[done]"
+      text: |
+        Loading required package: zeallot
+        Warning message:
+        In library(package, lib.loc = lib.loc, character.only = TRUE, logical.return = TRUE,  :
+          there is no package called ‘zeallot’
   isError: false
 ---
 id: 5
@@ -68,11 +67,7 @@ send:
       identical(sentinel, 42L),
       identical(Sys.getpid(), worker_pid),
       identical(.libPaths()[[1L]], initial_library),
-      !requireNamespace(
-        "zeallot",
-        lib.loc = initial_library,
-        quietly = TRUE
-      ),
+      isFALSE(require(zeallot)),
       !"not a valid requirement !!!" %in%
         reticulate::py_require()$packages
     )
@@ -81,6 +76,10 @@ result:
   content:
     - type: text
       text: |
+        Loading required package: zeallot
+        Warning message:
+        In library(package, lib.loc = lib.loc, character.only = TRUE, logical.return = TRUE,  :
+          there is no package called ‘zeallot’
         [1] 42
   isError: false
 ...

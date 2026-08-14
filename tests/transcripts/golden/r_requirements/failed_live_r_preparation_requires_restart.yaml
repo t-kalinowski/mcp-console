@@ -64,18 +64,18 @@ id: 6
 send:
   r: |
     saved <- base::unserialize(base::serialize(sentinel, NULL))
-    saveRDS(saved, tempfile())
+    saved_path <- tempfile(fileext = ".rds")
+    saveRDS(saved, saved_path)
     stopifnot(
       identical(saved, 42L),
       identical(Sys.getpid(), worker_pid),
       is.character(base::.libPaths())
     )
-    42L
+    cat(saved_path)
 result:
   content:
     - type: text
-      text: |
-        [1] 42
+      text: <worker temporary RDS path>
   isError: false
 ---
 id: 7
@@ -105,7 +105,9 @@ result:
 id: 9
 send:
   r: |
+    saved <- readRDS("<saved sentinel path>")
     stopifnot(
+      identical(saved, 42L),
       !exists("sentinel", inherits = FALSE),
       !"py-yaml12" %in% reticulate::py_require()$packages,
       identical(dirname(find.package("zeallot")), .libPaths()[[1L]])
