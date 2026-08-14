@@ -163,10 +163,11 @@ base::local({
       pandas <- reticulate::import("pandas", convert = FALSE)
       pandas$set_option("display.width", console_width)
     }
+    # Reticulate imports NumPy before its module-load hooks are installed.
     setHook("reticulate.onPyInit", function() {
       reticulate::py_register_load_hook("numpy", configure_numpy)
+      reticulate::py_register_load_hook("pandas", configure_pandas)
     }, action = "append")
-    reticulate::py_register_load_hook("pandas", configure_pandas)
     invisible()
   }
   setHook(
