@@ -35,6 +35,9 @@ const DEFAULT_R_REQUIREMENTS: &[&str] = &[
     "nanoarrow",
 ];
 
+#[cfg(target_os = "macos")]
+const DEFAULT_DUCKDB_EXTENSIONS: &[&str] = &["icu", "json"];
+
 const CUSTOM_DUCKDB_R_REQUIREMENTS: &[&str] = &["DBI", "duckdb", "jsonlite"];
 
 /// A cloneable handle to one lazily started worker.
@@ -126,22 +129,30 @@ impl Client {
         let program = std::env::current_exe()
             .map_err(|error| format!("failed to locate the R worker executable: {error}"))?;
         #[cfg(target_os = "macos")]
-        let r = Some(crate::resolver::resolve_r(
-            DEFAULT_R_REQUIREMENTS
+        let (r, duckdb_extensions) = {
+            let r = crate::resolver::resolve_r(
+                DEFAULT_R_REQUIREMENTS
+                    .iter()
+                    .map(|requirement| (*requirement).to_string())
+                    .collect(),
+                |_| Ok(()),
+            )?;
+            let duckdb_extensions = DEFAULT_DUCKDB_EXTENSIONS
                 .iter()
-                .map(|requirement| (*requirement).to_string())
-                .collect(),
-            |_| Ok(()),
-        )?);
+                .map(|extension| (*extension).to_string())
+                .collect::<Vec<_>>();
+            crate::resolver::resolve_duckdb_extensions(&r, &duckdb_extensions, |_| Ok(()))?;
+            (Some(r), duckdb_extensions.into_iter().collect())
+        };
         #[cfg(not(target_os = "macos"))]
-        let r = None;
+        let (r, duckdb_extensions) = (None, Default::default());
         let python = crate::resolver::resolve_python(&[], |_| Ok(()))?;
         Ok(Self::with_arguments(
             program,
             vec![OsString::from("worker")],
             Some(Environment {
                 custom_worker: false,
-                duckdb_extensions: Default::default(),
+                duckdb_extensions,
                 duckdb_r_targets: Vec::new(),
                 python,
                 r,

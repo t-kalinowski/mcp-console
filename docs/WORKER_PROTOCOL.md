@@ -21,6 +21,10 @@ For the built-in worker on macOS, server initialization first asks IR to resolve
 The GitHub requirement supplies the fork-aware output-stream restoration required by the worker; the host R installation must also provide reticulate for the managed-Python resolver, which runs before the worker `R_LIBS` is applied.
 It requires `ir` 0.4.0 or later and uses the same Rscript selection and `IR_NO_LOCAL_SOURCES` policy described below.
 The returned library becomes the first worker `R_LIBS` entry for every generation.
+Server initialization then uses that library's DuckDB package to install the `json` and `icu` extensions in DuckDB's native cache outside the sandbox.
+These extensions form the built-in retained default set.
+The resolver does not load their native code.
+Extensions outside that set, including `fts`, remain explicit requirements.
 
 When inherited `RETICULATE_PYTHON` is absent or exactly `managed`, server initialization also asks reticulate to resolve its baseline NumPy and pandas environment outside the sandbox.
 The resolver is equivalent to this R call and receives the manifest as JSON on `Rscript` standard input:
@@ -37,13 +41,13 @@ The server uses `$R_HOME/bin/Rscript` when `R_HOME` is set and otherwise selects
 It removes inherited `UV_OFFLINE`, allows reticulate and uv to use their normal global caches, and requires the command to return a valid interpreter path.
 The server retains the result and normalized manifest and applies them to each server-managed worker.
 Other inherited values, including an empty value, bypass the Python startup preflight unchanged.
-They do not bypass default R resolution.
-Custom workers skip both managed default preflights.
+They do not bypass default R or DuckDB extension resolution.
+Custom workers skip the default R, Python, and DuckDB extension preflights.
 
 `session` with `action = "prepare"` can add R or Python requirements or DuckDB extensions to the implicit session.
 R and Python requirements remain exact strings.
 DuckDB requirements are names that start with a lowercase ASCII letter and otherwise contain only lowercase ASCII letters, digits, and underscores; paths, URLs, repositories, versions, and SQL fragments are rejected.
-Before built-in worker startup, the server merges exact strings with the retained tidyverse, GitHub reticulate, DBI, DuckDB, arrow, and nanoarrow requirements and managed Python baseline, merges DuckDB names with the retained extension set, then resolves the complete candidates outside the sandbox.
+Before built-in worker startup, the server merges exact strings with the retained tidyverse, GitHub reticulate, DBI, DuckDB, arrow, and nanoarrow requirements and managed Python baseline, merges DuckDB names with the retained `json` and `icu` extension set, then resolves the complete candidates outside the sandbox.
 Custom workers skip the built-in package set, but every explicitly prepared R candidate includes DBI, DuckDB, and jsonlite so that the same library can service later DuckDB extension requests.
 Before R resolution, the server requires `ir --version` from `PATH` to report 0.4.0 or later.
 It then runs `ir run` with the same Rscript selection as the worker, one `--with` argument per requirement, and a constant expression that prints the resolved library path.
@@ -68,19 +72,22 @@ For a mixed request, the server keeps all candidates provisional until every req
 After a synchronized failure may have partially changed the live worker, the server leaves the retained configuration unchanged and rejects new requirement additions until a successful explicit restart.
 Evaluations remain available so the caller can save in-memory state.
 Transport or protocol failures still stop a worker whose usability is unknown.
-Custom workers skip the default preflights but can prepare explicit R requirements and DuckDB extensions.
+Custom workers skip the default R, Python, and DuckDB extension preflights but can prepare explicit R requirements and DuckDB extensions.
 The server supplies the retained R library through `R_LIBS`, and a running custom worker must acknowledge `prepare_r` with `r_prepared`.
 Prepared extensions use DuckDB's native default cache; the server does not resolve or inject that path.
 Custom workers must use the same native cache to load them.
 The hidden worker option replaces the executable, but R still starts from the user-selected installation and layers resolved libraries onto it.
 A custom worker must apply its first resolved R library before loading DuckDB; a DuckDB namespace loaded earlier from inherited libraries is outside the extension-preparation contract.
-Managed Python preparation and restart additions remain unavailable with a custom worker.
+Managed Python additions remain unavailable with a custom worker.
 If preparation overlaps worker startup, the server returns `[requirements not prepared: worker is starting]` without resolving the additions or changing the retained requirements, R library, Python manifest, or DuckDB extension set.
 
-`session` with `action = "restart"` may include additive Python requirements or omit them to retain the current manifest; it does not accept R or DuckDB additions.
-The server merges additions into its complete Python checkpoint and resolves the candidate before terminating the current worker.
-A resolution failure leaves the current worker and environment unchanged.
-After successful resolution, the server retains the prepared R library, DuckDB extension set, and candidate Python environment, terminates the current worker generation, eagerly starts its replacement, and returns `[idle]` after `ready`.
+`session` with `action = "restart"` may include additive R, Python, and DuckDB requirements or omit them to retain the current checkpoints.
+The server merges additions into the complete retained sets and resolves every changed candidate outside the sandbox before terminating the current worker.
+A new R candidate repeats installation of the complete retained DuckDB extension set with that candidate's DuckDB version.
+The server commits the R library, DuckDB extension set, and Python environment together only after every required resolution succeeds.
+A resolution failure leaves the current worker and retained environment unchanged.
+Custom workers accept R and DuckDB additions but reject Python additions.
+After successful resolution, the server terminates the current worker generation, eagerly starts its replacement, and returns `[idle]` after `ready`.
 All worker-owned R, Python, SQL, debugger, and unread-stdin state is lost.
 The implicit session exists for the server lifetime, so restart starts its first worker if none exists yet.
 After any requirement resolution succeeds, restart starts the same one-second stdin-close, sideband-shutdown, and process-group escalation path described below.
