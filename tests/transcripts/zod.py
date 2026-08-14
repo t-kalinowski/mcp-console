@@ -56,6 +56,11 @@ static int deny_killpg(pid_t process_group, int signal) {
     return kill(-process_group, signal);
 }
 
+__attribute__((constructor))
+static void remove_interposer_from_child_environment(void) {
+    unsetenv("DYLD_INSERT_LIBRARIES");
+}
+
 __attribute__((used))
 static struct {
     const void *replacement;
@@ -1292,8 +1297,8 @@ def test_restarts_after_unexpected_sideband_message(binary: Path) -> Transcript:
         environment = os.environ.copy()
         environment["TMPDIR"] = temporary_directory
         environment["MCP_CONSOLE_TEST_KILLPG_MARKER"] = str(killpg_marker)
-        # The interposer reaches the server, while sandbox-exec removes DYLD
-        # variables before it launches Zod.
+        # The interposer removes its loader variable after reaching the server,
+        # so sandbox-exec and Zod do not inherit it.
         environment["DYLD_INSERT_LIBRARIES"] = str(
             build_killpg_denial_interposer(temporary_path)
         )
