@@ -83,6 +83,18 @@ def r_test_environment() -> tuple[dict[str, str], Path]:
     return environment, home / "bin" / "Rscript"
 
 
+def use_temporary_home(environment: dict[str, str], home: Path) -> None:
+    original_home = Path(environment.get("HOME", str(Path.home())))
+    environment.setdefault(
+        "RENV_PATHS_CACHE",
+        str(original_home / "Library/Caches/org.R-project.R/R/renv/cache"),
+    )
+    # Keep IR resolution records and their package links under the same
+    # lifetime while retaining the host's stable package cache.
+    environment["IR_CACHE_DIR"] = str(home.parent / "ir-cache")
+    environment["HOME"] = str(home)
+
+
 def reference_plots(
     rscript: Path,
     environment: dict[str, str],

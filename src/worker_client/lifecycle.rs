@@ -164,6 +164,9 @@ impl Client {
             .lock()
             .map_err(|_| "worker environment lock poisoned".to_string())?;
         self.ensure_generation(&generation)?;
+        if environment.custom_worker {
+            return Err("Python requirements are unavailable with a custom worker".to_string());
+        }
         let Some(candidate) = merge_python_requirements(environment.python.as_ref(), requirements)
         else {
             drop(environment);
