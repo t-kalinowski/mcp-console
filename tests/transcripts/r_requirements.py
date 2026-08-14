@@ -250,16 +250,25 @@ def test_failed_live_r_preparation_requires_restart(binary: Path) -> Transcript:
     # fmt: r
     usable = code(r"""
         saved <- base::unserialize(base::serialize(sentinel, NULL))
-        saveRDS(saved, tempfile())
+        saved_path <- tempfile(fileext = ".rds")
+        saveRDS(saved, saved_path)
         stopifnot(
           identical(saved, 42L),
           identical(Sys.getpid(), worker_pid),
           is.character(base::.libPaths())
         )
-        42L
+        cat(saved_path)
         """)
     client.send(r=usable)
-    assert last_tool_text(client) == "[1] 42\n"
+    saved_path = Path(last_tool_text(client))
+    assert saved_path.is_file(), saved_path
+    assert client.temporary_directory is not None
+    # Preserve the RDS outside the retiring worker's private temporary directory.
+    saved_sentinel = Path(client.temporary_directory.name) / 'saved-😀"sentinel\\.rds'
+    shutil.copyfile(saved_path, saved_sentinel)
+    client.transcript[-1]["result"]["content"][0]["text"] = (
+        "<worker temporary RDS path>"
+    )
 
     client.session(action="restart")
     assert last_tool_text(client) == (
@@ -270,13 +279,18 @@ def test_failed_live_r_preparation_requires_restart(binary: Path) -> Transcript:
 
     # fmt: r
     restarted = code(r"""
+        saved <- readRDS("<saved sentinel path>")
         stopifnot(
+          identical(saved, 42L),
           !exists("sentinel", inherits = FALSE),
           !"py-yaml12" %in% reticulate::py_require()$packages,
           identical(dirname(find.package("zeallot")), .libPaths()[[1L]])
         )
         """)
-    client.send(r=restarted)
+    saved_sentinel_bytes = ", ".join(str(byte) for byte in os.fsencode(saved_sentinel))
+    saved_sentinel_literal = f"rawToChar(as.raw(c({saved_sentinel_bytes})))"
+    client.send(r=restarted.replace('"<saved sentinel path>"', saved_sentinel_literal))
+    client.transcript[-1]["send"]["r"] = restarted
     assert last_tool_text(client) == "[done]"
     return client._finish()
 
@@ -292,17 +306,16 @@ def test_failed_late_mixed_preparation_preserves_worker(binary: Path) -> Transcr
     r = code(r"""
         sentinel <- 42L
         worker_pid <- Sys.getpid()
-        initial_library <- .libPaths()[[1L]]
-        stopifnot(
-          !requireNamespace(
-            "zeallot",
-            lib.loc = initial_library,
-            quietly = TRUE
-          )
-        )
+        initial_lib_paths <- .libPaths()
+        initial_library <- initial_lib_paths[[1L]]
+        stopifnot(isFALSE(require(
+          zeallot,
+          lib.loc = initial_library,
+          quietly = TRUE
+        )))
         """)
     client.send(r=r)
-    assert last_tool_text(client) == "[done]"
+    assert last_tool_text(client) == "[done]", client.transcript[-1]
 
     invalid_python = "not a valid requirement !!!"
     client.session(
@@ -323,12 +336,12 @@ def test_failed_late_mixed_preparation_preserves_worker(binary: Path) -> Transcr
         stopifnot(
           identical(sentinel, 42L),
           identical(Sys.getpid(), worker_pid),
-          identical(.libPaths()[[1L]], initial_library),
-          !requireNamespace(
-            "zeallot",
+          identical(.libPaths(), initial_lib_paths),
+          isFALSE(require(
+            zeallot,
             lib.loc = initial_library,
             quietly = TRUE
-          ),
+          )),
           !"not a valid requirement !!!" %in%
             reticulate::py_require()$packages
         )

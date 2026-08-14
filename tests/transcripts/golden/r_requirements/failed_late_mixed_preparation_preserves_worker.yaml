@@ -18,14 +18,13 @@ send:
   r: |
     sentinel <- 42L
     worker_pid <- Sys.getpid()
-    initial_library <- .libPaths()[[1L]]
-    stopifnot(
-      !requireNamespace(
-        "zeallot",
-        lib.loc = initial_library,
-        quietly = TRUE
-      )
-    )
+    initial_lib_paths <- .libPaths()
+    initial_library <- initial_lib_paths[[1L]]
+    stopifnot(isFALSE(require(
+      zeallot,
+      lib.loc = initial_library,
+      quietly = TRUE
+    )))
 result:
   content:
     - type: text
@@ -67,12 +66,12 @@ send:
     stopifnot(
       identical(sentinel, 42L),
       identical(Sys.getpid(), worker_pid),
-      identical(.libPaths()[[1L]], initial_library),
-      !requireNamespace(
-        "zeallot",
+      identical(.libPaths(), initial_lib_paths),
+      isFALSE(require(
+        zeallot,
         lib.loc = initial_library,
         quietly = TRUE
-      ),
+      )),
       !"not a valid requirement !!!" %in%
         reticulate::py_require()$packages
     )
