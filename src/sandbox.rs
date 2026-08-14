@@ -250,21 +250,12 @@ impl SandboxedChild {
             }
         }
 
-        // SAFETY: `new_process_group` made the child's PID its process-group ID.
-        let result = unsafe { libc::killpg(self.child.id() as libc::pid_t, libc::SIGKILL) };
-        if result < 0 {
-            let kill_error = std::io::Error::last_os_error();
-            return match self.child.try_wait() {
-                Ok(Some(_)) => Ok(()),
-                Ok(None) => Err(format!(
-                    "failed to stop `{}`: {kill_error}",
-                    platform::SANDBOX_EXEC
-                )),
-                Err(wait_error) => Err(format!(
-                    "failed to stop `{}`: {kill_error}; additionally failed to read its status: {wait_error}",
-                    platform::SANDBOX_EXEC
-                )),
-            };
+        // `new_process_group` made the child's PID its process-group ID.
+        if let Err(kill_error) = platform::kill_process_group(self.child.id()) {
+            return Err(format!(
+                "failed to stop `{}`: {kill_error}",
+                platform::SANDBOX_EXEC
+            ));
         }
 
         self.child.wait().map(|_| ()).map_err(|error| {

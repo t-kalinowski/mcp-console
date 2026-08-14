@@ -27,6 +27,53 @@ PNG_1X1 = (
 )
 
 
+def build_killpg_denial_interposer(directory: Path) -> Path:
+    source = directory / "deny-killpg.c"
+    library = directory / "deny-killpg.dylib"
+    source.write_text(
+        r"""
+#include <errno.h>
+#include <fcntl.h>
+#include <signal.h>
+#include <stdlib.h>
+#include <sys/types.h>
+#include <unistd.h>
+
+static int deny_killpg(pid_t process_group, int signal) {
+    if (signal == SIGKILL) {
+        const char *marker = getenv("MCP_CONSOLE_TEST_KILLPG_MARKER");
+        if (marker != NULL) {
+            int descriptor = open(marker, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+            if (descriptor >= 0) {
+                close(descriptor);
+            }
+        }
+        errno = EPERM;
+        return -1;
+    }
+    return kill(-process_group, signal);
+}
+
+__attribute__((used))
+static struct {
+    const void *replacement;
+    const void *replacee;
+} interpose_killpg __attribute__((section("__DATA,__interpose"))) = {
+    (const void *)&deny_killpg,
+    (const void *)&killpg,
+};
+""".removeprefix("\n"),
+        encoding="utf-8",
+    )
+    subprocess.run(
+        ["cc", "-dynamiclib", "-o", library, source],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return library
+
+
 def test_routes_send_over_sideband(binary: Path) -> Transcript:
     zod = Path(__file__).resolve().parents[1] / "fixtures" / "zod"
     client = McpClient(
@@ -1239,9 +1286,16 @@ def test_restarts_after_unexpected_sideband_message(binary: Path) -> Transcript:
     zod = Path(__file__).resolve().parents[1] / "fixtures" / "zod"
     with tempfile.TemporaryDirectory() as temporary_directory:
         temporary_path = Path(temporary_directory)
+        killpg_marker = temporary_path / "killpg-denied"
         environment = os.environ.copy()
         environment["TMPDIR"] = temporary_directory
         environment["ZOD_REPORT_PROCESS_GROUP"] = "1"
+        environment["MCP_CONSOLE_TEST_KILLPG_MARKER"] = str(killpg_marker)
+        # The interposer reaches the server, while sandbox-exec removes DYLD
+        # variables before it launches Zod.
+        environment["DYLD_INSERT_LIBRARIES"] = str(
+            build_killpg_denial_interposer(temporary_path)
+        )
         client = McpClient(
             binary,
             ("serve", "--worker", str(zod)),
@@ -1260,15 +1314,17 @@ def test_restarts_after_unexpected_sideband_message(binary: Path) -> Transcript:
             worker_group = read_worker_group(group_marker)
             failed_call = client._start_send(r="violate protocol")
             client._receive(failed_call)
+            assert killpg_marker.is_file(), "killpg denial interposer did not run"
             result = failed_call["result"]
             assert result["isError"] is True
-            assert result["content"][0]["text"] == (
+            actual = result["content"][0]["text"]
+            assert actual == (
                 "zod output before protocol failure\n"
                 "[worker sent an unexpected ready message]\n"
                 "[worker stopped: in-memory state lost]\n"
                 "[starting new worker]\n"
                 "[idle]"
-            )
+            ), repr(actual)
             assert not process_group_exists(worker_group), "Zod outlived its failure"
 
             restarted_call = client._start_send(r="complete silently")
