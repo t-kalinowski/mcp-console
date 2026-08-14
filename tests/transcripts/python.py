@@ -218,8 +218,11 @@ def test_recovers_from_python_version_resolution_failure(binary: Path) -> Transc
     client.send(r=r)
     result = client.transcript[-1]["result"]
     assert result["isError"] is False, result
-    assert "managed Python version resolution failed" in result["content"][0]["text"]
-    result["content"][0]["text"] = "<Python version resolution failed>\n"
+    output = result["content"][0]["text"]
+    assert "managed Python version resolution failed" in output
+    uv = shutil.which("uv")
+    assert uv is not None and output.count(uv) == 1, output
+    result["content"][0]["text"] = output.replace(uv, "<uv executable>")
 
     client.send(r="identical(Sys.getpid(), worker_pid)")
     assert last_tool_text(client) == "[1] TRUE\n"
@@ -407,7 +410,9 @@ def test_prepares_python_requirements_after_worker_startup(binary: Path) -> Tran
     result = client.transcript[-1]["result"]
     assert result["isError"] is True, result
     assert "managed Python resolution failed" in result["content"][0]["text"]
-    result["content"][0]["text"] = "<invalid Python requirement rejected>"
+    result["content"][0]["text"] = normalize_python_resolution_error(
+        result["content"][0]["text"], invalid
+    )
 
     python = code("""
         sentinel, os.getpid() == worker_pid, importlib.util.find_spec("yaml12") is None

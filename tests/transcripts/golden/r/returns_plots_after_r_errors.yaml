@@ -12,7 +12,7 @@ result:
   content:
     - type: text
       text: |
-        Error: boom
+        Error in eval(quote({ : boom
     - type: image
       data: <PNG byte-identical to live Rscript page 1>
       mimeType: image/png

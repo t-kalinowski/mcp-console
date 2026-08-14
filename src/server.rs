@@ -82,9 +82,18 @@ enum SessionAction {
 #[schemars(inline)]
 #[serde(deny_unknown_fields)]
 struct Requirements {
+    /// Additive DuckDB extension names for `prepare`, for example `json`, `spatial`, or `fts`.
+    /// Names must start with a lowercase ASCII letter and contain only lowercase ASCII letters,
+    /// digits, and underscores. The host resolver uses DuckDB's own `INSTALL` outside the sandbox,
+    /// with DuckDB's default extension repository and native cache. Preparation does not load
+    /// extension code; `LOAD` and automatic loading happen later inside the sandbox.
+    #[serde(default)]
+    #[schemars(length(max = 64), inner(length(min = 1, max = 64)))]
+    duckdb: Vec<String>,
     /// Additive, single-line IR package references for `prepare`, for example `data.table`, `sf`, or
-    /// `yaml12`. An idle server-managed worker can add R requirements without losing live state.
-    /// Local package sources are rejected because resolution runs with server permissions.
+    /// `yaml12`. An idle worker that implements R preparation can add R requirements without losing
+    /// live state. Local package sources are rejected because resolution runs with server
+    /// permissions.
     #[serde(default)]
     #[schemars(length(max = 64), inner(length(min = 1)))]
     r: Vec<String>,
@@ -99,19 +108,20 @@ struct Requirements {
 #[derive(Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct SessionArguments {
-    /// `prepare` adds R or Python requirements before a server-managed worker starts. After startup,
-    /// it can add R and compatible Python requirements while the worker is idle. `restart` replaces
-    /// the worker, optionally adds Python requirements, and starts it if needed.
+    /// `prepare` adds R or Python requirements or DuckDB extensions before a worker starts.
+    /// After startup, it can add R requirements or DuckDB extensions while the worker is idle;
+    /// compatible Python additions require a server-managed worker. `restart` replaces the worker,
+    /// optionally adds Python requirements, and starts it if needed.
     action: SessionAction,
-    /// Additive packages to make available. `prepare` requires at least one R or Python entry.
-    /// `restart` accepts Python entries only; omit `requirements` to restart unchanged. Requirements
-    /// persist across restart but do not import or attach packages. After a recoverable live
-    /// preparation failure, evaluation remains available so state can be saved, but new requirement
-    /// additions return `[restart required]` until restart. The same marker follows a failed
-    /// automatic replacement. Resolution runs outside the worker sandbox and may download packages
-    /// or execute installation or build code on the host. Managed Python startup and Matplotlib
-    /// cache warming also run on the host and may execute selected code; use only trusted
-    /// requirements.
+    /// Additive packages or DuckDB extensions to make available. `prepare` requires at least one R,
+    /// Python, or DuckDB entry. `restart` accepts Python entries only; omit `requirements` to restart
+    /// unchanged. Requirements persist across restart but do not import, attach, or load packages or
+    /// extensions. After a recoverable live preparation failure, evaluation remains available so
+    /// state can be saved, but new requirement additions return `[restart required]` until restart.
+    /// The same marker follows a failed automatic replacement. Resolution runs outside the worker
+    /// sandbox and may download packages or extensions or execute package installation or build code
+    /// on the host. Managed Python startup and Matplotlib cache warming also run on the host and may
+    /// execute selected code; use only trusted requirements.
     requirements: Option<Requirements>,
 }
 
@@ -123,7 +133,7 @@ impl ConsoleServer {
     fn new(worker: Option<PathBuf>) -> Result<Self, String> {
         let transcript = crate::transcript::Transcript::new();
         let worker = match worker {
-            Some(program) => crate::worker_client::Client::new(program),
+            Some(program) => crate::worker_client::Client::new(program)?,
             None => crate::worker_client::Client::builtin()?,
         };
         Ok(Self {
@@ -137,7 +147,7 @@ impl ConsoleServer {
 #[tool_router]
 impl ConsoleServer {
     #[tool(
-        description = "Persistent mixed-language computational workbench. Use it whenever exact computation or direct inspection would improve accuracy—from arithmetic, string counting, parsing, and file or binary-data inspection to data wrangling, exploratory analysis, visualization, statistics, simulation, and model training or tuning. Choose the clearest language for each step and switch freely between calls. The default R environment includes tidyverse, reticulate, DBI, and duckdb, together with their full dependency sets, such as ggplot2, dplyr, readr, and jsonlite. The built-in managed Python environment includes NumPy and pandas. DuckDB SQL is also available. State persists across calls. Python reads R globals through `r.name`; R reads Python globals through `py$name`; SQL queries R data frames by name; R accesses the DuckDB catalog through `sql_connection()`. Language-native help and introspection are available. Use `session` to prepare other packages before loading or importing them. R default-device plots and open `matplotlib.pyplot` figures return as PNG images. Send exactly one complete `r`, `python`, or `sql` cell. Call `send` sequentially; concurrent calls are unsupported. Use `stdin` for interactive reads or debugger commands; omit code and stdin to poll. A wait timeout does not stop computation, and running work must be collected before new code is sent. R errors, Python exceptions, and DuckDB errors are ordinary console output, so inspect result text and continue or correct the cell. Evaluated code can read host files but cannot directly access the network and can write only within the worker's private temporary directory. Managed Python requirement resolution triggered by R code such as `reticulate::py_require()` or by an R package load is a host-side exception: it may access the network and execute installation or build code, so use only trusted requirements."
+        description = "Persistent mixed-language computational workbench. Use it whenever exact computation or direct inspection would improve accuracy—from arithmetic, string counting, parsing, and file or binary-data inspection to data wrangling, exploratory analysis, visualization, statistics, simulation, and model training or tuning. Choose the clearest language for each step and switch freely between calls. The default R environment includes tidyverse, reticulate, DBI, and duckdb, together with their full dependency sets, such as ggplot2, dplyr, readr, and jsonlite. The built-in managed Python environment includes NumPy and pandas. DuckDB SQL is also available. State persists across calls. Python reads R globals through `r.name`; R reads Python globals through `py$name`; SQL queries R data frames by name; R accesses the DuckDB catalog through `sql_connection()`. Language-native help and introspection are available. Use `session` to prepare other packages or DuckDB extensions before loading or importing them. R default-device plots and open `matplotlib.pyplot` figures return as PNG images. Send exactly one complete `r`, `python`, or `sql` cell. Call `send` sequentially; concurrent calls are unsupported. Use `stdin` for interactive reads or debugger commands; omit code and stdin to poll. A wait timeout does not stop computation, and running work must be collected before new code is sent. R errors, Python exceptions, and DuckDB errors are ordinary console output, so inspect result text and continue or correct the cell. Evaluated code can read host files but cannot directly access the network and can write only within the worker's private temporary directory. Managed Python requirement resolution triggered by R code such as `reticulate::py_require()` or by an R package load is a host-side exception: it may access the network and execute installation or build code, so use only trusted requirements."
     )]
     async fn send(
         &self,
@@ -188,7 +198,7 @@ impl ConsoleServer {
     }
 
     #[tool(
-        description = "Make additional R or Python packages available, or restart the persistent console session. Use `prepare` for packages not included in the built-in environments. Packages are not imported or attached automatically. An idle server-managed worker can add R and compatible Python requirements without losing live state. After a recoverable live preparation failure, evaluation remains available so state can be saved, but new requirement additions require restart. Requirements are additive, idempotent, and persist across restart. `restart` may optionally add Python requirements, then replaces the worker and loses all in-memory R, Python, and SQL state, debugger state, and unread stdin. Requirement resolution runs outside the execution sandbox and may download packages or execute installation or build code on the host; use only trusted requirements."
+        description = "Make additional R or Python packages and DuckDB extensions available, or restart the persistent console session. Use `prepare` for packages not included in the built-in environments or for DuckDB extensions. Packages and extensions are not imported, attached, or loaded automatically by preparation. An idle worker can add R requirements or DuckDB extensions without losing live state; compatible Python additions require a server-managed worker. After a recoverable live preparation failure, evaluation remains available so state can be saved, but new requirement additions require restart. Requirements are additive, idempotent, and persist across restart. `restart` may optionally add Python requirements, then replaces the worker and loses all in-memory R, Python, and SQL state, debugger state, and unread stdin. Requirement resolution runs outside the execution sandbox and may download packages or extensions or execute package installation or build code on the host; use only trusted requirements."
     )]
     async fn session(
         &self,
@@ -201,20 +211,21 @@ impl ConsoleServer {
     ) -> Result<CallToolResult, String> {
         let text = match action {
             SessionAction::Prepare => {
-                let Some(Requirements { r, python }) = requirements else {
+                let Some(Requirements { duckdb, r, python }) = requirements else {
                     return Err("`requirements` is required with `prepare`".to_string());
                 };
-                if r.is_empty() && python.is_empty() {
+                if duckdb.is_empty() && r.is_empty() && python.is_empty() {
                     return Err(
-                        "at least one of `requirements.r` or `requirements.python` is required"
+                        "at least one of `requirements.r`, `requirements.python`, or `requirements.duckdb` is required"
                             .to_string(),
                     );
                 }
+                validate_duckdb_extensions(&duckdb)?;
                 validate_r_requirements(&r)?;
                 validate_python_requirements(&python)?;
                 match self
                     .worker
-                    .prepare(crate::worker_client::Requirements { r, python })
+                    .prepare(crate::worker_client::Requirements { duckdb, r, python })
                     .await?
                 {
                     crate::worker_client::PrepareResult::Prepared => "[prepared]",
@@ -231,10 +242,15 @@ impl ConsoleServer {
             }
             SessionAction::Restart => {
                 let python = match requirements {
-                    Some(Requirements { r, python }) => {
+                    Some(Requirements { duckdb, r, python }) => {
                         if !r.is_empty() {
                             return Err(
                                 "`requirements.r` is not supported with `restart`".to_string()
+                            );
+                        }
+                        if !duckdb.is_empty() {
+                            return Err(
+                                "`requirements.duckdb` is not supported with `restart`".to_string()
                             );
                         }
                         if python.is_empty() {
@@ -302,6 +318,27 @@ fn validate_r_requirements(r: &[String]) -> Result<(), String> {
 
 fn validate_python_requirements(python: &[String]) -> Result<(), String> {
     validate_requirements(python, "python", "Python")
+}
+
+fn validate_duckdb_extensions(extensions: &[String]) -> Result<(), String> {
+    if extensions.len() > 64 {
+        return Err("`requirements.duckdb` accepts at most 64 extensions".to_string());
+    }
+    if extensions.iter().any(|extension| extension.len() > 64) {
+        return Err("DuckDB extension names must be at most 64 ASCII characters".to_string());
+    }
+    if extensions.iter().any(|extension| {
+        let mut bytes = extension.bytes();
+        !bytes.next().is_some_and(|byte| byte.is_ascii_lowercase())
+            || bytes
+                .any(|byte| !(byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_'))
+    }) {
+        return Err(
+            "DuckDB extension names must start with a lowercase ASCII letter and contain only lowercase ASCII letters, digits, and underscores"
+                .to_string(),
+        );
+    }
+    Ok(())
 }
 
 fn validate_requirements(

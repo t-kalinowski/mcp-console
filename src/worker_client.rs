@@ -35,6 +35,8 @@ const DEFAULT_R_REQUIREMENTS: &[&str] = &[
     "nanoarrow",
 ];
 
+const CUSTOM_DUCKDB_R_REQUIREMENTS: &[&str] = &["DBI", "duckdb", "jsonlite"];
+
 /// A cloneable handle to one lazily started worker.
 #[derive(Clone)]
 pub(crate) struct Client(Arc<ClientInner>);
@@ -106,8 +108,18 @@ struct ActiveEvaluation {
 }
 
 impl Client {
-    pub(crate) fn new(program: PathBuf) -> Self {
-        Self::with_arguments(program, Vec::new(), None)
+    pub(crate) fn new(program: PathBuf) -> Result<Self, String> {
+        Ok(Self::with_arguments(
+            program,
+            Vec::new(),
+            Some(Environment {
+                custom_worker: true,
+                duckdb_extensions: Default::default(),
+                duckdb_r_targets: Vec::new(),
+                python: None,
+                r: None,
+            }),
+        ))
     }
 
     pub(crate) fn builtin() -> Result<Self, String> {
@@ -127,7 +139,13 @@ impl Client {
         Ok(Self::with_arguments(
             program,
             vec![OsString::from("worker")],
-            Some(Environment { python, r }),
+            Some(Environment {
+                custom_worker: false,
+                duckdb_extensions: Default::default(),
+                duckdb_r_targets: Vec::new(),
+                python,
+                r,
+            }),
         ))
     }
 
@@ -534,7 +552,7 @@ impl Client {
     ) -> Result<(), String> {
         let replacing = matches!(&*worker, WorkerState::Stopped);
         if !matches!(&*worker, WorkerState::Running(_)) {
-            let environment = match &self.0.environment {
+            let mut environment = match &self.0.environment {
                 Some(environment) => Some(
                     environment
                         .lock()
@@ -563,6 +581,11 @@ impl Client {
                 .0
                 .runtime
                 .spawn(spec, self.0.output.clone(), on_started)?;
+            if let Some(environment) = environment.as_mut() {
+                // An external `--worker` must apply its first managed R layer before
+                // loading DuckDB; arbitrary preloaded namespaces are not tracked.
+                environment.duckdb_r_targets = environment.r.iter().cloned().collect();
+            }
             *worker = WorkerState::Running(running);
         }
         Ok(())

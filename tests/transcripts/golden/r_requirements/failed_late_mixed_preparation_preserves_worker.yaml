@@ -56,8 +56,8 @@ result:
         uv output:
         error: Failed to parse: `not a valid requirement !!!`
           Caused by: Expected one of `@`, `(`, `<`, `=`, `>`, `~`, `!`, `;`, found `a`
-        not a valid requirement !!!
-            ^
+            not a valid requirement !!!
+                ^
   isError: true
 ---
 id: 6
