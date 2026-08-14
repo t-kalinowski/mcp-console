@@ -175,18 +175,27 @@ impl Worker {
             .to_str()
             .ok_or_else(|| "resolved R library path is not UTF-8".to_string())?
             .to_string();
+        self.drain_pending_activity(
+            &mut resolve_python,
+            &mut resolve_python_version,
+            &mut checkpoint_python,
+        )?;
         self.writer
             .send(&ServerMessage::PrepareR {
                 library: library.clone(),
             })
             .map_err(|error| format!("worker sideband write failed: {error}"))?;
         let mut python_candidates = Vec::new();
-        let message = self.receive_preparation_message(
-            &mut python_candidates,
-            &mut resolve_python,
-            &mut resolve_python_version,
-            &mut checkpoint_python,
-        )?;
+        let message = loop {
+            if let Some(message) = self.receive_preparation_message(
+                &mut python_candidates,
+                &mut resolve_python,
+                &mut resolve_python_version,
+                &mut checkpoint_python,
+            )? {
+                break message;
+            }
+        };
         if !python_candidates.is_empty() {
             return Err(
                 "worker resolved Python without completing background activity".to_string(),
@@ -226,17 +235,27 @@ impl Worker {
         >,
         String,
     > {
+        self.drain_pending_activity(
+            &mut resolve_python,
+            &mut resolve_python_version,
+            &mut checkpoint_python,
+        )?;
         self.writer
             .send(&ServerMessage::PreparePython { packages })
             .map_err(|error| format!("worker sideband write failed: {error}"))?;
         let mut python_candidates = Vec::new();
 
-        match self.receive_preparation_message(
-            &mut python_candidates,
-            &mut resolve_python,
-            &mut resolve_python_version,
-            &mut checkpoint_python,
-        )? {
+        let message = loop {
+            if let Some(message) = self.receive_preparation_message(
+                &mut python_candidates,
+                &mut resolve_python,
+                &mut resolve_python_version,
+                &mut checkpoint_python,
+            )? {
+                break message;
+            }
+        };
+        match message {
             WorkerMessage::PythonPrepared { python_checkpoint } => {
                 Ok(Ok((python_checkpoint, python_candidates)))
             }
@@ -311,6 +330,65 @@ impl Worker {
         }
     }
 
+    fn drain_pending_activity(
+        &mut self,
+        resolve_python: &mut impl FnMut(
+            crate::worker_protocol::PythonResolveRequest,
+        ) -> Result<crate::resolver::ManagedPython, String>,
+        resolve_python_version: &mut impl FnMut(
+            crate::worker_protocol::PythonVersionResolveRequest,
+        ) -> Result<String, String>,
+        checkpoint_python: &mut impl FnMut(
+            Option<crate::worker_protocol::PythonRequirementManifest>,
+            Vec<crate::resolver::ManagedPython>,
+        ) -> Result<(), String>,
+    ) -> Result<(), String> {
+        while self.has_pending_message()? {
+            let mut python_candidates = Vec::new();
+            loop {
+                if self
+                    .receive_preparation_message(
+                        &mut python_candidates,
+                        resolve_python,
+                        resolve_python_version,
+                        checkpoint_python,
+                    )?
+                    .is_none()
+                {
+                    break;
+                }
+                return Err(
+                    "worker sent an explicit operation result before receiving a request"
+                        .to_string(),
+                );
+            }
+        }
+        Ok(())
+    }
+
+    fn has_pending_message(&self) -> Result<bool, String> {
+        if self.reader.has_buffered_data() {
+            return Ok(true);
+        }
+        loop {
+            let mut descriptor = libc::pollfd {
+                fd: self.reader.as_raw_fd(),
+                events: libc::POLLIN,
+                revents: 0,
+            };
+            // SAFETY: the sideband descriptor remains open for the call, and
+            // the pointer and count describe the initialized value exactly.
+            let result = unsafe { libc::poll(&mut descriptor, 1, 0) };
+            if result >= 0 {
+                return Ok(descriptor.revents != 0);
+            }
+            let error = std::io::Error::last_os_error();
+            if error.kind() != std::io::ErrorKind::Interrupted {
+                return Err(format!("worker sideband readiness check failed: {error}"));
+            }
+        }
+    }
+
     fn receive_preparation_message(
         &mut self,
         python_candidates: &mut Vec<crate::resolver::ManagedPython>,
@@ -324,7 +402,7 @@ impl Worker {
             Option<crate::worker_protocol::PythonRequirementManifest>,
             Vec<crate::resolver::ManagedPython>,
         ) -> Result<(), String>,
-    ) -> Result<WorkerMessage, String> {
+    ) -> Result<Option<WorkerMessage>, String> {
         loop {
             match self.receive()? {
                 WorkerMessage::ConsoleOutput { data } => self
@@ -345,6 +423,7 @@ impl Worker {
                 }
                 WorkerMessage::ActivityCompleted { python_checkpoint } => {
                     checkpoint_python(python_checkpoint, std::mem::take(python_candidates))?;
+                    return Ok(None);
                 }
                 WorkerMessage::InputRequested { prompt } => {
                     let prompt = serde_json::to_string(&prompt).map_err(|error| {
@@ -361,7 +440,7 @@ impl Worker {
                         "worker reported received input during requirement preparation".to_string(),
                     );
                 }
-                message => return Ok(message),
+                message => return Ok(Some(message)),
             }
         }
     }

@@ -35,6 +35,12 @@ def send(stream: TextIO, message: dict[str, Any]) -> None:
     stream.flush()
 
 
+def send_batch(stream: TextIO, messages: list[dict[str, Any]]) -> None:
+    for message in messages:
+        stream.write(json.dumps(message, separators=(",", ":")) + "\n")
+    stream.flush()
+
+
 def send_output(
     stream: TextIO,
     data: str,
@@ -295,13 +301,48 @@ def main() -> None:
             continue
 
         if source == "request input while idle":
-            send(writer, {"kind": "completed"})
-            send(writer, {"kind": "input_requested", "prompt": "idle> "})
+            send_batch(
+                writer,
+                [
+                    {"kind": "completed"},
+                    {"kind": "input_requested", "prompt": "idle> "},
+                ],
+            )
             try:
                 input()
             except EOFError:
                 return
             raise AssertionError("Zod received input during idle preparation")
+
+        if source == "resolve python while idle":
+            send_batch(
+                writer,
+                [
+                    {"kind": "completed"},
+                    {
+                        "kind": "resolve_python_version",
+                        "request": {"constraints": [">=3.11"], "environment": {}},
+                    },
+                ],
+            )
+            response = json.loads(reader.readline())
+            assert response["kind"] == "python_version_resolution_failed", response
+            requirements = {"packages": ["numpy", "pandas", "idle-package"]}
+            send(
+                writer,
+                {
+                    "kind": "resolve_python",
+                    "request": {
+                        "requirements": requirements,
+                        "retained_requirements": requirements,
+                        "environment": {},
+                    },
+                },
+            )
+            response = json.loads(reader.readline())
+            assert response["kind"] == "python_resolution_failed", response
+            send(writer, {"kind": "activity_completed"})
+            continue
 
         if source == "report process group":
             send_output(writer, f"zod process group: {os.getpgrp()}\n")
