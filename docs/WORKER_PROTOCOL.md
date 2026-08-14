@@ -95,8 +95,9 @@ After any requirement resolution succeeds, restart starts the same one-second st
 It reopens the lifecycle for the new worker instead of ending the MCP server.
 
 `session` with `action = "interrupt"` accepts no requirements and requires an active registered resolver or live worker; it does not start a process.
-The server queues an interrupt for the active resolver operation when one exists, or otherwise sends `SIGINT` to the direct worker PID, and returns `[interrupt sent]` without waiting for a sideband reply or result.
-The resolver owner sends `SIGINT` to its current process group.
+The server queues an interrupt for the active resolver operation when one exists, or otherwise sends `SIGINT` to the direct worker PID.
+It returns `[interrupt sent]` after the signal attempt succeeds without waiting for a sideband reply or for the resolver or evaluation to finish.
+The resolver owner sends `SIGINT` to its current process group, and a signal error is returned by both the interrupt and resolution calls.
 The registered resolver operation and worker process handle keep the request on that resolver or worker rather than retrying it against a replacement.
 An interrupted resolver reports its ordinary resolution failure.
 A worker signal is not assigned to an evaluation and remains best-effort runtime input: code can catch or delay it.
