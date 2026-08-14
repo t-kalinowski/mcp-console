@@ -1,0 +1,27 @@
+---
+!same-as tests/transcripts/golden/server/initializes_and_lists_tools.yaml
+---
+id: 3
+send:
+  r: request input while idle
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+id: 4
+session:
+  action: prepare
+  requirements:
+    r:
+      - praise
+result:
+  content:
+    - type: text
+      text: |-
+        [input requested: "idle> "]
+        [idle R callback requested input "idle> " during requirement preparation; collect callback input with send before preparing requirements]
+        [worker stopped: in-memory state lost]
+  isError: true
+...

@@ -827,6 +827,44 @@ def test_custom_worker_prepares_r_and_duckdb_requirements(binary: Path) -> Trans
         return client._finish()
 
 
+def test_custom_worker_reports_idle_input_before_preparation_failure(
+    binary: Path,
+) -> Transcript:
+    zod = Path(__file__).resolve().parents[1] / "fixtures" / "zod"
+    environment, _ = r_test_environment()
+    environment["RETICULATE_PYTHON"] = ""
+    with tempfile.TemporaryDirectory() as temporary:
+        isolated_library = Path(temporary) / "isolated-library"
+        isolated_library.mkdir()
+        environment["R_LIBS"] = str(isolated_library)
+        environment["R_LIBS_SITE"] = str(isolated_library)
+        environment["R_LIBS_USER"] = str(isolated_library)
+        home = Path(temporary) / "home"
+        home.mkdir()
+        use_temporary_home(environment, home)
+        client = McpClient(
+            binary,
+            ("serve", "--worker", str(zod)),
+            environment,
+        )
+        client._initialize_and_list_tools()
+        client.send(r="request input while idle")
+        assert last_tool_text(client) == "[done]"
+
+        result = client.session(
+            action="prepare",
+            requirements={"r": ["praise"]},
+        )
+        assert result["isError"] is True, result
+        assert result["content"][0]["text"] == (
+            '[input requested: "idle> "]\n'
+            '[idle R callback requested input "idle> " during requirement '
+            "preparation; collect callback input with send before preparing requirements]\n"
+            "[worker stopped: in-memory state lost]"
+        )
+        return client._finish()
+
+
 def test_custom_worker_restart_prepares_r_and_duckdb_requirements(
     binary: Path,
 ) -> Transcript:
