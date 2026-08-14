@@ -49,11 +49,11 @@ Worker `console_output` and `console_diagnostic` frames carry ordinary and diagn
 The server retains console channels and direct fd 1/2 identity until MCP projection.
 The server preserves sideband text and image order as MCP content blocks, coalesces adjacent text, and does not add `[done]` when an image is the only output.
 The implemented `session` surface accepts `action = "prepare"` with one or more R or Python requirement strings or DuckDB extension names, `action = "interrupt"` without requirements, or `action = "restart"` with optional R, Python, and DuckDB requirements for the implicit session.
-Interrupt requests `SIGINT` for an active host resolver process group, or otherwise sends it to the live worker, and returns `[interrupt sent]` without waiting for an acknowledgment or result.
+Interrupt requests `SIGINT` for an active host resolver process group, or otherwise sends it to the live worker, and returns `[interrupt sent]` after the signal attempt succeeds without waiting for the resolver or evaluation to finish.
 It does not start a process, and a worker signal is not assigned to a cell.
 The built-in worker checks pending interrupts at managed evaluation boundaries, while R, reticulate Python, and DuckDB retain their native in-evaluation handling.
 User code can catch or delay the signal.
-An interrupted host resolver reports its ordinary resolution failure.
+A resolver signal error is returned by both the interrupt and resolution calls; an interrupted host resolver otherwise reports its ordinary resolution failure.
 Managed console input waits do not add periodic interrupt checks; restart remains the bounded recovery path.
 Requirements are exact, additive, and idempotent.
 On macOS, plain built-in `serve` resolves the retained default R requirements `tidyverse`, `github::rstudio/reticulate`, `DBI`, `duckdb`, `arrow`, and `nanoarrow` through IR before accepting MCP input.
