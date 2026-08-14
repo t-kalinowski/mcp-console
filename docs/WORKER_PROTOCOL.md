@@ -500,6 +500,11 @@ A cell that ends while R requires continuation input produces `Error: Incomplete
 A successful silent R cell sends no console-text frame but still sends `completed`; if no other response text is pending, the server projects that completion as `[done]`.
 The CLI runs `worker` synchronously without a Tokio runtime, so R initialization and evaluation remain on the process main thread.
 
+Immediately before and after every R, Python, or SQL cell, the worker checks R's registered input handlers without blocking and runs one ready handler turn under `R_ToplevelExec()`.
+Package callbacks therefore share the cell's console and input routing, while their default-device plots use a separate managed graphics scope.
+Output and images from the final turn precede `completed`.
+The worker does not yet wait on R input handlers between cells, so a timer that becomes ready while the worker is otherwise idle remains pending until a cell boundary.
+
 The worker supplies cell source through `ReadConsole` before each top-level evaluation starts.
 For every evaluation-time `ReadConsole` call, the callback sends `input_requested`, then reads fd 0 directly until one newline arrives or R's supplied buffer is full.
 The built-in worker sends R's prompt field verbatim, including trailing spaces or an empty prompt.

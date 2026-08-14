@@ -1,5 +1,6 @@
 #!/usr/bin/env -S uv run --script
 
+import time
 from pathlib import Path
 
 from _support import (
@@ -43,6 +44,31 @@ def test_evaluates_a_complete_cell(binary: Path) -> Transcript:
     client.send(r='stop("boom")')
     client.send(r="answer")
     client.send(r="silent <- 1")
+    return client._finish()
+
+
+def test_services_later_callbacks_at_cell_boundaries(binary: Path) -> Transcript:
+    client = McpClient(binary, ("serve",))
+    client._initialize_and_list_tools()
+    client.session(action="prepare", requirements={"r": ["later"]})
+
+    # fmt: r
+    r = code(r"""
+        later::later(function() cat("cell end callback\n"), delay = 0)
+        """)
+    client.send(r=r)
+    assert last_tool_text(client) == "cell end callback\n"
+
+    # Leave a callback pending until the next cell begins.
+    # fmt: r
+    r = code(r"""
+        later::later(function() cat("cell start callback\n"), delay = 1)
+        """)
+    client.send(r=r)
+    assert last_tool_text(client) == "[done]"
+    time.sleep(1.1)
+    client.send(r='cat("cell body\\n")')
+    assert last_tool_text(client) == "cell start callback\ncell body\n"
     return client._finish()
 
 

@@ -229,6 +229,8 @@ Requirements make packages available but do not import or attach them.
 
 The worker runs each R cell through R's native top-level loop, captures R console output, prints each visible value, and maintains `.Last.value`.
 Each worker generation starts with `options(width = 200L)`; later changes to that option persist for the generation.
+Immediately before and after every R, Python, or SQL cell, the worker gives R's registered input handlers one nonblocking turn.
+Ready callbacks from packages such as `later` therefore run at those cell boundaries; the worker does not yet wake for timers while otherwise idle.
 If a cell ends while an expression is incomplete, earlier complete expressions from that cell remain applied.
 The worker installs a worker-owned `grDevices::png()` function as R's default graphics device and opens it lazily when a cell draws.
 Each managed page is returned as an MCP image when its device finalizes it by opening a new page or closing.

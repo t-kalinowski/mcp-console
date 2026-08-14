@@ -1,7 +1,7 @@
 #[cfg(target_os = "macos")]
 mod platform {
     use std::error::Error;
-    use std::ffi::{CStr, CString, c_char, c_int, c_uchar};
+    use std::ffi::{CStr, CString, c_char, c_int, c_uchar, c_void};
     use std::io;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Mutex, OnceLock};
@@ -15,16 +15,29 @@ mod platform {
     static WORKER_WRITER: OnceLock<crate::sideband::Writer> = OnceLock::new();
     static R_REPL_INIT: OnceLock<ReplInit> = OnceLock::new();
     static R_REPL_DO_ONE: OnceLock<ReplDoOne> = OnceLock::new();
+    static R_EVENTS: OnceLock<REvents> = OnceLock::new();
     static CELL_SOURCE: Mutex<Option<CellSource>> = Mutex::new(None);
     static WORKER_FAILURE: Mutex<Option<String>> = Mutex::new(None);
     static WORKER_SHUTDOWN: AtomicBool = AtomicBool::new(false);
     static EVALUATION_STARTED: AtomicBool = AtomicBool::new(false);
     type ReplInit = unsafe extern "C-unwind" fn();
     type ReplDoOne = unsafe extern "C-unwind" fn() -> c_int;
+    type TopLevelExec = unsafe extern "C-unwind" fn(
+        Option<unsafe extern "C-unwind" fn(*mut c_void)>,
+        *mut c_void,
+    ) -> c_int;
+    type CheckActivity = unsafe extern "C-unwind" fn(c_int, c_int) -> *mut c_void;
+    type RunHandlers = unsafe extern "C-unwind" fn(*mut c_void, *mut c_void);
 
     struct CellSource {
         text: String,
         offset: usize,
+    }
+
+    struct REvents {
+        top_level_exec: TopLevelExec,
+        check_activity: CheckActivity,
+        run_handlers: RunHandlers,
     }
 
     struct Runtime {
@@ -36,6 +49,12 @@ mod platform {
     }
 
     unsafe extern "C" {
+        fn mcp_r_run_ready_handlers(
+            top_level_exec: TopLevelExec,
+            check_activity: CheckActivity,
+            run_handlers: RunHandlers,
+            input_handlers: *mut c_void,
+        ) -> c_int;
         fn mcp_r_repl_run_cell(
             init: ReplInit,
             do_one: ReplDoOne,
@@ -250,11 +269,14 @@ mod platform {
         python: &mut crate::python::Bridge,
         sql: &mut crate::sql::Bridge,
     ) -> Result<(), String> {
-        match cell.language {
+        run_ready_handlers(graphics)?;
+        let result = match cell.language {
             Language::R => evaluate_r_cell(cell.source, graphics),
             Language::Python => evaluate_python_cell(cell.source, graphics, python),
             Language::Sql => evaluate_sql_cell(cell.source, sql),
-        }
+        };
+        run_ready_handlers(graphics)?;
+        result
     }
 
     fn evaluate_r_cell(r: String, graphics: &crate::r_graphics::Bridge) -> Result<(), String> {
@@ -367,13 +389,45 @@ mod platform {
         let library = libloading::os::unix::Library::this();
         let init = unsafe { *library.get::<ReplInit>(b"R_ReplDLLinit\0")? };
         let do_one = unsafe { *library.get::<ReplDoOne>(b"R_ReplDLLdo1\0")? };
+        let top_level_exec = unsafe { *library.get::<TopLevelExec>(b"R_ToplevelExec\0")? };
+        let check_activity = unsafe { *library.get::<CheckActivity>(b"R_checkActivity\0")? };
+        let run_handlers = unsafe { *library.get::<RunHandlers>(b"R_runHandlers\0")? };
         R_REPL_INIT
             .set(init)
             .map_err(|_| io::Error::other("R REPL was already initialized"))?;
         R_REPL_DO_ONE
             .set(do_one)
             .map_err(|_| io::Error::other("R REPL was already initialized"))?;
+        R_EVENTS
+            .set(REvents {
+                top_level_exec,
+                check_activity,
+                run_handlers,
+            })
+            .map_err(|_| io::Error::other("R event handlers were already initialized"))?;
         Ok(())
+    }
+
+    fn run_ready_handlers(graphics: &crate::r_graphics::Bridge) -> Result<(), String> {
+        graphics.begin()?;
+        EVALUATION_STARTED.store(true, Ordering::SeqCst);
+        let events = R_EVENTS
+            .get()
+            .expect("R event handlers should be initialized");
+        unsafe {
+            mcp_r_run_ready_handlers(
+                events.top_level_exec,
+                events.check_activity,
+                events.run_handlers,
+                r_input_handlers(),
+            );
+        }
+        EVALUATION_STARTED.store(false, Ordering::SeqCst);
+        graphics.finish()
+    }
+
+    fn r_input_handlers() -> *mut c_void {
+        unsafe { libr::get(libr::R_InputHandlers).cast_mut() }
     }
 
     fn run_repl_cell() -> c_int {
