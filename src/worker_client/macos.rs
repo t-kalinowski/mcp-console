@@ -333,9 +333,19 @@ impl Worker {
     }
 
     pub(super) fn shutdown(&mut self, deadline: Instant) -> Result<(), String> {
-        let shutdown = self.shutdown_handle().shutdown(deadline)?;
-        join_worker_thread(shutdown, "shutdown sender")?;
-        self.finish_retirement()
+        let process = self
+            .shutdown_handle()
+            .shutdown(deadline)
+            .and_then(|shutdown| join_worker_thread(shutdown, "shutdown sender"));
+        let retirement = self.finish_retirement();
+        match (process, retirement) {
+            (Ok(()), Ok(())) => Ok(()),
+            (Err(error), Ok(())) => Err(error),
+            (Ok(()), Err(error)) => Err(error),
+            (Err(error), Err(retirement_error)) => Err(format!(
+                "{error}; additionally failed to retire worker I/O: {retirement_error}"
+            )),
+        }
     }
 
     pub(super) fn finish_retirement(&mut self) -> Result<(), String> {

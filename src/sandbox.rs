@@ -273,18 +273,36 @@ impl SandboxedChild {
             }
         }
 
-        // SAFETY: `new_process_group` made the child's PID its process-group ID.
-        let result = unsafe { libc::killpg(self.child.id() as libc::pid_t, libc::SIGKILL) };
-        if result < 0 {
-            let kill_error = std::io::Error::last_os_error();
-            return match self.child.try_wait() {
-                Ok(Some(_)) => Ok(()),
-                Ok(None) => Err(format!(
-                    "failed to stop `{}`: {kill_error}",
+        // `new_process_group` made the child's PID its process-group ID. If
+        // descendant cleanup fails, still stop and reap the direct child while
+        // preserving that error so a replacement is not started.
+        if let Err(group_error) = platform::kill_process_group(self.child.id()) {
+            let group_error = format!(
+                "failed to stop `{}` process group: {group_error}",
+                platform::SANDBOX_EXEC
+            );
+            match self.child.try_wait() {
+                Ok(Some(_)) => return Err(group_error),
+                Ok(None) => {}
+                Err(error) => {
+                    return Err(format!(
+                        "{group_error}; failed to read `{}` status: {error}",
+                        platform::SANDBOX_EXEC
+                    ));
+                }
+            }
+            if let Err(error) = self.child.kill()
+                && error.raw_os_error() != Some(libc::ESRCH)
+            {
+                return Err(format!(
+                    "{group_error}; failed to stop direct `{}` process: {error}",
                     platform::SANDBOX_EXEC
-                )),
-                Err(wait_error) => Err(format!(
-                    "failed to stop `{}`: {kill_error}; additionally failed to read its status: {wait_error}",
+                ));
+            }
+            return match self.child.wait() {
+                Ok(_) => Err(group_error),
+                Err(error) => Err(format!(
+                    "{group_error}; failed to reap direct `{}` process: {error}",
                     platform::SANDBOX_EXEC
                 )),
             };
