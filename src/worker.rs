@@ -27,6 +27,14 @@ mod platform {
         offset: usize,
     }
 
+    struct Runtime {
+        writer: crate::sideband::Writer,
+        graphics: crate::r_graphics::Bridge,
+        r_environment: crate::r_environment::Bridge,
+        python: crate::python::Bridge,
+        sql: crate::sql::Bridge,
+    }
+
     unsafe extern "C" {
         fn mcp_r_repl_run_cell(
             init: ReplInit,
@@ -52,30 +60,53 @@ mod platform {
             .map_err(|_| io::Error::other("R worker sideband was already initialized"))?;
         let graphics = crate::r_graphics::Bridge::initialize()?;
         let r_environment = crate::r_environment::Bridge::initialize()?;
-        let mut python = crate::python::Bridge::initialize()?;
-        let mut sql = crate::sql::Bridge::initialize()?;
+        let python = crate::python::Bridge::initialize()?;
+        let sql = crate::sql::Bridge::initialize()?;
         writer.send(&WorkerMessage::Ready)?;
 
-        loop {
-            match receive_server_message()? {
+        Runtime {
+            writer,
+            graphics,
+            r_environment,
+            python,
+            sql,
+        }
+        .run()
+    }
+
+    impl Runtime {
+        fn run(&mut self) -> Result<(), Box<dyn Error>> {
+            loop {
+                if !self.handle(receive_server_message()?)? {
+                    return Ok(());
+                }
+            }
+        }
+
+        fn handle(&mut self, message: ServerMessage) -> Result<bool, Box<dyn Error>> {
+            match message {
                 ServerMessage::Evaluate { language, source } => {
-                    let result =
-                        evaluate_cell(Cell { language, source }, &graphics, &mut python, &mut sql);
+                    let result = evaluate_cell(
+                        Cell { language, source },
+                        &self.graphics,
+                        &mut self.python,
+                        &mut self.sql,
+                    );
 
                     if WORKER_SHUTDOWN.load(Ordering::SeqCst) {
-                        return Ok(());
+                        return Ok(false);
                     }
                     if let Some(message) = take_worker_failure().or_else(|| result.err()) {
                         return Err(io::Error::other(message).into());
                     }
-                    writer.send(&WorkerMessage::Completed {
-                        python_checkpoint: python.checkpoint()?,
+                    self.writer.send(&WorkerMessage::Completed {
+                        python_checkpoint: self.python.checkpoint()?,
                     })?;
                 }
                 ServerMessage::PreparePython { packages } => {
-                    let result = python.prepare(packages);
+                    let result = self.python.prepare(packages);
                     if WORKER_SHUTDOWN.load(Ordering::SeqCst) {
-                        return Ok(());
+                        return Ok(false);
                     }
                     if let Some(message) = take_worker_failure() {
                         return Err(io::Error::other(message).into());
@@ -84,32 +115,35 @@ mod platform {
                         Ok(crate::python::PreparationOutcome::Prepared {
                             checkpoint: python_checkpoint,
                         }) => {
-                            writer.send(&WorkerMessage::PythonPrepared { python_checkpoint })?;
+                            self.writer
+                                .send(&WorkerMessage::PythonPrepared { python_checkpoint })?;
                         }
                         Ok(crate::python::PreparationOutcome::Failed { message }) => {
-                            writer.send(&WorkerMessage::PythonPreparationFailed { message })?;
+                            self.writer
+                                .send(&WorkerMessage::PythonPreparationFailed { message })?;
                         }
                         Err(message) => return Err(io::Error::other(message).into()),
                     }
                 }
                 ServerMessage::PrepareR { library } => {
-                    let result = r_environment.prepare(std::path::Path::new(&library));
+                    let result = self.r_environment.prepare(std::path::Path::new(&library));
                     if WORKER_SHUTDOWN.load(Ordering::SeqCst) {
-                        return Ok(());
+                        return Ok(false);
                     }
                     if let Some(message) = take_worker_failure() {
                         return Err(io::Error::other(message).into());
                     }
                     match result.map_err(io::Error::other)? {
                         crate::r_environment::PreparationOutcome::Prepared { library } => {
-                            writer.send(&WorkerMessage::RPrepared { library })?;
+                            self.writer.send(&WorkerMessage::RPrepared { library })?;
                         }
                         crate::r_environment::PreparationOutcome::Failed { message } => {
-                            writer.send(&WorkerMessage::RPreparationFailed { message })?;
+                            self.writer
+                                .send(&WorkerMessage::RPreparationFailed { message })?;
                         }
                     }
                 }
-                ServerMessage::Shutdown => return Ok(()),
+                ServerMessage::Shutdown => return Ok(false),
                 ServerMessage::PythonResolved { .. }
                 | ServerMessage::PythonResolutionFailed { .. }
                 | ServerMessage::PythonVersionResolved { .. }
@@ -120,6 +154,7 @@ mod platform {
                     .into());
                 }
             }
+            Ok(true)
         }
     }
 
