@@ -294,6 +294,15 @@ def main() -> None:
             send(writer, {"kind": "completed"})
             continue
 
+        if source == "request input while idle":
+            send(writer, {"kind": "completed"})
+            send(writer, {"kind": "input_requested", "prompt": "idle> "})
+            try:
+                input()
+            except EOFError:
+                return
+            raise AssertionError("Zod received input during idle preparation")
+
         if source == "report process group":
             send_output(writer, f"zod process group: {os.getpgrp()}\n")
             send(writer, {"kind": "completed"})

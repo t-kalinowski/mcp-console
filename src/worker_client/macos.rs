@@ -350,6 +350,8 @@ impl Worker {
                     let prompt = serde_json::to_string(&prompt).map_err(|error| {
                         format!("failed to render worker input prompt: {error}")
                     })?;
+                    self.output
+                        .push_notice_line(format!("input requested: {prompt}"));
                     return Err(format!(
                         "idle R callback requested input {prompt} during requirement preparation; collect callback input with send before preparing requirements"
                     ));
