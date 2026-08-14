@@ -25,7 +25,10 @@ def test_initializes_and_lists_tools(binary: Path) -> Transcript:
         "`py$name`",
         "SQL queries R data frames by name",
         "`sql_connection()`",
-        "Use `session` to prepare other packages",
+        "Do not probe package availability in cells",
+        "If you want to use a package",
+        "prepare it with `session`",
+        "load it directly with R `library()` or Python `import`",
         "Call `send` sequentially",
         "ordinary console output",
         "cannot directly access the network",
@@ -64,7 +67,10 @@ def test_initializes_and_lists_tools(binary: Path) -> Transcript:
     session = tools["session"]
     for guidance in (
         "Make additional R or Python packages available",
-        "packages not included in the built-in environments",
+        "Do not probe package availability in cells",
+        "If you want to use a package",
+        "use `prepare`",
+        "load it with R `library()` or Python `import` in `send`",
         "idle server-managed worker can add R and compatible Python requirements",
         "without losing live state",
         "evaluation remains available so state can be saved",
