@@ -270,12 +270,17 @@ mod platform {
         sql: &mut crate::sql::Bridge,
     ) -> Result<(), String> {
         run_ready_handlers(graphics)?;
+        if WORKER_SHUTDOWN.load(Ordering::SeqCst) {
+            return Ok(());
+        }
         let result = match cell.language {
             Language::R => evaluate_r_cell(cell.source, graphics),
             Language::Python => evaluate_python_cell(cell.source, graphics, python),
             Language::Sql => evaluate_sql_cell(cell.source, sql),
         };
-        run_ready_handlers(graphics)?;
+        if result.is_ok() && !WORKER_SHUTDOWN.load(Ordering::SeqCst) {
+            run_ready_handlers(graphics)?;
+        }
         result
     }
 
