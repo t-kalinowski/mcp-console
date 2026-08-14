@@ -54,7 +54,7 @@ mod platform {
             check_activity: CheckActivity,
             run_handlers: RunHandlers,
             input_handlers: *mut c_void,
-        ) -> c_int;
+        );
         fn mcp_r_repl_run_cell(
             init: ReplInit,
             do_one: ReplDoOne,
