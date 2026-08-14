@@ -1,6 +1,5 @@
 #!/usr/bin/env -S uv run --script
 
-import json
 import os
 import shutil
 import tempfile
@@ -265,7 +264,7 @@ def test_failed_live_r_preparation_requires_restart(binary: Path) -> Transcript:
     assert saved_path.is_file(), saved_path
     assert client.temporary_directory is not None
     # Preserve the RDS outside the retiring worker's private temporary directory.
-    saved_sentinel = Path(client.temporary_directory.name) / 'saved-"sentinel\\.rds'
+    saved_sentinel = Path(client.temporary_directory.name) / 'saved-😀"sentinel\\.rds'
     shutil.copyfile(saved_path, saved_sentinel)
     client.transcript[-1]["result"]["content"][0]["text"] = (
         "<worker temporary RDS path>"
@@ -288,7 +287,8 @@ def test_failed_live_r_preparation_requires_restart(binary: Path) -> Transcript:
           identical(dirname(find.package("zeallot")), .libPaths()[[1L]])
         )
         """)
-    saved_sentinel_literal = json.dumps(saved_sentinel.as_posix())
+    saved_sentinel_bytes = ", ".join(str(byte) for byte in os.fsencode(saved_sentinel))
+    saved_sentinel_literal = f"rawToChar(as.raw(c({saved_sentinel_bytes})))"
     client.send(r=restarted.replace('"<saved sentinel path>"', saved_sentinel_literal))
     client.transcript[-1]["send"]["r"] = restarted
     assert last_tool_text(client) == "[done]"
