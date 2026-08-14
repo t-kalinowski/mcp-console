@@ -39,8 +39,10 @@ result:
         globals through `r.name`; R reads Python globals through `py$name`; SQL
         queries R data frames by name; R accesses the DuckDB catalog through
         `sql_connection()`. Language-native help and introspection are
-        available. Use `session` to prepare other packages or DuckDB extensions
-        before loading or importing them. R default-device plots and open
+        available. Do not probe package availability in cells. Use `session` to
+        prepare other packages or DuckDB extensions before loading or importing
+        them. If you use a custom Python installation, import packages already
+        installed there directly. R default-device plots and open
         `matplotlib.pyplot` figures return as PNG images. Send exactly one
         complete `r`, `python`, or `sql` cell. Call `send` sequentially;
         concurrent calls are unsupported. Use `stdin` for interactive reads or
@@ -77,11 +79,12 @@ result:
           python:
             description: |-
               Complete multiline Python cell evaluated in persistent `__main__` state; its final expression
-              is displayed. The built-in managed Python environment includes NumPy and pandas. Use
-              `session` to prepare other packages such as scikit-learn or Matplotlib. Read R globals and
-              call R functions through `r.name`; for example, `frame = r.df`. Return Python globals to R
-              through `py$name`. Python data frames are not automatically visible to SQL; bind them to an R
-              name first. At cell end, including after a Python error, every open `matplotlib.pyplot` figure
+              is displayed. The built-in managed Python environment includes NumPy and pandas. If you use a
+              custom Python installation, import packages already installed there directly. Use `session`
+              to prepare other packages such as scikit-learn or Matplotlib. Read R globals and call R
+              functions through `r.name`; for example, `frame = r.df`. Return Python globals to R through
+              `py$name`. Python data frames are not automatically visible to SQL; bind them to an R name
+              first. At cell end, including after a Python error, every open `matplotlib.pyplot` figure
               returns once as a PNG image and is closed. `show()` is optional. R plots called through `r`
               follow the R plot rules. Omit to send stdin or poll.
             type:

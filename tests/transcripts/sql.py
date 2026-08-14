@@ -1,6 +1,7 @@
 #!/usr/bin/env -S uv run --script
 
 import os
+import re
 import tempfile
 from pathlib import Path
 
@@ -293,6 +294,388 @@ def test_prepares_and_loads_duckdb_extensions(binary: Path) -> Transcript:
         preview = last_tool_text(client)
         assert preview.splitlines()[-1].split() == ["1", '"loaded"']
         return client._finish()
+
+
+def test_queries_a_ragnar_store_created_in_r(binary: Path) -> Transcript:
+    environment, _ = r_test_environment()
+    environment["RETICULATE_PYTHON"] = ""
+    temporary = tempfile.TemporaryDirectory()
+    workspace = Path(temporary.name)
+    home = workspace / "home"
+    home.mkdir()
+    use_temporary_home(environment, home)
+    # Isolate DuckDB's extension cache while reusing the host IR package cache.
+    environment.pop("IR_CACHE_DIR")
+    client = McpClient(
+        binary,
+        ("serve",),
+        environment,
+        current_directory=workspace,
+    )
+    client._initialize_and_list_tools()
+
+    sql = code(r"""
+        CREATE TEMP TABLE before_prepare AS
+        SELECT CAST(42 AS INTEGER) AS value
+        """)
+    client.send(sql=sql)
+    assert last_tool_text(client) == "[done]"
+
+    client.session(
+        action="prepare",
+        requirements={"r": ["ragnar"], "duckdb": ["fts", "vss"]},
+    )
+    assert last_tool_text(client) == "[prepared]"
+
+    # fmt: r
+    r = code(r"""
+        stopifnot(
+          identical(
+            DBI::dbGetQuery(
+              sql_connection(),
+              "SELECT value FROM before_prepare"
+            )$value,
+            42L
+          ),
+          identical(dirname(find.package("ragnar")), .libPaths()[[1L]])
+        )
+        embed_banana <- function(x) {
+          out <- matrix(1, nrow = length(x), ncol = 2L)
+          out[, 1L] <- grepl("banana", x, ignore.case = TRUE)
+          out
+        }
+        store_path <- file.path(tempdir(), "knowledge.ragnar.duckdb")
+        store <- suppressMessages(ragnar::ragnar_store_create(
+          location = store_path,
+          embed = embed_banana,
+          embedding_size = 2L
+        ))
+        documents <- list(
+          ragnar::MarkdownDocument(
+            "# Alpha\n\nApples are red fruit.",
+            origin = "alpha.md"
+          ),
+          ragnar::MarkdownDocument(
+            "# Beta\n\nBananas are yellow fruit.",
+            origin = "beta.md"
+          )
+        )
+        for (document in documents) {
+          chunks <- ragnar::markdown_chunk(
+            document,
+            target_size = 1000L,
+            target_overlap = 0
+          )
+          ragnar::ragnar_store_insert(store, chunks)
+        }
+        ragnar::ragnar_store_build_index(store, type = c("vss", "fts"))
+        connection <- sql_connection()
+        invisible(DBI::dbExecute(
+          connection,
+          paste(
+            "ATTACH",
+            DBI::dbQuoteString(connection, store_path),
+            "AS knowledge (READ_ONLY)"
+          )
+        ))
+        invisible(DBI::dbExecute(connection, "USE knowledge"))
+        writeLines("ragnar store ready")
+        """)
+    client.send(r=r)
+    marker = "ragnar store ready\n"
+    assert normalize_duckdb_progress(client) == marker
+
+    sql = code(r"""
+        LOAD fts;
+        LOAD vss;
+        SELECT
+          document.origin AS vss_origin,
+          nearest.distance,
+          (
+            SELECT origin
+            FROM chunks
+            WHERE fts_main_chunks.match_bm25(chunk_id, 'bananas') IS NOT NULL
+            ORDER BY origin
+            LIMIT 1
+          ) AS fts_origin,
+          (SELECT value FROM before_prepare) AS retained
+        FROM (
+          SELECT
+            doc_id,
+            array_cosine_distance(
+              embedding,
+              [1, 1]::FLOAT[2]
+            ) AS distance
+          FROM embeddings
+          ORDER BY distance
+          LIMIT 1
+        ) AS nearest
+        JOIN documents AS document USING (doc_id)
+        ORDER BY nearest.distance
+        """)
+    client.send(sql=sql)
+    preview = last_tool_text(client)
+    assert preview.splitlines()[-1].split() == [
+        "1",
+        '"beta.md"',
+        "0.0",
+        '"beta.md"',
+        "42",
+    ]
+    assert '"alpha.md"' not in preview
+    transcript = client._finish()
+    temporary.cleanup()
+    return transcript
+
+
+def test_uses_ragnar_like_the_guide_and_adapts_to_the_console(
+    binary: Path,
+) -> Transcript:
+    environment, _ = r_test_environment()
+    environment["RETICULATE_PYTHON"] = ""
+    temporary = tempfile.TemporaryDirectory()
+    workspace = Path(temporary.name)
+    home = workspace / "home"
+    home.mkdir()
+    use_temporary_home(environment, home)
+    # Isolate DuckDB's extension cache while reusing the host IR package cache.
+    environment.pop("IR_CACHE_DIR")
+    client = McpClient(
+        binary,
+        ("serve",),
+        environment,
+        current_directory=workspace,
+    )
+    client._initialize_and_list_tools()
+
+    sql = code(r"""
+        CREATE TABLE agent_notes AS
+        SELECT 'worker catalog' AS note
+        """)
+    client.send(sql=sql)
+    assert last_tool_text(client) == "[done]"
+
+    client.session(action="prepare", requirements={"r": ["ragnar"]})
+    assert last_tool_text(client) == "[prepared]"
+
+    r = code(r"""
+        ragnar::ragnar_store_create(
+          "knowledge.ragnar.duckdb",
+          embed = NULL
+        )
+        """)
+    client.send(r=r)
+    output = normalize_duckdb_progress(client)
+    assert "knowledge.ragnar.duckdb" in output
+    assert "Operation not permitted" in output
+    for directory in (str(workspace.resolve()), str(workspace)):
+        output = output.replace(directory, "<workspace>")
+    client.transcript[-1]["result"]["content"][0]["text"] = output
+    assert not (workspace / "knowledge.ragnar.duckdb").exists()
+
+    # fmt: r
+    r = code(r"""
+        store_path <- file.path(tempdir(), "knowledge.ragnar.duckdb")
+        store <- suppressMessages(ragnar::ragnar_store_create(
+          store_path,
+          embed = NULL
+        ))
+        documents <- list(
+          ragnar::MarkdownDocument(
+            "# Alpha\n\nApples are red fruit.",
+            origin = "alpha.md"
+          ),
+          ragnar::MarkdownDocument(
+            "# Beta\n\nBananas are yellow fruit.",
+            origin = "beta.md"
+          )
+        )
+        for (document in documents) {
+          chunks <- ragnar::markdown_chunk(
+            document,
+            target_size = 1000L,
+            target_overlap = 0
+          )
+          ragnar::ragnar_store_insert(store, chunks)
+        }
+        writeLines("created store under the worker tempdir")
+        """)
+    client.send(r=r)
+    assert normalize_duckdb_progress(client) == (
+        "created store under the worker tempdir\n"
+    )
+
+    r = code(r"""
+        ragnar::ragnar_store_build_index(store)
+        """)
+    client.send(r=r)
+    failure = normalize_duckdb_extension_error(client)
+    assert 'Failed to download extension "fts"' in failure
+
+    client.session(
+        action="prepare",
+        requirements={"duckdb": ["fts"]},
+    )
+    assert last_tool_text(client) == "[prepared]"
+
+    r = code(r"""
+        stopifnot(
+          DBI::dbIsValid(store@con),
+          DBI::dbGetQuery(store@con, "SELECT count(*) AS n FROM chunks")$n == 2
+        )
+        ragnar::ragnar_store_build_index(store)
+        writeLines("index built after extension preparation")
+        """)
+    client.send(r=r)
+    assert normalize_duckdb_progress(client) == (
+        "index built after extension preparation\n"
+    )
+
+    r = code(r"""
+        creator_result <- ragnar::ragnar_retrieve(
+          store,
+          "bananas",
+          top_k = 1L
+        )
+        creator_result[c("origin", "text")]
+        """)
+    client.send(r=r)
+    preview = normalize_duckdb_progress(client)
+    assert "beta.md" in preview and "Bananas are yellow fruit" in preview
+    assert "alpha.md" not in preview
+
+    r = code(r"""
+        reader <- ragnar::ragnar_store_connect(
+          store_path,
+          read_only = TRUE
+        )
+        """)
+    client.send(r=r)
+    failure = normalize_duckdb_extension_error(client)
+    assert 'Failed to download extension "vss"' in failure
+
+    client.session(
+        action="prepare",
+        requirements={"duckdb": ["vss"]},
+    )
+    assert last_tool_text(client) == "[prepared]"
+
+    r = code(r"""
+        reader <- ragnar::ragnar_store_connect(
+          store_path,
+          read_only = TRUE
+        )
+        reader_result <- ragnar::ragnar_retrieve(
+          reader,
+          "apples",
+          top_k = 1L
+        )
+        reader_result[c("origin", "text")]
+        """)
+    client.send(r=r)
+    preview = normalize_duckdb_progress(client)
+    assert "alpha.md" in preview and "Apples are red fruit" in preview
+    assert "beta.md" not in preview
+
+    sql = code(r"""
+        SELECT origin FROM chunks ORDER BY origin
+        """)
+    client.send(sql=sql)
+    output = normalize_trailing_spaces(client)
+    assert "Binder Error:" in output
+    assert 'Referenced column "origin" not found' in output
+
+    r = code(r"""
+        writeLines(paste(
+          "R chunks columns:",
+          paste(names(chunks), collapse = ", ")
+        ))
+        rm(chunks)
+        """)
+    client.send(r=r)
+    assert last_tool_text(client) == ("R chunks columns: start, end, context, text\n")
+
+    client.send(sql=sql)
+    output = normalize_trailing_spaces(client)
+    assert "Catalog Error:" in output
+    assert "Table with name chunks does not exist" in output
+
+    r = code(r"""
+        sql_connection(reader@con)
+        """)
+    client.send(r=r)
+    assert last_tool_text(client) == (
+        "Error in sql_connection(reader@con) : unused argument (reader@con)\n"
+    )
+
+    r = code(r"""
+        connection <- sql_connection()
+        stopifnot(
+          DBI::dbIsValid(store@con),
+          DBI::dbIsValid(reader@con),
+          !identical(connection, store@con),
+          !identical(connection, reader@con)
+        )
+        invisible(DBI::dbExecute(
+          connection,
+          paste(
+            "ATTACH",
+            DBI::dbQuoteString(connection, store_path),
+            "AS knowledge (READ_ONLY)"
+          )
+        ))
+        writeLines("attached with both ragnar connections still open")
+        """)
+    client.send(r=r)
+    assert last_tool_text(client) == (
+        "attached with both ragnar connections still open\n"
+    )
+
+    sql = code(r"""
+        SELECT origin FROM knowledge.main.chunks ORDER BY origin
+        """)
+    client.send(sql=sql)
+    preview = normalize_trailing_spaces(client)
+    assert [line.split() for line in preview.splitlines()[-2:]] == [
+        ["1", '"alpha.md"'],
+        ["2", '"beta.md"'],
+    ]
+
+    sql = code(r"""
+        SELECT origin
+        FROM knowledge.main.chunks
+        WHERE knowledge.fts_main_chunks.match_bm25(
+          chunk_id,
+          'bananas'
+        ) IS NOT NULL
+        ORDER BY origin
+        """)
+    client.send(sql=sql)
+    output = normalize_trailing_spaces(client)
+    assert 'Table with name "fts_main_chunks.terms" does not exist' in output
+    assert 'schema "fts_main_chunks" does not exist' in output
+
+    sql = code(r"""
+        USE knowledge;
+        SELECT
+          origin,
+          (SELECT note FROM memory.main.agent_notes) AS note
+        FROM chunks
+        WHERE fts_main_chunks.match_bm25(chunk_id, 'bananas') IS NOT NULL
+        ORDER BY origin
+        """)
+    client.send(sql=sql)
+    preview = normalize_trailing_spaces(client)
+    assert preview.splitlines()[-1].split() == [
+        "1",
+        '"beta.md"',
+        '"worker',
+        'catalog"',
+    ]
+
+    transcript = client._finish()
+    temporary.cleanup()
+    return transcript
 
 
 def test_evaluates_queries_in_a_persistent_catalog(binary: Path) -> Transcript:
@@ -838,6 +1221,47 @@ def last_tool_text(client: McpClient) -> str:
     result = client.transcript[-1]["result"]
     assert result.get("isError") is not True, result
     return result["content"][0]["text"]
+
+
+def normalize_duckdb_progress(client: McpClient) -> str:
+    output = last_tool_text(client)
+    sections = output.split("\r")
+    assert all(
+        not section.strip() or section.startswith("DuckDB progress:")
+        for section in sections[:-1]
+    ), output
+    output = sections[-1]
+    client.transcript[-1]["result"]["content"][0]["text"] = output
+    return normalize_trailing_spaces(client)
+
+
+def normalize_duckdb_extension_error(client: McpClient) -> str:
+    output = normalize_duckdb_progress(client)
+    output, download_urls = re.subn(
+        r'(?<= at URL )"https?://[^"]+"',
+        '"<DuckDB extension URL>"',
+        output,
+        count=1,
+    )
+    output, troubleshooting_urls = re.subn(
+        r"https://duckdb\.org/docs/stable/extensions/troubleshooting\?\S+",
+        "<DuckDB extension troubleshooting URL>",
+        output,
+        count=1,
+    )
+    assert (download_urls, troubleshooting_urls) == (1, 1), output
+    client.transcript[-1]["result"]["content"][0]["text"] = output
+    return output
+
+
+def normalize_trailing_spaces(client: McpClient) -> str:
+    output = last_tool_text(client)
+    trailing_newline = output.endswith("\n")
+    output = "\n".join(line.rstrip() for line in output.splitlines())
+    if trailing_newline:
+        output += "\n"
+    client.transcript[-1]["result"]["content"][0]["text"] = output
+    return output
 
 
 def duckdb_native_failure(failure: str) -> str:
