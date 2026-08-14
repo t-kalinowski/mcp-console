@@ -5,12 +5,12 @@ import re
 import shutil
 import subprocess
 import tempfile
+import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from textwrap import dedent
 from typing import Any
-
 
 TranscriptEntry = dict[str, Any]
 Transcript = list[TranscriptEntry]
@@ -346,3 +346,29 @@ class McpClient:
         assert return_code == 0, standard_error
         assert extra_output == "", f"unexpected extra output: {extra_output}"
         return self.transcript, standard_error
+
+
+def wait_for_worker_file(root: Path, name: str, client: McpClient) -> Path:
+    deadline = time.monotonic() + 10
+    while True:
+        paths = list(root.glob(f"**/{name}"))
+        if paths:
+            assert len(paths) == 1, paths
+            return paths[0]
+        assert client.process.poll() is None, (
+            "mcp-console stopped before worker checkpoint"
+        )
+        assert time.monotonic() < deadline, f"worker did not create {name}"
+        time.sleep(0.01)
+
+
+def stop_client(client: McpClient) -> None:
+    if client.process.poll() is not None:
+        return
+    if not client.stdin.closed:
+        client.stdin.close()
+    try:
+        client.process.wait(timeout=2)
+    except subprocess.TimeoutExpired:
+        client.process.kill()
+        client.process.wait()

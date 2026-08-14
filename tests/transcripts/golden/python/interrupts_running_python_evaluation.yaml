@@ -1,0 +1,57 @@
+---
+!same-as tests/transcripts/golden/server/initializes_and_lists_tools.yaml
+---
+id: 3
+send:
+  python: |
+    import os
+    from pathlib import Path
+    
+    python_interrupt_state = 41
+    Path(
+        os.environ["TMPDIR"],
+        "python-interrupt-started",
+    ).touch()
+    while True:
+        pass
+  timeout_ms: 0
+result:
+  content:
+    - type: text
+      text: |-
+        
+        [running]
+  isError: false
+---
+id: 4
+session:
+  action: interrupt
+result:
+  content:
+    - type: text
+      text: "[interrupt sent]"
+  isError: false
+---
+id: 5
+send:
+  timeout_ms: 3000
+result:
+  content:
+    - type: text
+      text: |
+        Traceback (most recent call last):
+          File "<string>", line 83, in _mcp_console_eval_cell
+          File "<mcp-console:python:e1>", line 9, in <module>
+        KeyboardInterrupt
+  isError: false
+---
+id: 6
+send:
+  python: python_interrupt_state + 1
+result:
+  content:
+    - type: text
+      text: |
+        42
+  isError: false
+...

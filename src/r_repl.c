@@ -3,6 +3,7 @@
 typedef void (*repl_init_fn)(void);
 typedef int (*repl_do_one_fn)(void);
 typedef void (*before_do_one_fn)(void);
+typedef void (*check_interrupt_fn)(void);
 
 /*
  * R errors jump to the context installed by R_ReplDLLinit(). Keep that
@@ -17,8 +18,13 @@ static volatile sig_atomic_t returned_normally = 1;
  * and keep the helper as a distinct C frame in optimized builds.
  */
 __attribute__((noinline))
-static int call_do_one(repl_do_one_fn do_one) {
+static int call_do_one(
+    repl_do_one_fn do_one,
+    check_interrupt_fn check_interrupt
+) {
+    check_interrupt();
     int status = do_one();
+    check_interrupt();
     returned_normally = 1;
     return status;
 }
@@ -26,7 +32,8 @@ static int call_do_one(repl_do_one_fn do_one) {
 int mcp_r_repl_run_cell(
     repl_init_fn init,
     repl_do_one_fn do_one,
-    before_do_one_fn before_do_one
+    before_do_one_fn before_do_one,
+    check_interrupt_fn check_interrupt
 ) {
     int last_status = 1;
 
@@ -41,7 +48,7 @@ int mcp_r_repl_run_cell(
     for (;;) {
         before_do_one();
         returned_normally = 0;
-        int status = call_do_one(do_one);
+        int status = call_do_one(do_one, check_interrupt);
         if (!returned_normally) {
             returned_normally = 1;
             return 0;

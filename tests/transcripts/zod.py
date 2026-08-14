@@ -17,6 +17,7 @@ from _support import (
     TranscriptWithCompanion,
     code,
     run_this_suite,
+    stop_client,
 )
 
 PLATFORMS = {"darwin"}
@@ -686,6 +687,44 @@ def test_drains_pending_sideband_output_while_running(binary: Path) -> Transcrip
         client.send(timeout_ms=3_000)
         assert last_tool_text(client) == "[done]"
         return client._finish()
+
+
+def test_interrupts_running_worker_with_sigint(binary: Path) -> Transcript:
+    zod = Path(__file__).resolve().parents[1] / "fixtures" / "zod"
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        temporary_path = Path(temporary_directory)
+        environment = os.environ.copy()
+        environment["TMPDIR"] = temporary_directory
+        client = McpClient(
+            binary,
+            ("serve", "--worker", str(zod)),
+            environment,
+        )
+        passed = False
+        try:
+            client._initialize_and_list_tools()
+            client.send(r="interrupt", timeout_ms=0)
+            assert last_tool_text(client) == "\n[running]"
+            wait_for_marker(
+                temporary_path,
+                "zod-interrupt-evaluation-started",
+                client,
+            )
+
+            client.session(action="interrupt")
+            assert last_tool_text(client) == "[interrupt sent]"
+            wait_for_marker(temporary_path, "zod-sigint-received", client)
+
+            client.send(timeout_ms=3_000)
+            assert last_tool_text(client) == "zod interrupted\n"
+            client.send(r="echo")
+            assert last_tool_text(client) == "zod: echo\n"
+            transcript = client._finish()
+            passed = True
+            return transcript
+        finally:
+            if not passed:
+                stop_client(client)
 
 
 def test_accepts_idle_stdin(binary: Path) -> Transcript:

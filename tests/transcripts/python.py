@@ -6,7 +6,6 @@ import socket
 import subprocess
 import tempfile
 import threading
-import time
 from pathlib import Path
 
 from _support import (
@@ -18,8 +17,9 @@ from _support import (
     r_test_environment,
     reference_plots,
     run_this_suite,
+    stop_client,
+    wait_for_worker_file,
 )
-
 
 PLATFORMS = {"darwin"}
 
@@ -724,6 +724,51 @@ def test_rejects_python_preparation_while_evaluation_is_running(
         client.send(python="runtime_generation_marker")
         assert last_tool_text(client) == "'original runtime retained'\n"
         return client._finish()
+
+
+def test_interrupts_running_python_evaluation(binary: Path) -> Transcript:
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        temporary_path = Path(temporary_directory)
+        environment = os.environ.copy()
+        environment["TMPDIR"] = temporary_directory
+        client = McpClient(binary, ("serve",), environment)
+        passed = False
+        try:
+            client._initialize_and_list_tools()
+            # fmt: python
+            python = code("""
+                import os
+                from pathlib import Path
+
+                python_interrupt_state = 41
+                Path(
+                    os.environ["TMPDIR"],
+                    "python-interrupt-started",
+                ).touch()
+                while True:
+                    pass
+                """)
+            client.send(python=python, timeout_ms=0)
+            assert last_tool_text(client) == "\n[running]"
+            wait_for_worker_file(
+                temporary_path,
+                "python-interrupt-started",
+                client,
+            )
+
+            client.session(action="interrupt")
+            assert last_tool_text(client) == "[interrupt sent]"
+            client.send(timeout_ms=3_000)
+            assert "KeyboardInterrupt" in last_tool_text(client)
+
+            client.send(python="python_interrupt_state + 1")
+            assert last_tool_text(client) == "42\n"
+            transcript = client._finish()
+            passed = True
+            return transcript
+        finally:
+            if not passed:
+                stop_client(client)
 
 
 def test_restart_cancels_live_python_preparation(binary: Path) -> Transcript:
@@ -1656,20 +1701,6 @@ def test_restarts_after_python_bridge_failure(binary: Path) -> Transcript:
 
 def last_tool_text(client: McpClient) -> str:
     return client.transcript[-1]["result"]["content"][0]["text"]
-
-
-def wait_for_worker_file(root: Path, name: str, client: McpClient) -> Path:
-    deadline = time.monotonic() + 10
-    while True:
-        paths = list(root.glob(f"**/{name}"))
-        if paths:
-            assert len(paths) == 1, paths
-            return paths[0]
-        assert client.process.poll() is None, (
-            "mcp-console stopped before worker checkpoint"
-        )
-        assert time.monotonic() < deadline, f"worker did not create {name}"
-        time.sleep(0.01)
 
 
 if __name__ == "__main__":

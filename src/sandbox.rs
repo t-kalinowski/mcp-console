@@ -234,6 +234,29 @@ impl SandboxedChild {
         })
     }
 
+    /// Sends SIGINT to the live direct sandbox process.
+    pub(crate) fn interrupt(&mut self) -> Result<(), String> {
+        let status = self
+            .child
+            .try_wait()
+            .map_err(|error| format!("failed to read worker status: {error}"))?;
+        if status.is_some() {
+            return Err("worker is not running".to_string());
+        }
+
+        // SAFETY: the child remains unreaped while this owner is locked, so
+        // its PID cannot be reused before kill returns.
+        let result = unsafe { libc::kill(self.child.id() as libc::pid_t, libc::SIGINT) };
+        if result == 0 {
+            Ok(())
+        } else {
+            Err(format!(
+                "failed to interrupt worker: {}",
+                std::io::Error::last_os_error()
+            ))
+        }
+    }
+
     /// Kills the live sandbox process group and reaps its direct process.
     ///
     /// Full descendant supervision, including a group whose leader has already

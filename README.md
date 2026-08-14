@@ -98,6 +98,19 @@ A failed automatic replacement leaves the worker stopped; a `prepare` call with 
 Caller-selected Python environments cannot accept managed Python additions, but their built-in workers can still apply R requirements.
 Custom workers cannot use managed preparation.
 
+A live worker can be sent an interrupt:
+
+```json
+{ "action": "interrupt" }
+```
+
+The call sends `SIGINT` to the worker process and returns `[interrupt sent]` without waiting for a sideband acknowledgment or evaluation result.
+It does not start a lazy worker; when no worker process exists, it returns `worker is not running`.
+The signal is not assigned to a cell: an idle signal is consumed at the next managed boundary, and a signal during R, reticulate Python, or DuckDB is handled by that runtime.
+Code can catch or delay the signal, so use `restart` when the worker does not return.
+An empty managed `readline()`, Python `input()` or debugger prompt, and host-side package resolution do not provide a periodic worker boundary and may continue waiting.
+`interrupt` accepts no `requirements`.
+
 The client can explicitly replace the worker, retain the prepared R library, and add Python requirements in the same call:
 
 ```json
@@ -312,7 +325,7 @@ The intended default client registration name is `console`:
 codex mcp add console -- mcp-console serve
 ```
 
-Under Codex's current naming convention, the implemented tools are `mcp__console.send` and `mcp__console.session`; `session` supports R and Python requirement preparation, live late R and Python additions, and explicit restart with optional additive Python requirements for the implicit session.
+Under Codex's current naming convention, the implemented tools are `mcp__console.send` and `mcp__console.session`; `session` supports R and Python requirement preparation, live late R and Python additions, best-effort worker interruption, and explicit restart with optional additive Python requirements for the implicit session.
 
 On macOS, `sandbox` launches the command under `/usr/bin/sandbox-exec`.
 The command can read the host filesystem, can write regular files only in a dedicated temporary directory, and cannot access the network.

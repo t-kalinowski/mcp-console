@@ -240,7 +240,7 @@ base::local({
     )
   }
 
-  evaluate <- function(id) {
+  evaluate_impl <- function(id) {
     if (is.null(evaluator)) {
       private <- reticulate::py_run_string(r"---(
 import __main__ as _main
@@ -347,6 +347,13 @@ def _mcp_console_eval_cell(
     for (image in images) {
       invisible(.Call("mcp_console_publish_python_plot", image))
     }
+    invisible()
+  }
+
+  evaluate <- function(id) {
+    tryCatch(evaluate_impl(id), interrupt = function(condition) {
+      cat("Error: interrupted\n")
+    })
     invisible()
   }
 

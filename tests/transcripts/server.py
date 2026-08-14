@@ -145,6 +145,16 @@ def test_validates_session_arguments(binary: Path) -> Transcript:
     )
 
     client.session(
+        action="interrupt",
+        requirements={"python": ["py-yaml12"]},
+    )
+    result = client.transcript[-1]["result"]
+    assert result["isError"] is True
+    assert result["content"][0]["text"] == (
+        "`requirements` is not supported with `interrupt`"
+    )
+
+    client.session(
         action="restart",
         requirements={"python": []},
     )
@@ -163,6 +173,16 @@ def test_validates_session_arguments(binary: Path) -> Transcript:
     assert result["content"][0]["text"] == (
         "`requirements.r` is not supported with `restart`"
     )
+    return client._finish()
+
+
+def test_rejects_interrupt_without_worker(binary: Path) -> Transcript:
+    client = McpClient(binary, ("serve",))
+    client._initialize_and_list_tools()
+    client.session(action="interrupt")
+    result = client.transcript[-1]["result"]
+    assert result["isError"] is True
+    assert result["content"][0]["text"] == "worker is not running"
     return client._finish()
 
 

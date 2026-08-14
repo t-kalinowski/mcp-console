@@ -75,6 +75,7 @@ struct SendArguments {
 #[serde(rename_all = "snake_case")]
 enum SessionAction {
     Prepare,
+    Interrupt,
     Restart,
 }
 
@@ -100,12 +101,14 @@ struct Requirements {
 #[serde(deny_unknown_fields)]
 struct SessionArguments {
     /// `prepare` adds R or Python requirements before a server-managed worker starts. After startup,
-    /// it can add R and compatible Python requirements while the worker is idle. `restart` replaces
-    /// the worker, optionally adds Python requirements, and starts it if needed.
+    /// it can add R and compatible Python requirements while the worker is idle. `interrupt` sends
+    /// SIGINT to the live worker process. `restart` replaces the worker, optionally adds Python
+    /// requirements, and starts it if needed.
     action: SessionAction,
     /// Additive packages to make available. `prepare` requires at least one R or Python entry.
-    /// `restart` accepts Python entries only; omit `requirements` to restart unchanged. Requirements
-    /// persist across restart but do not import or attach packages. After a recoverable live
+    /// `interrupt` accepts no requirements. `restart` accepts Python entries only; omit
+    /// `requirements` to restart unchanged. Requirements persist across restart but do not import or
+    /// attach packages. After a recoverable live
     /// preparation failure, evaluation remains available so state can be saved, but new requirement
     /// additions return `[restart required]` until restart. The same marker follows a failed
     /// automatic replacement. Resolution runs outside the worker sandbox and may download packages
@@ -188,7 +191,7 @@ impl ConsoleServer {
     }
 
     #[tool(
-        description = "Make additional R or Python packages available, or restart the persistent console session. Use `prepare` for packages not included in the built-in environments. Packages are not imported or attached automatically. An idle server-managed worker can add R and compatible Python requirements without losing live state. After a recoverable live preparation failure, evaluation remains available so state can be saved, but new requirement additions require restart. Requirements are additive, idempotent, and persist across restart. `restart` may optionally add Python requirements, then replaces the worker and loses all in-memory R, Python, and SQL state, debugger state, and unread stdin. Requirement resolution runs outside the execution sandbox and may download packages or execute installation or build code on the host; use only trusted requirements."
+        description = "Make additional R or Python packages available, send SIGINT to the live worker process, or restart the persistent console session. Use `prepare` for packages not included in the built-in environments. Packages are not imported or attached automatically. An idle server-managed worker can add R and compatible Python requirements without losing live state. After a recoverable live preparation failure, evaluation remains available so state can be saved, but new requirement additions require restart. Requirements are additive, idempotent, and persist across restart. `interrupt` returns after sending the signal; user code may catch or delay it. `restart` may optionally add Python requirements, then replaces the worker and loses all in-memory R, Python, and SQL state, debugger state, and unread stdin. Requirement resolution runs outside the execution sandbox and may download packages or execute installation or build code on the host; use only trusted requirements."
     )]
     async fn session(
         &self,
@@ -228,6 +231,13 @@ impl ConsoleServer {
                         ));
                     }
                 }
+            }
+            SessionAction::Interrupt => {
+                if requirements.is_some() {
+                    return Err("`requirements` is not supported with `interrupt`".to_string());
+                }
+                self.worker.interrupt().await?;
+                "[interrupt sent]"
             }
             SessionAction::Restart => {
                 let python = match requirements {
