@@ -246,6 +246,27 @@ mod platform {
             .map_err(|error| format!("worker sideband read failed: {error}"))
     }
 
+    fn observe_stdin_shutdown() -> Result<(), String> {
+        let mut event = libc::pollfd {
+            fd: libc::STDIN_FILENO,
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        loop {
+            let result = unsafe { libc::poll(&mut event, 1, 0) };
+            if result >= 0 {
+                if event.revents & libc::POLLHUP != 0 {
+                    WORKER_SHUTDOWN.store(true, Ordering::SeqCst);
+                }
+                return Ok(());
+            }
+            let error = io::Error::last_os_error();
+            if error.kind() != io::ErrorKind::Interrupted {
+                return Err(format!("worker stdin readiness check failed: {error}"));
+            }
+        }
+    }
+
     fn send_worker_message(message: &WorkerMessage) -> Result<(), String> {
         if !crate::sideband::available_in_process() {
             return Err("managed Python resolution is unavailable in a fork child".to_string());
@@ -431,7 +452,8 @@ mod platform {
             );
         }
         EVALUATION_STARTED.store(false, Ordering::SeqCst);
-        graphics.finish()
+        graphics.finish()?;
+        observe_stdin_shutdown()
     }
 
     fn r_input_handlers() -> *mut c_void {

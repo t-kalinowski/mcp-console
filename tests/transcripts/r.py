@@ -534,6 +534,39 @@ def test_restart_skips_cell_boundary_callbacks(binary: Path) -> Transcript:
     return client._finish()
 
 
+def test_restart_skips_direct_stdin_boundary_callback(binary: Path) -> Transcript:
+    client = McpClient(binary, ("serve",))
+    client._initialize_and_list_tools()
+    client.session(action="prepare", requirements={"r": ["later"]})
+
+    # A direct fd-0 read bypasses the worker's ReadConsole callback. Restart
+    # still must prevent the submitted cell from running after EOF releases it.
+    # fmt: r
+    r = code(r"""
+        later::later(
+          function() {
+            cat("direct callback waiting")
+            connection <- suppressWarnings(file("/dev/stdin"))
+            on.exit(close(connection))
+            readLines(connection, n = 1)
+            cat("direct callback released\n")
+          },
+          delay = 1
+        )
+        """)
+    client.send(r=r)
+    assert last_tool_text(client) == "[done]"
+    time.sleep(1.1)
+
+    client.send(r='cat("direct stdin cell ran\\n")', timeout_ms=1_000)
+    assert last_tool_text(client) == "direct callback waiting\n[running]"
+    client.session(action="restart")
+    output = last_tool_text(client)
+    assert "direct callback released" in output
+    assert "direct stdin cell ran" not in output
+    return client._finish()
+
+
 def test_browser_input(binary: Path) -> Transcript:
     client = McpClient(binary, ("serve",))
     client._initialize_and_list_tools()

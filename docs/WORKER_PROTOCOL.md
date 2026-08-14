@@ -519,6 +519,8 @@ The CLI runs `worker` synchronously without a Tokio runtime, so R initialization
 Immediately before every R, Python, or SQL cell, the worker checks R's registered input handlers without blocking and runs one ready handler turn under `R_ToplevelExec()`.
 It runs a second turn after a normal language outcome unless worker shutdown has begun.
 Shutdown or an infrastructure failure during the initial turn aborts the submitted cell.
+After either turn, the worker polls fd 0 once without blocking and treats `POLLHUP` as shutdown before it can dispatch or complete the cell.
+This also covers callbacks that read fd 0 directly and therefore bypass `ReadConsole`.
 Package callbacks therefore share the cell's console and input routing, while their default-device plots use a separate managed graphics scope.
 Output and images from the final turn precede `completed`.
 The worker does not yet wait on R input handlers between cells, so a timer that becomes ready while the worker is otherwise idle remains pending until a cell boundary.
