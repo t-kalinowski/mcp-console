@@ -11,7 +11,11 @@ result:
   content:
     - type: text
       text: |-
-        R package resolution failed with exit status: 1: Error: IR_NO_LOCAL_SOURCES is set, but installing this environment would use packages from the local file system:
+        R package resolution failed with exit status: 1: ℹ Loading metadata database
+        ✔ Loading metadata database ... done
+
+        <run-specific IR progress frames>
+        Error: IR_NO_LOCAL_SOURCES is set, but installing this environment would use packages from the local file system:
         - requested package `mcpconsolerinstallescape` from `file://<absolute package path>`
         Use a remote package source or unset IR_NO_LOCAL_SOURCES.
         Execution halted

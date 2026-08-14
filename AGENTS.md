@@ -320,6 +320,9 @@ Keep one Cargo package until the implemented code presents a concrete crate boun
   An internal-only refactor does not need a new test; verify it with the existing public test suite.
 - Test through public interfaces.
   Do not add tests for private helpers.
+- Preserve client-visible runtime output in transcript snapshots, including complete errors and tracebacks.
+  Do not replace it with summaries or placeholders.
+  Normalize only incidental fragments that create diff noise, such as run-specific temporary paths, and otherwise leave the content and ordering unchanged.
 - Format embedded R, Python, SQL, and shell test programs as multiline raw strings.
   Use escape sequences such as `\n` only when the program needs that character as data, not to lay out its source.
 - Keep complete code cells separate from interactive `stdin`.

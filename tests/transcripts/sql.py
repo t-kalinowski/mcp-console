@@ -379,7 +379,6 @@ def test_recovers_from_sql_errors(binary: Path) -> Transcript:
     assert output.startswith("Error: "), output
     assert "Catalog Error:" in output, output
     assert "table_that_does_not_exist" in output, output
-    result["content"][0]["text"] = "<DuckDB catalog error>\n"
 
     sql = code(r"""
         SELECT CAST(42 AS INTEGER) AS answer

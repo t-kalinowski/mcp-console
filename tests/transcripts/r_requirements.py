@@ -119,10 +119,18 @@ def test_rejects_local_r_installation(binary: Path) -> Transcript:
         assert "IR_NO_LOCAL_SOURCES is set" in error, error
         assert "mcpconsolerinstallescape" in error, error
         assert "Use a remote package source" in error, error
-        diagnostic = "Error: IR_NO_LOCAL_SOURCES is set"
-        _, separator, error = error.partition(diagnostic)
-        assert separator, error
-        error = f"R package resolution failed with exit status: 1: {diagnostic}{error}"
+        prefix, progress_start, progress_and_error = error.partition("\n\n\r")
+        assert progress_start and prefix.endswith(
+            "Loading metadata database ... done"
+        ), error
+        progress, diagnostic_start, diagnostic = progress_and_error.partition(
+            "Error: IR_NO_LOCAL_SOURCES is set"
+        )
+        assert diagnostic_start and "Resolving" in progress, error
+        error = (
+            f"{prefix}\n\n<run-specific IR progress frames>\n"
+            f"{diagnostic_start}{diagnostic}"
+        )
         client.transcript[-1]["session"]["requirements"]["r"] = [
             reference.replace(str(package), "<absolute package path>")
         ]
@@ -443,9 +451,6 @@ def test_prepares_initial_r_requirements(binary: Path) -> Transcript:
         assert f"Cannot parse package: {invalid_r}." in error, error
         assert error.endswith("Execution halted\nir: dependency resolution failed"), (
             error
-        )
-        result["content"][0]["text"] = "\n".join(
-            line.rstrip() for line in error.splitlines()
         )
 
         invalid_python = "not a valid requirement !!!"
