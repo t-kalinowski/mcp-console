@@ -17,6 +17,7 @@ static ATFORK_RESULT: OnceLock<libc::c_int> = OnceLock::new();
 
 pub(crate) struct Reader {
     inner: BufReader<Box<dyn Read + Send>>,
+    raw_fd: RawFd,
 }
 
 #[derive(Clone)]
@@ -69,9 +70,11 @@ pub(crate) fn connect_from_env() -> io::Result<(Reader, Writer)> {
 }
 
 impl Reader {
-    fn new(reader: impl Read + Send + 'static) -> Self {
+    fn new(reader: impl Read + AsRawFd + Send + 'static) -> Self {
+        let raw_fd = reader.as_raw_fd();
         Self {
             inner: BufReader::new(Box::new(reader)),
+            raw_fd,
         }
     }
 
@@ -87,6 +90,12 @@ impl Reader {
 
         serde_json::from_str(line.trim_end_matches(['\n', '\r']))
             .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
+    }
+}
+
+impl AsRawFd for Reader {
+    fn as_raw_fd(&self) -> RawFd {
+        self.raw_fd
     }
 }
 
