@@ -66,13 +66,8 @@ def normalize_python_resolution_error(error: str, invalid: str | None = None) ->
     )
     assert python_version_patch == int(has_python_version), error
     if invalid is not None:
-        error, uv_indentation = re.subn(
-            rf"(?m)^(?P<indent> *)({re.escape(invalid)})\n(?P=indent)(?P<caret> +\^)$",
-            lambda match: f"{match.group(2)}\n{match.group('caret')}",
-            error,
-        )
-        assert uv_indentation == 1, error
-    return "\n".join(line.rstrip() for line in error.splitlines())
+        assert invalid in error, error
+    return error
 
 
 def r_test_environment() -> tuple[dict[str, str], Path]:

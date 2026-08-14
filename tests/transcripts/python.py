@@ -222,10 +222,7 @@ def test_recovers_from_python_version_resolution_failure(binary: Path) -> Transc
     assert "managed Python version resolution failed" in output
     uv = shutil.which("uv")
     assert uv is not None and output.count(uv) == 1, output
-    output = output.replace(uv, "<uv executable>")
-    result["content"][0]["text"] = "\n".join(
-        line.rstrip(" ") for line in output.split("\n")
-    )
+    result["content"][0]["text"] = output.replace(uv, "<uv executable>")
 
     client.send(r="identical(Sys.getpid(), worker_pid)")
     assert last_tool_text(client) == "[1] TRUE\n"

@@ -110,9 +110,6 @@ def test_returns_cell_scoped_plots(binary: Path) -> Transcript:
     assert len(result["content"]) == 1, result
     output = result["content"][0]["text"]
     assert "plot.new has not been called yet" in output
-    result["content"][0]["text"] = "\n".join(
-        line.rstrip(" ") for line in output.split("\n")
-    )
 
     r = "plot(3:1)"
     expected_plot = reference_plots(

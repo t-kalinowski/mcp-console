@@ -23,7 +23,7 @@ result:
   content:
     - type: text
       text: |-
-        R package resolution failed with exit status: 1: Error:
+        R package resolution failed with exit status: 1: Error: 
         ! error in pak subprocess
         Caused by error in `get_remote_types(refs)`:
         ! Cannot parse package: not a valid requirement !!!.
@@ -80,8 +80,8 @@ result:
         uv output:
         error: Failed to parse: `not a valid requirement !!!`
           Caused by: Expected one of `@`, `(`, `<`, `=`, `>`, `~`, `!`, `;`, found `a`
-        not a valid requirement !!!
-            ^
+            not a valid requirement !!!
+                ^
   isError: true
 ---
 id: 6
