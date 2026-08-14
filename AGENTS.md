@@ -48,6 +48,9 @@ Worker `image` frames carry base64 data and a MIME type.
 Worker `console_output` and `console_diagnostic` frames carry ordinary and diagnostic console text.
 The server retains console channels and direct fd 1/2 identity until MCP projection.
 The server preserves sideband text and image order as MCP content blocks, coalesces adjacent text, and does not add `[done]` when an image is the only output.
+Explicit operation readers accept leading background console, image, and Python-resolution frames.
+An input request fails a noninteractive requirement-preparation operation instead of leaving it blocked.
+An `activity_completed` frame commits that activity's Python checkpoint before the explicit operation continues, although the built-in worker does not emit this frame yet.
 The implemented `session` surface accepts `action = "prepare"` or `action = "restart"` with one or more R or Python requirement strings or DuckDB extension names.
 Restart also accepts no requirements for the implicit session.
 Requirements are exact, additive, and idempotent.

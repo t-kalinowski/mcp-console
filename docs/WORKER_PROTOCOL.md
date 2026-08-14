@@ -231,6 +231,8 @@ The complete implemented message set is:
 | worker → server | `{"kind":"resolve_python_version","request":{"constraints":[],"environment":{}}}` | Select a Python version with reticulate and uv outside the sandbox. |
 | worker → server | `{"kind":"python_prepared","python_checkpoint":{"packages":["numpy","pandas","py-yaml12"]}}` | Finish explicit Python preparation and report its normalized manifest. |
 | worker → server | `{"kind":"python_preparation_failed","message":"..."}` | Report an ordinary explicit-preparation failure without discarding the worker. |
+| worker → server | `{"kind":"activity_completed","python_checkpoint":{"packages":["numpy","pandas","py-yaml12"]}}` | Fence background worker activity before the next explicit operation. The server accepts this frame, but the built-in worker does not emit it yet. |
+| worker → server | `{"kind":"activity_completed"}` | Fence background worker activity without a managed-Python checkpoint. The server accepts this frame, but the built-in worker does not emit it yet. |
 | worker → server | `{"kind":"completed","python_checkpoint":{"packages":["numpy","pandas","py-yaml12"]}}` | Complete the evaluation and report its normalized Python manifest. |
 | worker → server | `{"kind":"completed"}` | Complete without a managed-Python checkpoint. |
 
@@ -271,6 +273,11 @@ The matching `input_received` clears that state after the runtime read succeeds 
 Only one request may be outstanding: a second request, a receipt without a request, or completion before its receipt is a protocol failure.
 `completed` ends the sideband evaluation.
 The server must accept its optional Python checkpoint before the MCP evaluation completes and the next cell is permitted.
+
+Explicit operation readers also accept leading console, image, input, and Python-resolution frames from background worker activity.
+An `activity_completed` frame checkpoints the Python candidates produced by that activity before the reader continues to its own terminal frame.
+Background input requests fail the noninteractive requirement-preparation operation instead of leaving it blocked.
+The built-in worker does not yet run activity between cells, so it does not currently emit this boundary.
 
 An explicit live R preparation has this shape after the server resolves the complete R requirement set:
 

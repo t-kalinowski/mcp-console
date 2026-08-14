@@ -14,6 +14,7 @@ pub(super) struct Worker {
     reader: crate::sideband::Reader,
     writer: crate::sideband::Writer,
     stdin: StdinSender,
+    output: super::OutputTape,
     process: WorkerProcess,
 }
 
@@ -127,6 +128,7 @@ impl WorkerRuntime {
             reader,
             writer,
             stdin,
+            output,
             process,
         };
         if let Err(error) = on_started(worker.shutdown_handle()) {
@@ -158,6 +160,16 @@ impl Worker {
     pub(super) fn prepare_r(
         &mut self,
         library: &std::path::Path,
+        mut resolve_python: impl FnMut(
+            crate::worker_protocol::PythonResolveRequest,
+        ) -> Result<crate::resolver::ManagedPython, String>,
+        mut resolve_python_version: impl FnMut(
+            crate::worker_protocol::PythonVersionResolveRequest,
+        ) -> Result<String, String>,
+        mut checkpoint_python: impl FnMut(
+            Option<crate::worker_protocol::PythonRequirementManifest>,
+            Vec<crate::resolver::ManagedPython>,
+        ) -> Result<(), String>,
     ) -> Result<Result<(), String>, String> {
         let library = library
             .to_str()
@@ -168,7 +180,19 @@ impl Worker {
                 library: library.clone(),
             })
             .map_err(|error| format!("worker sideband write failed: {error}"))?;
-        match self.receive()? {
+        let mut python_candidates = Vec::new();
+        let message = self.receive_preparation_message(
+            &mut python_candidates,
+            &mut resolve_python,
+            &mut resolve_python_version,
+            &mut checkpoint_python,
+        )?;
+        if !python_candidates.is_empty() {
+            return Err(
+                "worker resolved Python without completing background activity".to_string(),
+            );
+        }
+        match message {
             WorkerMessage::RPrepared { library: prepared } if prepared == library => Ok(Ok(())),
             WorkerMessage::RPrepared { .. } => {
                 Err("worker prepared an unexpected R library".to_string())
@@ -185,6 +209,13 @@ impl Worker {
         mut resolve_python: impl FnMut(
             crate::worker_protocol::PythonResolveRequest,
         ) -> Result<crate::resolver::ManagedPython, String>,
+        mut resolve_python_version: impl FnMut(
+            crate::worker_protocol::PythonVersionResolveRequest,
+        ) -> Result<String, String>,
+        mut checkpoint_python: impl FnMut(
+            Option<crate::worker_protocol::PythonRequirementManifest>,
+            Vec<crate::resolver::ManagedPython>,
+        ) -> Result<(), String>,
     ) -> Result<
         Result<
             (
@@ -200,22 +231,17 @@ impl Worker {
             .map_err(|error| format!("worker sideband write failed: {error}"))?;
         let mut python_candidates = Vec::new();
 
-        loop {
-            match self.receive()? {
-                WorkerMessage::ResolvePython { request } => {
-                    python_candidates
-                        .extend(self.resolve_python_request(request, &mut resolve_python)?);
-                }
-                WorkerMessage::PythonPrepared { python_checkpoint } => {
-                    return Ok(Ok((python_checkpoint, python_candidates)));
-                }
-                WorkerMessage::PythonPreparationFailed { message } => {
-                    return Ok(Err(message));
-                }
-                _ => {
-                    return Err("worker sent an unexpected Python preparation message".to_string());
-                }
+        match self.receive_preparation_message(
+            &mut python_candidates,
+            &mut resolve_python,
+            &mut resolve_python_version,
+            &mut checkpoint_python,
+        )? {
+            WorkerMessage::PythonPrepared { python_checkpoint } => {
+                Ok(Ok((python_checkpoint, python_candidates)))
             }
+            WorkerMessage::PythonPreparationFailed { message } => Ok(Err(message)),
+            _ => Err("worker sent an unexpected Python preparation message".to_string()),
         }
     }
 
@@ -264,6 +290,9 @@ impl Worker {
                 WorkerMessage::ResolvePythonVersion { request } => {
                     self.resolve_python_version_request(request, &mut resolve_python_version)?;
                 }
+                WorkerMessage::ActivityCompleted { python_checkpoint } => {
+                    checkpoint_python(python_checkpoint, std::mem::take(&mut python_candidates))?;
+                }
                 WorkerMessage::Completed { python_checkpoint } => {
                     evaluation.input_complete()?;
                     checkpoint_python(python_checkpoint, python_candidates)?;
@@ -278,6 +307,59 @@ impl Worker {
                 | WorkerMessage::RPreparationFailed { .. } => {
                     return Err("worker sent an unexpected Python preparation result".to_string());
                 }
+            }
+        }
+    }
+
+    fn receive_preparation_message(
+        &mut self,
+        python_candidates: &mut Vec<crate::resolver::ManagedPython>,
+        resolve_python: &mut impl FnMut(
+            crate::worker_protocol::PythonResolveRequest,
+        ) -> Result<crate::resolver::ManagedPython, String>,
+        resolve_python_version: &mut impl FnMut(
+            crate::worker_protocol::PythonVersionResolveRequest,
+        ) -> Result<String, String>,
+        checkpoint_python: &mut impl FnMut(
+            Option<crate::worker_protocol::PythonRequirementManifest>,
+            Vec<crate::resolver::ManagedPython>,
+        ) -> Result<(), String>,
+    ) -> Result<WorkerMessage, String> {
+        loop {
+            match self.receive()? {
+                WorkerMessage::ConsoleOutput { data } => self
+                    .output
+                    .push_console_text(crate::worker_protocol::ConsoleChannel::Output, data),
+                WorkerMessage::ConsoleDiagnostic { data } => self
+                    .output
+                    .push_console_text(crate::worker_protocol::ConsoleChannel::Diagnostic, data),
+                WorkerMessage::Image { data, mime_type } => {
+                    crate::transcript::validate_image_data(&data)?;
+                    self.output.push_image(data, mime_type, None);
+                }
+                WorkerMessage::ResolvePython { request } => {
+                    python_candidates.extend(self.resolve_python_request(request, resolve_python)?);
+                }
+                WorkerMessage::ResolvePythonVersion { request } => {
+                    self.resolve_python_version_request(request, resolve_python_version)?;
+                }
+                WorkerMessage::ActivityCompleted { python_checkpoint } => {
+                    checkpoint_python(python_checkpoint, std::mem::take(python_candidates))?;
+                }
+                WorkerMessage::InputRequested { prompt } => {
+                    let prompt = serde_json::to_string(&prompt).map_err(|error| {
+                        format!("failed to render worker input prompt: {error}")
+                    })?;
+                    return Err(format!(
+                        "idle R callback requested input {prompt} during requirement preparation; collect callback input with send before preparing requirements"
+                    ));
+                }
+                WorkerMessage::InputReceived => {
+                    return Err(
+                        "worker reported received input during requirement preparation".to_string(),
+                    );
+                }
+                message => return Ok(message),
             }
         }
     }

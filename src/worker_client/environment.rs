@@ -165,7 +165,6 @@ impl Client {
             if python_candidate.is_some() && environment.python.is_none() {
                 return Ok(PrepareResult::RestartRequired);
             }
-            let current_python = environment.python.clone();
             let managed_r = if r_additions.is_subset(&current_r) {
                 None
             } else {
@@ -211,7 +210,6 @@ impl Client {
                 &generation,
                 worker,
                 python_packages,
-                current_python.as_ref(),
                 managed_r,
                 duckdb_candidate,
             );
@@ -325,7 +323,6 @@ impl Client {
         generation: &WorkerGeneration,
         mut worker: std::sync::MutexGuard<'_, WorkerState>,
         python_packages: Vec<String>,
-        current_python: Option<&crate::resolver::ManagedPython>,
         managed_r: Option<crate::resolver::ManagedR>,
         duckdb_extensions: Option<BTreeSet<String>>,
     ) -> Result<PrepareResult, String> {
@@ -337,12 +334,27 @@ impl Client {
         let managed_python = if python_packages.is_empty() {
             None
         } else {
-            let result = running.prepare_python(python_packages, |request| {
-                self.resolve_runtime_python(generation.clone(), request)
-            });
+            let result = running.prepare_python(
+                python_packages,
+                |request| self.resolve_runtime_python(generation.clone(), request),
+                |request| self.resolve_runtime_python_version(generation.clone(), request),
+                |checkpoint, candidates| {
+                    self.checkpoint_runtime_python(generation.clone(), checkpoint, candidates)
+                },
+            );
             match result {
                 Ok(Ok((checkpoint, candidates))) => {
-                    match select_python_checkpoint(current_python, checkpoint, candidates) {
+                    let current_python = self
+                        .0
+                        .environment
+                        .as_ref()
+                        .expect("running managed preparation requires an environment")
+                        .lock()
+                        .map_err(|_| "worker environment lock poisoned".to_string())?
+                        .python
+                        .clone();
+                    match select_python_checkpoint(current_python.as_ref(), checkpoint, candidates)
+                    {
                         Ok(managed) => Some(managed),
                         Err(error) => {
                             return self.fail_running_preparation(
@@ -376,7 +388,14 @@ impl Client {
             }
         };
         if let Some(managed_r) = managed_r.as_ref() {
-            match running.prepare_r(managed_r.library()) {
+            match running.prepare_r(
+                managed_r.library(),
+                |request| self.resolve_runtime_python(generation.clone(), request),
+                |request| self.resolve_runtime_python_version(generation.clone(), request),
+                |checkpoint, candidates| {
+                    self.checkpoint_runtime_python(generation.clone(), checkpoint, candidates)
+                },
+            ) {
                 Ok(Ok(())) => {}
                 Ok(Err(error)) => {
                     self.require_restart_for_requirement_changes(
