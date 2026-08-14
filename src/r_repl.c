@@ -1,8 +1,18 @@
 #include <signal.h>
+#include <stddef.h>
 
 typedef void (*repl_init_fn)(void);
 typedef int (*repl_do_one_fn)(void);
 typedef void (*before_do_one_fn)(void);
+typedef int (*top_level_exec_fn)(void (*)(void *), void *);
+typedef void *(*check_activity_fn)(int, int);
+typedef void (*run_handlers_fn)(void *, void *);
+
+struct event_handlers {
+    check_activity_fn check_activity;
+    run_handlers_fn run_handlers;
+    void *input_handlers;
+};
 
 /*
  * R errors jump to the context installed by R_ReplDLLinit(). Keep that
@@ -21,6 +31,28 @@ static int call_do_one(repl_do_one_fn do_one) {
     int status = do_one();
     returned_normally = 1;
     return status;
+}
+
+static void run_ready_handlers(void *data) {
+    struct event_handlers *handlers = data;
+    void *ready = handlers->check_activity(0, 1);
+    if (ready != NULL) {
+        handlers->run_handlers(handlers->input_handlers, ready);
+    }
+}
+
+int mcp_r_run_ready_handlers(
+    top_level_exec_fn top_level_exec,
+    check_activity_fn check_activity,
+    run_handlers_fn run_handlers,
+    void *input_handlers
+) {
+    struct event_handlers handlers = {
+        check_activity,
+        run_handlers,
+        input_handlers,
+    };
+    return top_level_exec(run_ready_handlers, &handlers);
 }
 
 int mcp_r_repl_run_cell(
