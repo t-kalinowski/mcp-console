@@ -21,7 +21,7 @@ session:
 result:
   content:
     - type: text
-      text: |-
+      text: |
         managed Python resolution failed:
         resolver input:
         {
@@ -33,7 +33,6 @@ result:
           ]
         }
         uv output:
-        <resolver interrupted>
   isError: true
 ---
 id: 5
