@@ -110,7 +110,7 @@ impl ProcessStopHandles {
 }
 
 impl Client {
-    /// Sends SIGINT to the live worker process.
+    /// Sends SIGINT to the active resolver or live worker process.
     pub(crate) async fn interrupt(&self) -> Result<(), String> {
         let client = self.clone();
         tokio::task::spawn_blocking(move || client.interrupt_blocking())
@@ -119,15 +119,21 @@ impl Client {
     }
 
     fn interrupt_blocking(&self) -> Result<(), String> {
-        let worker = {
+        let processes = {
             let lifecycle = self
                 .0
                 .lifecycle
                 .lock()
                 .map_err(|_| "worker lifecycle lock poisoned".to_string())?;
-            lifecycle.processes.worker.clone()
+            lifecycle.processes.clone()
         };
-        worker
+        if let Some(resolver) = processes.resolver
+            && resolver.interrupt()
+        {
+            return Ok(());
+        }
+        processes
+            .worker
             .ok_or_else(|| "worker is not running".to_string())?
             .interrupt()
     }

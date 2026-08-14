@@ -1,6 +1,7 @@
 #!/usr/bin/env -S uv run --script
 
 import os
+import signal
 import shutil
 import socket
 import subprocess
@@ -820,6 +821,102 @@ def test_interrupts_running_python_evaluation(binary: Path) -> Transcript:
         finally:
             if not passed:
                 stop_client(client)
+
+
+def test_interrupts_live_python_resolver(binary: Path) -> Transcript:
+    listener = socket.socket()
+    listener.bind(("127.0.0.1", 0))
+    listener.listen()
+    port = listener.getsockname()[1]
+    connected = threading.Event()
+    resolver_stopped = threading.Event()
+    release = threading.Event()
+
+    def hold_index_connection() -> None:
+        connection, _ = listener.accept()
+        listener.close()
+        connected.set()
+        connection.settimeout(0.05)
+        with connection:
+            while not release.is_set():
+                try:
+                    if not connection.recv(4096):
+                        resolver_stopped.set()
+                        return
+                except TimeoutError:
+                    pass
+
+    index = threading.Thread(target=hold_index_connection, daemon=True)
+    index.start()
+
+    previous_handler = signal.signal(signal.SIGINT, signal.SIG_IGN)
+    previous_mask = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT})
+    try:
+        client = McpClient(binary, ("serve",))
+    finally:
+        signal.signal(signal.SIGINT, previous_handler)
+        signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
+    passed = False
+    try:
+        client._initialize_and_list_tools()
+        # fmt: r
+        r = code(rf"""
+            resolver_interrupt_state <- 41L
+            Sys.setenv(UV_DEFAULT_INDEX = "http://127.0.0.1:{port}/simple")
+            """)
+        client.send(r=r)
+        assert last_tool_text(client) == "[done]"
+
+        preparation = client._start_session(
+            action="prepare",
+            requirements={"python": ["mcp-console-blocked-live-preparation"]},
+        )
+        assert connected.wait(10), "live preparation did not contact the blocking index"
+
+        interrupt = client._start_session(action="interrupt")
+        preparation_returned = threading.Event()
+        forced_release = threading.Event()
+
+        def release_if_preparation_blocks() -> None:
+            if not preparation_returned.wait(2):
+                forced_release.set()
+                release.set()
+
+        watchdog = threading.Thread(target=release_if_preparation_blocks)
+        watchdog.start()
+        client._receive_many([preparation, interrupt])
+        preparation_returned.set()
+        watchdog.join()
+        assert not forced_release.is_set(), "interrupt did not stop the Python resolver"
+        assert interrupt["result"] == {
+            "content": [{"type": "text", "text": "[interrupt sent]"}],
+            "isError": False,
+        }, interrupt
+        assert resolver_stopped.wait(2), "interrupted resolver kept its connection open"
+        assert preparation["result"]["isError"] is True, preparation
+        error = preparation["result"]["content"][0]["text"]
+        assert "managed Python resolution" in error, error
+        error = normalize_python_resolution_error(error)
+        stable, separator, _ = error.partition("uv output:")
+        assert separator, error
+        preparation["result"]["content"][0]["text"] = (
+            f"{stable}{separator}\n<resolver interrupted>"
+        )
+
+        client.send(r="resolver_interrupt_state + 1L")
+        assert last_tool_text(client) == "[1] 42\n"
+        transcript = client._finish()
+        address = f"127.0.0.1:{port}"
+        for entry in transcript:
+            if source := entry.get("send", {}).get("r"):
+                entry["send"]["r"] = source.replace(address, "127.0.0.1:<PORT>")
+        passed = True
+        return transcript
+    finally:
+        release.set()
+        index.join(2)
+        if not passed:
+            stop_client(client)
 
 
 def test_restart_cancels_live_python_preparation(binary: Path) -> Transcript:
