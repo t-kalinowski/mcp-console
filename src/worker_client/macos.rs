@@ -345,18 +345,15 @@ impl Worker {
     ) -> Result<(), String> {
         while self.has_pending_message()? {
             let mut python_candidates = Vec::new();
-            loop {
-                if self
-                    .receive_preparation_message(
-                        &mut python_candidates,
-                        resolve_python,
-                        resolve_python_version,
-                        checkpoint_python,
-                    )?
-                    .is_none()
-                {
-                    break;
-                }
+            if self
+                .receive_preparation_message(
+                    &mut python_candidates,
+                    resolve_python,
+                    resolve_python_version,
+                    checkpoint_python,
+                )?
+                .is_some()
+            {
                 return Err(
                     "worker sent an explicit operation result before receiving a request"
                         .to_string(),
