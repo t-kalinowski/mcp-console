@@ -295,16 +295,13 @@ def main() -> None:
             continue
 
         if source == "report managed requirements":
-            extension_directory = os.environ.get(
-                "MCP_CONSOLE_DUCKDB_EXTENSION_DIRECTORY",
-                "",
-            )
-            expected_extension_directory = str(
-                Path(os.environ["HOME"], ".duckdb", "extensions")
-            )
             r_prepared = str(prepared_r_library is not None).lower()
             duckdb_prepared = str(
-                extension_directory == expected_extension_directory
+                any(
+                    Path(os.environ["HOME"], ".duckdb", "extensions").glob(
+                        "*/*/json.duckdb_extension"
+                    )
+                )
             ).lower()
             send_output(
                 writer,

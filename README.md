@@ -111,7 +111,8 @@ A failed automatic replacement leaves the worker stopped; a `prepare` call with 
 Caller-selected Python environments cannot accept managed Python additions, but their built-in workers can still apply R requirements and prepare DuckDB extensions.
 Custom workers skip the default R and Python preflights, but can prepare explicit R requirements and DuckDB extensions.
 Each prepared custom-worker R library also includes DBI, DuckDB, and jsonlite for host extension installation.
-They must honor the server-provided `R_LIBS` and DuckDB extension-cache environment and acknowledge live `prepare_r` requests.
+They must honor the server-provided `R_LIBS` and acknowledge live `prepare_r` requests.
+Prepared extensions use DuckDB's native default cache; custom workers must use that cache to load them.
 Managed Python preparation remains unavailable with a custom worker.
 
 The client can explicitly replace the worker, retain the prepared R library, and add Python requirements in the same call:

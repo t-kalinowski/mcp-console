@@ -1,5 +1,4 @@
 use std::os::unix::process::CommandExt as _;
-use std::path::Path;
 use std::process::{Command, Stdio};
 
 use serde::Serialize;
@@ -16,14 +15,10 @@ base::local({
   ), collapse = "\n")
   input <- jsonlite::fromJSON(input)
   extensions <- base::unlist(input$extensions, use.names = FALSE)
-  extension_directory <- input$extension_directory
   base::stopifnot(
     base::is.character(extensions),
     base::length(extensions) > 0L,
-    base::all(base::grepl("^[a-z][a-z0-9_]*$", extensions)),
-    base::is.character(extension_directory),
-    base::length(extension_directory) == 1L,
-    base::nzchar(extension_directory)
+    base::all(base::grepl("^[a-z][a-z0-9_]*$", extensions))
   )
 
   storage <- base::tempfile("mcp-console-duckdb-resolver-")
@@ -31,7 +26,9 @@ base::local({
     duckdb::duckdb(
       dbdir = ":memory:",
       config = list(
-        extension_directory = extension_directory,
+        # Suppress DuckDB-R's storage policy while leaving DuckDB core to use
+        # its compiled default extension directory.
+        extension_directory = "",
         secret_directory = base::file.path(storage, "stored-secrets"),
         temp_directory = base::file.path(storage, "spill"),
         autoinstall_known_extensions = "false",
@@ -69,23 +66,15 @@ base::local({
 #[derive(Serialize)]
 struct ResolverInput<'a> {
     extensions: &'a [String],
-    extension_directory: &'a str,
 }
 
 pub(crate) fn resolve_duckdb_extensions(
     managed_r: &super::ManagedR,
     extensions: &[String],
-    extension_directory: &Path,
     on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
 ) -> Result<(), String> {
-    let extension_directory = extension_directory
-        .to_str()
-        .ok_or_else(|| "DuckDB extension directory path is not UTF-8".to_string())?;
-    let input = serde_json::to_vec(&ResolverInput {
-        extensions,
-        extension_directory,
-    })
-    .expect("DuckDB extension resolver input should serialize as JSON");
+    let input = serde_json::to_vec(&ResolverInput { extensions })
+        .expect("DuckDB extension resolver input should serialize as JSON");
 
     let rscript = managed_r.rscript();
     let mut command = Command::new(rscript);
@@ -97,7 +86,7 @@ pub(crate) fn resolve_duckdb_extensions(
         .process_group(0);
     managed_r.configure_resolver(&mut command)?;
     // DuckDB performs its normal core-extension installation outside the
-    // sandbox. Names and the cache path are JSON input, never R or SQL source.
+    // sandbox. Names are JSON input, never R or SQL source.
     let mut child = command.spawn().map_err(|error| {
         format!(
             "failed to run DuckDB extension resolver with `{}`: {error}",

@@ -2,10 +2,6 @@ const BRIDGE_INIT: &str = r#"
 base::local({
   connection <- NULL
   source <- NULL
-  extension_directory <- Sys.getenv(
-    "MCP_CONSOLE_DUCKDB_EXTENSION_DIRECTORY",
-    unset = ""
-  )
   printer_ready <- FALSE
   preview_rows <- 20L
   preview_columns <- 12L
@@ -42,16 +38,12 @@ base::local({
         environment_scan = TRUE
       )
     )
-    if (nzchar(extension_directory)) {
-      DBI::dbExecute(
-        connection,
-        paste(
-          "SET extension_directories = [",
-          DBI::dbQuoteString(connection, extension_directory),
-          "]"
-        )
-      )
-    }
+    # DuckDB expands the shorthand itself, keeping HOME interpretation inside
+    # DuckDB while the primary writable directory remains worker-private.
+    DBI::dbExecute(
+      connection,
+      "SET extension_directories = ['~/.duckdb/extensions']"
+    )
     DBI::dbExecute(connection, "SET enable_progress_bar = false")
     invisible(connection)
   }

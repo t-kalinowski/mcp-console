@@ -7,7 +7,6 @@ use super::{Client, WorkerState};
 
 pub(super) struct Environment {
     pub(super) custom_worker: bool,
-    pub(super) duckdb_extension_directory: std::path::PathBuf,
     pub(super) duckdb_extensions: BTreeSet<String>,
     /// R libraries that may have supplied DuckDB in the current worker generation.
     pub(super) duckdb_r_targets: Vec<crate::resolver::ManagedR>,
@@ -190,12 +189,7 @@ impl Client {
                     push_duckdb_r_target(&mut targets, managed_r.clone());
                 }
                 let duckdb_extensions = duckdb_extensions.iter().cloned().collect::<Vec<_>>();
-                self.resolve_duckdb_extensions(
-                    &generation,
-                    &targets,
-                    &duckdb_extensions,
-                    &environment.duckdb_extension_directory,
-                )?;
+                self.resolve_duckdb_extensions(&generation, &targets, &duckdb_extensions)?;
             }
             let python_packages = if python_candidate.is_some() {
                 python_additions.into_iter().collect()
@@ -245,12 +239,7 @@ impl Client {
                 push_duckdb_r_target(&mut targets, managed_r.clone());
             }
             let duckdb_extensions = duckdb_extensions.iter().cloned().collect::<Vec<_>>();
-            self.resolve_duckdb_extensions(
-                &generation,
-                &targets,
-                &duckdb_extensions,
-                &environment.duckdb_extension_directory,
-            )?;
+            self.resolve_duckdb_extensions(&generation, &targets, &duckdb_extensions)?;
         }
 
         let mut managed_python = environment.python.clone();
@@ -290,7 +279,6 @@ impl Client {
         generation: &WorkerGeneration,
         managed_r: &[crate::resolver::ManagedR],
         extensions: &[String],
-        extension_directory: &std::path::Path,
     ) -> Result<(), String> {
         if managed_r.is_empty() {
             return Err(
@@ -298,12 +286,10 @@ impl Client {
             );
         }
         for managed_r in managed_r {
-            let result = crate::resolver::resolve_duckdb_extensions(
-                managed_r,
-                extensions,
-                extension_directory,
-                |handle| self.register_resolver_stop_handle(generation, handle),
-            );
+            let result =
+                crate::resolver::resolve_duckdb_extensions(managed_r, extensions, |handle| {
+                    self.register_resolver_stop_handle(generation, handle)
+                });
             self.clear_resolver_stop_handle(generation)?;
             result?;
         }

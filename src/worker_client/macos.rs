@@ -65,7 +65,6 @@ impl WorkerRuntime {
         let super::WorkerSpec {
             executable,
             arguments,
-            duckdb_extension_directory,
             managed_python,
             managed_r,
         } = spec;
@@ -78,12 +77,6 @@ impl WorkerRuntime {
         }
         if let Some(managed_r) = managed_r {
             managed_r.configure_worker(&mut command)?;
-        }
-        if let Some(extension_directory) = duckdb_extension_directory {
-            command.env(
-                "MCP_CONSOLE_DUCKDB_EXTENSION_DIRECTORY",
-                extension_directory,
-            );
         }
         command
             .args(arguments)

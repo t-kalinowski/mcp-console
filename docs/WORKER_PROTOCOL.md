@@ -69,7 +69,9 @@ After a synchronized failure may have partially changed the live worker, the ser
 Evaluations remain available so the caller can save in-memory state.
 Transport or protocol failures still stop a worker whose usability is unknown.
 Custom workers skip the default preflights but can prepare explicit R requirements and DuckDB extensions.
-The server supplies the retained R library through `R_LIBS`, supplies the shared extension cache through `MCP_CONSOLE_DUCKDB_EXTENSION_DIRECTORY`, and requires a running custom worker to acknowledge `prepare_r` with `r_prepared`.
+The server supplies the retained R library through `R_LIBS`, and a running custom worker must acknowledge `prepare_r` with `r_prepared`.
+Prepared extensions use DuckDB's native default cache; the server does not resolve or inject that path.
+Custom workers must use the same native cache to load them.
 Managed Python preparation and restart additions remain unavailable with a custom worker.
 If preparation overlaps worker startup, the server returns `[requirements not prepared: worker is starting]` without resolving the additions or changing the retained requirements, R library, Python manifest, or DuckDB extension set.
 
@@ -647,7 +649,7 @@ The current sandbox child does not yet supervise descendants after its direct pr
 
 Zod implements the protocol as an executable uv script requiring Python 3.11 or newer.
 As a custom worker, it omits `python_checkpoint` from every `completed` frame.
-It acknowledges `prepare_r` and can report whether the server supplied its live R library and DuckDB extension-cache environment.
+It acknowledges `prepare_r` and can report whether the server supplied its live R library and prepared the JSON extension in DuckDB's native cache.
 The `emit console kinds` mode sends adjacent `console_output` and `console_diagnostic` frames to verify that MCP still returns one merged text block.
 When an R `source` is exactly `echo`, it sends two output chunks followed by `completed`:
 

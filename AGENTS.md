@@ -140,7 +140,9 @@ When inherited `RETICULATE_PYTHON` is absent or exactly `managed`, built-in serv
 Other inherited values, including an empty value, are preserved and skip the Python startup preflight but not default R resolution; a later successful explicit preparation takes precedence over them.
 Custom workers skip both managed default preflights but can prepare explicit R requirements and DuckDB extensions.
 Every custom-worker R candidate includes DBI, DuckDB, and jsonlite so the same library can service later DuckDB extension requests.
-They receive the retained library through `R_LIBS` and the extension cache through `MCP_CONSOLE_DUCKDB_EXTENSION_DIRECTORY`, and a running custom worker must acknowledge live `prepare_r` requests.
+They receive the retained library through `R_LIBS`, and a running custom worker must acknowledge live `prepare_r` requests.
+Prepared extensions use DuckDB's native default cache; the server does not resolve or inject that path.
+Custom workers must use the same native cache to load them.
 Custom workers reject Python requirement preparation and restart requests with Python additions.
 R, Python, and DuckDB resolution may access the network and write normal host caches outside the sandbox; R and Python package resolution may execute package installation or build code, and managed Python environment startup and the Matplotlib font-manager import also run there.
 Requirement strings remain process-argument or JSON data rather than R source, and no submitted cell is evaluated by the resolver.

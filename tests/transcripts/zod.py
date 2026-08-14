@@ -582,6 +582,22 @@ def test_custom_worker_skips_managed_python_preflight(binary: Path) -> Transcrip
     return client._finish()
 
 
+def test_custom_worker_starts_without_home(binary: Path) -> Transcript:
+    zod = Path(__file__).resolve().parents[1] / "fixtures" / "zod"
+    environment = os.environ.copy()
+    environment.pop("HOME", None)
+    client = McpClient(
+        binary,
+        ("serve", "--worker", str(zod)),
+        environment,
+    )
+    client._initialize_and_list_tools()
+
+    client.send(r="echo")
+    assert last_tool_text(client) == "zod: echo\n"
+    return client._finish()
+
+
 def test_custom_worker_prepares_r_and_duckdb_requirements(binary: Path) -> Transcript:
     zod = Path(__file__).resolve().parents[1] / "fixtures" / "zod"
     environment, _ = r_test_environment()

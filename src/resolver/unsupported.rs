@@ -51,7 +51,6 @@ pub(crate) fn resolve_r(
 pub(crate) fn resolve_duckdb_extensions(
     _managed_r: &ManagedR,
     _extensions: &[String],
-    _extension_directory: &std::path::Path,
     _on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
 ) -> Result<(), String> {
     Err("DuckDB extension preparation is supported only on macOS".to_string())
