@@ -1,6 +1,7 @@
 #!/usr/bin/env -S uv run --script
 
 import os
+import re
 import tempfile
 from pathlib import Path
 
@@ -503,12 +504,12 @@ def test_uses_ragnar_like_the_guide_and_adapts_to_the_console(
         "created store under the worker tempdir\n"
     )
 
-    client.send(r="ragnar::ragnar_store_build_index(store)")
-    failure = normalize_duckdb_progress(client)
+    r = code(r"""
+        ragnar::ragnar_store_build_index(store)
+        """)
+    client.send(r=r)
+    failure = normalize_duckdb_extension_error(client)
     assert 'Failed to download extension "fts"' in failure
-    client.transcript[-1]["result"]["content"][0]["text"] = (
-        duckdb_native_failure(failure) + "\n"
-    )
 
     client.session(
         action="prepare",
@@ -549,11 +550,8 @@ def test_uses_ragnar_like_the_guide_and_adapts_to_the_console(
         )
         """)
     client.send(r=r)
-    failure = normalize_duckdb_progress(client)
+    failure = normalize_duckdb_extension_error(client)
     assert 'Failed to download extension "vss"' in failure
-    client.transcript[-1]["result"]["content"][0]["text"] = (
-        duckdb_native_failure(failure) + "\n"
-    )
 
     client.session(
         action="prepare",
@@ -601,7 +599,10 @@ def test_uses_ragnar_like_the_guide_and_adapts_to_the_console(
     assert "Catalog Error:" in output
     assert "Table with name chunks does not exist" in output
 
-    client.send(r="sql_connection(reader@con)")
+    r = code(r"""
+        sql_connection(reader@con)
+        """)
+    client.send(r=r)
     assert last_tool_text(client) == (
         "Error in sql_connection(reader@con) : unused argument (reader@con)\n"
     )
@@ -1152,6 +1153,25 @@ def normalize_duckdb_progress(client: McpClient) -> str:
     output = sections[-1]
     client.transcript[-1]["result"]["content"][0]["text"] = output
     return normalize_trailing_spaces(client)
+
+
+def normalize_duckdb_extension_error(client: McpClient) -> str:
+    output = normalize_duckdb_progress(client)
+    output, download_urls = re.subn(
+        r'(?<= at URL )"https?://[^"]+"',
+        '"<DuckDB extension URL>"',
+        output,
+        count=1,
+    )
+    output, troubleshooting_urls = re.subn(
+        r"https://duckdb\.org/docs/stable/extensions/troubleshooting\?\S+",
+        "<DuckDB extension troubleshooting URL>",
+        output,
+        count=1,
+    )
+    assert (download_urls, troubleshooting_urls) == (1, 1), output
+    client.transcript[-1]["result"]["content"][0]["text"] = output
+    return output
 
 
 def normalize_trailing_spaces(client: McpClient) -> str:

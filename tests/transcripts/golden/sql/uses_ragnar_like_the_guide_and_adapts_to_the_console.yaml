@@ -77,12 +77,20 @@ result:
 ---
 id: 7
 send:
-  r: ragnar::ragnar_store_build_index(store)
+  r: |
+    ragnar::ragnar_store_build_index(store)
 result:
   content:
     - type: text
       text: |
-        Invalid Error: IO Error: Failed to download extension "fts"
+        Error in `dbSendQuery()`:
+        ! Invalid Error: IO Error: Failed to download extension "fts" at URL "<DuckDB extension URL>"
+        Extension "fts" is an existing extension.
+
+        For more info, visit <DuckDB extension troubleshooting URL> (ERROR Could not establish connection)
+        ℹ Context: rapi_prepare
+        ℹ Error type: INVALID
+        Run `rlang::last_trace()` to see where the error occurred.
   isError: false
 ---
 id: 8
@@ -143,7 +151,14 @@ result:
   content:
     - type: text
       text: |
-        Invalid Error: IO Error: Failed to download extension "vss"
+        Error in `duckdb_result()`:
+        ! Invalid Error: IO Error: Failed to download extension "vss" at URL "<DuckDB extension URL>"
+        Extension "vss" is an existing extension.
+
+        For more info, visit <DuckDB extension troubleshooting URL> (ERROR Could not establish connection)
+        ℹ Context: rapi_execute
+        ℹ Error type: INVALID
+        Run `rlang::last_trace()` to see where the error occurred.
   isError: false
 ---
 id: 12
@@ -232,7 +247,8 @@ result:
 ---
 id: 17
 send:
-  r: sql_connection(reader@con)
+  r: |
+    sql_connection(reader@con)
 result:
   content:
     - type: text
