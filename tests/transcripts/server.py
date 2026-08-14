@@ -1,6 +1,7 @@
 #!/usr/bin/env -S uv run --script
 
 import json
+import os
 from pathlib import Path
 
 from _support import McpClient, Transcript, code, run_this_suite
@@ -101,6 +102,104 @@ def test_initializes_and_lists_tools(binary: Path) -> Transcript:
     transcript = client._finish()
     assert not (workspace / ".mcp-console").exists(), workspace
     return transcript
+
+
+def test_initializes_and_lists_tools_with_custom_worker(binary: Path) -> Transcript:
+    zod = Path(__file__).resolve().parents[1] / "fixtures" / "zod"
+    client = McpClient(
+        binary,
+        ("serve", "--worker", str(zod)),
+    )
+    client._initialize_and_list_tools()
+    tools = {tool["name"]: tool for tool in client.transcript[-1]["result"]["tools"]}
+
+    send = tools["send"]
+    for guidance in (
+        "custom worker selected with `serve --worker`",
+        "custom worker defines the supported languages and installed packages",
+        "Package availability and loading are worker-defined",
+        "package preparation with `session` is unavailable",
+    ):
+        assert guidance in send["description"], guidance
+    assert "prepare it with `session`" not in send["description"]
+    for language in ("r", "python", "sql"):
+        description = send["inputSchema"]["properties"][language]["description"]
+        assert f"custom worker with the `{language}` language tag" in description
+        assert "worker defines how the source is evaluated" in description
+
+    session = tools["session"]
+    for guidance in (
+        "Restart the persistent custom-worker session",
+        'action = "restart"',
+        "package preparation and restart-time requirements are unavailable",
+        "loses all worker-owned state and unread stdin",
+    ):
+        assert guidance in session["description"], guidance
+    properties = session["inputSchema"]["properties"]
+    assert properties["action"]["enum"] == ["restart"], properties["action"]
+    assert "replaces the custom worker" in properties["action"]["description"]
+    assert "requirements" not in properties
+    advertised = json.dumps(tools)
+    for built_in_claim in (
+        "The default R environment",
+        "The built-in managed Python environment",
+        "DuckDB SQL is also available",
+        "server-managed worker",
+    ):
+        assert built_in_claim not in advertised, built_in_claim
+    return client._finish()
+
+
+def test_initializes_and_lists_tools_with_configured_python(binary: Path) -> Transcript:
+    environment = os.environ.copy()
+    environment["RETICULATE_PYTHON"] = "configured-by-user"
+    client = McpClient(binary, ("serve",), environment)
+    client._initialize_and_list_tools()
+    tools = {tool["name"]: tool for tool in client.transcript[-1]["result"]["tools"]}
+
+    send = tools["send"]
+    for guidance in (
+        "The default R environment includes tidyverse, reticulate, DBI, and duckdb",
+        "Python initially follows inherited `RETICULATE_PYTHON` configuration",
+        "A successful `prepare` with Python requirements before the worker starts",
+        "Import packages provided by the active Python environment directly",
+        "If you want to use an additional package, prepare it with `session`",
+        "If Python preparation reports `[restart required]`",
+        "When managed Python is active",
+    ):
+        assert guidance in send["description"], guidance
+    assert (
+        "managed Python environment includes NumPy and pandas"
+        not in send["description"]
+    )
+    python = send["inputSchema"]["properties"]["python"]["description"]
+    assert "initially follows inherited `RETICULATE_PYTHON` configuration" in python
+    assert (
+        "Import packages provided by the active Python environment directly" in python
+    )
+
+    session = tools["session"]
+    assert (
+        "Load packages provided by the active Python environment directly"
+        in session["description"]
+    )
+    assert (
+        "If Python preparation reports `[restart required]`" in session["description"]
+    )
+    action = session["inputSchema"]["properties"]["action"]["description"]
+    assert (
+        "After an inherited Python worker starts, use `restart` with Python requirements"
+        in action
+    )
+    python_requirements = session["inputSchema"]["properties"]["requirements"][
+        "properties"
+    ]["python"]["description"]
+    assert (
+        "After an inherited Python worker starts, supply additions to `restart`"
+        in python_requirements
+    )
+    assert "requirements" in session["inputSchema"]["properties"]
+    return client._finish()
 
 
 def test_validates_send_arguments(binary: Path) -> Transcript:

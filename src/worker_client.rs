@@ -39,6 +39,11 @@ const DEFAULT_R_REQUIREMENTS: &[&str] = &[
 #[derive(Clone)]
 pub(crate) struct Client(Arc<ClientInner>);
 
+pub(crate) struct BuiltinClient {
+    pub(crate) client: Client,
+    pub(crate) initially_managed_python: bool,
+}
+
 struct ClientInner {
     runtime: platform::WorkerRuntime,
     program: PathBuf,
@@ -110,7 +115,7 @@ impl Client {
         Self::with_arguments(program, Vec::new(), None)
     }
 
-    pub(crate) fn builtin() -> Result<Self, String> {
+    pub(crate) fn builtin() -> Result<BuiltinClient, String> {
         let program = std::env::current_exe()
             .map_err(|error| format!("failed to locate the R worker executable: {error}"))?;
         #[cfg(target_os = "macos")]
@@ -124,11 +129,15 @@ impl Client {
         #[cfg(not(target_os = "macos"))]
         let r = None;
         let python = crate::resolver::resolve_python(&[], |_| Ok(()))?;
-        Ok(Self::with_arguments(
-            program,
-            vec![OsString::from("worker")],
-            Some(Environment { python, r }),
-        ))
+        let initially_managed_python = python.is_some();
+        Ok(BuiltinClient {
+            client: Self::with_arguments(
+                program,
+                vec![OsString::from("worker")],
+                Some(Environment { python, r }),
+            ),
+            initially_managed_python,
+        })
     }
 
     fn with_arguments(

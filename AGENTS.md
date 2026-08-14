@@ -191,6 +191,8 @@ The hidden `worker` command takes ownership of the sideband, discovers `R_HOME` 
 It does not self-execute or set a dynamic-loader environment variable.
 The worker command runs synchronously on the process main thread; only `serve` creates a Tokio runtime.
 The hidden development option `serve --worker PATH` replaces the built-in worker with an executable that implements the same sideband request/receipt protocol and fd-0 input contract.
+Before initialization, the server renders one tool router for the selected worker profile: the built-in profile reflects whether Python is initially server-managed or follows inherited `RETICULATE_PYTHON` configuration and advertises the corresponding package lifecycle, while the custom-worker profile advertises worker-defined language and package behavior plus restart without requirements.
+On operating systems without a worker runtime, both built-in and custom selections advertise that console execution, session restart, and requirement preparation are unavailable.
 The Python fixture `tests/fixtures/zod` provides deterministic acceptance coverage for R, Python, and SQL language tags at that boundary, MCP image content, direct fd-0 input, captured standard streams, and server-owned timeout and polling mechanics.
 When MCP input closes, the server cancels any active host resolver and starts a one-second deadline for graceful sideband shutdown without delaying it.
 If the direct sandbox process is still running when time expires, the sandbox boundary force-stops its process group and reaps that direct process.
@@ -241,6 +243,7 @@ See `design-sketches/README.md` for the product overview and `design-sketches/do
 - `src/server.rs` — MCP stdio server, `send` tool, and worker selection.
 - `src/server_transport.rs` — stdio response delivery and interrupted-restart ordering.
 - `src/sql.rs` — persistent DuckDB/DBI SQL bridge and bounded streaming Arrow previews.
+- `src/tool_descriptions.rs` — worker-profile rendering for tool descriptions and input schemas.
 - `src/transcript.rs` — append-only MCP tool journal and image artifact persistence.
 - `src/r_repl.c` — C-owned per-cell DLL-REPL iterator and long-jump boundary.
 - `src/sideband.rs` — macOS inherited-pipe JSON-lines transport.

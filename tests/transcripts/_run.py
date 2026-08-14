@@ -19,8 +19,10 @@ directory = Path(__file__).resolve().parent
 root = directory.parents[1]
 binary = root / "target" / "debug" / "mcp-console"
 suite_paths = sorted(directory.glob("[!_]*.py"))
-initialization_reference = (
-    "tests/transcripts/golden/server/initializes_and_lists_tools.yaml"
+initialization_references = (
+    "tests/transcripts/golden/server/initializes_and_lists_tools.yaml",
+    "tests/transcripts/golden/server/initializes_and_lists_tools_with_configured_python.yaml",
+    "tests/transcripts/golden/server/initializes_and_lists_tools_with_custom_worker.yaml",
 )
 
 parser = argparse.ArgumentParser(prog="scripts/test")
@@ -163,7 +165,9 @@ for suite_name, selected_case_names in selected_suites.items():
         else:
             actual = recorded
             companion = None
-        if golden != root / initialization_reference:
+        for initialization_reference in initialization_references:
+            if golden == root / initialization_reference:
+                continue
             reference = read_yaml(root / initialization_reference, multi=True)
             assert reference, f"{initialization_reference} contains no documents"
             if identical(actual[: len(reference)], reference):
@@ -171,6 +175,7 @@ for suite_name, selected_case_names in selected_suites.items():
                     Yaml(initialization_reference, tag="!same-as"),
                     *actual[len(reference) :],
                 ]
+                break
         check_golden(golden, actual, case)
         if companion is not None:
             check_golden(*companion, case)

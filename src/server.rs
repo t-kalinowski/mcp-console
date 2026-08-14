@@ -7,7 +7,11 @@ use std::time::{Duration, Instant};
 
 use rmcp::{
     RoleServer, ServerHandler, ServiceExt,
-    handler::server::{common::Extension, tool::ToolCallContext, wrapper::Parameters},
+    handler::server::{
+        common::Extension,
+        tool::{ToolCallContext, ToolRouter},
+        wrapper::Parameters,
+    },
     model::{CallToolRequestParams, CallToolResult, ContentBlock, ErrorData},
     schemars,
     service::RequestContext,
@@ -23,6 +27,7 @@ const DEFAULT_TIMEOUT_MS: u64 = 60_000;
 #[derive(Clone)]
 struct ConsoleServer {
     worker: crate::worker_client::Client,
+    tool_router: ToolRouter<Self>,
     transcript: crate::transcript::Transcript,
     deliveries: crate::server_transport::ResponseDeliveries,
 }
@@ -42,8 +47,7 @@ struct SendArguments {
     /// width and height are in inches. Omit to send stdin or poll.
     r: Option<String>,
     /// Complete multiline Python cell evaluated in persistent `__main__` state; its final expression
-    /// is displayed. The built-in managed Python environment includes NumPy and pandas. Use
-    /// `session` to prepare other packages such as scikit-learn or Matplotlib. Read R globals and
+    /// is displayed. {{python_details}} Read R globals and
     /// call R functions through `r.name`; for example, `frame = r.df`. Return Python globals to R
     /// through `py$name`. Python data frames are not automatically visible to SQL; bind them to an R
     /// name first. At cell end, including after a Python error, every open `matplotlib.pyplot` figure
@@ -122,12 +126,29 @@ fn default_timeout_ms() -> u64 {
 impl ConsoleServer {
     fn new(worker: Option<PathBuf>) -> Result<Self, String> {
         let transcript = crate::transcript::Transcript::new();
-        let worker = match worker {
-            Some(program) => crate::worker_client::Client::new(program),
-            None => crate::worker_client::Client::builtin()?,
+        let (worker, profile) = match worker {
+            Some(program) => (
+                crate::worker_client::Client::new(program),
+                crate::tool_descriptions::WorkerProfile::Custom,
+            ),
+            None => {
+                let builtin = crate::worker_client::Client::builtin()?;
+                (
+                    builtin.client,
+                    crate::tool_descriptions::WorkerProfile::BuiltIn {
+                        initially_managed_python: builtin.initially_managed_python,
+                    },
+                )
+            }
+        };
+        let profile = if cfg!(target_os = "macos") {
+            profile
+        } else {
+            crate::tool_descriptions::WorkerProfile::Unsupported
         };
         Ok(Self {
             worker,
+            tool_router: crate::tool_descriptions::render(Self::tool_router(), profile),
             transcript,
             deliveries: crate::server_transport::ResponseDeliveries::default(),
         })
@@ -137,7 +158,7 @@ impl ConsoleServer {
 #[tool_router]
 impl ConsoleServer {
     #[tool(
-        description = "Persistent mixed-language computational workbench. Use it whenever exact computation or direct inspection would improve accuracy—from arithmetic, string counting, parsing, and file or binary-data inspection to data wrangling, exploratory analysis, visualization, statistics, simulation, and model training or tuning. Choose the clearest language for each step and switch freely between calls. The default R environment includes tidyverse, reticulate, DBI, and duckdb, together with their full dependency sets, such as ggplot2, dplyr, readr, and jsonlite. The built-in managed Python environment includes NumPy and pandas. DuckDB SQL is also available. State persists across calls. Python reads R globals through `r.name`; R reads Python globals through `py$name`; SQL queries R data frames by name; R accesses the DuckDB catalog through `sql_connection()`. Language-native help and introspection are available. Do not probe package availability in cells. If you want to use a package, prepare it with `session`, then load it directly with R `library()` or Python `import`. R default-device plots and open `matplotlib.pyplot` figures return as PNG images. Send exactly one complete `r`, `python`, or `sql` cell. Call `send` sequentially; concurrent calls are unsupported. Use `stdin` for interactive reads or debugger commands; omit code and stdin to poll. A wait timeout does not stop computation, and running work must be collected before new code is sent. R errors, Python exceptions, and DuckDB errors are ordinary console output, so inspect result text and continue or correct the cell. Evaluated code can read host files but cannot directly access the network and can write only within the worker's private temporary directory. Managed Python requirement resolution triggered by R code such as `reticulate::py_require()` or by an R package load is a host-side exception: it may access the network and execute installation or build code, so use only trusted requirements."
+        description = "Persistent mixed-language computational workbench. Use it whenever exact computation or direct inspection would improve accuracy—from arithmetic, string counting, parsing, and file or binary-data inspection to data wrangling, exploratory analysis, visualization, statistics, simulation, and model training or tuning. Choose the clearest language for each step and switch freely between calls. The default R environment includes tidyverse, reticulate, DBI, and duckdb, together with their full dependency sets, such as ggplot2, dplyr, readr, and jsonlite. {{python_environment}} DuckDB SQL is also available. State persists across calls. Python reads R globals through `r.name`; R reads Python globals through `py$name`; SQL queries R data frames by name; R accesses the DuckDB catalog through `sql_connection()`. Language-native help and introspection are available. {{package_guidance}} R default-device plots and open `matplotlib.pyplot` figures return as PNG images. Send exactly one complete `r`, `python`, or `sql` cell. Call `send` sequentially; concurrent calls are unsupported. Use `stdin` for interactive reads or debugger commands; omit code and stdin to poll. A wait timeout does not stop computation, and running work must be collected before new code is sent. R errors, Python exceptions, and DuckDB errors are ordinary console output, so inspect result text and continue or correct the cell. Evaluated code can read host files but cannot directly access the network and can write only within the worker's private temporary directory.{{python_resolution}}"
     )]
     async fn send(
         &self,
@@ -188,7 +209,7 @@ impl ConsoleServer {
     }
 
     #[tool(
-        description = "Make additional R or Python packages available, or restart the persistent console session. Do not probe package availability in cells. If you want to use a package, use `prepare`, then load it with R `library()` or Python `import` in `send`. Packages are not imported or attached automatically. An idle server-managed worker can add R and compatible Python requirements without losing live state. After a recoverable live preparation failure, evaluation remains available so state can be saved, but new requirement additions require restart. Requirements are additive, idempotent, and persist across restart. `restart` may optionally add Python requirements, then replaces the worker and loses all in-memory R, Python, and SQL state, debugger state, and unread stdin. Requirement resolution runs outside the execution sandbox and may download packages or execute installation or build code on the host; use only trusted requirements."
+        description = "Make additional R or Python packages available, or restart the persistent console session. {{package_guidance}} Packages are not imported or attached automatically. {{live_preparation}} After a recoverable live preparation failure, evaluation remains available so state can be saved, but new requirement additions require restart. Requirements are additive, idempotent, and persist across restart. `restart` may optionally add Python requirements, then replaces the worker and loses all in-memory R, Python, and SQL state, debugger state, and unread stdin. Requirement resolution runs outside the execution sandbox and may download packages or execute installation or build code on the host; use only trusted requirements."
     )]
     async fn session(
         &self,
@@ -332,7 +353,7 @@ fn validate_requirements(
     Ok(())
 }
 
-#[tool_handler(name = "mcp-console")]
+#[tool_handler(router = self.tool_router, name = "mcp-console")]
 impl ServerHandler for ConsoleServer {
     async fn call_tool(
         &self,
@@ -341,7 +362,8 @@ impl ServerHandler for ConsoleServer {
     ) -> Result<CallToolResult, ErrorData> {
         let request_id = context.id.clone();
         if !matches!(request.name.as_ref(), "send" | "session") {
-            return Self::tool_router()
+            return self
+                .tool_router
                 .call(ToolCallContext::new(self, request, context))
                 .await;
         }
@@ -365,7 +387,7 @@ impl ServerHandler for ConsoleServer {
             Arc::into_inner(request).expect("transcript task should release the tool request");
         context.extensions.insert(call.clone());
         let result = Arc::new(
-            Self::tool_router()
+            self.tool_router
                 .call(ToolCallContext::new(self, request, context))
                 .await,
         );

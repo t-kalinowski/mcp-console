@@ -52,6 +52,42 @@ def test_preserves_empty_python_environment(binary: Path) -> Transcript:
     return client._finish()
 
 
+def test_running_configured_python_requires_restart_for_requirements(
+    binary: Path,
+) -> Transcript:
+    environment = os.environ.copy()
+    environment["RETICULATE_PYTHON"] = "configured-by-user"
+    client = McpClient(binary, ("serve",), environment)
+    client._initialize_and_list_tools()
+    tools = {tool["name"]: tool for tool in client.transcript[-1]["result"]["tools"]}
+
+    client.send(r="configured_worker_started <- TRUE")
+    assert last_tool_text(client) == "[done]"
+    client.session(
+        action="prepare",
+        requirements={"python": ["numpy"]},
+    )
+    assert last_tool_text(client) == "[restart required]"
+
+    session = tools["session"]
+    assert (
+        "If Python preparation reports `[restart required]`" in session["description"]
+    )
+    action = session["inputSchema"]["properties"]["action"]["description"]
+    assert (
+        "After an inherited Python worker starts, use `restart` with Python requirements"
+        in action
+    )
+    python_requirements = session["inputSchema"]["properties"]["requirements"][
+        "properties"
+    ]["python"]["description"]
+    assert (
+        "After an inherited Python worker starts, supply additions to `restart`"
+        in python_requirements
+    )
+    return client._finish()
+
+
 def managed_python_transcript(binary: Path, configured: bool) -> Transcript:
     environment = os.environ.copy()
     if configured:
@@ -254,6 +290,22 @@ def test_prepares_explicit_numpy_requirement(binary: Path) -> Transcript:
         """)
     client.send(r=r)
     assert last_tool_text(client) == "[done]"
+    tools_entry = client._request("tools/list")
+    tools = {tool["name"]: tool for tool in tools_entry["result"]["tools"]}
+    send_description = tools["send"]["description"]
+    for guidance in (
+        "Python initially follows inherited `RETICULATE_PYTHON` configuration",
+        "Import packages provided by the active Python environment directly",
+        "When managed Python is active",
+    ):
+        assert guidance in send_description, guidance
+    assert (
+        "managed Python environment includes NumPy and pandas" not in send_description
+    )
+    assert (
+        "Load packages provided by the active Python environment directly"
+        in tools["session"]["description"]
+    )
     return client._finish()
 
 

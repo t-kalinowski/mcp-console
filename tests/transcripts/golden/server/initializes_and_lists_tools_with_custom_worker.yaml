@@ -1,0 +1,109 @@
+---
+id: 1
+input:
+  method: initialize
+  params:
+    protocolVersion: 2025-11-25
+    capabilities: {}
+    clientInfo:
+      name: acceptance-test
+      version: 1.0.0
+result:
+  protocolVersion: 2025-11-25
+  capabilities:
+    tools: {}
+  serverInfo:
+    name: mcp-console
+    version: 0.1.0
+---
+input:
+  method: notifications/initialized
+---
+id: 2
+input:
+  method: tools/list
+result:
+  tools:
+    - name: send
+      description: >-
+        Persistent console backed by the custom worker selected with `serve
+        --worker`. MCP Console passes one complete cell tagged `r`, `python`, or
+        `sql`; the custom worker defines the supported languages and installed
+        packages, together with its state model, interoperability, plotting, and
+        ordinary error behavior. Package availability and loading are
+        worker-defined; package preparation with `session` is unavailable. Call
+        `send` sequentially; concurrent calls are unsupported. Use `stdin` to
+        queue exact UTF-8 text to worker standard input without adding a
+        newline; omit code and stdin to poll. A wait timeout does not stop the
+        worker operation, and running work must be collected before new code is
+        sent. The worker can read host files but cannot directly access the
+        network and can write only within its private temporary directory.
+      inputSchema:
+        $schema: https://json-schema.org/draft/2020-12/schema
+        additionalProperties: false
+        type: object
+        properties:
+          r:
+            description: >-
+              Complete multiline cell sent to the custom worker with the `r` language
+              tag. The worker defines how the source is evaluated and returned. Omit
+              to send stdin or poll.
+            type:
+              - string
+              - "null"
+          python:
+            description: >-
+              Complete multiline cell sent to the custom worker with the `python`
+              language tag. The worker defines how the source is evaluated and
+              returned. Omit to send stdin or poll.
+            type:
+              - string
+              - "null"
+          sql:
+            description: >-
+              Complete multiline cell sent to the custom worker with the `sql`
+              language tag. The worker defines how the source is evaluated and
+              returned. Omit to send stdin or poll.
+            type:
+              - string
+              - "null"
+          stdin:
+            description: >-
+              Text queued exactly as UTF-8 bytes to custom worker standard input; no
+              newline is added. Send it with a cell to prequeue input or on its own
+              while the worker is running or idle. If output ends in `[stdin needed]`,
+              send the requested input here. Unread text can satisfy later reads and
+              is discarded by restart.
+            type:
+              - string
+              - "null"
+          timeout_ms:
+            description: |-
+              Maximum time this call waits for an evaluation or one automatic worker replacement attempt.
+              On expiry, the call returns available output followed by the current state, such as
+              `[running]` or `[worker starting]`, without stopping the computation or startup. Poll by
+              calling `send` again without `r`, `python`, `sql`, or `stdin`.
+            type: integer
+            format: uint64
+            minimum: 0
+            default: 60000
+    - name: session
+      description: >-
+        Restart the persistent custom-worker session. Call `session` with
+        `action = "restart"` and omit `requirements`; package preparation and
+        restart-time requirements are unavailable with a custom worker. Restart
+        replaces the worker, starts it if needed, and loses all worker-owned
+        state and unread stdin.
+      inputSchema:
+        $schema: https://json-schema.org/draft/2020-12/schema
+        required:
+          - action
+        type: object
+        properties:
+          action:
+            description: "`restart` replaces the custom worker and starts it if needed."
+            type: string
+            enum:
+              - restart
+        additionalProperties: false
+...

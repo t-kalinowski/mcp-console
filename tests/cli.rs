@@ -768,6 +768,93 @@ fn stdio_console_does_not_start_an_unsandboxed_r_session() {
     );
 }
 
+#[cfg(not(target_os = "macos"))]
+#[test]
+fn stdio_console_advertises_the_unavailable_worker_runtime() {
+    for arguments in [
+        &["serve"][..],
+        &["serve", "--worker", "unused-custom-worker"][..],
+    ] {
+        let mut client = McpClient::start(arguments);
+        let response = client.request(2, "tools/list", None);
+        let tools = response["result"]["tools"]
+            .as_array()
+            .expect("tools/list should return tools");
+        let send = tools
+            .iter()
+            .find(|tool| tool["name"] == "send")
+            .expect("send should be registered");
+        let session = tools
+            .iter()
+            .find(|tool| tool["name"] == "session")
+            .expect("session should be registered");
+
+        assert!(
+            send["description"]
+                .as_str()
+                .expect("send should have a description")
+                .contains("Console execution and worker stdin are unavailable")
+        );
+        assert!(
+            session["description"]
+                .as_str()
+                .expect("session should have a description")
+                .contains("Console sessions are unavailable on this operating system")
+        );
+        let send_properties = send["inputSchema"]["properties"]
+            .as_object()
+            .expect("send properties should be an object");
+        for property in ["r", "python", "sql", "stdin"] {
+            assert!(
+                send_properties[property]["description"]
+                    .as_str()
+                    .expect("send property should have a description")
+                    .contains("currently supported only on macOS")
+            );
+        }
+        assert!(
+            send_properties["timeout_ms"]["description"]
+                .as_str()
+                .expect("timeout should have a description")
+                .contains("Maximum time this call waits")
+        );
+        let session_properties = session["inputSchema"]["properties"]
+            .as_object()
+            .expect("session properties should be an object");
+        assert!(
+            session_properties["action"]["description"]
+                .as_str()
+                .expect("action should have a description")
+                .contains("currently supported only on macOS")
+        );
+        let requirements = &session_properties["requirements"];
+        assert!(
+            requirements["description"]
+                .as_str()
+                .expect("requirements should have a description")
+                .contains("currently supported only on macOS")
+        );
+        for language in ["r", "python"] {
+            assert!(
+                requirements["properties"][language]["description"]
+                    .as_str()
+                    .expect("requirement language should have a description")
+                    .contains("currently supported only on macOS")
+            );
+        }
+        let advertised = serde_json::to_string(tools).expect("tools should serialize");
+        for unavailable_claim in [
+            "The default R environment",
+            "The built-in managed Python environment",
+            "DuckDB SQL is also available",
+            "custom worker defines",
+            "server-managed worker",
+        ] {
+            assert!(!advertised.contains(unavailable_claim), "{advertised}");
+        }
+    }
+}
+
 struct McpClient {
     server: Child,
     input: Option<std::process::ChildStdin>,

@@ -1,5 +1,5 @@
 ---
-!same-as tests/transcripts/golden/server/initializes_and_lists_tools.yaml
+!same-as tests/transcripts/golden/server/initializes_and_lists_tools_with_custom_worker.yaml
 ---
 id: 3
 send:
