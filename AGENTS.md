@@ -104,7 +104,8 @@ Named sessions do not exist yet.
 On macOS, default R and DuckDB extension preflights and managed-Python preflight happen during `serve` startup when required; the first nonempty stdin submission or evaluation still lazily starts the built-in worker under the same sandbox policy as the `sandbox` command.
 The worker embeds R through `libr` and `harp`, retains global state, and feeds each complete R cell through R's DLL REPL iterator.
 R parses and evaluates its expressions sequentially, captures console output, prints visible values, and performs native top-level bookkeeping.
-Immediately before and after every R, Python, or SQL cell, the worker gives R's registered input handlers one nonblocking turn under an R top-level boundary.
+Immediately before every R, Python, or SQL cell, the worker gives R's registered input handlers one nonblocking turn under an R top-level boundary.
+It gives them a second turn after a normal language outcome unless worker shutdown has begun.
 Ready callbacks run within a managed graphics scope and their output precedes cell completion.
 The worker does not yet wake for R input handlers while otherwise idle.
 Each worker generation starts with `options(width = 200L)`; evaluated code can change that persistent option.

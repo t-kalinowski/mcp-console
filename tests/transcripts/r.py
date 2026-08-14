@@ -458,6 +458,39 @@ def test_restart_while_r_waits_for_input(binary: Path) -> Transcript:
     return client._finish()
 
 
+def test_restart_skips_cell_boundary_callbacks(binary: Path) -> Transcript:
+    client = McpClient(binary, ("serve",))
+    client._initialize_and_list_tools()
+    client.session(action="prepare", requirements={"r": ["later"]})
+
+    # Leave a callback ready for the initial boundary turn. Restart after it
+    # requests input, and verify that the submitted cell is never dispatched.
+    # fmt: r
+    r = code(r"""
+        later::later(function() readline("callback> "), delay = 1)
+        """)
+    client.send(r=r)
+    assert last_tool_text(client) == "[done]"
+    time.sleep(1.1)
+    client.send(r='cat("cell body ran\\n")')
+    assert last_tool_text(client) == ('[input requested: "callback> "]\n[stdin needed]')
+    client.session(action="restart")
+    assert "cell body ran" not in last_tool_text(client)
+
+    # Leave a callback ready for the final boundary turn, then restart while
+    # the cell is blocked in the console read.
+    # fmt: r
+    r = code(r"""
+        later::later(function() cat("post-cell callback ran\n"), delay = 0)
+        readline("cell> ")
+        """)
+    client.send(r=r)
+    assert last_tool_text(client) == ('[input requested: "cell> "]\n[stdin needed]')
+    client.session(action="restart")
+    assert "post-cell callback ran" not in last_tool_text(client)
+    return client._finish()
+
+
 def test_browser_input(binary: Path) -> Transcript:
     client = McpClient(binary, ("serve",))
     client._initialize_and_list_tools()
