@@ -27,7 +27,8 @@ It appends schema-versioned `session_started`, `tool_call`, `artifact_created`, 
 Tool records preserve timestamps, MCP request IDs, normalized parsed call parameters, final results or errors, and content-block order.
 `tool_result` records server assembly, not delivery; cancellation or disconnection may suppress the response.
 Image blocks received during a `send` operation remain in MCP results and are also decoded byte-for-byte under the run's `artifacts/` directory immediately, including when the evaluation is never polled again; the journal replaces their base64 data with relative paths.
-A background image first received during live requirement preparation remains pending until a later `send` or restart response drains, assembles, and persists it.
+A background image first received during live requirement preparation is validated and queued.
+It is persisted when a response drains and assembles that pending output, including the current failed preparation response, a later `send`, or a restart response.
 Journal writes are flushed before a tool begins and after its result is assembled.
 If the run record cannot be created or a later recording write fails, the server disables recording, emits one diagnostic to standard error, and continues serving console calls.
 An existing journal may therefore end with the last successfully flushed event.

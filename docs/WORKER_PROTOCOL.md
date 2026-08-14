@@ -267,7 +267,8 @@ The worker may send zero or more `console_output`, `console_diagnostic`, or `ima
 The server retains the console distinction, preserves frame arrival order as MCP content blocks, and concatenates adjacent text chunks without exposing the distinction in MCP content.
 An image frame's `data` must be valid base64.
 During a `send` operation, the recorder decodes it byte-for-byte into an artifact, while the MCP image retains the original string.
-A background image first received during live requirement preparation is validated and queued, then persisted when a later `send` or restart response drains and assembles it.
+A background image first received during live requirement preparation is validated and queued.
+It is persisted when a response drains and assembles that pending output, including the current failed preparation response, a later `send`, or a restart response.
 The frame's `mime_type` becomes the MCP image `mimeType` unchanged; only `image/png` receives a format-specific `.png` artifact suffix, and other MIME types use `.bin`.
 `input_requested` appends one server-owned MCP request record and starts one provisional input state.
 The matching `input_received` clears that state after the runtime read succeeds without removing the record.

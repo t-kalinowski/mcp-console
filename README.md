@@ -27,7 +27,8 @@ Initialization, tool listing, unknown tool calls, and an otherwise unused `serve
 On Unix, newly created record directories use mode `0700`, and journal and artifact files use mode `0600`.
 It appends `session_started`, `tool_call`, `artifact_created`, and `tool_result` events to `internal/events.jsonl` for each ordinary, non-task `send` or `session` call, including timestamps, request and call IDs, exact arguments, ordered text and image blocks, and tool errors.
 Image bytes received during a `send` operation are decoded and flushed under `artifacts/` immediately, including images from an evaluation that is never polled again.
-A background image first received during live requirement preparation remains pending until a later `send` or restart response drains, assembles, and persists it.
+A background image first received during live requirement preparation is validated and queued.
+It is persisted when a response drains and assembles that pending output, including the current failed preparation response, a later `send`, or a restart response.
 The JSONL result refers to each image's relative artifact path while the MCP response remains unchanged.
 The result record captures server assembly, not delivery; cancellation or disconnection may suppress the response.
 Recording is optional: if the run record cannot be created or a later write fails, MCP Console disables recording for that server process, emits one diagnostic to standard error, and continues serving console calls.
