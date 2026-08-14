@@ -65,7 +65,8 @@ def test_initializes_and_lists_tools(binary: Path) -> Transcript:
     for guidance in (
         "Make additional R or Python packages and DuckDB extensions available",
         "packages not included in the built-in environments",
-        "idle server-managed worker can add R and compatible Python requirements or DuckDB extensions",
+        "idle worker can add R requirements or DuckDB extensions",
+        "compatible Python additions require a server-managed worker",
         "without losing live state",
         "evaluation remains available so state can be saved",
         "new requirement additions require restart",
@@ -79,11 +80,9 @@ def test_initializes_and_lists_tools(binary: Path) -> Transcript:
     action_description = " ".join(
         session["inputSchema"]["properties"]["action"]["description"].split()
     )
-    assert "before a server-managed worker starts" in action_description, (
-        action_description
-    )
+    assert "before a worker starts" in action_description, action_description
     assert (
-        "After startup, it can add R and compatible Python requirements or DuckDB extensions while the worker is idle"
+        "After startup, it can add R requirements or DuckDB extensions while the worker is idle"
         in action_description
     ), action_description
     requirements_description = session["inputSchema"]["properties"]["requirements"][
@@ -137,7 +136,7 @@ def test_validates_session_arguments(binary: Path) -> Transcript:
     result = client.transcript[-1]["result"]
     assert result["isError"] is True
     assert result["content"][0]["text"] == (
-        "DuckDB extension names must start with a lowercase ASCII letter and "
+        "Core DuckDB extension names must start with a lowercase ASCII letter and "
         "contain only lowercase ASCII letters, digits, and underscores"
     )
 

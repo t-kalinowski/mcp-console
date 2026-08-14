@@ -6,8 +6,11 @@ use super::lifecycle::{
 use super::{Client, WorkerState};
 
 pub(super) struct Environment {
+    pub(super) custom_worker: bool,
     pub(super) duckdb_extension_directory: std::path::PathBuf,
     pub(super) duckdb_extensions: BTreeSet<String>,
+    /// R libraries that may have supplied DuckDB in the current worker generation.
+    pub(super) duckdb_r_targets: Vec<crate::resolver::ManagedR>,
     pub(super) python: Option<crate::resolver::ManagedPython>,
     pub(super) r: Option<crate::resolver::ManagedR>,
 }
@@ -60,6 +63,18 @@ fn select_python_checkpoint(
         .ok_or_else(|| "worker checkpoint does not match a resolved Python environment".to_string())
 }
 
+fn push_duckdb_r_target(
+    targets: &mut Vec<crate::resolver::ManagedR>,
+    candidate: crate::resolver::ManagedR,
+) {
+    if targets
+        .iter()
+        .all(|target| target.library() != candidate.library())
+    {
+        targets.push(candidate);
+    }
+}
+
 impl Client {
     /// Adds requirements to the managed environment.
     pub(crate) async fn prepare(
@@ -79,13 +94,17 @@ impl Client {
             .0
             .environment
             .as_ref()
-            .ok_or_else(|| "requirements are unavailable with a custom worker".to_string())?;
+            .ok_or_else(|| "managed requirements are unavailable".to_string())?;
         let active_evaluation = self.evaluation()?.is_some();
         let mut environment = environment
             .lock()
             .map_err(|_| "worker environment lock poisoned".to_string())?;
         self.ensure_generation(&generation)?;
-        let duckdb_additions = requirements.duckdb.into_iter().collect::<BTreeSet<_>>();
+        let Requirements { duckdb, python, r } = requirements;
+        if environment.custom_worker && !python.is_empty() {
+            return Err("Python requirements are unavailable with a custom worker".to_string());
+        }
+        let duckdb_additions = duckdb.into_iter().collect::<BTreeSet<_>>();
         let duckdb_candidate = if duckdb_additions.is_subset(&environment.duckdb_extensions) {
             None
         } else {
@@ -97,12 +116,19 @@ impl Client {
                     .collect::<BTreeSet<_>>(),
             )
         };
-        let python_additions = requirements.python.into_iter().collect::<BTreeSet<_>>();
+        let python_additions = python.into_iter().collect::<BTreeSet<_>>();
         let python_candidate = merge_python_requirements(
             environment.python.as_ref(),
             python_additions.iter().cloned().collect(),
         );
-        let r_additions = requirements.r.into_iter().collect::<BTreeSet<_>>();
+        let mut r_additions = r.into_iter().collect::<BTreeSet<_>>();
+        if environment.custom_worker {
+            r_additions.extend(
+                super::CUSTOM_DUCKDB_R_REQUIREMENTS
+                    .iter()
+                    .map(|requirement| (*requirement).to_string()),
+            );
+        }
         let current_r = environment
             .r
             .as_ref()
@@ -151,11 +177,22 @@ impl Client {
                 self.clear_resolver_stop_handle(&generation)?;
                 Some(result?)
             };
-            if let Some(duckdb_extensions) = duckdb_candidate.as_ref() {
+            let duckdb_extensions = duckdb_candidate
+                .as_ref()
+                .unwrap_or(&environment.duckdb_extensions);
+            if !duckdb_extensions.is_empty() && (duckdb_candidate.is_some() || managed_r.is_some())
+            {
+                let mut targets = Vec::new();
+                if duckdb_candidate.is_some() {
+                    targets.extend(environment.duckdb_r_targets.iter().cloned());
+                }
+                if let Some(managed_r) = managed_r.as_ref() {
+                    push_duckdb_r_target(&mut targets, managed_r.clone());
+                }
                 let duckdb_extensions = duckdb_extensions.iter().cloned().collect::<Vec<_>>();
                 self.resolve_duckdb_extensions(
                     &generation,
-                    environment.r.as_ref(),
+                    &targets,
                     &duckdb_extensions,
                     &environment.duckdb_extension_directory,
                 )?;
@@ -197,11 +234,20 @@ impl Client {
             managed_r = Some(result?);
         }
 
-        if let Some(duckdb_extensions) = duckdb_candidate.as_ref() {
+        let duckdb_extensions = duckdb_candidate
+            .as_ref()
+            .unwrap_or(&environment.duckdb_extensions);
+        if !duckdb_extensions.is_empty()
+            && (duckdb_candidate.is_some() || !r_additions.is_subset(&current_r))
+        {
+            let mut targets = Vec::new();
+            if let Some(managed_r) = managed_r.as_ref() {
+                push_duckdb_r_target(&mut targets, managed_r.clone());
+            }
             let duckdb_extensions = duckdb_extensions.iter().cloned().collect::<Vec<_>>();
             self.resolve_duckdb_extensions(
                 &generation,
-                managed_r.as_ref(),
+                &targets,
                 &duckdb_extensions,
                 &environment.duckdb_extension_directory,
             )?;
@@ -242,21 +288,26 @@ impl Client {
     fn resolve_duckdb_extensions(
         &self,
         generation: &WorkerGeneration,
-        managed_r: Option<&crate::resolver::ManagedR>,
+        managed_r: &[crate::resolver::ManagedR],
         extensions: &[String],
         extension_directory: &std::path::Path,
     ) -> Result<(), String> {
-        let managed_r = managed_r.ok_or_else(|| {
-            "DuckDB extension preparation requires a server-managed R environment".to_string()
-        })?;
-        let result = crate::resolver::resolve_duckdb_extensions(
-            managed_r,
-            extensions,
-            extension_directory,
-            |handle| self.register_resolver_stop_handle(generation, handle),
-        );
-        self.clear_resolver_stop_handle(generation)?;
-        result
+        if managed_r.is_empty() {
+            return Err(
+                "DuckDB extension preparation requires a managed R environment".to_string(),
+            );
+        }
+        for managed_r in managed_r {
+            let result = crate::resolver::resolve_duckdb_extensions(
+                managed_r,
+                extensions,
+                extension_directory,
+                |handle| self.register_resolver_stop_handle(generation, handle),
+            );
+            self.clear_resolver_stop_handle(generation)?;
+            result?;
+        }
+        Ok(())
     }
 
     fn commit_locked_duckdb_environment(
@@ -428,6 +479,7 @@ impl Client {
                     environment.python = Some(managed_python);
                 }
                 if let Some(managed_r) = managed_r {
+                    push_duckdb_r_target(&mut environment.duckdb_r_targets, managed_r.clone());
                     environment.r = Some(managed_r);
                 }
                 if let Some(duckdb_extensions) = duckdb_extensions {
@@ -508,6 +560,9 @@ impl Client {
         let environment = environment
             .lock()
             .map_err(|_| "worker environment lock poisoned".to_string())?;
+        if environment.custom_worker {
+            return Err("Python requirements are unavailable with a custom worker".to_string());
+        }
         let current = environment.python.clone().ok_or_else(|| {
             "runtime Python requirements require a server-managed interpreter".to_string()
         })?;
@@ -566,6 +621,9 @@ impl Client {
         let environment = environment
             .lock()
             .map_err(|_| "worker environment lock poisoned".to_string())?;
+        if environment.custom_worker {
+            return Err("Python requirements are unavailable with a custom worker".to_string());
+        }
         if environment.python.is_none() {
             return Err(
                 "runtime Python version resolution requires a server-managed interpreter"
@@ -589,6 +647,25 @@ impl Client {
         candidates: Vec<crate::resolver::ManagedPython>,
     ) -> Result<(), String> {
         self.ensure_generation(&generation)?;
+        let mut environment = if checkpoint.is_some() {
+            let environment =
+                self.0.environment.as_ref().ok_or_else(|| {
+                    "custom worker reported a managed Python checkpoint".to_string()
+                })?;
+            Some(
+                environment
+                    .lock()
+                    .map_err(|_| "worker environment lock poisoned".to_string())?,
+            )
+        } else {
+            None
+        };
+        if environment
+            .as_ref()
+            .is_some_and(|environment| environment.custom_worker)
+        {
+            return Err("custom worker reported a managed Python checkpoint".to_string());
+        }
         if self.requirement_change_state(&generation)?.0 == RequirementChangeState::RestartRequired
         {
             return Ok(());
@@ -600,14 +677,9 @@ impl Client {
                 Err("worker resolved Python without reporting a checkpoint".to_string())
             };
         };
-        let environment = self
-            .0
-            .environment
-            .as_ref()
-            .ok_or_else(|| "custom worker reported a managed Python checkpoint".to_string())?;
-        let mut environment = environment
-            .lock()
-            .map_err(|_| "worker environment lock poisoned".to_string())?;
+        let environment = environment
+            .as_mut()
+            .expect("a Python checkpoint should lock the worker environment");
         let managed =
             select_python_checkpoint(environment.python.as_ref(), checkpoint, candidates)?;
         let lifecycle = self

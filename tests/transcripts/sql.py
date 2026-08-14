@@ -4,7 +4,14 @@ import os
 import tempfile
 from pathlib import Path
 
-from _support import McpClient, Transcript, code, r_test_environment, run_this_suite
+from _support import (
+    McpClient,
+    Transcript,
+    code,
+    r_test_environment,
+    run_this_suite,
+    use_temporary_home,
+)
 
 
 PLATFORMS = {"darwin"}
@@ -17,7 +24,7 @@ def test_prepares_and_loads_duckdb_extensions(binary: Path) -> Transcript:
         workspace = Path(temporary)
         home = workspace / "home"
         home.mkdir()
-        environment["HOME"] = str(home)
+        use_temporary_home(environment, home)
         client = McpClient(
             binary,
             ("serve",),
@@ -38,25 +45,40 @@ def test_prepares_and_loads_duckdb_extensions(binary: Path) -> Transcript:
 
         sql = code(r"""
             CREATE TABLE retained_state AS
-            SELECT CAST(42 AS INTEGER) AS answer
+            SELECT
+              CAST(42 AS INTEGER) AS answer,
+              'duckdb extension preparation' AS body
+            UNION ALL
+            SELECT 7, 'other words'
             """)
         client.send(sql=sql)
         assert last_tool_text(client) == "[done]"
 
         client.session(
             action="prepare",
-            requirements={"duckdb": ["inet"]},
+            requirements={"duckdb": ["fts"]},
         )
         assert last_tool_text(client) == "[prepared]"
         client.session(
             action="prepare",
-            requirements={"duckdb": ["inet"]},
+            requirements={"duckdb": ["fts"]},
         )
         assert last_tool_text(client) == "[prepared]"
-        installed_inet = list(
-            (home / ".duckdb" / "extensions").glob("*/*/inet.duckdb_extension")
+        installed_fts = list(
+            (home / ".duckdb" / "extensions").glob("*/*/fts.duckdb_extension")
         )
-        assert len(installed_inet) == 1, installed_inet
+        assert len(installed_fts) == 1, installed_fts
+
+        installed_fts[0].unlink()
+        client.session(
+            action="prepare",
+            requirements={"r": ["praise"]},
+        )
+        assert last_tool_text(client) == "[prepared]"
+        installed_fts = list(
+            (home / ".duckdb" / "extensions").glob("*/*/fts.duckdb_extension")
+        )
+        assert len(installed_fts) == 1, installed_fts
 
         client.session(
             action="prepare",
@@ -68,23 +90,64 @@ def test_prepares_and_loads_duckdb_extensions(binary: Path) -> Transcript:
         assert (
             "unknown core DuckDB extension: not_a_real_duckdb_extension" in failure
         ), failure
-        result["content"][0]["text"] = "<unknown core DuckDB extension rejected>"
+
+        sql = code(r"""
+            PRAGMA create_fts_index('retained_state', 'answer', 'body')
+            """)
+        client.send(sql=sql)
+        assert last_tool_text(client) == "[done]"
 
         sql = code(r"""
             SELECT
-              retained_state.answer,
-              CASE
-                WHEN host('127.0.0.1'::INET) = '127.0.0.1' THEN 1
-                ELSE 0
-              END AS extension_works,
-              extensions.loaded
+              'loaded' AS verified
             FROM retained_state
             CROSS JOIN duckdb_extensions() AS extensions
-            WHERE extensions.extension_name = 'inet'
+            WHERE retained_state.answer = 42
+              AND extensions.extension_name = 'fts'
+              AND extensions.loaded
+              AND fts_main_retained_state.match_bm25(
+                retained_state.answer,
+                'duckdb'
+              ) IS NOT NULL
             """)
         client.send(sql=sql)
         preview = last_tool_text(client)
-        assert preview.splitlines()[-1].split() == ["1", "42", "1", "true"]
+        assert preview.splitlines()[-1].split() == ["1", '"loaded"']
+
+        client.session(action="restart")
+        assert last_tool_text(client) == (
+            "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
+        )
+
+        client.send(sql="LOAD fts")
+        assert last_tool_text(client) == "[done]"
+        sql = code(r"""
+            CREATE TABLE replacement_state AS
+            SELECT
+              CAST(42 AS INTEGER) AS answer,
+              'duckdb extension preparation' AS body
+            """)
+        client.send(sql=sql)
+        assert last_tool_text(client) == "[done]"
+        sql = code(r"""
+            PRAGMA create_fts_index('replacement_state', 'answer', 'body')
+            """)
+        client.send(sql=sql)
+        assert last_tool_text(client) == "[done]"
+        sql = code(r"""
+            SELECT 'loaded' AS verified
+            FROM replacement_state
+            CROSS JOIN duckdb_extensions() AS extensions
+            WHERE extensions.extension_name = 'fts'
+              AND extensions.loaded
+              AND fts_main_replacement_state.match_bm25(
+                replacement_state.answer,
+                'duckdb'
+              ) IS NOT NULL
+            """)
+        client.send(sql=sql)
+        preview = last_tool_text(client)
+        assert preview.splitlines()[-1].split() == ["1", '"loaded"']
         return client._finish()
 
 

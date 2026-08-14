@@ -16,7 +16,9 @@ from _support import (
     Transcript,
     TranscriptWithCompanion,
     code,
+    r_test_environment,
     run_this_suite,
+    use_temporary_home,
 )
 
 PLATFORMS = {"darwin"}
@@ -560,7 +562,7 @@ def test_custom_worker_skips_managed_python_preflight(binary: Path) -> Transcrip
         """).removesuffix("\n")
     client.send(python=python)
     result = client.session(
-        action="restart",
+        action="prepare",
         requirements={"python": ["py-yaml12"]},
     )
     assert result["isError"] is True, result
@@ -568,16 +570,75 @@ def test_custom_worker_skips_managed_python_preflight(binary: Path) -> Transcrip
         "Python requirements are unavailable with a custom worker"
     )
     result = client.session(
-        action="prepare",
-        requirements={"duckdb": ["inet"]},
+        action="restart",
+        requirements={"python": ["py-yaml12"]},
     )
     assert result["isError"] is True, result
     assert result["content"][0]["text"] == (
-        "requirements are unavailable with a custom worker"
+        "Python requirements are unavailable with a custom worker"
     )
     client.send(r="echo")
     assert last_tool_text(client) == "zod: echo\n"
     return client._finish()
+
+
+def test_custom_worker_prepares_r_and_duckdb_requirements(binary: Path) -> Transcript:
+    zod = Path(__file__).resolve().parents[1] / "fixtures" / "zod"
+    environment, _ = r_test_environment()
+    environment["RETICULATE_PYTHON"] = ""
+    with tempfile.TemporaryDirectory() as temporary:
+        isolated_library = Path(temporary) / "isolated-library"
+        isolated_library.mkdir()
+        environment["R_LIBS"] = str(isolated_library)
+        environment["R_LIBS_SITE"] = str(isolated_library)
+        environment["R_LIBS_USER"] = str(isolated_library)
+        home = Path(temporary) / "home"
+        home.mkdir()
+        use_temporary_home(environment, home)
+        client = McpClient(
+            binary,
+            ("serve", "--worker", str(zod)),
+            environment,
+        )
+        client._initialize_and_list_tools()
+        client.send(r="echo")
+
+        client.session(
+            action="prepare",
+            requirements={"r": ["praise"]},
+        )
+        assert last_tool_text(client) == "[prepared]"
+
+        client.session(
+            action="prepare",
+            requirements={"duckdb": ["json"]},
+        )
+        assert last_tool_text(client) == "[prepared]"
+        installed_json = list(
+            (home / ".duckdb" / "extensions").glob("*/*/json.duckdb_extension")
+        )
+        assert len(installed_json) == 1, installed_json
+
+        client.send(r="report managed requirements")
+        assert last_tool_text(client) == "zod requirements: r=true; duckdb=true\n"
+
+        client.send(r="fail next r preparation")
+        assert last_tool_text(client) == "[done]"
+        result = client.session(
+            action="prepare",
+            requirements={"r": ["zeallot"]},
+        )
+        assert result["isError"] is True, result
+        assert result["content"][0]["text"] == (
+            "zod rejected R preparation; further requirement changes are "
+            "unavailable until session restart"
+        )
+
+        result = client.send(r="report managed python checkpoint")
+        assert result["isError"] is True, result
+        failure = result["content"][0]["text"]
+        assert "custom worker reported a managed Python checkpoint" in failure, failure
+        return client._finish()
 
 
 def test_captures_worker_stdout(binary: Path) -> Transcript:

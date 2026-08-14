@@ -9,7 +9,6 @@ send:
       identical(dirname(find.package("reticulate")), .libPaths()[[1L]]),
       identical(dirname(find.package("DBI")), .libPaths()[[1L]]),
       identical(dirname(find.package("duckdb")), .libPaths()[[1L]]),
-      identical(as.character(packageVersion("duckdb")), "1.5.5"),
       identical(dirname(find.package("arrow")), .libPaths()[[1L]]),
       identical(dirname(find.package("nanoarrow")), .libPaths()[[1L]]),
       identical(packageDescription("reticulate")$RemoteType, "github"),

@@ -118,6 +118,8 @@ def main() -> None:
         )
     configure_startup(temporary)
     send(writer, {"kind": "ready"})
+    prepared_r_library: str | None = None
+    fail_next_r_preparation = False
 
     if os.environ.get("ZOD_BLOCK_SIDEBAND_WRITE") == "1":
         reader.read(1)
@@ -130,6 +132,22 @@ def main() -> None:
         message_kind = message["kind"]
         if message_kind == "shutdown":
             return
+
+        if message_kind == "prepare_r":
+            assert set(message) == {"kind", "library"}
+            if fail_next_r_preparation:
+                fail_next_r_preparation = False
+                send(
+                    writer,
+                    {
+                        "kind": "r_preparation_failed",
+                        "message": "zod rejected R preparation",
+                    },
+                )
+                continue
+            prepared_r_library = message["library"]
+            send(writer, {"kind": "r_prepared", "library": prepared_r_library})
+            continue
 
         assert message_kind == "evaluate"
         assert set(message) == {"kind", "language", "source"}
@@ -274,6 +292,40 @@ def main() -> None:
 
         if source == "complete silently":
             send(writer, {"kind": "completed"})
+            continue
+
+        if source == "report managed requirements":
+            extension_directory = os.environ.get(
+                "MCP_CONSOLE_DUCKDB_EXTENSION_DIRECTORY",
+                "",
+            )
+            expected_extension_directory = str(
+                Path(os.environ["HOME"], ".duckdb", "extensions")
+            )
+            r_prepared = str(prepared_r_library is not None).lower()
+            duckdb_prepared = str(
+                extension_directory == expected_extension_directory
+            ).lower()
+            send_output(
+                writer,
+                f"zod requirements: r={r_prepared}; duckdb={duckdb_prepared}\n",
+            )
+            send(writer, {"kind": "completed"})
+            continue
+
+        if source == "fail next r preparation":
+            fail_next_r_preparation = True
+            send(writer, {"kind": "completed"})
+            continue
+
+        if source == "report managed python checkpoint":
+            send(
+                writer,
+                {
+                    "kind": "completed",
+                    "python_checkpoint": {"packages": ["numpy", "pandas"]},
+                },
+            )
             continue
 
         if source == "emit console kinds":

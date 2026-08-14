@@ -123,17 +123,17 @@ result:
         restart the persistent console session. Use `prepare` for packages not
         included in the built-in environments or core DuckDB extensions.
         Packages and extensions are not imported, attached, or loaded
-        automatically by preparation. An idle server-managed worker can add R
-        and compatible Python requirements or DuckDB extensions without losing
-        live state. After a recoverable live preparation failure, evaluation
-        remains available so state can be saved, but new requirement additions
-        require restart. Requirements are additive, idempotent, and persist
-        across restart. `restart` may optionally add Python requirements, then
-        replaces the worker and loses all in-memory R, Python, and SQL state,
-        debugger state, and unread stdin. Requirement resolution runs outside
-        the execution sandbox and may download packages or extensions or execute
-        package installation or build code on the host; use only trusted
-        requirements.
+        automatically by preparation. An idle worker can add R requirements or
+        DuckDB extensions without losing live state; compatible Python additions
+        require a server-managed worker. After a recoverable live preparation
+        failure, evaluation remains available so state can be saved, but new
+        requirement additions require restart. Requirements are additive,
+        idempotent, and persist across restart. `restart` may optionally add
+        Python requirements, then replaces the worker and loses all in-memory R,
+        Python, and SQL state, debugger state, and unread stdin. Requirement
+        resolution runs outside the execution sandbox and may download packages
+        or extensions or execute package installation or build code on the host;
+        use only trusted requirements.
       inputSchema:
         $schema: https://json-schema.org/draft/2020-12/schema
         required:
@@ -142,10 +142,10 @@ result:
         properties:
           action:
             description: |-
-              `prepare` adds R or Python requirements or core DuckDB extensions before a server-managed
-              worker starts. After startup, it can add R and compatible Python requirements or DuckDB
-              extensions while the worker is idle. `restart` replaces the worker, optionally adds Python
-              requirements, and starts it if needed.
+              `prepare` adds R or Python requirements or core DuckDB extensions before a worker starts.
+              After startup, it can add R requirements or DuckDB extensions while the worker is idle;
+              compatible Python additions require a server-managed worker. `restart` replaces the worker,
+              optionally adds Python requirements, and starts it if needed.
             type: string
             enum:
               - prepare
@@ -183,8 +183,9 @@ result:
               r:
                 description: |-
                   Additive, single-line IR package references for `prepare`, for example `data.table`, `sf`, or
-                  `yaml12`. An idle server-managed worker can add R requirements without losing live state.
-                  Local package sources are rejected because resolution runs with server permissions.
+                  `yaml12`. An idle worker that implements R preparation can add R requirements without losing
+                  live state. Local package sources are rejected because resolution runs with server
+                  permissions.
                 type: array
                 items:
                   type: string
