@@ -39,8 +39,10 @@ result:
         globals through `r.name`; R reads Python globals through `py$name`; SQL
         queries R data frames by name; R accesses the DuckDB catalog through
         `sql_connection()`. Language-native help and introspection are
-        available. Use `session` to prepare other packages or DuckDB extensions
-        before loading or importing them. R default-device plots and open
+        available. Do not probe package availability in cells. Use `session` to
+        prepare other packages or DuckDB extensions before loading or importing
+        them. If you use a custom Python installation, import packages already
+        installed there directly. R default-device plots and open
         `matplotlib.pyplot` figures return as PNG images. Send exactly one
         complete `r`, `python`, or `sql` cell. Call `send` sequentially;
         concurrent calls are unsupported. Use `stdin` for interactive reads or
