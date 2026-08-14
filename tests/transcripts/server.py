@@ -49,13 +49,17 @@ def test_initializes_and_lists_tools(binary: Path) -> Transcript:
     assert "dplyr::" not in r_description
     assert "readr::" not in r_description
     assert "jsonlite::" not in r_description
-    assert (
-        "`matplotlib.pyplot`"
-        in send["inputSchema"]["properties"]["python"]["description"]
+    python_description = " ".join(
+        send["inputSchema"]["properties"]["python"]["description"].split()
     )
+    assert "`matplotlib.pyplot`" in python_description
     assert (
         "The built-in managed Python environment includes NumPy and pandas"
-        in send["inputSchema"]["properties"]["python"]["description"]
+        in python_description
+    )
+    assert (
+        "If you use a custom Python installation, import packages already installed there directly"
+        in python_description
     )
     assert "bounded preview" in send["inputSchema"]["properties"]["sql"]["description"]
     stdin_description = " ".join(

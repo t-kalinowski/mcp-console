@@ -42,11 +42,12 @@ struct SendArguments {
     /// width and height are in inches. Omit to send stdin or poll.
     r: Option<String>,
     /// Complete multiline Python cell evaluated in persistent `__main__` state; its final expression
-    /// is displayed. The built-in managed Python environment includes NumPy and pandas. Use
-    /// `session` to prepare other packages such as scikit-learn or Matplotlib. Read R globals and
-    /// call R functions through `r.name`; for example, `frame = r.df`. Return Python globals to R
-    /// through `py$name`. Python data frames are not automatically visible to SQL; bind them to an R
-    /// name first. At cell end, including after a Python error, every open `matplotlib.pyplot` figure
+    /// is displayed. The built-in managed Python environment includes NumPy and pandas. If you use a
+    /// custom Python installation, import packages already installed there directly. Use `session`
+    /// to prepare other packages such as scikit-learn or Matplotlib. Read R globals and call R
+    /// functions through `r.name`; for example, `frame = r.df`. Return Python globals to R through
+    /// `py$name`. Python data frames are not automatically visible to SQL; bind them to an R name
+    /// first. At cell end, including after a Python error, every open `matplotlib.pyplot` figure
     /// returns once as a PNG image and is closed. `show()` is optional. R plots called through `r`
     /// follow the R plot rules. Omit to send stdin or poll.
     python: Option<String>,
