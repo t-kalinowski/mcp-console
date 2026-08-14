@@ -353,6 +353,30 @@ def test_previews_schema_and_exact_values(binary: Path) -> Transcript:
     return transcript
 
 
+def test_uses_200_column_default(binary: Path) -> Transcript:
+    client = McpClient(binary, ("serve",))
+    client._initialize_and_list_tools()
+    sql = code(r"""
+        SELECT
+          1 AS column_name_01_abcdefghijkl,
+          2 AS column_name_02_abcdefghijkl,
+          3 AS column_name_03_abcdefghijkl,
+          4 AS column_name_04_abcdefghijkl,
+          5 AS column_name_05_abcdefghijkl,
+          6 AS column_name_06_abcdefghijkl
+        """)
+    client.send(sql=sql)
+    output = last_tool_text(client)
+    for column in range(1, 7):
+        assert f"column_name_{column:02}_abcdefghijkl" in output
+    assert "abbreviated name" not in output
+    header = next(
+        line for line in output.splitlines() if line.startswith("  column_name_01")
+    )
+    assert 160 < len(header) <= 200, repr(header)
+    return client._finish()
+
+
 def test_bounds_query_previews_without_materializing_results(
     binary: Path,
 ) -> Transcript:
@@ -380,6 +404,12 @@ def test_bounds_query_previews_without_materializing_results(
     wide = last_tool_text(client)
 
     sql = code(r"""
+        SELECT repeat('z', 1000) AS value
+        """)
+    client.send(sql=sql)
+    long_cell = last_tool_text(client)
+
+    sql = code(r"""
         SELECT value
         FROM range(1000000000000) AS values(value)
         WHERE value % 97 = 0
@@ -393,6 +423,8 @@ def test_bounds_query_previews_without_materializing_results(
     assert "[2 additional columns omitted]" in wide
     assert "[cell values truncated to 160 characters]" in wide
     assert "a" * 161 not in wide
+    assert f'"{"z" * 159}…"' in long_cell
+    assert "[cell values truncated to 160 characters]" in long_cell
     assert large != "\n[running]"
     assert len(large.encode("utf-8")) <= 12 * 1024
     assert "[additional rows omitted]" in large

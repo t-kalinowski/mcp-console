@@ -89,6 +89,7 @@ Named sessions do not exist yet.
 On macOS, default R preflight and managed-Python preflight happen during `serve` startup when required; the first nonempty stdin submission or evaluation still lazily starts the built-in worker under the same sandbox policy as the `sandbox` command.
 The worker embeds R through `libr` and `harp`, retains global state, and feeds each complete R cell through R's DLL REPL iterator.
 R parses and evaluates its expressions sequentially, captures console output, prints visible values, and performs native top-level bookkeeping.
+Each worker generation starts with `options(width = 200L)`; evaluated code can change that persistent option.
 Cell EOF while R requires continuation input is an error; earlier complete expressions from that cell remain applied.
 R parse, evaluation, and auto-print failures are normal language outcomes with `isError: false`.
 The worker maps `R_WriteConsoleEx` type 0 to `console_output`, nonzero types and `R_ShowMessage` to `console_diagnostic`, and currently renders both as ordinary MCP text.
@@ -102,6 +103,7 @@ Graphics devices opened explicitly by evaluated code, such as with `grDevices::p
 A silent successful R cell sends `completed` without a console-text frame and projects to `[done]` when no other response text is pending.
 Submitted R functions do not currently retain a source filename.
 Python cells run in the same worker through reticulate, retain `__main__` state, execute statements, and display a final expression through `sys.displayhook()`.
+Python sees a 200-column terminal width, and NumPy `linewidth` and pandas `display.width` start at 200 when those modules load; evaluated code can change those settings.
 Python source uses a synthetic evaluation filename, and uncaught exceptions print a Python traceback as a normal language outcome with `isError: false`.
 R plots invoked through reticulate's `r` bridge use the managed R graphics lifecycle and return as MCP images under the same sizing, cell-scope, and device-ownership rules as R cells.
 At Python cell end, including after a Python error, the worker renders every open `matplotlib.pyplot` figure in memory, emits it once as `image/png`, and closes all pyplot-managed figures.
@@ -165,7 +167,7 @@ It returns a borrowed reference to the same worker-owned connection; callers mus
 Established DuckDB, DBI, and dplyr interfaces can use that connection, and lazy dplyr relations observe later catalog changes until collection.
 Prepared queries retain scanned data frames until their DBI results are cleared.
 Query results use `DBI::dbSendQueryArrow()` and one streaming `DBI::dbFetchArrow()` batch of at most 21 rows.
-The worker displays at most 20 rows and 12 columns through pillar, limits cells to 160 characters, and limits the SQL preview itself to 12 KiB; the byte limit may reduce rows or columns further.
+The worker displays at most 20 rows and 12 columns through pillar in a 200-column layout, limits cells to 160 characters, and limits the SQL preview itself to 12 KiB; the byte limit may reduce rows or columns further.
 The 21st row determines only whether to append the omitted-row marker; the worker does not count or materialize the complete result.
 Arrow schemas keep column names and types visible for empty results, while DuckDB stringifies only the bounded displayed batch and applies the cell limit before returning text to R so `NULL`, `BIGINT`, `DECIMAL`, and nested values remain exact when they fit.
 Temporary Arrow relations use collision-checked names and are unregistered after formatting.

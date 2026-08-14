@@ -153,6 +153,32 @@ base::local({
     }
   }
 
+  console_width <- getOption("width")
+  install_console_width <- function(...) {
+    configure_numpy <- function() {
+      numpy <- reticulate::import("numpy", convert = FALSE)
+      numpy$set_printoptions(linewidth = console_width)
+    }
+    configure_pandas <- function() {
+      pandas <- reticulate::import("pandas", convert = FALSE)
+      pandas$set_option("display.width", console_width)
+    }
+    # Reticulate imports NumPy before its module-load hooks are installed.
+    setHook("reticulate.onPyInit", function() {
+      reticulate::py_register_load_hook("numpy", configure_numpy)
+      reticulate::py_register_load_hook("pandas", configure_pandas)
+    }, action = "append")
+    invisible()
+  }
+  setHook(
+    packageEvent("reticulate", "onLoad"),
+    install_console_width,
+    action = "append"
+  )
+  if ("reticulate" %in% loadedNamespaces()) {
+    install_console_width()
+  }
+
   checkpoint_manifest <- function() {
     if (is.na(managed) || !"reticulate" %in% loadedNamespaces()) {
       return(NULL)
@@ -394,6 +420,7 @@ def _mcp_console_eval_cell(
         link_matplotlib_caches();
 
         for (name, value, overwrite) in [
+            (c"COLUMNS", c"200", true),
             (c"RETICULATE_REMAP_OUTPUT_STREAMS", c"1", true),
             (c"UV_OFFLINE", c"1", true),
             (c"MPLBACKEND", c"agg", false),

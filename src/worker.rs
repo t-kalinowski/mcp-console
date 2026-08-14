@@ -323,6 +323,7 @@ mod platform {
         }
         harp::routines::r_register_routines();
         harp::initialize();
+        harp::parse_eval_base("base::options(width = 200L)")?;
         initialize_r_repl()?;
         Ok(())
     }

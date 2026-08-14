@@ -6,6 +6,7 @@ base::local({
   preview_rows <- 20L
   preview_columns <- 12L
   cell_width <- 160L
+  preview_width <- 200L
   response_bytes <- 12L * 1024L
 
   bridge <- environment()
@@ -242,16 +243,16 @@ base::local({
       pillar.print_max = preview_rows,
       pillar.subtle = FALSE,
       pillar.superdigit_sep = "\u200b",
-      pillar.width = cell_width,
+      pillar.width = preview_width,
       scipen = 0L,
-      width = cell_width
+      width = preview_width
     )
     on.exit(options(previous_options))
     output <- paste(
       format(
         table,
         n = rows,
-        width = cell_width,
+        width = preview_width,
         max_extra_cols = columns,
         max_footer_lines = columns + 1L
       ),

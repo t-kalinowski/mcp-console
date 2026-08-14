@@ -467,6 +467,7 @@ If shutdown already closed the gate, startup stops the new child and fails immed
 
 The built-in worker runs each complete cell through `R_ReplDLLinit()` and repeated `R_ReplDLLdo1()` calls.
 R parses and evaluates its expressions sequentially in the persistent global environment, captures console output, prints every visible value, and performs native top-level bookkeeping such as updating `.Last.value`.
+After R initializes, each worker generation sets `options(width = 200L)` before reporting ready; evaluated code can change the option for the rest of that generation.
 A cell that ends while R requires continuation input produces `Error: Incomplete code`; earlier complete expressions from that cell remain applied.
 A successful silent R cell sends no console-text frame but still sends `completed`; if no other response text is pending, the server projects that completion as `[done]`.
 The CLI runs `worker` synchronously without a Tokio runtime, so R initialization and evaluation remain on the process main thread.
@@ -503,6 +504,8 @@ Graphics devices opened explicitly by evaluated code, such as with `grDevices::p
 ### Python cells
 
 The worker embeds one persistent Python `__main__` interpreter through reticulate.
+Before R or Python initializes, it sets `COLUMNS=200`; when NumPy or pandas loads, reticulate hooks set NumPy `linewidth` and pandas `display.width` to 200.
+Evaluated code can change those Python settings after module load.
 At worker startup, it sets `RETICULATE_REMAP_OUTPUT_STREAMS=1` once, before user R can initialize Python.
 Within the worker process, reticulate then routes Python text writes through R's console callbacks, including when user R initializes Python before the first Python cell.
 Python standard output uses R's ordinary console path and produces `console_output` frames.
@@ -580,7 +583,7 @@ The evaluator never counts the complete result for display.
 The preview selects at most 12 columns and uses the Arrow schema for the original column names and visible physical types.
 For nonempty results, the nanoarrow batch crosses into Arrow through the C Data Interface without copying its payload, then a 20-row by 12-column view becomes a private temporary DuckDB Arrow relation whose name is checked against catalog objects and existing Arrow registrations before registration.
 DuckDB casts only the selected 20-row by 12-column preview to text and applies the 160-character limit before returning those strings to R, preserving SQL `NULL` and exact values including `BIGINT`, `DECIMAL`, lists, and structs when they fit without first converting them to lossy R data-frame columns.
-Pillar lays out that bounded text with an explicit 160-character cell limit and fixed print options, and its footer identifies selected columns that do not fit in the table body.
+Pillar lays out that bounded text within 200 columns while retaining the 160-character per-cell limit, and its footer identifies selected columns that do not fit in the table body.
 Empty results still show their selected names and types followed by `[0 rows]`.
 `[additional rows omitted]`, `[N additional columns omitted]`, and `[cell values truncated to 160 characters]` report structural omissions.
 The complete SQL preview, including its trailing newline, is limited to 12 KiB; if necessary, formatting removes candidate rows and then columns until it fits and updates the omission markers.
