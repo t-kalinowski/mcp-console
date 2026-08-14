@@ -257,6 +257,7 @@ impl Worker {
                     evaluation.input_requested(prompt)?;
                 }
                 WorkerMessage::InputReceived => evaluation.input_received()?,
+                WorkerMessage::InputCancelled => evaluation.input_cancelled()?,
                 WorkerMessage::ResolvePython { request } => {
                     python_candidates
                         .extend(self.resolve_python_request(request, &mut resolve_python)?);

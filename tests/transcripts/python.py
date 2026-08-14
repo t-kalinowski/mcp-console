@@ -742,10 +742,28 @@ def test_interrupts_running_python_evaluation(binary: Path) -> Transcript:
         passed = False
         try:
             client._initialize_and_list_tools()
+
+            def interrupt_python(source: str, marker: str, expected: str) -> None:
+                client.send(python=source, timeout_ms=0)
+                assert last_tool_text(client) == "\n[running]"
+                wait_for_worker_file(temporary_path, marker, client)
+                client.session(action="interrupt")
+                assert last_tool_text(client) == "[interrupt sent]"
+                client.send(timeout_ms=3_000)
+                output = last_tool_text(client)
+                assert output == expected, repr(output)
+
             # fmt: r
             r = code(r"""
+                python_interrupt_r_forever <- function() {
+                  invisible(file.create(file.path(
+                    tempdir(),
+                    "python-r-call-interrupt-started"
+                  )))
+                  repeat {}
+                }
                 invisible(suppressMessages(base::trace(
-                  "py_run_string",
+                  "py_eval",
                   tracer = quote({
                     invisible(file.create(file.path(
                       tempdir(),
@@ -780,18 +798,36 @@ def test_interrupts_running_python_evaluation(binary: Path) -> Transcript:
             # fmt: r
             r = code(r"""
                 invisible(suppressMessages(base::untrace(
-                  "py_run_string",
+                  "py_eval",
                   where = asNamespace("reticulate")
                 )))
+                # Poison reticulate's cached result wrapper before MCP Console
+                # initializes its private Python evaluator. The evaluator must
+                # return through direct conversion instead of that wrapper.
+                invisible(reticulate::py_eval(
+                  r"---(
+                exec(
+                    "import inspect\n"
+                    "inspect._mcp_original_getmro_code = inspect.getmro.__code__\n"
+                    "def _mcp_interrupting_getmro(cls):\n"
+                    "    getmro.__code__ = _mcp_original_getmro_code\n"
+                    "    raise KeyboardInterrupt\n"
+                    "inspect.getmro.__code__ = _mcp_interrupting_getmro.__code__\n"
+                )
+                )---",
+                  convert = TRUE
+                ))
                 """)
             client.send(r=r)
             assert last_tool_text(client) == "[done]"
 
             # fmt: python
             python = code("""
+                import inspect
                 import os
                 from pathlib import Path
 
+                inspect.getmro.__code__ = inspect._mcp_original_getmro_code
                 python_interrupt_state = 41
                 Path(
                     os.environ["TMPDIR"],
@@ -811,10 +847,85 @@ def test_interrupts_running_python_evaluation(binary: Path) -> Transcript:
             client.session(action="interrupt")
             assert last_tool_text(client) == "[interrupt sent]"
             client.send(timeout_ms=3_000)
-            assert "KeyboardInterrupt" in last_tool_text(client)
+            output = last_tool_text(client)
+            assert output == (
+                "Traceback (most recent call last):\n"
+                '  File "<string>", line 88, in _mcp_console_eval_cell\n'
+                '  File "<mcp-console:python:e2>", line 11, in <module>\n'
+                "KeyboardInterrupt\n"
+            ), repr(output)
 
             client.send(python="python_interrupt_state + 1")
             assert last_tool_text(client) == "42\n"
+
+            # fmt: python
+            python = code("""
+                import os
+                from pathlib import Path
+
+                try:
+                    Path(
+                        os.environ["TMPDIR"],
+                        "python-caught-interrupt-started",
+                    ).touch()
+                    while True:
+                        pass
+                except KeyboardInterrupt:
+                    print("Caught Python interrupt; ", end="")
+                finally:
+                    print("Running Python finally; ", end="")
+
+                print("Python continued")
+                """)
+            interrupt_python(
+                python,
+                "python-caught-interrupt-started",
+                "Caught Python interrupt; Running Python finally; Python continued\n",
+            )
+
+            # fmt: python
+            python = code("""
+                try:
+                    r.python_interrupt_r_forever()
+                except KeyboardInterrupt:
+                    print("Caught R interrupt; ", end="")
+                finally:
+                    print("Running R-call finally; ", end="")
+
+                print("Python continued after R")
+                """)
+            interrupt_python(
+                python,
+                "python-r-call-interrupt-started",
+                "Caught R interrupt; Running R-call finally; Python continued after R\n",
+            )
+
+            # fmt: python
+            python = code("""
+                try:
+                    input("interrupt> ")
+                except KeyboardInterrupt:
+                    print("Caught input interrupt; ", end="")
+                finally:
+                    print("Running input finally; ", end="")
+
+                print("Python continued after input")
+                """)
+            client.send(python=python)
+            output = last_tool_text(client)
+            assert output == ('[input requested: "interrupt> "]\n[stdin needed]'), repr(
+                output
+            )
+
+            client.session(action="interrupt")
+            assert last_tool_text(client) == "[interrupt sent]"
+            client.send(timeout_ms=3_000)
+            output = last_tool_text(client)
+            assert output == (
+                "Caught input interrupt; Running input finally; "
+                "Python continued after input\n"
+            ), repr(output)
+
             transcript = client._finish()
             passed = True
             return transcript

@@ -4,8 +4,15 @@
 id: 3
 send:
   r: |
+    python_interrupt_r_forever <- function() {
+      invisible(file.create(file.path(
+        tempdir(),
+        "python-r-call-interrupt-started"
+      )))
+      repeat {}
+    }
     invisible(suppressMessages(base::trace(
-      "py_run_string",
+      "py_eval",
       tracer = quote({
         invisible(file.create(file.path(
           tempdir(),
@@ -56,9 +63,25 @@ id: 7
 send:
   r: |
     invisible(suppressMessages(base::untrace(
-      "py_run_string",
+      "py_eval",
       where = asNamespace("reticulate")
     )))
+    # Poison reticulate's cached result wrapper before MCP Console
+    # initializes its private Python evaluator. The evaluator must
+    # return through direct conversion instead of that wrapper.
+    invisible(reticulate::py_eval(
+      r"---(
+    exec(
+        "import inspect\n"
+        "inspect._mcp_original_getmro_code = inspect.getmro.__code__\n"
+        "def _mcp_interrupting_getmro(cls):\n"
+        "    getmro.__code__ = _mcp_original_getmro_code\n"
+        "    raise KeyboardInterrupt\n"
+        "inspect.getmro.__code__ = _mcp_interrupting_getmro.__code__\n"
+    )
+    )---",
+      convert = TRUE
+    ))
 result:
   content:
     - type: text
@@ -68,9 +91,11 @@ result:
 id: 8
 send:
   python: |
+    import inspect
     import os
     from pathlib import Path
-    
+
+    inspect.getmro.__code__ = inspect._mcp_original_getmro_code
     python_interrupt_state = 41
     Path(
         os.environ["TMPDIR"],
@@ -104,8 +129,8 @@ result:
     - type: text
       text: |
         Traceback (most recent call last):
-          File "<string>", line 83, in _mcp_console_eval_cell
-          File "<mcp-console:python:e2>", line 9, in <module>
+          File "<string>", line 88, in _mcp_console_eval_cell
+          File "<mcp-console:python:e2>", line 11, in <module>
         KeyboardInterrupt
   isError: false
 ---
@@ -117,5 +142,129 @@ result:
     - type: text
       text: |
         42
+  isError: false
+---
+id: 12
+send:
+  python: |
+    import os
+    from pathlib import Path
+
+    try:
+        Path(
+            os.environ["TMPDIR"],
+            "python-caught-interrupt-started",
+        ).touch()
+        while True:
+            pass
+    except KeyboardInterrupt:
+        print("Caught Python interrupt; ", end="")
+    finally:
+        print("Running Python finally; ", end="")
+
+    print("Python continued")
+  timeout_ms: 0
+result:
+  content:
+    - type: text
+      text: |-
+
+        [running]
+  isError: false
+---
+id: 13
+session:
+  action: interrupt
+result:
+  content:
+    - type: text
+      text: "[interrupt sent]"
+  isError: false
+---
+id: 14
+send:
+  timeout_ms: 3000
+result:
+  content:
+    - type: text
+      text: |
+        Caught Python interrupt; Running Python finally; Python continued
+  isError: false
+---
+id: 15
+send:
+  python: |
+    try:
+        r.python_interrupt_r_forever()
+    except KeyboardInterrupt:
+        print("Caught R interrupt; ", end="")
+    finally:
+        print("Running R-call finally; ", end="")
+
+    print("Python continued after R")
+  timeout_ms: 0
+result:
+  content:
+    - type: text
+      text: |-
+
+        [running]
+  isError: false
+---
+id: 16
+session:
+  action: interrupt
+result:
+  content:
+    - type: text
+      text: "[interrupt sent]"
+  isError: false
+---
+id: 17
+send:
+  timeout_ms: 3000
+result:
+  content:
+    - type: text
+      text: |
+        Caught R interrupt; Running R-call finally; Python continued after R
+  isError: false
+---
+id: 18
+send:
+  python: |
+    try:
+        input("interrupt> ")
+    except KeyboardInterrupt:
+        print("Caught input interrupt; ", end="")
+    finally:
+        print("Running input finally; ", end="")
+
+    print("Python continued after input")
+result:
+  content:
+    - type: text
+      text: |-
+        [input requested: "interrupt> "]
+        [stdin needed]
+  isError: false
+---
+id: 19
+session:
+  action: interrupt
+result:
+  content:
+    - type: text
+      text: "[interrupt sent]"
+  isError: false
+---
+id: 20
+send:
+  timeout_ms: 3000
+result:
+  content:
+    - type: text
+      text: |
+        Caught input interrupt; Running input finally; Python continued after input
   isError: false
 ...

@@ -3,17 +3,7 @@
 ---
 id: 3
 send:
-  r: |
-    sql_interrupt_armed <- FALSE
-    options(duckdb.progress_display = function(percentage) {
-      if (isTRUE(sql_interrupt_armed)) {
-        invisible(file.create(file.path(
-          tempdir(),
-          "sql-interrupt-started"
-        )))
-      }
-    })
-    invisible(sql_connection())
+  python: sql_python_state = 42
 result:
   content:
     - type: text
@@ -21,6 +11,47 @@ result:
   isError: false
 ---
 id: 4
+send:
+  r: |
+    sql_interrupt_armed <- FALSE
+    sql_interrupt_attempt <- 0L
+    options(duckdb.progress_display = function(percentage) {
+      if (isTRUE(sql_interrupt_armed)) {
+        invisible(file.create(file.path(
+          tempdir(),
+          paste0(
+            "sql-interrupt-",
+            sql_interrupt_attempt,
+            "-started"
+          )
+        )))
+      }
+    })
+    arm_sql_interrupt <- function() {
+      sql_interrupt_armed <<- FALSE
+      invisible(DBI::dbExecute(
+        sql_connection(),
+        "SET enable_progress_bar = true"
+      ))
+      invisible(DBI::dbExecute(
+        sql_connection(),
+        "SET progress_bar_time = 0"
+      ))
+      sql_interrupt_armed <<- TRUE
+      invisible(NULL)
+    }
+    invisible(sql_connection())
+    invisible(DBI::dbExecute(
+      sql_connection(),
+      "SET threads = 1"
+    ))
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+id: 5
 send:
   sql: |
     CREATE TABLE interrupt_state AS
@@ -31,25 +62,18 @@ result:
       text: "[done]"
   isError: false
 ---
-id: 5
+id: 6
 send:
   r: |
-    sql_interrupt_armed <- TRUE
-    invisible(DBI::dbExecute(
-      sql_connection(),
-      "SET enable_progress_bar = true"
-    ))
-    invisible(DBI::dbExecute(
-      sql_connection(),
-      "SET progress_bar_time = 0"
-    ))
+    sql_interrupt_attempt <- 1L
+    arm_sql_interrupt()
 result:
   content:
     - type: text
       text: "[done]"
   isError: false
 ---
-id: 6
+id: 7
 send:
   sql: |
     SELECT sum(hash(value)) AS total
@@ -59,11 +83,11 @@ result:
   content:
     - type: text
       text: |-
-        
+
         [running]
   isError: false
 ---
-id: 7
+id: 8
 session:
   action: interrupt
 result:
@@ -72,16 +96,63 @@ result:
       text: "[interrupt sent]"
   isError: false
 ---
-id: 8
+id: 9
 send:
   timeout_ms: 5000
 result:
   content:
     - type: text
-      text: "\n"
+      text: |+
+
+
   isError: false
 ---
-id: 9
+id: 10
+send:
+  r: |
+    sql_interrupt_attempt <- 2L
+    arm_sql_interrupt()
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+id: 11
+send:
+  sql: |
+    SELECT sum(hash(value)) AS total
+    FROM range(1000000000000) AS values(value)
+  timeout_ms: 0
+result:
+  content:
+    - type: text
+      text: |-
+
+        [running]
+  isError: false
+---
+id: 12
+session:
+  action: interrupt
+result:
+  content:
+    - type: text
+      text: "[interrupt sent]"
+  isError: false
+---
+id: 13
+send:
+  timeout_ms: 5000
+result:
+  content:
+    - type: text
+      text: |+
+
+
+  isError: false
+---
+id: 14
 send:
   sql: SELECT answer FROM interrupt_state
 result:
@@ -92,5 +163,15 @@ result:
            answer
           <int32>
         1      42
+  isError: false
+---
+id: 15
+send:
+  python: sql_python_state + 1
+result:
+  content:
+    - type: text
+      text: |
+        43
   isError: false
 ...
