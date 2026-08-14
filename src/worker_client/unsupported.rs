@@ -13,10 +13,17 @@ impl WorkerRuntime {
         let super::WorkerSpec {
             executable,
             arguments,
+            duckdb_extension_directory,
             managed_python,
             managed_r,
         } = spec;
-        let _ = (executable, arguments, managed_python, managed_r);
+        let _ = (
+            executable,
+            arguments,
+            duckdb_extension_directory,
+            managed_python,
+            managed_r,
+        );
         Err("workers are supported only on macOS".to_string())
     }
 }

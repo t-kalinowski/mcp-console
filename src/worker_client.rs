@@ -30,7 +30,7 @@ const DEFAULT_R_REQUIREMENTS: &[&str] = &[
     "tidyverse",
     "github::rstudio/reticulate",
     "DBI",
-    "duckdb",
+    "duckdb@1.5.5",
     "arrow",
     "nanoarrow",
 ];
@@ -56,6 +56,7 @@ struct ClientInner {
 struct WorkerSpec<'a> {
     executable: &'a std::path::Path,
     arguments: &'a [OsString],
+    duckdb_extension_directory: Option<&'a std::path::Path>,
     managed_python: Option<&'a crate::resolver::ManagedPython>,
     managed_r: Option<&'a crate::resolver::ManagedR>,
 }
@@ -124,10 +125,16 @@ impl Client {
         #[cfg(not(target_os = "macos"))]
         let r = None;
         let python = crate::resolver::resolve_python(&[], |_| Ok(()))?;
+        let duckdb_extension_directory = default_duckdb_extension_directory()?;
         Ok(Self::with_arguments(
             program,
             vec![OsString::from("worker")],
-            Some(Environment { python, r }),
+            Some(Environment {
+                duckdb_extension_directory,
+                duckdb_extensions: Default::default(),
+                python,
+                r,
+            }),
         ))
     }
 
@@ -548,9 +555,13 @@ impl Client {
             let managed_r = environment
                 .as_ref()
                 .and_then(|environment| environment.r.as_ref());
+            let duckdb_extension_directory = environment
+                .as_ref()
+                .map(|environment| environment.duckdb_extension_directory.as_path());
             let spec = WorkerSpec {
                 executable: &self.0.program,
                 arguments: &self.0.arguments,
+                duckdb_extension_directory,
                 managed_python,
                 managed_r,
             };
@@ -567,4 +578,18 @@ impl Client {
         }
         Ok(())
     }
+}
+
+fn default_duckdb_extension_directory() -> Result<PathBuf, String> {
+    let home = std::env::var_os("HOME")
+        .filter(|home| !home.is_empty())
+        .map(PathBuf::from)
+        .ok_or_else(|| "DuckDB extension preparation requires `HOME`".to_string())?;
+    if !home.is_absolute() || !home.is_dir() {
+        return Err(format!(
+            "DuckDB extension preparation requires an existing absolute home directory; found `{}`",
+            home.display()
+        ));
+    }
+    Ok(home.join(".duckdb/extensions"))
 }

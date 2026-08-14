@@ -2,6 +2,10 @@ const BRIDGE_INIT: &str = r#"
 base::local({
   connection <- NULL
   source <- NULL
+  extension_directory <- Sys.getenv(
+    "MCP_CONSOLE_DUCKDB_EXTENSION_DIRECTORY",
+    unset = ""
+  )
   printer_ready <- FALSE
   preview_rows <- 20L
   preview_columns <- 12L
@@ -31,11 +35,23 @@ base::local({
         config = list(
           extension_directory = file.path(storage, "extensions"),
           secret_directory = file.path(storage, "stored-secrets"),
-          temp_directory = file.path(storage, "spill")
+          temp_directory = file.path(storage, "spill"),
+          autoinstall_known_extensions = "false",
+          autoload_known_extensions = "true"
         ),
         environment_scan = TRUE
       )
     )
+    if (nzchar(extension_directory)) {
+      DBI::dbExecute(
+        connection,
+        paste(
+          "SET extension_directories = [",
+          DBI::dbQuoteString(connection, extension_directory),
+          "]"
+        )
+      )
+    }
     DBI::dbExecute(connection, "SET enable_progress_bar = false")
     invisible(connection)
   }

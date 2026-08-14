@@ -1,0 +1,85 @@
+---
+!same-as tests/transcripts/golden/server/initializes_and_lists_tools.yaml
+---
+id: 3
+session:
+  action: prepare
+  requirements:
+    duckdb:
+      - json
+result:
+  content:
+    - type: text
+      text: "[prepared]"
+  isError: false
+---
+id: 4
+send:
+  sql: |
+    CREATE TABLE retained_state AS
+    SELECT CAST(42 AS INTEGER) AS answer
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+id: 5
+session:
+  action: prepare
+  requirements:
+    duckdb:
+      - inet
+result:
+  content:
+    - type: text
+      text: "[prepared]"
+  isError: false
+---
+id: 6
+session:
+  action: prepare
+  requirements:
+    duckdb:
+      - inet
+result:
+  content:
+    - type: text
+      text: "[prepared]"
+  isError: false
+---
+id: 7
+session:
+  action: prepare
+  requirements:
+    duckdb:
+      - not_a_real_duckdb_extension
+result:
+  content:
+    - type: text
+      text: <unknown core DuckDB extension rejected>
+  isError: true
+---
+id: 8
+send:
+  sql: |
+    SELECT
+      retained_state.answer,
+      CASE
+        WHEN host('127.0.0.1'::INET) = '127.0.0.1' THEN 1
+        ELSE 0
+      END AS extension_works,
+      extensions.loaded
+    FROM retained_state
+    CROSS JOIN duckdb_extensions() AS extensions
+    WHERE extensions.extension_name = 'inet'
+result:
+  content:
+    - type: text
+      text: |
+        # A tibble: 1 × 3
+           answer extension_works loaded
+          <int32>         <int32> <bool>
+        1      42               1 true  
+  isError: false
+...

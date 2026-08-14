@@ -567,6 +567,14 @@ def test_custom_worker_skips_managed_python_preflight(binary: Path) -> Transcrip
     assert result["content"][0]["text"] == (
         "Python requirements are unavailable with a custom worker"
     )
+    result = client.session(
+        action="prepare",
+        requirements={"duckdb": ["inet"]},
+    )
+    assert result["isError"] is True, result
+    assert result["content"][0]["text"] == (
+        "requirements are unavailable with a custom worker"
+    )
     client.send(r="echo")
     assert last_tool_text(client) == "zod: echo\n"
     return client._finish()

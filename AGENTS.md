@@ -48,16 +48,20 @@ Worker `image` frames carry base64 data and a MIME type.
 Worker `console_output` and `console_diagnostic` frames carry ordinary and diagnostic console text.
 The server retains console channels and direct fd 1/2 identity until MCP projection.
 The server preserves sideband text and image order as MCP content blocks, coalesces adjacent text, and does not add `[done]` when an image is the only output.
-The implemented `session` surface accepts `action = "prepare"` with one or more R or Python requirement strings or `action = "restart"` with optional Python requirement strings for the implicit session.
+The implemented `session` surface accepts `action = "prepare"` with one or more R or Python requirement strings or core DuckDB extension names, or `action = "restart"` with optional Python requirement strings for the implicit session.
 Requirements are exact, additive, and idempotent.
-On macOS, plain built-in `serve` resolves the retained default R requirements `tidyverse`, `github::rstudio/reticulate`, `DBI`, `duckdb`, `arrow`, and `nanoarrow` through IR before accepting MCP input.
+On macOS, plain built-in `serve` resolves the retained default R requirements `tidyverse`, `github::rstudio/reticulate`, `DBI`, `duckdb@1.5.5`, `arrow`, and `nanoarrow` through IR before accepting MCP input.
 The GitHub reticulate requirement supplies the fork-aware output restoration required by the worker; host R must also provide reticulate to bootstrap managed Python before the worker library is applied.
-The resulting library is retained across worker generations; tidyverse packages, reticulate, DBI, duckdb, arrow, nanoarrow, and their dependency sets are available but are not attached automatically.
+The resulting library is retained across worker generations; tidyverse packages, reticulate, DBI, DuckDB 1.5.5, arrow, nanoarrow, and their dependency sets are available but are not attached automatically.
 Before the worker starts, each successful prepare resolves the complete candidate sets outside the sandbox, atomically retains them in server memory, and returns `[prepared]` without starting the worker.
 Before each R resolution, the server requires `ir --version` from `PATH` to report 0.4.0 or later; it then uses `ir run` with the worker's Rscript, and the result becomes the first worker `R_LIBS` entry.
 Python requirements use reticulate and uv and replace any inherited Python selection with the resolved interpreter.
+DuckDB extension requirements must start with a lowercase ASCII letter and otherwise contain only lowercase ASCII letters, digits, and underscores.
+The host resolver uses the managed R library and DuckDB's own `INSTALL ... FROM core` statement outside the sandbox, storing the result in DuckDB's persistent, version- and platform-specific `~/.duckdb/extensions` cache.
+The pinned DuckDB R requirement keeps host installation and a live SQL connection on the same version-scoped cache across later R preparation.
+It does not load extension code outside the sandbox and does not inspect or intercept submitted SQL.
 The server sets `IR_NO_LOCAL_SOURCES` for every R resolution, so IR prevents direct or transitive local package installation while retaining ownership of package-reference parsing.
-A failed resolution leaves the prior requirements, R library, and interpreter unchanged.
+A failed resolution leaves the prior retained requirements, R library, interpreter, and DuckDB extension set unchanged.
 For a uv tool failure, the tool error reports a JSON manifest containing reticulate's selected Python and the complete candidate package set, followed by uv's stderr, while omitting the helper command, temporary output path, and reticulate's `py_require()`-oriented guidance.
 The direct resolver process defines its process-group lifetime: after it exits, the server force-stops any remaining in-group descendants before reaping it and collecting its standard streams.
 Closing MCP input cancels an in-flight explicit or runtime resolution by force-stopping its host resolver process group; startup preflights complete before MCP input is accepted and are not cancellable through that lifecycle.
@@ -65,17 +69,20 @@ An idle built-in worker can apply new R requirements without replacement.
 The server resolves the complete R requirement set outside the sandbox, prepends the new library to the live `.libPaths()`, removes the previous managed IR entry, preserves the other live library paths and in-memory state, and retains the confirmed library for later worker generations.
 Each IR candidate contains the complete retained R requirement set, so replacing the previous managed entry keeps the live search path aligned with restart and crash replacement instead of accumulating stale managed libraries.
 An idle server-managed worker can also materialize an uninitialized Python manifest or activate a same-`libpython` environment while preserving live state.
-A mixed live R and Python preparation commits both retained configurations only after both changes succeed.
+An idle server-managed worker can prepare DuckDB extensions on the host without replacement or loss of live state.
+The DuckDB resolver uses the existing cancellable resolver process-group lifecycle and adds no worker sideband messages.
+A mixed live R, Python, and DuckDB preparation commits all retained configurations only after every requested change succeeds.
 Failure preserves the prior retained configuration.
+An earlier DuckDB install from a failed multi-extension request may remain in the host cache without entering the retained extension set.
 After a synchronized failure may have partially changed the live worker, evaluation remains available so its state can be saved, but new requirement additions return `[restart required]` until a successful explicit restart.
 Transport or protocol failures still stop the worker when its usability is unknown.
 The server returns `[prepared]` only after checkpointing the complete result.
 Preparation during evaluation is rejected.
-Preparation that overlaps worker startup returns `[requirements not prepared: worker is starting]` without resolving the additions or changing the retained requirements, R library, or Python manifest.
+Preparation that overlaps worker startup returns `[requirements not prepared: worker is starting]` without resolving the additions or changing the retained requirements, R library, Python manifest, or DuckDB extension set.
 A failed automatic replacement leaves the worker stopped; new requirements then return `[restart required]`, and prepare does not start or configure the next replacement attempt.
-Restart retains the prepared R library, merges any supplied Python additions into the complete checkpointed manifest, and resolves the candidate before terminating the current worker.
+Restart retains the prepared R library and DuckDB extension set, merges any supplied Python additions into the complete checkpointed manifest, and resolves the candidate before terminating the current worker.
 A failed restart resolution leaves the current worker, its in-memory state, requirements, R library, and Python interpreter unchanged.
-After successful resolution, restart retains the prepared R library and candidate Python environment, loses all worker-owned in-memory state and unread stdin, eagerly starts a replacement, and returns `[idle]` after it reports ready.
+After successful resolution, restart retains the prepared R library, DuckDB extension set, and candidate Python environment, loses all worker-owned in-memory state and unread stdin, eagerly starts a replacement, and returns `[idle]` after it reports ready.
 The implicit session exists for the server lifetime, so restart starts its first worker if none exists yet.
 It first queues worker-stdin closure and the sideband shutdown message without waiting behind an evaluation, then force-stops the process group and reaps the direct sandbox process at the one-second deadline if that process remains live.
 It then waits for the active sideband operation to end, cancels the worker's stdin writer and standard-stream readers, drains standard-stream bytes already buffered at that boundary, and joins the tasks before reporting `[worker stopped: in-memory state lost]` or launching the replacement.
@@ -130,8 +137,8 @@ Fork-child text capture requires reticulate from its `main` branch or a release 
 An exec descendant that retains fd 1/2 creates fresh standard streams backed by those descriptors, so its ordinary stdout and stderr are captured while that worker generation's output boundary remains open.
 When inherited `RETICULATE_PYTHON` is absent or exactly `managed`, built-in server startup calls reticulate's internal uv environment resolver with its NumPy and pandas baseline outside the sandbox and retains the resulting interpreter and normalized manifest for every worker generation.
 Other inherited values, including an empty value, are preserved and skip the Python startup preflight but not default R resolution; a later successful explicit preparation takes precedence over them.
-Custom workers skip both managed default preflights and reject R and Python requirement preparation and restart requests with Python requirements.
-R and Python resolution may access the network, write normal host caches, and execute package installation or build code outside the sandbox; managed Python environment startup and the Matplotlib font-manager import also run there.
+Custom workers skip both managed default preflights and reject R, Python, and DuckDB requirement preparation and restart requests with Python requirements.
+R, Python, and DuckDB resolution may access the network and write normal host caches outside the sandbox; R and Python package resolution may execute package installation or build code, and managed Python environment startup and the Matplotlib font-manager import also run there.
 Requirement strings remain process-argument or JSON data rather than R source, and no submitted cell is evaluated by the resolver.
 Before initializing R, the worker forces `UV_OFFLINE=1`, overwriting any inherited value to match the sandbox's network denial.
 Reticulate reuses the server-resolved or caller-selected interpreter.
@@ -155,7 +162,9 @@ They accept proactively queued or follow-up stdin, including repeated debugger c
 Python `sys.stdin` and other direct fd-0 reads bypass the bridge and emit neither frame.
 SQL cells use the `duckdb` and `DBI` R packages through a private R bridge; previews also require `nanoarrow`, `arrow`, `tibble`, and `pillar`.
 The first SQL cell or call to `sql_connection()` lazily opens one in-memory connection with environment scanning enabled, and later operations in that worker generation reuse its catalog.
-DuckDB extension, secret, and spill paths are explicit children of the worker's private R temporary directory.
+DuckDB's primary extension, secret, and spill paths are explicit children of the worker's private R temporary directory.
+The connection disables automatic extension installation and reads prepared extensions from the host-populated `~/.duckdb/extensions` cache as a secondary directory.
+The sandbox permits reads but not writes to that cache; explicit `LOAD` and DuckDB autoload execute extension code inside the sandbox.
 The connection disables DuckDB progress output so previews contain only query results.
 The worker stores SQL source in private R state and calls the bridge with a short evaluation ID.
 The bridge sends queries through a zero-argument closure enclosed by R's global environment, so DuckDB searches the persistent R session rather than the private bridge environment.
@@ -210,7 +219,7 @@ The public MCP surface has two tools:
 - `send` evaluates complete R, Python, or SQL cells, writes to the session's stdin stream, and polls for output.
 - `session` manages session requirements and lifecycle operations.
 
-R and Python requirement preparation, live late R and Python additions, and explicit restart with optional additive Python requirements are implemented for `session`; its broader lifecycle surface remains planned.
+R and Python requirement preparation, core DuckDB extension preparation, live late additions, and explicit restart with optional additive Python requirements are implemented for `session`; its broader lifecycle surface remains planned.
 
 The MCP initialization identity remains `mcp-console`.
 The intended default client registration name is `console`, for example `codex mcp add console -- mcp-console serve`.
@@ -230,6 +239,7 @@ See `design-sketches/README.md` for the product overview and `design-sketches/do
 - `src/cli.rs` — clap command definitions and user-facing help.
 - `src/python.rs` — worker environment and reticulate bridge.
 - `src/resolver.rs` — platform-gated host-resolver facade.
+- `src/resolver/managed_duckdb.rs` — macOS host-side core DuckDB extension installation.
 - `src/resolver/managed_r.rs` — macOS IR-backed R library resolution.
 - `src/resolver/managed_python.rs` — macOS reticulate/uv-managed Python resolution.
 - `src/resolver/process.rs` — shared macOS resolver process-group lifecycle and cancellation.
@@ -305,9 +315,9 @@ Keep one Cargo package until the implemented code presents a concrete crate boun
 - Keep complete code cells separate from interactive `stdin`.
 - Keep the MCP adapter independent of interpreter implementation details.
 - Treat submitted R, Python, and SQL execution as shell-class capability and place safety at the worker-process boundary.
-  Managed-Python startup and explicit R or Python preparation are host-bootstrap exceptions.
-  R requirements are IR command arguments resolved with `IR_NO_LOCAL_SOURCES`; Python requirements use a JSON standard-input manifest.
-  Neither is evaluated as R source, though accepted package installation, build code, managed Python startup, and the Matplotlib font-cache import may execute outside the worker sandbox.
+  Managed-Python startup and explicit R, Python, or DuckDB preparation are host-bootstrap exceptions.
+  R requirements are IR command arguments resolved with `IR_NO_LOCAL_SOURCES`; Python requirements use a JSON standard-input manifest; DuckDB requirements are validated core extension names passed to DuckDB's own installer.
+  None is evaluated as submitted R or SQL source, though accepted package installation, build code, managed Python startup, and the Matplotlib font-cache import may execute outside the worker sandbox.
 - Update this file when a PR changes the implemented surface or repository map.
 - Before every commit, run `scripts/format` and review its changes.
 - Run `scripts/check` before opening a PR.

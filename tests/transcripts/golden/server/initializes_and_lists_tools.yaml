@@ -39,21 +39,21 @@ result:
         globals through `r.name`; R reads Python globals through `py$name`; SQL
         queries R data frames by name; R accesses the DuckDB catalog through
         `sql_connection()`. Language-native help and introspection are
-        available. Use `session` to prepare other packages before loading or
-        importing them. R default-device plots and open `matplotlib.pyplot`
-        figures return as PNG images. Send exactly one complete `r`, `python`,
-        or `sql` cell. Call `send` sequentially; concurrent calls are
-        unsupported. Use `stdin` for interactive reads or debugger commands;
-        omit code and stdin to poll. A wait timeout does not stop computation,
-        and running work must be collected before new code is sent. R errors,
-        Python exceptions, and DuckDB errors are ordinary console output, so
-        inspect result text and continue or correct the cell. Evaluated code can
-        read host files but cannot directly access the network and can write
-        only within the worker's private temporary directory. Managed Python
-        requirement resolution triggered by R code such as
-        `reticulate::py_require()` or by an R package load is a host-side
-        exception: it may access the network and execute installation or build
-        code, so use only trusted requirements.
+        available. Use `session` to prepare other packages or DuckDB extensions
+        before loading or importing them. R default-device plots and open
+        `matplotlib.pyplot` figures return as PNG images. Send exactly one
+        complete `r`, `python`, or `sql` cell. Call `send` sequentially;
+        concurrent calls are unsupported. Use `stdin` for interactive reads or
+        debugger commands; omit code and stdin to poll. A wait timeout does not
+        stop computation, and running work must be collected before new code is
+        sent. R errors, Python exceptions, and DuckDB errors are ordinary
+        console output, so inspect result text and continue or correct the cell.
+        Evaluated code can read host files but cannot directly access the
+        network and can write only within the worker's private temporary
+        directory. Managed Python requirement resolution triggered by R code
+        such as `reticulate::py_require()` or by an R package load is a
+        host-side exception: it may access the network and execute installation
+        or build code, so use only trusted requirements.
       inputSchema:
         $schema: https://json-schema.org/draft/2020-12/schema
         additionalProperties: false
@@ -119,19 +119,21 @@ result:
             default: 60000
     - name: session
       description: >-
-        Make additional R or Python packages available, or restart the
-        persistent console session. Use `prepare` for packages not included in
-        the built-in environments. Packages are not imported or attached
-        automatically. An idle server-managed worker can add R and compatible
-        Python requirements without losing live state. After a recoverable live
-        preparation failure, evaluation remains available so state can be saved,
-        but new requirement additions require restart. Requirements are
-        additive, idempotent, and persist across restart. `restart` may
-        optionally add Python requirements, then replaces the worker and loses
-        all in-memory R, Python, and SQL state, debugger state, and unread
-        stdin. Requirement resolution runs outside the execution sandbox and may
-        download packages or execute installation or build code on the host; use
-        only trusted requirements.
+        Make additional R or Python packages and DuckDB extensions available, or
+        restart the persistent console session. Use `prepare` for packages not
+        included in the built-in environments or core DuckDB extensions.
+        Packages and extensions are not imported, attached, or loaded
+        automatically by preparation. An idle server-managed worker can add R
+        and compatible Python requirements or DuckDB extensions without losing
+        live state. After a recoverable live preparation failure, evaluation
+        remains available so state can be saved, but new requirement additions
+        require restart. Requirements are additive, idempotent, and persist
+        across restart. `restart` may optionally add Python requirements, then
+        replaces the worker and loses all in-memory R, Python, and SQL state,
+        debugger state, and unread stdin. Requirement resolution runs outside
+        the execution sandbox and may download packages or extensions or execute
+        package installation or build code on the host; use only trusted
+        requirements.
       inputSchema:
         $schema: https://json-schema.org/draft/2020-12/schema
         required:
@@ -140,28 +142,44 @@ result:
         properties:
           action:
             description: |-
-              `prepare` adds R or Python requirements before a server-managed worker starts. After startup,
-              it can add R and compatible Python requirements while the worker is idle. `restart` replaces
-              the worker, optionally adds Python requirements, and starts it if needed.
+              `prepare` adds R or Python requirements or core DuckDB extensions before a server-managed
+              worker starts. After startup, it can add R and compatible Python requirements or DuckDB
+              extensions while the worker is idle. `restart` replaces the worker, optionally adds Python
+              requirements, and starts it if needed.
             type: string
             enum:
               - prepare
               - restart
           requirements:
             description: |-
-              Additive packages to make available. `prepare` requires at least one R or Python entry.
-              `restart` accepts Python entries only; omit `requirements` to restart unchanged. Requirements
-              persist across restart but do not import or attach packages. After a recoverable live
-              preparation failure, evaluation remains available so state can be saved, but new requirement
-              additions return `[restart required]` until restart. The same marker follows a failed
-              automatic replacement. Resolution runs outside the worker sandbox and may download packages
-              or execute installation or build code on the host. Managed Python startup and Matplotlib
-              cache warming also run on the host and may execute selected code; use only trusted
-              requirements.
+              Additive packages or DuckDB extensions to make available. `prepare` requires at least one R,
+              Python, or DuckDB entry. `restart` accepts Python entries only; omit `requirements` to restart
+              unchanged. Requirements persist across restart but do not import, attach, or load packages or
+              extensions. After a recoverable live preparation failure, evaluation remains available so
+              state can be saved, but new requirement additions return `[restart required]` until restart.
+              The same marker follows a failed automatic replacement. Resolution runs outside the worker
+              sandbox and may download packages or extensions or execute package installation or build code
+              on the host. Managed Python startup and Matplotlib cache warming also run on the host and may
+              execute selected code; use only trusted requirements.
             type:
               - object
               - "null"
             properties:
+              duckdb:
+                description: |-
+                  Additive core DuckDB extension names for `prepare`, for example `json`, `spatial`, or `fts`.
+                  Names must start with a lowercase ASCII letter and contain only lowercase ASCII letters,
+                  digits, and underscores. The host resolver uses DuckDB's own `INSTALL ... FROM core` outside
+                  the sandbox and stores extensions in DuckDB's persistent, version- and platform-specific
+                  `~/.duckdb/extensions` cache. Preparation does not load extension code; `LOAD` and automatic
+                  loading happen later inside the sandbox.
+                type: array
+                items:
+                  type: string
+                  minLength: 1
+                  maxLength: 64
+                maxItems: 64
+                default: []
               r:
                 description: |-
                   Additive, single-line IR package references for `prepare`, for example `data.table`, `sf`, or

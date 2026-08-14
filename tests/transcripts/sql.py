@@ -4,10 +4,88 @@ import os
 import tempfile
 from pathlib import Path
 
-from _support import McpClient, Transcript, code, run_this_suite
+from _support import McpClient, Transcript, code, r_test_environment, run_this_suite
 
 
 PLATFORMS = {"darwin"}
+
+
+def test_prepares_and_loads_duckdb_extensions(binary: Path) -> Transcript:
+    environment, _ = r_test_environment()
+    environment["RETICULATE_PYTHON"] = ""
+    with tempfile.TemporaryDirectory() as temporary:
+        workspace = Path(temporary)
+        home = workspace / "home"
+        home.mkdir()
+        environment["HOME"] = str(home)
+        client = McpClient(
+            binary,
+            ("serve",),
+            environment,
+            current_directory=workspace,
+        )
+        client._initialize_and_list_tools()
+
+        client.session(
+            action="prepare",
+            requirements={"duckdb": ["json"]},
+        )
+        assert last_tool_text(client) == "[prepared]"
+        installed_json = list(
+            (home / ".duckdb" / "extensions").glob("*/*/json.duckdb_extension")
+        )
+        assert len(installed_json) == 1, installed_json
+
+        sql = code(r"""
+            CREATE TABLE retained_state AS
+            SELECT CAST(42 AS INTEGER) AS answer
+            """)
+        client.send(sql=sql)
+        assert last_tool_text(client) == "[done]"
+
+        client.session(
+            action="prepare",
+            requirements={"duckdb": ["inet"]},
+        )
+        assert last_tool_text(client) == "[prepared]"
+        client.session(
+            action="prepare",
+            requirements={"duckdb": ["inet"]},
+        )
+        assert last_tool_text(client) == "[prepared]"
+        installed_inet = list(
+            (home / ".duckdb" / "extensions").glob("*/*/inet.duckdb_extension")
+        )
+        assert len(installed_inet) == 1, installed_inet
+
+        client.session(
+            action="prepare",
+            requirements={"duckdb": ["not_a_real_duckdb_extension"]},
+        )
+        result = client.transcript[-1]["result"]
+        assert result["isError"] is True, result
+        failure = result["content"][0]["text"]
+        assert (
+            "unknown core DuckDB extension: not_a_real_duckdb_extension" in failure
+        ), failure
+        result["content"][0]["text"] = "<unknown core DuckDB extension rejected>"
+
+        sql = code(r"""
+            SELECT
+              retained_state.answer,
+              CASE
+                WHEN host('127.0.0.1'::INET) = '127.0.0.1' THEN 1
+                ELSE 0
+              END AS extension_works,
+              extensions.loaded
+            FROM retained_state
+            CROSS JOIN duckdb_extensions() AS extensions
+            WHERE extensions.extension_name = 'inet'
+            """)
+        client.send(sql=sql)
+        preview = last_tool_text(client)
+        assert preview.splitlines()[-1].split() == ["1", "42", "1", "true"]
+        return client._finish()
 
 
 def test_evaluates_queries_in_a_persistent_catalog(binary: Path) -> Transcript:

@@ -63,13 +63,13 @@ def test_initializes_and_lists_tools(binary: Path) -> Transcript:
 
     session = tools["session"]
     for guidance in (
-        "Make additional R or Python packages available",
+        "Make additional R or Python packages and DuckDB extensions available",
         "packages not included in the built-in environments",
-        "idle server-managed worker can add R and compatible Python requirements",
+        "idle server-managed worker can add R and compatible Python requirements or DuckDB extensions",
         "without losing live state",
         "evaluation remains available so state can be saved",
         "new requirement additions require restart",
-        "Packages are not imported or attached automatically",
+        "Packages and extensions are not imported, attached, or loaded automatically by preparation",
         "loses all in-memory R, Python, and SQL state",
     ):
         assert guidance in session["description"], guidance
@@ -83,7 +83,7 @@ def test_initializes_and_lists_tools(binary: Path) -> Transcript:
         action_description
     )
     assert (
-        "After startup, it can add R and compatible Python requirements while the worker is idle"
+        "After startup, it can add R and compatible Python requirements or DuckDB extensions while the worker is idle"
         in action_description
     ), action_description
     requirements_description = session["inputSchema"]["properties"]["requirements"][
@@ -126,7 +126,19 @@ def test_validates_session_arguments(binary: Path) -> Transcript:
     result = client.transcript[-1]["result"]
     assert result["isError"] is True
     assert result["content"][0]["text"] == (
-        "at least one of `requirements.r` or `requirements.python` is required"
+        "at least one of `requirements.r`, `requirements.python`, or "
+        "`requirements.duckdb` is required"
+    )
+
+    client.session(
+        action="prepare",
+        requirements={"duckdb": ["spatial FROM community"]},
+    )
+    result = client.transcript[-1]["result"]
+    assert result["isError"] is True
+    assert result["content"][0]["text"] == (
+        "DuckDB extension names must start with a lowercase ASCII letter and "
+        "contain only lowercase ASCII letters, digits, and underscores"
     )
 
     client.session(action="prepare", requirements={"r": [""]})
@@ -162,6 +174,16 @@ def test_validates_session_arguments(binary: Path) -> Transcript:
     assert result["isError"] is True
     assert result["content"][0]["text"] == (
         "`requirements.r` is not supported with `restart`"
+    )
+
+    client.session(
+        action="restart",
+        requirements={"duckdb": ["json"]},
+    )
+    result = client.transcript[-1]["result"]
+    assert result["isError"] is True
+    assert result["content"][0]["text"] == (
+        "`requirements.duckdb` is not supported with `restart`"
     )
     return client._finish()
 
