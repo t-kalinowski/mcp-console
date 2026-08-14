@@ -501,8 +501,8 @@ A successful silent R cell sends no console-text frame but still sends `complete
 The CLI runs `worker` synchronously without a Tokio runtime, so R initialization and evaluation remain on the process main thread.
 
 Immediately before every R, Python, or SQL cell, the worker checks R's registered input handlers without blocking and runs one ready handler turn under `R_ToplevelExec()`.
-It runs a second turn after a normal language outcome unless worker shutdown has begun.
-Shutdown or an infrastructure failure during the initial turn aborts the submitted cell.
+It runs a second turn after a normal language outcome only if worker shutdown has not begun and the cell recorded no infrastructure failure.
+Shutdown or an infrastructure failure during the initial turn aborts the submitted cell; an infrastructure failure recorded by the cell skips the final turn.
 After either turn, the worker polls fd 0 once without blocking and treats `POLLHUP` as shutdown before it can dispatch or complete the cell.
 This also covers callbacks that read fd 0 directly and therefore bypass `ReadConsole`.
 Package callbacks therefore share the cell's console and input routing, while their default-device plots use a separate managed graphics scope.

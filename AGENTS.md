@@ -101,8 +101,8 @@ On macOS, default R and DuckDB extension preflights and managed-Python preflight
 The worker embeds R through `libr` and `harp`, retains global state, and feeds each complete R cell through R's DLL REPL iterator.
 R parses and evaluates its expressions sequentially, captures console output, prints visible values, and performs native top-level bookkeeping.
 Immediately before every R, Python, or SQL cell, the worker gives R's registered input handlers one nonblocking turn under an R top-level boundary.
-It gives them a second turn after a normal language outcome unless worker shutdown has begun.
-Shutdown or an infrastructure failure during the initial turn aborts the submitted cell.
+It gives them a second turn after a normal language outcome only if worker shutdown has not begun and the cell recorded no infrastructure failure.
+Shutdown or an infrastructure failure during the initial turn aborts the submitted cell; an infrastructure failure recorded by the cell skips the final turn.
 After either turn, a worker-stdin hangup marks shutdown before the worker can dispatch or complete the cell, including when a callback reads fd 0 directly.
 Ready callbacks run within a managed graphics scope and their output precedes cell completion.
 The worker does not yet wake for R input handlers while otherwise idle.
