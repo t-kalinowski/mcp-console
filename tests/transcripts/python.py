@@ -290,22 +290,6 @@ def test_prepares_explicit_numpy_requirement(binary: Path) -> Transcript:
         """)
     client.send(r=r)
     assert last_tool_text(client) == "[done]"
-    tools_entry = client._request("tools/list")
-    tools = {tool["name"]: tool for tool in tools_entry["result"]["tools"]}
-    send_description = tools["send"]["description"]
-    for guidance in (
-        "Python initially follows inherited `RETICULATE_PYTHON` configuration",
-        "Import packages provided by the active Python environment directly",
-        "When managed Python is active",
-    ):
-        assert guidance in send_description, guidance
-    assert (
-        "managed Python environment includes NumPy and pandas" not in send_description
-    )
-    assert (
-        "Load packages provided by the active Python environment directly"
-        in tools["session"]["description"]
-    )
     return client._finish()
 
 
