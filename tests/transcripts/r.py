@@ -108,8 +108,11 @@ def test_returns_cell_scoped_plots(binary: Path) -> Transcript:
     result = client.transcript[-1]["result"]
     assert result.get("isError") is not True, result
     assert len(result["content"]) == 1, result
-    assert "plot.new has not been called yet" in result["content"][0]["text"]
-    result["content"][0]["text"] = "Error: plot.new has not been called yet\n"
+    output = result["content"][0]["text"]
+    assert "plot.new has not been called yet" in output
+    result["content"][0]["text"] = "\n".join(
+        line.rstrip(" ") for line in output.split("\n")
+    )
 
     r = "plot(3:1)"
     expected_plot = reference_plots(
@@ -189,8 +192,7 @@ def test_returns_plots_after_r_errors(binary: Path) -> Transcript:
     result = client.transcript[-1]["result"]
     text_items = [item for item in result["content"] if item["type"] == "text"]
     assert len(text_items) == 1 and "boom" in text_items[0]["text"], result
-    text_items[0]["text"] = "Error: boom\n"
-    assert_result_content(client, ["Error: boom\n", expected_plot[0]])
+    assert_result_content(client, [text_items[0]["text"], expected_plot[0]])
 
     r = "plot(3:1)"
     expected_plot = reference_plots(
