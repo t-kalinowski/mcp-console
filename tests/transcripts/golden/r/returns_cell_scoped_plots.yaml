@@ -41,7 +41,8 @@ result:
   content:
     - type: text
       text: |
-        Error: plot.new has not been called yet
+        Error in plot.xy(xy.coords(x, y), type = type, ...) : 
+          plot.new has not been called yet
   isError: false
 ---
 id: 5

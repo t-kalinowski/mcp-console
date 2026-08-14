@@ -1,5 +1,5 @@
 use std::path::{Path, PathBuf};
-use std::process::Stdio;
+use std::process::{Command, Stdio};
 
 use super::process::{
     ResolverOutput, ResolverProcess, ResolverStopHandle, completed_write, read_output,
@@ -19,6 +19,7 @@ const MINIMUM_IR_VERSION: semver::Version = semver::Version::new(0, 4, 0);
 pub(crate) struct ManagedR {
     library: PathBuf,
     r_libs: std::ffi::OsString,
+    rscript: PathBuf,
     requirements: Vec<String>,
 }
 
@@ -43,6 +44,21 @@ impl ManagedR {
 
     pub(crate) fn library(&self) -> &Path {
         &self.library
+    }
+
+    pub(crate) fn configure_resolver(&self, command: &mut Command) -> Result<(), String> {
+        if !self.library.is_dir() {
+            return Err(format!(
+                "resolved R library `{}` no longer exists",
+                self.library.display()
+            ));
+        }
+        command.env("R_LIBS", &self.r_libs);
+        Ok(())
+    }
+
+    pub(crate) fn rscript(&self) -> &Path {
+        &self.rscript
     }
 }
 
@@ -148,6 +164,7 @@ pub(crate) fn resolve_r(
     Ok(ManagedR {
         library,
         r_libs,
+        rscript,
         requirements,
     })
 }

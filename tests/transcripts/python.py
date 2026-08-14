@@ -1,6 +1,7 @@
 #!/usr/bin/env -S uv run --script
 
 import os
+import re
 import signal
 import shutil
 import socket
@@ -219,8 +220,11 @@ def test_recovers_from_python_version_resolution_failure(binary: Path) -> Transc
     client.send(r=r)
     result = client.transcript[-1]["result"]
     assert result["isError"] is False, result
-    assert "managed Python version resolution failed" in result["content"][0]["text"]
-    result["content"][0]["text"] = "<Python version resolution failed>\n"
+    output = result["content"][0]["text"]
+    assert "managed Python version resolution failed" in output
+    uv = shutil.which("uv")
+    assert uv is not None and output.count(uv) == 1, output
+    result["content"][0]["text"] = output.replace(uv, "<uv executable>")
 
     client.send(r="identical(Sys.getpid(), worker_pid)")
     assert last_tool_text(client) == "[1] TRUE\n"
@@ -408,7 +412,9 @@ def test_prepares_python_requirements_after_worker_startup(binary: Path) -> Tran
     result = client.transcript[-1]["result"]
     assert result["isError"] is True, result
     assert "managed Python resolution failed" in result["content"][0]["text"]
-    result["content"][0]["text"] = "<invalid Python requirement rejected>"
+    result["content"][0]["text"] = normalize_python_resolution_error(
+        result["content"][0]["text"], invalid
+    )
 
     python = code("""
         sentinel, os.getpid() == worker_pid, importlib.util.find_spec("yaml12") is None
@@ -891,10 +897,10 @@ def test_interrupts_live_python_resolver(binary: Path) -> Transcript:
         error = preparation["result"]["content"][0]["text"]
         assert "managed Python resolution" in error, error
         error = normalize_python_resolution_error(error)
-        stable, separator, _ = error.partition("uv output:")
-        assert separator, error
-        preparation["result"]["content"][0]["text"] = (
-            f"{stable}{separator}\n<resolver interrupted>"
+        assert "uv output:" in error, error
+        error = re.sub(r"Sleeping [0-9.]+s", "Sleeping <DELAY>s", error)
+        preparation["result"]["content"][0]["text"] = error.replace(
+            f"127.0.0.1:{port}", "127.0.0.1:<PORT>"
         )
 
         client.send(r="resolver_interrupt_state + 1L")

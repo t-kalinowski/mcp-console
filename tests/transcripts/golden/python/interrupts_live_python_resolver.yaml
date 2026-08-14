@@ -33,7 +33,8 @@ result:
           ]
         }
         uv output:
-        <resolver interrupted>
+        WARN Retry attempt #0. Sleeping <DELAY>s before the next attempt
+        WARN Retry attempt #0. Sleeping <DELAY>s before the next attempt
   isError: true
 ---
 id: 5

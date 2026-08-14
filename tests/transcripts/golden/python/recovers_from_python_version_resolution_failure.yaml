@@ -21,7 +21,15 @@ result:
   content:
     - type: text
       text: |
-        <Python version resolution failed>
+        Error: managed Python version resolution failed with exit status: 1: error: Failed to initialize cache at `/dev/null`
+          Caused by: failed to create directory `/dev/null`: File exists (os error 17)
+        parse error: premature EOF
+                                               
+                             (right here) ------^
+
+        Warning message:
+        In system2(uv, args, ...) :
+          running command ''<uv executable>' python list --all-versions --color never --output-format json --python-preference  only-managed' had status 2
   isError: false
 ---
 id: 4
