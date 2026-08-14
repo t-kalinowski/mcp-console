@@ -1,0 +1,39 @@
+---
+!same-as tests/transcripts/golden/server/initializes_and_lists_tools.yaml
+---
+id: 3
+session:
+  action: prepare
+  requirements:
+    r:
+      - later
+result:
+  content:
+    - type: text
+      text: "[prepared]"
+  isError: false
+---
+id: 4
+send:
+  r: |
+    later::later(
+      function() system("printf final-boundary-callback-ran"),
+      delay = 0
+    )
+    plot(1)
+    old_umask <- Sys.umask("0777")
+    on.exit(Sys.umask(old_umask), add = TRUE)
+    grDevices::dev.off()
+    Sys.umask(old_umask)
+    on.exit(NULL)
+    "cell completed"
+result:
+  content:
+    - type: text
+      text: |-
+        [failed to read managed plot `<worker plot>`: permission denied]
+        [worker stopped: in-memory state lost]
+        [starting new worker]
+        [idle]
+  isError: true
+...

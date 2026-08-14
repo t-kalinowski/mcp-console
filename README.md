@@ -232,8 +232,8 @@ Requirements make packages available but do not import or attach them.
 The worker runs each R cell through R's native top-level loop, captures R console output, prints each visible value, and maintains `.Last.value`.
 Each worker generation starts with `options(width = 200L)`; later changes to that option persist for the generation.
 Immediately before every R, Python, or SQL cell, the worker gives R's registered input handlers one nonblocking turn.
-It gives them a second turn after a normal language outcome unless worker shutdown has begun.
-Shutdown or an infrastructure failure during the initial turn aborts the submitted cell.
+It gives them a second turn after a normal language outcome only if worker shutdown has not begun and the cell recorded no infrastructure failure.
+Shutdown or an infrastructure failure during the initial turn aborts the submitted cell; an infrastructure failure recorded by the cell skips the final turn.
 After either turn, a worker-stdin hangup marks shutdown before the worker can dispatch or complete the cell, including when a callback reads fd 0 directly.
 Ready callbacks from packages such as `later` therefore run at those cell boundaries; the worker does not yet wake for timers while otherwise idle.
 If a cell ends while an expression is incomplete, earlier complete expressions from that cell remain applied.

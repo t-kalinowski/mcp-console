@@ -303,6 +303,9 @@ mod platform {
             Language::Sql => evaluate_sql_cell(cell.source, sql),
         };
         if result.is_ok() && !WORKER_SHUTDOWN.load(Ordering::SeqCst) {
+            if let Some(message) = take_worker_failure() {
+                return Err(message);
+            }
             run_ready_handlers(graphics)?;
         }
         result
