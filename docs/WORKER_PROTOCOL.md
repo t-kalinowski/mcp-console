@@ -442,24 +442,28 @@ New code is rejected while an evaluation or its uncollected result is active.
 | idle | server → worker `evaluate` | evaluating |
 | idle | server → worker `prepare_r` | preparing R |
 | idle | server → worker `prepare_python` | preparing Python |
-| evaluating | worker → server `output` | evaluating |
-| evaluating | worker → server `image` | evaluating |
+| idle | worker → server `output` or `image` | background activity |
+| background activity, evaluating, or preparing R or Python | worker → server `output` or `image` | unchanged |
+| idle or background activity | worker → server `input_requested` | append request record; background activity, input provisional |
+| background activity, input provisional | worker → server `input_received` | retain request record; background activity |
 | evaluating | worker → server `input_requested` | append request record; evaluating, input provisional |
 | evaluating, input provisional | worker → server `input_received` | retain request record; evaluating |
-| evaluating or preparing Python | worker → server `resolve_python` | host resolving; worker waiting |
+| preparing R or Python | worker → server `input_requested` | append request record; fail preparation and stop worker |
+| background activity, evaluating, or preparing R or Python | worker → server `resolve_python` | host resolving; worker waiting |
 | host resolving | server → worker `python_resolved` | prior operation; retain candidate |
 | host resolving | server → worker `python_resolution_failed` | prior operation; prior checkpoint unchanged |
-| evaluating | worker → server `resolve_python_version` | host selecting version; worker waiting |
-| host selecting version | server → worker `python_version_resolved` | evaluating; no candidate created |
-| host selecting version | server → worker `python_version_resolution_failed` | evaluating; no checkpoint change |
+| background activity, evaluating, or preparing R or Python | worker → server `resolve_python_version` | host selecting version; worker waiting |
+| host selecting version | server → worker `python_version_resolved` | prior operation; no candidate created |
+| host selecting version | server → worker `python_version_resolution_failed` | prior operation; no checkpoint change |
 | evaluating, with or without input reported | MCP stdin submission | evaluating |
+| background activity, no provisional input | worker → server `activity_completed` | validate checkpoint, then idle |
 | evaluating, no provisional input | worker → server `completed` | validate checkpoint, then idle |
 | preparing R | worker → server `r_prepared` | validate library path, then idle |
 | preparing R | worker → server `r_preparation_failed` | block requirement changes; then idle |
 | preparing Python | worker → server `python_prepared` | validate checkpoint, then idle |
 | preparing Python | worker → server `python_preparation_failed` | discard candidates, then idle |
-| starting, idle, evaluating, preparing R or Python, host resolving, or host selecting version | server → worker `shutdown` | terminal |
-| starting, idle, evaluating, preparing R or Python, host resolving, or host selecting version | MCP `session` restart | starting in a new generation |
+| starting, idle, background activity, evaluating, preparing R or Python, host resolving, or host selecting version | server → worker `shutdown` | terminal |
+| starting, idle, background activity, evaluating, preparing R or Python, host resolving, or host selecting version | MCP `session` restart | starting in a new generation |
 
 Malformed JSON, invalid UTF-8, an unexpected message, or sideband EOF fails the active operation.
 `python_resolution_failed` and `python_version_resolution_failed` reply to valid resolver requests; they are not general protocol error messages.
