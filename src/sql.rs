@@ -354,6 +354,9 @@ base::local({
       },
       error = function(error) {
         cat("Error: ", conditionMessage(error), "\n", sep = "")
+      },
+      interrupt = function(condition) {
+        cat("Error: interrupted\n")
       }
     )
     invisible(NULL)

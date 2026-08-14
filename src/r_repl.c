@@ -7,6 +7,7 @@ typedef void (*before_do_one_fn)(void);
 typedef int (*top_level_exec_fn)(void (*)(void *), void *);
 typedef void *(*check_activity_fn)(int, int);
 typedef void (*run_handlers_fn)(void *, void *);
+typedef void (*check_interrupt_fn)(void);
 
 struct event_handlers {
     check_activity_fn check_activity;
@@ -27,8 +28,13 @@ static volatile sig_atomic_t returned_normally = 1;
  * and keep the helper as a distinct C frame in optimized builds.
  */
 __attribute__((noinline))
-static int call_do_one(repl_do_one_fn do_one) {
+static int call_do_one(
+    repl_do_one_fn do_one,
+    check_interrupt_fn check_interrupt
+) {
+    check_interrupt();
     int status = do_one();
+    check_interrupt();
     returned_normally = 1;
     return status;
 }
@@ -59,7 +65,8 @@ void mcp_r_run_ready_handlers(
 int mcp_r_repl_run_cell(
     repl_init_fn init,
     repl_do_one_fn do_one,
-    before_do_one_fn before_do_one
+    before_do_one_fn before_do_one,
+    check_interrupt_fn check_interrupt
 ) {
     int last_status = 1;
 
@@ -74,7 +81,7 @@ int mcp_r_repl_run_cell(
     for (;;) {
         before_do_one();
         returned_normally = 0;
-        int status = call_do_one(do_one);
+        int status = call_do_one(do_one, check_interrupt);
         if (!returned_normally) {
             returned_normally = 1;
             return 0;

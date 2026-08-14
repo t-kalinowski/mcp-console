@@ -1,0 +1,69 @@
+---
+!same-as tests/transcripts/golden/server/initializes_and_lists_tools.yaml
+---
+id: 3
+send:
+  r: |
+    interrupt_state <- 41L
+    invisible(file.create(file.path(
+      tempdir(),
+      "r-interrupt-started"
+    )))
+    repeat {}
+  timeout_ms: 0
+result:
+  content:
+    - type: text
+      text: |-
+
+        [running]
+  isError: false
+---
+id: 4
+session:
+  action: interrupt
+result:
+  content:
+    - type: text
+      text: "[interrupt sent]"
+  isError: false
+---
+id: 5
+send:
+  timeout_ms: 3000
+result:
+  content:
+    - type: text
+      text: "\n"
+  isError: false
+---
+id: 6
+send:
+  r: interrupt_state + 1L
+result:
+  content:
+    - type: text
+      text: |
+        [1] 42
+  isError: false
+---
+id: 7
+session:
+  action: interrupt
+result:
+  content:
+    - type: text
+      text: "[interrupt sent]"
+  isError: false
+---
+id: 8
+send:
+  r: 6 * 7
+result:
+  content:
+    - type: text
+      text: |
+
+        [1] 42
+  isError: false
+...

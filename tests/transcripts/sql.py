@@ -11,9 +11,10 @@ from _support import (
     code,
     r_test_environment,
     run_this_suite,
+    stop_client,
     use_temporary_home,
+    wait_for_worker_file,
 )
-
 
 PLATFORMS = {"darwin"}
 
@@ -714,6 +715,80 @@ def test_evaluates_queries_in_a_persistent_catalog(binary: Path) -> Transcript:
             """)
         client.send(sql=sql)
         return client._finish()
+
+
+def test_interrupts_running_sql_query(binary: Path) -> Transcript:
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        temporary_path = Path(temporary_directory)
+        environment = os.environ.copy()
+        environment["TMPDIR"] = temporary_directory
+        client = McpClient(binary, ("serve",), environment)
+        passed = False
+        try:
+            client._initialize_and_list_tools()
+            # fmt: r
+            r = code(r"""
+                sql_interrupt_armed <- FALSE
+                options(duckdb.progress_display = function(percentage) {
+                  if (isTRUE(sql_interrupt_armed)) {
+                    invisible(file.create(file.path(
+                      tempdir(),
+                      "sql-interrupt-started"
+                    )))
+                  }
+                })
+                invisible(sql_connection())
+                """)
+            client.send(r=r)
+            assert last_tool_text(client) == "[done]"
+
+            sql = code(r"""
+                CREATE TABLE interrupt_state AS
+                SELECT CAST(42 AS INTEGER) AS answer
+                """)
+            client.send(sql=sql)
+            assert last_tool_text(client) == "[done]"
+
+            # fmt: r
+            r = code(r"""
+                sql_interrupt_armed <- TRUE
+                invisible(DBI::dbExecute(
+                  sql_connection(),
+                  "SET enable_progress_bar = true"
+                ))
+                invisible(DBI::dbExecute(
+                  sql_connection(),
+                  "SET progress_bar_time = 0"
+                ))
+                """)
+            client.send(r=r)
+            assert last_tool_text(client) == "[done]"
+
+            sql = code(r"""
+                SELECT sum(hash(value)) AS total
+                FROM range(1000000000000) AS values(value)
+                """)
+            client.send(sql=sql, timeout_ms=0)
+            assert last_tool_text(client) == "\n[running]"
+            wait_for_worker_file(
+                temporary_path,
+                "sql-interrupt-started",
+                client,
+            )
+
+            client.session(action="interrupt")
+            assert last_tool_text(client) == "[interrupt sent]"
+            client.send(timeout_ms=5_000)
+            assert "Error: interrupted" in last_tool_text(client)
+
+            client.send(sql="SELECT answer FROM interrupt_state")
+            assert "42" in last_tool_text(client)
+            transcript = client._finish()
+            passed = True
+            return transcript
+        finally:
+            if not passed:
+                stop_client(client)
 
 
 def test_queries_r_data_frames(binary: Path) -> Transcript:

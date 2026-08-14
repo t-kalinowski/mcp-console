@@ -1,5 +1,8 @@
 #!/usr/bin/env -S uv run --script
 
+import os
+import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -11,8 +14,9 @@ from _support import (
     r_test_environment,
     reference_plots,
     run_this_suite,
+    stop_client,
+    wait_for_worker_file,
 )
-
 
 PLATFORMS = {"darwin"}
 
@@ -656,6 +660,66 @@ def test_times_out_and_polls_running_evaluation(binary: Path) -> Transcript:
     assert output == "[1] 42\n", output
     client.send(r="answer + 1")
     return client._finish()
+
+
+def test_interrupts_running_r_evaluation(binary: Path) -> Transcript:
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        temporary_path = Path(temporary_directory)
+        environment = os.environ.copy()
+        environment["TMPDIR"] = temporary_directory
+        # fmt: python
+        launcher = code("""
+            import os
+            import signal
+            import sys
+
+            signal.signal(signal.SIGINT, signal.SIG_IGN)
+            signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT})
+            os.execv(sys.argv[1], sys.argv[1:])
+            """)
+        client = McpClient(
+            Path(sys.executable),
+            ("-c", launcher, str(binary), "serve"),
+            environment,
+        )
+        passed = False
+        try:
+            client._initialize_and_list_tools()
+            # fmt: r
+            r = code(r"""
+                interrupt_state <- 41L
+                invisible(file.create(file.path(
+                  tempdir(),
+                  "r-interrupt-started"
+                )))
+                repeat {}
+                """)
+            client.send(r=r, timeout_ms=0)
+            assert last_tool_text(client) == "\n[running]"
+            wait_for_worker_file(
+                temporary_path,
+                "r-interrupt-started",
+                client,
+            )
+
+            client.session(action="interrupt")
+            assert last_tool_text(client) == "[interrupt sent]"
+            client.send(timeout_ms=3_000)
+            assert last_tool_text(client) == "\n"
+
+            client.send(r="interrupt_state + 1L")
+            assert last_tool_text(client) == "[1] 42\n"
+
+            client.session(action="interrupt")
+            assert last_tool_text(client) == "[interrupt sent]"
+            client.send(r="6 * 7")
+            assert last_tool_text(client) == "\n[1] 42\n"
+            transcript = client._finish()
+            passed = True
+            return transcript
+        finally:
+            if not passed:
+                stop_client(client)
 
 
 def test_routes_idle_and_timed_out_stdin(binary: Path) -> Transcript:

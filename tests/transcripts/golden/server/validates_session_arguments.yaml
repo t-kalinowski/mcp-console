@@ -64,6 +64,18 @@ result:
 ---
 id: 8
 session:
+  action: interrupt
+  requirements:
+    python:
+      - py-yaml12
+result:
+  content:
+    - type: text
+      text: "`requirements` is not supported with `interrupt`"
+  isError: true
+---
+id: 8
+session:
   action: restart
   requirements: {}
 result:

@@ -119,6 +119,19 @@ The hidden worker option replaces the executable, but R still starts from the us
 A custom worker must apply its first resolved R library before loading DuckDB; a DuckDB namespace loaded earlier from inherited libraries is outside the extension-preparation contract.
 Managed Python additions remain unavailable with a custom worker; R and DuckDB additions are supported by both `prepare` and `restart`.
 
+A live worker can be sent an interrupt:
+
+```json
+{ "action": "interrupt" }
+```
+
+The call sends `SIGINT` to the worker process and returns `[interrupt sent]` without waiting for a sideband acknowledgment or evaluation result.
+It does not start a lazy worker; when no worker process exists, it returns `worker is not running`.
+The signal is not assigned to a cell: an idle signal is consumed at the next managed boundary, and a signal during R, reticulate Python, or DuckDB is handled by that runtime.
+Code can catch or delay the signal, so use `restart` when the worker does not return.
+An empty managed `readline()`, Python `input()` or debugger prompt, and host-side package resolution do not provide a periodic worker boundary and may continue waiting.
+`interrupt` accepts no `requirements`.
+
 The client can explicitly replace the worker and add R, Python, and DuckDB requirements in the same call:
 
 ```json
@@ -348,7 +361,7 @@ The intended default client registration name is `console`:
 codex mcp add console -- mcp-console serve
 ```
 
-Under Codex's current naming convention, the implemented tools are `mcp__console.send` and `mcp__console.session`; `session` supports R and Python requirement preparation, DuckDB extension preparation, live late additions, and explicit restart with optional additive R, Python, and DuckDB requirements for the implicit session.
+Under Codex's current naming convention, the implemented tools are `mcp__console.send` and `mcp__console.session`; `session` supports R and Python requirement preparation, DuckDB extension preparation, live late additions, best-effort worker interruption, and explicit restart with optional additive R, Python, and DuckDB requirements for the implicit session.
 
 On macOS, `sandbox` launches the command under `/usr/bin/sandbox-exec`.
 The command can read the host filesystem, can write regular files only in a dedicated temporary directory, and cannot access the network.

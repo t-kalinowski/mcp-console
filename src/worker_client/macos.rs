@@ -539,6 +539,13 @@ impl StdinSender {
 }
 
 impl WorkerShutdownHandle {
+    pub(super) fn interrupt(&self) -> Result<(), String> {
+        self.child
+            .lock()
+            .map_err(|_| "worker process lock poisoned".to_string())?
+            .interrupt()
+    }
+
     /// Closes worker input, requests protocol shutdown, and enforces the process deadline.
     ///
     /// The owning `Worker` separately joins the stdin and standard-stream tasks.
