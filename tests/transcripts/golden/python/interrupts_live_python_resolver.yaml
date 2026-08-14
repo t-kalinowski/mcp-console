@@ -21,7 +21,7 @@ session:
 result:
   content:
     - type: text
-      text: |-
+      text: |
         managed Python resolution failed:
         resolver input:
         {
@@ -33,8 +33,6 @@ result:
           ]
         }
         uv output:
-        WARN Retry attempt #0. Sleeping <DELAY>s before the next attempt
-        WARN Retry attempt #0. Sleeping <DELAY>s before the next attempt
   isError: true
 ---
 id: 5

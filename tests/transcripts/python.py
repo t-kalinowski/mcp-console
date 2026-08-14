@@ -1,7 +1,6 @@
 #!/usr/bin/env -S uv run --script
 
 import os
-import re
 import signal
 import shutil
 import socket
@@ -849,10 +848,12 @@ def test_interrupts_live_python_resolver(binary: Path) -> Transcript:
     index = threading.Thread(target=hold_index_connection, daemon=True)
     index.start()
 
+    environment = os.environ.copy()
+    environment["RUST_LOG"] = "error"
     previous_handler = signal.signal(signal.SIGINT, signal.SIG_IGN)
     previous_mask = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT})
     try:
-        client = McpClient(binary, ("serve",))
+        client = McpClient(binary, ("serve",), environment)
     finally:
         signal.signal(signal.SIGINT, previous_handler)
         signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
@@ -898,7 +899,6 @@ def test_interrupts_live_python_resolver(binary: Path) -> Transcript:
         assert "managed Python resolution" in error, error
         error = normalize_python_resolution_error(error)
         assert "uv output:" in error, error
-        error = re.sub(r"Sleeping [0-9.]+s", "Sleeping <DELAY>s", error)
         preparation["result"]["content"][0]["text"] = error.replace(
             f"127.0.0.1:{port}", "127.0.0.1:<PORT>"
         )
