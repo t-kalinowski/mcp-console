@@ -82,12 +82,11 @@ enum SessionAction {
 #[schemars(inline)]
 #[serde(deny_unknown_fields)]
 struct Requirements {
-    /// Additive core DuckDB extension names for `prepare`, for example `json`, `spatial`, or `fts`.
+    /// Additive DuckDB extension names for `prepare`, for example `json`, `spatial`, or `fts`.
     /// Names must start with a lowercase ASCII letter and contain only lowercase ASCII letters,
-    /// digits, and underscores. The host resolver uses DuckDB's own `INSTALL ... FROM core` outside
-    /// the sandbox and stores extensions in DuckDB's persistent, version- and platform-specific
-    /// `~/.duckdb/extensions` cache. Preparation does not load extension code; `LOAD` and automatic
-    /// loading happen later inside the sandbox.
+    /// digits, and underscores. The host resolver uses DuckDB's own `INSTALL` outside the sandbox,
+    /// with DuckDB's default extension repository and native cache. Preparation does not load
+    /// extension code; `LOAD` and automatic loading happen later inside the sandbox.
     #[serde(default)]
     #[schemars(length(max = 64), inner(length(min = 1, max = 64)))]
     duckdb: Vec<String>,
@@ -109,7 +108,7 @@ struct Requirements {
 #[derive(Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct SessionArguments {
-    /// `prepare` adds R or Python requirements or core DuckDB extensions before a worker starts.
+    /// `prepare` adds R or Python requirements or DuckDB extensions before a worker starts.
     /// After startup, it can add R requirements or DuckDB extensions while the worker is idle;
     /// compatible Python additions require a server-managed worker. `restart` replaces the worker,
     /// optionally adds Python requirements, and starts it if needed.
@@ -199,7 +198,7 @@ impl ConsoleServer {
     }
 
     #[tool(
-        description = "Make additional R or Python packages and DuckDB extensions available, or restart the persistent console session. Use `prepare` for packages not included in the built-in environments or core DuckDB extensions. Packages and extensions are not imported, attached, or loaded automatically by preparation. An idle worker can add R requirements or DuckDB extensions without losing live state; compatible Python additions require a server-managed worker. After a recoverable live preparation failure, evaluation remains available so state can be saved, but new requirement additions require restart. Requirements are additive, idempotent, and persist across restart. `restart` may optionally add Python requirements, then replaces the worker and loses all in-memory R, Python, and SQL state, debugger state, and unread stdin. Requirement resolution runs outside the execution sandbox and may download packages or extensions or execute package installation or build code on the host; use only trusted requirements."
+        description = "Make additional R or Python packages and DuckDB extensions available, or restart the persistent console session. Use `prepare` for packages not included in the built-in environments or for DuckDB extensions. Packages and extensions are not imported, attached, or loaded automatically by preparation. An idle worker can add R requirements or DuckDB extensions without losing live state; compatible Python additions require a server-managed worker. After a recoverable live preparation failure, evaluation remains available so state can be saved, but new requirement additions require restart. Requirements are additive, idempotent, and persist across restart. `restart` may optionally add Python requirements, then replaces the worker and loses all in-memory R, Python, and SQL state, debugger state, and unread stdin. Requirement resolution runs outside the execution sandbox and may download packages or extensions or execute package installation or build code on the host; use only trusted requirements."
     )]
     async fn session(
         &self,
@@ -326,7 +325,7 @@ fn validate_duckdb_extensions(extensions: &[String]) -> Result<(), String> {
         return Err("`requirements.duckdb` accepts at most 64 extensions".to_string());
     }
     if extensions.iter().any(|extension| extension.len() > 64) {
-        return Err("Core DuckDB extension names must be at most 64 ASCII characters".to_string());
+        return Err("DuckDB extension names must be at most 64 ASCII characters".to_string());
     }
     if extensions.iter().any(|extension| {
         let mut bytes = extension.bytes();
@@ -335,7 +334,7 @@ fn validate_duckdb_extensions(extensions: &[String]) -> Result<(), String> {
                 .any(|byte| !(byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_'))
     }) {
         return Err(
-            "Core DuckDB extension names must start with a lowercase ASCII letter and contain only lowercase ASCII letters, digits, and underscores"
+            "DuckDB extension names must start with a lowercase ASCII letter and contain only lowercase ASCII letters, digits, and underscores"
                 .to_string(),
         );
     }

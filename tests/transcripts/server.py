@@ -136,7 +136,7 @@ def test_validates_session_arguments(binary: Path) -> Transcript:
     result = client.transcript[-1]["result"]
     assert result["isError"] is True
     assert result["content"][0]["text"] == (
-        "Core DuckDB extension names must start with a lowercase ASCII letter and "
+        "DuckDB extension names must start with a lowercase ASCII letter and "
         "contain only lowercase ASCII letters, digits, and underscores"
     )
 

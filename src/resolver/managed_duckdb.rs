@@ -30,34 +30,18 @@ base::local({
         # its compiled default extension directory.
         extension_directory = "",
         secret_directory = base::file.path(storage, "stored-secrets"),
-        temp_directory = base::file.path(storage, "spill"),
-        autoinstall_known_extensions = "false",
-        autoload_known_extensions = "false"
-      ),
-      environment_scan = FALSE
+        temp_directory = base::file.path(storage, "spill")
+      )
     )
   )
   base::on.exit(DBI::dbDisconnect(connection), add = TRUE)
   DBI::dbExecute(connection, "SET enable_progress_bar = false")
 
-  known <- DBI::dbGetQuery(
-    connection,
-    "SELECT extension_name FROM duckdb_extensions()"
-  )$extension_name
-  unknown <- base::setdiff(extensions, known)
-  if (base::length(unknown)) {
-    base::stop(
-      "unknown core DuckDB extension: ",
-      base::paste(unknown, collapse = ", "),
-      call. = FALSE
-    )
-  }
-
   for (extension in extensions) {
     identifier <- DBI::dbQuoteIdentifier(connection, extension)
     DBI::dbExecute(
       connection,
-      base::paste("INSTALL", identifier, "FROM core")
+      base::paste("INSTALL", identifier)
     )
   }
 })
@@ -85,8 +69,8 @@ pub(crate) fn resolve_duckdb_extensions(
         .stderr(Stdio::piped())
         .process_group(0);
     managed_r.configure_resolver(&mut command)?;
-    // DuckDB performs its normal core-extension installation outside the
-    // sandbox. Names are JSON input, never R or SQL source.
+    // DuckDB performs its normal extension installation outside the sandbox.
+    // Names are JSON input, never R or SQL source.
     let mut child = command.spawn().map_err(|error| {
         format!(
             "failed to run DuckDB extension resolver with `{}`: {error}",

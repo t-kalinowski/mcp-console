@@ -32,7 +32,7 @@ result:
   content:
     - type: text
       text: >-
-        Core DuckDB extension names must start with a lowercase ASCII letter and
+        DuckDB extension names must start with a lowercase ASCII letter and
         contain only lowercase ASCII letters, digits, and underscores
   isError: true
 ---

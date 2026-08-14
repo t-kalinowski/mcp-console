@@ -3,6 +3,16 @@
 ---
 id: 3
 send:
+  sql: echo
+result:
+  content:
+    - type: text
+      text: |
+        zod sql: echo
+  isError: false
+---
+id: 4
+send:
   r: echo
 result:
   content:

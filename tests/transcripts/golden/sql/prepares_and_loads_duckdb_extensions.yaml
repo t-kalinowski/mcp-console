@@ -2,18 +2,6 @@
 !same-as tests/transcripts/golden/server/initializes_and_lists_tools.yaml
 ---
 id: 3
-session:
-  action: prepare
-  requirements:
-    duckdb:
-      - json
-result:
-  content:
-    - type: text
-      text: "[prepared]"
-  isError: false
----
-id: 4
 send:
   sql: |
     CREATE TABLE retained_state AS
@@ -26,6 +14,18 @@ result:
   content:
     - type: text
       text: "[done]"
+  isError: false
+---
+id: 4
+session:
+  action: prepare
+  requirements:
+    duckdb:
+      - json
+result:
+  content:
+    - type: text
+      text: "[prepared]"
   isError: false
 ---
 id: 5
@@ -73,9 +73,9 @@ session:
 result:
   content:
     - type: text
-      text: |-
-        DuckDB extension resolution failed with exit status: 1: Error: unknown core DuckDB extension: not_a_real_duckdb_extension
-        Execution halted
+      text: >-
+        Invalid Error: HTTP Error: Failed to download extension
+        "not_a_real_duckdb_extension"
   isError: true
 ---
 id: 9

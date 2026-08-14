@@ -33,16 +33,6 @@ def test_prepares_and_loads_duckdb_extensions(binary: Path) -> Transcript:
         )
         client._initialize_and_list_tools()
 
-        client.session(
-            action="prepare",
-            requirements={"duckdb": ["json"]},
-        )
-        assert last_tool_text(client) == "[prepared]"
-        installed_json = list(
-            (home / ".duckdb" / "extensions").glob("*/*/json.duckdb_extension")
-        )
-        assert len(installed_json) == 1, installed_json
-
         sql = code(r"""
             CREATE TABLE retained_state AS
             SELECT
@@ -53,6 +43,16 @@ def test_prepares_and_loads_duckdb_extensions(binary: Path) -> Transcript:
             """)
         client.send(sql=sql)
         assert last_tool_text(client) == "[done]"
+
+        client.session(
+            action="prepare",
+            requirements={"duckdb": ["json"]},
+        )
+        assert last_tool_text(client) == "[prepared]"
+        installed_json = list(
+            (home / ".duckdb" / "extensions").glob("*/*/json.duckdb_extension")
+        )
+        assert len(installed_json) == 1, installed_json
 
         client.session(
             action="prepare",
@@ -87,9 +87,17 @@ def test_prepares_and_loads_duckdb_extensions(binary: Path) -> Transcript:
         result = client.transcript[-1]["result"]
         assert result["isError"] is True, result
         failure = result["content"][0]["text"]
+        assert failure.startswith("DuckDB extension resolution failed with "), failure
         assert (
-            "unknown core DuckDB extension: not_a_real_duckdb_extension" in failure
+            'Failed to download extension "not_a_real_duckdb_extension"' in failure
         ), failure
+        assert "unknown core DuckDB extension" not in failure, failure
+        native_failure = next(
+            line.strip().removeprefix("! ")
+            for line in failure.splitlines()
+            if "Failed to download extension" in line
+        )
+        result["content"][0]["text"] = native_failure.partition(' at URL "')[0]
 
         sql = code(r"""
             PRAGMA create_fts_index('retained_state', 'answer', 'body')

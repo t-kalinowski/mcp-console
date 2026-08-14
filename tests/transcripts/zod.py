@@ -593,6 +593,9 @@ def test_custom_worker_starts_without_home(binary: Path) -> Transcript:
     )
     client._initialize_and_list_tools()
 
+    client.send(sql="echo")
+    assert last_tool_text(client) == "zod sql: echo\n"
+
     client.send(r="echo")
     assert last_tool_text(client) == "zod: echo\n"
     return client._finish()

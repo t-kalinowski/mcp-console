@@ -40,7 +40,7 @@ Other inherited values, including an empty value, bypass the Python startup pref
 They do not bypass default R resolution.
 Custom workers skip both managed default preflights.
 
-`session` with `action = "prepare"` can add R or Python requirements or core DuckDB extensions to the implicit session.
+`session` with `action = "prepare"` can add R or Python requirements or DuckDB extensions to the implicit session.
 R and Python requirements remain exact strings.
 DuckDB requirements are names that start with a lowercase ASCII letter and otherwise contain only lowercase ASCII letters, digits, and underscores; paths, URLs, repositories, versions, and SQL fragments are rejected.
 Before built-in worker startup, the server merges exact strings with the retained tidyverse, GitHub reticulate, DBI, DuckDB, arrow, and nanoarrow requirements and managed Python baseline, merges DuckDB names with the retained extension set, then resolves the complete candidates outside the sandbox.
@@ -49,8 +49,8 @@ Before R resolution, the server requires `ir --version` from `PATH` to report 0.
 It then runs `ir run` with the same Rscript selection as the worker, one `--with` argument per requirement, and a constant expression that prints the resolved library path.
 The server sets `IR_NO_LOCAL_SOURCES` for every invocation, so IR refuses package installation from direct or transitive local sources while retaining ownership of package-reference parsing.
 Python requirements use the host resolver described above and take precedence over an inherited Python selection.
-DuckDB requirements use the resolved managed R library and DuckDB's own `INSTALL ... FROM core` statement outside the sandbox.
-The resolver installs into DuckDB's standard `~/.duckdb/extensions` cache, whose layout separates versions and platforms, and never loads the installed native code.
+DuckDB requirements use the resolved managed R library and DuckDB's own `INSTALL` statement outside the sandbox.
+DuckDB selects its default repository and native extension cache, whose layout separates versions and platforms; the resolver never loads the installed native code.
 Every newly resolved R candidate repeats the complete retained extension installation with that candidate's DuckDB version.
 DuckDB treats files already present in the matching version-and-platform cache as installed, so a warm repeat is a no-op.
 When a live worker may have loaded DuckDB from an earlier resolved R library, new extensions are installed with every such library as well as the pending candidate.
@@ -102,7 +102,7 @@ These boundary details apply:
 
 The IR resolver receives R package references as process arguments.
 The Python environment resolver receives only a requirement manifest on standard input, and the Python version resolver receives only version constraints; neither receives submitted cells or `send` stdin.
-The DuckDB extension resolver receives validated core extension names as data and runs DuckDB's own installer; it does not receive or inspect submitted SQL.
+The DuckDB extension resolver receives validated extension names as data and runs DuckDB's own installer; it does not receive or inspect submitted SQL.
 These resolvers may use the network and write their normal host caches outside the sandbox; R and Python package resolution may execute package installation or build code, and managed Python environment startup and the Matplotlib font-manager import also run there.
 DuckDB extension preparation performs installation but not loading outside the sandbox.
 `IR_NO_LOCAL_SOURCES` prevents IR from running package installation code for local sources; it may reuse a library that was already materialized.
@@ -575,10 +575,9 @@ Direct `sys.stdin` or fd-0 reads bypass the callback and produce neither frame.
 The worker stores each SQL source string in a process-lifetime private R environment and calls its evaluator with a short evaluation ID.
 The first SQL cell or call to `sql_connection()` lazily creates one in-memory DuckDB connection through `duckdb` and `DBI`; later operations reuse that connection and its catalog for the worker generation.
 Environment scanning is enabled.
-The driver receives an explicit primary extension directory, stored-secret directory, and spill directory beneath R's worker-private temporary directory, so it does not select or prompt for ambient writable DuckDB storage.
-It sets `autoinstall_known_extensions = false` and exposes the host-populated `~/.duckdb/extensions` cache as a secondary extension directory.
-That host cache is readable but not writable from the sandbox.
-Explicit `LOAD` and DuckDB's automatic loading run extension code inside the sandbox; missing extensions are not fetched there.
+The driver leaves extension discovery to DuckDB while keeping stored-secret and spill directories beneath R's worker-private temporary directory.
+DuckDB's native extension cache is readable but not writable from the sandbox, and the sandbox denies network access.
+Explicit `LOAD` and DuckDB's default automatic-extension behavior run inside the sandbox.
 SQL is passed directly to DuckDB without regex interception.
 The bridge disables DuckDB progress output on the connection so previews contain only query results.
 

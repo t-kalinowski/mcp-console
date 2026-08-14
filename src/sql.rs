@@ -29,20 +29,14 @@ base::local({
       duckdb::duckdb(
         dbdir = ":memory:",
         config = list(
-          extension_directory = file.path(storage, "extensions"),
+          # Suppress DuckDB-R's temporary fallback while leaving DuckDB core
+          # to resolve its native default extension directory.
+          extension_directory = "",
           secret_directory = file.path(storage, "stored-secrets"),
-          temp_directory = file.path(storage, "spill"),
-          autoinstall_known_extensions = "false",
-          autoload_known_extensions = "true"
+          temp_directory = file.path(storage, "spill")
         ),
         environment_scan = TRUE
       )
-    )
-    # DuckDB expands the shorthand itself, keeping HOME interpretation inside
-    # DuckDB while the primary writable directory remains worker-private.
-    DBI::dbExecute(
-      connection,
-      "SET extension_directories = ['~/.duckdb/extensions']"
     )
     DBI::dbExecute(connection, "SET enable_progress_bar = false")
     invisible(connection)

@@ -48,7 +48,7 @@ Worker `image` frames carry base64 data and a MIME type.
 Worker `console_output` and `console_diagnostic` frames carry ordinary and diagnostic console text.
 The server retains console channels and direct fd 1/2 identity until MCP projection.
 The server preserves sideband text and image order as MCP content blocks, coalesces adjacent text, and does not add `[done]` when an image is the only output.
-The implemented `session` surface accepts `action = "prepare"` with one or more R or Python requirement strings or core DuckDB extension names, or `action = "restart"` with optional Python requirement strings for the implicit session.
+The implemented `session` surface accepts `action = "prepare"` with one or more R or Python requirement strings or DuckDB extension names, or `action = "restart"` with optional Python requirement strings for the implicit session.
 Requirements are exact, additive, and idempotent.
 On macOS, plain built-in `serve` resolves the retained default R requirements `tidyverse`, `github::rstudio/reticulate`, `DBI`, `duckdb`, `arrow`, and `nanoarrow` through IR before accepting MCP input.
 The GitHub reticulate requirement supplies the fork-aware output restoration required by the worker; host R must also provide reticulate to bootstrap managed Python before the worker library is applied.
@@ -57,7 +57,7 @@ Before the worker starts, each successful prepare resolves the complete candidat
 Before each R resolution, the server requires `ir --version` from `PATH` to report 0.4.0 or later; it then uses `ir run` with the worker's Rscript, and the result becomes the first worker `R_LIBS` entry.
 Python requirements use reticulate and uv and replace any inherited Python selection with the resolved interpreter.
 DuckDB extension requirements must start with a lowercase ASCII letter and otherwise contain only lowercase ASCII letters, digits, and underscores.
-The host resolver uses the managed R library and DuckDB's own `INSTALL ... FROM core` statement outside the sandbox, storing the result in DuckDB's persistent, version- and platform-specific `~/.duckdb/extensions` cache.
+The host resolver uses the managed R library and DuckDB's own `INSTALL` statement outside the sandbox, letting DuckDB select its default repository and native version- and platform-specific extension cache.
 Every newly resolved R candidate repeats the complete retained extension installation with its DuckDB version; DuckDB treats a matching warm cache as already installed.
 Within a live worker generation, new extensions are also installed with every resolved R library that could have supplied the loaded DuckDB namespace, and replacement resets that target list to the retained library.
 It does not load extension code outside the sandbox and does not inspect or intercept submitted SQL.
@@ -171,9 +171,8 @@ Python `sys.stdin` and other direct fd-0 reads bypass the bridge and emit neithe
 SQL cells use the `duckdb` and `DBI` R packages through a private R bridge.
 Previews require `nanoarrow` for DuckDB's DBI Arrow stream, `arrow` for bounded record-batch manipulation and temporary registration, and `tibble` and `pillar` for display.
 The first SQL cell or call to `sql_connection()` lazily opens one in-memory connection with environment scanning enabled, and later operations in that worker generation reuse its catalog.
-DuckDB's primary extension, secret, and spill paths are explicit children of the worker's private R temporary directory.
-The connection disables automatic extension installation and reads prepared extensions from the host-populated `~/.duckdb/extensions` cache as a secondary directory.
-The sandbox permits reads but not writes to that cache; explicit `LOAD` and DuckDB autoload execute extension code inside the sandbox.
+The connection leaves extension discovery to DuckDB while keeping secret and spill paths beneath the worker's private R temporary directory.
+The sandbox permits reads but not writes to DuckDB's native extension cache and denies network access; explicit `LOAD` and DuckDB's default automatic-extension behavior execute inside the sandbox.
 The connection disables DuckDB progress output so previews contain only query results.
 The worker stores SQL source in private R state and calls the bridge with a short evaluation ID.
 The bridge sends queries through a zero-argument closure enclosed by R's global environment, so DuckDB searches the persistent R session rather than the private bridge environment.
@@ -228,7 +227,7 @@ The public MCP surface has two tools:
 - `send` evaluates complete R, Python, or SQL cells, writes to the session's stdin stream, and polls for output.
 - `session` manages session requirements and lifecycle operations.
 
-R and Python requirement preparation, core DuckDB extension preparation, live late additions, and explicit restart with optional additive Python requirements are implemented for `session`; its broader lifecycle surface remains planned.
+R and Python requirement preparation, DuckDB extension preparation, live late additions, and explicit restart with optional additive Python requirements are implemented for `session`; its broader lifecycle surface remains planned.
 
 The MCP initialization identity remains `mcp-console`.
 The intended default client registration name is `console`, for example `codex mcp add console -- mcp-console serve`.
@@ -248,7 +247,7 @@ See `design-sketches/README.md` for the product overview and `design-sketches/do
 - `src/cli.rs` — clap command definitions and user-facing help.
 - `src/python.rs` — worker environment and reticulate bridge.
 - `src/resolver.rs` — platform-gated host-resolver facade.
-- `src/resolver/managed_duckdb.rs` — macOS host-side core DuckDB extension installation.
+- `src/resolver/managed_duckdb.rs` — macOS host-side DuckDB extension installation.
 - `src/resolver/managed_r.rs` — macOS IR-backed R library resolution.
 - `src/resolver/managed_python.rs` — macOS reticulate/uv-managed Python resolution.
 - `src/resolver/process.rs` — shared macOS resolver process-group lifecycle and cancellation.
@@ -325,7 +324,7 @@ Keep one Cargo package until the implemented code presents a concrete crate boun
 - Keep the MCP adapter independent of interpreter implementation details.
 - Treat submitted R, Python, and SQL execution as shell-class capability and place safety at the worker-process boundary.
   Managed-Python startup and explicit R, Python, or DuckDB preparation are host-bootstrap exceptions.
-  R requirements are IR command arguments resolved with `IR_NO_LOCAL_SOURCES`; Python requirements use a JSON standard-input manifest; DuckDB requirements are validated core extension names passed to DuckDB's own installer.
+  R requirements are IR command arguments resolved with `IR_NO_LOCAL_SOURCES`; Python requirements use a JSON standard-input manifest; DuckDB requirements are validated extension names passed to DuckDB's own installer.
   None is evaluated as submitted R or SQL source, though accepted package installation, build code, managed Python startup, and the Matplotlib font-cache import may execute outside the worker sandbox.
 - Update this file when a PR changes the implemented surface or repository map.
 - Before every commit, run `scripts/format` and review its changes.
