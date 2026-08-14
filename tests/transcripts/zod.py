@@ -35,6 +35,7 @@ def build_killpg_denial_interposer(directory: Path) -> Path:
 #include <errno.h>
 #include <fcntl.h>
 #include <signal.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <sys/types.h>
 #include <unistd.h>
@@ -45,6 +46,7 @@ static int deny_killpg(pid_t process_group, int signal) {
         if (marker != NULL) {
             int descriptor = open(marker, O_WRONLY | O_CREAT | O_TRUNC, 0600);
             if (descriptor >= 0) {
+                dprintf(descriptor, "%d\n", process_group);
                 close(descriptor);
             }
         }
@@ -1289,7 +1291,6 @@ def test_restarts_after_unexpected_sideband_message(binary: Path) -> Transcript:
         killpg_marker = temporary_path / "killpg-denied"
         environment = os.environ.copy()
         environment["TMPDIR"] = temporary_directory
-        environment["ZOD_REPORT_PROCESS_GROUP"] = "1"
         environment["MCP_CONSOLE_TEST_KILLPG_MARKER"] = str(killpg_marker)
         # The interposer reaches the server, while sandbox-exec removes DYLD
         # variables before it launches Zod.
@@ -1305,16 +1306,30 @@ def test_restarts_after_unexpected_sideband_message(binary: Path) -> Transcript:
         passed = False
         try:
             client._initialize_and_list_tools()
-            client.send(r="complete silently")
-            group_marker = wait_for_marker(
-                temporary_path,
-                "zod-process-group",
-                client,
+            client.send(r="report process group")
+            process_group_output = last_tool_text(client)
+            process_group_prefix = "zod process group: "
+            assert process_group_output.startswith(process_group_prefix), (
+                process_group_output
             )
-            worker_group = read_worker_group(group_marker)
+            worker_group = int(
+                process_group_output.removeprefix(process_group_prefix).removesuffix(
+                    "\n"
+                )
+            )
+            assert process_group_output == f"{process_group_prefix}{worker_group}\n"
+            assert worker_group != os.getpgrp(), (
+                "Zod did not enter a dedicated process group"
+            )
+            client.transcript[-1]["result"]["content"][0]["text"] = (
+                "zod process group: <process group>\n"
+            )
             failed_call = client._start_send(r="violate protocol")
             client._receive(failed_call)
             assert killpg_marker.is_file(), "killpg denial interposer did not run"
+            assert int(killpg_marker.read_text(encoding="utf-8")) == worker_group, (
+                "killpg denial targeted a different process group"
+            )
             result = failed_call["result"]
             assert result["isError"] is True
             actual = result["content"][0]["text"]

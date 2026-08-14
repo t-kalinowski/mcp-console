@@ -276,6 +276,11 @@ def main() -> None:
             send(writer, {"kind": "completed"})
             continue
 
+        if source == "report process group":
+            send_output(writer, f"zod process group: {os.getpgrp()}\n")
+            send(writer, {"kind": "completed"})
+            continue
+
         if source == "emit console kinds":
             send_output(writer, "zod output\n")
             send_output(writer, "zod diagnostic\n", ConsoleKind.DIAGNOSTIC)

@@ -3,11 +3,12 @@
 ---
 id: 3
 send:
-  r: complete silently
+  r: report process group
 result:
   content:
     - type: text
-      text: "[done]"
+      text: |
+        zod process group: <process group>
   isError: false
 ---
 id: 4
