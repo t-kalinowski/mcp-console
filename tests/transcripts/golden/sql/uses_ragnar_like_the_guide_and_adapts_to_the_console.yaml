@@ -1,0 +1,338 @@
+---
+!same-as tests/transcripts/golden/server/initializes_and_lists_tools.yaml
+---
+id: 3
+send:
+  sql: |
+    CREATE TABLE agent_notes AS
+    SELECT 'worker catalog' AS note
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+id: 4
+session:
+  action: prepare
+  requirements:
+    r:
+      - ragnar
+result:
+  content:
+    - type: text
+      text: "[prepared]"
+  isError: false
+---
+id: 5
+send:
+  r: |
+    ragnar::ragnar_store_create(
+      "knowledge.ragnar.duckdb",
+      embed = NULL
+    )
+result:
+  content:
+    - type: text
+      text: |
+        Error in file(con, "w") : cannot open the connection
+        In addition: Warning message:
+        In file(con, "w") :
+          cannot open file 'knowledge.ragnar.duckdb': Operation not permitted
+  isError: false
+---
+id: 6
+send:
+  r: |
+    store_path <- file.path(tempdir(), "knowledge.ragnar.duckdb")
+    store <- suppressMessages(ragnar::ragnar_store_create(
+      store_path,
+      embed = NULL
+    ))
+    documents <- list(
+      ragnar::MarkdownDocument(
+        "# Alpha\n\nApples are red fruit.",
+        origin = "alpha.md"
+      ),
+      ragnar::MarkdownDocument(
+        "# Beta\n\nBananas are yellow fruit.",
+        origin = "beta.md"
+      )
+    )
+    for (document in documents) {
+      chunks <- ragnar::markdown_chunk(
+        document,
+        target_size = 1000L,
+        target_overlap = 0
+      )
+      ragnar::ragnar_store_insert(store, chunks)
+    }
+    writeLines("created store under the worker tempdir")
+result:
+  content:
+    - type: text
+      text: |
+        created store under the worker tempdir
+  isError: false
+---
+id: 7
+send:
+  r: |
+    ragnar::ragnar_store_build_index(store)
+result:
+  content:
+    - type: text
+      text: |
+        Error in `dbSendQuery()`:
+        ! Invalid Error: IO Error: Failed to download extension "fts" at URL "<DuckDB extension URL>"
+        Extension "fts" is an existing extension.
+
+        For more info, visit <DuckDB extension troubleshooting URL> (ERROR Could not establish connection)
+        ℹ Context: rapi_prepare
+        ℹ Error type: INVALID
+        Run `rlang::last_trace()` to see where the error occurred.
+  isError: false
+---
+id: 8
+session:
+  action: prepare
+  requirements:
+    duckdb:
+      - fts
+result:
+  content:
+    - type: text
+      text: "[prepared]"
+  isError: false
+---
+id: 9
+send:
+  r: |
+    stopifnot(
+      DBI::dbIsValid(store@con),
+      DBI::dbGetQuery(store@con, "SELECT count(*) AS n FROM chunks")$n == 2
+    )
+    ragnar::ragnar_store_build_index(store)
+    writeLines("index built after extension preparation")
+result:
+  content:
+    - type: text
+      text: |
+        index built after extension preparation
+  isError: false
+---
+id: 10
+send:
+  r: |
+    creator_result <- ragnar::ragnar_retrieve(
+      store,
+      "bananas",
+      top_k = 1L
+    )
+    creator_result[c("origin", "text")]
+result:
+  content:
+    - type: text
+      text: |
+        # A tibble: 1 × 2
+          origin  text
+          <chr>   <chr>
+        1 beta.md "# Beta\n\nBananas are yellow fruit."
+  isError: false
+---
+id: 11
+send:
+  r: |
+    reader <- ragnar::ragnar_store_connect(
+      store_path,
+      read_only = TRUE
+    )
+result:
+  content:
+    - type: text
+      text: |
+        Error in `duckdb_result()`:
+        ! Invalid Error: IO Error: Failed to download extension "vss" at URL "<DuckDB extension URL>"
+        Extension "vss" is an existing extension.
+
+        For more info, visit <DuckDB extension troubleshooting URL> (ERROR Could not establish connection)
+        ℹ Context: rapi_execute
+        ℹ Error type: INVALID
+        Run `rlang::last_trace()` to see where the error occurred.
+  isError: false
+---
+id: 12
+session:
+  action: prepare
+  requirements:
+    duckdb:
+      - vss
+result:
+  content:
+    - type: text
+      text: "[prepared]"
+  isError: false
+---
+id: 13
+send:
+  r: |
+    reader <- ragnar::ragnar_store_connect(
+      store_path,
+      read_only = TRUE
+    )
+    reader_result <- ragnar::ragnar_retrieve(
+      reader,
+      "apples",
+      top_k = 1L
+    )
+    reader_result[c("origin", "text")]
+result:
+  content:
+    - type: text
+      text: |
+        # A tibble: 1 × 2
+          origin   text
+          <chr>    <chr>
+        1 alpha.md "# Alpha\n\nApples are red fruit."
+  isError: false
+---
+id: 14
+send:
+  sql: |
+    SELECT origin FROM chunks ORDER BY origin
+result:
+  content:
+    - type: text
+      text: |
+        Error: Binder Error: Referenced column "origin" not found in FROM clause!
+        Candidate bindings: "start"
+
+        LINE 1: SELECT origin FROM chunks ORDER BY origin
+                       ^
+        ℹ Context: rapi_prepare
+        ℹ Error type: BINDER
+  isError: false
+---
+id: 15
+send:
+  r: |
+    writeLines(paste(
+      "R chunks columns:",
+      paste(names(chunks), collapse = ", ")
+    ))
+    rm(chunks)
+result:
+  content:
+    - type: text
+      text: |
+        R chunks columns: start, end, context, text
+  isError: false
+---
+id: 16
+send:
+  sql: |
+    SELECT origin FROM chunks ORDER BY origin
+result:
+  content:
+    - type: text
+      text: |
+        Error: Catalog Error: Table with name chunks does not exist!
+        Did you mean "pg_constraint"?
+
+        LINE 1: SELECT origin FROM chunks ORDER BY origin
+                                   ^
+        ℹ Context: rapi_prepare
+        ℹ Error type: CATALOG
+  isError: false
+---
+id: 17
+send:
+  r: |
+    sql_connection(reader@con)
+result:
+  content:
+    - type: text
+      text: |
+        Error in sql_connection(reader@con) : unused argument (reader@con)
+  isError: false
+---
+id: 18
+send:
+  r: |
+    connection <- sql_connection()
+    stopifnot(
+      DBI::dbIsValid(store@con),
+      DBI::dbIsValid(reader@con),
+      !identical(connection, store@con),
+      !identical(connection, reader@con)
+    )
+    invisible(DBI::dbExecute(
+      connection,
+      paste(
+        "ATTACH",
+        DBI::dbQuoteString(connection, store_path),
+        "AS knowledge (READ_ONLY)"
+      )
+    ))
+    writeLines("attached with both ragnar connections still open")
+result:
+  content:
+    - type: text
+      text: |
+        attached with both ragnar connections still open
+  isError: false
+---
+id: 19
+send:
+  sql: |
+    SELECT origin FROM knowledge.main.chunks ORDER BY origin
+result:
+  content:
+    - type: text
+      text: |
+        # A tibble: 2 × 1
+          origin
+          <string>
+        1 "alpha.md"
+        2 "beta.md"
+  isError: false
+---
+id: 20
+send:
+  sql: |
+    SELECT origin
+    FROM knowledge.main.chunks
+    WHERE knowledge.fts_main_chunks.match_bm25(
+      chunk_id,
+      'bananas'
+    ) IS NOT NULL
+    ORDER BY origin
+result:
+  content:
+    - type: text
+      text: |
+        Error: Catalog Error: Table with name "fts_main_chunks.terms" does not exist because schema "fts_main_chunks" does not exist.
+        ℹ Context: rapi_prepare
+        ℹ Error type: CATALOG
+  isError: false
+---
+id: 21
+send:
+  sql: |
+    USE knowledge;
+    SELECT
+      origin,
+      (SELECT note FROM memory.main.agent_notes) AS note
+    FROM chunks
+    WHERE fts_main_chunks.match_bm25(chunk_id, 'bananas') IS NOT NULL
+    ORDER BY origin
+result:
+  content:
+    - type: text
+      text: |
+        # A tibble: 1 × 2
+          origin    note
+          <string>  <string>
+        1 "beta.md" "worker catalog"
+  isError: false
+...
