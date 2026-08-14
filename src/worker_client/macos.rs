@@ -179,6 +179,7 @@ impl Worker {
             &mut resolve_python,
             &mut resolve_python_version,
             &mut checkpoint_python,
+            None,
         )?;
         self.writer
             .send(&ServerMessage::PrepareR {
@@ -187,11 +188,12 @@ impl Worker {
             .map_err(|error| format!("worker sideband write failed: {error}"))?;
         let mut python_candidates = Vec::new();
         let message = loop {
-            if let Some(message) = self.receive_preparation_message(
+            if let Some(message) = self.receive_activity_message(
                 &mut python_candidates,
                 &mut resolve_python,
                 &mut resolve_python_version,
                 &mut checkpoint_python,
+                None,
             )? {
                 break message;
             }
@@ -239,6 +241,7 @@ impl Worker {
             &mut resolve_python,
             &mut resolve_python_version,
             &mut checkpoint_python,
+            None,
         )?;
         self.writer
             .send(&ServerMessage::PreparePython { packages })
@@ -246,11 +249,12 @@ impl Worker {
         let mut python_candidates = Vec::new();
 
         let message = loop {
-            if let Some(message) = self.receive_preparation_message(
+            if let Some(message) = self.receive_activity_message(
                 &mut python_candidates,
                 &mut resolve_python,
                 &mut resolve_python_version,
                 &mut checkpoint_python,
+                None,
             )? {
                 break message;
             }
@@ -281,10 +285,16 @@ impl Worker {
         ) -> Result<(), String>,
     ) -> Result<(), String> {
         let crate::cell::Cell { language, source } = cell;
+        evaluation.attach_writer(self.stdin.clone())?;
+        self.drain_pending_activity(
+            &mut resolve_python,
+            &mut resolve_python_version,
+            &mut checkpoint_python,
+            Some(evaluation),
+        )?;
         self.writer
             .send(&ServerMessage::Evaluate { language, source })
             .map_err(|error| format!("worker sideband write failed: {error}"))?;
-        evaluation.attach_writer(self.stdin.clone())?;
         let mut python_candidates = Vec::new();
 
         loop {
@@ -342,15 +352,17 @@ impl Worker {
             Option<crate::worker_protocol::PythonRequirementManifest>,
             Vec<crate::resolver::ManagedPython>,
         ) -> Result<(), String>,
+        evaluation: Option<&super::Evaluation>,
     ) -> Result<(), String> {
         while self.has_pending_message()? {
             let mut python_candidates = Vec::new();
             if self
-                .receive_preparation_message(
+                .receive_activity_message(
                     &mut python_candidates,
                     resolve_python,
                     resolve_python_version,
                     checkpoint_python,
+                    evaluation,
                 )?
                 .is_some()
             {
@@ -386,7 +398,7 @@ impl Worker {
         }
     }
 
-    fn receive_preparation_message(
+    fn receive_activity_message(
         &mut self,
         python_candidates: &mut Vec<crate::resolver::ManagedPython>,
         resolve_python: &mut impl FnMut(
@@ -399,18 +411,33 @@ impl Worker {
             Option<crate::worker_protocol::PythonRequirementManifest>,
             Vec<crate::resolver::ManagedPython>,
         ) -> Result<(), String>,
+        evaluation: Option<&super::Evaluation>,
     ) -> Result<Option<WorkerMessage>, String> {
         loop {
             match self.receive()? {
-                WorkerMessage::ConsoleOutput { data } => self
-                    .output
-                    .push_console_text(crate::worker_protocol::ConsoleChannel::Output, data),
-                WorkerMessage::ConsoleDiagnostic { data } => self
-                    .output
-                    .push_console_text(crate::worker_protocol::ConsoleChannel::Diagnostic, data),
+                WorkerMessage::ConsoleOutput { data } => match evaluation {
+                    Some(evaluation) => {
+                        evaluation.output(crate::worker_protocol::ConsoleChannel::Output, data)?
+                    }
+                    None => self
+                        .output
+                        .push_console_text(crate::worker_protocol::ConsoleChannel::Output, data),
+                },
+                WorkerMessage::ConsoleDiagnostic { data } => match evaluation {
+                    Some(evaluation) => evaluation
+                        .output(crate::worker_protocol::ConsoleChannel::Diagnostic, data)?,
+                    None => self.output.push_console_text(
+                        crate::worker_protocol::ConsoleChannel::Diagnostic,
+                        data,
+                    ),
+                },
                 WorkerMessage::Image { data, mime_type } => {
-                    crate::transcript::validate_image_data(&data)?;
-                    self.output.push_image(data, mime_type, None);
+                    if let Some(evaluation) = evaluation {
+                        evaluation.image(data, mime_type)?;
+                    } else {
+                        crate::transcript::validate_image_data(&data)?;
+                        self.output.push_image(data, mime_type, None);
+                    }
                 }
                 WorkerMessage::ResolvePython { request } => {
                     python_candidates.extend(self.resolve_python_request(request, resolve_python)?);
@@ -423,6 +450,10 @@ impl Worker {
                     return Ok(None);
                 }
                 WorkerMessage::InputRequested { prompt } => {
+                    if let Some(evaluation) = evaluation {
+                        evaluation.input_requested(prompt)?;
+                        continue;
+                    }
                     let prompt = serde_json::to_string(&prompt).map_err(|error| {
                         format!("failed to render worker input prompt: {error}")
                     })?;
@@ -433,6 +464,10 @@ impl Worker {
                     ));
                 }
                 WorkerMessage::InputReceived => {
+                    if let Some(evaluation) = evaluation {
+                        evaluation.input_received()?;
+                        continue;
+                    }
                     return Err(
                         "worker reported received input during requirement preparation".to_string(),
                     );

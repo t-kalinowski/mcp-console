@@ -309,10 +309,18 @@ def main() -> None:
                 ],
             )
             try:
-                input()
+                value = input()
             except EOFError:
                 return
-            raise AssertionError("Zod received input during idle preparation")
+            assert value == "continue"
+            send_batch(
+                writer,
+                [
+                    {"kind": "input_received"},
+                    {"kind": "activity_completed"},
+                ],
+            )
+            continue
 
         if source == "resolve python while idle":
             send_batch(

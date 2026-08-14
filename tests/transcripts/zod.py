@@ -899,6 +899,31 @@ def test_custom_worker_resolves_idle_activity_before_preparation(
         return client._finish()
 
 
+def test_custom_worker_resolves_idle_activity_before_evaluation(
+    binary: Path,
+) -> Transcript:
+    zod = Path(__file__).resolve().parents[1] / "fixtures" / "zod"
+    environment, _ = r_test_environment()
+    environment["RETICULATE_PYTHON"] = ""
+    client = McpClient(
+        binary,
+        ("serve", "--worker", str(zod)),
+        environment,
+    )
+    client._initialize_and_list_tools()
+    client.send(r="resolve python while idle")
+    assert last_tool_text(client) == "[done]"
+
+    client.send(r="echo")
+    assert last_tool_text(client) == "zod: echo\n"
+
+    client.send(r="request input while idle")
+    assert last_tool_text(client) == "[done]"
+    client.send(r="echo", stdin="continue\n")
+    assert last_tool_text(client) == '[input requested: "idle> "]\nzod: echo\n'
+    return client._finish()
+
+
 def test_custom_worker_restart_prepares_r_and_duckdb_requirements(
     binary: Path,
 ) -> Transcript:

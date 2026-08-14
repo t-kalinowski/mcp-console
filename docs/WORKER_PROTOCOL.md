@@ -277,11 +277,11 @@ Only one request may be outstanding: a second request, a receipt without a reque
 The server must accept its optional Python checkpoint before the MCP evaluation completes and the next cell is permitted.
 
 Explicit operation readers also accept leading console, image, input, and Python-resolution frames from background worker activity.
-Before sending a live preparation command, the server makes one nonblocking readiness check, including reader-buffered bytes.
+Before sending a live preparation command or evaluation, the server makes one nonblocking readiness check, including reader-buffered bytes.
 It drains each observed background activity through `activity_completed`, then checks once more.
 A custom worker whose background activity begins concurrently must queue the unrelated command until its nested resolver response arrives.
 An `activity_completed` frame checkpoints the Python candidates produced by that activity before the reader continues to its own terminal frame.
-Background input requests fail the noninteractive requirement-preparation operation instead of leaving it blocked.
+Background input requests join an evaluation's ordinary stdin flow, but fail the noninteractive requirement-preparation operation instead of leaving it blocked.
 The built-in worker does not yet run activity between cells, so it does not currently emit this boundary.
 
 An explicit live R preparation has this shape after the server resolves the complete R requirement set:
