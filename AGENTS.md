@@ -26,7 +26,8 @@ On Unix, newly created record directories use mode `0700`, and journal and artif
 It appends schema-versioned `session_started`, `tool_call`, `artifact_created`, and `tool_result` records for ordinary, non-task `send` and `session` calls to `internal/events.jsonl`.
 Tool records preserve timestamps, MCP request IDs, normalized parsed call parameters, final results or errors, and content-block order.
 `tool_result` records server assembly, not delivery; cancellation or disconnection may suppress the response.
-Image blocks remain in MCP results and are also decoded byte-for-byte under the run's `artifacts/` directory as soon as the worker publishes them, including when the evaluation is never polled again; the journal replaces their base64 data with relative paths.
+Image blocks received during a `send` operation remain in MCP results and are also decoded byte-for-byte under the run's `artifacts/` directory immediately, including when the evaluation is never polled again; the journal replaces their base64 data with relative paths.
+A background image first received during live requirement preparation remains pending until a later `send` assembles and persists it.
 Journal writes are flushed before a tool begins and after its result is assembled.
 If the run record cannot be created or a later recording write fails, the server disables recording, emits one diagnostic to standard error, and continues serving console calls.
 An existing journal may therefore end with the last successfully flushed event.
