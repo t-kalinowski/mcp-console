@@ -128,7 +128,7 @@ impl Client {
             lifecycle.processes.clone()
         };
         if let Some(resolver) = processes.resolver
-            && resolver.interrupt()
+            && resolver.interrupt()?
         {
             return Ok(());
         }
