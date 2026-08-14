@@ -203,6 +203,7 @@ SQL can scan data frames in R global state; Python data frames become visible to
 Requirements make packages available but do not import or attach them.
 
 The worker runs each R cell through R's native top-level loop, captures R console output, prints each visible value, and maintains `.Last.value`.
+Each worker generation starts with `options(width = 200L)`; later changes to that option persist for the generation.
 If a cell ends while an expression is incomplete, earlier complete expressions from that cell remain applied.
 The worker installs a worker-owned `grDevices::png()` function as R's default graphics device and opens it lazily when a cell draws.
 Each managed page is returned as an MCP image when its device finalizes it by opening a new page or closing.
@@ -223,6 +224,7 @@ plot(1:10)
 
 Graphics devices opened explicitly by evaluated code, such as with `grDevices::png()`, are user-owned: the worker does not close them, read their files, or return them as MCP images.
 Python cells execute statements in persistent `__main__` state and display their final expression through Python's display hook.
+Python formatters see a 200-column terminal width; pandas `display.width` and NumPy `linewidth` also start at 200 and remain user-configurable.
 Python reads R globals through reticulate's `r.name` bridge, and R reads Python globals through the attached `py$name` binding.
 R plots invoked from a Python cell through reticulate's `r` bridge use the same managed default device, sizing options, cell scope, and MCP image output as plots invoked from an R cell.
 At the end of each Python cell, including after a Python error, every open figure managed by `matplotlib.pyplot` is rendered in memory, returned once as a PNG image, and closed.
@@ -247,7 +249,7 @@ An exec descendant that retains fd 1/2 creates fresh standard streams backed by 
 SQL cells and `sql_connection()` lazily open one in-memory DuckDB connection through the `duckdb` and `DBI` R packages and reuse it for the worker generation.
 DuckDB extension, secret, and spill paths stay under the worker's private R temporary directory.
 The worker sends the complete SQL source out of band to a private R bridge and executes query results through DBI's streaming Arrow API.
-It fetches at most 21 rows, uses the final row only to detect that more data exists, and renders at most 20 rows and 12 columns with 160-character cells and a 12 KiB SQL-preview limit.
+It fetches at most 21 rows, uses the final row only to detect that more data exists, and renders at most 20 rows and 12 columns in a 200-column layout, with a 160-character per-cell limit and a 12 KiB SQL-preview limit.
 The preview shows Arrow column types, SQL `NULL`, and empty-result schemas; DuckDB converts only the bounded displayed cells to text and applies the cell limit before returning them to R, preserving values such as `BIGINT`, `DECIMAL`, lists, and structs when they fit.
 It reports omitted rows without counting the complete result and reports omitted columns explicitly; the final byte limit may reduce the displayed rows or columns further.
 Statements without result columns are silent, so they return `[done]` when they produce no other output.

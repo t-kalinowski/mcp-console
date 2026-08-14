@@ -71,12 +71,11 @@ result:
     - type: text
       text: |
         # A tibble: 1 × 12
-          column_name_01_is_deliberately_long column_name_02_is_deliberately_long column_name_03_is_deliberately…¹ col…² col…³ col…⁴ col…⁵ col…⁶ col…⁷ col…⁸ col…⁹ col…˟
-                                      <int32>                             <int32>                          <int32> <int> <int> <int> <int> <int> <int> <int> <int> <int>
-        1                                   1                                   2                                3     4     5     6     7     8     9    10    11    12
-        # ℹ abbreviated names: ¹​column_name_03_is_deliberately_long, ²​column_name_04_is_deliberately_long, ³​column_name_05_is_deliberately_long,
-        #   ⁴​column_name_06_is_deliberately_long, ⁵​column_name_07_is_deliberately_long, ⁶​column_name_08_is_deliberately_long, ⁷​column_name_09_is_deliberately_long,
-        #   ⁸​column_name_10_is_deliberately_long, ⁹​column_name_11_is_deliberately_long, ˟​column_name_12_is_deliberately_long
+          column_name_01_is_deliberately_long column_name_02_is_deliberately_long column_name_03_is_deliberately_long column_name_04_is_deliberately_long column_nam…¹ col…² col…³ col…⁴ col…⁵ col…⁶ col…⁷ col…⁸
+                                      <int32>                             <int32>                             <int32>                             <int32>      <int32> <int> <int> <int> <int> <int> <int> <int>
+        1                                   1                                   2                                   3                                   4            5     6     7     8     9    10    11    12
+        # ℹ abbreviated names: ¹​column_name_05_is_deliberately_long, ²​column_name_06_is_deliberately_long, ³​column_name_07_is_deliberately_long, ⁴​column_name_08_is_deliberately_long,
+        #   ⁵​column_name_09_is_deliberately_long, ⁶​column_name_10_is_deliberately_long, ⁷​column_name_11_is_deliberately_long, ⁸​column_name_12_is_deliberately_long
   isError: false
 ---
 id: 6

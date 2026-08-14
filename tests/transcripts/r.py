@@ -46,6 +46,24 @@ def test_evaluates_a_complete_cell(binary: Path) -> Transcript:
     return client._finish()
 
 
+def test_uses_200_column_default(binary: Path) -> Transcript:
+    client = McpClient(binary, ("serve",))
+    client._initialize_and_list_tools()
+    # fmt: r
+    r = code(r"""
+        cat("width: ", getOption("width"), "\n", sep = "")
+        1:45
+        """)
+    client.send(r=r)
+    output = last_tool_text(client)
+    lines = output.splitlines()
+    assert lines[0] == "width: 200", repr(output)
+    assert len(lines) == 2, repr(output)
+    assert lines[1].startswith(" [1]"), repr(output)
+    assert lines[1].endswith(" 45"), repr(output)
+    return client._finish()
+
+
 def test_returns_cell_scoped_plots(binary: Path) -> Transcript:
     environment, rscript = r_test_environment()
     client = McpClient(binary, ("serve",), environment)

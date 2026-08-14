@@ -106,6 +106,65 @@ def test_evaluates_with_explicit_managed_python(binary: Path) -> Transcript:
     return managed_python_transcript(binary, configured=True)
 
 
+def test_uses_200_column_default(binary: Path) -> Transcript:
+    client = McpClient(binary, ("serve",))
+    client._initialize_and_list_tools()
+    # fmt: python
+    python = code("""
+        import shutil
+
+        import numpy as np
+        import pandas as pd
+
+        print(f"terminal columns: {shutil.get_terminal_size().columns}")
+        print(f"pandas display.width: {pd.get_option('display.width')}")
+        print(f"NumPy linewidth: {np.get_printoptions()['linewidth']}")
+        pd.DataFrame(
+            [range(12)],
+            columns=[f"column_{column:02}" for column in range(12)],
+        )
+        """)
+    client.send(python=python)
+    output = last_tool_text(client)
+    assert output.startswith(
+        "terminal columns: 200\npandas display.width: 200\nNumPy linewidth: 200\n"
+    ), repr(output)
+    for column in range(12):
+        assert f"column_{column:02}" in output
+    assert "..." not in output
+    assert "[1 rows x 12 columns]" not in output
+    return client._finish()
+
+
+def test_uses_200_column_default_after_r_initializes_python(
+    binary: Path,
+) -> Transcript:
+    client = McpClient(binary, ("serve",))
+    client._initialize_and_list_tools()
+    # fmt: r
+    r = code(r"""
+        reticulate::py_run_string(
+          "
+        import numpy as np
+        import pandas as pd
+        "
+        )
+        cat(
+          "R-first NumPy linewidth: ",
+          reticulate::py_eval("np.get_printoptions()['linewidth']"),
+          "\nR-first pandas display.width: ",
+          reticulate::py_eval("pd.get_option('display.width')"),
+          "\n",
+          sep = ""
+        )
+        """)
+    client.send(r=r)
+    assert last_tool_text(client) == (
+        "R-first NumPy linewidth: 200\nR-first pandas display.width: 200\n"
+    )
+    return client._finish()
+
+
 def test_prints_requirements_with_host_uv_cache(binary: Path) -> Transcript:
     with tempfile.TemporaryDirectory() as temporary_directory:
         temporary = Path(temporary_directory)
