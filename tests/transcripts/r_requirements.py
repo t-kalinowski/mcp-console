@@ -308,11 +308,11 @@ def test_failed_late_mixed_preparation_preserves_worker(binary: Path) -> Transcr
         worker_pid <- Sys.getpid()
         initial_lib_paths <- .libPaths()
         initial_library <- initial_lib_paths[[1L]]
-        stopifnot(isFALSE(suppressWarnings(require(
+        stopifnot(isFALSE(require(
           zeallot,
           lib.loc = initial_library,
           quietly = TRUE
-        ))))
+        )))
         """)
     client.send(r=r)
     assert last_tool_text(client) == "[done]", client.transcript[-1]
@@ -337,11 +337,11 @@ def test_failed_late_mixed_preparation_preserves_worker(binary: Path) -> Transcr
           identical(sentinel, 42L),
           identical(Sys.getpid(), worker_pid),
           identical(.libPaths(), initial_lib_paths),
-          isFALSE(suppressWarnings(require(
+          isFALSE(require(
             zeallot,
             lib.loc = initial_library,
             quietly = TRUE
-          ))),
+          )),
           !"not a valid requirement !!!" %in%
             reticulate::py_require()$packages
         )
