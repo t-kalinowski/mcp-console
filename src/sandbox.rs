@@ -250,12 +250,39 @@ impl SandboxedChild {
             }
         }
 
-        // `new_process_group` made the child's PID its process-group ID.
-        if let Err(kill_error) = platform::kill_process_group(self.child.id()) {
-            return Err(format!(
-                "failed to stop `{}`: {kill_error}",
+        // `new_process_group` made the child's PID its process-group ID. If
+        // descendant cleanup fails, still stop and reap the direct child while
+        // preserving that error so a replacement is not started.
+        if let Err(group_error) = platform::kill_process_group(self.child.id()) {
+            let group_error = format!(
+                "failed to stop `{}` process group: {group_error}",
                 platform::SANDBOX_EXEC
-            ));
+            );
+            match self.child.try_wait() {
+                Ok(Some(_)) => return Err(group_error),
+                Ok(None) => {}
+                Err(error) => {
+                    return Err(format!(
+                        "{group_error}; failed to read `{}` status: {error}",
+                        platform::SANDBOX_EXEC
+                    ));
+                }
+            }
+            if let Err(error) = self.child.kill()
+                && error.raw_os_error() != Some(libc::ESRCH)
+            {
+                return Err(format!(
+                    "{group_error}; failed to stop direct `{}` process: {error}",
+                    platform::SANDBOX_EXEC
+                ));
+            }
+            return match self.child.wait() {
+                Ok(_) => Err(group_error),
+                Err(error) => Err(format!(
+                    "{group_error}; failed to reap direct `{}` process: {error}",
+                    platform::SANDBOX_EXEC
+                )),
+            };
         }
 
         self.child.wait().map(|_| ()).map_err(|error| {
