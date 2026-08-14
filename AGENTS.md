@@ -143,6 +143,8 @@ Every custom-worker R candidate includes DBI, DuckDB, and jsonlite so the same l
 They receive the retained library through `R_LIBS`, and a running custom worker must acknowledge live `prepare_r` requests.
 Prepared extensions use DuckDB's native default cache; the server does not resolve or inject that path.
 Custom workers must use the same native cache to load them.
+The hidden worker option replaces the executable, but R still starts from the user-selected installation and layers resolved libraries onto it.
+A custom worker must apply its first resolved R library before loading DuckDB; a DuckDB namespace loaded earlier from inherited libraries is outside the extension-preparation contract.
 Custom workers reject Python requirement preparation and restart requests with Python additions.
 R, Python, and DuckDB resolution may access the network and write normal host caches outside the sandbox; R and Python package resolution may execute package installation or build code, and managed Python environment startup and the Matplotlib font-manager import also run there.
 Requirement strings remain process-argument or JSON data rather than R source, and no submitted cell is evaluated by the resolver.

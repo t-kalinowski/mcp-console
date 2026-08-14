@@ -582,6 +582,8 @@ impl Client {
                 .runtime
                 .spawn(spec, self.0.output.clone(), on_started)?;
             if let Some(environment) = environment.as_mut() {
+                // An external `--worker` must apply its first managed R layer before
+                // loading DuckDB; arbitrary preloaded namespaces are not tracked.
                 environment.duckdb_r_targets = environment.r.iter().cloned().collect();
             }
             *worker = WorkerState::Running(running);

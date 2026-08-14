@@ -113,6 +113,8 @@ Custom workers skip the default R and Python preflights, but can prepare explici
 Each prepared custom-worker R library also includes DBI, DuckDB, and jsonlite for host extension installation.
 They must honor the server-provided `R_LIBS` and acknowledge live `prepare_r` requests.
 Prepared extensions use DuckDB's native default cache; custom workers must use that cache to load them.
+The hidden worker option replaces the executable, but R still starts from the user-selected installation and layers resolved libraries onto it.
+A custom worker must apply its first resolved R library before loading DuckDB; a DuckDB namespace loaded earlier from inherited libraries is outside the extension-preparation contract.
 Managed Python preparation remains unavailable with a custom worker.
 
 The client can explicitly replace the worker, retain the prepared R library, and add Python requirements in the same call:
