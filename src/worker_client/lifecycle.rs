@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -137,10 +138,10 @@ impl Client {
             .interrupt()
     }
 
-    /// Replaces the current worker, optionally adding Python requirements first.
+    /// Replaces the current worker, optionally adding requirements first.
     pub(crate) async fn restart(
         &self,
-        requirements: Vec<String>,
+        requirements: super::Requirements,
         grace: Duration,
     ) -> Result<Response, String> {
         let client = self.clone();
@@ -153,10 +154,13 @@ impl Client {
 
     fn restart_blocking(
         &self,
-        requirements: Vec<String>,
+        requirements: super::Requirements,
         grace: Duration,
     ) -> Result<Response, String> {
-        let restart = if requirements.is_empty() {
+        let restart = if requirements.duckdb.is_empty()
+            && requirements.python.is_empty()
+            && requirements.r.is_empty()
+        {
             self.begin_restart(grace)?
         } else {
             self.resolve_and_begin_restart(requirements, grace)?
@@ -181,37 +185,129 @@ impl Client {
 
     fn resolve_and_begin_restart(
         &self,
-        requirements: Vec<String>,
+        requirements: super::Requirements,
         grace: Duration,
     ) -> Result<RestartContext, String> {
         let generation = self.admit()?;
-        let environment = self.0.environment.as_ref().ok_or_else(|| {
-            "Python requirements are unavailable with a custom worker".to_string()
-        })?;
+        let environment = self
+            .0
+            .environment
+            .as_ref()
+            .ok_or_else(|| "managed requirements are unavailable".to_string())?;
         let mut environment = environment
             .lock()
             .map_err(|_| "worker environment lock poisoned".to_string())?;
         self.ensure_generation(&generation)?;
-        if environment.custom_worker {
+        let super::Requirements { duckdb, python, r } = requirements;
+        if environment.custom_worker && !python.is_empty() {
             return Err("Python requirements are unavailable with a custom worker".to_string());
         }
-        let Some(candidate) = merge_python_requirements(environment.python.as_ref(), requirements)
-        else {
+
+        let duckdb_additions = duckdb.into_iter().collect::<BTreeSet<_>>();
+        let duckdb_changed = !duckdb_additions.is_subset(&environment.duckdb_extensions);
+        let duckdb_extensions = environment
+            .duckdb_extensions
+            .union(&duckdb_additions)
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        let python_candidate = merge_python_requirements(environment.python.as_ref(), python);
+        let mut r_additions = r.into_iter().collect::<BTreeSet<_>>();
+        if environment.custom_worker {
+            r_additions.extend(
+                super::CUSTOM_DUCKDB_R_REQUIREMENTS
+                    .iter()
+                    .map(|requirement| (*requirement).to_string()),
+            );
+        }
+        let current_r = environment
+            .r
+            .as_ref()
+            .map(|managed| managed.requirements().iter().cloned().collect())
+            .unwrap_or_default();
+        let r_changed = !r_additions.is_subset(&current_r);
+        if !duckdb_changed && python_candidate.is_none() && !r_changed {
             drop(environment);
             return self.begin_restart(grace);
-        };
+        }
 
-        let managed = match crate::resolver::resolve_python_host(candidate, |handle| {
-            self.register_resolver_stop_handle(&generation, handle)
-        }) {
-            Ok(managed) => managed,
-            Err(error) => {
-                self.clear_resolver_stop_handle(&generation)?;
-                return Err(error);
+        let mut managed_r = environment.r.clone();
+        if r_changed {
+            let requirements = current_r.union(&r_additions).cloned().collect();
+            let result = crate::resolver::resolve_r(requirements, |handle| {
+                self.register_resolver_stop_handle(&generation, handle)
+            });
+            self.clear_resolver_stop_handle(&generation)?;
+            managed_r = Some(result?);
+        }
+
+        if !duckdb_extensions.is_empty() && (duckdb_changed || r_changed) {
+            let target = managed_r.as_ref().ok_or_else(|| {
+                "DuckDB extension preparation requires a managed R environment".to_string()
+            })?;
+            let extensions = duckdb_extensions.iter().cloned().collect::<Vec<_>>();
+            self.resolve_duckdb_extensions(&generation, std::slice::from_ref(target), &extensions)?;
+        }
+
+        let mut managed_python = environment.python.clone();
+        if let Some(candidate) = python_candidate {
+            let result = crate::resolver::resolve_python_host(candidate, |handle| {
+                self.register_resolver_stop_handle(&generation, handle)
+            });
+            self.clear_resolver_stop_handle(&generation)?;
+            managed_python = Some(result?);
+        }
+
+        self.commit_environment_and_begin_restart(
+            &generation,
+            grace,
+            &mut environment,
+            managed_python,
+            managed_r,
+            duckdb_extensions,
+        )
+    }
+
+    fn commit_environment_and_begin_restart(
+        &self,
+        expected: &WorkerGeneration,
+        grace: Duration,
+        environment: &mut super::environment::Environment,
+        managed_python: Option<crate::resolver::ManagedPython>,
+        managed_r: Option<crate::resolver::ManagedR>,
+        duckdb_extensions: BTreeSet<String>,
+    ) -> Result<RestartContext, String> {
+        let mut evaluation = self.evaluation()?;
+        let mut lifecycle = self
+            .0
+            .lifecycle
+            .lock()
+            .map_err(|_| "worker lifecycle lock poisoned".to_string())?;
+        match lifecycle.state {
+            LifecycleState::Ready if lifecycle.generation.is(expected) => {}
+            LifecycleState::Ready => {
+                return Err("session restarted before the operation began".to_string());
             }
-        };
-
-        self.commit_environment_and_begin_restart(&generation, grace, &mut environment, managed)
+            LifecycleState::Restarting { .. } => {
+                return Err("worker is restarting".to_string());
+            }
+            LifecycleState::ShuttingDown { .. } => {
+                return Err("worker is shutting down".to_string());
+            }
+        }
+        lifecycle.processes.resolver = None;
+        let evaluation = evaluation
+            .take()
+            .map(|active| active.evaluation.reserve_for_restart())
+            .transpose()?;
+        environment.python = managed_python;
+        environment.r = managed_r;
+        environment.duckdb_extensions = duckdb_extensions;
+        let (processes, deadline) = lifecycle.start_restart(grace);
+        Ok(RestartContext {
+            processes,
+            deadline,
+            evaluation,
+        })
     }
 
     /// Crosses the physical worker boundary before starting its replacement.
@@ -378,45 +474,6 @@ impl Client {
             .take()
             .map(|active| active.evaluation.reserve_for_restart())
             .transpose()?;
-        let (processes, deadline) = lifecycle.start_restart(grace);
-        Ok(RestartContext {
-            processes,
-            deadline,
-            evaluation,
-        })
-    }
-
-    fn commit_environment_and_begin_restart(
-        &self,
-        expected: &WorkerGeneration,
-        grace: Duration,
-        environment: &mut super::environment::Environment,
-        managed: crate::resolver::ManagedPython,
-    ) -> Result<RestartContext, String> {
-        let mut evaluation = self.evaluation()?;
-        let mut lifecycle = self
-            .0
-            .lifecycle
-            .lock()
-            .map_err(|_| "worker lifecycle lock poisoned".to_string())?;
-        match lifecycle.state {
-            LifecycleState::Ready if lifecycle.generation.is(expected) => {}
-            LifecycleState::Ready => {
-                return Err("session restarted before the operation began".to_string());
-            }
-            LifecycleState::Restarting { .. } => {
-                return Err("worker is restarting".to_string());
-            }
-            LifecycleState::ShuttingDown { .. } => {
-                return Err("worker is shutting down".to_string());
-            }
-        }
-        lifecycle.processes.resolver = None;
-        let evaluation = evaluation
-            .take()
-            .map(|active| active.evaluation.reserve_for_restart())
-            .transpose()?;
-        environment.python = Some(managed);
         let (processes, deadline) = lifecycle.start_restart(grace);
         Ok(RestartContext {
             processes,

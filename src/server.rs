@@ -83,18 +83,19 @@ enum SessionAction {
 #[schemars(inline)]
 #[serde(deny_unknown_fields)]
 struct Requirements {
-    /// Additive DuckDB extension names for `prepare`, for example `json`, `spatial`, or `fts`.
-    /// Names must start with a lowercase ASCII letter and contain only lowercase ASCII letters,
-    /// digits, and underscores. The host resolver uses DuckDB's own `INSTALL` outside the sandbox,
-    /// with DuckDB's default extension repository and native cache. Preparation does not load
-    /// extension code; `LOAD` and automatic loading happen later inside the sandbox.
+    /// Additive DuckDB extension names for `prepare` or `restart`, for example `fts`, `spatial`, or
+    /// `excel`. JSON and ICU are already prepared for built-in workers. Names must start with a
+    /// lowercase ASCII letter and contain only lowercase ASCII letters, digits, and underscores.
+    /// The host resolver uses DuckDB's own `INSTALL` outside the sandbox, with DuckDB's default
+    /// extension repository and native cache. Preparation does not load extension code; `LOAD` and
+    /// automatic loading happen later inside the sandbox.
     #[serde(default)]
     #[schemars(length(max = 64), inner(length(min = 1, max = 64)))]
     duckdb: Vec<String>,
-    /// Additive, single-line IR package references for `prepare`, for example `data.table`, `sf`, or
-    /// `yaml12`. An idle worker that implements R preparation can add R requirements without losing
-    /// live state. Local package sources are rejected because resolution runs with server
-    /// permissions.
+    /// Additive, single-line IR package references for `prepare` or `restart`, for example
+    /// `data.table`, `sf`, or `yaml12`. An idle worker that implements R preparation can add R
+    /// requirements without losing live state. Local package sources are rejected because resolution
+    /// runs with server permissions.
     #[serde(default)]
     #[schemars(length(max = 64), inner(length(min = 1)))]
     r: Vec<String>,
@@ -112,13 +113,13 @@ struct SessionArguments {
     /// `prepare` adds R or Python requirements or DuckDB extensions before a worker starts.
     /// After startup, it can add R requirements or DuckDB extensions while the worker is idle;
     /// compatible Python additions require a server-managed worker. `interrupt` requests SIGINT for
-    /// an active host resolver, or otherwise sends it to the live worker. `restart` replaces the
-    /// worker, optionally adds Python requirements, and starts it if needed.
+    /// an active host resolver, or otherwise sends it to the live worker. `restart` can add any of
+    /// the same requirements before it replaces the worker and starts it if needed.
     action: SessionAction,
     /// Additive packages or DuckDB extensions to make available. `prepare` requires at least one R,
-    /// Python, or DuckDB entry. `interrupt` accepts no requirements. `restart` accepts Python entries
-    /// only; omit `requirements` to restart unchanged. Requirements persist across restart but do
-    /// not import, attach, or load packages or extensions. After a recoverable live preparation
+    /// Python, or DuckDB entry. `interrupt` accepts no requirements. `restart` accepts the same
+    /// additions; omit `requirements` to restart unchanged. Requirements persist across restart but
+    /// do not import, attach, or load packages or extensions. After a recoverable live preparation
     /// failure, evaluation remains available so state can be saved, but new requirement additions
     /// return `[restart required]` until restart. The same marker follows a failed automatic
     /// replacement. Resolution runs outside the worker sandbox and may download packages or
@@ -201,7 +202,7 @@ impl ConsoleServer {
     }
 
     #[tool(
-        description = "Make additional R or Python packages and DuckDB extensions available, request SIGINT for an active host resolver or send it to a live worker, or restart the persistent console session. Use `prepare` for packages not included in the built-in environments or for DuckDB extensions. Packages and extensions are not imported, attached, or loaded automatically by preparation. An idle worker can add R requirements or DuckDB extensions without losing live state; compatible Python additions require a server-managed worker. After a recoverable live preparation failure, evaluation remains available so state can be saved, but new requirement additions require restart. Requirements are additive, idempotent, and persist across restart. `interrupt` returns after sending the request or signal; user code may catch or delay it. `restart` may optionally add Python requirements, then replaces the worker and loses all in-memory R, Python, and SQL state, debugger state, and unread stdin. Requirement resolution runs outside the execution sandbox and may download packages or extensions or execute package installation or build code on the host; use only trusted requirements."
+        description = "Make additional R or Python packages and DuckDB extensions available, request SIGINT for an active host resolver or send it to a live worker, or restart the persistent console session. The built-in worker prepares DuckDB's JSON and ICU extensions by default. Use `prepare` for packages not included in the built-in environments or for other DuckDB extensions. Packages and extensions are not imported, attached, or loaded automatically by preparation. An idle worker can add R requirements or DuckDB extensions without losing live state; compatible Python additions require a server-managed worker. After a recoverable live preparation failure, evaluation remains available so state can be saved, but new requirement additions require restart. Requirements are additive, idempotent, and persist across restart. `interrupt` returns after sending the request or signal; user code may catch or delay it. `restart` may optionally add R, Python, and DuckDB requirements, then replaces the worker and loses all in-memory R, Python, and SQL state, debugger state, and unread stdin. Requirement resolution runs outside the execution sandbox and may download packages or extensions or execute package installation or build code on the host; use only trusted requirements."
     )]
     async fn session(
         &self,
@@ -212,20 +213,14 @@ impl ConsoleServer {
             requirements,
         }): Parameters<SessionArguments>,
     ) -> Result<CallToolResult, String> {
+        if let Some(requirements) = requirements.as_ref() {
+            validate_session_requirements(requirements)?;
+        }
         let text = match action {
             SessionAction::Prepare => {
                 let Some(Requirements { duckdb, r, python }) = requirements else {
                     return Err("`requirements` is required with `prepare`".to_string());
                 };
-                if duckdb.is_empty() && r.is_empty() && python.is_empty() {
-                    return Err(
-                        "at least one of `requirements.r`, `requirements.python`, or `requirements.duckdb` is required"
-                            .to_string(),
-                    );
-                }
-                validate_duckdb_extensions(&duckdb)?;
-                validate_r_requirements(&r)?;
-                validate_python_requirements(&python)?;
                 match self
                     .worker
                     .prepare(crate::worker_client::Requirements { duckdb, r, python })
@@ -251,30 +246,18 @@ impl ConsoleServer {
                 "[interrupt sent]"
             }
             SessionAction::Restart => {
-                let python = match requirements {
-                    Some(Requirements { duckdb, r, python }) => {
-                        if !r.is_empty() {
-                            return Err(
-                                "`requirements.r` is not supported with `restart`".to_string()
-                            );
-                        }
-                        if !duckdb.is_empty() {
-                            return Err(
-                                "`requirements.duckdb` is not supported with `restart`".to_string()
-                            );
-                        }
-                        if python.is_empty() {
-                            return Err(
-                                "`requirements.python` must contain at least one requirement"
-                                    .to_string(),
-                            );
-                        }
-                        validate_python_requirements(&python)?;
-                        python
-                    }
-                    None => Vec::new(),
-                };
-                let response = self.worker.restart(python, WORKER_SHUTDOWN_GRACE).await?;
+                let Requirements { duckdb, r, python } = requirements.unwrap_or(Requirements {
+                    duckdb: Vec::new(),
+                    r: Vec::new(),
+                    python: Vec::new(),
+                });
+                let response = self
+                    .worker
+                    .restart(
+                        crate::worker_client::Requirements { duckdb, r, python },
+                        WORKER_SHUTDOWN_GRACE,
+                    )
+                    .await?;
                 return Ok(response_to_tool_result(
                     response,
                     &call,
@@ -328,6 +311,19 @@ fn validate_r_requirements(r: &[String]) -> Result<(), String> {
 
 fn validate_python_requirements(python: &[String]) -> Result<(), String> {
     validate_requirements(python, "python", "Python")
+}
+
+fn validate_session_requirements(requirements: &Requirements) -> Result<(), String> {
+    if requirements.duckdb.is_empty() && requirements.r.is_empty() && requirements.python.is_empty()
+    {
+        return Err(
+            "at least one of `requirements.r`, `requirements.python`, or `requirements.duckdb` is required"
+                .to_string(),
+        );
+    }
+    validate_duckdb_extensions(&requirements.duckdb)?;
+    validate_r_requirements(&requirements.r)?;
+    validate_python_requirements(&requirements.python)
 }
 
 fn validate_duckdb_extensions(extensions: &[String]) -> Result<(), String> {

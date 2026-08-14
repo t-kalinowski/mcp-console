@@ -661,6 +661,43 @@ def test_custom_worker_prepares_r_and_duckdb_requirements(binary: Path) -> Trans
         return client._finish()
 
 
+def test_custom_worker_restart_prepares_r_and_duckdb_requirements(
+    binary: Path,
+) -> Transcript:
+    zod = Path(__file__).resolve().parents[1] / "fixtures" / "zod"
+    environment, _ = r_test_environment()
+    environment["RETICULATE_PYTHON"] = ""
+    with tempfile.TemporaryDirectory() as temporary:
+        isolated_library = Path(temporary) / "isolated-library"
+        isolated_library.mkdir()
+        environment["R_LIBS"] = str(isolated_library)
+        environment["R_LIBS_SITE"] = str(isolated_library)
+        environment["R_LIBS_USER"] = str(isolated_library)
+        home = Path(temporary) / "home"
+        home.mkdir()
+        use_temporary_home(environment, home)
+        client = McpClient(
+            binary,
+            ("serve", "--worker", str(zod)),
+            environment,
+        )
+        client._initialize_and_list_tools()
+
+        client.session(
+            action="restart",
+            requirements={"r": ["praise"], "duckdb": ["json"]},
+        )
+        assert last_tool_text(client) == "[starting new worker]\n[idle]"
+        installed_json = list(
+            (home / ".duckdb" / "extensions").glob("*/*/json.duckdb_extension")
+        )
+        assert len(installed_json) == 1, installed_json
+
+        client.send(r="report managed requirements")
+        assert last_tool_text(client) == "zod requirements: r=true; duckdb=true\n"
+        return client._finish()
+
+
 def test_captures_worker_stdout(binary: Path) -> Transcript:
     zod = Path(__file__).resolve().parents[1] / "fixtures" / "zod"
     client = McpClient(

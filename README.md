@@ -54,8 +54,9 @@ Unread bytes may be completed by later stdin or satisfy a later worker read or e
 On macOS, the built-in server resolves a default R library containing tidyverse, `github::rstudio/reticulate`, DBI, DuckDB, arrow, and nanoarrow before it accepts MCP input.
 The GitHub reticulate requirement supplies the fork-aware output handling required by the worker; the host R installation must also provide reticulate to bootstrap managed Python before the worker library is applied.
 When Python is managed, its default environment contains NumPy and pandas.
-Packages are available but are not attached or imported automatically.
-The MCP client can prepare additive R and Python requirements and DuckDB extensions for the implicit session:
+The built-in server also prepares DuckDB's JSON and ICU extensions in DuckDB's native cache.
+Packages and extensions are available but are not attached, imported, or loaded automatically.
+The MCP client can prepare additive R and Python requirements and other DuckDB extensions for the implicit session:
 
 ```json
 {
@@ -63,7 +64,7 @@ The MCP client can prepare additive R and Python requirements and DuckDB extensi
   "requirements": {
     "r": ["data.table"],
     "python": ["polars>=1"],
-    "duckdb": ["json"]
+    "duckdb": ["fts"]
   }
 }
 ```
@@ -79,13 +80,14 @@ It does not load packages or extension code into the worker, or start the worker
 Before each R resolution, the server requires `ir --version` from `PATH` to report 0.4.0 or later.
 The server runs IR with the same Rscript selection as the worker and prepends the returned library to the worker's inherited `R_LIBS`, leaving its other R libraries available.
 
-DuckDB extension requirements are strict extension names such as `json`, `spatial`, or `fts`.
+DuckDB extension requirements are strict extension names such as `fts`, `spatial`, or `excel`.
 Each name must start with a lowercase ASCII letter and otherwise contain only lowercase ASCII letters, digits, and underscores; repository names, paths, URLs, and version expressions are not accepted.
 The host resolver lets DuckDB select its default repository and native extension cache.
 That cache persists across workers and is scoped by DuckDB version and platform.
 Whenever R preparation selects a new library, the host resolver repeats the retained extension installs with that library's DuckDB version.
 Already installed extensions are a no-op for DuckDB.
 While a worker remains live, new extensions are also installed for each resolved R library that could have supplied its loaded DuckDB namespace; a replacement resets that list to the retained library.
+JSON and ICU are retained defaults for the built-in worker; FTS and other extensions remain on demand.
 
 After a worker starts, `prepare` can apply new R requirements while the worker is idle when that worker implements the `prepare_r` protocol.
 The server resolves the complete R requirement set outside the sandbox, then prepends the new library to the live `.libPaths()` and removes the previous managed IR entry.
@@ -109,13 +111,13 @@ Preparation during an evaluation is an error.
 Preparation that overlaps worker startup returns `[requirements not prepared: worker is starting]` without resolving the additions or changing the retained requirements, R library, Python manifest, or DuckDB extension set.
 A failed automatic replacement leaves the worker stopped; a `prepare` call with new additions then returns `[restart required]` and does not retain them or configure the next replacement attempt.
 Caller-selected Python environments cannot accept managed Python additions, but their built-in workers can still apply R requirements and prepare DuckDB extensions.
-Custom workers skip the default R and Python preflights, but can prepare explicit R requirements and DuckDB extensions.
+Custom workers skip the default R, Python, and DuckDB extension preflights, but can prepare explicit R requirements and DuckDB extensions.
 Each prepared custom-worker R library also includes DBI, DuckDB, and jsonlite for host extension installation.
 They must honor the server-provided `R_LIBS` and acknowledge live `prepare_r` requests.
 Prepared extensions use DuckDB's native default cache; custom workers must use that cache to load them.
 The hidden worker option replaces the executable, but R still starts from the user-selected installation and layers resolved libraries onto it.
 A custom worker must apply its first resolved R library before loading DuckDB; a DuckDB namespace loaded earlier from inherited libraries is outside the extension-preparation contract.
-Managed Python preparation remains unavailable with a custom worker.
+Managed Python additions remain unavailable with a custom worker; R and DuckDB additions are supported by both `prepare` and `restart`.
 
 An active host resolver or live worker can be sent an interrupt:
 
@@ -131,19 +133,23 @@ Code can catch or delay the signal, so use `restart` when the worker does not re
 An empty managed `readline()`, Python `input()`, or debugger prompt does not provide a periodic worker boundary and may continue waiting.
 `interrupt` accepts no `requirements`.
 
-The client can explicitly replace the worker, retain the prepared R library, and add Python requirements in the same call:
+The client can explicitly replace the worker and add R, Python, and DuckDB requirements in the same call:
 
 ```json
 {
   "action": "restart",
-  "requirements": { "python": ["py-yaml12"] }
+  "requirements": {
+    "r": ["praise"],
+    "python": ["py-yaml12"],
+    "duckdb": ["fts"]
+  }
 }
 ```
 
-The client can omit `requirements` to retain the current Python checkpoint unchanged.
-`restart` does not accept new R or DuckDB requirements; it reuses the R library and DuckDB extension set retained by earlier successful preparation.
-When requirements are supplied, the server resolves the complete merged candidate before stopping the current worker.
-A resolution failure leaves the current worker, its in-memory state, and its environment unchanged.
+The client can omit `requirements` to retain the current R, Python, and DuckDB checkpoints unchanged.
+When requirements are supplied, the server merges them into the complete retained sets and resolves every changed candidate before stopping the current worker.
+It commits the resulting candidates together only after every required resolution succeeds.
+A resolution failure leaves the current worker, its in-memory state, and its retained environment unchanged.
 Restart returns `[idle]` after the replacement reports ready.
 It loses all in-memory R, Python, SQL, debugger, and unread-stdin state.
 The implicit session exists for the server lifetime, so restart starts its first worker if none exists yet.
@@ -154,7 +160,7 @@ Without a waiting `send`, the restart response includes retained output from the
 If a `send` is waiting on the interrupted cell, that call receives the old worker's text and images through retirement, followed by `[stopped by session restart request before evaluation finished]` and, when restart retires a ready worker, `[worker stopped: in-memory state lost]`.
 The server writes that `send` reply before starting the replacement or returning the restart response.
 The restart response contains `[active evaluation stopped by session restart request]`, its own stopped notice when it retires a ready worker, `[starting new worker]`, replacement startup output, and `[idle]` without repeating the old worker's output.
-On macOS, the default R preflight and, when required, the managed-Python preflight happen during `serve` startup; a successful `prepare` extends those initial selections before the first nonempty stdin submission or evaluation lazily starts the sandboxed embedded R worker.
+On macOS, the default R and DuckDB extension preflights and, when required, the managed-Python preflight happen during `serve` startup; a successful `prepare` extends those initial selections before the first nonempty stdin submission or evaluation lazily starts the sandboxed embedded R worker.
 Later calls reuse the same global R state, reticulate Python interpreter, and in-memory DuckDB catalog.
 An infrastructure or protocol failure stops that worker and discards its in-memory R, Python, and SQL state.
 The failed `send` includes retained worker output, the specific bracketed error, and `[worker stopped: in-memory state lost]`, then emits `[starting new worker]` and makes one replacement attempt within the same deadline.
@@ -317,11 +323,11 @@ Default and explicit R resolution runs `ir run` outside the sandbox with the req
 IR may access the network, write its normal host caches, and execute package installation code.
 If IR is absent, too old, or cannot resolve the default library, built-in `serve` exits before accepting MCP requests.
 A later explicit R resolution failure is a tool error and leaves the prior configuration unchanged.
-Explicit DuckDB extension preparation runs the managed DuckDB package outside the sandbox and calls its own installer once for each validated extension name.
+Default and explicit DuckDB extension preparation runs the managed DuckDB package outside the sandbox and calls its own installer once for each extension name.
 The resolver may access the network and write DuckDB's native version- and platform-specific extension cache, but it does not load extension code.
 The extension resolver shares the cancellable process-group lifecycle used by the R and Python resolvers; no DuckDB-specific message is added to the worker sideband protocol, though an accompanying R-library change still uses `prepare_r`.
 When `RETICULATE_PYTHON` is unset or is `managed`, `mcp-console serve` runs reticulate's uv environment resolver outside the worker sandbox with its NumPy and pandas baseline, where it can use the normal host caches and network access.
-Other configured values, including an empty value, are preserved when no Python requirements are prepared and skip the Python startup preflight; they do not skip the default R preflight.
+Other configured values, including an empty value, are preserved when no Python requirements are prepared and skip the Python startup preflight; they do not skip the default R or DuckDB extension preflight.
 An explicit `session` preparation selects its resolved managed environment even when `RETICULATE_PYTHON` was configured, so a successful call guarantees that its requirements are present.
 The server retains the selected interpreter and normalized manifest and applies them to each sandboxed worker; the worker forces `UV_OFFLINE=1` and otherwise uses the existing sandbox policy unchanged.
 For a server-managed worker, MCP Console seeds reticulate's requirement manifest and intercepts its internal uv environment and Python-version resolution.
@@ -351,7 +357,7 @@ The intended default client registration name is `console`:
 codex mcp add console -- mcp-console serve
 ```
 
-Under Codex's current naming convention, the implemented tools are `mcp__console.send` and `mcp__console.session`; `session` supports R and Python requirement preparation, DuckDB extension preparation, live late additions, best-effort resolver or worker interruption, and explicit restart with optional additive Python requirements for the implicit session.
+Under Codex's current naming convention, the implemented tools are `mcp__console.send` and `mcp__console.session`; `session` supports R and Python requirement preparation, DuckDB extension preparation, live late additions, best-effort resolver or worker interruption, and explicit restart with optional additive R, Python, and DuckDB requirements for the implicit session.
 
 On macOS, `sandbox` launches the command under `/usr/bin/sandbox-exec`.
 The command can read the host filesystem, can write regular files only in a dedicated temporary directory, and cannot access the network.

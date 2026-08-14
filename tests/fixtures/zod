@@ -313,7 +313,14 @@ def main() -> None:
             continue
 
         if source == "report managed requirements":
-            r_prepared = str(prepared_r_library is not None).lower()
+            r_prepared = str(
+                prepared_r_library is not None
+                or any(
+                    Path(library, "praise").is_dir()
+                    for library in os.environ.get("R_LIBS", "").split(os.pathsep)
+                    if library
+                )
+            ).lower()
             duckdb_prepared = str(
                 any(
                     Path(os.environ["HOME"], ".duckdb", "extensions").glob(

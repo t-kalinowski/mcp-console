@@ -18,6 +18,146 @@ from _support import (
 PLATFORMS = {"darwin"}
 
 
+def test_uses_default_duckdb_extensions(binary: Path) -> Transcript:
+    environment, _ = r_test_environment()
+    environment["RETICULATE_PYTHON"] = ""
+    with tempfile.TemporaryDirectory() as temporary:
+        workspace = Path(temporary)
+        home = workspace / "home"
+        home.mkdir()
+        use_temporary_home(environment, home)
+        client = McpClient(
+            binary,
+            ("serve",),
+            environment,
+            current_directory=workspace,
+        )
+        client._initialize_and_list_tools()
+
+        for extension in ("icu", "json"):
+            installed = list(
+                (home / ".duckdb" / "extensions").glob(
+                    f"*/*/{extension}.duckdb_extension"
+                )
+            )
+            assert len(installed) == 1, installed
+        assert not list(
+            (home / ".duckdb" / "extensions").glob("*/*/fts.duckdb_extension")
+        )
+
+        sql = code(r"""
+            SELECT
+              CASE
+                WHEN json_extract_string('{"answer": 42}', '$.answer') = '42'
+                THEN 1234567
+                ELSE 0
+              END AS json_ok,
+              CASE
+                WHEN timezone('America/New_York', TIMESTAMP '2020-01-01') IS NOT NULL
+                THEN 1234567
+                ELSE 0
+              END AS icu_ok1
+            """)
+        client.send(sql=sql)
+        preview = last_tool_text(client)
+        assert preview.splitlines()[-1].split() == ["1", "1234567", "1234567"]
+
+        sql = code(r"""
+            SELECT CASE WHEN count(*) = 2 THEN 1234567 ELSE 0 END AS loaded1
+            FROM duckdb_extensions()
+            WHERE extension_name IN ('icu', 'json') AND loaded
+            """)
+        client.send(sql=sql)
+        preview = last_tool_text(client)
+        assert preview.splitlines()[-1].split() == ["1", "1234567"]
+        return client._finish()
+
+
+def test_restart_adds_r_and_duckdb_requirements(binary: Path) -> Transcript:
+    environment, _ = r_test_environment()
+    environment["RETICULATE_PYTHON"] = ""
+    with tempfile.TemporaryDirectory() as temporary:
+        workspace = Path(temporary)
+        home = workspace / "home"
+        home.mkdir()
+        ambient_library = workspace / "ambient-library"
+        ambient_library.mkdir()
+        environment["R_LIBS"] = str(ambient_library)
+        environment["R_LIBS_SITE"] = str(ambient_library)
+        environment["R_LIBS_USER"] = str(ambient_library)
+        use_temporary_home(environment, home)
+        client = McpClient(
+            binary,
+            ("serve",),
+            environment,
+            current_directory=workspace,
+        )
+        client._initialize_and_list_tools()
+        client.send(r="restart_marker <- 42L")
+        assert last_tool_text(client) == "[done]"
+
+        client.session(
+            action="restart",
+            requirements={
+                "r": ["praise"],
+                "duckdb": ["not_a_real_duckdb_extension"],
+            },
+        )
+        result = client.transcript[-1]["result"]
+        assert result["isError"] is True, result
+        failure = result["content"][0]["text"]
+        assert (
+            'Failed to download extension "not_a_real_duckdb_extension"' in failure
+        ), failure
+        result["content"][0]["text"] = duckdb_native_failure(failure)
+
+        client.send(
+            r=(
+                "identical(restart_marker, 42L) && "
+                "!requireNamespace('praise', quietly = TRUE)"
+            )
+        )
+        assert last_tool_text(client) == "[1] TRUE\n"
+
+        client.session(
+            action="restart",
+            requirements={"r": ["praise"], "duckdb": ["fts"]},
+        )
+        assert last_tool_text(client) == (
+            "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
+        )
+        installed_fts = list(
+            (home / ".duckdb" / "extensions").glob("*/*/fts.duckdb_extension")
+        )
+        assert len(installed_fts) == 1, installed_fts
+
+        client.send(
+            r=(
+                "!exists('restart_marker') && "
+                "requireNamespace('praise', quietly = TRUE)"
+            )
+        )
+        assert last_tool_text(client) == "[1] TRUE\n"
+
+        sql = code(r"""
+            CREATE TABLE restart_documents AS
+            SELECT 1 AS id, 'duckdb restart requirements' AS body
+            """)
+        client.send(sql=sql)
+        assert last_tool_text(client) == "[done]"
+        client.send(sql="PRAGMA create_fts_index('restart_documents', 'id', 'body')")
+        assert last_tool_text(client) == "[done]"
+        sql = code(r"""
+            SELECT count(*) AS matches
+            FROM restart_documents
+            WHERE fts_main_restart_documents.match_bm25(id, 'duckdb') IS NOT NULL
+            """)
+        client.send(sql=sql)
+        preview = last_tool_text(client)
+        assert preview.splitlines()[-1].split() == ["1", "1"]
+        return client._finish()
+
+
 def test_prepares_and_loads_duckdb_extensions(binary: Path) -> Transcript:
     environment, _ = r_test_environment()
     environment["RETICULATE_PYTHON"] = ""
@@ -93,12 +233,7 @@ def test_prepares_and_loads_duckdb_extensions(binary: Path) -> Transcript:
             'Failed to download extension "not_a_real_duckdb_extension"' in failure
         ), failure
         assert "unknown core DuckDB extension" not in failure, failure
-        native_failure = next(
-            line.strip().removeprefix("! ")
-            for line in failure.splitlines()
-            if "Failed to download extension" in line
-        )
-        result["content"][0]["text"] = native_failure.partition(' at URL "')[0]
+        result["content"][0]["text"] = duckdb_native_failure(failure)
 
         sql = code(r"""
             PRAGMA create_fts_index('retained_state', 'answer', 'body')
@@ -703,6 +838,15 @@ def last_tool_text(client: McpClient) -> str:
     result = client.transcript[-1]["result"]
     assert result.get("isError") is not True, result
     return result["content"][0]["text"]
+
+
+def duckdb_native_failure(failure: str) -> str:
+    native_failure = next(
+        line.strip().removeprefix("! ")
+        for line in failure.splitlines()
+        if "Failed to download extension" in line
+    )
+    return native_failure.partition(' at URL "')[0]
 
 
 if __name__ == "__main__":
