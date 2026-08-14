@@ -115,6 +115,46 @@ def test_stops_cell_after_boundary_callback_failure(binary: Path) -> Transcript:
     return client._finish()
 
 
+def test_skips_final_boundary_callbacks_after_cell_failure(binary: Path) -> Transcript:
+    client = McpClient(binary, ("serve",))
+    client._initialize_and_list_tools()
+    client.session(action="prepare", requirements={"r": ["later"]})
+
+    # Record a plot publication failure during the cell, then leave a callback
+    # ready for the final handler turn. The callback writes directly to stdout
+    # so its execution remains observable after sideband publication fails.
+    # fmt: r
+    r = code(r"""
+        later::later(
+          function() system("printf final-boundary-callback-ran"),
+          delay = 0
+        )
+        plot(1)
+        old_umask <- Sys.umask("0777")
+        on.exit(Sys.umask(old_umask), add = TRUE)
+        grDevices::dev.off()
+        Sys.umask(old_umask)
+        on.exit(NULL)
+        "cell completed"
+        """)
+    client.send(r=r)
+    result = client.transcript[-1]["result"]
+    assert result["isError"] is True, result
+    output = result["content"][0]["text"]
+    assert "final-boundary-callback-ran" not in output, output
+    assert "failed to read managed plot" in output, output
+    assert output.endswith(
+        "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
+    ), output
+    result["content"][0]["text"] = (
+        "[failed to read managed plot `<worker plot>`: permission denied]\n"
+        "[worker stopped: in-memory state lost]\n"
+        "[starting new worker]\n"
+        "[idle]"
+    )
+    return client._finish()
+
+
 def test_uses_200_column_default(binary: Path) -> Transcript:
     client = McpClient(binary, ("serve",))
     client._initialize_and_list_tools()
