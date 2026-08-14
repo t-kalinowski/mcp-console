@@ -304,19 +304,16 @@ def test_failed_late_mixed_preparation_preserves_worker(binary: Path) -> Transcr
     r = code(r"""
         sentinel <- 42L
         worker_pid <- Sys.getpid()
-        initial_library <- .libPaths()[[1L]]
-        .libPaths(initial_library, include.site = FALSE)
-        stopifnot(isFALSE(require(zeallot)))
+        initial_lib_paths <- .libPaths()
+        initial_library <- initial_lib_paths[[1L]]
+        stopifnot(isFALSE(suppressWarnings(require(
+          zeallot,
+          lib.loc = initial_library,
+          quietly = TRUE
+        ))))
         """)
     client.send(r=r)
-    failed_load = (
-        "Loading required package: zeallot\n"
-        "Warning message:\n"
-        "In library(package, lib.loc = lib.loc, character.only = TRUE, "
-        "logical.return = TRUE,  :\n"
-        "  there is no package called ‘zeallot’\n"
-    )
-    assert last_tool_text(client) == failed_load, client.transcript[-1]
+    assert last_tool_text(client) == "[done]", client.transcript[-1]
 
     invalid_python = "not a valid requirement !!!"
     client.session(
@@ -337,15 +334,19 @@ def test_failed_late_mixed_preparation_preserves_worker(binary: Path) -> Transcr
         stopifnot(
           identical(sentinel, 42L),
           identical(Sys.getpid(), worker_pid),
-          identical(.libPaths()[[1L]], initial_library),
-          isFALSE(require(zeallot)),
+          identical(.libPaths(), initial_lib_paths),
+          isFALSE(suppressWarnings(require(
+            zeallot,
+            lib.loc = initial_library,
+            quietly = TRUE
+          ))),
           !"not a valid requirement !!!" %in%
             reticulate::py_require()$packages
         )
         42L
         """)
     client.send(r=r)
-    assert last_tool_text(client) == f"{failed_load}[1] 42\n"
+    assert last_tool_text(client) == "[1] 42\n"
     return client._finish()
 
 
