@@ -1,5 +1,6 @@
 #!/usr/bin/env -S uv run --script
 
+import time
 from pathlib import Path
 
 from _support import (
@@ -43,6 +44,114 @@ def test_evaluates_a_complete_cell(binary: Path) -> Transcript:
     client.send(r='stop("boom")')
     client.send(r="answer")
     client.send(r="silent <- 1")
+    return client._finish()
+
+
+def test_services_later_callbacks_at_cell_boundaries(binary: Path) -> Transcript:
+    client = McpClient(binary, ("serve",))
+    client._initialize_and_list_tools()
+    client.session(action="prepare", requirements={"r": ["later"]})
+
+    # fmt: r
+    r = code(r"""
+        later::later(function() cat("cell end callback\n"), delay = 0)
+        """)
+    client.send(r=r)
+    assert last_tool_text(client) == "cell end callback\n"
+
+    # Leave a callback pending until the next cell begins.
+    # fmt: r
+    r = code(r"""
+        later::later(function() cat("cell start callback\n"), delay = 1)
+        """)
+    client.send(r=r)
+    assert last_tool_text(client) == "[done]"
+    time.sleep(1.1)
+    client.send(r='cat("cell body\\n")')
+    assert last_tool_text(client) == "cell start callback\ncell body\n"
+    return client._finish()
+
+
+def test_stops_cell_after_boundary_callback_failure(binary: Path) -> Transcript:
+    client = McpClient(binary, ("serve",))
+    client._initialize_and_list_tools()
+    client.session(action="prepare", requirements={"r": ["later"]})
+
+    # Create the finalized page without read permissions. The PNG device can
+    # write through its open descriptor, but publication cannot reopen it.
+    # fmt: r
+    r = code(r"""
+        later::later(
+          function() {
+            plot(1)
+            old_umask <- Sys.umask("0777")
+            on.exit(Sys.umask(old_umask), add = TRUE)
+            grDevices::dev.off()
+            Sys.umask(old_umask)
+            on.exit(NULL)
+          },
+          delay = 1
+        )
+        """)
+    client.send(r=r)
+    assert last_tool_text(client) == "[done]"
+    time.sleep(1.1)
+
+    client.send(r='system("printf boundary-cell-ran")')
+    result = client.transcript[-1]["result"]
+    assert result["isError"] is True, result
+    output = result["content"][0]["text"]
+    assert "boundary-cell-ran" not in output, output
+    assert "failed to read managed plot" in output, output
+    assert output.endswith(
+        "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
+    ), output
+    result["content"][0]["text"] = (
+        "[failed to read managed plot `<worker plot>`: permission denied]\n"
+        "[worker stopped: in-memory state lost]\n"
+        "[starting new worker]\n"
+        "[idle]"
+    )
+    return client._finish()
+
+
+def test_skips_final_boundary_callbacks_after_cell_failure(binary: Path) -> Transcript:
+    client = McpClient(binary, ("serve",))
+    client._initialize_and_list_tools()
+    client.session(action="prepare", requirements={"r": ["later"]})
+
+    # Record a plot publication failure during the cell, then leave a callback
+    # ready for the final handler turn. The callback writes directly to stdout
+    # so its execution remains observable after sideband publication fails.
+    # fmt: r
+    r = code(r"""
+        later::later(
+          function() system("printf final-boundary-callback-ran"),
+          delay = 0
+        )
+        plot(1)
+        old_umask <- Sys.umask("0777")
+        on.exit(Sys.umask(old_umask), add = TRUE)
+        grDevices::dev.off()
+        Sys.umask(old_umask)
+        on.exit(NULL)
+        "cell completed"
+        """)
+    client.send(r=r)
+    result = client.transcript[-1]["result"]
+    assert result["isError"] is True, result
+    output = result["content"][0]["text"]
+    assert "final-boundary-callback-ran" not in output, output
+    assert "failed to read managed plot" in output, output
+    assert output.endswith(
+        "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
+    ), output
+    result["content"][0]["text"] = (
+        "[failed to read managed plot `<worker plot>`: permission denied]\n"
+        "[worker stopped: in-memory state lost]\n"
+        "[starting new worker]\n"
+        "[idle]"
+    )
     return client._finish()
 
 
@@ -429,6 +538,72 @@ def test_restart_while_r_waits_for_input(binary: Path) -> Transcript:
 
     client.send(r='exists("restart_marker", inherits = FALSE)')
     assert last_tool_text(client) == "[1] FALSE\n"
+    return client._finish()
+
+
+def test_restart_skips_cell_boundary_callbacks(binary: Path) -> Transcript:
+    client = McpClient(binary, ("serve",))
+    client._initialize_and_list_tools()
+    client.session(action="prepare", requirements={"r": ["later"]})
+
+    # Leave a callback ready for the initial boundary turn. Restart after it
+    # requests input, and verify that the submitted cell is never dispatched.
+    # fmt: r
+    r = code(r"""
+        later::later(function() readline("callback> "), delay = 1)
+        """)
+    client.send(r=r)
+    assert last_tool_text(client) == "[done]"
+    time.sleep(1.1)
+    client.send(r='cat("cell body ran\\n")')
+    assert last_tool_text(client) == ('[input requested: "callback> "]\n[stdin needed]')
+    client.session(action="restart")
+    assert "cell body ran" not in last_tool_text(client)
+
+    # Leave a callback ready for the final boundary turn, then restart while
+    # the cell is blocked in the console read.
+    # fmt: r
+    r = code(r"""
+        later::later(function() cat("post-cell callback ran\n"), delay = 0)
+        readline("cell> ")
+        """)
+    client.send(r=r)
+    assert last_tool_text(client) == ('[input requested: "cell> "]\n[stdin needed]')
+    client.session(action="restart")
+    assert "post-cell callback ran" not in last_tool_text(client)
+    return client._finish()
+
+
+def test_restart_skips_direct_stdin_boundary_callback(binary: Path) -> Transcript:
+    client = McpClient(binary, ("serve",))
+    client._initialize_and_list_tools()
+    client.session(action="prepare", requirements={"r": ["later"]})
+
+    # A direct fd-0 read bypasses the worker's ReadConsole callback. Restart
+    # still must prevent the submitted cell from running after EOF releases it.
+    # fmt: r
+    r = code(r"""
+        later::later(
+          function() {
+            cat("direct callback waiting")
+            connection <- suppressWarnings(file("/dev/stdin"))
+            on.exit(close(connection))
+            readLines(connection, n = 1)
+            cat("direct callback released\n")
+          },
+          delay = 1
+        )
+        """)
+    client.send(r=r)
+    assert last_tool_text(client) == "[done]"
+    time.sleep(1.1)
+
+    client.send(r='cat("direct stdin cell ran\\n")', timeout_ms=1_000)
+    assert last_tool_text(client) == "direct callback waiting\n[running]"
+    client.session(action="restart")
+    output = last_tool_text(client)
+    assert "direct callback released" in output
+    assert "direct stdin cell ran" not in output
     return client._finish()
 
 
