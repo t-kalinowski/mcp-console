@@ -25,36 +25,8 @@ input:
 result:
   tools:
     - name: send
-      description: >-
-        Persistent mixed-language computational workbench. Use it whenever exact
-        computation or direct inspection would improve accuracy—from arithmetic,
-        string counting, parsing, and file or binary-data inspection to data
-        wrangling, exploratory analysis, visualization, statistics, simulation,
-        and model training or tuning. Choose the clearest language for each step
-        and switch freely between calls. The default R environment includes
-        tidyverse, reticulate, DBI, and duckdb, together with their full
-        dependency sets, such as ggplot2, dplyr, readr, and jsonlite. The
-        built-in managed Python environment includes NumPy and pandas. DuckDB
-        SQL is also available. State persists across calls. Python reads R
-        globals through `r.name`; R reads Python globals through `py$name`; SQL
-        queries R data frames by name; R accesses the DuckDB catalog through
-        `sql_connection()`. Language-native help and introspection are
-        available. Do not probe package availability in cells. If you want to
-        use a package, prepare it with `session`, then load it directly with R
-        `library()` or Python `import`. R default-device plots and open
-        `matplotlib.pyplot` figures return as PNG images. Send exactly one
-        complete `r`, `python`, or `sql` cell. Call `send` sequentially;
-        concurrent calls are unsupported. Use `stdin` for interactive reads or
-        debugger commands; omit code and stdin to poll. A wait timeout does not
-        stop computation, and running work must be collected before new code is
-        sent. R errors, Python exceptions, and DuckDB errors are ordinary
-        console output, so inspect result text and continue or correct the cell.
-        Evaluated code can read host files but cannot directly access the
-        network and can write only within the worker's private temporary
-        directory. Managed Python requirement resolution triggered by R code
-        such as `reticulate::py_require()` or by an R package load is a
-        host-side exception: it may access the network and execute installation
-        or build code, so use only trusted requirements.
+      description: |-
+        Persistent mixed-language computational workbench. Use it whenever exact computation or direct inspection would improve accuracy—from arithmetic, string counting, parsing, and file or binary-data inspection to data wrangling, exploratory analysis, visualization, statistics, simulation, and model training or tuning. Choose the clearest language for each step and switch freely between calls. The default R environment includes tidyverse, reticulate, DBI, and duckdb, together with their full dependency sets, such as ggplot2, dplyr, readr, and jsonlite. Python initially follows inherited `RETICULATE_PYTHON` configuration. A successful `prepare` with Python requirements before the worker starts or `restart` with Python requirements after it starts replaces it with a managed environment. Packages in the active Python environment are not discovered or advertised. DuckDB SQL is also available. State persists across calls. Python reads R globals through `r.name`; R reads Python globals through `py$name`; SQL queries R data frames by name; R accesses the DuckDB catalog through `sql_connection()`. Language-native help and introspection are available. Do not probe package availability in cells. Load R packages directly with `library()`. Import packages provided by the active Python environment directly. If you want to use an additional package, prepare it with `session`. If Python preparation reports `[restart required]`, call `session` with `action = "restart"` and those Python requirements instead; restart loses worker state. R default-device plots and open `matplotlib.pyplot` figures return as PNG images. Send exactly one complete `r`, `python`, or `sql` cell. Call `send` sequentially; concurrent calls are unsupported. Use `stdin` for interactive reads or debugger commands; omit code and stdin to poll. A wait timeout does not stop computation, and running work must be collected before new code is sent. R errors, Python exceptions, and DuckDB errors are ordinary console output, so inspect result text and continue or correct the cell. Evaluated code can read host files but cannot directly access the network and can write only within the worker's private temporary directory. When managed Python is active, requirement resolution triggered by R code such as `reticulate::py_require()` or by an R package load is a host-side exception: it may access the network and execute installation or build code, so use only trusted requirements.
       inputSchema:
         $schema: https://json-schema.org/draft/2020-12/schema
         additionalProperties: false
@@ -78,8 +50,9 @@ result:
           python:
             description: |-
               Complete multiline Python cell evaluated in persistent `__main__` state; its final expression
-              is displayed. The built-in managed Python environment includes NumPy and pandas. Use
-              `session` to prepare other packages such as scikit-learn or Matplotlib. Read R globals and
+              is displayed. Python initially follows inherited `RETICULATE_PYTHON` configuration.
+              A successful `prepare` with Python requirements before the worker starts or `restart` with Python requirements after it starts replaces it with a managed environment.
+              Packages in the active Python environment are not discovered or advertised. Import packages provided by the active Python environment directly. If you want to use an additional Python package, prepare it with `session`. If Python preparation reports `[restart required]`, call `session` with `action = "restart"` and that Python requirement instead; restart loses worker state. Read R globals and
               call R functions through `r.name`; for example, `frame = r.df`. Return Python globals to R
               through `py$name`. Python data frames are not automatically visible to SQL; bind them to an R
               name first. At cell end, including after a Python error, every open `matplotlib.pyplot` figure
@@ -122,10 +95,14 @@ result:
       description: >-
         Make additional R or Python packages available, or restart the
         persistent console session. Do not probe package availability in cells.
-        If you want to use a package, use `prepare`, then load it with R
-        `library()` or Python `import` in `send`. Packages are not imported or
-        attached automatically. An idle server-managed worker can add R and
-        compatible Python requirements without losing live state. After a
+        Load packages provided by the active Python environment directly with
+        `import`, and load R packages with `library()`. If you want to use an
+        additional package, use `prepare`. If Python preparation reports
+        `[restart required]`, call `restart` with those Python requirements
+        instead; restart loses worker state. Packages are not imported or
+        attached automatically. An idle worker can add R requirements without
+        losing live state. Once Python is managed, it may also activate
+        compatible Python additions without losing live state. After a
         recoverable live preparation failure, evaluation remains available so
         state can be saved, but new requirement additions require restart.
         Requirements are additive, idempotent, and persist across restart.
@@ -141,10 +118,13 @@ result:
         type: object
         properties:
           action:
-            description: |-
-              `prepare` adds R or Python requirements before a server-managed worker starts. After startup,
-              it can add R and compatible Python requirements while the worker is idle. `restart` replaces
-              the worker, optionally adds Python requirements, and starts it if needed.
+            description: >-
+              `prepare` adds R or Python requirements before a worker starts. An idle
+              worker can add R requirements without losing state. Once Python is
+              managed, it may also activate compatible Python additions without losing
+              state. After an inherited Python worker starts, use `restart` with
+              Python requirements; restart loses worker state and starts its
+              replacement.
             type: string
             enum:
               - prepare
@@ -176,9 +156,12 @@ result:
                 maxItems: 64
                 default: []
               python:
-                description: |-
-                  Additive, single-line PEP 508 requirements for `prepare` or `restart`, for example `polars>=1`,
-                  `scikit-learn`, or `matplotlib`. An idle server-managed worker may activate compatible
+                description: >-
+                  Additive, single-line PEP 508 requirements for `prepare` or `restart`,
+                  for example `polars>=1`, `scikit-learn`, or `matplotlib`. Before the
+                  first worker starts, `prepare` can select managed Python. After an
+                  inherited Python worker starts, supply additions to `restart`. Once
+                  Python is managed, an idle worker may activate compatible `prepare`
                   additions without losing state.
                 type: array
                 items:

@@ -52,6 +52,42 @@ def test_preserves_empty_python_environment(binary: Path) -> Transcript:
     return client._finish()
 
 
+def test_running_configured_python_requires_restart_for_requirements(
+    binary: Path,
+) -> Transcript:
+    environment = os.environ.copy()
+    environment["RETICULATE_PYTHON"] = "configured-by-user"
+    client = McpClient(binary, ("serve",), environment)
+    client._initialize_and_list_tools()
+    tools = {tool["name"]: tool for tool in client.transcript[-1]["result"]["tools"]}
+
+    client.send(r="configured_worker_started <- TRUE")
+    assert last_tool_text(client) == "[done]"
+    client.session(
+        action="prepare",
+        requirements={"python": ["numpy"]},
+    )
+    assert last_tool_text(client) == "[restart required]"
+
+    session = tools["session"]
+    assert (
+        "If Python preparation reports `[restart required]`" in session["description"]
+    )
+    action = session["inputSchema"]["properties"]["action"]["description"]
+    assert (
+        "After an inherited Python worker starts, use `restart` with Python requirements"
+        in action
+    )
+    python_requirements = session["inputSchema"]["properties"]["requirements"][
+        "properties"
+    ]["python"]["description"]
+    assert (
+        "After an inherited Python worker starts, supply additions to `restart`"
+        in python_requirements
+    )
+    return client._finish()
+
+
 def managed_python_transcript(binary: Path, configured: bool) -> Transcript:
     environment = os.environ.copy()
     if configured:

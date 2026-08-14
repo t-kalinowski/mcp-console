@@ -2,6 +2,15 @@
 !same-as tests/transcripts/golden/server/initializes_and_lists_tools_with_configured_python.yaml
 ---
 id: 3
+send:
+  r: configured_worker_started <- TRUE
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+id: 4
 session:
   action: prepare
   requirements:
@@ -10,16 +19,6 @@ session:
 result:
   content:
     - type: text
-      text: "[prepared]"
-  isError: false
----
-id: 4
-send:
-  r: |
-    stopifnot(Sys.getenv("RETICULATE_PYTHON") != "/mcp-console-prepare-must-replace-python")
-result:
-  content:
-    - type: text
-      text: "[done]"
+      text: "[restart required]"
   isError: false
 ...
