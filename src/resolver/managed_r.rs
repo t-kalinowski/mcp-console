@@ -41,6 +41,10 @@ impl ManagedR {
     pub(crate) fn requirements(&self) -> &[String] {
         &self.requirements
     }
+
+    pub(crate) fn library(&self) -> &Path {
+        &self.library
+    }
 }
 
 pub(crate) fn resolve_r(

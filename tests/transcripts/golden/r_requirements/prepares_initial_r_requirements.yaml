@@ -129,17 +129,31 @@ session:
 result:
   content:
     - type: text
-      text: "[restart required]"
+      text: "[prepared]"
   isError: false
 ---
 id: 9
 send:
   r: |
-    stopifnot(!"py-yaml12" %in% reticulate::py_require()$packages)
+    stopifnot(
+      "py-yaml12" %in% reticulate::py_require()$packages,
+      identical(
+        dirname(find.package("praise")),
+        .libPaths()[[1L]]
+      ),
+      identical(
+        dirname(find.package("zeallot")),
+        .libPaths()[[1L]]
+      ),
+      normalizePath(.libPaths()[[2L]]) ==
+        normalizePath(Sys.getenv("MCP_CONSOLE_AMBIENT_R_LIBRARY"))
+    )
+    42L
 result:
   content:
     - type: text
-      text: "[done]"
+      text: |
+        [1] 42
   isError: false
 ---
 id: 10
@@ -158,12 +172,14 @@ id: 11
 send:
   r: |
     stopifnot(
+      "py-yaml12" %in% reticulate::py_require()$packages,
       identical(
         dirname(find.package("praise")),
         .libPaths()[[1L]]
       ),
-      !file.exists(
-        file.path(.libPaths()[[1L]], "zeallot", "DESCRIPTION")
+      identical(
+        dirname(find.package("zeallot")),
+        .libPaths()[[1L]]
       ),
       normalizePath(.libPaths()[[2L]]) ==
         normalizePath(Sys.getenv("MCP_CONSOLE_AMBIENT_R_LIBRARY"))

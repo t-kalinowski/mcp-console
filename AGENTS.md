@@ -61,13 +61,18 @@ A failed resolution leaves the prior requirements, R library, and interpreter un
 For a uv tool failure, the tool error reports a JSON manifest containing reticulate's selected Python and the complete candidate package set, followed by uv's stderr, while omitting the helper command, temporary output path, and reticulate's `py_require()`-oriented guidance.
 The direct resolver process defines its process-group lifetime: after it exits, the server force-stops any remaining in-group descendants before reaping it and collecting its standard streams.
 Closing MCP input cancels an in-flight explicit or runtime resolution by force-stopping its host resolver process group; startup preflights complete before MCP input is accepted and are not cancellable through that lifecycle.
-An idle server-managed worker can apply Python-only additions through reticulate without replacement.
-It materializes an uninitialized manifest or activates a same-`libpython` environment while preserving live state.
-The server returns `[prepared]` only after checkpointing the result; failure preserves the live and retained manifests.
+An idle built-in worker can apply new R requirements without replacement.
+The server resolves the complete R requirement set outside the sandbox, prepends the new library to the live `.libPaths()`, removes the previous managed IR entry, preserves the other live library paths and in-memory state, and retains the confirmed library for later worker generations.
+Each IR candidate contains the complete retained R requirement set, so replacing the previous managed entry keeps the live search path aligned with restart and crash replacement instead of accumulating stale managed libraries.
+An idle server-managed worker can also materialize an uninitialized Python manifest or activate a same-`libpython` environment while preserving live state.
+A mixed live R and Python preparation commits both retained configurations only after both changes succeed.
+Failure preserves the prior retained configuration.
+After a synchronized failure may have partially changed the live worker, evaluation remains available so its state can be saved, but new requirement additions return `[restart required]` until a successful explicit restart.
+Transport or protocol failures still stop the worker when its usability is unknown.
+The server returns `[prepared]` only after checkpointing the complete result.
 Preparation during evaluation is rejected.
 Preparation that overlaps worker startup returns `[requirements not prepared: worker is starting]` without resolving the additions or changing the retained requirements, R library, or Python manifest.
-A call with a new R requirement after startup returns `[restart required]` and applies none of that call's additions.
-A failed automatic replacement leaves the worker stopped; new requirements then return that marker, and prepare does not start or configure the next replacement attempt.
+A failed automatic replacement leaves the worker stopped; new requirements then return `[restart required]`, and prepare does not start or configure the next replacement attempt.
 Restart retains the prepared R library, merges any supplied Python additions into the complete checkpointed manifest, and resolves the candidate before terminating the current worker.
 A failed restart resolution leaves the current worker, its in-memory state, requirements, R library, and Python interpreter unchanged.
 After successful resolution, restart retains the prepared R library and candidate Python environment, loses all worker-owned in-memory state and unread stdin, eagerly starts a replacement, and returns `[idle]` after it reports ready.
@@ -75,11 +80,12 @@ The implicit session exists for the server lifetime, so restart starts its first
 It first queues worker-stdin closure and the sideband shutdown message without waiting behind an evaluation, then force-stops the process group and reaps the direct sandbox process at the one-second deadline if that process remains live.
 It then waits for the active sideband operation to end, cancels the worker's stdin writer and standard-stream readers, drains standard-stream bytes already buffered at that boundary, and joins the tasks before reporting `[worker stopped: in-memory state lost]` or launching the replacement.
 Each admitted evaluation or idle stdin write carries its worker generation, so work admitted before restart cannot reach the replacement.
-A live Python preparation invalidated by restart returns `Python preparation cancelled by restart`; active-generation sideband failures retain their transport diagnostics.
+An R preparation cancelled while its IR resolver is active reports resolver cancellation.
+After preparation reaches the live worker, restart cancellation returns `R preparation cancelled by restart` when the call includes R and `Python preparation cancelled by restart` otherwise; active-generation sideband failures retain their transport diagnostics.
 Without a waiting `send`, the explicit restart response preserves old-worker output, reports `[active evaluation stopped by session restart request]` when it interrupts an unfinished cell, and then returns the stopped notice when it retires a ready worker, `[starting new worker]`, replacement startup output, and `[idle]` in that order.
 When a `send` is waiting on the interrupted cell, it exclusively receives old-worker output through retirement followed by `[stopped by session restart request before evaluation finished]` and, when restart retires a ready worker, `[worker stopped: in-memory state lost]`.
 The server writes that `send` reply before starting the replacement or returning the restart response, which contains `[active evaluation stopped by session restart request]`, its own stopped notice when it retires a ready worker, `[starting new worker]`, replacement startup output, and `[idle]` without repeating the old-worker output.
-Named sessions and runtime R requirement additions do not exist yet.
+Named sessions do not exist yet.
 On macOS, default R preflight and managed-Python preflight happen during `serve` startup when required; the first nonempty stdin submission or evaluation still lazily starts the built-in worker under the same sandbox policy as the `sandbox` command.
 The worker embeds R through `libr` and `harp`, retains global state, and feeds each complete R cell through R's DLL REPL iterator.
 R parses and evaluates its expressions sequentially, captures console output, prints visible values, and performs native top-level bookkeeping.
@@ -194,7 +200,7 @@ This initial launcher waits only for the direct command.
 Background descendants are unsupported: they may outlive the launcher, which attempts to remove their dedicated temporary directory on a best-effort basis when it returns.
 Descendant supervision is intentionally deferred because it must account for process groups, session-detached children, signal forwarding, and PID reuse together.
 The sandbox command and worker are unsupported on Linux and Windows.
-Named sessions, runtime R requirement additions, Python relation sharing, the sidecar API, viewer, complete output retention, and generated Quarto transcripts do not exist yet.
+Named sessions, Python relation sharing, the sidecar API, viewer, complete output retention, and generated Quarto transcripts do not exist yet.
 
 ## Product direction
 
@@ -204,7 +210,7 @@ The public MCP surface has two tools:
 - `send` evaluates complete R, Python, or SQL cells, writes to the session's stdin stream, and polls for output.
 - `session` manages session requirements and lifecycle operations.
 
-R and Python requirement preparation, live late Python additions, and explicit restart with optional additive Python requirements are implemented for `session`; its broader lifecycle surface remains planned.
+R and Python requirement preparation, live late R and Python additions, and explicit restart with optional additive Python requirements are implemented for `session`; its broader lifecycle surface remains planned.
 
 The MCP initialization identity remains `mcp-console`.
 The intended default client registration name is `console`, for example `codex mcp add console -- mcp-console serve`.
@@ -229,6 +235,7 @@ See `design-sketches/README.md` for the product overview and `design-sketches/do
 - `src/resolver/process.rs` — shared macOS resolver process-group lifecycle and cancellation.
 - `src/resolver/unsupported.rs` — non-macOS resolver stubs.
 - `src/r_bridge.rs` — shared private R-environment bridge used by graphics, Python, and SQL adapters.
+- `src/r_environment.rs` — private bridge for updating the live R library search path.
 - `src/r_graphics.c` — C-owned forwarding boundary for managed graphics-device callbacks that may long-jump.
 - `src/r_graphics.rs` — cell-scoped managed R graphics device and PNG image publication.
 - `src/server.rs` — MCP stdio server, `send` tool, and worker selection.

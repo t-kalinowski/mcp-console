@@ -799,15 +799,18 @@ Reticulate owns the live manifest during an evaluation, while the supervisor own
 
 Only newly added package requirements fit the v1 late-layering contract.
 Removals and constraint changes remain unsupported after initialization.
-Idle Python-only `session prepare` uses this same path; restart still handles runtime replacement.
+Idle `session prepare` uses this path for compatible Python additions; mixed R and Python preparation coordinates it with the R library update as one public operation.
 
 ### 14.2 R
 
-The implemented implicit session uses IR for explicit pre-start R requirements.
+The implemented implicit session uses IR for explicit R requirements.
 The supervisor requires `ir --version` from `PATH` to report 0.4.0 or later, then runs `ir run` outside the worker sandbox with the same Rscript selection as the worker and one `--with` argument per exact requirement.
 It validates IR's returned library and prepends it to inherited `R_LIBS` before each worker generation initializes R.
 The prepared library persists across explicit restart and crash replacement.
-R additions after the worker starts still require a future restart-with-R-requirements path; the live worker does not mutate `.libPaths()`.
+While the built-in worker is idle, the supervisor can resolve the complete additive R requirement set and ask a fixed private R bridge to prepend the candidate to `.libPaths()` and remove the previous managed entry.
+Each candidate contains the complete retained R requirement set, so replacing the previous managed entry keeps live package lookup consistent with restart and crash replacement instead of accumulating stale candidates.
+The bridge preserves the other live library paths and in-memory state.
+Only after the worker confirms the normalized library path does the supervisor retain that library for later generations.
 The supervisor sets `IR_NO_LOCAL_SOURCES` for every invocation.
 IR owns package-reference parsing and prevents direct or transitive local package installation before materialization.
 This does not sandbox build code from accepted repository or remote packages, and IR may reuse an already materialized library.
@@ -821,9 +824,22 @@ Before worker startup, an explicit `prepare` action remains atomic:
 2. resolve and prepare the candidate environment outside the arbitrary-code worker;
 3. commit the R library, Python interpreter, and manifests only after every requested resolution succeeds.
 
-After startup, reject preparation during evaluation and return `[restart required]` atomically for calls with a new R requirement.
-Otherwise send structured Python additions through reticulate and commit the matching checkpoint before returning `[prepared]`.
-Failure preserves the prior live manifest and supervisor checkpoint.
+After startup, preparation remains an atomic public operation while the built-in worker is idle:
+
+1. merge additions into the complete retained R and Python requirement sets;
+2. resolve each new candidate through its language-specific host resolver without changing the retained checkpoints;
+3. apply the R candidate through the private `.libPaths()` bridge and compatible Python additions through reticulate;
+4. commit both retained configurations only after every requested live change succeeds and the worker generation is still current.
+
+A failure leaves the prior retained configuration unchanged.
+If a synchronized failure may have partially changed the live worker, the supervisor keeps it available for evaluation but rejects new requirement additions until a successful explicit restart.
+This gives the caller an opportunity to save in-memory state before replacing the worker.
+Transport or protocol failures still stop a worker whose usability is unknown.
+Preparation during evaluation remains rejected.
+
+A stopped worker cannot receive live environment updates.
+The current implicit-session implementation returns `[restart required]` for new preparation additions in that state and does not stage them for the next generation.
+Its `restart` action reuses the retained R library and accepts only optional Python additions.
 
 An explicit `restart` with requirements is atomic until the worker replacement boundary:
 

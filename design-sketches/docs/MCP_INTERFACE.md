@@ -278,16 +278,21 @@ Requirements are additive logical-session configuration managed by `session`, no
 
 `prepare` resolves and adds requirements without replacing an existing runtime.
 It creates the logical session if needed but may leave it in `prepared` state without a worker.
-For an idle server-managed runtime, a Python-only prepare can add packages through reticulate without replacing the runtime.
+For an idle server-managed runtime, prepare can add R packages by prepending the new managed library to the live `.libPaths()` and removing its predecessor, and can add Python packages through reticulate without replacing the runtime.
+It preserves the other R library paths and in-memory runtime state, and retains the confirmed R library for later generations.
 Before Python initializes, it updates and materializes the manifest; after initialization, it activates a candidate that uses the same `libpython`.
-A failed resolution leaves the live and retained manifests unchanged.
+A mixed R and Python preparation commits both retained configurations only after both live changes succeed.
+A failed resolution or activation leaves the retained configuration unchanged.
+If a synchronized failure may have partially changed the live runtime, evaluation remains available so the caller can save state, but new requirement additions report that restart is required until a successful explicit restart.
+Transport or protocol failures still stop a runtime whose usability is unknown.
 Preparation while the runtime is evaluating is an error.
-If a call contains a new R requirement after startup, it reports that a restart is required and applies none of that call's additions.
 
 `restart` may include additive requirements.
 Resolution occurs before the old runtime is terminated.
 If resolution fails, the current runtime remains intact.
 After successful resolution, restart creates a new runtime generation with the retained merged manifest.
+The current implicit-session implementation accepts only Python additions with `restart`; it reuses the R library retained by an earlier successful `prepare`.
+A stopped worker cannot apply live additions, so the current implementation reports that a restart is required without retaining new requirements.
 
 The resolver may run outside the arbitrary-code worker and populate immutable caches.
 Package download access does not imply general network access for user code.
@@ -299,7 +304,7 @@ Package download access does not imply general network access for user code.
 ```json
 {
   "name": "session",
-  "description": "Prepare, inspect, or control persistent console sessions; normal evaluation and polling use send. Requirements are additive session configuration and survive runtime restarts. prepare creates the session if needed and adds requirements without replacing an existing runtime. An idle server-managed runtime can activate new Python packages in place; unsupported late additions report that a restart is required. restart starts a fresh runtime generation; any existing in-memory R, Python, and SQL state is lost, while requirements, workspace files, and the transcript are retained. close ends the logical session.",
+  "description": "Prepare, inspect, or control persistent console sessions; normal evaluation and polling use send. Requirements are additive session configuration and survive runtime restarts. prepare creates the session if needed and adds requirements without replacing an existing runtime. An idle server-managed runtime can activate new R and compatible Python packages in place while preserving live state. restart starts a fresh runtime generation; any existing in-memory R, Python, and SQL state is lost, while requirements, workspace files, and the transcript are retained. close ends the logical session.",
   "inputSchema": {
     "type": "object",
     "additionalProperties": false,
@@ -327,13 +332,13 @@ Package download access does not imply general network access for user code.
             "type": "array",
             "items": { "type": "string", "minLength": 1 },
             "maxItems": 64,
-            "description": "R package requirement strings. IR prevents installation from local package sources because it runs with server permissions."
+            "description": "R package requirement strings. IR prevents installation from local package sources because it runs with server permissions. prepare can add them to an idle built-in runtime without replacing it."
           },
           "python": {
             "type": "array",
             "items": { "type": "string", "minLength": 1 },
             "maxItems": 64,
-            "description": "PEP 508 Python requirement strings. prepare can activate Python-only additions in an idle server-managed runtime."
+            "description": "PEP 508 Python requirement strings. prepare can activate compatible additions in an idle server-managed runtime."
           }
         }
       }
@@ -371,6 +376,7 @@ transcript: .mcp-console/sessions/default/transcript.qmd
 
 `prepare` follows the requirement semantics above.
 For a missing session it retains configuration without starting a worker; the first cell or nonempty stdin submission starts it.
+For an idle running session it preserves the worker generation and in-memory state.
 
 ```json
 {
@@ -387,6 +393,7 @@ It never silently escalates to restart.
 If a worker exists, it is terminated and all in-memory R, Python, SQL, debugger, and process state is lost.
 On a prepared session with no worker, restart simply starts the first generation.
 The transcript records the generation boundary.
+The current implicit-session implementation accepts only Python additions on this action and reuses its retained R library.
 
 `close` terminates the worker and removes the logical session and its requirement manifest.
 Retained workspace files and transcripts follow explicit retention policy; closing a session must not silently delete unrelated user files.

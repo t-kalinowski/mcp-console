@@ -35,6 +35,10 @@ impl ManagedR {
     pub(crate) fn requirements(&self) -> &[String] {
         &[]
     }
+
+    pub(crate) fn library(&self) -> &std::path::Path {
+        unreachable!("managed R libraries are supported only on macOS")
+    }
 }
 
 pub(crate) fn resolve_r(

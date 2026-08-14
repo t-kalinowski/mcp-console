@@ -78,16 +78,25 @@ It does not load packages into or start the worker.
 Before each R resolution, the server requires `ir --version` from `PATH` to report 0.4.0 or later.
 The server runs IR with the same Rscript selection as the worker and prepends the returned library to the worker's inherited `R_LIBS`, leaving its other R libraries available.
 
-After a server-managed worker starts, a Python-only `prepare` applies additions while the worker is idle.
-It materializes an uninitialized manifest or activates a same-`libpython` environment while preserving live state.
-The server returns `[prepared]` only after accepting the checkpoint; failure leaves the live and retained manifests unchanged.
+After the built-in worker starts, `prepare` can apply new R requirements while the worker is idle.
+The server resolves the complete R requirement set outside the sandbox, then prepends the new library to the live `.libPaths()` and removes the previous managed IR entry.
+Each candidate contains the complete retained R requirement set, so replacing the previous managed entry keeps the live worker aligned with later worker generations and avoids accumulating stale managed libraries.
+Other live library paths and the worker's in-memory state are preserved.
+The server retains the new library only after the worker confirms the change, and later worker generations reuse it.
+
+An idle server-managed worker can also materialize an uninitialized Python manifest or activate a same-`libpython` environment without replacing the worker.
+A mixed R and Python preparation commits both retained configurations only after both live changes succeed.
+A failure leaves the retained R and Python configurations unchanged.
+If a synchronized failure may have partially changed the live worker, evaluation remains available so its state can be saved, but new requirement additions return `[restart required]` until a successful explicit restart.
+Transport or protocol failures still stop the worker when its usability is unknown.
+The server returns `[prepared]` only after accepting the complete checkpoint.
 Exact repeats are idempotent.
 
 Preparation during an evaluation is an error.
 Preparation that overlaps worker startup returns `[requirements not prepared: worker is starting]` without resolving the additions or changing the retained requirements, R library, or Python manifest.
-A call with a new R requirement after startup returns `[restart required]` and applies none of that call's additions.
-No session action can add a new R requirement after startup; start a fresh `mcp-console serve` process and prepare it before its worker starts.
-Caller-selected Python environments and custom workers cannot use managed live preparation.
+A failed automatic replacement leaves the worker stopped; a `prepare` call with new additions then returns `[restart required]` and does not retain them or configure the next replacement attempt.
+Caller-selected Python environments cannot accept managed Python additions, but their built-in workers can still apply R requirements.
+Custom workers cannot use managed preparation.
 
 The client can explicitly replace the worker, retain the prepared R library, and add Python requirements in the same call:
 
@@ -99,6 +108,7 @@ The client can explicitly replace the worker, retain the prepared R library, and
 ```
 
 The client can omit `requirements` to retain the current Python checkpoint unchanged.
+`restart` does not accept new R requirements; it reuses the R library retained by earlier successful preparation.
 When requirements are supplied, the server resolves the complete merged candidate before stopping the current worker.
 A resolution failure leaves the current worker, its in-memory state, and its environment unchanged.
 Restart returns `[idle]` after the replacement reports ready.
@@ -300,7 +310,7 @@ The intended default client registration name is `console`:
 codex mcp add console -- mcp-console serve
 ```
 
-Under Codex's current naming convention, the implemented tools are `mcp__console.send` and `mcp__console.session`; `session` supports R and Python requirement preparation, live late Python additions, and explicit restart with optional additive Python requirements for the implicit session.
+Under Codex's current naming convention, the implemented tools are `mcp__console.send` and `mcp__console.session`; `session` supports R and Python requirement preparation, live late R and Python additions, and explicit restart with optional additive Python requirements for the implicit session.
 
 On macOS, `sandbox` launches the command under `/usr/bin/sandbox-exec`.
 The command can read the host filesystem, can write regular files only in a dedicated temporary directory, and cannot access the network.
