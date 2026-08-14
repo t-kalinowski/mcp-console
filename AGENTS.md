@@ -103,6 +103,7 @@ R parses and evaluates its expressions sequentially, captures console output, pr
 Immediately before every R, Python, or SQL cell, the worker gives R's registered input handlers one nonblocking turn under an R top-level boundary.
 It gives them a second turn after a normal language outcome unless worker shutdown has begun.
 Shutdown or an infrastructure failure during the initial turn aborts the submitted cell.
+After either turn, a worker-stdin hangup marks shutdown before the worker can dispatch or complete the cell, including when a callback reads fd 0 directly.
 Ready callbacks run within a managed graphics scope and their output precedes cell completion.
 The worker does not yet wake for R input handlers while otherwise idle.
 Each worker generation starts with `options(width = 200L)`; evaluated code can change that persistent option.
