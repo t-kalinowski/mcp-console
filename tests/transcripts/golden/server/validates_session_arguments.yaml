@@ -65,12 +65,13 @@ result:
 id: 8
 session:
   action: restart
-  requirements:
-    python: []
+  requirements: {}
 result:
   content:
     - type: text
-      text: "`requirements.python` must contain at least one requirement"
+      text: >-
+        at least one of `requirements.r`, `requirements.python`, or
+        `requirements.duckdb` is required
   isError: true
 ---
 id: 9
@@ -78,11 +79,13 @@ session:
   action: restart
   requirements:
     r:
-      - cli
+      - |-
+        cli
+        dplyr
 result:
   content:
     - type: text
-      text: "`requirements.r` is not supported with `restart`"
+      text: R requirement strings must not contain NUL or line breaks
   isError: true
 ---
 id: 10
@@ -90,10 +93,12 @@ session:
   action: restart
   requirements:
     duckdb:
-      - json
+      - spatial FROM community
 result:
   content:
     - type: text
-      text: "`requirements.duckdb` is not supported with `restart`"
+      text: >-
+        DuckDB extension names must start with a lowercase ASCII letter and
+        contain only lowercase ASCII letters, digits, and underscores
   isError: true
 ...

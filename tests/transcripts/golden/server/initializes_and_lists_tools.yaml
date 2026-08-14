@@ -122,20 +122,21 @@ result:
     - name: session
       description: >-
         Make additional R or Python packages and DuckDB extensions available, or
-        restart the persistent console session. Use `prepare` for packages not
-        included in the built-in environments or for DuckDB extensions. Packages
-        and extensions are not imported, attached, or loaded automatically by
-        preparation. An idle worker can add R requirements or DuckDB extensions
-        without losing live state; compatible Python additions require a
-        server-managed worker. After a recoverable live preparation failure,
-        evaluation remains available so state can be saved, but new requirement
-        additions require restart. Requirements are additive, idempotent, and
-        persist across restart. `restart` may optionally add Python
-        requirements, then replaces the worker and loses all in-memory R,
-        Python, and SQL state, debugger state, and unread stdin. Requirement
-        resolution runs outside the execution sandbox and may download packages
-        or extensions or execute package installation or build code on the host;
-        use only trusted requirements.
+        restart the persistent console session. The built-in worker prepares
+        DuckDB's JSON and ICU extensions by default. Use `prepare` for packages
+        not included in the built-in environments or for other DuckDB
+        extensions. Packages and extensions are not imported, attached, or
+        loaded automatically by preparation. An idle worker can add R
+        requirements or DuckDB extensions without losing live state; compatible
+        Python additions require a server-managed worker. After a recoverable
+        live preparation failure, evaluation remains available so state can be
+        saved, but new requirement additions require restart. Requirements are
+        additive, idempotent, and persist across restart. `restart` may
+        optionally add R, Python, and DuckDB requirements, then replaces the
+        worker and loses all in-memory R, Python, and SQL state, debugger state,
+        and unread stdin. Requirement resolution runs outside the execution
+        sandbox and may download packages or extensions or execute package
+        installation or build code on the host; use only trusted requirements.
       inputSchema:
         $schema: https://json-schema.org/draft/2020-12/schema
         required:
@@ -146,8 +147,8 @@ result:
             description: |-
               `prepare` adds R or Python requirements or DuckDB extensions before a worker starts.
               After startup, it can add R requirements or DuckDB extensions while the worker is idle;
-              compatible Python additions require a server-managed worker. `restart` replaces the worker,
-              optionally adds Python requirements, and starts it if needed.
+              compatible Python additions require a server-managed worker. `restart` can add any of the same
+              requirements before it replaces the worker and starts it if needed.
             type: string
             enum:
               - prepare
@@ -155,7 +156,7 @@ result:
           requirements:
             description: |-
               Additive packages or DuckDB extensions to make available. `prepare` requires at least one R,
-              Python, or DuckDB entry. `restart` accepts Python entries only; omit `requirements` to restart
+              Python, or DuckDB entry. `restart` accepts the same additions; omit `requirements` to restart
               unchanged. Requirements persist across restart but do not import, attach, or load packages or
               extensions. After a recoverable live preparation failure, evaluation remains available so
               state can be saved, but new requirement additions return `[restart required]` until restart.
@@ -169,11 +170,12 @@ result:
             properties:
               duckdb:
                 description: |-
-                  Additive DuckDB extension names for `prepare`, for example `json`, `spatial`, or `fts`.
-                  Names must start with a lowercase ASCII letter and contain only lowercase ASCII letters,
-                  digits, and underscores. The host resolver uses DuckDB's own `INSTALL` outside the sandbox,
-                  with DuckDB's default extension repository and native cache. Preparation does not load
-                  extension code; `LOAD` and automatic loading happen later inside the sandbox.
+                  Additive DuckDB extension names for `prepare` or `restart`, for example `fts`, `spatial`, or
+                  `excel`. JSON and ICU are already prepared for built-in workers. Names must start with a
+                  lowercase ASCII letter and contain only lowercase ASCII letters, digits, and underscores.
+                  The host resolver uses DuckDB's own `INSTALL` outside the sandbox, with DuckDB's default
+                  extension repository and native cache. Preparation does not load extension code; `LOAD` and
+                  automatic loading happen later inside the sandbox.
                 type: array
                 items:
                   type: string
@@ -183,10 +185,10 @@ result:
                 default: []
               r:
                 description: |-
-                  Additive, single-line IR package references for `prepare`, for example `data.table`, `sf`, or
-                  `yaml12`. An idle worker that implements R preparation can add R requirements without losing
-                  live state. Local package sources are rejected because resolution runs with server
-                  permissions.
+                  Additive, single-line IR package references for `prepare` or `restart`, for example
+                  `data.table`, `sf`, or `yaml12`. An idle worker that implements R preparation can add R
+                  requirements without losing live state. Local package sources are rejected because resolution
+                  runs with server permissions.
                 type: array
                 items:
                   type: string
