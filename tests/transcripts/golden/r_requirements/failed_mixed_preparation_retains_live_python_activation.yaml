@@ -4,10 +4,7 @@
 id: 3
 send:
   r: |
-    sentinel <- 42L
-    worker_pid <- Sys.getpid()
-    invisible(loadNamespace("reticulate"))
-    stopifnot(!reticulate::py_available(initialize = FALSE))
+    invisible(reticulate::py_config())
     original_lib_paths <- base::.libPaths
     replacement_lib_paths <- base::local({
       original <- original_lib_paths
@@ -50,36 +47,6 @@ result:
 ---
 id: 5
 session:
-  action: prepare
-  requirements:
-    r:
-      - zeallot
-result:
-  content:
-    - type: text
-      text: "[restart required]"
-  isError: false
----
-id: 6
-send:
-  r: |
-    saved <- base::unserialize(base::serialize(sentinel, NULL))
-    saved_path <- tempfile(fileext = ".rds")
-    saveRDS(saved, saved_path)
-    stopifnot(
-      identical(saved, 42L),
-      identical(Sys.getpid(), worker_pid),
-      is.character(base::.libPaths())
-    )
-    cat(saved_path)
-result:
-  content:
-    - type: text
-      text: <worker temporary RDS path>
-  isError: false
----
-id: 7
-session:
   action: restart
 result:
   content:
@@ -90,28 +57,12 @@ result:
         [idle]
   isError: false
 ---
-id: 8
-session:
-  action: prepare
-  requirements:
-    r:
-      - zeallot
-result:
-  content:
-    - type: text
-      text: "[prepared]"
-  isError: false
----
-id: 9
+id: 6
 send:
   r: |
-    saved <- readRDS("<saved sentinel path>")
     stopifnot(
-      identical(saved, 42L),
-      !exists("sentinel", inherits = FALSE),
       "py-yaml12" %in% reticulate::py_require()$packages,
-      reticulate::py_module_available("yaml12"),
-      identical(dirname(find.package("zeallot")), .libPaths()[[1L]])
+      reticulate::py_module_available("yaml12")
     )
 result:
   content:

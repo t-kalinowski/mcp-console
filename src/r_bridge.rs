@@ -117,13 +117,6 @@ impl Bridge {
         self.call0(function, |value| Ok(unsafe { libr::Rf_asInteger(value) }))
     }
 
-    pub(crate) fn call0_string(&self, function: &CStr) -> Result<Option<String>, String> {
-        self.call0(function, |value| {
-            Option::<String>::try_from(harp::object::RObject::view(value))
-                .map_err(|error| error.to_string())
-        })
-    }
-
     pub(crate) fn call1_string(
         &self,
         function: &CStr,

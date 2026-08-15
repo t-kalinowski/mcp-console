@@ -115,14 +115,9 @@ pub(crate) enum WorkerMessage {
     PythonActivated {
         requirements: PythonRequirementManifest,
     },
-    PythonPrepared {
-        python_checkpoint: PythonRequirementManifest,
-    },
+    PythonPrepared,
     PythonPreparationFailed {
         message: String,
     },
-    Completed {
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        python_checkpoint: Option<PythonRequirementManifest>,
-    },
+    Completed,
 }

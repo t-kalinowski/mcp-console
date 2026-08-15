@@ -39,16 +39,7 @@ impl Worker {
             crate::worker_protocol::PythonRequirementManifest,
             &[crate::resolver::ManagedPython],
         ) -> Result<(), String>,
-    ) -> Result<
-        Result<
-            (
-                crate::worker_protocol::PythonRequirementManifest,
-                Vec<crate::resolver::ManagedPython>,
-            ),
-            String,
-        >,
-        String,
-    > {
+    ) -> Result<Result<Option<crate::resolver::ManagedPython>, String>, String> {
         let _ = packages;
         unreachable!("unsupported workers cannot start")
     }
@@ -66,10 +57,6 @@ impl Worker {
         _activate_python: impl FnMut(
             crate::worker_protocol::PythonRequirementManifest,
             &[crate::resolver::ManagedPython],
-        ) -> Result<(), String>,
-        _checkpoint_python: impl FnMut(
-            Option<crate::worker_protocol::PythonRequirementManifest>,
-            Vec<crate::resolver::ManagedPython>,
         ) -> Result<(), String>,
     ) -> Result<(), String> {
         let crate::cell::Cell { language, source } = cell;

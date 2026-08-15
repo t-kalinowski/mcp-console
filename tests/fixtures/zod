@@ -345,16 +345,6 @@ def main() -> None:
             send(writer, {"kind": "completed"})
             continue
 
-        if source == "report managed python checkpoint":
-            send(
-                writer,
-                {
-                    "kind": "completed",
-                    "python_checkpoint": {"packages": ["numpy", "pandas"]},
-                },
-            )
-            continue
-
         if source == "report managed python activation":
             send(
                 writer,

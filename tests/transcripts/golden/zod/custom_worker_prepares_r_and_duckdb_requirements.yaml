@@ -70,19 +70,6 @@ result:
 ---
 id: 9
 send:
-  r: report managed python checkpoint
-result:
-  content:
-    - type: text
-      text: |-
-        [custom worker reported a managed Python checkpoint]
-        [worker stopped: in-memory state lost]
-        [starting new worker]
-        [idle]
-  isError: true
----
-id: 10
-send:
   r: report managed python activation
 result:
   content:

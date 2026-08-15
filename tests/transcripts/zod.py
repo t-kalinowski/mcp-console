@@ -828,11 +828,6 @@ def test_custom_worker_prepares_r_and_duckdb_requirements(binary: Path) -> Trans
             "unavailable until session restart"
         )
 
-        result = client.send(r="report managed python checkpoint")
-        assert result["isError"] is True, result
-        failure = result["content"][0]["text"]
-        assert "custom worker reported a managed Python checkpoint" in failure, failure
-
         result = client.send(r="report managed python activation")
         assert result["isError"] is True, result
         failure = result["content"][0]["text"]
