@@ -6,6 +6,8 @@ import subprocess
 import sys
 import tempfile
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 from _support import (
@@ -48,6 +50,25 @@ def build_r_input_handler(
     )
 
 
+@contextmanager
+def r_input_handler_client(binary: Path) -> Iterator[tuple[McpClient, Path]]:
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        directory = Path(temporary_directory)
+        environment, rscript = r_test_environment()
+        environment["TMPDIR"] = temporary_directory
+        build_r_input_handler(directory, environment, rscript)
+        client = McpClient(
+            binary,
+            ("serve",),
+            environment=environment,
+            current_directory=directory,
+        )
+        try:
+            yield client, directory
+        finally:
+            stop_client(client)
+
+
 def test_evaluates_a_complete_cell(binary: Path) -> Transcript:
     client = McpClient(binary, ("serve",))
     client._initialize_and_list_tools()
@@ -78,25 +99,23 @@ def test_evaluates_a_complete_cell(binary: Path) -> Transcript:
     return client._finish()
 
 
-def test_services_later_callbacks_at_cell_boundaries(binary: Path) -> Transcript:
-    environment, rscript = r_test_environment()
-    with tempfile.TemporaryDirectory() as temporary_directory:
-        directory = Path(temporary_directory)
-        environment["TMPDIR"] = temporary_directory
-        build_r_input_handler(directory, environment, rscript)
-
-        client = McpClient(
-            binary,
-            ("serve",),
-            environment=environment,
-            current_directory=directory,
-        )
+def test_services_r_input_handlers_at_cell_boundaries(binary: Path) -> Transcript:
+    with r_input_handler_client(binary) as (client, directory):
         client._initialize_and_list_tools()
-        client.session(action="prepare", requirements={"r": ["later"]})
 
+        # Make the handler ready before the worker's final boundary turn.
         # fmt: r
         r = code(r"""
-            later::later(function() cat("cell end callback\n"), delay = 0)
+            dyn.load("./mcp_test_input_handler.so")
+            callback_fifo <- file.path(tempdir(), "cell-end-handler-fifo")
+            invisible(.Call(
+              "mcp_test_register_input_handler",
+              callback_fifo,
+              function() cat("cell end callback\n")
+            ))
+            writer <- fifo(callback_fifo, open = "wb")
+            writeBin(as.raw(1), writer)
+            close(writer)
             """)
         client.send(r=r)
         assert last_tool_text(client) == "cell end callback\n"
@@ -109,14 +128,18 @@ def test_services_later_callbacks_at_cell_boundaries(binary: Path) -> Transcript
             dyn.load("./mcp_test_input_handler.so")
             invisible(.Call(
               "mcp_test_register_input_handler",
-              file.path(tempdir(), "input-handler-fifo"),
+              file.path(tempdir(), "cell-start-handler-fifo"),
               function() cat("cell start callback\n")
             ))
             """)
         client.send(r=r)
         output = last_tool_text(client)
         assert output == "[done]", repr(output)
-        fifo = wait_for_worker_file(directory, "input-handler-fifo", client)
+        fifo = wait_for_worker_file(
+            directory,
+            "cell-start-handler-fifo",
+            client,
+        )
         fifo.write_bytes(b"x")
         client.send(r='cat("cell body\\n")')
         assert last_tool_text(client) == "cell start callback\ncell body\n"
@@ -124,86 +147,95 @@ def test_services_later_callbacks_at_cell_boundaries(binary: Path) -> Transcript
 
 
 def test_stops_cell_after_boundary_callback_failure(binary: Path) -> Transcript:
-    client = McpClient(binary, ("serve",))
-    client._initialize_and_list_tools()
-    client.session(action="prepare", requirements={"r": ["later"]})
+    with r_input_handler_client(binary) as (client, directory):
+        client._initialize_and_list_tools()
 
-    # Create the finalized page without read permissions. The PNG device can
-    # write through its open descriptor, but publication cannot reopen it.
-    # fmt: r
-    r = code(r"""
-        later::later(
-          function() {
+        # Create the finalized page without read permissions. The PNG device
+        # can write through its open descriptor, but publication cannot reopen
+        # it.
+        # fmt: r
+        r = code(r"""
+            dyn.load("./mcp_test_input_handler.so")
+            invisible(.Call(
+              "mcp_test_register_input_handler",
+              file.path(tempdir(), "failing-handler-fifo"),
+              function() {
+                plot(1)
+                old_umask <- Sys.umask("0777")
+                on.exit(Sys.umask(old_umask), add = TRUE)
+                grDevices::dev.off()
+                Sys.umask(old_umask)
+                on.exit(NULL)
+              }
+            ))
+            """)
+        client.send(r=r)
+        assert last_tool_text(client) == "[done]"
+        fifo = wait_for_worker_file(directory, "failing-handler-fifo", client)
+        fifo.write_bytes(b"x")
+
+        client.send(r='system("printf boundary-cell-ran")')
+        result = client.transcript[-1]["result"]
+        assert result["isError"] is True, result
+        output = result["content"][0]["text"]
+        assert "boundary-cell-ran" not in output, output
+        assert "failed to read managed plot" in output, output
+        assert output.endswith(
+            "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
+        ), output
+        result["content"][0]["text"] = (
+            "[failed to read managed plot `<worker plot>`: permission denied]\n"
+            "[worker stopped: in-memory state lost]\n"
+            "[starting new worker]\n"
+            "[idle]"
+        )
+        return client._finish()
+
+
+def test_skips_final_boundary_callbacks_after_cell_failure(binary: Path) -> Transcript:
+    with r_input_handler_client(binary) as (client, _directory):
+        client._initialize_and_list_tools()
+
+        # Record a plot publication failure during the cell after making an
+        # input handler ready for the final boundary turn. The handler writes
+        # directly to stdout so its execution would remain observable after
+        # sideband publication fails.
+        # fmt: r
+        r = code(r"""
+            dyn.load("./mcp_test_input_handler.so")
+            callback_fifo <- file.path(tempdir(), "skipped-handler-fifo")
+            invisible(.Call(
+              "mcp_test_register_input_handler",
+              callback_fifo,
+              function() system("printf final-boundary-callback-ran")
+            ))
+            writer <- fifo(callback_fifo, open = "wb")
+            writeBin(as.raw(1), writer)
+            close(writer)
             plot(1)
             old_umask <- Sys.umask("0777")
             on.exit(Sys.umask(old_umask), add = TRUE)
             grDevices::dev.off()
             Sys.umask(old_umask)
             on.exit(NULL)
-          },
-          delay = 1
+            "cell completed"
+            """)
+        client.send(r=r)
+        result = client.transcript[-1]["result"]
+        assert result["isError"] is True, result
+        output = result["content"][0]["text"]
+        assert "final-boundary-callback-ran" not in output, output
+        assert "failed to read managed plot" in output, output
+        assert output.endswith(
+            "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
+        ), output
+        result["content"][0]["text"] = (
+            "[failed to read managed plot `<worker plot>`: permission denied]\n"
+            "[worker stopped: in-memory state lost]\n"
+            "[starting new worker]\n"
+            "[idle]"
         )
-        """)
-    client.send(r=r)
-    assert last_tool_text(client) == "[done]"
-    time.sleep(1.1)
-
-    client.send(r='system("printf boundary-cell-ran")')
-    result = client.transcript[-1]["result"]
-    assert result["isError"] is True, result
-    output = result["content"][0]["text"]
-    assert "boundary-cell-ran" not in output, output
-    assert "failed to read managed plot" in output, output
-    assert output.endswith(
-        "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
-    ), output
-    result["content"][0]["text"] = (
-        "[failed to read managed plot `<worker plot>`: permission denied]\n"
-        "[worker stopped: in-memory state lost]\n"
-        "[starting new worker]\n"
-        "[idle]"
-    )
-    return client._finish()
-
-
-def test_skips_final_boundary_callbacks_after_cell_failure(binary: Path) -> Transcript:
-    client = McpClient(binary, ("serve",))
-    client._initialize_and_list_tools()
-    client.session(action="prepare", requirements={"r": ["later"]})
-
-    # Record a plot publication failure during the cell, then leave a callback
-    # ready for the final handler turn. The callback writes directly to stdout
-    # so its execution remains observable after sideband publication fails.
-    # fmt: r
-    r = code(r"""
-        later::later(
-          function() system("printf final-boundary-callback-ran"),
-          delay = 0
-        )
-        plot(1)
-        old_umask <- Sys.umask("0777")
-        on.exit(Sys.umask(old_umask), add = TRUE)
-        grDevices::dev.off()
-        Sys.umask(old_umask)
-        on.exit(NULL)
-        "cell completed"
-        """)
-    client.send(r=r)
-    result = client.transcript[-1]["result"]
-    assert result["isError"] is True, result
-    output = result["content"][0]["text"]
-    assert "final-boundary-callback-ran" not in output, output
-    assert "failed to read managed plot" in output, output
-    assert output.endswith(
-        "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
-    ), output
-    result["content"][0]["text"] = (
-        "[failed to read managed plot `<worker plot>`: permission denied]\n"
-        "[worker stopped: in-memory state lost]\n"
-        "[starting new worker]\n"
-        "[idle]"
-    )
-    return client._finish()
+        return client._finish()
 
 
 def test_uses_200_column_default(binary: Path) -> Transcript:
@@ -593,69 +625,93 @@ def test_restart_while_r_waits_for_input(binary: Path) -> Transcript:
 
 
 def test_restart_skips_cell_boundary_callbacks(binary: Path) -> Transcript:
-    client = McpClient(binary, ("serve",))
-    client._initialize_and_list_tools()
-    client.session(action="prepare", requirements={"r": ["later"]})
+    with r_input_handler_client(binary) as (client, directory):
+        client._initialize_and_list_tools()
 
-    # Leave a callback ready for the initial boundary turn. Restart after it
-    # requests input, and verify that the submitted cell is never dispatched.
-    # fmt: r
-    r = code(r"""
-        later::later(function() readline("callback> "), delay = 1)
-        """)
-    client.send(r=r)
-    assert last_tool_text(client) == "[done]"
-    time.sleep(1.1)
-    client.send(r='cat("cell body ran\\n")')
-    assert last_tool_text(client) == ('[input requested: "callback> "]\n[stdin needed]')
-    client.session(action="restart")
-    assert "cell body ran" not in last_tool_text(client)
+        # Leave a callback ready for the initial boundary turn. Restart after
+        # it requests input, and verify that the submitted cell is never
+        # dispatched.
+        # fmt: r
+        r = code(r"""
+            dyn.load("./mcp_test_input_handler.so")
+            invisible(.Call(
+              "mcp_test_register_input_handler",
+              file.path(tempdir(), "initial-boundary-fifo"),
+              function() readline("callback> ")
+            ))
+            """)
+        client.send(r=r)
+        assert last_tool_text(client) == "[done]"
+        fifo = wait_for_worker_file(directory, "initial-boundary-fifo", client)
+        fifo.write_bytes(b"x")
+        client.send(r='cat("cell body ran\\n")')
+        assert last_tool_text(client) == (
+            '[input requested: "callback> "]\n[stdin needed]'
+        )
+        client.session(action="restart")
+        assert "cell body ran" not in last_tool_text(client)
 
-    # Leave a callback ready for the final boundary turn, then restart while
-    # the cell is blocked in the console read.
-    # fmt: r
-    r = code(r"""
-        later::later(function() cat("post-cell callback ran\n"), delay = 0)
-        readline("cell> ")
-        """)
-    client.send(r=r)
-    assert last_tool_text(client) == ('[input requested: "cell> "]\n[stdin needed]')
-    client.session(action="restart")
-    assert "post-cell callback ran" not in last_tool_text(client)
-    return client._finish()
+        # Make the next callback ready before the cell blocks, then restart
+        # without letting the worker run its final boundary turn.
+        # fmt: r
+        r = code(r"""
+            dyn.load("./mcp_test_input_handler.so")
+            callback_fifo <- file.path(tempdir(), "final-boundary-fifo")
+            invisible(.Call(
+              "mcp_test_register_input_handler",
+              callback_fifo,
+              function() cat("post-cell callback ran\n")
+            ))
+            writer <- fifo(callback_fifo, open = "wb")
+            writeBin(as.raw(1), writer)
+            close(writer)
+            readline("cell> ")
+            """)
+        client.send(r=r)
+        assert last_tool_text(client) == ('[input requested: "cell> "]\n[stdin needed]')
+        client.session(action="restart")
+        assert "post-cell callback ran" not in last_tool_text(client)
+        return client._finish()
 
 
 def test_restart_skips_direct_stdin_boundary_callback(binary: Path) -> Transcript:
-    client = McpClient(binary, ("serve",))
-    client._initialize_and_list_tools()
-    client.session(action="prepare", requirements={"r": ["later"]})
+    with r_input_handler_client(binary) as (client, directory):
+        client._initialize_and_list_tools()
 
-    # A direct fd-0 read bypasses the worker's ReadConsole callback. Restart
-    # still must prevent the submitted cell from running after EOF releases it.
-    # fmt: r
-    r = code(r"""
-        later::later(
-          function() {
-            cat("direct callback waiting")
-            connection <- suppressWarnings(file("/dev/stdin"))
-            on.exit(close(connection))
-            readLines(connection, n = 1)
-            cat("direct callback released\n")
-          },
-          delay = 1
+        # A direct fd-0 read bypasses the worker's ReadConsole callback.
+        # Restart still must prevent the submitted cell from running after EOF
+        # releases it.
+        # fmt: r
+        r = code(r"""
+            dyn.load("./mcp_test_input_handler.so")
+            invisible(.Call(
+              "mcp_test_register_input_handler",
+              file.path(tempdir(), "direct-stdin-boundary-fifo"),
+              function() {
+                cat("direct callback waiting")
+                connection <- suppressWarnings(file("/dev/stdin"))
+                on.exit(close(connection))
+                readLines(connection, n = 1)
+                cat("direct callback released\n")
+              }
+            ))
+            """)
+        client.send(r=r)
+        assert last_tool_text(client) == "[done]"
+        fifo = wait_for_worker_file(
+            directory,
+            "direct-stdin-boundary-fifo",
+            client,
         )
-        """)
-    client.send(r=r)
-    assert last_tool_text(client) == "[done]"
-    time.sleep(1.1)
+        fifo.write_bytes(b"x")
 
-    client.send(r='cat("direct stdin cell ran\\n")', timeout_ms=1_000)
-    assert last_tool_text(client) == "direct callback waiting\n[running]"
-    client.session(action="restart")
-    output = last_tool_text(client)
-    assert "direct callback released" in output
-    assert "direct stdin cell ran" not in output
-    return client._finish()
+        client.send(r='cat("direct stdin cell ran\\n")', timeout_ms=1_000)
+        assert last_tool_text(client) == "direct callback waiting\n[running]"
+        client.session(action="restart")
+        output = last_tool_text(client)
+        assert "direct callback released" in output
+        assert "direct stdin cell ran" not in output
+        return client._finish()
 
 
 def test_browser_input(binary: Path) -> Transcript:
