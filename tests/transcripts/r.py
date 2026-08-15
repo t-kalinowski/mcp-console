@@ -82,9 +82,8 @@ def test_services_later_callbacks_at_cell_boundaries(binary: Path) -> Transcript
     environment, rscript = r_test_environment()
     with tempfile.TemporaryDirectory() as temporary_directory:
         directory = Path(temporary_directory)
+        environment["TMPDIR"] = temporary_directory
         build_r_input_handler(directory, environment, rscript)
-        fifo = directory / "input-handler-fifo"
-        os.mkfifo(fifo)
 
         client = McpClient(
             binary,
@@ -110,12 +109,14 @@ def test_services_later_callbacks_at_cell_boundaries(binary: Path) -> Transcript
             dyn.load("./mcp_test_input_handler.so")
             invisible(.Call(
               "mcp_test_register_input_handler",
-              "input-handler-fifo"
+              file.path(tempdir(), "input-handler-fifo"),
+              function() cat("cell start callback\n")
             ))
             """)
         client.send(r=r)
         output = last_tool_text(client)
         assert output == "[done]", repr(output)
+        fifo = wait_for_worker_file(directory, "input-handler-fifo", client)
         fifo.write_bytes(b"x")
         client.send(r='cat("cell body\\n")')
         assert last_tool_text(client) == "cell start callback\ncell body\n"
@@ -711,8 +712,9 @@ def test_times_out_and_polls_running_evaluation(binary: Path) -> Transcript:
 def test_interrupts_running_r_evaluation(binary: Path) -> Transcript:
     with tempfile.TemporaryDirectory() as temporary_directory:
         temporary_path = Path(temporary_directory)
-        environment = os.environ.copy()
+        environment, rscript = r_test_environment()
         environment["TMPDIR"] = temporary_directory
+        build_r_input_handler(temporary_path, environment, rscript)
         # fmt: python
         launcher = code("""
             import os
@@ -727,6 +729,7 @@ def test_interrupts_running_r_evaluation(binary: Path) -> Transcript:
             Path(sys.executable),
             ("-c", launcher, str(binary), "serve"),
             environment,
+            current_directory=temporary_path,
         )
         passed = False
         try:
@@ -757,11 +760,12 @@ def test_interrupts_running_r_evaluation(binary: Path) -> Transcript:
             client.send(r="interrupt_state + 1L")
             assert last_tool_text(client) == "[1] 42\n"
 
-            client.session(action="prepare", requirements={"r": ["later"]})
-            assert last_tool_text(client) == "[prepared]"
             # fmt: r
             r = code(r"""
-                later::later(
+                dyn.load("./mcp_test_input_handler.so")
+                invisible(.Call(
+                  "mcp_test_register_input_handler",
+                  file.path(tempdir(), "input-handler-fifo"),
                   function() {
                     invisible(file.create(file.path(
                       tempdir(),
@@ -769,10 +773,15 @@ def test_interrupts_running_r_evaluation(binary: Path) -> Transcript:
                     )))
                     on.exit(boundary_interrupt_cleanup <<- TRUE)
                     repeat {}
-                  },
-                  delay = 0
-                )
+                  }
+                ))
                 boundary_interrupt_state <- 42L
+                writer <- fifo(
+                  file.path(tempdir(), "input-handler-fifo"),
+                  open = "wb"
+                )
+                writeBin(as.raw(1), writer)
+                close(writer)
                 """)
             client.send(r=r, timeout_ms=0)
             assert last_tool_text(client) == "\n[running]"
@@ -786,9 +795,7 @@ def test_interrupts_running_r_evaluation(binary: Path) -> Transcript:
             assert last_tool_text(client) == "[interrupt sent]"
             client.send(timeout_ms=3_000)
             output = last_tool_text(client)
-            assert output == (
-                "\nlater: exception occurred while executing callback.\n"
-            ), repr(output)
+            assert output == "\n", repr(output)
             client.send(r="c(boundary_interrupt_state, boundary_interrupt_cleanup)")
             assert last_tool_text(client) == "[1] 42  1\n"
 
