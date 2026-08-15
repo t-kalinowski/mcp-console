@@ -27,13 +27,11 @@ result:
 id: 5
 send:
   r: |
-    later::later_fd(
-      function(ready) {
-        stopifnot(identical(ready, TRUE))
-        cat("cell start callback\n")
-      },
-      readfds = 0L
-    )
+    dyn.load("./mcp_test_input_handler.so")
+    invisible(.Call(
+      "mcp_test_register_input_handler",
+      "input-handler-fifo"
+    ))
 result:
   content:
     - type: text
@@ -41,17 +39,6 @@ result:
   isError: false
 ---
 id: 6
-send:
-  stdin: callback gate
-result:
-  content:
-    - type: text
-      text: |-
-
-        [idle]
-  isError: false
----
-id: 7
 send:
   r: cat("cell body\n")
 result:
