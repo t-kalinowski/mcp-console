@@ -1,5 +1,5 @@
 use std::path::{Path, PathBuf};
-use std::process::Stdio;
+use std::process::{Command, Stdio};
 
 use super::process::{
     ResolverOutput, ResolverProcess, ResolverStopHandle, completed_write, read_output,
