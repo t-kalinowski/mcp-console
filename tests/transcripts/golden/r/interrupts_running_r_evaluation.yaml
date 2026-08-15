@@ -14,9 +14,7 @@ send:
 result:
   content:
     - type: text
-      text: |-
-
-        [running]
+      text: "\n[running]"
   isError: false
 ---
 id: 4
@@ -48,21 +46,12 @@ result:
   isError: false
 ---
 id: 7
-session:
-  action: prepare
-  requirements:
-    r:
-      - later
-result:
-  content:
-    - type: text
-      text: "[prepared]"
-  isError: false
----
-id: 8
 send:
   r: |
-    later::later(
+    dyn.load("./mcp_test_input_handler.so")
+    invisible(.Call(
+      "mcp_test_register_input_handler",
+      file.path(tempdir(), "input-handler-fifo"),
       function() {
         invisible(file.create(file.path(
           tempdir(),
@@ -70,20 +59,23 @@ send:
         )))
         on.exit(boundary_interrupt_cleanup <<- TRUE)
         repeat {}
-      },
-      delay = 0
-    )
+      }
+    ))
     boundary_interrupt_state <- 42L
+    writer <- fifo(
+      file.path(tempdir(), "input-handler-fifo"),
+      open = "wb"
+    )
+    writeBin(as.raw(1), writer)
+    close(writer)
   timeout_ms: 0
 result:
   content:
     - type: text
-      text: |-
-
-        [running]
+      text: "\n[running]"
   isError: false
 ---
-id: 9
+id: 8
 session:
   action: interrupt
 result:
@@ -92,20 +84,18 @@ result:
       text: "[interrupt sent]"
   isError: false
 ---
-id: 10
+id: 9
 send:
   timeout_ms: 3000
 result:
   content:
     - type: text
-      text: |
-
-        later: exception occurred while executing callback.
+      text: "\n"
   isError: false
 ---
-id: 11
+id: 10
 send:
-  r: c(boundary_interrupt_state, boundary_interrupt_cleanup)
+  r: "c(boundary_interrupt_state, boundary_interrupt_cleanup)"
 result:
   content:
     - type: text
@@ -113,7 +103,7 @@ result:
         [1] 42  1
   isError: false
 ---
-id: 12
+id: 11
 session:
   action: interrupt
 result:
@@ -122,18 +112,16 @@ result:
       text: "[interrupt sent]"
   isError: false
 ---
-id: 13
+id: 12
 send:
   r: 6 * 7
 result:
   content:
     - type: text
-      text: |
-
-        [1] 42
+      text: "\n[1] 42\n"
   isError: false
 ---
-id: 14
+id: 13
 send:
   r: |
     setTimeLimit(elapsed = 10, transient = FALSE)
@@ -145,9 +133,9 @@ result:
       text: "[done]"
   isError: false
 ---
-id: 15
+id: 14
 send:
-  r: '"idle time does not consume a cell limit"'
+  r: "\"idle time does not consume a cell limit\""
 result:
   content:
     - type: text
