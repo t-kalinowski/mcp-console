@@ -268,6 +268,12 @@ mod platform {
         }
     }
 
+    pub(crate) fn publish_python_activation(
+        requirements: crate::worker_protocol::PythonRequirementManifest,
+    ) -> Result<(), String> {
+        send_worker_message(&WorkerMessage::PythonActivated { requirements })
+    }
+
     pub(crate) fn resolve_python_version(
         request: crate::worker_protocol::PythonVersionResolveRequest,
     ) -> Result<String, String> {
@@ -807,7 +813,9 @@ mod platform {
 }
 
 #[cfg(target_os = "macos")]
-pub(crate) use platform::{publish_plot, resolve_python, resolve_python_version, run};
+pub(crate) use platform::{
+    publish_plot, publish_python_activation, resolve_python, resolve_python_version, run,
+};
 
 #[cfg(not(target_os = "macos"))]
 pub(crate) fn run() -> Result<(), Box<dyn std::error::Error>> {
