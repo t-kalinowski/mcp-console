@@ -240,7 +240,7 @@ base::local({
     )
   }
 
-  evaluate <- function(id) {
+  evaluate_impl <- function(id) {
     if (is.null(evaluator)) {
       private <- reticulate::py_run_string(r"---(
 import __main__ as _main
@@ -348,6 +348,18 @@ def _mcp_console_eval_cell(
       invisible(.Call("mcp_console_publish_python_plot", image))
     }
     invisible()
+  }
+
+  interrupted <- FALSE
+
+  evaluate <- function(id) {
+    interrupted <<- FALSE
+    # Observe the condition without handling it; R_tryEval remains the boundary.
+    withCallingHandlers(
+      evaluate_impl(id),
+      interrupt = function(condition) interrupted <<- TRUE,
+      error = function(condition) interrupted <<- FALSE
+    )
   }
 
   environment()

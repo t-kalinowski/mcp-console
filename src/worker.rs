@@ -16,6 +16,7 @@ mod platform {
     static R_REPL_INIT: OnceLock<ReplInit> = OnceLock::new();
     static R_REPL_DO_ONE: OnceLock<ReplDoOne> = OnceLock::new();
     static R_EVENTS: OnceLock<REvents> = OnceLock::new();
+    static R_CHECK_USER_INTERRUPT: OnceLock<CheckUserInterrupt> = OnceLock::new();
     static CELL_SOURCE: Mutex<Option<CellSource>> = Mutex::new(None);
     static WORKER_FAILURE: Mutex<Option<String>> = Mutex::new(None);
     static WORKER_SHUTDOWN: AtomicBool = AtomicBool::new(false);
@@ -28,6 +29,7 @@ mod platform {
     ) -> c_int;
     type CheckActivity = unsafe extern "C-unwind" fn(c_int, c_int) -> *mut c_void;
     type RunHandlers = unsafe extern "C-unwind" fn(*mut c_void, *mut c_void);
+    type CheckUserInterrupt = unsafe extern "C-unwind" fn();
 
     struct CellSource {
         text: String,
@@ -59,6 +61,8 @@ mod platform {
             init: ReplInit,
             do_one: ReplDoOne,
             before_do_one: extern "C" fn(),
+            check_interrupt: CheckUserInterrupt,
+            interrupts_pending: *const c_int,
         ) -> c_int;
     }
 
@@ -70,6 +74,7 @@ mod platform {
         crate::python::configure_worker_environment()?;
         let (reader, writer) = crate::sideband::connect_from_env()?;
         let r_home = harp::command::r_home_setup()?;
+        normalize_interrupt_signal()?;
         initialize_r(&r_home)?;
         WORKER_READER
             .set(Mutex::new(reader))
@@ -105,12 +110,14 @@ mod platform {
         fn handle(&mut self, message: ServerMessage) -> Result<bool, Box<dyn Error>> {
             match message {
                 ServerMessage::Evaluate { language, source } => {
+                    check_interrupts();
                     let result = evaluate_cell(
                         Cell { language, source },
                         &self.graphics,
                         &mut self.python,
                         &mut self.sql,
                     );
+                    check_interrupts();
 
                     if WORKER_SHUTDOWN.load(Ordering::SeqCst) {
                         return Ok(false);
@@ -118,12 +125,14 @@ mod platform {
                     if let Some(message) = take_worker_failure().or_else(|| result.err()) {
                         return Err(io::Error::other(message).into());
                     }
-                    self.writer.send(&WorkerMessage::Completed {
-                        python_checkpoint: self.python.checkpoint()?,
-                    })?;
+                    let python_checkpoint =
+                        defer_interrupts(|| self.python.checkpoint(), check_interrupts)?;
+                    self.writer
+                        .send(&WorkerMessage::Completed { python_checkpoint })?;
                 }
                 ServerMessage::PreparePython { packages } => {
-                    let result = self.python.prepare(packages);
+                    let result =
+                        defer_interrupts(|| self.python.prepare(packages), discard_interrupts);
                     if WORKER_SHUTDOWN.load(Ordering::SeqCst) {
                         return Ok(false);
                     }
@@ -145,7 +154,10 @@ mod platform {
                     }
                 }
                 ServerMessage::PrepareR { library } => {
-                    let result = self.r_environment.prepare(std::path::Path::new(&library));
+                    let result = defer_interrupts(
+                        || self.r_environment.prepare(std::path::Path::new(&library)),
+                        discard_interrupts,
+                    );
                     if WORKER_SHUTDOWN.load(Ordering::SeqCst) {
                         return Ok(false);
                     }
@@ -175,6 +187,53 @@ mod platform {
             }
             Ok(true)
         }
+    }
+
+    fn normalize_interrupt_signal() -> io::Result<()> {
+        if unsafe { libc::signal(libc::SIGINT, libc::SIG_DFL) } == libc::SIG_ERR {
+            return Err(io::Error::last_os_error());
+        }
+        let mut signals = unsafe { std::mem::zeroed() };
+        if unsafe { libc::sigemptyset(&mut signals) } != 0
+            || unsafe { libc::sigaddset(&mut signals, libc::SIGINT) } != 0
+        {
+            return Err(io::Error::last_os_error());
+        }
+        let result =
+            unsafe { libc::pthread_sigmask(libc::SIG_UNBLOCK, &signals, std::ptr::null_mut()) };
+        (result == 0)
+            .then_some(())
+            .ok_or_else(|| io::Error::from_raw_os_error(result))
+    }
+
+    fn check_interrupts() {
+        if !interrupt_pending() {
+            return;
+        }
+        let check = *R_CHECK_USER_INTERRUPT
+            .get()
+            .expect("R interrupt checker should be initialized");
+        let _ = harp::top_level_exec(|| unsafe { check() });
+    }
+
+    fn defer_interrupts<T>(
+        operation: impl FnOnce() -> Result<T, String>,
+        after: impl FnOnce(),
+    ) -> Result<T, String> {
+        let previous = unsafe { libr::get(libr::R_interrupts_suspended) };
+        unsafe { libr::set(libr::R_interrupts_suspended, libr::Rboolean_TRUE) };
+        let result = operation();
+        unsafe { libr::set(libr::R_interrupts_suspended, previous) };
+        after();
+        result
+    }
+
+    fn discard_interrupts() {
+        unsafe { libr::set(libr::R_interrupts_pending, 0) };
+    }
+
+    fn interrupt_pending() -> bool {
+        unsafe { libr::get(libr::R_interrupts_pending) != 0 }
     }
 
     pub(crate) fn resolve_python(
@@ -320,7 +379,7 @@ mod platform {
             return Ok(());
         }
 
-        graphics.begin()?;
+        defer_interrupts(|| graphics.begin(), check_interrupts)?;
         set_cell_source(r);
         let status = run_repl_cell();
         clear_cell_source();
@@ -334,7 +393,7 @@ mod platform {
                 "R worker received unexpected DLL REPL status {status}"
             )),
         };
-        graphics.finish()?;
+        defer_interrupts(|| graphics.finish(), check_interrupts)?;
         result
     }
 
@@ -350,11 +409,11 @@ mod platform {
             );
             return Ok(());
         }
-        graphics.begin()?;
+        defer_interrupts(|| graphics.begin(), check_interrupts)?;
         EVALUATION_STARTED.store(true, Ordering::SeqCst);
         let result = python.evaluate(&source);
         EVALUATION_STARTED.store(false, Ordering::SeqCst);
-        graphics.finish()?;
+        defer_interrupts(|| graphics.finish(), check_interrupts)?;
         result
     }
 
@@ -424,6 +483,8 @@ mod platform {
         let top_level_exec = unsafe { *library.get::<TopLevelExec>(b"R_ToplevelExec\0")? };
         let check_activity = unsafe { *library.get::<CheckActivity>(b"R_checkActivity\0")? };
         let run_handlers = unsafe { *library.get::<RunHandlers>(b"R_runHandlers\0")? };
+        let check_interrupt =
+            unsafe { *library.get::<CheckUserInterrupt>(b"R_CheckUserInterrupt\0")? };
         R_REPL_INIT
             .set(init)
             .map_err(|_| io::Error::other("R REPL was already initialized"))?;
@@ -437,11 +498,14 @@ mod platform {
                 run_handlers,
             })
             .map_err(|_| io::Error::other("R event handlers were already initialized"))?;
+        R_CHECK_USER_INTERRUPT
+            .set(check_interrupt)
+            .map_err(|_| io::Error::other("R interrupt checker was already initialized"))?;
         Ok(())
     }
 
     fn run_ready_handlers(graphics: &crate::r_graphics::Bridge) -> Result<(), String> {
-        graphics.begin()?;
+        defer_interrupts(|| graphics.begin(), check_interrupts)?;
         EVALUATION_STARTED.store(true, Ordering::SeqCst);
         let events = R_EVENTS
             .get()
@@ -455,7 +519,7 @@ mod platform {
             );
         }
         EVALUATION_STARTED.store(false, Ordering::SeqCst);
-        graphics.finish()?;
+        defer_interrupts(|| graphics.finish(), check_interrupts)?;
         observe_stdin_shutdown()
     }
 
@@ -470,10 +534,21 @@ mod platform {
         let do_one = *R_REPL_DO_ONE
             .get()
             .expect("R REPL should be initialized before evaluation");
+        let check_interrupt = *R_CHECK_USER_INTERRUPT
+            .get()
+            .expect("R interrupt checker should be initialized before evaluation");
         // SAFETY: Both function pointers are process-lifetime libR symbols with
         // the declared ABI. This main thread owns R, and the C shim contains R's
         // top-level jump so it cannot bypass a live Rust frame.
-        unsafe { mcp_r_repl_run_cell(init, do_one, before_repl_iteration) }
+        unsafe {
+            mcp_r_repl_run_cell(
+                init,
+                do_one,
+                before_repl_iteration,
+                check_interrupt,
+                libr::R_interrupts_pending,
+            )
+        }
     }
 
     extern "C" fn before_repl_iteration() {

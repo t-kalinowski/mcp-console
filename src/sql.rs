@@ -342,7 +342,7 @@ base::local({
     }
   }
 
-  evaluate <- function(id) {
+  evaluate_impl <- function(id) {
     tryCatch(
       {
         ensure_connection()
@@ -357,6 +357,18 @@ base::local({
       }
     )
     invisible(NULL)
+  }
+
+  interrupted <- FALSE
+
+  evaluate <- function(id) {
+    interrupted <<- FALSE
+    # Observe the condition without handling it; R_tryEval remains the boundary.
+    withCallingHandlers(
+      evaluate_impl(id),
+      interrupt = function(condition) interrupted <<- TRUE,
+      error = function(condition) interrupted <<- FALSE
+    )
   }
 
   environment()

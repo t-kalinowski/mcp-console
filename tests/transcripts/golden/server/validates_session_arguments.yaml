@@ -64,6 +64,18 @@ result:
 ---
 id: 8
 session:
+  action: interrupt
+  requirements:
+    python:
+      - py-yaml12
+result:
+  content:
+    - type: text
+      text: "`requirements` is not supported with `interrupt`"
+  isError: true
+---
+id: 9
+session:
   action: restart
   requirements: {}
 result:
@@ -74,7 +86,7 @@ result:
         `requirements.duckdb` is required
   isError: true
 ---
-id: 9
+id: 10
 session:
   action: restart
   requirements:
@@ -88,7 +100,7 @@ result:
       text: R requirement strings must not contain NUL or line breaks
   isError: true
 ---
-id: 10
+id: 11
 session:
   action: restart
   requirements:
