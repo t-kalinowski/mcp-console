@@ -616,6 +616,7 @@ impl Client {
         }
         let managed =
             select_python_activation(environment.python.as_ref(), requirements, candidates)?;
+        candidates.clear();
         self.commit_locked_runtime_python(&generation, &mut environment, managed)
     }
 
