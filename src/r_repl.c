@@ -30,11 +30,12 @@ static volatile sig_atomic_t returned_normally = 1;
 __attribute__((noinline))
 static int call_do_one(
     repl_do_one_fn do_one,
-    check_interrupt_fn check_interrupt
+    check_interrupt_fn check_interrupt,
+    const volatile int *interrupts_pending
 ) {
-    check_interrupt();
+    if (*interrupts_pending != 0) check_interrupt();
     int status = do_one();
-    check_interrupt();
+    if (*interrupts_pending != 0) check_interrupt();
     returned_normally = 1;
     return status;
 }
@@ -66,7 +67,8 @@ int mcp_r_repl_run_cell(
     repl_init_fn init,
     repl_do_one_fn do_one,
     before_do_one_fn before_do_one,
-    check_interrupt_fn check_interrupt
+    check_interrupt_fn check_interrupt,
+    const volatile int *interrupts_pending
 ) {
     int last_status = 1;
 
@@ -81,7 +83,7 @@ int mcp_r_repl_run_cell(
     for (;;) {
         before_do_one();
         returned_normally = 0;
-        int status = call_do_one(do_one, check_interrupt);
+        int status = call_do_one(do_one, check_interrupt, interrupts_pending);
         if (!returned_normally) {
             returned_normally = 1;
             return 0;

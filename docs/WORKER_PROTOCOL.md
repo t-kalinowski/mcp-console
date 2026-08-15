@@ -523,7 +523,7 @@ Output and images from the final turn precede `completed`.
 The worker does not yet wait on R input handlers between cells, so a timer that becomes ready while the worker is otherwise idle remains pending until a cell boundary.
 
 Before R initializes, the worker restores the default `SIGINT` disposition and unblocks the signal so R can install its handler.
-The worker checks `R_CheckUserInterrupt()` before and after every `R_ReplDLLdo1()` call and at cell boundaries.
+The worker checks whether an interrupt is pending before and after every `R_ReplDLLdo1()` call and at cell boundaries, and calls `R_CheckUserInterrupt()` only when one is pending.
 It temporarily suspends runtime interrupt handling during worker-owned graphics setup and cleanup, Python checkpointing, and explicit preparation, then handles any pending interrupt immediately afterward, so those internal calls do not turn a normal or late interrupt into an infrastructure failure.
 Graphics and checkpoint boundaries report the normal runtime outcome; explicit preparation silently discards the late signal so it does not introduce an unexpected console frame into the preparation exchange.
 Checks that may jump remain inside the C REPL shim or `R_ToplevelExec`; their callback frames hold no Rust values that require destruction.

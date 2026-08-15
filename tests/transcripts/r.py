@@ -750,6 +750,22 @@ def test_interrupts_running_r_evaluation(binary: Path) -> Transcript:
             assert last_tool_text(client) == "[interrupt sent]"
             client.send(r="6 * 7")
             assert last_tool_text(client) == "\n[1] 42\n"
+
+            # Boundary checks must not process elapsed-time limits when no
+            # interrupt is pending; R resets the limit when the cell begins.
+            # fmt: r
+            r = code(r"""
+                setTimeLimit(elapsed = 10, transient = FALSE)
+                invisible(NULL)
+                setTimeLimit(elapsed = 0.05, transient = FALSE)
+                """)
+            client.send(r=r)
+            assert last_tool_text(client) == "[done]"
+            time.sleep(0.1)
+            client.send(r='"idle time does not consume a cell limit"')
+            assert last_tool_text(client) == (
+                '[1] "idle time does not consume a cell limit"\n'
+            )
             transcript = client._finish()
             passed = True
             return transcript

@@ -741,6 +741,51 @@ def test_interrupts_running_python_evaluation(binary: Path) -> Transcript:
         passed = False
         try:
             client._initialize_and_list_tools()
+            # fmt: r
+            r = code(r"""
+                invisible(suppressMessages(base::trace(
+                  "py_run_string",
+                  tracer = quote({
+                    invisible(file.create(file.path(
+                      tempdir(),
+                      "python-r-interrupt-started"
+                    )))
+                    repeat {}
+                  }),
+                  print = FALSE,
+                  where = asNamespace("reticulate")
+                )))
+                """)
+            client.send(r=r)
+            output = last_tool_text(client)
+            assert output == "[done]", repr(output)
+
+            client.send(python="42", timeout_ms=0)
+            assert last_tool_text(client) == "\n[running]"
+            wait_for_worker_file(
+                temporary_path,
+                "python-r-interrupt-started",
+                client,
+            )
+
+            client.session(action="interrupt")
+            assert last_tool_text(client) == "[interrupt sent]"
+            client.send(timeout_ms=3_000)
+            result = client.transcript[-1]["result"]
+            assert result["isError"] is False, result
+            output = last_tool_text(client)
+            assert output == "\n", repr(output)
+
+            # fmt: r
+            r = code(r"""
+                invisible(suppressMessages(base::untrace(
+                  "py_run_string",
+                  where = asNamespace("reticulate")
+                )))
+                """)
+            client.send(r=r)
+            assert last_tool_text(client) == "[done]"
+
             # fmt: python
             python = code("""
                 import os
@@ -1674,6 +1719,15 @@ def test_restarts_after_python_bridge_failure(binary: Path) -> Transcript:
     r = code(r"""
         python_worker_marker <- TRUE
         Sys.setenv(RETICULATE_PYTHON = "/mcp-console-missing-python")
+        invisible(suppressMessages(base::trace(
+          "py_discover_config",
+          tracer = quote(base::signalCondition(base::structure(
+            base::list(message = "synthetic interrupt", call = NULL),
+            class = c("interrupt", "condition")
+          ))),
+          print = FALSE,
+          where = asNamespace("reticulate")
+        )))
         """)
     client.send(r=r)
     client.send(python="6 * 7")

@@ -132,4 +132,26 @@ result:
 
         [1] 42
   isError: false
+---
+id: 14
+send:
+  r: |
+    setTimeLimit(elapsed = 10, transient = FALSE)
+    invisible(NULL)
+    setTimeLimit(elapsed = 0.05, transient = FALSE)
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+id: 15
+send:
+  r: '"idle time does not consume a cell limit"'
+result:
+  content:
+    - type: text
+      text: |
+        [1] "idle time does not consume a cell limit"
+  isError: false
 ...

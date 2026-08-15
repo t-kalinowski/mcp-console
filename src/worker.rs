@@ -62,6 +62,7 @@ mod platform {
             do_one: ReplDoOne,
             before_do_one: extern "C" fn(),
             check_interrupt: CheckUserInterrupt,
+            interrupts_pending: *const c_int,
         ) -> c_int;
     }
 
@@ -206,6 +207,9 @@ mod platform {
     }
 
     fn check_interrupts() {
+        if !interrupt_pending() {
+            return;
+        }
         let check = *R_CHECK_USER_INTERRUPT
             .get()
             .expect("R interrupt checker should be initialized");
@@ -226,6 +230,10 @@ mod platform {
 
     fn discard_interrupts() {
         unsafe { libr::set(libr::R_interrupts_pending, 0) };
+    }
+
+    fn interrupt_pending() -> bool {
+        unsafe { libr::get(libr::R_interrupts_pending) != 0 }
     }
 
     pub(crate) fn resolve_python(
@@ -532,7 +540,15 @@ mod platform {
         // SAFETY: Both function pointers are process-lifetime libR symbols with
         // the declared ABI. This main thread owns R, and the C shim contains R's
         // top-level jump so it cannot bypass a live Rust frame.
-        unsafe { mcp_r_repl_run_cell(init, do_one, before_repl_iteration, check_interrupt) }
+        unsafe {
+            mcp_r_repl_run_cell(
+                init,
+                do_one,
+                before_repl_iteration,
+                check_interrupt,
+                libr::R_interrupts_pending,
+            )
+        }
     }
 
     extern "C" fn before_repl_iteration() {

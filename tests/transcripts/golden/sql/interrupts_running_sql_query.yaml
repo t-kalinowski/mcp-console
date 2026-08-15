@@ -78,9 +78,7 @@ send:
 result:
   content:
     - type: text
-      text: |
-
-        Error: interrupted
+      text: "\n"
   isError: false
 ---
 id: 9
