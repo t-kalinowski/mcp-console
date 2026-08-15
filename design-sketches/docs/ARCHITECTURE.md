@@ -796,6 +796,7 @@ After initialization, reticulate resolves late additions with the exact active P
 Reticulate must verify that it uses the exact live `libpython`, run the candidate's `activate_this.py`, swap its Python configuration, and update its manifest.
 The worker then reports the normalized logical manifest through a standalone `python_activated` event.
 The supervisor immediately accepts the matching candidate, or its prior environment when that manifest did not change.
+Acceptance and the restart-generation check are atomic; a receipt still pending when restart claims the generation is discarded with that worker.
 The `completed` and `python_prepared` operation receipts carry no Python manifest.
 The Python interpreter and its live objects remain in place throughout a successful activation.
 Reticulate owns the live manifest, while the supervisor owns the last reported activation between worker generations.

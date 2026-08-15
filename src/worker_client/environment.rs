@@ -635,13 +635,12 @@ impl Client {
         requirements: crate::worker_protocol::PythonRequirementManifest,
         candidates: &[crate::resolver::ManagedPython],
     ) -> Result<(), String> {
-        self.ensure_generation(&generation)?;
         let environment = self
             .0
             .environment
             .as_ref()
             .ok_or_else(|| "custom worker reported a managed Python activation".to_string())?;
-        let environment = environment
+        let mut environment = environment
             .lock()
             .map_err(|_| "worker environment lock poisoned".to_string())?;
         if environment.custom_worker {
@@ -649,8 +648,7 @@ impl Client {
         }
         let managed =
             select_python_activation(environment.python.as_ref(), requirements, candidates)?;
-        drop(environment);
-        self.commit_runtime_python(generation, managed)
+        self.commit_locked_runtime_python(&generation, &mut environment, managed)
     }
 
     fn commit_runtime_python(
@@ -658,7 +656,6 @@ impl Client {
         generation: WorkerGeneration,
         managed: crate::resolver::ManagedPython,
     ) -> Result<(), String> {
-        self.ensure_generation(&generation)?;
         let environment = self
             .0
             .environment
@@ -667,13 +664,22 @@ impl Client {
         let mut environment = environment
             .lock()
             .map_err(|_| "worker environment lock poisoned".to_string())?;
+        self.commit_locked_runtime_python(&generation, &mut environment, managed)
+    }
+
+    fn commit_locked_runtime_python(
+        &self,
+        generation: &WorkerGeneration,
+        environment: &mut Environment,
+        managed: crate::resolver::ManagedPython,
+    ) -> Result<(), String> {
         let lifecycle = self
             .0
             .lifecycle
             .lock()
             .map_err(|_| "worker lifecycle lock poisoned".to_string())?;
         match lifecycle.state {
-            LifecycleState::Ready if lifecycle.generation.is(&generation) => {
+            LifecycleState::Ready if lifecycle.generation.is(generation) => {
                 environment.python = Some(managed);
                 Ok(())
             }

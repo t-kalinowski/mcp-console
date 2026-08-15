@@ -178,6 +178,7 @@ It materializes an uninitialized manifest.
 After initialization, additive package requirements resolve to candidate environments outside the sandbox, and reticulate performs its exact-`libpython` check, `activate_this.py`, configuration swap, and manifest assignment.
 After reticulate accepts a managed environment, the worker sends a standalone `python_activated` event.
 The server immediately retains the matching resolved candidate or its unchanged current environment.
+Acceptance and the restart-generation check are atomic; a receipt that remains pending when restart claims the generation is discarded with that worker.
 `completed` and `python_prepared` carry no Python manifest.
 When no live activation was required, a successful `python_prepared` retains the last materialized candidate.
 A lazy pre-initialization `py_require()` declaration remains worker-owned until Python initializes or explicit preparation materializes it.

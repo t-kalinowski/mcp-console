@@ -339,6 +339,7 @@ The server retains the selected interpreter and normalized manifest and applies 
 For a server-managed worker, MCP Console seeds reticulate's requirement manifest and intercepts its internal uv environment and Python-version resolution.
 It does not wrap `py_require()`, so reticulate retains its package attribution and activation behavior.
 After reticulate accepts a managed environment, the worker sends a standalone `python_activated` event and the server immediately retains the matching resolved environment.
+Acceptance and the restart-generation check are atomic; a receipt that remains pending when restart claims the generation is discarded with that worker.
 `completed` and `python_prepared` carry no manifest.
 Idle explicit preparation passes structured additions through the same bridge and materializes an uninitialized manifest or activates a same-`libpython` environment while preserving live state.
 Its payload-free `python_prepared` receipt accepts a successfully materialized candidate that did not require live activation.

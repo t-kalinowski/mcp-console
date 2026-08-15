@@ -261,6 +261,8 @@ The `environment` object may contain only `UV_*` settings other than `UV_OFFLINE
 `python_activated.requirements` is the complete normalized logical manifest, not reticulate's request history.
 The receipt is reserved for server-managed workers.
 The built-in worker sends it after reticulate accepts a managed environment; the server immediately retains the matching resolved candidate or its unchanged current environment.
+Receipt acceptance and the restart-generation check are atomic.
+A receipt still pending when restart claims the generation is discarded with that worker.
 Custom workers and caller-configured Python workers do not send `python_activated`; a custom worker that sends it fails the active operation with a managed-Python-activation protocol error.
 `completed` and `python_prepared` carry no Python manifest.
 
