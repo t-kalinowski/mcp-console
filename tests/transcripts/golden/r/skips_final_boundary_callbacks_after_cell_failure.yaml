@@ -2,24 +2,18 @@
 !same-as tests/transcripts/golden/server/initializes_and_lists_tools.yaml
 ---
 id: 3
-session:
-  action: prepare
-  requirements:
-    r:
-      - later
-result:
-  content:
-    - type: text
-      text: "[prepared]"
-  isError: false
----
-id: 4
 send:
   r: |
-    later::later(
-      function() system("printf final-boundary-callback-ran"),
-      delay = 0
-    )
+    dyn.load("./mcp_test_input_handler.so")
+    callback_fifo <- file.path(tempdir(), "skipped-handler-fifo")
+    invisible(.Call(
+      "mcp_test_register_input_handler",
+      callback_fifo,
+      function() system("printf final-boundary-callback-ran")
+    ))
+    writer <- fifo(callback_fifo, open = "wb")
+    writeBin(as.raw(1), writer)
+    close(writer)
     plot(1)
     old_umask <- Sys.umask("0777")
     on.exit(Sys.umask(old_umask), add = TRUE)
