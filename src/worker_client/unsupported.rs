@@ -35,6 +35,10 @@ impl Worker {
         _resolve_python: impl FnMut(
             crate::worker_protocol::PythonResolveRequest,
         ) -> Result<crate::resolver::ManagedPython, String>,
+        _activate_python: impl FnMut(
+            crate::worker_protocol::PythonRequirementManifest,
+            &[crate::resolver::ManagedPython],
+        ) -> Result<(), String>,
     ) -> Result<
         Result<
             (
@@ -59,6 +63,10 @@ impl Worker {
         _resolve_python_version: impl FnMut(
             crate::worker_protocol::PythonVersionResolveRequest,
         ) -> Result<String, String>,
+        _activate_python: impl FnMut(
+            crate::worker_protocol::PythonRequirementManifest,
+            &[crate::resolver::ManagedPython],
+        ) -> Result<(), String>,
         _checkpoint_python: impl FnMut(
             Option<crate::worker_protocol::PythonRequirementManifest>,
             Vec<crate::resolver::ManagedPython>,

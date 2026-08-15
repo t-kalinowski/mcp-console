@@ -185,6 +185,10 @@ impl Worker {
         mut resolve_python: impl FnMut(
             crate::worker_protocol::PythonResolveRequest,
         ) -> Result<crate::resolver::ManagedPython, String>,
+        mut activate_python: impl FnMut(
+            crate::worker_protocol::PythonRequirementManifest,
+            &[crate::resolver::ManagedPython],
+        ) -> Result<(), String>,
     ) -> Result<
         Result<
             (
@@ -205,6 +209,9 @@ impl Worker {
                 WorkerMessage::ResolvePython { request } => {
                     python_candidates
                         .extend(self.resolve_python_request(request, &mut resolve_python)?);
+                }
+                WorkerMessage::PythonActivated { requirements } => {
+                    activate_python(requirements, &python_candidates)?;
                 }
                 WorkerMessage::PythonPrepared { python_checkpoint } => {
                     return Ok(Ok((python_checkpoint, python_candidates)));
@@ -230,6 +237,10 @@ impl Worker {
         mut resolve_python_version: impl FnMut(
             crate::worker_protocol::PythonVersionResolveRequest,
         ) -> Result<String, String>,
+        mut activate_python: impl FnMut(
+            crate::worker_protocol::PythonRequirementManifest,
+            &[crate::resolver::ManagedPython],
+        ) -> Result<(), String>,
         mut checkpoint_python: impl FnMut(
             Option<crate::worker_protocol::PythonRequirementManifest>,
             Vec<crate::resolver::ManagedPython>,
@@ -263,6 +274,9 @@ impl Worker {
                 }
                 WorkerMessage::ResolvePythonVersion { request } => {
                     self.resolve_python_version_request(request, &mut resolve_python_version)?;
+                }
+                WorkerMessage::PythonActivated { requirements } => {
+                    activate_python(requirements, &python_candidates)?;
                 }
                 WorkerMessage::Completed { python_checkpoint } => {
                     evaluation.input_complete()?;

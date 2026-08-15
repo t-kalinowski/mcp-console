@@ -440,6 +440,8 @@ impl Client {
             Vec<crate::resolver::ManagedPython>,
         ) -> Result<(), String>,
     ) -> Result<(), SendFailure> {
+        let activator = self.clone();
+        let activation_generation = generation.clone();
         self.ensure_generation(&generation)
             .map_err(SendFailure::from)?;
         let mut worker = self
@@ -469,6 +471,13 @@ impl Client {
                 evaluation,
                 resolve_python,
                 resolve_python_version,
+                move |requirements, candidates| {
+                    activator.activate_runtime_python(
+                        activation_generation.clone(),
+                        requirements,
+                        candidates,
+                    )
+                },
                 checkpoint_python,
             )
             .map_err(|message| evaluation.classify_failure(message));

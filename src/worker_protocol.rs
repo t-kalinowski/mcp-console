@@ -112,6 +112,9 @@ pub(crate) enum WorkerMessage {
     ResolvePythonVersion {
         request: PythonVersionResolveRequest,
     },
+    PythonActivated {
+        requirements: PythonRequirementManifest,
+    },
     PythonPrepared {
         python_checkpoint: PythonRequirementManifest,
     },

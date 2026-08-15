@@ -337,6 +337,16 @@ def main() -> None:
             )
             continue
 
+        if source == "report managed python activation":
+            send(
+                writer,
+                {
+                    "kind": "python_activated",
+                    "requirements": {"packages": ["numpy", "pandas"]},
+                },
+            )
+            continue
+
         if source == "emit console kinds":
             send_output(writer, "zod output\n")
             send_output(writer, "zod diagnostic\n", ConsoleKind.DIAGNOSTIC)
