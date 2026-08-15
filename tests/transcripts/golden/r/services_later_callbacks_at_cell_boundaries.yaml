@@ -30,7 +30,8 @@ send:
     dyn.load("./mcp_test_input_handler.so")
     invisible(.Call(
       "mcp_test_register_input_handler",
-      "input-handler-fifo"
+      file.path(tempdir(), "input-handler-fifo"),
+      function() cat("cell start callback\n")
     ))
 result:
   content:
@@ -40,7 +41,7 @@ result:
 ---
 id: 6
 send:
-  r: cat("cell body\n")
+  r: "cat(\"cell body\\n\")"
 result:
   content:
     - type: text
