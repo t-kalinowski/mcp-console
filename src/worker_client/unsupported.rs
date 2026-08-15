@@ -37,7 +37,7 @@ impl Worker {
         ) -> Result<crate::resolver::ManagedPython, String>,
         _activate_python: impl FnMut(
             crate::worker_protocol::PythonRequirementManifest,
-            &[crate::resolver::ManagedPython],
+            &mut Vec<crate::resolver::ManagedPython>,
         ) -> Result<(), String>,
     ) -> Result<Result<Option<crate::resolver::ManagedPython>, String>, String> {
         let _ = packages;
@@ -56,7 +56,7 @@ impl Worker {
         ) -> Result<String, String>,
         _activate_python: impl FnMut(
             crate::worker_protocol::PythonRequirementManifest,
-            &[crate::resolver::ManagedPython],
+            &mut Vec<crate::resolver::ManagedPython>,
         ) -> Result<(), String>,
     ) -> Result<(), String> {
         let crate::cell::Cell { language, source } = cell;
