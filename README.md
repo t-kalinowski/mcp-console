@@ -125,9 +125,9 @@ An active host resolver or live worker can be sent an interrupt:
 { "action": "interrupt" }
 ```
 
-The call requests `SIGINT` for an active host resolver process group, or otherwise sends it to the live worker, and returns `[interrupt sent]` without waiting for an acknowledgment or result.
+The call requests `SIGINT` for an active host resolver process group, or otherwise sends it to the live worker, and returns `[interrupt sent]` after the resolver accepts the request or the worker signal succeeds, without waiting for the resolver or evaluation to finish.
 It does not start a process; when neither target exists, it returns `worker is not running`.
-An interrupted resolver reports its ordinary resolution failure.
+A resolver signal error is returned by both the interrupt and resolution calls; an interrupted resolver otherwise reports its ordinary resolution failure.
 A worker signal is not assigned to a cell: an idle signal is consumed at the next managed boundary, and a signal during R, reticulate Python, or DuckDB is handled by that runtime.
 Code can catch or delay the signal, so use `restart` when the worker does not return.
 An empty managed `readline()`, Python `input()`, or debugger prompt does not provide a periodic worker boundary and may continue waiting.

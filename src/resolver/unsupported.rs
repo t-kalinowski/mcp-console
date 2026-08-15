@@ -16,8 +16,8 @@ impl ResolverStopHandle {
         Ok(())
     }
 
-    pub(crate) fn interrupt(&self) -> bool {
-        false
+    pub(crate) fn interrupt(&self) -> Result<bool, String> {
+        Ok(false)
     }
 }
 
