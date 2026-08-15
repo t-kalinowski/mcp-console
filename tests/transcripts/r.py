@@ -685,31 +685,89 @@ def test_interrupts_running_r_evaluation(binary: Path) -> Transcript:
         passed = False
         try:
             client._initialize_and_list_tools()
+            client.send(r='reticulate::py_run_string("interrupt_state = 41")')
+            assert last_tool_text(client) == "[done]"
+
             # fmt: r
             r = code(r"""
-                interrupt_state <- 41L
-                invisible(file.create(file.path(
-                  tempdir(),
-                  "r-interrupt-started"
-                )))
-                repeat {}
+                interrupt_state <- 40L
+                tryCatch(
+                  {
+                    invisible(file.create(file.path(
+                      tempdir(),
+                      "r-native-interrupt-started"
+                    )))
+                    repeat {}
+                  },
+                  interrupt = function(condition) {
+                    interrupt_state <<- interrupt_state + 1L
+                    cat("caught native R interrupt\n")
+                  },
+                  finally = cat("native R cleanup\n")
+                )
+                for (attempt in 1:2) {
+                  py$interrupt_marker <- file.path(
+                    tempdir(),
+                    paste0("r-interrupt-", attempt, "-started")
+                  )
+                  body <- if (attempt == 1L) {
+                    "import time\ntime.sleep(60)"
+                  } else {
+                    "while True:\n    pass"
+                  }
+                  python <- paste(
+                    "from pathlib import Path",
+                    "Path(interrupt_marker).touch()",
+                    body,
+                    sep = "\n"
+                  )
+                  tryCatch(
+                    reticulate::py_run_string(python),
+                    interrupt = function(condition) {
+                      interrupt_state <<- interrupt_state + 1L
+                      cat("caught R interrupt ", attempt, "\n", sep = "")
+                    },
+                    finally = cat("cleanup ", attempt, "\n", sep = "")
+                  )
+                }
+                cat("continued with state ", interrupt_state, "\n", sep = "")
                 """)
             client.send(r=r, timeout_ms=0)
             assert last_tool_text(client) == "\n[running]"
             wait_for_worker_file(
                 temporary_path,
-                "r-interrupt-started",
+                "r-native-interrupt-started",
+                client,
+            )
+
+            client.session(action="interrupt")
+            assert last_tool_text(client) == "[interrupt sent]"
+            wait_for_worker_file(
+                temporary_path,
+                "r-interrupt-1-started",
+                client,
+            )
+
+            client.session(action="interrupt")
+            assert last_tool_text(client) == "[interrupt sent]"
+            wait_for_worker_file(
+                temporary_path,
+                "r-interrupt-2-started",
                 client,
             )
 
             client.session(action="interrupt")
             assert last_tool_text(client) == "[interrupt sent]"
             client.send(timeout_ms=3_000)
-            output = last_tool_text(client)
-            assert output == "\n", repr(output)
-
-            client.send(r="interrupt_state + 1L")
-            assert last_tool_text(client) == "[1] 42\n"
+            assert last_tool_text(client) == (
+                "caught native R interrupt\n"
+                "native R cleanup\n"
+                "caught R interrupt 1\n"
+                "cleanup 1\n"
+                "caught R interrupt 2\n"
+                "cleanup 2\n"
+                "continued with state 43\n"
+            )
 
             client.session(action="prepare", requirements={"r": ["later"]})
             assert last_tool_text(client) == "[prepared]"
@@ -745,6 +803,52 @@ def test_interrupts_running_r_evaluation(binary: Path) -> Transcript:
             ), repr(output)
             client.send(r="c(boundary_interrupt_state, boundary_interrupt_cleanup)")
             assert last_tool_text(client) == "[1] 42  1\n"
+
+            # fmt: r
+            r = code(r"""
+                tryCatch(
+                  {
+                    invisible(file.create(file.path(
+                      tempdir(),
+                      "r-readline-started"
+                    )))
+                    readline("interrupt> ")
+                  },
+                  interrupt = function(condition) {
+                    cat("caught readline interrupt\n")
+                  },
+                  finally = cat("readline cleanup\n")
+                )
+                cat("continued after readline\n")
+                """)
+            client.send(r=r)
+            assert last_tool_text(client) == (
+                '[input requested: "interrupt> "]\n[stdin needed]'
+            )
+            wait_for_worker_file(
+                temporary_path,
+                "r-readline-started",
+                client,
+            )
+            client.send(stdin="preserved fragment", timeout_ms=50)
+            assert last_tool_text(client) == "\n[stdin needed]"
+
+            client.session(action="interrupt")
+            assert last_tool_text(client) == "[interrupt sent]"
+            client.send(timeout_ms=3_000)
+            assert last_tool_text(client) == (
+                "caught readline interrupt\n"
+                "readline cleanup\n"
+                "continued after readline\n"
+            )
+
+            client.send(r='readline("after interrupt> ")', stdin="\n")
+            assert last_tool_text(client) == (
+                '[input requested: "after interrupt> "]\n[1] "preserved fragment"\n'
+            )
+
+            client.send(r="interrupt_state")
+            assert last_tool_text(client) == "[1] 43\n"
 
             client.session(action="interrupt")
             assert last_tool_text(client) == "[interrupt sent]"

@@ -100,6 +100,7 @@ pub(crate) enum WorkerMessage {
         prompt: String,
     },
     InputReceived,
+    InputCancelled,
     RPrepared {
         library: String,
     },

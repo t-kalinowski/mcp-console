@@ -239,6 +239,7 @@ The complete implemented message set is:
 | worker → server | `{"kind":"image","data":"...","mime_type":"image/png"}` | Append one base64-encoded image. |
 | worker → server | `{"kind":"input_requested","prompt":"..."}` | Report that the runtime requested input. |
 | worker → server | `{"kind":"input_received"}` | Report that the current read succeeded. |
+| worker → server | `{"kind":"input_cancelled"}` | Report that an interrupt cancelled the current managed read. |
 | worker → server | `{"kind":"r_prepared","library":"..."}` | Confirm the normalized live R library path. |
 | worker → server | `{"kind":"r_preparation_failed","message":"..."}` | Report a synchronized live R update failure without discarding the worker. |
 | worker → server | `{"kind":"resolve_python","request":{"requirements":{"packages":["numpy","pandas"]},"retained_requirements":{"packages":["numpy","pandas"]},"environment":{}}}` | Resolve the complete proposed reticulate manifest outside the sandbox. |
@@ -286,7 +287,8 @@ The recorder decodes it byte-for-byte into an artifact, while the MCP image reta
 The frame's `mime_type` becomes the MCP image `mimeType` unchanged; only `image/png` receives a format-specific `.png` artifact suffix, and other MIME types use `.bin`.
 `input_requested` appends one server-owned MCP request record and starts one provisional input state.
 The matching `input_received` clears that state after the runtime read succeeds without removing the record.
-Only one request may be outstanding: a second request, a receipt without a request, or completion before its receipt is a protocol failure.
+An interrupting built-in worker instead sends `input_cancelled` before the runtime unwinds; this clears the same provisional state and preserves the request record.
+Only one request may be outstanding: a second request, a receipt or cancellation without a request, or completion before either terminal frame is a protocol failure.
 `completed` ends the sideband evaluation.
 The server must accept its optional Python checkpoint before the MCP evaluation completes and the next cell is permitted.
 
@@ -357,7 +359,7 @@ For a call with `r`, `python`, or `sql`, the evaluation wait includes lazy worke
 
 Every `input_requested` frame immediately adds `[input requested: <prompt>]` to pending MCP output, with the prompt encoded as a JSON string.
 Its outstanding state remains provisional for 10 milliseconds.
-If `input_received` arrives first, the server retains the request record and continues waiting for another request, completion, or the MCP deadline.
+If `input_received` or `input_cancelled` arrives first, the server retains the request record and continues waiting for another request, completion, or the MCP deadline.
 If the grace expires first, the call returns output collected so far, the request record, and the `\n[stdin needed]` banner before that deadline.
 Supplying nonempty stdin for an outstanding request starts a fresh 10-millisecond grace window; the MCP deadline reports a still-outstanding request immediately, even inside that window.
 A pending input request wins over the `\n[running]` banner at the deadline.
@@ -428,6 +430,7 @@ A newline-free fragment remains pending until later stdin completes it or worker
 The R console callback consumes only through one newline or its supplied buffer; it does not prefetch later lines from fd 0.
 `input_requested` is an observation of worker state, not permission to write.
 After a nonempty callback read, `input_received` closes that provisional request before the runtime resumes.
+When an interrupt ends the managed read, `input_cancelled` closes it before the runtime unwinds.
 Each request frame produces one record, regardless of how many stdin payloads or polls occur while it remains outstanding.
 It does not acknowledge a particular stdin submission, identify which bytes satisfied the read, or report bytes consumed by code that reads fd 0 directly.
 If no receipt arrives during the grace window, the request remains exposed as `\n[stdin needed]`; a partial follow-up therefore returns only `\n[stdin needed]` again rather than repeating the request record or returning `\n[running]`.
@@ -454,6 +457,7 @@ New code is rejected while an evaluation or its uncollected result is active.
 | evaluating | worker → server `image` | evaluating |
 | evaluating | worker → server `input_requested` | append request record; evaluating, input provisional |
 | evaluating, input provisional | worker → server `input_received` | retain request record; evaluating |
+| evaluating, input provisional | worker → server `input_cancelled` | retain request record; evaluating |
 | evaluating or preparing Python | worker → server `resolve_python` | host resolving; worker waiting |
 | host resolving | server → worker `python_resolved` | prior operation; retain candidate |
 | host resolving | server → worker `python_resolution_failed` | prior operation; prior checkpoint unchanged |
@@ -538,20 +542,22 @@ The Python and SQL bridges observe escaping R interrupt conditions without handl
 Host resolution remains interruptible through its own process-group target while worker-side runtime interrupt handling stays suspended across preparation.
 
 The worker supplies cell source through `ReadConsole` before each top-level evaluation starts.
-For every evaluation-time `ReadConsole` call, the callback sends `input_requested`, then reads fd 0 directly until one newline arrives or R's supplied buffer is full.
+For every evaluation-time `ReadConsole` call, the callback sends `input_requested`, consumes any preserved managed-input carry, then reads fd 0 until one newline arrives or R's supplied buffer is full.
 The built-in worker sends R's prompt field verbatim, including trailing spaces or an empty prompt.
 The server preserves that value but JSON-quotes it in the MCP input-request record instead of appending it as bare prompt text.
 After a nonempty read succeeds, it sends `input_received` before returning the bytes to R.
 A newline-free fragment shorter than that buffer keeps the callback blocked, while bytes after a returned chunk remain in the pipe for a later `ReadConsole` call or a direct fd-0 reader.
+While the callback is waiting, it polls fd 0 and R's pending-interrupt flag.
+On an interrupt, it preserves any partial line, sends `input_cancelled`, unwinds its Rust frames, and checks the interrupt from a C-owned frame so R or reticulate can handle it normally.
+That carry belongs to the managed console callback; a direct fd-0 reader cannot access bytes the callback already consumed.
 It uses R's busy callback rather than prompt text to distinguish cell source from evaluated-code input.
 Unread fd-0 input remains available across evaluation boundaries.
 Submitted source references are not retained.
 Parse, evaluation, and print errors are returned as console text followed by `completed`, so the worker remains available even though the protocol has no structured language-error message.
 The worker maps `R_WriteConsoleEx` type 0 to `console_output` and every nonzero type to `console_diagnostic`.
 It also maps `R_ShowMessage` and worker-generated language diagnostics to `console_diagnostic`.
-An empty managed console read has no periodic interrupt boundary: the fd-0 read retries `EINTR` and continues waiting.
-This applies to R `readline()` and to Python `input()` and debugger prompts routed through reticulate.
-The signal remains pending until the read returns; explicit restart is the bounded way to stop that wait.
+This managed cancellation applies to R `readline()` and to Python `input()` and debugger prompts routed through reticulate.
+Direct fd-0 readers do not emit input frames or add a periodic interrupt boundary.
 Subprocesses and descendants that write directly to retained fd 1 or fd 2 bypass the R console callbacks, but their output is still collected through the standard-stream pipes.
 
 At startup, the worker installs a managed function as R's default graphics device.

@@ -7,6 +7,7 @@ typedef void (*before_do_one_fn)(void);
 typedef int (*top_level_exec_fn)(void (*)(void *), void *);
 typedef void *(*check_activity_fn)(int, int);
 typedef void (*run_handlers_fn)(void *, void *);
+typedef int (*read_console_fn)(const char *, unsigned char *, int, int);
 typedef void (*check_interrupt_fn)(void);
 
 struct event_handlers {
@@ -14,6 +15,38 @@ struct event_handlers {
     run_handlers_fn run_handlers;
     void *input_handlers;
 };
+
+static read_console_fn read_console;
+static check_interrupt_fn check_interrupt;
+static const volatile int *interrupts_pending;
+
+void mcp_r_console_configure(
+    read_console_fn read,
+    check_interrupt_fn check,
+    const volatile int *pending
+) {
+    read_console = read;
+    check_interrupt = check;
+    interrupts_pending = pending;
+}
+
+/*
+ * Rust reports cancellation with -1 after its stack has unwound. Check from
+ * this C frame because R may jump to its top-level interrupt context.
+ */
+int mcp_r_read_console(
+    const char *prompt,
+    unsigned char *buffer,
+    int length,
+    int add_history
+) {
+    int status = read_console(prompt, buffer, length, add_history);
+    if (status < 0) {
+        if (*interrupts_pending != 0) check_interrupt();
+        return 0;
+    }
+    return status;
+}
 
 /*
  * R errors jump to the context installed by R_ReplDLLinit(). Keep that

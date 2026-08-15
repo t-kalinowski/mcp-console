@@ -3,13 +3,57 @@
 ---
 id: 3
 send:
+  r: reticulate::py_run_string("interrupt_state = 41")
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+id: 4
+send:
   r: |
-    interrupt_state <- 41L
-    invisible(file.create(file.path(
-      tempdir(),
-      "r-interrupt-started"
-    )))
-    repeat {}
+    interrupt_state <- 40L
+    tryCatch(
+      {
+        invisible(file.create(file.path(
+          tempdir(),
+          "r-native-interrupt-started"
+        )))
+        repeat {}
+      },
+      interrupt = function(condition) {
+        interrupt_state <<- interrupt_state + 1L
+        cat("caught native R interrupt\n")
+      },
+      finally = cat("native R cleanup\n")
+    )
+    for (attempt in 1:2) {
+      py$interrupt_marker <- file.path(
+        tempdir(),
+        paste0("r-interrupt-", attempt, "-started")
+      )
+      body <- if (attempt == 1L) {
+        "import time\ntime.sleep(60)"
+      } else {
+        "while True:\n    pass"
+      }
+      python <- paste(
+        "from pathlib import Path",
+        "Path(interrupt_marker).touch()",
+        body,
+        sep = "\n"
+      )
+      tryCatch(
+        reticulate::py_run_string(python),
+        interrupt = function(condition) {
+          interrupt_state <<- interrupt_state + 1L
+          cat("caught R interrupt ", attempt, "\n", sep = "")
+        },
+        finally = cat("cleanup ", attempt, "\n", sep = "")
+      )
+    }
+    cat("continued with state ", interrupt_state, "\n", sep = "")
   timeout_ms: 0
 result:
   content:
@@ -19,7 +63,7 @@ result:
         [running]
   isError: false
 ---
-id: 4
+id: 5
 session:
   action: interrupt
 result:
@@ -28,26 +72,41 @@ result:
       text: "[interrupt sent]"
   isError: false
 ---
-id: 5
+id: 6
+session:
+  action: interrupt
+result:
+  content:
+    - type: text
+      text: "[interrupt sent]"
+  isError: false
+---
+id: 7
+session:
+  action: interrupt
+result:
+  content:
+    - type: text
+      text: "[interrupt sent]"
+  isError: false
+---
+id: 8
 send:
   timeout_ms: 3000
 result:
   content:
     - type: text
-      text: "\n"
-  isError: false
----
-id: 6
-send:
-  r: interrupt_state + 1L
-result:
-  content:
-    - type: text
       text: |
-        [1] 42
+        caught native R interrupt
+        native R cleanup
+        caught R interrupt 1
+        cleanup 1
+        caught R interrupt 2
+        cleanup 2
+        continued with state 43
   isError: false
 ---
-id: 7
+id: 9
 session:
   action: prepare
   requirements:
@@ -59,7 +118,7 @@ result:
       text: "[prepared]"
   isError: false
 ---
-id: 8
+id: 10
 send:
   r: |
     later::later(
@@ -83,7 +142,7 @@ result:
         [running]
   isError: false
 ---
-id: 9
+id: 11
 session:
   action: interrupt
 result:
@@ -92,7 +151,7 @@ result:
       text: "[interrupt sent]"
   isError: false
 ---
-id: 10
+id: 12
 send:
   timeout_ms: 3000
 result:
@@ -103,7 +162,7 @@ result:
         later: exception occurred while executing callback.
   isError: false
 ---
-id: 11
+id: 13
 send:
   r: c(boundary_interrupt_state, boundary_interrupt_cleanup)
 result:
@@ -113,7 +172,44 @@ result:
         [1] 42  1
   isError: false
 ---
-id: 12
+id: 14
+send:
+  r: |
+    tryCatch(
+      {
+        invisible(file.create(file.path(
+          tempdir(),
+          "r-readline-started"
+        )))
+        readline("interrupt> ")
+      },
+      interrupt = function(condition) {
+        cat("caught readline interrupt\n")
+      },
+      finally = cat("readline cleanup\n")
+    )
+    cat("continued after readline\n")
+result:
+  content:
+    - type: text
+      text: |-
+        [input requested: "interrupt> "]
+        [stdin needed]
+  isError: false
+---
+id: 15
+send:
+  stdin: preserved fragment
+  timeout_ms: 50
+result:
+  content:
+    - type: text
+      text: |-
+
+        [stdin needed]
+  isError: false
+---
+id: 16
 session:
   action: interrupt
 result:
@@ -122,7 +218,50 @@ result:
       text: "[interrupt sent]"
   isError: false
 ---
-id: 13
+id: 17
+send:
+  timeout_ms: 3000
+result:
+  content:
+    - type: text
+      text: |
+        caught readline interrupt
+        readline cleanup
+        continued after readline
+  isError: false
+---
+id: 18
+send:
+  r: readline("after interrupt> ")
+  stdin: "\n"
+result:
+  content:
+    - type: text
+      text: |
+        [input requested: "after interrupt> "]
+        [1] "preserved fragment"
+  isError: false
+---
+id: 19
+send:
+  r: interrupt_state
+result:
+  content:
+    - type: text
+      text: |
+        [1] 43
+  isError: false
+---
+id: 20
+session:
+  action: interrupt
+result:
+  content:
+    - type: text
+      text: "[interrupt sent]"
+  isError: false
+---
+id: 21
 send:
   r: 6 * 7
 result:
@@ -133,7 +272,7 @@ result:
         [1] 42
   isError: false
 ---
-id: 14
+id: 22
 send:
   r: |
     setTimeLimit(elapsed = 10, transient = FALSE)
@@ -145,7 +284,7 @@ result:
       text: "[done]"
   isError: false
 ---
-id: 15
+id: 23
 send:
   r: '"idle time does not consume a cell limit"'
 result:

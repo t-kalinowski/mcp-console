@@ -18,6 +18,7 @@ mod platform {
     static R_EVENTS: OnceLock<REvents> = OnceLock::new();
     static R_CHECK_USER_INTERRUPT: OnceLock<CheckUserInterrupt> = OnceLock::new();
     static CELL_SOURCE: Mutex<Option<CellSource>> = Mutex::new(None);
+    static CONSOLE_STDIN_CARRY: Mutex<Vec<u8>> = Mutex::new(Vec::new());
     static WORKER_FAILURE: Mutex<Option<String>> = Mutex::new(None);
     static WORKER_SHUTDOWN: AtomicBool = AtomicBool::new(false);
     static EVALUATION_STARTED: AtomicBool = AtomicBool::new(false);
@@ -29,6 +30,12 @@ mod platform {
     ) -> c_int;
     type CheckActivity = unsafe extern "C-unwind" fn(c_int, c_int) -> *mut c_void;
     type RunHandlers = unsafe extern "C-unwind" fn(*mut c_void, *mut c_void);
+    type ReadConsole = unsafe extern "C-unwind" fn(
+        prompt: *const c_char,
+        buffer: *mut c_uchar,
+        length: c_int,
+        add_history: c_int,
+    ) -> c_int;
     type CheckUserInterrupt = unsafe extern "C-unwind" fn();
 
     struct CellSource {
@@ -63,6 +70,20 @@ mod platform {
             before_do_one: extern "C" fn(),
             check_interrupt: CheckUserInterrupt,
             interrupts_pending: *const c_int,
+        ) -> c_int;
+    }
+
+    unsafe extern "C-unwind" {
+        fn mcp_r_console_configure(
+            read_console: ReadConsole,
+            check_interrupt: CheckUserInterrupt,
+            interrupts_pending: *const c_int,
+        );
+        fn mcp_r_read_console(
+            prompt: *const c_char,
+            buffer: *mut c_uchar,
+            length: c_int,
+            add_history: c_int,
         ) -> c_int;
     }
 
@@ -461,7 +482,7 @@ mod platform {
             libr::set(libr::R_Outputfile, std::ptr::null_mut());
             libr::set(libr::ptr_R_WriteConsole, None);
             libr::set(libr::ptr_R_WriteConsoleEx, Some(r_write_console));
-            libr::set(libr::ptr_R_ReadConsole, Some(r_read_console));
+            libr::set(libr::ptr_R_ReadConsole, Some(mcp_r_read_console));
             libr::set(libr::ptr_R_ShowMessage, Some(r_show_message));
             libr::set(libr::ptr_R_Busy, Some(r_busy));
             libr::setup_Rmainloop();
@@ -503,6 +524,9 @@ mod platform {
         R_CHECK_USER_INTERRUPT
             .set(check_interrupt)
             .map_err(|_| io::Error::other("R interrupt checker was already initialized"))?;
+        unsafe {
+            mcp_r_console_configure(r_read_console, check_interrupt, libr::R_interrupts_pending)
+        };
         Ok(())
     }
 
@@ -732,6 +756,12 @@ mod platform {
                 {
                     record_worker_failure(error);
                     return console_eof(buf);
+                } else if read == 0 && interrupt_pending() {
+                    if let Err(error) = send_input_cancelled() {
+                        record_worker_failure(error);
+                        return console_eof(buf);
+                    }
+                    return -1;
                 }
                 read
             }
@@ -760,6 +790,14 @@ mod platform {
             .map_err(|error| format!("R worker failed to report received input: {error}"))
     }
 
+    fn send_input_cancelled() -> Result<(), String> {
+        WORKER_WRITER
+            .get()
+            .expect("R worker sideband writer should be initialized")
+            .send(&WorkerMessage::InputCancelled)
+            .map_err(|error| format!("R worker failed to cancel an input request: {error}"))
+    }
+
     fn send_image(data: String) -> Result<(), String> {
         WORKER_WRITER
             .get()
@@ -778,8 +816,51 @@ mod platform {
     }
 
     fn read_console_stdin(buf: *mut c_uchar, buflen: c_int) -> Result<c_int, String> {
-        let mut length = 0;
-        while length < (buflen as usize) - 1 {
+        let capacity = (buflen as usize) - 1;
+        let mut carry = CONSOLE_STDIN_CARRY
+            .lock()
+            .map_err(|_| "R worker stdin carry lock poisoned".to_string())?;
+        let mut length = carry.len().min(capacity);
+        unsafe {
+            std::ptr::copy_nonoverlapping(carry.as_ptr(), buf, length);
+        }
+        carry.drain(..length);
+        drop(carry);
+
+        while length < capacity {
+            if interrupt_pending() {
+                preserve_console_stdin(buf, length)?;
+                return Ok(console_eof(buf));
+            }
+            let mut descriptor = libc::pollfd {
+                fd: libc::STDIN_FILENO,
+                events: libc::POLLIN,
+                revents: 0,
+            };
+            let ready = unsafe { libc::poll(&mut descriptor, 1, 10) };
+            if ready == 0 {
+                continue;
+            }
+            if ready < 0 {
+                let error = io::Error::last_os_error();
+                if error.kind() == io::ErrorKind::Interrupted {
+                    continue;
+                }
+                return Err(format!("R worker stdin poll failed: {error}"));
+            }
+            if descriptor.revents & libc::POLLNVAL != 0 {
+                return Err("R worker stdin descriptor is invalid".to_string());
+            }
+            if descriptor.revents & (libc::POLLIN | libc::POLLHUP) == 0 {
+                return Err(format!(
+                    "R worker stdin poll returned unexpected events {}",
+                    descriptor.revents
+                ));
+            }
+            if interrupt_pending() {
+                preserve_console_stdin(buf, length)?;
+                return Ok(console_eof(buf));
+            }
             let byte = unsafe { buf.add(length) };
             let count = unsafe { libc::read(libc::STDIN_FILENO, byte.cast(), 1) };
             if count == 1 {
@@ -803,6 +884,19 @@ mod platform {
             *buf.add(length) = 0;
         }
         Ok(i32::from(length > 0))
+    }
+
+    fn preserve_console_stdin(buf: *const c_uchar, length: usize) -> Result<(), String> {
+        if length == 0 {
+            return Ok(());
+        }
+        let mut preserved = unsafe { std::slice::from_raw_parts(buf, length) }.to_vec();
+        let mut carry = CONSOLE_STDIN_CARRY
+            .lock()
+            .map_err(|_| "R worker stdin carry lock poisoned".to_string())?;
+        preserved.append(&mut carry);
+        *carry = preserved;
+        Ok(())
     }
 }
 
