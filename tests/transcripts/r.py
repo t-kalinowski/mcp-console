@@ -63,14 +63,22 @@ def test_services_later_callbacks_at_cell_boundaries(binary: Path) -> Transcript
     client.send(r=r)
     assert last_tool_text(client) == "cell end callback\n"
 
-    # Leave a callback pending until the next cell begins.
+    # Leave a callback pending until fd 0 becomes readable, then service it
+    # before the next cell begins.
     # fmt: r
     r = code(r"""
-        later::later(function() cat("cell start callback\n"), delay = 1)
+        later::later_fd(
+          function(ready) {
+            stopifnot(identical(ready, TRUE))
+            cat("cell start callback\n")
+          },
+          readfds = 0L
+        )
         """)
     client.send(r=r)
     assert last_tool_text(client) == "[done]"
-    time.sleep(1.1)
+    client.send(stdin="callback gate")
+    assert last_tool_text(client) == "\n[idle]"
     client.send(r='cat("cell body\\n")')
     assert last_tool_text(client) == "cell start callback\ncell body\n"
     return client._finish()

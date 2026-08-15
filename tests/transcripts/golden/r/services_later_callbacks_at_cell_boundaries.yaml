@@ -27,7 +27,13 @@ result:
 id: 5
 send:
   r: |
-    later::later(function() cat("cell start callback\n"), delay = 1)
+    later::later_fd(
+      function(ready) {
+        stopifnot(identical(ready, TRUE))
+        cat("cell start callback\n")
+      },
+      readfds = 0L
+    )
 result:
   content:
     - type: text
@@ -35,6 +41,17 @@ result:
   isError: false
 ---
 id: 6
+send:
+  stdin: callback gate
+result:
+  content:
+    - type: text
+      text: |-
+
+        [idle]
+  isError: false
+---
+id: 7
 send:
   r: cat("cell body\n")
 result:
