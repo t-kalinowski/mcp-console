@@ -3,7 +3,7 @@
 ---
 id: 3
 send:
-  r: reticulate::py_run_string("interrupt_state = 41")
+  r: "reticulate::py_run_string(\"interrupt_state = 41\")"
 result:
   content:
     - type: text
@@ -58,9 +58,7 @@ send:
 result:
   content:
     - type: text
-      text: |-
-
-        [running]
+      text: "\n[running]"
   isError: false
 ---
 id: 5
@@ -107,21 +105,12 @@ result:
   isError: false
 ---
 id: 9
-session:
-  action: prepare
-  requirements:
-    r:
-      - later
-result:
-  content:
-    - type: text
-      text: "[prepared]"
-  isError: false
----
-id: 10
 send:
   r: |
-    later::later(
+    dyn.load("./mcp_test_input_handler.so")
+    invisible(.Call(
+      "mcp_test_register_input_handler",
+      file.path(tempdir(), "input-handler-fifo"),
       function() {
         invisible(file.create(file.path(
           tempdir(),
@@ -129,20 +118,23 @@ send:
         )))
         on.exit(boundary_interrupt_cleanup <<- TRUE)
         repeat {}
-      },
-      delay = 0
-    )
+      }
+    ))
     boundary_interrupt_state <- 42L
+    writer <- fifo(
+      file.path(tempdir(), "input-handler-fifo"),
+      open = "wb"
+    )
+    writeBin(as.raw(1), writer)
+    close(writer)
   timeout_ms: 0
 result:
   content:
     - type: text
-      text: |-
-
-        [running]
+      text: "\n[running]"
   isError: false
 ---
-id: 11
+id: 10
 session:
   action: interrupt
 result:
@@ -151,20 +143,18 @@ result:
       text: "[interrupt sent]"
   isError: false
 ---
-id: 12
+id: 11
 send:
   timeout_ms: 3000
 result:
   content:
     - type: text
-      text: |
-
-        later: exception occurred while executing callback.
+      text: "\n"
   isError: false
 ---
-id: 13
+id: 12
 send:
-  r: c(boundary_interrupt_state, boundary_interrupt_cleanup)
+  r: "c(boundary_interrupt_state, boundary_interrupt_cleanup)"
 result:
   content:
     - type: text
@@ -172,7 +162,7 @@ result:
         [1] 42  1
   isError: false
 ---
-id: 14
+id: 13
 send:
   r: |
     tryCatch(
@@ -197,19 +187,17 @@ result:
         [stdin needed]
   isError: false
 ---
-id: 15
+id: 14
 send:
   stdin: preserved fragment
   timeout_ms: 50
 result:
   content:
     - type: text
-      text: |-
-
-        [stdin needed]
+      text: "\n[stdin needed]"
   isError: false
 ---
-id: 16
+id: 15
 session:
   action: interrupt
 result:
@@ -218,7 +206,7 @@ result:
       text: "[interrupt sent]"
   isError: false
 ---
-id: 17
+id: 16
 send:
   timeout_ms: 3000
 result:
@@ -230,9 +218,9 @@ result:
         continued after readline
   isError: false
 ---
-id: 18
+id: 17
 send:
-  r: readline("after interrupt> ")
+  r: "readline(\"after interrupt> \")"
   stdin: "\n"
 result:
   content:
@@ -242,7 +230,7 @@ result:
         [1] "preserved fragment"
   isError: false
 ---
-id: 19
+id: 18
 send:
   r: interrupt_state
 result:
@@ -252,7 +240,7 @@ result:
         [1] 43
   isError: false
 ---
-id: 20
+id: 19
 session:
   action: interrupt
 result:
@@ -261,18 +249,16 @@ result:
       text: "[interrupt sent]"
   isError: false
 ---
-id: 21
+id: 20
 send:
   r: 6 * 7
 result:
   content:
     - type: text
-      text: |
-
-        [1] 42
+      text: "\n[1] 42\n"
   isError: false
 ---
-id: 22
+id: 21
 send:
   r: |
     setTimeLimit(elapsed = 10, transient = FALSE)
@@ -284,9 +270,9 @@ result:
       text: "[done]"
   isError: false
 ---
-id: 23
+id: 22
 send:
-  r: '"idle time does not consume a cell limit"'
+  r: "\"idle time does not consume a cell limit\""
 result:
   content:
     - type: text

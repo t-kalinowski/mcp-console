@@ -4,10 +4,12 @@
 #include <Rinternals.h>
 
 #include <fcntl.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 static InputHandler *registered_handler = NULL;
 static int registered_fd = -1;
+static SEXP registered_callback = NULL;
 
 static void handle_input(void *user_data) {
   (void)user_data;
@@ -24,15 +26,26 @@ static void handle_input(void *user_data) {
   if (length != 1) {
     Rf_error("failed to read test input handler byte");
   }
-  Rprintf("cell start callback\n");
+
+  SEXP callback = PROTECT(registered_callback);
+  registered_callback = NULL;
+  R_ReleaseObject(callback);
+  SEXP call = PROTECT(Rf_lang1(callback));
+  Rf_eval(call, R_GlobalEnv);
+  UNPROTECT(2);
 }
 
-static SEXP register_input_handler(SEXP path) {
+static SEXP register_input_handler(SEXP path, SEXP callback) {
   if (registered_handler != NULL) {
     Rf_error("test input handler is already registered");
   }
 
-  int fd = open(CHAR(STRING_ELT(path, 0)), O_RDONLY | O_NONBLOCK);
+  const char *fifo = CHAR(STRING_ELT(path, 0));
+  if (mkfifo(fifo, S_IRUSR | S_IWUSR) < 0) {
+    Rf_error("failed to create test input handler FIFO");
+  }
+
+  int fd = open(fifo, O_RDONLY | O_NONBLOCK);
   if (fd < 0) {
     Rf_error("failed to open test input handler FIFO");
   }
@@ -45,11 +58,13 @@ static SEXP register_input_handler(SEXP path) {
   }
   registered_fd = fd;
   registered_handler = handler;
+  registered_callback = callback;
+  R_PreserveObject(registered_callback);
   return R_NilValue;
 }
 
 static const R_CallMethodDef call_methods[] = {
-    {"mcp_test_register_input_handler", (DL_FUNC)&register_input_handler, 1},
+    {"mcp_test_register_input_handler", (DL_FUNC)&register_input_handler, 2},
     {NULL, NULL, 0},
 };
 
