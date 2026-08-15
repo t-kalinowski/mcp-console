@@ -1,6 +1,8 @@
 #!/usr/bin/env -S uv run --script
 
 import os
+import shutil
+import subprocess
 import sys
 import tempfile
 import time
@@ -19,6 +21,31 @@ from _support import (
 )
 
 PLATFORMS = {"darwin"}
+
+
+def build_r_input_handler(
+    directory: Path,
+    environment: dict[str, str],
+    rscript: Path,
+) -> None:
+    source = Path(__file__).parent.parent / "fixtures" / "r_input_handler.c"
+    local_source = directory / source.name
+    shutil.copyfile(source, local_source)
+    subprocess.run(
+        [
+            rscript.parent / "R",
+            "CMD",
+            "SHLIB",
+            "-o",
+            "mcp_test_input_handler.so",
+            local_source.name,
+        ],
+        cwd=directory,
+        env=environment,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
 
 
 def test_evaluates_a_complete_cell(binary: Path) -> Transcript:
@@ -52,36 +79,47 @@ def test_evaluates_a_complete_cell(binary: Path) -> Transcript:
 
 
 def test_services_later_callbacks_at_cell_boundaries(binary: Path) -> Transcript:
-    client = McpClient(binary, ("serve",))
-    client._initialize_and_list_tools()
-    client.session(action="prepare", requirements={"r": ["later"]})
+    environment, rscript = r_test_environment()
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        directory = Path(temporary_directory)
+        build_r_input_handler(directory, environment, rscript)
+        fifo = directory / "input-handler-fifo"
+        os.mkfifo(fifo)
 
-    # fmt: r
-    r = code(r"""
-        later::later(function() cat("cell end callback\n"), delay = 0)
-        """)
-    client.send(r=r)
-    assert last_tool_text(client) == "cell end callback\n"
-
-    # Leave a callback pending until fd 0 becomes readable, then service it
-    # before the next cell begins.
-    # fmt: r
-    r = code(r"""
-        later::later_fd(
-          function(ready) {
-            stopifnot(identical(ready, TRUE))
-            cat("cell start callback\n")
-          },
-          readfds = 0L
+        client = McpClient(
+            binary,
+            ("serve",),
+            environment=environment,
+            current_directory=directory,
         )
-        """)
-    client.send(r=r)
-    assert last_tool_text(client) == "[done]"
-    client.send(stdin="callback gate")
-    assert last_tool_text(client) == "\n[idle]"
-    client.send(r='cat("cell body\\n")')
-    assert last_tool_text(client) == "cell start callback\ncell body\n"
-    return client._finish()
+        client._initialize_and_list_tools()
+        client.session(action="prepare", requirements={"r": ["later"]})
+
+        # fmt: r
+        r = code(r"""
+            later::later(function() cat("cell end callback\n"), delay = 0)
+            """)
+        client.send(r=r)
+        assert last_tool_text(client) == "cell end callback\n"
+
+        # Register an input handler while its FIFO is empty, then make the
+        # descriptor readable before submitting the next cell. The completed
+        # write is the readiness barrier for the initial boundary turn.
+        # fmt: r
+        r = code(r"""
+            dyn.load("./mcp_test_input_handler.so")
+            invisible(.Call(
+              "mcp_test_register_input_handler",
+              "input-handler-fifo"
+            ))
+            """)
+        client.send(r=r)
+        output = last_tool_text(client)
+        assert output == "[done]", repr(output)
+        fifo.write_bytes(b"x")
+        client.send(r='cat("cell body\\n")')
+        assert last_tool_text(client) == "cell start callback\ncell body\n"
+        return client._finish()
 
 
 def test_stops_cell_after_boundary_callback_failure(binary: Path) -> Transcript:
