@@ -113,9 +113,9 @@ struct Requirements {
 struct SessionArguments {
     /// `prepare` adds R or Python requirements or DuckDB extensions before a worker starts.
     /// After startup, it can add R requirements or DuckDB extensions while the worker is idle;
-    /// compatible Python additions require a server-managed worker. `interrupt` sends SIGINT to the
-    /// live worker process. `restart` can add any of the same requirements before it replaces the
-    /// worker and starts it if needed.
+    /// compatible Python additions require a server-managed worker. `interrupt` requests SIGINT for
+    /// an active host resolver, or otherwise sends it to the live worker. `restart` can add any of
+    /// the same requirements before it replaces the worker and starts it if needed.
     action: SessionAction,
     /// Additive packages or DuckDB extensions to make available. `prepare` requires at least one R,
     /// Python, or DuckDB entry. `interrupt` accepts no requirements. `restart` accepts the same
@@ -203,7 +203,7 @@ impl ConsoleServer {
     }
 
     #[tool(
-        description = "Make additional R or Python packages and DuckDB extensions available, send SIGINT to the live worker process, or restart the persistent console session. The built-in worker prepares DuckDB's JSON and ICU extensions by default. Use `prepare` for packages not included in the built-in environments or for other DuckDB extensions. Packages and extensions are not imported, attached, or loaded automatically by preparation. An idle worker can add R requirements or DuckDB extensions without losing live state; compatible Python additions require a server-managed worker. After a recoverable live preparation failure, evaluation remains available so state can be saved, but new requirement additions require restart. Requirements are additive, idempotent, and persist across restart. `interrupt` returns after sending the signal; user code may catch or delay it. `restart` may optionally add R, Python, and DuckDB requirements, then replaces the worker and loses all in-memory R, Python, and SQL state, debugger state, and unread stdin. Requirement resolution runs outside the execution sandbox and may download packages or extensions or execute package installation or build code on the host; use only trusted requirements."
+        description = "Make additional R or Python packages and DuckDB extensions available, request SIGINT for an active host resolver or otherwise send it to the live worker, or restart the persistent console session. The built-in worker prepares DuckDB's JSON and ICU extensions by default. Use `prepare` for packages not included in the built-in environments or for other DuckDB extensions. Packages and extensions are not imported, attached, or loaded automatically by preparation. An idle worker can add R requirements or DuckDB extensions without losing live state; compatible Python additions require a server-managed worker. After a recoverable live preparation failure, evaluation remains available so state can be saved, but new requirement additions require restart. Requirements are additive, idempotent, and persist across restart. `interrupt` returns after sending the request or signal; user code may catch or delay it. `restart` may optionally add R, Python, and DuckDB requirements, then replaces the worker and loses all in-memory R, Python, and SQL state, debugger state, and unread stdin. Requirement resolution runs outside the execution sandbox and may download packages or extensions or execute package installation or build code on the host; use only trusted requirements."
     )]
     async fn session(
         &self,

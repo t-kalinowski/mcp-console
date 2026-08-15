@@ -1,10 +1,9 @@
-use std::os::unix::process::CommandExt as _;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 
 use serde::Serialize;
 
 use super::process::{
-    ResolverProcess, ResolverStopHandle, read_output, stop_resolver, write_input,
+    ResolverProcess, ResolverStopHandle, read_output, resolver_command, stop_resolver, write_input,
 };
 
 const DUCKDB_EXTENSION_RESOLVER: &str = r#"
@@ -61,13 +60,12 @@ pub(crate) fn resolve_duckdb_extensions(
         .expect("DuckDB extension resolver input should serialize as JSON");
 
     let rscript = managed_r.rscript();
-    let mut command = Command::new(rscript);
+    let mut command = resolver_command(rscript);
     command
         .args(["--vanilla", "-e", DUCKDB_EXTENSION_RESOLVER])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .process_group(0);
+        .stderr(Stdio::piped());
     managed_r.configure_resolver(&mut command)?;
     // DuckDB performs its normal extension installation outside the sandbox.
     // Names are JSON input, never R or SQL source.
