@@ -2,28 +2,21 @@
 !same-as tests/transcripts/golden/server/initializes_and_lists_tools.yaml
 ---
 id: 3
-session:
-  action: prepare
-  requirements:
-    r:
-      - later
-result:
-  content:
-    - type: text
-      text: "[prepared]"
-  isError: false
----
-id: 4
 send:
   r: |
-    later::later(function() readline("callback> "), delay = 1)
+    dyn.load("./mcp_test_input_handler.so")
+    invisible(.Call(
+      "mcp_test_register_input_handler",
+      file.path(tempdir(), "initial-boundary-fifo"),
+      function() readline("callback> ")
+    ))
 result:
   content:
     - type: text
       text: "[done]"
   isError: false
 ---
-id: 5
+id: 4
 send:
   r: cat("cell body ran\n")
 result:
@@ -34,7 +27,7 @@ result:
         [stdin needed]
   isError: false
 ---
-id: 6
+id: 5
 session:
   action: restart
 result:
@@ -47,10 +40,19 @@ result:
         [idle]
   isError: false
 ---
-id: 7
+id: 6
 send:
   r: |
-    later::later(function() cat("post-cell callback ran\n"), delay = 0)
+    dyn.load("./mcp_test_input_handler.so")
+    callback_fifo <- file.path(tempdir(), "final-boundary-fifo")
+    invisible(.Call(
+      "mcp_test_register_input_handler",
+      callback_fifo,
+      function() cat("post-cell callback ran\n")
+    ))
+    writer <- fifo(callback_fifo, open = "wb")
+    writeBin(as.raw(1), writer)
+    close(writer)
     readline("cell> ")
 result:
   content:
@@ -60,7 +62,7 @@ result:
         [stdin needed]
   isError: false
 ---
-id: 8
+id: 7
 session:
   action: restart
 result:

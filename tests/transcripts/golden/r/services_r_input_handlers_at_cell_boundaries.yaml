@@ -2,21 +2,18 @@
 !same-as tests/transcripts/golden/server/initializes_and_lists_tools.yaml
 ---
 id: 3
-session:
-  action: prepare
-  requirements:
-    r:
-      - later
-result:
-  content:
-    - type: text
-      text: "[prepared]"
-  isError: false
----
-id: 4
 send:
   r: |
-    later::later(function() cat("cell end callback\n"), delay = 0)
+    dyn.load("./mcp_test_input_handler.so")
+    callback_fifo <- file.path(tempdir(), "cell-end-handler-fifo")
+    invisible(.Call(
+      "mcp_test_register_input_handler",
+      callback_fifo,
+      function() cat("cell end callback\n")
+    ))
+    writer <- fifo(callback_fifo, open = "wb")
+    writeBin(as.raw(1), writer)
+    close(writer)
 result:
   content:
     - type: text
@@ -24,13 +21,13 @@ result:
         cell end callback
   isError: false
 ---
-id: 5
+id: 4
 send:
   r: |
     dyn.load("./mcp_test_input_handler.so")
     invisible(.Call(
       "mcp_test_register_input_handler",
-      file.path(tempdir(), "input-handler-fifo"),
+      file.path(tempdir(), "cell-start-handler-fifo"),
       function() cat("cell start callback\n")
     ))
 result:
@@ -39,9 +36,9 @@ result:
       text: "[done]"
   isError: false
 ---
-id: 6
+id: 5
 send:
-  r: "cat(\"cell body\\n\")"
+  r: cat("cell body\n")
 result:
   content:
     - type: text
