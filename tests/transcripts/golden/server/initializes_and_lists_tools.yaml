@@ -138,8 +138,8 @@ result:
         and DuckDB requirements, then replaces the worker and loses all
         in-memory R, Python, and SQL state, debugger state, and unread stdin.
         Requirement resolution runs outside the execution sandbox and may
-        download packages or extensions or execute installation or build code on
-        the host; use only trusted requirements.
+        download packages or extensions or execute package installation or build
+        code on the host; use only trusted requirements.
       inputSchema:
         $schema: https://json-schema.org/draft/2020-12/schema
         required:

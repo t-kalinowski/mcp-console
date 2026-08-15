@@ -49,6 +49,42 @@ result:
 ---
 id: 7
 session:
+  action: prepare
+  requirements:
+    r:
+      - later
+result:
+  content:
+    - type: text
+      text: "[prepared]"
+  isError: false
+---
+id: 8
+send:
+  r: |
+    later::later(
+      function() {
+        invisible(file.create(file.path(
+          tempdir(),
+          "r-boundary-interrupt-started"
+        )))
+        on.exit(boundary_interrupt_cleanup <<- TRUE)
+        repeat {}
+      },
+      delay = 0
+    )
+    boundary_interrupt_state <- 42L
+  timeout_ms: 0
+result:
+  content:
+    - type: text
+      text: |-
+
+        [running]
+  isError: false
+---
+id: 9
+session:
   action: interrupt
 result:
   content:
@@ -56,7 +92,37 @@ result:
       text: "[interrupt sent]"
   isError: false
 ---
-id: 8
+id: 10
+send:
+  timeout_ms: 3000
+result:
+  content:
+    - type: text
+      text: |
+
+        later: exception occurred while executing callback.
+  isError: false
+---
+id: 11
+send:
+  r: c(boundary_interrupt_state, boundary_interrupt_cleanup)
+result:
+  content:
+    - type: text
+      text: |
+        [1] 42  1
+  isError: false
+---
+id: 12
+session:
+  action: interrupt
+result:
+  content:
+    - type: text
+      text: "[interrupt sent]"
+  isError: false
+---
+id: 13
 send:
   r: 6 * 7
 result:

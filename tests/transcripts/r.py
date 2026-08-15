@@ -705,10 +705,46 @@ def test_interrupts_running_r_evaluation(binary: Path) -> Transcript:
             client.session(action="interrupt")
             assert last_tool_text(client) == "[interrupt sent]"
             client.send(timeout_ms=3_000)
-            assert last_tool_text(client) == "\n"
+            output = last_tool_text(client)
+            assert output == "\n", repr(output)
 
             client.send(r="interrupt_state + 1L")
             assert last_tool_text(client) == "[1] 42\n"
+
+            client.session(action="prepare", requirements={"r": ["later"]})
+            assert last_tool_text(client) == "[prepared]"
+            # fmt: r
+            r = code(r"""
+                later::later(
+                  function() {
+                    invisible(file.create(file.path(
+                      tempdir(),
+                      "r-boundary-interrupt-started"
+                    )))
+                    on.exit(boundary_interrupt_cleanup <<- TRUE)
+                    repeat {}
+                  },
+                  delay = 0
+                )
+                boundary_interrupt_state <- 42L
+                """)
+            client.send(r=r, timeout_ms=0)
+            assert last_tool_text(client) == "\n[running]"
+            wait_for_worker_file(
+                temporary_path,
+                "r-boundary-interrupt-started",
+                client,
+            )
+
+            client.session(action="interrupt")
+            assert last_tool_text(client) == "[interrupt sent]"
+            client.send(timeout_ms=3_000)
+            output = last_tool_text(client)
+            assert output == (
+                "\nlater: exception occurred while executing callback.\n"
+            ), repr(output)
+            client.send(r="c(boundary_interrupt_state, boundary_interrupt_cleanup)")
+            assert last_tool_text(client) == "[1] 42  1\n"
 
             client.session(action="interrupt")
             assert last_tool_text(client) == "[interrupt sent]"
