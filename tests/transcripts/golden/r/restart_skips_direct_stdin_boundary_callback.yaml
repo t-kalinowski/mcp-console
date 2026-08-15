@@ -16,33 +16,42 @@ result:
 id: 4
 send:
   r: |
-    later::later(
-      function() {
-        cat("direct callback waiting")
-        connection <- suppressWarnings(file("/dev/stdin"))
-        on.exit(close(connection))
-        readLines(connection, n = 1)
-        cat("direct callback released\n")
-      },
-      delay = 1
-    )
+    callback_gate <- tempfile("mcp-console-callback-gate-")
+    callback_checkpoint <- tempfile("mcp-console-callback-checkpoint-")
+    run_callback <- function() {
+      if (!file.exists(callback_gate)) {
+        later::later(run_callback, delay = 0)
+        return(invisible(NULL))
+      }
+      cat("direct callback waiting")
+      connection <- suppressWarnings(file("/dev/stdin"))
+      on.exit(close(connection))
+      stopifnot(file.create(callback_checkpoint))
+      readLines(connection, n = 1)
+      cat("direct callback released\n")
+    }
+    later::later(run_callback, delay = 0)
+    cat(callback_gate, callback_checkpoint, sep = "\n")
 result:
   content:
     - type: text
-      text: "[done]"
+      text: |-
+        <worker callback gate>
+        <worker callback checkpoint>
   isError: false
 ---
 id: 5
 send:
   r: cat("direct stdin cell ran\n")
-  timeout_ms: 1000
+  timeout_ms: 30000
 result:
   content:
     - type: text
       text: |-
-        direct callback waiting
-        [running]
-  isError: false
+        direct callback waitingdirect callback released
+        [stopped by session restart request before evaluation finished]
+        [worker stopped: in-memory state lost]
+  isError: true
 ---
 id: 6
 session:
@@ -51,7 +60,6 @@ result:
   content:
     - type: text
       text: |-
-        direct callback released
         [active evaluation stopped by session restart request]
         [worker stopped: in-memory state lost]
         [starting new worker]

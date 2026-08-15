@@ -583,27 +583,53 @@ def test_restart_skips_direct_stdin_boundary_callback(binary: Path) -> Transcrip
     # still must prevent the submitted cell from running after EOF releases it.
     # fmt: r
     r = code(r"""
-        later::later(
-          function() {
-            cat("direct callback waiting")
-            connection <- suppressWarnings(file("/dev/stdin"))
-            on.exit(close(connection))
-            readLines(connection, n = 1)
-            cat("direct callback released\n")
-          },
-          delay = 1
-        )
+        callback_gate <- tempfile("mcp-console-callback-gate-")
+        callback_checkpoint <- tempfile("mcp-console-callback-checkpoint-")
+        run_callback <- function() {
+          if (!file.exists(callback_gate)) {
+            later::later(run_callback, delay = 0)
+            return(invisible(NULL))
+          }
+          cat("direct callback waiting")
+          connection <- suppressWarnings(file("/dev/stdin"))
+          on.exit(close(connection))
+          stopifnot(file.create(callback_checkpoint))
+          readLines(connection, n = 1)
+          cat("direct callback released\n")
+        }
+        later::later(run_callback, delay = 0)
+        cat(callback_gate, callback_checkpoint, sep = "\n")
         """)
     client.send(r=r)
-    assert last_tool_text(client) == "[done]"
-    time.sleep(1.1)
+    paths = last_tool_text(client).splitlines()
+    assert len(paths) == 2, paths
+    client.transcript[-1]["result"]["content"][0]["text"] = (
+        "<worker callback gate>\n<worker callback checkpoint>"
+    )
+    callback_gate, callback_checkpoint = map(Path, paths)
+    callback_gate.touch()
 
-    client.send(r='cat("direct stdin cell ran\\n")', timeout_ms=1_000)
-    assert last_tool_text(client) == "direct callback waiting\n[running]"
-    client.session(action="restart")
-    output = last_tool_text(client)
-    assert "direct callback released" in output
-    assert "direct stdin cell ran" not in output
+    waiting = client._start_send(
+        r='cat("direct stdin cell ran\\n")',
+        timeout_ms=30_000,
+    )
+    deadline = time.monotonic() + 5
+    while not callback_checkpoint.exists():
+        assert client.process.poll() is None, (
+            "mcp-console stopped before the direct callback reached its checkpoint"
+        )
+        assert time.monotonic() < deadline, (
+            "direct callback did not reach its checkpoint"
+        )
+        time.sleep(0.01)
+
+    restarted = client._start_session(action="restart")
+    client._receive(waiting)
+    client._receive(restarted)
+    assert "direct callback waiting" in waiting["result"]["content"][0]["text"]
+    assert "direct callback released" in waiting["result"]["content"][0]["text"]
+    assert "direct stdin cell ran" not in waiting["result"]["content"][0]["text"]
+    assert "direct stdin cell ran" not in restarted["result"]["content"][0]["text"]
     return client._finish()
 
 
