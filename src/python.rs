@@ -15,7 +15,7 @@ mod platform {
 
     const BRIDGE_INIT: &str = r#"
 base::local({
-  evaluator <- NULL
+  initialized <- FALSE
   managed <- Sys.getenv("MCP_CONSOLE_MANAGED_PYTHON", unset = NA_character_)
   source <- NULL
 
@@ -241,8 +241,27 @@ base::local({
   }
 
   evaluate_impl <- function(id) {
-    if (is.null(evaluator)) {
-      private <- reticulate::py_run_string(r"---(
+    if (!initialized) {
+      matplotlib_hook <- function() {
+        invisible(reticulate::py_eval(
+          paste0(
+            "setattr(",
+            "__import__('sys').modules['matplotlib.pyplot'], ",
+            "'show', lambda *args, **kwargs: None)"
+          ),
+          convert = TRUE
+        ))
+      }
+      if (reticulate::py_eval(
+        "'matplotlib.pyplot' in __import__('sys').modules",
+        convert = TRUE
+      )) {
+        matplotlib_hook()
+      } else {
+        base::setHook("reticulate::matplotlib.pyplot::load", matplotlib_hook)
+      }
+
+      script <- r"---(
 import __main__ as _main
 import ast as _ast
 import base64 as _base64
@@ -251,6 +270,7 @@ import io as _io
 import logging as _logging
 import sys as _sys
 import traceback as _traceback
+import types as _types
 
 
 class _McpConsoleMatplotlibLogFilter(_logging.Filter):
@@ -263,6 +283,9 @@ class _McpConsoleMatplotlibLogFilter(_logging.Filter):
 _logging.getLogger("matplotlib.font_manager").addFilter(
     _McpConsoleMatplotlibLogFilter()
 )
+
+_mcp_console_image_state = [()]
+_mcp_console_runtime = _types.ModuleType("_mcp_console_runtime")
 
 
 def _mcp_console_collect_plots(
@@ -309,6 +332,7 @@ def _mcp_console_eval_cell(
     _eval=_builtins.eval,
     _BaseException=_builtins.BaseException,
     _collect_plots=_mcp_console_collect_plots,
+    _image_state=_mcp_console_image_state,
     _sys=_sys,
     _print_exc=_traceback.print_exc,
 ):
@@ -330,23 +354,61 @@ def _mcp_console_eval_cell(
     except _BaseException:
         _print_exc()
     try:
-        return _collect_plots()
+        _image_state[0] = _collect_plots()
     except _BaseException:
         _print_exc()
-        return ()
-)---", local = TRUE, convert = FALSE)
-      reticulate::py_register_load_hook("matplotlib.pyplot", function() {
-        pyplot <- reticulate::import("matplotlib.pyplot", convert = FALSE)
-        pyplot$show <- function(...) reticulate::py_none()
-      })
-      evaluator <<- private$`_mcp_console_eval_cell`
+        _image_state[0] = ()
+    return None
+
+
+def _mcp_console_take_images(_image_state=_mcp_console_image_state):
+    images = _image_state[0]
+    _image_state[0] = ()
+    return images
+
+
+def _mcp_console_run(
+    source,
+    filename,
+    _evaluate=_mcp_console_eval_cell,
+):
+    return _evaluate(source, filename)
+
+
+_mcp_console_runtime.run = _mcp_console_run
+_mcp_console_runtime.take_images = _mcp_console_take_images
+_sys.modules[_mcp_console_runtime.__name__] = _mcp_console_runtime
+)---"
+      reticulate::py_eval(
+        paste0(
+          "exec(",
+          jsonlite::toJSON(script, auto_unbox = TRUE),
+          ", {'__name__': '_mcp_console_runtime'})"
+        ),
+        convert = TRUE
+      )
+      initialized <<- TRUE
     }
 
     filename <- paste0("<mcp-console:python:", id, ">")
-    images <- reticulate::py_to_r(evaluator(source, filename))
-    for (image in images) {
-      invisible(.Call("mcp_console_publish_python_plot", image))
-    }
+    on.exit({
+      images <- reticulate::py_eval(
+        "__import__('sys').modules['_mcp_console_runtime'].take_images()",
+        convert = TRUE
+      )
+      for (image in images) {
+        invisible(.Call("mcp_console_publish_python_plot", image))
+      }
+    }, add = TRUE)
+    cell <- jsonlite::toJSON(list(source, filename), auto_unbox = TRUE)
+    reticulate::py_eval(
+      paste0(
+        "__import__('sys').modules['_mcp_console_runtime'].run(*",
+        cell,
+        ")"
+      ),
+      convert = TRUE
+    )
     invisible()
   }
 

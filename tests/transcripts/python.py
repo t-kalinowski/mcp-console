@@ -1,8 +1,8 @@
 #!/usr/bin/env -S uv run --script
 
 import os
-import signal
 import shutil
+import signal
 import socket
 import subprocess
 import tempfile
@@ -745,7 +745,7 @@ def test_interrupts_running_python_evaluation(binary: Path) -> Transcript:
             # fmt: r
             r = code(r"""
                 invisible(suppressMessages(base::trace(
-                  "py_run_string",
+                  "py_eval",
                   tracer = quote({
                     invisible(file.create(file.path(
                       tempdir(),
@@ -780,18 +780,36 @@ def test_interrupts_running_python_evaluation(binary: Path) -> Transcript:
             # fmt: r
             r = code(r"""
                 invisible(suppressMessages(base::untrace(
-                  "py_run_string",
+                  "py_eval",
                   where = asNamespace("reticulate")
                 )))
+                # Poison reticulate's cached result wrapper before MCP Console
+                # initializes its private Python evaluator. The evaluator must
+                # return through direct conversion instead of that wrapper.
+                invisible(reticulate::py_eval(
+                  r"---(
+                exec(
+                    "import inspect\n"
+                    "inspect._mcp_original_getmro_code = inspect.getmro.__code__\n"
+                    "def _mcp_interrupting_getmro(cls):\n"
+                    "    getmro.__code__ = _mcp_original_getmro_code\n"
+                    "    raise KeyboardInterrupt\n"
+                    "inspect.getmro.__code__ = _mcp_interrupting_getmro.__code__\n"
+                )
+                )---",
+                  convert = TRUE
+                ))
                 """)
             client.send(r=r)
             assert last_tool_text(client) == "[done]"
 
             # fmt: python
             python = code("""
+                import inspect
                 import os
                 from pathlib import Path
 
+                inspect.getmro.__code__ = inspect._mcp_original_getmro_code
                 python_interrupt_state = 41
                 Path(
                     os.environ["TMPDIR"],
@@ -1084,17 +1102,34 @@ def test_evaluates_cells_in_persistent_reticulate_state(binary: Path) -> Transcr
           marker <- paste0("unique_python_", "source_marker")
           any(grepl(marker, calls, fixed = TRUE))
         }
+        reticulate::py_run_string(
+          r"---(
+        test_sys = __import__("sys")
+        test_types = __import__("types")
+        _io = "user io"
+        _main = "user main"
+        _sys = "user sys"
+        sorted = "user sorted"
+        test_sys.modules["matplotlib.pyplot"] = test_types.SimpleNamespace(
+            get_fignums=lambda: [],
+            close=lambda *_args, **_kwargs: None,
+        )
+        )---"
+        )
         """)
     client.send(r=r)
     # fmt: python
     python = code("""
         answer = r.from_r + 1
         print("from Python")
-        answer + 1
+        (
+            answer + 1,
+            (_io, _main, _sys, sorted) == ("user io", "user main", "user sys", "user sorted"),
+        )
         """)
     client.send(python=python)
     output = last_tool_text(client)
-    assert output == "from Python\n42\n", repr(output)
+    assert output == "from Python\n(42, True)\n", repr(output)
     # fmt: python
     python = code("""
         1
