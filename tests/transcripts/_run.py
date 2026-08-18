@@ -31,8 +31,8 @@ parser.add_argument(
     "-j",
     "--jobs",
     type=int,
-    default=os.cpu_count() or 1,
-    help="number of transcript cases to run concurrently (default: CPU count)",
+    default=max(2, os.cpu_count() or 2),
+    help="number of transcript cases to run concurrently (default: at least 2)",
 )
 parser.add_argument("selectors", nargs="*", metavar="SUITE[::CASE]")
 

@@ -42,7 +42,7 @@ scripts/test --jobs 1 python
 scripts/test --update server::initializes_and_lists_tools
 ```
 
-With no selectors, `scripts/test` runs every suite and case in parallel, using one worker process per available CPU by default.
+With no selectors, `scripts/test` runs every suite and case in parallel, using at least two worker processes and otherwise one per available CPU by default.
 Pass `--jobs N` to set the maximum concurrency or `--jobs 1` to run serially.
 A suite selector runs every case in that file; a `SUITE::CASE` selector runs one named function.
 Use `--update` only to accept an intentional transcript change.
