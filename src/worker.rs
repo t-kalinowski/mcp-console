@@ -125,10 +125,7 @@ mod platform {
                     if let Some(message) = take_worker_failure().or_else(|| result.err()) {
                         return Err(io::Error::other(message).into());
                     }
-                    let python_checkpoint =
-                        defer_interrupts(|| self.python.checkpoint(), check_interrupts)?;
-                    self.writer
-                        .send(&WorkerMessage::Completed { python_checkpoint })?;
+                    self.writer.send(&WorkerMessage::Completed)?;
                 }
                 // Keep worker-owned preparation state transitions atomic. Any
                 // nested host resolver registers its own interrupt target.
@@ -142,11 +139,8 @@ mod platform {
                         return Err(io::Error::other(message).into());
                     }
                     match result {
-                        Ok(crate::python::PreparationOutcome::Prepared {
-                            checkpoint: python_checkpoint,
-                        }) => {
-                            self.writer
-                                .send(&WorkerMessage::PythonPrepared { python_checkpoint })?;
+                        Ok(crate::python::PreparationOutcome::Prepared) => {
+                            self.writer.send(&WorkerMessage::PythonPrepared)?;
                         }
                         Ok(crate::python::PreparationOutcome::Failed { message }) => {
                             self.writer

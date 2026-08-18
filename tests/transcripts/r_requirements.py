@@ -215,8 +215,8 @@ def test_failed_live_r_preparation_requires_restart(binary: Path) -> Transcript:
     setup = code(r"""
         sentinel <- 42L
         worker_pid <- Sys.getpid()
-        invisible(reticulate::py_config())
-        stopifnot(reticulate::py_available(initialize = FALSE))
+        invisible(loadNamespace("reticulate"))
+        stopifnot(!reticulate::py_available(initialize = FALSE))
         original_lib_paths <- base::.libPaths
         replacement_lib_paths <- base::local({
           original <- original_lib_paths
@@ -300,6 +300,65 @@ def test_failed_live_r_preparation_requires_restart(binary: Path) -> Transcript:
     saved_sentinel_literal = f"rawToChar(as.raw(c({saved_sentinel_bytes})))"
     client.send(r=restarted.replace('"<saved sentinel path>"', saved_sentinel_literal))
     client.transcript[-1]["send"]["r"] = restarted
+    assert last_tool_text(client) == "[done]"
+    return client._finish()
+
+
+def test_failed_mixed_preparation_retains_live_python_activation(
+    binary: Path,
+) -> Transcript:
+    environment, _ = r_test_environment()
+    client = McpClient(binary, ("serve",), environment)
+    client._initialize_and_list_tools()
+
+    # fmt: r
+    setup = code(r"""
+        invisible(reticulate::py_config())
+        original_lib_paths <- base::.libPaths
+        replacement_lib_paths <- base::local({
+          original <- original_lib_paths
+          function(new) {
+            if (base::missing(new)) {
+              return(original())
+            }
+            original(new)
+            base::stop("blocked live R preparation")
+          }
+        })
+        base::unlockBinding(".libPaths", base::baseenv())
+        base::assign(
+          ".libPaths",
+          replacement_lib_paths,
+          envir = base::baseenv()
+        )
+        base::lockBinding(".libPaths", base::baseenv())
+        """)
+    client.send(r=setup)
+    assert last_tool_text(client) == "[done]", client.transcript[-1]
+
+    client.session(
+        action="prepare",
+        requirements={"r": ["praise"], "python": ["py-yaml12"]},
+    )
+    result = client.transcript[-1]["result"]
+    assert result["isError"] is True, result
+    assert result["content"][0]["text"] == (
+        "blocked live R preparation; further requirement changes are unavailable "
+        "until session restart"
+    )
+
+    client.session(action="restart")
+    assert last_tool_text(client) == (
+        "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
+    )
+    # fmt: r
+    retained = code(r"""
+        stopifnot(
+          "py-yaml12" %in% reticulate::py_require()$packages,
+          reticulate::py_module_available("yaml12")
+        )
+        """)
+    client.send(r=retained)
     assert last_tool_text(client) == "[done]"
     return client._finish()
 

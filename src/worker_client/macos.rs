@@ -189,16 +189,7 @@ impl Worker {
             crate::worker_protocol::PythonRequirementManifest,
             &[crate::resolver::ManagedPython],
         ) -> Result<(), String>,
-    ) -> Result<
-        Result<
-            (
-                crate::worker_protocol::PythonRequirementManifest,
-                Vec<crate::resolver::ManagedPython>,
-            ),
-            String,
-        >,
-        String,
-    > {
+    ) -> Result<Result<Option<crate::resolver::ManagedPython>, String>, String> {
         self.writer
             .send(&ServerMessage::PreparePython { packages })
             .map_err(|error| format!("worker sideband write failed: {error}"))?;
@@ -213,9 +204,7 @@ impl Worker {
                 WorkerMessage::PythonActivated { requirements } => {
                     activate_python(requirements, &python_candidates)?;
                 }
-                WorkerMessage::PythonPrepared { python_checkpoint } => {
-                    return Ok(Ok((python_checkpoint, python_candidates)));
-                }
+                WorkerMessage::PythonPrepared => return Ok(Ok(python_candidates.pop())),
                 WorkerMessage::PythonPreparationFailed { message } => {
                     return Ok(Err(message));
                 }
@@ -240,10 +229,6 @@ impl Worker {
         mut activate_python: impl FnMut(
             crate::worker_protocol::PythonRequirementManifest,
             &[crate::resolver::ManagedPython],
-        ) -> Result<(), String>,
-        mut checkpoint_python: impl FnMut(
-            Option<crate::worker_protocol::PythonRequirementManifest>,
-            Vec<crate::resolver::ManagedPython>,
         ) -> Result<(), String>,
     ) -> Result<(), String> {
         let crate::cell::Cell { language, source } = cell;
@@ -278,15 +263,14 @@ impl Worker {
                 WorkerMessage::PythonActivated { requirements } => {
                     activate_python(requirements, &python_candidates)?;
                 }
-                WorkerMessage::Completed { python_checkpoint } => {
+                WorkerMessage::Completed => {
                     evaluation.input_complete()?;
-                    checkpoint_python(python_checkpoint, python_candidates)?;
                     return Ok(());
                 }
                 WorkerMessage::Ready => {
                     return Err("worker sent an unexpected ready message".to_string());
                 }
-                WorkerMessage::PythonPrepared { .. }
+                WorkerMessage::PythonPrepared
                 | WorkerMessage::PythonPreparationFailed { .. }
                 | WorkerMessage::RPrepared { .. }
                 | WorkerMessage::RPreparationFailed { .. } => {

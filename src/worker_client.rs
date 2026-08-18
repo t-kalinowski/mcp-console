@@ -399,10 +399,10 @@ impl Client {
     ) {
         let resolver = self.clone();
         let version_resolver = self.clone();
-        let checkpointer = self.clone();
+        let activator = self.clone();
         let resolver_generation = generation.clone();
         let version_generation = generation.clone();
-        let checkpoint_generation = generation.clone();
+        let activation_generation = generation.clone();
         let result = self.evaluate_with_worker(
             cell,
             evaluation,
@@ -411,10 +411,10 @@ impl Client {
             move |request| {
                 version_resolver.resolve_runtime_python_version(version_generation.clone(), request)
             },
-            move |checkpoint, candidates| {
-                checkpointer.checkpoint_runtime_python(
-                    checkpoint_generation.clone(),
-                    checkpoint,
+            move |requirements, candidates| {
+                activator.activate_runtime_python(
+                    activation_generation.clone(),
+                    requirements,
                     candidates,
                 )
             },
@@ -435,13 +435,11 @@ impl Client {
         resolve_python_version: impl FnMut(
             crate::worker_protocol::PythonVersionResolveRequest,
         ) -> Result<String, String>,
-        checkpoint_python: impl FnMut(
-            Option<crate::worker_protocol::PythonRequirementManifest>,
-            Vec<crate::resolver::ManagedPython>,
+        activate_python: impl FnMut(
+            crate::worker_protocol::PythonRequirementManifest,
+            &[crate::resolver::ManagedPython],
         ) -> Result<(), String>,
     ) -> Result<(), SendFailure> {
-        let activator = self.clone();
-        let activation_generation = generation.clone();
         self.ensure_generation(&generation)
             .map_err(SendFailure::from)?;
         let mut worker = self
@@ -471,14 +469,7 @@ impl Client {
                 evaluation,
                 resolve_python,
                 resolve_python_version,
-                move |requirements, candidates| {
-                    activator.activate_runtime_python(
-                        activation_generation.clone(),
-                        requirements,
-                        candidates,
-                    )
-                },
-                checkpoint_python,
+                activate_python,
             )
             .map_err(|message| evaluation.classify_failure(message));
         let failure = match result {

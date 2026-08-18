@@ -80,13 +80,13 @@ Each IR candidate contains the complete retained R requirement set, so replacing
 An idle server-managed worker can also materialize an uninitialized Python manifest or activate a same-`libpython` environment while preserving live state.
 An idle worker that implements R preparation can prepare DuckDB extensions on the host without replacement or loss of live state.
 The DuckDB resolver uses the existing cancellable resolver process-group lifecycle and adds no DuckDB-specific worker sideband messages; an accompanying R candidate still uses `prepare_r`.
-A successful Python activation is retained immediately and validated again by the operation's terminal checkpoint.
+A successful Python activation or explicit materialization is retained immediately.
 In a mixed live R, Python, and DuckDB preparation, that activation can remain retained even if a later R update fails.
 The R and DuckDB configurations are retained only after the complete operation succeeds.
 An earlier DuckDB install from a failed multi-extension request may remain in the host cache without entering the retained extension set.
 After a synchronized failure may have partially changed the live worker, evaluation remains available so its state can be saved, but new requirement additions return `[restart required]` until a successful explicit restart.
 Transport or protocol failures still stop the worker when its usability is unknown.
-The server returns `[prepared]` only after checkpointing the complete result.
+The server returns `[prepared]` only after the complete operation succeeds.
 Preparation during evaluation is rejected.
 Preparation that overlaps worker startup returns `[requirements not prepared: worker is starting]` without resolving the additions or changing the retained requirements, R library, Python manifest, or DuckDB extension set.
 A failed automatic replacement leaves the worker stopped; new requirements then return `[restart required]`, and prepare does not start or configure the next replacement attempt.
@@ -170,15 +170,18 @@ Before initializing R, the worker forces `UV_OFFLINE=1`, overwriting any inherit
 Reticulate reuses the server-resolved or caller-selected interpreter.
 For a server-managed worker, MCP Console seeds reticulate's requirement manifest and intercepts its internal `uv_get_or_create_env` and `resolve_python_version` bindings, without wrapping `py_require()`.
 Environment resolution and Python-version selection become separate typed sideband requests, and the host resolver runs reticulate and uv with the requested `UV_*` settings outside the sandbox.
-Version selection returns only the selected version and does not create a candidate environment or alter checkpoint state.
+Version selection returns only the selected version and does not create a candidate environment or alter retained state.
 Each environment-resolution request sends the physical resolver manifest, the logical manifest to retain if accepted, and the worker's current `UV_*` settings except `UV_OFFLINE` to the host resolver; those settings are transient inputs and are not retained or replayed.
 After Python initializes, reticulate resolves late additions against the exact active Python patch version while leaving the logical `py_require()` Python constraints unchanged.
-Explicit preparation sends structured additions and reports a separate checkpoint or failure without evaluating a cell.
-If managed reticulate is loaded but Python remains uninitialized at cell end or after explicit preparation, the worker invokes the resolver once to materialize the final manifest.
+Explicit preparation sends structured additions and reports a payload-free completion or failure without evaluating a cell.
+It materializes an uninitialized manifest.
 After initialization, additive package requirements resolve to candidate environments outside the sandbox, and reticulate performs its exact-`libpython` check, `activate_this.py`, configuration swap, and manifest assignment.
-The worker reports each accepted live environment through `python_activated`, and the server immediately retains the matching resolved candidate.
-The terminal `completed` or `python_prepared` checkpoint remains an operation-level validation and preserves lazy pre-initialization requirements materialized at cell end or during explicit preparation.
-A later failure does not roll back an activation already reported.
+After reticulate accepts a managed environment, the worker sends a standalone `python_activated` event.
+The server immediately retains the matching resolved candidate or its unchanged current environment.
+Acceptance and the restart-generation check are atomic; a receipt that remains pending when restart claims the generation is discarded with that worker.
+`completed` and `python_prepared` carry no Python manifest.
+When no live activation was required, a successful `python_prepared` retains the last materialized candidate.
+A lazy pre-initialization `py_require()` declaration remains worker-owned until Python initializes or explicit preparation materializes it.
 The live Python interpreter and its state are retained during successful activation.
 Evaluated R code or an R package load can therefore trigger host resolution, which may use the network, write host caches, and execute package build backends outside the worker sandbox; the structured requirements and forwarded settings are data, and the submitted cell is not evaluated by the resolver.
 Python reads R globals through reticulate's `r.name` bridge, and R reads Python globals through the worker-attached `py$name` binding.
@@ -282,7 +285,7 @@ See `design-sketches/README.md` for the product overview and `design-sketches/do
 - `src/sideband.rs` — macOS inherited-pipe JSON-lines transport.
 - `src/worker.rs` — embedded R initialization, cell dispatch, and console callbacks.
 - `src/worker_client.rs` — server-side worker orchestration and lazy worker access.
-- `src/worker_client/environment.rs` — requirement preparation and managed environment checkpoints.
+- `src/worker_client/environment.rs` — requirement preparation and retained managed environments.
 - `src/worker_client/evaluation.rs` — per-cell evaluation, stdin, input-request, and wait state.
 - `src/worker_client/lifecycle.rs` — worker generations, restart coordination, and process shutdown.
 - `src/worker_client/output.rs` — response assembly and captured standard-stream buffering.

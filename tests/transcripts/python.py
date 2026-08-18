@@ -560,7 +560,7 @@ def test_layers_python_requirements_declared_by_r_packages(
         return client._finish()
 
 
-def test_resolves_package_requirements_before_python_initializes(
+def test_does_not_retain_package_requirements_before_python_initializes(
     binary: Path,
 ) -> Transcript:
     environment, rscript = r_test_environment()
@@ -596,8 +596,8 @@ def test_resolves_package_requirements_before_python_initializes(
         client.send(r=r)
         assert last_tool_text(client) == "[done]"
 
-        # Replace the worker after the requirement declaration has completed,
-        # but before Python has initialized.
+        # A lazy declaration is worker-owned until Python initializes or an
+        # explicit preparation materializes it.
         # fmt: r
         r = code(r"""
             tools::pskill(Sys.getpid(), signal = 9L)
@@ -619,16 +619,7 @@ def test_resolves_package_requirements_before_python_initializes(
             """)
         client.send(r=r)
         output = last_tool_text(client)
-        assert output == "[1] TRUE\n", repr(output)
-
-        # fmt: python
-        python = code("""
-            import yaml12
-
-            yaml12.__name__
-            """)
-        client.send(python=python)
-        assert last_tool_text(client) == "'yaml12'\n"
+        assert output == "[1] FALSE\n", repr(output)
         return client._finish()
 
 
@@ -1255,6 +1246,7 @@ def test_returns_matplotlib_plots(binary: Path) -> Transcript:
         # fmt: r
         r = code(r"""
             reticulate::py_require("matplotlib")
+            invisible(reticulate::py_config())
             """)
         client.send(r=r)
         assert last_tool_text(client) == "[done]"
