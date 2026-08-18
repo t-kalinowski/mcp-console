@@ -259,6 +259,11 @@ impl Response {
         self.mark_error();
     }
 
+    pub(super) fn push_tool_error(&mut self, message: impl Into<String>) {
+        self.push_line(message);
+        self.mark_error();
+    }
+
     pub(super) fn mark_error(&mut self) {
         self.is_error = true;
     }

@@ -816,17 +816,46 @@ def test_custom_worker_prepares_r_and_duckdb_requirements(binary: Path) -> Trans
         client.send(r="report managed requirements")
         assert last_tool_text(client) == "zod requirements: r=true; duckdb=true\n"
 
-        client.send(r="fail next r preparation")
+        client.send(r="fail next r preparation after output")
         assert last_tool_text(client) == "[done]"
         result = client.session(
             action="prepare",
             requirements={"r": ["zeallot"]},
         )
         assert result["isError"] is True, result
-        assert result["content"][0]["text"] == (
-            "zod rejected R preparation; further requirement changes are "
-            "unavailable until session restart"
-        )
+        assert result["content"] == [
+            {"type": "text", "text": "before failed preparation\n"},
+            {"type": "image", "data": PNG_1X1, "mimeType": "image/png"},
+            {
+                "type": "text",
+                "text": (
+                    "\nzod rejected R preparation; further requirement changes "
+                    "are unavailable until session restart"
+                ),
+            },
+        ], result
+
+        assert client.temporary_directory is not None
+        workspace = Path(client.temporary_directory.name)
+        session = next((workspace / ".mcp-console" / "sessions").iterdir())
+        events = [
+            json.loads(line)
+            for line in (session / "internal" / "events.jsonl")
+            .read_text(encoding="utf-8")
+            .splitlines()
+        ]
+        artifact = events[-2]
+        recorded_result = events[-1]
+        assert artifact["event"] == "artifact_created", artifact
+        assert recorded_result["event"] == "tool_result", recorded_result
+        assert artifact["call_id"] == recorded_result["call_id"], events[-2:]
+        assert recorded_result["result"]["content"][1] == {
+            "type": "image",
+            "artifactId": artifact["artifact_id"],
+            "path": artifact["path"],
+            "mimeType": "image/png",
+        }, recorded_result
+        assert (session / artifact["path"]).read_bytes() == base64.b64decode(PNG_1X1)
 
         result = client.send(r="report managed python activation")
         assert result["isError"] is True, result

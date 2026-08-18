@@ -17,6 +17,7 @@ pub(super) struct Environment {
 pub(crate) enum PrepareResult {
     Prepared,
     RestartRequired,
+    Failed(super::Response),
     WorkerStopped(super::Response),
 }
 
@@ -384,7 +385,7 @@ impl Client {
                 Ok(Ok(())) => {}
                 Ok(Err(error)) => {
                     self.require_restart_for_requirement_changes(generation)?;
-                    return Err(requirement_restart_error(error));
+                    return Ok(self.failed_preparation_response(requirement_restart_error(error)));
                 }
                 Err(error) => {
                     return self.fail_running_preparation(
@@ -431,10 +432,16 @@ impl Client {
                         FailedWorkerStop::RestartOwnsWorker => Err(error),
                     };
                 }
-                Err(error)
+                Ok(self.failed_preparation_response(error))
             }
             GenerationStatus::CurrentClosing => Err(error),
         }
+    }
+
+    fn failed_preparation_response(&self, error: String) -> PrepareResult {
+        let mut response = self.0.output.take();
+        response.push_tool_error(error);
+        PrepareResult::Failed(response)
     }
 
     fn commit_running_environment(

@@ -135,6 +135,7 @@ def main() -> None:
     send(writer, {"kind": "ready"})
     prepared_r_library: str | None = None
     fail_next_r_preparation = False
+    emit_output_before_r_preparation_failure = False
     queued_message: dict[str, Any] | None = None
 
     if os.environ.get("ZOD_BLOCK_SIDEBAND_WRITE") == "1":
@@ -160,6 +161,17 @@ def main() -> None:
             assert set(message) == {"kind", "library"}
             if fail_next_r_preparation:
                 fail_next_r_preparation = False
+                if emit_output_before_r_preparation_failure:
+                    emit_output_before_r_preparation_failure = False
+                    send_output(writer, "before failed preparation\n")
+                    send(
+                        writer,
+                        {
+                            "kind": "image",
+                            "data": PNG_1X1,
+                            "mime_type": "image/png",
+                        },
+                    )
                 send(
                     writer,
                     {
@@ -407,6 +419,12 @@ def main() -> None:
 
         if source == "fail next r preparation":
             fail_next_r_preparation = True
+            send(writer, {"kind": "completed"})
+            continue
+
+        if source == "fail next r preparation after output":
+            fail_next_r_preparation = True
+            emit_output_before_r_preparation_failure = True
             send(writer, {"kind": "completed"})
             continue
 

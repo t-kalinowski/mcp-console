@@ -229,6 +229,14 @@ impl ConsoleServer {
                 {
                     crate::worker_client::PrepareResult::Prepared => "[prepared]",
                     crate::worker_client::PrepareResult::RestartRequired => "[restart required]",
+                    crate::worker_client::PrepareResult::Failed(response) => {
+                        return Ok(response_to_tool_result(
+                            response,
+                            &call,
+                            &self.transcript,
+                            &delivery,
+                        ));
+                    }
                     crate::worker_client::PrepareResult::WorkerStopped(response) => {
                         return Ok(response_to_tool_result(
                             response,
