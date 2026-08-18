@@ -14,7 +14,9 @@ send:
 result:
   content:
     - type: text
-      text: "\n[running]"
+      text: |-
+
+        [running]
   isError: false
 ---
 id: 4
@@ -72,7 +74,9 @@ send:
 result:
   content:
     - type: text
-      text: "\n[running]"
+      text: |-
+
+        [running]
   isError: false
 ---
 id: 8
@@ -95,7 +99,7 @@ result:
 ---
 id: 10
 send:
-  r: "c(boundary_interrupt_state, boundary_interrupt_cleanup)"
+  r: c(boundary_interrupt_state, boundary_interrupt_cleanup)
 result:
   content:
     - type: text
@@ -118,7 +122,9 @@ send:
 result:
   content:
     - type: text
-      text: "\n[1] 42\n"
+      text: |
+
+        [1] 42
   isError: false
 ---
 id: 13
@@ -135,7 +141,7 @@ result:
 ---
 id: 14
 send:
-  r: "\"idle time does not consume a cell limit\""
+  r: '"idle time does not consume a cell limit"'
 result:
   content:
     - type: text
