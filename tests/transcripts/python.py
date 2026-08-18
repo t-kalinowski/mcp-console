@@ -480,7 +480,13 @@ def test_layers_python_requirements_declared_by_r_packages(
     fixture = Path(__file__).parents[1] / "fixtures" / "py_require"
     with tempfile.TemporaryDirectory() as library:
         subprocess.run(
-            [rscript.with_name("R"), "CMD", "INSTALL", "--library", library, fixture],
+            [
+                rscript.with_name("R"),
+                "CMD",
+                "INSTALL",
+                f"--library={library}",
+                fixture,
+            ],
             check=True,
             capture_output=True,
             text=True,
@@ -561,7 +567,13 @@ def test_resolves_package_requirements_before_python_initializes(
     fixture = Path(__file__).parents[1] / "fixtures" / "py_require"
     with tempfile.TemporaryDirectory() as library:
         subprocess.run(
-            [rscript.with_name("R"), "CMD", "INSTALL", "--library", library, fixture],
+            [
+                rscript.with_name("R"),
+                "CMD",
+                "INSTALL",
+                f"--library={library}",
+                fixture,
+            ],
             check=True,
             capture_output=True,
             text=True,

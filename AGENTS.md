@@ -300,7 +300,7 @@ See `design-sketches/README.md` for the product overview and `design-sketches/do
 - `tests/transcripts/python.py` — public reticulate Python-cell acceptance suite.
 - `tests/transcripts/sql.py` — public persistent-DuckDB acceptance suite.
 - `tests/transcripts/worker.py` — public-server acceptance plus captured built-in worker wire events.
-- `tests/transcripts/_run.py` — discovers transcript suites and compares case snapshots.
+- `tests/transcripts/_run.py` — discovers transcript suites, runs cases in parallel by default, and compares case snapshots.
 - `tests/transcripts/_support.py` — shared transcript types and MCP stdio client.
 - `tests/transcripts/<suite>.py` — suites of named imperative transcript cases.
 - `tests/transcripts/golden/SUITE/` — human-readable YAML 1.2 case transcripts.
