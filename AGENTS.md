@@ -35,7 +35,7 @@ An existing journal may therefore end with the last successfully flushed event.
 Submitted source, stdin, and tool-result output are recorded without redaction.
 Generated Quarto transcripts and complete output spools do not exist yet.
 Supplying exactly one of `r`, `python`, or `sql` starts one complete cell and waits for up to `timeout_ms`, which defaults to 60 seconds.
-If an established worker fails, the same `send` makes one automatic replacement attempt within that deadline.
+If an established worker fails during that cell, the same `send` makes one automatic replacement attempt within that deadline.
 If the wait expires while the cell is still evaluating, `send` drains output produced so far, appends the newline-prefixed banner `\n[running]`, and leaves the computation running.
 If it expires while the replacement is starting, the response instead ends with `[worker starting]`; later polls report the same state until the worker reports ready, then return startup output followed by `[idle]`.
 Concurrent `send` calls are unsupported.
@@ -44,6 +44,7 @@ With no evaluation active, an empty `send` immediately drains the output collect
 It sends no worker frame, does not wait for idle callbacks, and is not delayed by `timeout_ms`.
 Output accepted after the snapshot remains pending for a later response.
 An empty call does not start an initial or stopped worker.
+If it discovers an idle worker failure, it stops that worker and reports the failure without starting a replacement; a later nonempty `send` or explicit restart starts the next worker.
 Supplying `stdin` with a code cell, during an evaluation, or while idle queues exact UTF-8 bytes to worker fd 0 without adding a newline, inspecting, echoing, or limiting the text, or waiting for an input request.
 A nonempty idle stdin call lazily starts the worker when needed, queues the bytes, and immediately returns the current output snapshot; `timeout_ms` does not bound that startup or delay the snapshot.
 Queuing bytes does not acknowledge their consumption, so the response may still report `\n[stdin needed]` until the continuous reader receives `input_received`.
@@ -94,6 +95,7 @@ An idle server-managed worker can also materialize an uninitialized Python manif
 An idle worker that implements R preparation can prepare DuckDB extensions on the host without replacement or loss of live state.
 The DuckDB resolver uses the existing cancellable resolver process-group lifecycle and adds no DuckDB-specific worker sideband messages; an accompanying R candidate still uses `prepare_r`.
 A successful Python activation or explicit materialization is retained immediately.
+After any operation terminal, the continuous reader waits for the operation owner to commit terminal state before reading another frame, so later idle activity cannot overtake that retention.
 In a mixed live R, Python, and DuckDB preparation, that activation can remain retained even if a later R update fails.
 The R and DuckDB configurations are retained only after the complete operation succeeds.
 An earlier DuckDB install from a failed multi-extension request may remain in the host cache without entering the retained extension set.
@@ -109,7 +111,7 @@ A failed restart resolution leaves the current worker, its in-memory state, requ
 After every required resolution succeeds, restart commits the R library, DuckDB extension set, and Python environment together, loses all worker-owned in-memory state and unread stdin, eagerly starts a replacement, and returns `[idle]` after it reports ready.
 The implicit session exists for the server lifetime, so restart starts its first worker if none exists yet.
 It first queues worker-stdin closure and the sideband shutdown message without waiting behind an active cell, then force-stops the process group and reaps the direct sandbox process at the one-second deadline if that process remains live.
-It then waits for the active evaluation or preparation to end, cancels the worker's stdin writer and output readers, drains standard-stream bytes already buffered at that boundary, and joins the tasks before reporting `[worker stopped: in-memory state lost]` or launching the replacement.
+It then waits for the active evaluation or preparation to end, cancels the worker's continuous sideband reader, stdin writer, and output readers, drains standard-stream bytes already buffered at that boundary, and joins the tasks before reporting `[worker stopped: in-memory state lost]` or launching the replacement.
 Each admitted cell or idle stdin write carries its worker generation, so work admitted before restart cannot reach the replacement.
 An R preparation cancelled while its IR resolver is active reports resolver cancellation.
 After preparation reaches the live worker, restart cancellation returns `R preparation cancelled by restart` when the call includes R and `Python preparation cancelled by restart` otherwise; active-generation sideband failures retain their transport diagnostics.

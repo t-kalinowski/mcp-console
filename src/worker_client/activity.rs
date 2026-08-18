@@ -1,10 +1,11 @@
+use std::os::fd::AsRawFd;
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 
 use crate::worker_protocol::{ServerMessage, WorkerMessage};
 
 use super::output::OutputCheckpoint;
-use super::{Evaluation, OutputTape, WorkerCallbacks};
+use super::{Evaluation, OutputTape, TerminalCommit, WorkerCallbacks};
 
 #[derive(Clone)]
 pub(super) struct Activity(Arc<Mutex<ActivityState>>);
@@ -17,7 +18,7 @@ struct ActivityState {
 
 struct Operation {
     kind: OperationKind,
-    result: mpsc::Sender<Result<OperationResult, String>>,
+    result: mpsc::Sender<Result<TerminalCommit<OperationResult>, String>>,
 }
 
 enum OperationKind {
@@ -55,11 +56,31 @@ impl Activity {
         writer: crate::sideband::Writer,
         output: OutputTape,
         callbacks: WorkerCallbacks,
+        cancelled: std::io::PipeReader,
     ) -> thread::JoinHandle<()> {
         let activity = self.clone();
         thread::spawn(move || {
             let mut python_candidates = Vec::new();
             loop {
+                if !reader.has_buffered_data() {
+                    let events = match super::platform::wait_for_worker_io(
+                        reader.as_raw_fd(),
+                        libc::POLLIN,
+                        &cancelled,
+                    ) {
+                        Ok(events) => events,
+                        Err(error) => {
+                            activity.fail(format!("worker sideband read failed: {error}"));
+                            return;
+                        }
+                    };
+                    if events.cancelled {
+                        return;
+                    }
+                    if !events.ready {
+                        continue;
+                    }
+                }
                 let message = match reader.receive() {
                     Ok(message) => message,
                     Err(error) => {
@@ -67,15 +88,22 @@ impl Activity {
                         return;
                     }
                 };
-                if let Err(error) = handle_message(
+                let keep_reading = match handle_message(
                     message,
                     &activity,
                     &writer,
                     &output,
                     &callbacks,
                     &mut python_candidates,
+                    &cancelled,
                 ) {
-                    activity.fail(error);
+                    Ok(keep_reading) => keep_reading,
+                    Err(error) => {
+                        activity.fail(error);
+                        return;
+                    }
+                };
+                if !keep_reading {
                     return;
                 }
             }
@@ -85,7 +113,7 @@ impl Activity {
     pub(super) fn begin_cell(
         &self,
         evaluation: Arc<Evaluation>,
-    ) -> Result<mpsc::Receiver<Result<OperationResult, String>>, String> {
+    ) -> Result<mpsc::Receiver<Result<TerminalCommit<OperationResult>, String>>, String> {
         let (result, receiver) = mpsc::channel();
         let mut state = self.lock()?;
         state.ensure_available()?;
@@ -101,20 +129,20 @@ impl Activity {
 
     pub(super) fn begin_r_preparation(
         &self,
-    ) -> Result<mpsc::Receiver<Result<OperationResult, String>>, String> {
+    ) -> Result<mpsc::Receiver<Result<TerminalCommit<OperationResult>, String>>, String> {
         self.begin_preparation(OperationKind::PrepareR)
     }
 
     pub(super) fn begin_python_preparation(
         &self,
-    ) -> Result<mpsc::Receiver<Result<OperationResult, String>>, String> {
+    ) -> Result<mpsc::Receiver<Result<TerminalCommit<OperationResult>, String>>, String> {
         self.begin_preparation(OperationKind::PreparePython)
     }
 
     fn begin_preparation(
         &self,
         kind: OperationKind,
-    ) -> Result<mpsc::Receiver<Result<OperationResult, String>>, String> {
+    ) -> Result<mpsc::Receiver<Result<TerminalCommit<OperationResult>, String>>, String> {
         let (result, receiver) = mpsc::channel();
         let mut state = self.lock()?;
         state.ensure_available()?;
@@ -211,7 +239,8 @@ impl Activity {
         message: WorkerMessage,
         python_candidates: &mut Vec<crate::resolver::ManagedPython>,
         output: &OutputTape,
-    ) -> Result<(), String> {
+        cancelled: &std::io::PipeReader,
+    ) -> Result<bool, String> {
         let (Operation { kind, result }, checkpoint) = {
             let mut state = self.lock()?;
             let operation = state.operation.take().ok_or_else(|| {
@@ -257,9 +286,37 @@ impl Activity {
             }
         };
         match outcome {
-            Ok(outcome) => result
-                .send(Ok(outcome))
-                .map_err(|_| "worker operation receiver stopped".to_string()),
+            Ok(outcome) => {
+                let (acknowledged, acknowledgment) = match std::io::pipe() {
+                    Ok(pipe) => pipe,
+                    Err(error) => {
+                        let error = format!(
+                            "failed to create worker terminal acknowledgment pipe: {error}"
+                        );
+                        let _ = result.send(Err(error.clone()));
+                        return Err(error);
+                    }
+                };
+                result
+                    .send(Ok(TerminalCommit::new(outcome, acknowledgment)))
+                    .map_err(|_| "worker operation receiver stopped".to_string())?;
+                loop {
+                    let events = super::platform::wait_for_worker_io(
+                        acknowledged.as_raw_fd(),
+                        libc::POLLIN,
+                        cancelled,
+                    )
+                    .map_err(|error| {
+                        format!("worker terminal acknowledgment wait failed: {error}")
+                    })?;
+                    if events.cancelled {
+                        return Ok(false);
+                    }
+                    if events.ready {
+                        return Ok(true);
+                    }
+                }
+            }
             Err(error) => {
                 let _ = result.send(Err(error.clone()));
                 Err(error)
@@ -293,38 +350,41 @@ fn handle_message(
     output: &OutputTape,
     callbacks: &WorkerCallbacks,
     python_candidates: &mut Vec<crate::resolver::ManagedPython>,
-) -> Result<(), String> {
+    cancelled: &std::io::PipeReader,
+) -> Result<bool, String> {
     use crate::worker_protocol::ConsoleChannel::{Diagnostic, Output};
 
     match message {
         WorkerMessage::ConsoleOutput { data } => match activity.route()? {
-            Route::Cell(evaluation) => evaluation.output(Output, data),
+            Route::Cell(evaluation) => evaluation.output(Output, data).map(|()| true),
             Route::Preparation | Route::Idle => {
                 output.push_console_text(Output, data);
-                Ok(())
+                Ok(true)
             }
         },
         WorkerMessage::ConsoleDiagnostic { data } => match activity.route()? {
-            Route::Cell(evaluation) => evaluation.output(Diagnostic, data),
+            Route::Cell(evaluation) => evaluation.output(Diagnostic, data).map(|()| true),
             Route::Preparation | Route::Idle => {
                 output.push_console_text(Diagnostic, data);
-                Ok(())
+                Ok(true)
             }
         },
         WorkerMessage::Image { data, mime_type } => match activity.route()? {
-            Route::Cell(evaluation) => evaluation.image(data, mime_type),
+            Route::Cell(evaluation) => evaluation.image(data, mime_type).map(|()| true),
             Route::Preparation | Route::Idle => {
                 crate::transcript::validate_image_data(&data)?;
                 output.push_image(data, mime_type, None);
-                Ok(())
+                Ok(true)
             }
         },
         WorkerMessage::InputRequested { prompt } => {
             let rendered = serde_json::to_string(&prompt)
                 .map_err(|error| format!("failed to render worker input prompt: {error}"))?;
-            activity.input_requested(prompt, rendered, output)
+            activity
+                .input_requested(prompt, rendered, output)
+                .map(|()| true)
         }
-        WorkerMessage::InputReceived => activity.input_received(),
+        WorkerMessage::InputReceived => activity.input_received().map(|()| true),
         WorkerMessage::ResolvePython { request } => {
             let response = match callbacks.resolve_python(request) {
                 Ok(managed) => {
@@ -337,6 +397,7 @@ fn handle_message(
             writer
                 .send(&response)
                 .map_err(|error| format!("worker sideband write failed: {error}"))
+                .map(|()| true)
         }
         WorkerMessage::ResolvePythonVersion { request } => {
             let response = match callbacks.resolve_python_version(request) {
@@ -346,17 +407,113 @@ fn handle_message(
             writer
                 .send(&response)
                 .map_err(|error| format!("worker sideband write failed: {error}"))
+                .map(|()| true)
         }
-        WorkerMessage::PythonActivated { requirements } => {
-            callbacks.activate_python(requirements, python_candidates)
-        }
+        WorkerMessage::PythonActivated { requirements } => callbacks
+            .activate_python(requirements, python_candidates)
+            .map(|()| true),
         message @ (WorkerMessage::Completed
         | WorkerMessage::RPrepared { .. }
         | WorkerMessage::RPreparationFailed { .. }
         | WorkerMessage::PythonPrepared
         | WorkerMessage::PythonPreparationFailed { .. }) => {
-            activity.complete(message, python_candidates, output)
+            activity.complete(message, python_candidates, output, cancelled)
         }
         WorkerMessage::Ready => Err("worker sent an unexpected ready message".to_string()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use super::*;
+
+    #[test]
+    fn terminal_result_waits_for_owner_commit() {
+        let activity = Activity::new();
+        let operation = activity
+            .begin_r_preparation()
+            .expect("R preparation should begin");
+        let output = OutputTape::new();
+        let (cancelled, _cancel) =
+            std::io::pipe().expect("reader cancellation pipe should be created");
+        let (finished, completion_finished) = mpsc::channel();
+        let completing = activity.clone();
+        let completion = thread::spawn(move || {
+            let result = completing.complete(
+                WorkerMessage::RPrepared {
+                    library: "library".to_string(),
+                },
+                &mut Vec::new(),
+                &output,
+                &cancelled,
+            );
+            finished
+                .send(result)
+                .expect("completion result should be observed");
+        });
+
+        let terminal = operation
+            .recv()
+            .expect("operation result should be sent")
+            .expect("operation should complete");
+        assert!(
+            completion_finished
+                .recv_timeout(Duration::from_millis(50))
+                .is_err(),
+            "reader continued before the terminal owner committed"
+        );
+        terminal.commit_with(|result| match result {
+            OperationResult::RPrepared(library) => assert_eq!(library, "library"),
+            _ => panic!("unexpected operation result"),
+        });
+        assert!(
+            completion_finished
+                .recv_timeout(Duration::from_secs(1))
+                .expect("reader should observe the terminal commit")
+                .expect("terminal completion should succeed")
+        );
+        completion.join().expect("completion task should finish");
+    }
+
+    #[test]
+    fn reader_cancellation_interrupts_terminal_commit_wait() {
+        let activity = Activity::new();
+        let operation = activity
+            .begin_r_preparation()
+            .expect("R preparation should begin");
+        let output = OutputTape::new();
+        let (cancelled, cancel) =
+            std::io::pipe().expect("reader cancellation pipe should be created");
+        let (finished, completion_finished) = mpsc::channel();
+        let completing = activity.clone();
+        let completion = thread::spawn(move || {
+            let result = completing.complete(
+                WorkerMessage::RPrepared {
+                    library: "library".to_string(),
+                },
+                &mut Vec::new(),
+                &output,
+                &cancelled,
+            );
+            finished
+                .send(result)
+                .expect("completion result should be observed");
+        });
+
+        let terminal = operation
+            .recv()
+            .expect("operation result should be sent")
+            .expect("operation should complete");
+        drop(cancel);
+        assert!(
+            !completion_finished
+                .recv_timeout(Duration::from_secs(1))
+                .expect("reader cancellation should stop the commit wait")
+                .expect("terminal cancellation should not fail the reader")
+        );
+        drop(terminal);
+        completion.join().expect("completion task should finish");
     }
 }

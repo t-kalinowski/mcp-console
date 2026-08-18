@@ -75,6 +75,56 @@ struct WorkerSnapshot {
     input_requested: bool,
 }
 
+/// Keeps the sideband reader behind a terminal frame until its owner commits.
+struct TerminalCommit<T> {
+    value: Option<T>,
+    acknowledgment: Option<std::io::PipeWriter>,
+}
+
+impl<T> TerminalCommit<T> {
+    fn new(value: T, acknowledgment: std::io::PipeWriter) -> Self {
+        Self {
+            value: Some(value),
+            acknowledgment: Some(acknowledgment),
+        }
+    }
+
+    fn try_map<U, E>(
+        mut self,
+        map: impl FnOnce(T) -> Result<U, E>,
+    ) -> Result<TerminalCommit<U>, E> {
+        let value = self
+            .value
+            .take()
+            .expect("terminal result should be available until commit");
+        let value = map(value)?;
+        Ok(TerminalCommit {
+            value: Some(value),
+            acknowledgment: self.acknowledgment.take(),
+        })
+    }
+
+    fn commit_with<U>(mut self, commit: impl FnOnce(T) -> U) -> U {
+        let value = self
+            .value
+            .take()
+            .expect("terminal result should be available until commit");
+        let result = commit(value);
+        self.acknowledge();
+        result
+    }
+
+    fn acknowledge(&mut self) {
+        drop(self.acknowledgment.take());
+    }
+}
+
+impl<T> Drop for TerminalCommit<T> {
+    fn drop(&mut self) {
+        self.acknowledge();
+    }
+}
+
 #[derive(Clone)]
 struct WorkerCallbacks {
     client: Client,
@@ -486,8 +536,8 @@ impl Client {
             .evaluate(cell, evaluation.clone())
             .map_err(|message| evaluation.classify_failure(message));
         let failure = match result {
-            Ok(checkpoint) => {
-                evaluation.complete_cell_at(checkpoint);
+            Ok(completion) => {
+                completion.commit_with(|checkpoint| evaluation.complete_cell_at(checkpoint));
                 return Ok(());
             }
             Err(failure) => failure,
