@@ -15,6 +15,7 @@ from _support import (
     code,
     r_test_environment,
     reference_plots,
+    release_worker_callback_gate,
     run_this_suite,
     stop_client,
     wait_for_worker_file,
@@ -119,6 +120,75 @@ def test_services_r_input_handlers_at_cell_boundaries(binary: Path) -> Transcrip
         return client._finish()
 
 
+def test_services_later_callbacks_while_idle(binary: Path) -> Transcript:
+    client = McpClient(binary, ("serve",))
+    client._initialize_and_list_tools()
+    client.session(action="prepare", requirements={"r": ["later"]})
+
+    # fmt: r
+    r = code(r"""
+        callback_gate <- tempfile("mcp-console-callback-gate-")
+        callback_checkpoint <- tempfile("mcp-console-callback-checkpoint-")
+        run_callback <- function() {
+          if (!file.exists(callback_gate)) {
+            later::later(run_callback, delay = 0.01)
+            return(invisible(NULL))
+          }
+          idle_value <<- 42
+          cat("idle callback\n")
+          stopifnot(file.create(callback_checkpoint))
+        }
+        later::later(run_callback, delay = 0.01)
+        cat(callback_gate, callback_checkpoint, sep = "\n")
+        """)
+    client.send(r=r)
+    release_worker_callback_gate(client, "idle callback")
+    client.send(r="idle_value")
+    assert last_tool_text(client) == "idle callback\n[1] 42\n"
+    return client._finish()
+
+
+def test_returns_plots_from_idle_later_callbacks(binary: Path) -> Transcript:
+    environment, rscript = r_test_environment()
+    client = McpClient(binary, ("serve",), environment)
+    client._initialize_and_list_tools()
+    client.session(action="prepare", requirements={"r": ["later"]})
+
+    # fmt: r
+    r = code(r"""
+        callback_gate <- tempfile("mcp-console-callback-gate-")
+        callback_checkpoint <- tempfile("mcp-console-callback-checkpoint-")
+        run_callback <- function() {
+          if (!file.exists(callback_gate)) {
+            later::later(run_callback, delay = 0.01)
+            return(invisible(NULL))
+          }
+          cat("idle plot\n")
+          plot(1:3)
+          stopifnot(file.create(callback_checkpoint))
+        }
+        later::later(run_callback, delay = 0.01)
+        cat(callback_gate, callback_checkpoint, sep = "\n")
+        """)
+    client.send(r=r)
+    release_worker_callback_gate(client, "idle plot callback")
+    expected_plot = reference_plots(
+        rscript,
+        environment,
+        "plot(1:3)",
+        width=800 / 96,
+        height=600 / 96,
+        dpi=96,
+        pages=1,
+    )
+    client.send(r='cat("cell body\\n")')
+    assert_result_content(
+        client,
+        ["idle plot\n", expected_plot[0], "cell body\n"],
+    )
+    return client._finish()
+
+
 def test_stops_cell_after_boundary_callback_failure(binary: Path) -> Transcript:
     with r_input_handler_client(binary) as (client, directory):
         client._initialize_and_list_tools()
@@ -209,6 +279,36 @@ def test_skips_final_boundary_callbacks_after_cell_failure(binary: Path) -> Tran
             "[idle]"
         )
         return client._finish()
+
+
+def test_routes_input_to_idle_later_callbacks_before_a_cell(binary: Path) -> Transcript:
+    client = McpClient(binary, ("serve",))
+    client._initialize_and_list_tools()
+    client.session(action="prepare", requirements={"r": ["later"]})
+
+    # fmt: r
+    r = code(r"""
+        callback_gate <- tempfile("mcp-console-callback-gate-")
+        callback_checkpoint <- tempfile("mcp-console-callback-checkpoint-")
+        run_callback <- function() {
+          if (!file.exists(callback_gate)) {
+            later::later(run_callback, delay = 0.01)
+            return(invisible(NULL))
+          }
+          stopifnot(file.create(callback_checkpoint))
+          idle_answer <<- readline("later> ")
+        }
+        later::later(run_callback, delay = 0.01)
+        cat(callback_gate, callback_checkpoint, sep = "\n")
+        """)
+    client.send(r=r)
+    release_worker_callback_gate(client, "idle input callback")
+    client.send(
+        r='cat("cell: ", idle_answer, "\\n", sep = "")',
+        stdin="yes\n",
+    )
+    assert last_tool_text(client) == ('[input requested: "later> "]\ncell: yes\n')
+    return client._finish()
 
 
 def test_uses_200_column_default(binary: Path) -> Transcript:

@@ -118,7 +118,12 @@ It gives them a second turn after a normal language outcome only if worker shutd
 Shutdown or an infrastructure failure during the initial turn aborts the submitted cell; an infrastructure failure recorded by the cell skips the final turn.
 After either turn, a worker-stdin hangup marks shutdown before the worker can dispatch or complete the cell, including when a callback reads fd 0 directly.
 Ready callbacks run within a managed graphics scope and their output precedes cell completion.
-The worker does not yet wake for R input handlers while otherwise idle.
+Between cells, the worker temporarily adds the sideband descriptor to R's input-handler set and blocks in `R_checkActivity()` for either R activity or a server command.
+It removes that temporary handler before running R code, so fork children inherit no stale sideband handler.
+R handler errors remain below `R_ToplevelExec()`, and the worker uses no worker-owned fixed polling interval or second event loop.
+Idle console output and images remain in the worker sideband until a code-bearing `send` or live requirement preparation drains them; pipe backpressure and managed-Python requests can therefore pause a callback until one of those operations begins.
+Before applying a live requirement preparation, the built-in worker gives registered R handlers one nonblocking turn, so a callback already ready when the command arrives is collected first.
+Idle callbacks that request input can be continued by a code-bearing `send`; a noninteractive requirement preparation that encounters the request stops the worker instead of blocking indefinitely.
 Each worker generation starts with `options(width = 200L)`; evaluated code can change that persistent option.
 Cell EOF while R requires continuation input is an error; earlier complete expressions from that cell remain applied.
 R parse, evaluation, and auto-print failures are normal language outcomes with `isError: false`.
@@ -236,7 +241,7 @@ It does not self-execute or set a dynamic-loader environment variable.
 The worker command runs synchronously on the process main thread; only `serve` creates a Tokio runtime.
 The hidden development option `serve --worker PATH` replaces the built-in worker with an executable that implements the same sideband request/receipt protocol and fd-0 input contract.
 The Python fixture `tests/fixtures/zod` provides deterministic acceptance coverage for R, Python, and SQL language tags at that boundary, MCP image content, direct fd-0 input, captured standard streams, and server-owned timeout and polling mechanics.
-When MCP input closes, the server cancels any active host resolver and starts a one-second deadline for graceful sideband shutdown without delaying it.
+When MCP input closes, the server starts a one-second worker-shutdown deadline, closes worker stdin, sends sideband shutdown, waits for worker exit through that deadline, and then cancels any active host resolver.
 If the direct sandbox process is still running when time expires, the sandbox boundary force-stops its process group and reaps that direct process.
 The version command prints the package name and version.
 On macOS, the sandbox command launches a subprocess under `sandbox-exec` with host filesystem reads allowed, regular-file writes limited to a dedicated per-launch temporary directory, runtime device and IPC exceptions, and network access denied.

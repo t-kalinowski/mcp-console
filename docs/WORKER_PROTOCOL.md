@@ -111,7 +111,8 @@ These boundary details apply:
 - Evaluations and idle stdin writes stay associated with the worker that admitted them.
   Work from the old worker is rejected rather than delivered to the replacement.
 - An R preparation cancelled while its IR resolver is active reports resolver cancellation.
-  After preparation reaches the live worker, restart cancellation returns `R preparation cancelled by restart` when the call includes R and `Python preparation cancelled by restart` otherwise, regardless of whether resolver cancellation or worker shutdown completes first.
+  After preparation reaches the live worker, restart cancellation returns `R preparation cancelled by restart` when the call includes R and `Python preparation cancelled by restart` otherwise.
+  Worker shutdown precedes host-resolver cancellation so cancellation cannot release an unrelated command queued on the retiring worker.
   Sideband failures from the active generation remain infrastructure errors.
 - Standard-output and standard-error bytes collected from the old worker are retained through retirement.
 - When a `send` is waiting on an unfinished evaluation, that call owns the old worker's text and images.
@@ -301,7 +302,9 @@ The server sends an explicit evaluation or live-preparation command without firs
 Its operation reader accepts console, image, input, Python-resolution, Python-version-resolution, and Python-activation frames that preceding background work may already have published.
 A worker that is waiting for a nested resolver reply must queue an unrelated command, finish that callback after the reply arrives, and then process the command.
 The explicit operation's ordinary terminal therefore also fences the preceding background work.
-Background input joins an evaluation's normal input flow, but fails a noninteractive live preparation instead of leaving it blocked.
+Background input joins an evaluation's normal input flow.
+Before applying a live preparation command, the built-in worker gives registered R handlers one nonblocking turn, so a ready callback is handled first.
+An input request from that callback fails the noninteractive preparation instead of leaving it blocked.
 
 An explicit live R preparation has this shape after the server resolves the complete R requirement set:
 
@@ -339,7 +342,7 @@ Before initialization, payload-free `python_prepared` accepts the last successfu
 For a mixed public preparation, an accepted Python environment remains retained if a later R update fails.
 `python_preparation_failed` restores the live manifest, discards unmatched candidates, and leaves the worker usable.
 
-A server-managed worker may send `resolve_python` during an evaluation when reticulate invokes its internal `uv_get_or_create_env` binding.
+A server-managed worker may send `resolve_python` during an evaluation, live preparation, or preceding idle callback when reticulate invokes its internal `uv_get_or_create_env` binding.
 The request contains both the complete physical resolver manifest and the complete logical retained manifest, not a history delta.
 Their packages and `exclude_newer` must match, while the physical manifest may select the exact active Python patch version without replacing the logical constraint that will be retained.
 The server performs the resolution while the worker waits and replies with exactly one `python_resolved` or `python_resolution_failed` frame on the same sideband.
@@ -354,7 +357,7 @@ Unmatched candidates are discarded when the operation ends, except that successf
 A pre-initialization `py_require()` call updates only the worker's lazy reticulate manifest.
 It is not durable across worker loss until Python initialization resolves and reports the manifest through `python_activated`, or explicit preparation materializes it and returns `python_prepared`.
 
-A server-managed worker may send `resolve_python_version` during an evaluation when reticulate invokes its internal `resolve_python_version` binding.
+A server-managed worker may send `resolve_python_version` during an evaluation, live preparation, or preceding idle callback when reticulate invokes its internal `resolve_python_version` binding.
 The request contains only version constraints and the current `UV_*` settings other than `UV_OFFLINE`.
 The server runs reticulate's version selection while the worker waits and replies with exactly one `python_version_resolved` or `python_version_resolution_failed` frame.
 This request returns no interpreter, creates no environment candidate, and does not affect retained Python state.
@@ -503,8 +506,7 @@ Any earlier `python_activated` event has already updated retained state.
 
 The server begins shutdown when MCP input closes or RMCP releases its transport.
 At that moment it fixes a deadline one second in the future and closes the client lifecycle.
-If explicit preparation or a worker-triggered Python resolution is active, shutdown force-stops the resolver process group and reaps its direct `Rscript` process.
-It then attempts to send:
+It first attempts to send:
 
 ```json
 { "kind": "shutdown" }
@@ -515,13 +517,15 @@ The shutdown task queues worker-stdin closure, then attempts the sideband write.
 It runs independently of the deadline so a blocked stdin writer or full sideband pipe cannot postpone forced termination.
 The sandbox child waits only for the time remaining before the original deadline.
 If its direct process is still running at the deadline, the sandbox force-stops its process group and reaps that direct process.
-After the process stops and the active sideband operation returns, shutdown cancels its stdin writer and standard-stream readers, drains the finite standard-stream bytes already buffered at that boundary, and joins those tasks.
+After the worker stops, shutdown force-stops any resolver process group that was active for explicit preparation or worker-triggered Python resolution and reaps its direct process.
+After both stop paths complete and the active sideband operation returns, shutdown cancels its stdin writer and standard-stream readers, drains the finite standard-stream bytes already buffered at that boundary, and joins those tasks.
 This closes the old generation's server-side pipe boundary before shutdown returns, even when a background descendant retains a pipe descriptor or a blocked stdin write.
 The descendant itself remains unsupervised as described below, and any later write to the closed pipe is not captured.
 
-Shutdown owns stop handles independently of the evaluation lock, including simultaneous handles for the worker and its nested host resolver.
-This lets the server terminate both processes while another thread is blocked waiting for resolver or worker output.
-If the worker cannot observe the shutdown frame while evaluating, the bounded kill is the completion path.
+Shutdown owns stop handles independently of the active-operation lock, including simultaneous handles for the worker and its nested host resolver.
+This lets the server terminate both processes while another thread is blocked waiting for resolver or worker output, while ensuring the worker stop path completes before resolver cancellation can release queued work.
+A resolver that finishes independently while restart begins remains ordered against the shutdown write by ordinary sideband publication; restart adds no stronger preemption boundary before the worker observes shutdown.
+If the worker cannot observe the shutdown frame while running a cell or R callback, the bounded kill is the completion path.
 
 Shutdown closes a one-way gate that the client checks before and after acquiring the worker lock.
 Startup registers a separate stop handle before waiting for `ready`.
@@ -545,7 +549,18 @@ After either turn, the worker polls fd 0 once without blocking and treats `POLLH
 This also covers callbacks that read fd 0 directly and therefore bypass `ReadConsole`.
 Package callbacks therefore share the cell's console and input routing, while their default-device plots use a separate managed graphics scope.
 Output and images from the final turn precede `completed`.
-The worker does not yet wait on R input handlers between cells, so a timer that becomes ready while the worker is otherwise idle remains pending until a cell boundary.
+Between cells, the worker temporarily registers its sideband read descriptor as an R input handler with no callback and blocks in `R_checkActivity()`.
+R activity wakes the same main thread for one managed handler turn; sideband activity returns control to the existing command dispatcher.
+The temporary handler is removed before any R handler runs, including after an R long jump, so supported fork children never inherit it.
+The minimum positive `R_wait_usec` or `Rg_wait_usec` value bounds the wait so `R_PolledEvents` can run; otherwise the worker blocks until a descriptor is ready.
+This uses R's descriptor wait without a separate event loop or worker-owned fixed polling interval.
+
+After an idle handler turn, the worker returns to the same wait without sending an activity-specific terminal frame.
+Idle callback frames remain in the worker-to-server pipe until a code-bearing `send` or live requirement preparation reads them.
+The explicit command is queued when necessary, its reader handles the preceding frames, and its ordinary terminal fences the combined work.
+Because there is no continuous server reader, pipe-sized output or a managed-Python request can pause a callback until one of those operations begins collecting it.
+A code-bearing `send` can continue an idle callback's input request through the normal evaluation input state.
+Requirement preparation is noninteractive, so an idle input request stops the worker instead of blocking indefinitely.
 
 Before R initializes, the worker restores the default `SIGINT` disposition and unblocks the signal so R can install its handler.
 The worker checks whether an interrupt is pending before and after every `R_ReplDLLdo1()` call and at cell boundaries, and calls `R_CheckUserInterrupt()` only when one is pending.
@@ -610,7 +625,7 @@ Before initializing R, it forces `UV_OFFLINE=1`, overwriting any inherited value
 For a server-managed worker, MCP Console seeds reticulate's manifest and replaces the namespace bindings for its internal `uv_get_or_create_env` and `resolve_python_version` functions.
 It does not replace `py_require()`, so reticulate retains its package attribution, manifest history, compatibility checks, activation, and configuration behavior within the live R process.
 When Python is already initialized, only additive package requirements are supported.
-The worker sends the complete physical resolver manifest, the logical manifest to retain after successful activation, and its current `UV_*` settings except `UV_OFFLINE`, then waits for the server's resolver reply within the same evaluation.
+The worker sends the complete physical resolver manifest, the logical manifest to retain after successful activation, and its current `UV_*` settings except `UV_OFFLINE`, then waits for the server's resolver reply before returning to reticulate.
 The two manifests must agree on packages and `exclude_newer`; only the physical manifest may substitute the exact active Python patch version.
 Those settings are not retained after the resolution.
 Reticulate checks that each candidate uses the exact live `libpython`, runs `activate_this.py`, swaps its configuration, and updates its manifest.

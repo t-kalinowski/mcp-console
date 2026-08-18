@@ -208,6 +208,31 @@ def assert_result_content(
         image["data"] = f"<PNG byte-identical to {reference}>"
 
 
+def release_worker_callback_gate(
+    client: "McpClient",
+    description: str,
+) -> None:
+    result = client.transcript[-1]["result"]
+    assert result.get("isError") is not True, result
+    content = result["content"]
+    assert len(content) == 1 and content[0]["type"] == "text", content
+    paths = content[0]["text"].splitlines()
+    assert len(paths) == 2, content
+    content[0]["text"] = "<worker callback gate>\n<worker callback checkpoint>"
+
+    gate, checkpoint = map(Path, paths)
+    gate.touch()
+    deadline = time.monotonic() + 5
+    while not checkpoint.exists():
+        assert client.process.poll() is None, (
+            f"mcp-console stopped before {description} reached its checkpoint"
+        )
+        assert time.monotonic() < deadline, (
+            f"{description} did not reach its checkpoint"
+        )
+        time.sleep(0.01)
+
+
 def run_this_suite(suite_path: str) -> None:
     suite = Path(suite_path).resolve()
     root = suite.parents[2]
