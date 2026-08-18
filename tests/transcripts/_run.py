@@ -10,7 +10,7 @@ import runpy
 import shutil
 import sys
 from collections.abc import Callable
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 
 from _support import Transcript, TranscriptWithCompanion, YamlStream
@@ -217,11 +217,29 @@ def main() -> None:
             check_recording(suite_name, case_name, recorded, update=options.update)
         return
 
-    executor = ProcessPoolExecutor(max_workers=options.jobs)
+    max_workers = min(options.jobs, len(arguments))
+    if sys.platform == "win32":
+        max_workers = min(max_workers, 61)
+
+    executor = ProcessPoolExecutor(max_workers=max_workers)
     try:
-        recordings = executor.map(record_case, *zip(*arguments))
-        for (suite_name, case_name, _), recorded in zip(selected, recordings):
-            check_recording(suite_name, case_name, recorded, update=options.update)
+        futures = {
+            executor.submit(record_case, *argument): index
+            for index, argument in enumerate(arguments)
+        }
+        recordings: dict[int, RecordedTranscript] = {}
+        next_recording = 0
+        for future in as_completed(futures):
+            recordings[futures[future]] = future.result()
+            while next_recording in recordings:
+                suite_name, case_name, _ = selected[next_recording]
+                check_recording(
+                    suite_name,
+                    case_name,
+                    recordings.pop(next_recording),
+                    update=options.update,
+                )
+                next_recording += 1
     except BaseException:
         executor.shutdown(cancel_futures=True)
         raise
