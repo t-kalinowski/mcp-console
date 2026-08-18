@@ -13,6 +13,7 @@ The client validates the omitted JSON-RPC version and response ID before recordi
 Tool calls show the tool name and arguments directly, so a `tools/call` request for `send` is recorded as `send: ARGUMENTS`.
 The response's `result` or `error`, when present, appears directly at the document root after the request.
 The initialization, initialized notification, and tool-list exchange appear in full only in `server::initializes_and_lists_tools`.
+When selected, that case runs to completion before the remaining transcript cases start.
 Before compacting another transcript, the runner verifies that its prefix equals every document in the full snapshot.
 An identical prefix becomes a bare `!same-as PATH` document; a different prefix remains in full.
 `PATH` identifies the snapshot used for comparison, and the tag does not load the file.

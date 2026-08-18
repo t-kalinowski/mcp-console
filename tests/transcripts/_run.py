@@ -20,8 +20,10 @@ directory = Path(__file__).resolve().parent
 root = directory.parents[1]
 binary = root / "target" / "debug" / "mcp-console"
 suite_paths = sorted(directory.glob("[!_]*.py"))
+initialization_suite = "server"
+initialization_case = "initializes_and_lists_tools"
 initialization_reference = (
-    "tests/transcripts/golden/server/initializes_and_lists_tools.yaml"
+    f"tests/transcripts/golden/{initialization_suite}/{initialization_case}.yaml"
 )
 
 parser = argparse.ArgumentParser(prog="scripts/test")
@@ -210,6 +212,14 @@ def main() -> None:
         return
 
     selected = selected_cases(suites, options.selectors)
+    for index, (suite_name, case_name, suite_path) in enumerate(selected):
+        if (suite_name, case_name) != (initialization_suite, initialization_case):
+            continue
+        recorded = record_case(suite_path, case_name)
+        check_recording(suite_name, case_name, recorded, update=options.update)
+        selected.pop(index)
+        break
+
     arguments = [(suite_path, case_name) for _, case_name, suite_path in selected]
     if options.jobs == 1 or len(arguments) < 2:
         recordings = (record_case(*pair) for pair in arguments)
@@ -227,19 +237,14 @@ def main() -> None:
             executor.submit(record_case, *argument): index
             for index, argument in enumerate(arguments)
         }
-        recordings: dict[int, RecordedTranscript] = {}
-        next_recording = 0
         for future in as_completed(futures):
-            recordings[futures[future]] = future.result()
-            while next_recording in recordings:
-                suite_name, case_name, _ = selected[next_recording]
-                check_recording(
-                    suite_name,
-                    case_name,
-                    recordings.pop(next_recording),
-                    update=options.update,
-                )
-                next_recording += 1
+            suite_name, case_name, _ = selected[futures[future]]
+            check_recording(
+                suite_name,
+                case_name,
+                future.result(),
+                update=options.update,
+            )
     except BaseException:
         executor.shutdown(cancel_futures=True)
         raise
