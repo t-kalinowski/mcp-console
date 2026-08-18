@@ -2265,6 +2265,117 @@ def test_shuts_down_stalled_worker(binary: Path) -> Transcript:
                 stop_process(client.process)
 
 
+def test_restart_does_not_wait_for_sideband_descendant(binary: Path) -> Transcript:
+    zod = Path(__file__).resolve().parents[1] / "fixtures" / "zod"
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        temporary_path = Path(temporary_directory)
+        environment = os.environ.copy()
+        environment["TMPDIR"] = temporary_directory
+        client = McpClient(
+            binary,
+            ("serve", "--worker", str(zod)),
+            environment,
+        )
+        descendant_group = None
+        passed = False
+        try:
+            client._initialize_and_list_tools()
+            client.send(r="start sideband descendant")
+            assert last_tool_text(client) == "[done]"
+            marker = wait_for_marker(
+                temporary_path,
+                "zod-sideband-descendant-pid",
+                client,
+            )
+            descendant_group = int(marker.read_text(encoding="utf-8"))
+
+            restarted = client._start_session(action="restart")
+            received = threading.Event()
+            errors: list[BaseException] = []
+
+            def receive_restart() -> None:
+                try:
+                    client._receive(restarted)
+                except BaseException as error:
+                    errors.append(error)
+                finally:
+                    received.set()
+
+            receiver = threading.Thread(target=receive_restart, daemon=True)
+            receiver.start()
+            assert received.wait(3), "restart waited for the inherited sideband descriptor"
+            receiver.join()
+            if errors:
+                raise errors[0]
+            assert last_tool_text(client) == (
+                "[worker stopped: in-memory state lost]\n"
+                "[starting new worker]\n"
+                "[idle]"
+            )
+
+            stop_process_group(descendant_group)
+            descendant_group = None
+            client.send(r="echo")
+            assert last_tool_text(client) == "zod: echo\n"
+            transcript = client._finish()
+            passed = True
+            return transcript
+        finally:
+            stop_process_group(descendant_group)
+            if not passed:
+                stop_process(client.process)
+
+
+def test_shutdown_does_not_wait_for_sideband_descendant(binary: Path) -> Transcript:
+    zod = Path(__file__).resolve().parents[1] / "fixtures" / "zod"
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        temporary_path = Path(temporary_directory)
+        environment = os.environ.copy()
+        environment["TMPDIR"] = temporary_directory
+        client = McpClient(
+            binary,
+            ("serve", "--worker", str(zod)),
+            environment,
+        )
+        descendant_group = None
+        passed = False
+        try:
+            client._initialize_and_list_tools()
+            client.send(r="start sideband descendant")
+            assert last_tool_text(client) == "[done]"
+            marker = wait_for_marker(
+                temporary_path,
+                "zod-sideband-descendant-pid",
+                client,
+            )
+            descendant_group = int(marker.read_text(encoding="utf-8"))
+
+            shutdown_started = time.monotonic()
+            client.stdin.close()
+            try:
+                return_code = client.process.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                raise AssertionError(
+                    "mcp-console waited for the inherited sideband descriptor"
+                ) from None
+            shutdown_elapsed = time.monotonic() - shutdown_started
+
+            assert shutdown_elapsed < 1.5, (
+                f"worker shutdown took {shutdown_elapsed:.3f} seconds"
+            )
+            assert return_code == 0, client.stderr.read()
+            client.stdout.read()
+            assert client.stderr.read() == ""
+            stop_process_group(descendant_group)
+            descendant_group = None
+            passed = True
+            return client.transcript
+        finally:
+            stop_process_group(descendant_group)
+            if not passed:
+                stop_process(client.process)
+
+
 def test_shutdown_deadline_does_not_wait_for_sideband_writer(
     binary: Path,
 ) -> Transcript:

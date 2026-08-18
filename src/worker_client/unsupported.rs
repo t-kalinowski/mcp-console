@@ -26,14 +26,15 @@ impl Worker {
     pub(super) fn prepare_r(
         &mut self,
         _library: &std::path::Path,
-    ) -> Result<Result<(), String>, String> {
+    ) -> Result<super::TerminalCommit<Result<(), String>>, String> {
         unreachable!("unsupported workers cannot start")
     }
 
     pub(super) fn prepare_python(
         &mut self,
         packages: Vec<String>,
-    ) -> Result<Result<Option<crate::resolver::ManagedPython>, String>, String> {
+    ) -> Result<super::TerminalCommit<Result<Option<crate::resolver::ManagedPython>, String>>, String>
+    {
         let _ = packages;
         unreachable!("unsupported workers cannot start")
     }
@@ -42,7 +43,7 @@ impl Worker {
         &mut self,
         cell: crate::cell::Cell,
         _evaluation: std::sync::Arc<super::Evaluation>,
-    ) -> Result<super::output::OutputCheckpoint, String> {
+    ) -> Result<super::TerminalCommit<super::output::OutputCheckpoint>, String> {
         let _ = cell;
         unreachable!("unsupported workers cannot start")
     }

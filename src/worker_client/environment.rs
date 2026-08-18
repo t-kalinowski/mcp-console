@@ -334,27 +334,24 @@ impl Client {
         if !python_packages.is_empty() {
             let result = running.prepare_python(python_packages);
             match result {
-                Ok(Ok(Some(managed))) => {
-                    if let Err(error) = self.commit_runtime_python(generation.clone(), managed) {
+                Ok(completion) => {
+                    let committed = completion.commit_with(|result| match result {
+                        Ok(Some(managed)) => self
+                            .commit_runtime_python(generation.clone(), managed)
+                            .map_err(|error| (true, error)),
+                        Ok(None) => Ok(()),
+                        Err(error) => Err((false, error)),
+                    });
+                    if let Err((stop_worker, error)) = committed {
                         return self.fail_running_preparation(
                             &mut worker,
                             generation,
-                            true,
+                            stop_worker,
                             error,
                             includes_r,
                         );
                     }
                 }
-                Ok(Ok(None)) => {}
-                Ok(Err(error)) => {
-                    return self.fail_running_preparation(
-                        &mut worker,
-                        generation,
-                        false,
-                        error,
-                        includes_r,
-                    );
-                }
                 Err(error) => {
                     return self.fail_running_preparation(
                         &mut worker,
@@ -366,13 +363,9 @@ impl Client {
                 }
             }
         }
-        if let Some(managed_r) = managed_r.as_ref() {
-            match running.prepare_r(managed_r.library()) {
-                Ok(Ok(())) => {}
-                Ok(Err(error)) => {
-                    self.require_restart_for_requirement_changes(generation)?;
-                    return Ok(self.failed_preparation_response(requirement_restart_error(error)));
-                }
+        if let Some(managed_r) = managed_r {
+            let completion = match running.prepare_r(managed_r.library()) {
+                Ok(completion) => completion,
                 Err(error) => {
                     return self.fail_running_preparation(
                         &mut worker,
@@ -382,11 +375,26 @@ impl Client {
                         true,
                     );
                 }
-            }
+            };
+            let committed = completion.commit_with(|result| match result {
+                Ok(()) => self
+                    .commit_running_environment(generation, Some(managed_r), duckdb_extensions)
+                    .map(|()| None),
+                Err(error) => self
+                    .require_restart_for_requirement_changes(generation)
+                    .map(|()| Some(error)),
+            });
+            return match committed {
+                Ok(None) => Ok(PrepareResult::Prepared),
+                Ok(Some(error)) => {
+                    Ok(self.failed_preparation_response(requirement_restart_error(error)))
+                }
+                Err(error) => {
+                    self.fail_running_preparation(&mut worker, generation, true, error, true)
+                }
+            };
         }
-        if let Err(error) =
-            self.commit_running_environment(generation, managed_r, duckdb_extensions)
-        {
+        if let Err(error) = self.commit_running_environment(generation, None, duckdb_extensions) {
             return self.fail_running_preparation(&mut worker, generation, true, error, includes_r);
         }
         Ok(PrepareResult::Prepared)

@@ -476,6 +476,8 @@ New code is rejected while an evaluation and its uncollected result are active.
 Between-cell callbacks do not create a separate server-side operation state.
 The generation-long reader publishes their frames immediately.
 An evaluation's `completed` frame records a tape checkpoint; callback frames accepted after that checkpoint remain pending for the next response.
+After any operation terminal, the reader waits for the operation owner to commit its terminal state before reading another frame.
+Later idle frames therefore cannot overtake environment retention or evaluation completion.
 
 | From | Frame | To |
 | --- | --- | --- |
@@ -513,7 +515,8 @@ Malformed JSON, invalid UTF-8, an unexpected message, or sideband EOF fails the 
 There is no structured message for other protocol or infrastructure failures.
 Initial startup failure leaves no cached worker, so a later evaluation retries startup silently.
 After `ready`, a sideband failure retires the worker before its tool error reports `[worker stopped: in-memory state lost]`.
-The failed `send` then makes one announced replacement attempt before its deadline; a later call starts a new announced attempt only if that replacement failed.
+A nonempty `send` that fails during an active operation then makes one announced replacement attempt before its deadline; a later call starts a new announced attempt only if that replacement failed.
+An empty `send` that discovers an idle failure stops the worker and reports the failure without starting a replacement; a later nonempty `send` or explicit restart starts the next worker.
 Sideband content received before that failure is retained and precedes the tool error.
 Worker retirement waits for the standard-stream readers, so all accepted standard-stream text precedes the tool error and stopped notice.
 If either output path contributed text, the server starts the bracketed error on a new line.
@@ -536,7 +539,9 @@ It runs independently of the deadline so a blocked stdin writer or full sideband
 The sandbox child waits only for the time remaining before the original deadline.
 If its direct process is still running at the deadline, the sandbox force-stops its process group and reaps that direct process.
 After the worker stops, shutdown force-stops any resolver process group that was active for explicit preparation or worker-triggered Python resolution and reaps its direct process.
-After both stop paths complete and the active sideband operation returns, shutdown cancels its stdin writer and standard-stream readers, drains the finite standard-stream bytes already buffered at that boundary, and joins those tasks.
+After both stop paths complete, shutdown cancels the continuous sideband reader, its stdin writer, and its standard-stream readers.
+Sideband cancellation also interrupts a wait for terminal-state commit.
+Shutdown drains the finite standard-stream bytes already buffered at that boundary and joins the tasks.
 This closes the old generation's server-side pipe boundary before shutdown returns, even when a background descendant retains a pipe descriptor or a blocked stdin write.
 The descendant itself remains unsupervised as described below, and any later write to the closed pipe is not captured.
 

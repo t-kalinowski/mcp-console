@@ -5,6 +5,7 @@ use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::Instant;
 
+use super::TerminalCommit;
 use super::activity::{Activity, OperationResult};
 use crate::worker_protocol::{ServerMessage, WorkerMessage};
 
@@ -32,7 +33,7 @@ struct WorkerProcess {
 }
 
 struct WorkerThreads {
-    sideband: Option<thread::JoinHandle<()>>,
+    sideband: Option<WorkerIoThread>,
     stdin: WorkerIoThread,
     stdout: WorkerIoThread,
     stderr: WorkerIoThread,
@@ -43,9 +44,9 @@ struct WorkerIoThread {
     thread: thread::JoinHandle<()>,
 }
 
-struct WorkerIoEvents {
-    ready: bool,
-    cancelled: bool,
+pub(super) struct WorkerIoEvents {
+    pub(super) ready: bool,
+    pub(super) cancelled: bool,
 }
 
 #[derive(Clone)]
@@ -89,6 +90,7 @@ impl WorkerRuntime {
             .new_process_group();
         child_fds.configure(&mut command);
         let stdin_cancel = cancellation_pipe("stdin")?;
+        let sideband_cancel = cancellation_pipe("sideband")?;
         let stdout_cancel = cancellation_pipe("stdout")?;
         let stderr_cancel = cancellation_pipe("stderr")?;
         let mut child = command
@@ -155,9 +157,18 @@ impl WorkerRuntime {
         if let Some(error) = error {
             return Err(worker.startup_failure(error));
         }
-        let sideband = worker
-            .activity
-            .start(reader, worker.writer.clone(), output, callbacks);
+        let (sideband_cancelled, sideband_cancel) = sideband_cancel;
+        let sideband = worker.activity.start(
+            reader,
+            worker.writer.clone(),
+            output,
+            callbacks,
+            sideband_cancelled,
+        );
+        let sideband = WorkerIoThread {
+            cancel: sideband_cancel,
+            thread: sideband,
+        };
         worker.process.attach_sideband(sideband);
         Ok(worker)
     }
@@ -168,7 +179,7 @@ impl Worker {
     pub(super) fn prepare_r(
         &mut self,
         library: &std::path::Path,
-    ) -> Result<Result<(), String>, String> {
+    ) -> Result<TerminalCommit<Result<(), String>>, String> {
         let library = library
             .to_str()
             .ok_or_else(|| "resolved R library path is not UTF-8".to_string())?
@@ -181,32 +192,33 @@ impl Worker {
             self.activity.fail(error.clone());
             return Err(error);
         }
-        match receive_operation(result)? {
+        receive_operation(result)?.try_map(|outcome| match outcome {
             OperationResult::RPrepared(prepared) if prepared == library => Ok(Ok(())),
             OperationResult::RPrepared(_) => {
                 Err("worker prepared an unexpected R library".to_string())
             }
             OperationResult::RPreparationFailed(message) => Ok(Err(message)),
             _ => Err("worker sent an unexpected R preparation message".to_string()),
-        }
+        })
     }
 
     /// Adds Python packages through the live worker's reticulate manifest.
     pub(super) fn prepare_python(
         &mut self,
         packages: Vec<String>,
-    ) -> Result<Result<Option<crate::resolver::ManagedPython>, String>, String> {
+    ) -> Result<TerminalCommit<Result<Option<crate::resolver::ManagedPython>, String>>, String>
+    {
         let result = self.activity.begin_python_preparation()?;
         if let Err(error) = self.writer.send(&ServerMessage::PreparePython { packages }) {
             let error = format!("worker sideband write failed: {error}");
             self.activity.fail(error.clone());
             return Err(error);
         }
-        match receive_operation(result)? {
+        receive_operation(result)?.try_map(|outcome| match outcome {
             OperationResult::PythonPrepared(candidate) => Ok(Ok(candidate)),
             OperationResult::PythonPreparationFailed(message) => Ok(Err(message)),
             _ => Err("worker sent an unexpected Python preparation message".to_string()),
-        }
+        })
     }
 
     /// Sends one cell and waits for its terminal sideband message.
@@ -214,7 +226,7 @@ impl Worker {
         &mut self,
         cell: crate::cell::Cell,
         evaluation: Arc<super::Evaluation>,
-    ) -> Result<super::output::OutputCheckpoint, String> {
+    ) -> Result<TerminalCommit<super::output::OutputCheckpoint>, String> {
         let result = self.activity.begin_cell(evaluation.clone())?;
         let crate::cell::Cell { language, source } = cell;
         if let Err(error) = self
@@ -229,10 +241,10 @@ impl Worker {
             self.activity.fail(error.clone());
             return Err(error);
         }
-        match receive_operation(result)? {
+        receive_operation(result)?.try_map(|outcome| match outcome {
             OperationResult::Completed(checkpoint) => Ok(checkpoint),
             _ => Err("worker sent an unexpected evaluation result".to_string()),
-        }
+        })
     }
 
     pub(super) fn snapshot(
@@ -283,8 +295,8 @@ impl Worker {
 }
 
 fn receive_operation(
-    receiver: mpsc::Receiver<Result<OperationResult, String>>,
-) -> Result<OperationResult, String> {
+    receiver: mpsc::Receiver<Result<TerminalCommit<OperationResult>, String>>,
+) -> Result<TerminalCommit<OperationResult>, String> {
     receiver
         .recv()
         .map_err(|_| "worker sideband dispatcher stopped".to_string())?
@@ -390,7 +402,7 @@ fn drain_buffered_output(
     }
 }
 
-fn wait_for_worker_io(
+pub(super) fn wait_for_worker_io(
     descriptor: RawFd,
     events: libc::c_short,
     cancelled: &std::io::PipeReader,
@@ -492,7 +504,7 @@ impl WorkerShutdownHandle {
 }
 
 impl WorkerProcess {
-    fn attach_sideband(&mut self, sideband: thread::JoinHandle<()>) {
+    fn attach_sideband(&mut self, sideband: WorkerIoThread) {
         self.threads
             .as_mut()
             .expect("worker threads should still be active")
@@ -503,12 +515,13 @@ impl WorkerProcess {
         let Some(threads) = self.threads.take() else {
             return Ok(());
         };
-        let sideband = threads.sideband.map_or(Ok(()), |thread| {
-            join_worker_thread(thread, "sideband reader")
-        });
+        let sideband = threads.sideband.map(WorkerIoThread::cancel);
         let stdin = threads.stdin.cancel();
         let stdout = threads.stdout.cancel();
         let stderr = threads.stderr.cancel();
+        let sideband = sideband.map_or(Ok(()), |thread| {
+            join_worker_thread(thread, "sideband reader")
+        });
         let stdin = join_worker_thread(stdin, "stdin writer");
         let stdout = join_worker_thread(stdout, "stdout reader");
         let stderr = join_worker_thread(stderr, "stderr reader");
