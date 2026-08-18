@@ -8,6 +8,7 @@ from pathlib import Path
 from _support import (
     McpClient,
     Transcript,
+    build_r_input_handler,
     code,
     r_test_environment,
     run_this_suite,
@@ -720,15 +721,32 @@ def test_evaluates_queries_in_a_persistent_catalog(binary: Path) -> Transcript:
 def test_interrupts_running_sql_query(binary: Path) -> Transcript:
     with tempfile.TemporaryDirectory() as temporary_directory:
         temporary_path = Path(temporary_directory)
-        environment = os.environ.copy()
+        environment, rscript = r_test_environment()
         environment["TMPDIR"] = temporary_directory
-        client = McpClient(binary, ("serve",), environment)
+        build_r_input_handler(temporary_path, environment, rscript)
+        client = McpClient(
+            binary,
+            ("serve",),
+            environment,
+            current_directory=temporary_path,
+        )
         passed = False
         try:
             client._initialize_and_list_tools()
             # fmt: r
             r = code(r"""
                 sql_interrupt_armed <- FALSE
+                dyn.load("./mcp_test_input_handler.so")
+                invisible(.Call(
+                  "mcp_test_register_input_handler",
+                  file.path(tempdir(), "sql-interrupt-finished-fifo"),
+                  function() {
+                    invisible(file.create(file.path(
+                      tempdir(),
+                      "sql-interrupt-finished"
+                    )))
+                  }
+                ))
                 options(duckdb.progress_display = function(percentage) {
                   if (isTRUE(sql_interrupt_armed)) {
                     invisible(file.create(file.path(
@@ -740,7 +758,8 @@ def test_interrupts_running_sql_query(binary: Path) -> Transcript:
                 invisible(sql_connection())
                 """)
             client.send(r=r)
-            assert last_tool_text(client) == "[done]"
+            output = last_tool_text(client)
+            assert output == "[done]", repr(output)
 
             sql = code(r"""
                 CREATE TABLE interrupt_state AS
@@ -775,10 +794,21 @@ def test_interrupts_running_sql_query(binary: Path) -> Transcript:
                 "sql-interrupt-started",
                 client,
             )
+            finished_fifo = wait_for_worker_file(
+                temporary_path,
+                "sql-interrupt-finished-fifo",
+                client,
+            )
+            finished_fifo.write_bytes(b"x")
 
             client.session(action="interrupt")
             assert last_tool_text(client) == "[interrupt sent]"
-            client.send(timeout_ms=5_000)
+            wait_for_worker_file(
+                temporary_path,
+                "sql-interrupt-finished",
+                client,
+            )
+            client.send(timeout_ms=1_000)
             result = client.transcript[-1]["result"]
             assert result["isError"] is False, result
             output = last_tool_text(client)

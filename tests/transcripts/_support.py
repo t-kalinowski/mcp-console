@@ -86,6 +86,31 @@ def r_test_environment() -> tuple[dict[str, str], Path]:
     return environment, home / "bin" / "Rscript"
 
 
+def build_r_input_handler(
+    directory: Path,
+    environment: dict[str, str],
+    rscript: Path,
+) -> None:
+    source = Path(__file__).parent.parent / "fixtures" / "r_input_handler.c"
+    local_source = directory / source.name
+    shutil.copyfile(source, local_source)
+    subprocess.run(
+        [
+            rscript.parent / "R",
+            "CMD",
+            "SHLIB",
+            "-o",
+            "mcp_test_input_handler.so",
+            local_source.name,
+        ],
+        cwd=directory,
+        env=environment,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+
 def use_temporary_home(environment: dict[str, str], home: Path) -> None:
     original_home = Path(environment.get("HOME", str(Path.home())))
     environment.setdefault(
