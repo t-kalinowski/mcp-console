@@ -2,45 +2,31 @@
 !same-as tests/transcripts/golden/server/initializes_and_lists_tools.yaml
 ---
 id: 3
-session:
-  action: prepare
-  requirements:
-    r:
-      - later
+send:
+  r: |
+    dyn.load("./mcp_test_input_handler.so")
+    invisible(.Call(
+      "mcp_test_register_input_handler",
+      file.path(tempdir(), "direct-stdin-boundary-fifo"),
+      function() {
+        cat("direct callback waiting")
+        connection <- suppressWarnings(file("/dev/stdin"))
+        on.exit(close(connection))
+        stopifnot(file.create(file.path(
+          tempdir(),
+          "direct-stdin-boundary-checkpoint"
+        )))
+        readLines(connection, n = 1)
+        cat("direct callback released\n")
+      }
+    ))
 result:
   content:
     - type: text
-      text: "[prepared]"
+      text: "[done]"
   isError: false
 ---
 id: 4
-send:
-  r: |
-    callback_gate <- tempfile("mcp-console-callback-gate-")
-    callback_checkpoint <- tempfile("mcp-console-callback-checkpoint-")
-    run_callback <- function() {
-      if (!file.exists(callback_gate)) {
-        later::later(run_callback, delay = 0)
-        return(invisible(NULL))
-      }
-      cat("direct callback waiting")
-      connection <- suppressWarnings(file("/dev/stdin"))
-      on.exit(close(connection))
-      stopifnot(file.create(callback_checkpoint))
-      readLines(connection, n = 1)
-      cat("direct callback released\n")
-    }
-    later::later(run_callback, delay = 0)
-    cat(callback_gate, callback_checkpoint, sep = "\n")
-result:
-  content:
-    - type: text
-      text: |-
-        <worker callback gate>
-        <worker callback checkpoint>
-  isError: false
----
-id: 5
 send:
   r: cat("direct stdin cell ran\n")
   timeout_ms: 30000
@@ -53,7 +39,7 @@ result:
         [worker stopped: in-memory state lost]
   isError: true
 ---
-id: 6
+id: 5
 session:
   action: restart
 result:

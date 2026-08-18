@@ -86,18 +86,25 @@ impl Bridge {
                     libr::Rf_protect(r_string(&evaluation_id, evaluation_id_length));
                 let source_symbol = libr::Rf_install(c"source".as_ptr());
                 let evaluate_symbol = libr::Rf_install(c"evaluate".as_ptr());
+                let interrupted_symbol = libr::Rf_install(c"interrupted".as_ptr());
                 libr::Rf_defineVar(source_symbol, source, self.state);
                 let call = libr::Rf_protect(libr::Rf_lang2(evaluate_symbol, evaluation_id));
                 let mut evaluation_error = 0;
                 (self.try_eval)(call, self.state, &mut evaluation_error);
+                let interrupted = evaluation_error != 0
+                    && libr::Rf_asInteger(libr::Rf_findVarInFrame(self.state, interrupted_symbol))
+                        == 1;
                 libr::Rf_defineVar(source_symbol, libr::R_NilValue, self.state);
                 libr::Rf_unprotect(3);
-                evaluation_error
+                (evaluation_error, interrupted)
             }
         });
-        let evaluation_error = result
+        let (evaluation_error, interrupted) = result
             .map_err(|error| format!("failed to call the {} bridge: {error}", self.language))?;
         if evaluation_error != 0 {
+            if interrupted {
+                return Ok(());
+            }
             return Err(format!(
                 "{} bridge failed during R evaluation",
                 self.language

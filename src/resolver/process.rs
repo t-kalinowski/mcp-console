@@ -1,7 +1,8 @@
 use std::io::{self, Write};
 use std::mem::MaybeUninit;
+use std::os::unix::process::CommandExt as _;
 use std::path::Path;
-use std::process::{Child, ChildStdin, ExitStatus};
+use std::process::{Child, ChildStdin, Command, ExitStatus};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 
@@ -10,7 +11,13 @@ pub(crate) struct ResolverStopHandle(Sender<ResolverEvent>);
 
 enum ResolverEvent {
     Cancel,
+    Interrupt(Sender<Result<(), String>>),
     Exited(io::Result<()>),
+}
+
+enum ResolverInterrupt {
+    Signaled,
+    AlreadyExited,
 }
 
 pub(super) struct ResolverOutput {
@@ -68,6 +75,20 @@ impl ResolverStopHandle {
         let _ = self.0.send(ResolverEvent::Cancel);
         Ok(())
     }
+
+    pub(crate) fn interrupt(&self) -> Result<bool, String> {
+        let (reply, response) = mpsc::channel();
+        if self.0.send(ResolverEvent::Interrupt(reply)).is_err() {
+            return Ok(false);
+        }
+        match response.recv() {
+            Ok(result) => result.map(|()| true),
+            // The resolver may finish after accepting the request but before
+            // replying. The interrupt stays with that completed operation
+            // rather than falling through to a different worker target.
+            Err(_) => Ok(true),
+        }
+    }
 }
 
 pub(super) fn completed_write() -> Receiver<io::Result<()>> {
@@ -96,6 +117,30 @@ pub(super) fn write_input(mut input: ChildStdin, bytes: Vec<u8>) -> Receiver<io:
         let _ = sender.send(input.write_all(&bytes));
     });
     receiver
+}
+
+pub(super) fn resolver_command(program: &Path) -> Command {
+    let mut command = Command::new(program);
+    command.process_group(0);
+    // SAFETY: the closure calls only libc signal functions after fork and
+    // before exec. Resolver programs must not inherit an ignored or blocked
+    // SIGINT from the MCP host.
+    unsafe {
+        command.pre_exec(|| {
+            if libc::signal(libc::SIGINT, libc::SIG_DFL) == libc::SIG_ERR {
+                return Err(io::Error::last_os_error());
+            }
+            let mut signals = std::mem::zeroed();
+            if libc::sigemptyset(&mut signals) != 0
+                || libc::sigaddset(&mut signals, libc::SIGINT) != 0
+                || libc::sigprocmask(libc::SIG_UNBLOCK, &signals, std::ptr::null_mut()) != 0
+            {
+                return Err(io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    command
 }
 
 fn watch_resolver_exit(pid: u32, events: Sender<ResolverEvent>) {
@@ -140,22 +185,43 @@ fn wait_for_resolver_exit(
     program: &Path,
     kind: &str,
 ) -> Result<ExitStatus, String> {
-    match events.recv() {
-        Ok(ResolverEvent::Cancel) => {
-            stop_resolver(child, program, kind)?;
-            Err(format!("{kind} resolution cancelled"))
-        }
-        Ok(ResolverEvent::Exited(Ok(()))) => stop_resolver(child, program, kind),
-        Ok(ResolverEvent::Exited(Err(error))) => {
-            let _ = stop_resolver(child, program, kind);
-            Err(format!(
-                "failed to wait for {kind} resolver `{}`: {error}",
-                program.display()
-            ))
-        }
-        Err(_) => {
-            let _ = stop_resolver(child, program, kind);
-            Err(format!("{kind} resolver exit task stopped"))
+    loop {
+        match events.recv() {
+            Ok(ResolverEvent::Cancel) => {
+                stop_resolver(child, program, kind)?;
+                return Err(format!("{kind} resolution cancelled"));
+            }
+            Ok(ResolverEvent::Interrupt(reply)) => match interrupt_resolver(child) {
+                Ok(ResolverInterrupt::Signaled) => {
+                    let _ = reply.send(Ok(()));
+                }
+                Ok(ResolverInterrupt::AlreadyExited) => {
+                    let _ = reply.send(Ok(()));
+                }
+                Err(error) => {
+                    let message = format!(
+                        "failed to interrupt {kind} resolver `{}`: {error}",
+                        program.display()
+                    );
+                    let _ = reply.send(Err(message.clone()));
+                    let _ = stop_resolver(child, program, kind);
+                    return Err(message);
+                }
+            },
+            Ok(ResolverEvent::Exited(Ok(()))) => {
+                return stop_resolver(child, program, kind);
+            }
+            Ok(ResolverEvent::Exited(Err(error))) => {
+                let _ = stop_resolver(child, program, kind);
+                return Err(format!(
+                    "failed to wait for {kind} resolver `{}`: {error}",
+                    program.display()
+                ));
+            }
+            Err(_) => {
+                let _ = stop_resolver(child, program, kind);
+                return Err(format!("{kind} resolver exit task stopped"));
+            }
         }
     }
 }
@@ -181,6 +247,42 @@ fn wait_for_resolver(
         stdout,
         stderr,
     })
+}
+
+fn interrupt_resolver(child: &mut Child) -> io::Result<ResolverInterrupt> {
+    let pid = child.id();
+    // SAFETY: `process_group(0)` made the resolver PID its process-group ID.
+    if unsafe { libc::killpg(pid as libc::pid_t, libc::SIGINT) } == 0 {
+        return Ok(ResolverInterrupt::Signaled);
+    }
+    let error = io::Error::last_os_error();
+    if matches!(error.raw_os_error(), Some(libc::EPERM) | Some(libc::ESRCH)) {
+        // Keep an exited leader unreaped so its watcher remains authoritative
+        // and this resolver PID cannot be reused before normal cleanup.
+        if resolver_has_exited(pid)? {
+            return Ok(ResolverInterrupt::AlreadyExited);
+        }
+    }
+    Err(error)
+}
+
+fn resolver_has_exited(pid: u32) -> io::Result<bool> {
+    let mut status = MaybeUninit::<libc::siginfo_t>::zeroed();
+    // SAFETY: `status` points to zeroed writable storage. WNOWAIT observes the
+    // direct child without reaping it, and WNOHANG makes a live child return.
+    let result = unsafe {
+        libc::waitid(
+            libc::P_PID,
+            pid as libc::id_t,
+            status.as_mut_ptr(),
+            libc::WEXITED | libc::WNOWAIT | libc::WNOHANG,
+        )
+    };
+    if result != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: waitid initialized the zeroed structure before returning zero.
+    Ok(unsafe { status.assume_init().si_pid() } == pid as libc::pid_t)
 }
 
 pub(super) fn stop_resolver(

@@ -15,6 +15,10 @@ impl ResolverStopHandle {
     pub(crate) fn stop(&self) -> Result<(), String> {
         Ok(())
     }
+
+    pub(crate) fn interrupt(&self) -> Result<bool, String> {
+        Ok(false)
+    }
 }
 
 impl ManagedPython {

@@ -5,6 +5,7 @@
 
 import json
 import os
+import signal
 import time
 from enum import StrEnum
 from pathlib import Path
@@ -111,6 +112,14 @@ def main() -> None:
     reader = open_sideband(READ_FD_ENV, "r")
     writer = open_sideband(WRITE_FD_ENV, "w")
     temporary = Path(os.environ["TMPDIR"])
+    received_sigint = False
+
+    def handle_sigint(_signum: int, _frame: object) -> None:
+        nonlocal received_sigint
+        received_sigint = True
+        (temporary / "zod-sigint-received").touch()
+
+    signal.signal(signal.SIGINT, handle_sigint)
     if os.environ.get("ZOD_REPORT_PROCESS_GROUP") == "1":
         (temporary / "zod-process-group").write_text(
             str(os.getpgrp()),
@@ -161,6 +170,15 @@ def main() -> None:
             continue
 
         assert language == "r"
+        if source == "interrupt":
+            (temporary / "zod-interrupt-evaluation-started").touch()
+            while not received_sigint:
+                signal.pause()
+            received_sigint = False
+            send_output(writer, "zod interrupted\n")
+            send(writer, {"kind": "completed"})
+            continue
+
         if source == "stall":
             Path(os.environ["TMPDIR"], "zod-stalled").touch()
             while True:

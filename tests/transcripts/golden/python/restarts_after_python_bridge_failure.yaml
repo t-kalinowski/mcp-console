@@ -6,6 +6,15 @@ send:
   r: |
     python_worker_marker <- TRUE
     Sys.setenv(RETICULATE_PYTHON = "/mcp-console-missing-python")
+    invisible(suppressMessages(base::trace(
+      "py_discover_config",
+      tracer = quote(base::signalCondition(base::structure(
+        base::list(message = "synthetic interrupt", call = NULL),
+        class = c("interrupt", "condition")
+      ))),
+      print = FALSE,
+      where = asNamespace("reticulate")
+    )))
 result:
   content:
     - type: text

@@ -10,7 +10,8 @@ The current implementation provides one worker for one server process.
 It evaluates one complete R, Python, or SQL cell at a time and accepts exact `stdin` text whether the worker is evaluating or idle.
 Evaluations run sequentially.
 
-The protocol does not yet include interrupts, request IDs, general structured errors, sessions, capabilities, or protocol version negotiation.
+The sideband protocol does not include interrupt frames, request IDs, general structured errors, sessions, capabilities, or protocol version negotiation.
+MCP `session` interrupt is out of band: the server requests `SIGINT` for an active host resolver process group, or otherwise sends it to the live worker process.
 
 Plain `serve` selects the built-in worker.
 The hidden `serve --worker PATH` option replaces it with a development worker.
@@ -93,6 +94,16 @@ The implicit session exists for the server lifetime, so restart starts its first
 After any requirement resolution succeeds, restart starts the same one-second stdin-close, sideband-shutdown, and process-group escalation path described below.
 It reopens the lifecycle for the new worker instead of ending the MCP server.
 
+`session` with `action = "interrupt"` accepts no requirements and requires an active registered resolver or live worker; it does not start a process.
+The server queues an interrupt for the active resolver operation when one exists, or otherwise sends `SIGINT` to the direct worker PID.
+It returns `[interrupt sent]` after the resolver accepts the request or the worker signal succeeds, without waiting for a sideband reply or for the resolver or evaluation to finish.
+The resolver owner sends `SIGINT` to its current process group, and a signal error is returned by both the interrupt and resolution calls.
+The registered resolver operation and worker process handle keep the request on that resolver or worker rather than retrying it against a replacement.
+An interrupted resolver reports its ordinary resolution failure.
+A worker signal is not assigned to an evaluation and remains best-effort runtime input: code can catch or delay it.
+When neither target exists, the call returns `worker is not running`.
+Custom workers receive the worker process signal and are responsible for their own signal behavior.
+
 These boundary details apply:
 
 - Evaluations and idle stdin writes stay associated with the worker that admitted them.
@@ -123,6 +134,9 @@ For a uv tool failure, `Rscript` captures reticulate's message stream and sends 
 The server combines that selection with the complete candidate package set it submitted and renders them as a JSON resolver-input manifest before uv's stderr.
 It discards reticulate's helper command, temporary output path, hints, and R call information.
 Each R, Python, or DuckDB resolver leads a dedicated process group registered with the server lifecycle control before requirement input is written.
+Before exec, each resolver child restores the default `SIGINT` disposition and unblocks the signal.
+A session interrupt asks the resolver owner to send `SIGINT` to its current group and lets the resolution return its ordinary failure.
+Restart, shutdown, and transport cancellation retain the bounded cancellation path, which force-stops the group.
 The server waits for either lifecycle cancellation or a non-reaping notification that the direct resolver process exited.
 Direct-process exit ends the resolver-group lifetime: the server force-stops any remaining in-group descendants, reaps the direct process, and then collects the resolver's standard streams.
 Closing MCP input force-stops an active explicit or runtime resolver group and reaps its direct process; startup preflights finish before MCP input is accepted and do not participate in this cancellation path.
@@ -267,6 +281,10 @@ worker -> server  {"kind":"console_output","data":"zod: "}
 worker -> server  {"kind":"console_output","data":"echo\n"}
 worker -> server  {"kind":"completed"}
 ```
+
+No sideband interrupt or acknowledgment frame exists.
+A `SIGINT` that reaches the process while it is idle remains pending until the next managed boundary; the entry check consumes it and the next cell proceeds.
+A signal that arrives after a cell's final check is handled at the same later boundary.
 
 The worker may send zero or more `console_output`, `console_diagnostic`, or `image` messages.
 The server retains the console distinction, preserves frame arrival order as MCP content blocks, and concatenates adjacent text chunks without exposing the distinction in MCP content.
@@ -438,6 +456,7 @@ New code is rejected while an evaluation or its uncollected result is active.
 | idle | server → worker `evaluate` | evaluating |
 | idle | server → worker `prepare_r` | preparing R |
 | idle | server → worker `prepare_python` | preparing Python |
+| any phase with an active resolver or registered live worker | MCP `session` interrupt | unchanged; request `SIGINT` outside sideband |
 | evaluating | worker → server `output` | evaluating |
 | evaluating | worker → server `image` | evaluating |
 | evaluating | worker → server `input_requested` | append request record; evaluating, input provisional |
@@ -517,6 +536,15 @@ Package callbacks therefore share the cell's console and input routing, while th
 Output and images from the final turn precede `completed`.
 The worker does not yet wait on R input handlers between cells, so a timer that becomes ready while the worker is otherwise idle remains pending until a cell boundary.
 
+Before R initializes, the worker restores the default `SIGINT` disposition and unblocks the signal so R can install its handler.
+The worker checks whether an interrupt is pending before and after every `R_ReplDLLdo1()` call and at cell boundaries, and calls `R_CheckUserInterrupt()` only when one is pending.
+It temporarily suspends runtime interrupt handling during worker-owned graphics setup and cleanup, Python checkpointing, and worker-local preparation, then handles or discards any pending interrupt immediately afterward, so those internal calls do not turn a normal or late interrupt into an infrastructure failure.
+Graphics and checkpoint boundaries report the normal runtime outcome; worker-local preparation silently discards the late signal so it does not introduce an unexpected console frame into the preparation exchange.
+Checks that may jump remain inside the C REPL shim or `R_ToplevelExec`; their callback frames hold no Rust values that require destruction.
+R, reticulate, and DuckDB perform their own checks during managed execution.
+The Python and SQL bridges observe escaping R interrupt conditions without handling them; the shared top-level R boundary classifies them as ordinary language outcomes after they propagate, so they do not retire the worker.
+Host resolution remains interruptible through its own process-group target while worker-side runtime interrupt handling stays suspended across preparation.
+
 The worker supplies cell source through `ReadConsole` before each top-level evaluation starts.
 For every evaluation-time `ReadConsole` call, the callback sends `input_requested`, then reads fd 0 directly until one newline arrives or R's supplied buffer is full.
 The built-in worker sends R's prompt field verbatim, including trailing spaces or an empty prompt.
@@ -529,6 +557,9 @@ Submitted source references are not retained.
 Parse, evaluation, and print errors are returned as console text followed by `completed`, so the worker remains available even though the protocol has no structured language-error message.
 The worker maps `R_WriteConsoleEx` type 0 to `console_output` and every nonzero type to `console_diagnostic`.
 It also maps `R_ShowMessage` and worker-generated language diagnostics to `console_diagnostic`.
+An empty managed console read has no periodic interrupt boundary: the fd-0 read retries `EINTR` and continues waiting.
+This applies to R `readline()` and to Python `input()` and debugger prompts routed through reticulate.
+The signal remains pending until the read returns; explicit restart is the bounded way to stop that wait.
 Subprocesses and descendants that write directly to retained fd 1 or fd 2 bypass the R console callbacks, but their output is still collected through the standard-stream pipes.
 
 At startup, the worker installs a managed function as R's default graphics device.
@@ -668,6 +699,9 @@ An explicitly configured interpreter must be initializable under the offline wor
 R requirements, the selected IR library, and Python requirements are retained only in server memory.
 Server-managed workers can activate additive package requirements and checkpoint their final manifest after startup through evaluated `py_require()` calls or idle explicit preparation.
 Runtime Python version changes, `exclude_newer` changes, and non-additive package changes after initialization are not supported by the layering path.
+A session interrupt targets an active host resolver before the worker; the resolver owner sends `SIGINT` to its current process group, and the resolver reports its ordinary failure.
+Evaluated code that replaces or blocks the `SIGINT` handler is outside the interrupt contract.
+An interrupt sent during worker startup is best effort and can terminate the process before the runtime installs its handler.
 Named sessions and environment provenance do not exist.
 The Python input bridge does not observe direct `sys.stdin` or fd-0 reads.
 The SQL adapter does not expose Python objects as relations or provide a separate registration API.
@@ -687,6 +721,7 @@ zod: echo\n
 ```
 
 The Python and SQL `echo` modes return `zod python: echo\n` and `zod sql: echo\n`, verifying that the server preserves each language tag.
+The `interrupt` mode waits after evaluation dispatch, handles a real process `SIGINT`, records its receipt, completes, and then accepts a later evaluation.
 The `emit image` mode sends text, a valid one-pixel PNG image, and more text before completion, verifying ordered MCP content projection.
 When an R `source` is exactly `stall`, Zod creates a checkpoint in its private temporary directory and sleeps forever.
 When the source is `complete after timeout`, it pauses briefly before returning `zod: complete after timeout\n`.
