@@ -187,7 +187,7 @@ impl Worker {
         ) -> Result<crate::resolver::ManagedPython, String>,
         mut activate_python: impl FnMut(
             crate::worker_protocol::PythonRequirementManifest,
-            &[crate::resolver::ManagedPython],
+            &mut Vec<crate::resolver::ManagedPython>,
         ) -> Result<(), String>,
     ) -> Result<Result<Option<crate::resolver::ManagedPython>, String>, String> {
         self.writer
@@ -202,7 +202,7 @@ impl Worker {
                         .extend(self.resolve_python_request(request, &mut resolve_python)?);
                 }
                 WorkerMessage::PythonActivated { requirements } => {
-                    activate_python(requirements, &python_candidates)?;
+                    activate_python(requirements, &mut python_candidates)?;
                 }
                 WorkerMessage::PythonPrepared => return Ok(Ok(python_candidates.pop())),
                 WorkerMessage::PythonPreparationFailed { message } => {
@@ -228,7 +228,7 @@ impl Worker {
         ) -> Result<String, String>,
         mut activate_python: impl FnMut(
             crate::worker_protocol::PythonRequirementManifest,
-            &[crate::resolver::ManagedPython],
+            &mut Vec<crate::resolver::ManagedPython>,
         ) -> Result<(), String>,
     ) -> Result<(), String> {
         let crate::cell::Cell { language, source } = cell;
@@ -261,7 +261,7 @@ impl Worker {
                     self.resolve_python_version_request(request, &mut resolve_python_version)?;
                 }
                 WorkerMessage::PythonActivated { requirements } => {
-                    activate_python(requirements, &python_candidates)?;
+                    activate_python(requirements, &mut python_candidates)?;
                 }
                 WorkerMessage::Completed => {
                     evaluation.input_complete()?;

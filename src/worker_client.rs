@@ -437,7 +437,7 @@ impl Client {
         ) -> Result<String, String>,
         activate_python: impl FnMut(
             crate::worker_protocol::PythonRequirementManifest,
-            &[crate::resolver::ManagedPython],
+            &mut Vec<crate::resolver::ManagedPython>,
         ) -> Result<(), String>,
     ) -> Result<(), SendFailure> {
         self.ensure_generation(&generation)

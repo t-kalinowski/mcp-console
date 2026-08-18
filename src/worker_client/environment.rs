@@ -47,19 +47,18 @@ pub(super) fn merge_python_requirements(
 fn select_python_activation(
     current: Option<&crate::resolver::ManagedPython>,
     requirements: crate::worker_protocol::PythonRequirementManifest,
-    candidates: &[crate::resolver::ManagedPython],
+    candidates: &mut Vec<crate::resolver::ManagedPython>,
 ) -> Result<crate::resolver::ManagedPython, String> {
     let requirements = requirements.normalized();
-    candidates
+    if let Some(index) = candidates
         .iter()
-        .rev()
-        .find(|candidate| candidate.requirements() == &requirements)
+        .rposition(|candidate| candidate.requirements() == &requirements)
+    {
+        return Ok(candidates.remove(index));
+    }
+    current
         .cloned()
-        .or_else(|| {
-            current
-                .cloned()
-                .filter(|current| current.requirements() == &requirements)
-        })
+        .filter(|current| current.requirements() == &requirements)
         .ok_or_else(|| "worker activation does not match a resolved Python environment".to_string())
 }
 
@@ -140,8 +139,7 @@ impl Client {
         {
             return Ok(PrepareResult::Prepared);
         }
-        if self.requirement_change_state(&generation)?.0 == RequirementChangeState::RestartRequired
-        {
+        if self.requirement_change_state(&generation)? == RequirementChangeState::RestartRequired {
             return Ok(PrepareResult::RestartRequired);
         }
         if active_evaluation {
@@ -332,9 +330,7 @@ impl Client {
             return Err("worker state changed during requirement preparation".to_string());
         };
         let includes_r = managed_r.is_some();
-        let managed_python = if python_packages.is_empty() {
-            None
-        } else {
+        if !python_packages.is_empty() {
             let result = running.prepare_python(
                 python_packages,
                 |request| self.resolve_runtime_python(generation.clone(), request),
@@ -344,9 +340,7 @@ impl Client {
             );
             match result {
                 Ok(Ok(Some(managed))) => {
-                    if let Err(error) =
-                        self.commit_runtime_python(generation.clone(), managed.clone())
-                    {
+                    if let Err(error) = self.commit_runtime_python(generation.clone(), managed) {
                         return self.fail_running_preparation(
                             &mut worker,
                             generation,
@@ -355,9 +349,8 @@ impl Client {
                             includes_r,
                         );
                     }
-                    Some(managed)
                 }
-                Ok(Ok(None)) => None,
+                Ok(Ok(None)) => {}
                 Ok(Err(error)) => {
                     return self.fail_running_preparation(
                         &mut worker,
@@ -377,15 +370,12 @@ impl Client {
                     );
                 }
             }
-        };
+        }
         if let Some(managed_r) = managed_r.as_ref() {
             match running.prepare_r(managed_r.library()) {
                 Ok(Ok(())) => {}
                 Ok(Err(error)) => {
-                    self.require_restart_for_requirement_changes(
-                        generation,
-                        managed_python.clone(),
-                    )?;
+                    self.require_restart_for_requirement_changes(generation)?;
                     return Err(requirement_restart_error(error));
                 }
                 Err(error) => {
@@ -399,12 +389,9 @@ impl Client {
                 }
             }
         }
-        if let Err(error) = self.commit_running_environment(
-            generation,
-            managed_python,
-            managed_r,
-            duckdb_extensions,
-        ) {
+        if let Err(error) =
+            self.commit_running_environment(generation, managed_r, duckdb_extensions)
+        {
             return self.fail_running_preparation(&mut worker, generation, true, error, includes_r);
         }
         Ok(PrepareResult::Prepared)
@@ -445,7 +432,6 @@ impl Client {
     fn commit_running_environment(
         &self,
         generation: &WorkerGeneration,
-        managed_python: Option<crate::resolver::ManagedPython>,
         managed_r: Option<crate::resolver::ManagedR>,
         duckdb_extensions: Option<BTreeSet<String>>,
     ) -> Result<(), String> {
@@ -464,9 +450,6 @@ impl Client {
             .map_err(|_| "worker lifecycle lock poisoned".to_string())?;
         match lifecycle.state {
             LifecycleState::Ready if lifecycle.generation.is(generation) => {
-                if let Some(managed_python) = managed_python {
-                    environment.python = Some(managed_python);
-                }
                 if let Some(managed_r) = managed_r {
                     push_duckdb_r_target(&mut environment.duckdb_r_targets, managed_r.clone());
                     environment.r = Some(managed_r);
@@ -487,23 +470,16 @@ impl Client {
     fn requirement_change_state(
         &self,
         generation: &WorkerGeneration,
-    ) -> Result<
-        (
-            RequirementChangeState,
-            Option<crate::resolver::ManagedPython>,
-        ),
-        String,
-    > {
+    ) -> Result<RequirementChangeState, String> {
         let lifecycle = self
             .0
             .lifecycle
             .lock()
             .map_err(|_| "worker lifecycle lock poisoned".to_string())?;
         match lifecycle.state {
-            LifecycleState::Ready if lifecycle.generation.is(generation) => Ok((
-                lifecycle.requirement_changes,
-                lifecycle.provisional_python.clone(),
-            )),
+            LifecycleState::Ready if lifecycle.generation.is(generation) => {
+                Ok(lifecycle.requirement_changes)
+            }
             LifecycleState::Ready => {
                 Err("session restarted before the operation began".to_string())
             }
@@ -515,7 +491,6 @@ impl Client {
     fn require_restart_for_requirement_changes(
         &self,
         generation: &WorkerGeneration,
-        provisional_python: Option<crate::resolver::ManagedPython>,
     ) -> Result<(), String> {
         let mut lifecycle = self
             .0
@@ -525,7 +500,6 @@ impl Client {
         match lifecycle.state {
             LifecycleState::Ready if lifecycle.generation.is(generation) => {
                 lifecycle.requirement_changes = RequirementChangeState::RestartRequired;
-                lifecycle.provisional_python = provisional_python;
                 Ok(())
             }
             LifecycleState::Ready => {
@@ -570,14 +544,8 @@ impl Client {
             return Ok(current);
         }
         match self.requirement_change_state(&generation)? {
-            (RequirementChangeState::Available, _) => {}
-            (RequirementChangeState::RestartRequired, Some(provisional))
-                if provisional.requirements() == &retained_requirements =>
-            {
-                self.ensure_generation(&generation)?;
-                return Ok(provisional);
-            }
-            (RequirementChangeState::RestartRequired, _) => {
+            RequirementChangeState::Available => {}
+            RequirementChangeState::RestartRequired => {
                 return Err("requirement changes are unavailable until session restart".to_string());
             }
         }
@@ -633,7 +601,7 @@ impl Client {
         &self,
         generation: WorkerGeneration,
         requirements: crate::worker_protocol::PythonRequirementManifest,
-        candidates: &[crate::resolver::ManagedPython],
+        candidates: &mut Vec<crate::resolver::ManagedPython>,
     ) -> Result<(), String> {
         let environment = self
             .0
@@ -648,6 +616,7 @@ impl Client {
         }
         let managed =
             select_python_activation(environment.python.as_ref(), requirements, candidates)?;
+        candidates.clear();
         self.commit_locked_runtime_python(&generation, &mut environment, managed)
     }
 

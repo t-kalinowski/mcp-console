@@ -451,6 +451,52 @@ def test_prepares_python_requirements_after_worker_startup(binary: Path) -> Tran
     return client._finish()
 
 
+def test_does_not_retain_stale_python_materialization(binary: Path) -> Transcript:
+    client = McpClient(binary, ("serve",))
+    client._initialize_and_list_tools()
+    client.send(r="invisible(reticulate::py_config())")
+    assert last_tool_text(client) == "[done]"
+
+    # Make explicit preparation resolve the unchanged environment before its
+    # real activation. The first candidate is materialized but never activated.
+    # fmt: r
+    r = code(r"""
+        namespace <- asNamespace("reticulate")
+        original_py_require <- get("py_require", envir = namespace)
+        injected <- FALSE
+        replacement <- function(...) {
+          if (!injected) {
+            injected <<- TRUE
+            requirements <- original_py_require()
+            invisible(get("uv_get_or_create_env", envir = namespace)(
+              requirements$packages,
+              requirements$python_version,
+              requirements$exclude_newer
+            ))
+          }
+          original_py_require(...)
+        }
+        unlockBinding("py_require", namespace)
+        assign("py_require", replacement, envir = namespace)
+        lockBinding("py_require", namespace)
+        """)
+    client.send(r=r)
+    assert last_tool_text(client) == "[done]"
+
+    client.session(
+        action="prepare",
+        requirements={"python": ["py-yaml12"]},
+    )
+    assert last_tool_text(client) == "[prepared]"
+    client.session(action="restart")
+    assert last_tool_text(client) == (
+        "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
+    )
+    client.send(python="import yaml12; yaml12.__name__")
+    assert last_tool_text(client) == "'yaml12'\n"
+    return client._finish()
+
+
 def test_failed_restart_requirements_preserve_worker(binary: Path) -> Transcript:
     client = McpClient(binary, ("serve",))
     client._initialize_and_list_tools()
