@@ -217,10 +217,16 @@ def main() -> None:
             check_recording(suite_name, case_name, recorded, update=options.update)
         return
 
-    with ProcessPoolExecutor(max_workers=options.jobs) as executor:
+    executor = ProcessPoolExecutor(max_workers=options.jobs)
+    try:
         recordings = executor.map(record_case, *zip(*arguments))
         for (suite_name, case_name, _), recorded in zip(selected, recordings):
             check_recording(suite_name, case_name, recorded, update=options.update)
+    except BaseException:
+        executor.shutdown(cancel_futures=True)
+        raise
+    else:
+        executor.shutdown()
 
 
 if __name__ == "__main__":
