@@ -15,8 +15,9 @@ impl WorkerRuntime {
             arguments,
             managed_python,
             managed_r,
+            callbacks,
         } = spec;
-        let _ = (executable, arguments, managed_python, managed_r);
+        let _ = (executable, arguments, managed_python, managed_r, callbacks);
         Err("workers are supported only on macOS".to_string())
     }
 }
@@ -25,16 +26,6 @@ impl Worker {
     pub(super) fn prepare_r(
         &mut self,
         _library: &std::path::Path,
-        _resolve_python: impl FnMut(
-            crate::worker_protocol::PythonResolveRequest,
-        ) -> Result<crate::resolver::ManagedPython, String>,
-        _resolve_python_version: impl FnMut(
-            crate::worker_protocol::PythonVersionResolveRequest,
-        ) -> Result<String, String>,
-        _activate_python: impl FnMut(
-            crate::worker_protocol::PythonRequirementManifest,
-            &mut Vec<crate::resolver::ManagedPython>,
-        ) -> Result<(), String>,
     ) -> Result<Result<(), String>, String> {
         unreachable!("unsupported workers cannot start")
     }
@@ -42,16 +33,6 @@ impl Worker {
     pub(super) fn prepare_python(
         &mut self,
         packages: Vec<String>,
-        _resolve_python: impl FnMut(
-            crate::worker_protocol::PythonResolveRequest,
-        ) -> Result<crate::resolver::ManagedPython, String>,
-        _resolve_python_version: impl FnMut(
-            crate::worker_protocol::PythonVersionResolveRequest,
-        ) -> Result<String, String>,
-        _activate_python: impl FnMut(
-            crate::worker_protocol::PythonRequirementManifest,
-            &mut Vec<crate::resolver::ManagedPython>,
-        ) -> Result<(), String>,
     ) -> Result<Result<Option<crate::resolver::ManagedPython>, String>, String> {
         let _ = packages;
         unreachable!("unsupported workers cannot start")
@@ -60,24 +41,20 @@ impl Worker {
     pub(super) fn evaluate(
         &mut self,
         cell: crate::cell::Cell,
-        _evaluation: &super::Evaluation,
-        _resolve_python: impl FnMut(
-            crate::worker_protocol::PythonResolveRequest,
-        ) -> Result<crate::resolver::ManagedPython, String>,
-        _resolve_python_version: impl FnMut(
-            crate::worker_protocol::PythonVersionResolveRequest,
-        ) -> Result<String, String>,
-        _activate_python: impl FnMut(
-            crate::worker_protocol::PythonRequirementManifest,
-            &mut Vec<crate::resolver::ManagedPython>,
-        ) -> Result<(), String>,
-    ) -> Result<(), String> {
-        let crate::cell::Cell { language, source } = cell;
-        let _ = (language, source);
+        _evaluation: std::sync::Arc<super::Evaluation>,
+    ) -> Result<super::output::OutputCheckpoint, String> {
+        let _ = cell;
         unreachable!("unsupported workers cannot start")
     }
 
     pub(super) fn write_stdin(&self, _stdin: String) -> Result<(), String> {
+        unreachable!("unsupported workers cannot start")
+    }
+
+    pub(super) fn snapshot(
+        &self,
+        _output: &super::OutputTape,
+    ) -> Result<super::WorkerSnapshot, String> {
         unreachable!("unsupported workers cannot start")
     }
 

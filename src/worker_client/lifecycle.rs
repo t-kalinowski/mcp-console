@@ -316,6 +316,7 @@ impl Client {
     /// `finish_retirement()` joins its remaining I/O tasks. No old-worker output
     /// can be published after the stopped notice below.
     fn replace_worker(&self, evaluation: Option<RestartReservation>) -> Result<Response, String> {
+        let generation = self.worker_generation()?;
         let mut worker = self
             .0
             .worker
@@ -332,15 +333,17 @@ impl Client {
 
         let mut response = Response::default();
         let mut wait_for_send = None;
-        let mut interrupted = false;
+        let mut interrupted_notice = None;
         if let Some(evaluation) = evaluation {
             let unfinished = evaluation.unfinished();
-            interrupted = unfinished;
+            if unfinished {
+                interrupted_notice = Some(evaluation.active_stopped_notice());
+            }
             let old_output = evaluation.project_response(old_output);
             if evaluation.waiting {
                 let mut send_output = old_output;
                 if unfinished {
-                    send_output.push_notice(super::output::EVALUATION_STOPPED_BY_RESTART_NOTICE);
+                    send_output.push_notice(evaluation.stopped_notice());
                     if retired_worker {
                         send_output.push_notice(super::output::WORKER_STOPPED_NOTICE);
                     }
@@ -363,8 +366,8 @@ impl Client {
         {
             response.extend(output);
         }
-        if interrupted {
-            response.push_notice(super::output::ACTIVE_EVALUATION_STOPPED_NOTICE);
+        if let Some(notice) = interrupted_notice {
+            response.push_notice(notice);
         }
         if retired_worker {
             response.push_notice(super::output::WORKER_STOPPED_NOTICE);
@@ -378,7 +381,7 @@ impl Client {
         self.ensure_restarting()?;
         response.push_notice_line(super::output::WORKER_STARTING_NOTICE);
 
-        if let Err(message) = self.start_worker(&mut worker, false, |stop_handle| {
+        if let Err(message) = self.start_worker(&mut worker, generation, false, |stop_handle| {
             self.register_restart_stop_handle(stop_handle)
         }) {
             let message = match self.clear_restart_stop_handle() {
@@ -407,6 +410,14 @@ impl Client {
             LifecycleState::Restarting { .. } => Err("worker is restarting".to_string()),
             LifecycleState::ShuttingDown { .. } => Err("worker is shutting down".to_string()),
         }
+    }
+
+    fn worker_generation(&self) -> Result<WorkerGeneration, String> {
+        self.0
+            .lifecycle
+            .lock()
+            .map_err(|_| "worker lifecycle lock poisoned".to_string())
+            .map(|lifecycle| lifecycle.generation.clone())
     }
 
     pub(super) fn generation_status(

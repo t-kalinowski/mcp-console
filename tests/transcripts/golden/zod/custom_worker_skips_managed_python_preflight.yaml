@@ -44,4 +44,14 @@ result:
       text: |
         zod: echo
   isError: false
+---
+id: 7
+send: {}
+result:
+  content:
+    - type: text
+      text: |-
+
+        [idle]
+  isError: false
 ...
