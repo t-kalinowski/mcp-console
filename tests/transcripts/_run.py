@@ -5,34 +5,41 @@
 
 import argparse
 import difflib
+import os
 import runpy
 import shutil
 import sys
 from collections.abc import Callable
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 
 from _support import Transcript, TranscriptWithCompanion, YamlStream
 from yaml12 import Yaml, format_yaml, read_yaml
 
-
 directory = Path(__file__).resolve().parent
 root = directory.parents[1]
 binary = root / "target" / "debug" / "mcp-console"
 suite_paths = sorted(directory.glob("[!_]*.py"))
+initialization_suite = "server"
+initialization_case = "initializes_and_lists_tools"
 initialization_reference = (
-    "tests/transcripts/golden/server/initializes_and_lists_tools.yaml"
+    f"tests/transcripts/golden/{initialization_suite}/{initialization_case}.yaml"
 )
 
 parser = argparse.ArgumentParser(prog="scripts/test")
 parser.add_argument("--list", action="store_true", dest="list_tests")
 parser.add_argument("--update", action="store_true")
+parser.add_argument(
+    "-j",
+    "--jobs",
+    type=int,
+    default=max(2, os.cpu_count() or 2),
+    help="number of transcript cases to run concurrently (default: at least 2)",
+)
 parser.add_argument("selectors", nargs="*", metavar="SUITE[::CASE]")
-options = parser.parse_args()
-
-assert binary.is_file(), f"{binary.relative_to(root)} is missing; run scripts/test"
-assert suite_paths, "no transcript suites found"
 
 TranscriptCase = Callable[[Path], Transcript | TranscriptWithCompanion]
+RecordedTranscript = Transcript | TranscriptWithCompanion
 
 
 def load_suite(
@@ -71,10 +78,10 @@ def identical(left: object, right: object) -> bool:
     return left == right
 
 
-def check_golden(golden: Path, actual: YamlStream, case: str) -> None:
+def check_golden(golden: Path, actual: YamlStream, case: str, *, update: bool) -> None:
     actual_text = format_yaml(actual, multi=True)
 
-    if options.update:
+    if update:
         golden.parent.mkdir(parents=True, exist_ok=True)
         golden.write_text(actual_text, encoding="utf-8")
         print(f"updated {golden.relative_to(root)}")
@@ -100,77 +107,150 @@ def check_golden(golden: Path, actual: YamlStream, case: str) -> None:
     print(f"{golden.relative_to(root)}: ok")
 
 
-suites = {path.stem: path for path in suite_paths}
+def record_case(suite_path: Path, case_name: str) -> RecordedTranscript:
+    cases, _, _ = load_suite(suite_path)
+    return cases[case_name](binary)
 
-if options.list_tests:
-    for suite_name, suite_path in suites.items():
-        cases, _, _ = load_suite(suite_path)
-        for case_name in cases:
-            print(f"{suite_name}::{case_name}")
-    raise SystemExit
 
-selected_suites: dict[str, list[str] | None] = {}
-if options.selectors:
-    for selector in options.selectors:
-        suite_name, separator, case_name = selector.partition("::")
-        if suite_name not in suites:
-            parser.error(f"unknown transcript suite: {suite_name}")
-
-        if not separator:
-            selected_suites[suite_name] = None
-        elif suite_name not in selected_suites:
-            selected_suites[suite_name] = [case_name]
-        elif selected_suites[suite_name] is not None:
-            selected_suites[suite_name].append(case_name)
-else:
-    selected_suites = dict.fromkeys(suites)
-
-for suite_name, selected_case_names in selected_suites.items():
-    suite_path = suites[suite_name]
-    cases, platforms, required_commands = load_suite(suite_path)
-
-    if selected_case_names is None:
-        selected_cases = cases.items()
+def check_recording(
+    suite_name: str,
+    case_name: str,
+    recorded: RecordedTranscript,
+    *,
+    update: bool,
+) -> None:
+    golden = directory / "golden" / suite_name / f"{case_name}.yaml"
+    case = f"{suite_name}::{case_name}"
+    if isinstance(recorded, TranscriptWithCompanion):
+        actual = recorded.transcript
+        companion = (
+            golden.with_suffix(f".{recorded.companion_name}.yaml"),
+            recorded.companion,
+        )
     else:
-        unknown_cases = [name for name in selected_case_names if name not in cases]
-        if unknown_cases:
-            parser.error(
-                f"unknown transcript case in {suite_name}: {', '.join(unknown_cases)}"
-            )
-        selected_cases = ((name, cases[name]) for name in selected_case_names)
+        actual = recorded
+        companion = None
+    if golden != root / initialization_reference:
+        reference = read_yaml(root / initialization_reference, multi=True)
+        assert reference, f"{initialization_reference} contains no documents"
+        if identical(actual[: len(reference)], reference):
+            actual = [
+                Yaml(initialization_reference, tag="!same-as"),
+                *actual[len(reference) :],
+            ]
+    check_golden(golden, actual, case, update=update)
+    if companion is not None:
+        check_golden(*companion, case, update=update)
 
-    if platforms is not None and sys.platform not in platforms:
-        print(f"{suite_name}: skipped on {sys.platform}")
-        continue
 
-    missing_commands = sorted(
-        command for command in required_commands if shutil.which(command) is None
-    )
-    if missing_commands:
-        print(f"{suite_name}: skipped; missing {', '.join(missing_commands)} on PATH")
-        continue
+def selected_cases(
+    suites: dict[str, Path], selectors: list[str]
+) -> list[tuple[str, str, Path]]:
+    selected_suites: dict[str, list[str] | None] = {}
+    if selectors:
+        for selector in selectors:
+            suite_name, separator, case_name = selector.partition("::")
+            if suite_name not in suites:
+                parser.error(f"unknown transcript suite: {suite_name}")
 
-    for case_name, record_transcript in selected_cases:
-        golden = directory / "golden" / suite_name / f"{case_name}.yaml"
-        case = f"{suite_name}::{case_name}"
-        recorded = record_transcript(binary)
-        if isinstance(recorded, TranscriptWithCompanion):
-            actual = recorded.transcript
-            companion = (
-                golden.with_suffix(f".{recorded.companion_name}.yaml"),
-                recorded.companion,
-            )
+            if not separator:
+                selected_suites[suite_name] = None
+            elif suite_name not in selected_suites:
+                selected_suites[suite_name] = [case_name]
+            elif selected_suites[suite_name] is not None:
+                selected_suites[suite_name].append(case_name)
+    else:
+        selected_suites = dict.fromkeys(suites)
+
+    selected: list[tuple[str, str, Path]] = []
+    for suite_name, selected_case_names in selected_suites.items():
+        suite_path = suites[suite_name]
+        cases, platforms, required_commands = load_suite(suite_path)
+
+        if selected_case_names is None:
+            case_names = list(cases)
         else:
-            actual = recorded
-            companion = None
-        if golden != root / initialization_reference:
-            reference = read_yaml(root / initialization_reference, multi=True)
-            assert reference, f"{initialization_reference} contains no documents"
-            if identical(actual[: len(reference)], reference):
-                actual = [
-                    Yaml(initialization_reference, tag="!same-as"),
-                    *actual[len(reference) :],
-                ]
-        check_golden(golden, actual, case)
-        if companion is not None:
-            check_golden(*companion, case)
+            unknown_cases = [name for name in selected_case_names if name not in cases]
+            if unknown_cases:
+                parser.error(
+                    f"unknown transcript case in {suite_name}: "
+                    f"{', '.join(unknown_cases)}"
+                )
+            case_names = selected_case_names
+
+        if platforms is not None and sys.platform not in platforms:
+            print(f"{suite_name}: skipped on {sys.platform}")
+            continue
+
+        missing_commands = sorted(
+            command for command in required_commands if shutil.which(command) is None
+        )
+        if missing_commands:
+            print(
+                f"{suite_name}: skipped; missing {', '.join(missing_commands)} on PATH"
+            )
+            continue
+
+        selected.extend((suite_name, case_name, suite_path) for case_name in case_names)
+    return selected
+
+
+def main() -> None:
+    options = parser.parse_args()
+    if options.jobs < 1:
+        parser.error("--jobs must be at least 1")
+
+    assert binary.is_file(), f"{binary.relative_to(root)} is missing; run scripts/test"
+    assert suite_paths, "no transcript suites found"
+
+    suites = {path.stem: path for path in suite_paths}
+    if options.list_tests:
+        for suite_name, suite_path in suites.items():
+            cases, _, _ = load_suite(suite_path)
+            for case_name in cases:
+                print(f"{suite_name}::{case_name}")
+        return
+
+    selected = selected_cases(suites, options.selectors)
+    for index, (suite_name, case_name, suite_path) in enumerate(selected):
+        if (suite_name, case_name) != (initialization_suite, initialization_case):
+            continue
+        recorded = record_case(suite_path, case_name)
+        check_recording(suite_name, case_name, recorded, update=options.update)
+        selected.pop(index)
+        break
+
+    arguments = [(suite_path, case_name) for _, case_name, suite_path in selected]
+    if options.jobs == 1 or len(arguments) < 2:
+        recordings = (record_case(*pair) for pair in arguments)
+        for (suite_name, case_name, _), recorded in zip(selected, recordings):
+            check_recording(suite_name, case_name, recorded, update=options.update)
+        return
+
+    max_workers = min(options.jobs, len(arguments))
+    if sys.platform == "win32":
+        max_workers = min(max_workers, 61)
+
+    executor = ProcessPoolExecutor(max_workers=max_workers)
+    try:
+        futures = {
+            executor.submit(record_case, *argument): index
+            for index, argument in enumerate(arguments)
+        }
+        for future in as_completed(futures):
+            suite_name, case_name, _ = selected[futures[future]]
+            check_recording(
+                suite_name,
+                case_name,
+                future.result(),
+                update=options.update,
+            )
+    except BaseException:
+        executor.shutdown(cancel_futures=True)
+        raise
+    else:
+        executor.shutdown()
+
+
+if __name__ == "__main__":
+    main()

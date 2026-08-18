@@ -1,8 +1,5 @@
 #!/usr/bin/env -S uv run --script
 
-import os
-import shutil
-import subprocess
 import sys
 import tempfile
 import time
@@ -14,6 +11,7 @@ from _support import (
     McpClient,
     Transcript,
     assert_result_content,
+    build_r_input_handler,
     code,
     r_test_environment,
     reference_plots,
@@ -23,31 +21,6 @@ from _support import (
 )
 
 PLATFORMS = {"darwin"}
-
-
-def build_r_input_handler(
-    directory: Path,
-    environment: dict[str, str],
-    rscript: Path,
-) -> None:
-    source = Path(__file__).parent.parent / "fixtures" / "r_input_handler.c"
-    local_source = directory / source.name
-    shutil.copyfile(source, local_source)
-    subprocess.run(
-        [
-            rscript.parent / "R",
-            "CMD",
-            "SHLIB",
-            "-o",
-            "mcp_test_input_handler.so",
-            local_source.name,
-        ],
-        cwd=directory,
-        env=environment,
-        check=True,
-        capture_output=True,
-        text=True,
-    )
 
 
 @contextmanager
