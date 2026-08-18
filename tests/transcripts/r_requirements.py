@@ -215,8 +215,8 @@ def test_failed_live_r_preparation_requires_restart(binary: Path) -> Transcript:
     setup = code(r"""
         sentinel <- 42L
         worker_pid <- Sys.getpid()
-        invisible(loadNamespace("reticulate"))
-        stopifnot(!reticulate::py_available(initialize = FALSE))
+        invisible(reticulate::py_config())
+        stopifnot(reticulate::py_available(initialize = FALSE))
         original_lib_paths <- base::.libPaths
         replacement_lib_paths <- base::local({
           original <- original_lib_paths
@@ -291,7 +291,8 @@ def test_failed_live_r_preparation_requires_restart(binary: Path) -> Transcript:
         stopifnot(
           identical(saved, 42L),
           !exists("sentinel", inherits = FALSE),
-          !"py-yaml12" %in% reticulate::py_require()$packages,
+          "py-yaml12" %in% reticulate::py_require()$packages,
+          reticulate::py_module_available("yaml12"),
           identical(dirname(find.package("zeallot")), .libPaths()[[1L]])
         )
         """)

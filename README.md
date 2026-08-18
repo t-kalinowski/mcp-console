@@ -99,8 +99,9 @@ An idle server-managed worker can also materialize an uninitialized Python manif
 An idle worker that implements R preparation can prepare DuckDB extensions without replacing the worker or losing its in-memory state.
 The host resolver installs them but never loads them; explicit `LOAD` and DuckDB's automatic extension loading occur later inside the sandbox.
 This path invokes DuckDB's parser and installer directly rather than inspecting submitted SQL text.
-A mixed R, Python, and DuckDB preparation commits the retained configurations only after all requested changes succeed.
-A failure leaves the retained R, Python, and DuckDB configuration unchanged.
+A successful Python activation is retained as soon as the worker reports it and is validated again by the operation's terminal checkpoint.
+In a mixed R, Python, and DuckDB preparation, that activation can therefore remain retained even if a later R update fails.
+The R and DuckDB configurations are retained only after the complete preparation succeeds.
 An earlier extension from a failed multi-extension request may remain in DuckDB's host cache, but it is not retained as prepared.
 If a synchronized failure may have partially changed the live worker, evaluation remains available so its state can be saved, but new requirement additions return `[restart required]` until a successful explicit restart.
 Transport or protocol failures still stop the worker when its usability is unknown.
@@ -337,9 +338,9 @@ An explicit `session` preparation selects its resolved managed environment even 
 The server retains the selected interpreter and normalized manifest and applies them to each sandboxed worker; the worker forces `UV_OFFLINE=1` and otherwise uses the existing sandbox policy unchanged.
 For a server-managed worker, MCP Console seeds reticulate's requirement manifest and intercepts its internal uv environment and Python-version resolution.
 It does not wrap `py_require()`, so reticulate retains its activation behavior.
-Idle explicit preparation passes structured additions through the same bridge and reports a checkpoint instead of completing a cell.
-It materializes an uninitialized manifest or activates a same-`libpython` environment while preserving live state.
-The server retains only a matching checkpoint; failure preserves the prior live and server manifests.
+After reticulate accepts a live managed environment, the worker reports `python_activated`, and the server immediately retains the matching resolved candidate.
+The terminal `completed` or `python_prepared` checkpoint remains an operation-level validation and also preserves lazy pre-initialization requirements materialized at cell end or during explicit preparation.
+Idle explicit preparation passes structured additions through the same bridge, materializes an uninitialized manifest, or activates a same-`libpython` environment while preserving live state.
 Each runtime environment resolution sends the physical resolver manifest and the logical manifest to retain if accepted, together with the worker's current `UV_*` settings except `UV_OFFLINE`; those settings are not retained or replayed across worker generations.
 Runtime Python-version selection sends only version constraints and the same transient settings, and creates no environment candidate.
 After Python initializes, reticulate resolves late additions against the exact active Python patch version while leaving the logical `py_require()` Python constraints unchanged.

@@ -632,7 +632,7 @@ def test_resolves_package_requirements_before_python_initializes(
         return client._finish()
 
 
-def test_does_not_checkpoint_python_requirements_from_failed_cell(
+def test_retains_python_activation_before_later_cell_failure(
     binary: Path,
 ) -> Transcript:
     client = McpClient(binary, ("serve",))
@@ -654,7 +654,8 @@ def test_does_not_checkpoint_python_requirements_from_failed_cell(
         "[idle]"
     )
 
-    # Confirm that the failed cell did not advance the replacement's manifest.
+    # The successful activation is retained even though the cell later kills
+    # the worker before its ordinary completion message.
     # fmt: r
     r = code(r"""
         worker_pid <- Sys.getpid()
@@ -662,21 +663,8 @@ def test_does_not_checkpoint_python_requirements_from_failed_cell(
         """)
     client.send(r=r)
     output = last_tool_text(client)
-    assert output == "[1] FALSE\n", repr(output)
+    assert output == "[1] TRUE\n", repr(output)
 
-    client.session(
-        action="prepare",
-        requirements={"python": ["py-yaml12"]},
-    )
-    assert last_tool_text(client) == "[prepared]"
-
-    # Preparing materializes the manifest without initializing Python.
-    # fmt: r
-    r = code(r"""
-        identical(Sys.getpid(), worker_pid) && !reticulate::py_available(FALSE)
-        """)
-    client.send(r=r)
-    assert last_tool_text(client) == "[1] TRUE\n"
     # fmt: python
     python = code("""
         import yaml12

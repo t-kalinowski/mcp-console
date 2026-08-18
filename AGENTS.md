@@ -80,8 +80,9 @@ Each IR candidate contains the complete retained R requirement set, so replacing
 An idle server-managed worker can also materialize an uninitialized Python manifest or activate a same-`libpython` environment while preserving live state.
 An idle worker that implements R preparation can prepare DuckDB extensions on the host without replacement or loss of live state.
 The DuckDB resolver uses the existing cancellable resolver process-group lifecycle and adds no DuckDB-specific worker sideband messages; an accompanying R candidate still uses `prepare_r`.
-A mixed live R, Python, and DuckDB preparation commits all retained configurations only after every requested change succeeds.
-Failure preserves the prior retained configuration.
+A successful Python activation is retained immediately and validated again by the operation's terminal checkpoint.
+In a mixed live R, Python, and DuckDB preparation, that activation can remain retained even if a later R update fails.
+The R and DuckDB configurations are retained only after the complete operation succeeds.
 An earlier DuckDB install from a failed multi-extension request may remain in the host cache without entering the retained extension set.
 After a synchronized failure may have partially changed the live worker, evaluation remains available so its state can be saved, but new requirement additions return `[restart required]` until a successful explicit restart.
 Transport or protocol failures still stop the worker when its usability is unknown.
@@ -175,9 +176,9 @@ After Python initializes, reticulate resolves late additions against the exact a
 Explicit preparation sends structured additions and reports a separate checkpoint or failure without evaluating a cell.
 If managed reticulate is loaded but Python remains uninitialized at cell end or after explicit preparation, the worker invokes the resolver once to materialize the final manifest.
 After initialization, additive package requirements resolve to candidate environments outside the sandbox, and reticulate performs its exact-`libpython` check, `activate_this.py`, configuration swap, and manifest assignment.
-The worker retains every resolved candidate for the active operation.
-The server accepts the last candidate matching its reported checkpoint, or the prior environment when its manifest still matches, and only then updates its retained state.
-Normal language outcomes reach the evaluation checkpoint; an infrastructure or protocol failure leaves the prior checkpoint unchanged.
+The worker reports each accepted live environment through `python_activated`, and the server immediately retains the matching resolved candidate.
+The terminal `completed` or `python_prepared` checkpoint remains an operation-level validation and preserves lazy pre-initialization requirements materialized at cell end or during explicit preparation.
+A later failure does not roll back an activation already reported.
 The live Python interpreter and its state are retained during successful activation.
 Evaluated R code or an R package load can therefore trigger host resolution, which may use the network, write host caches, and execute package build backends outside the worker sandbox; the structured requirements and forwarded settings are data, and the submitted cell is not evaluated by the resolver.
 Python reads R globals through reticulate's `r.name` bridge, and R reads Python globals through the worker-attached `py$name` binding.

@@ -17,6 +17,7 @@ mod platform {
 base::local({
   evaluator <- NULL
   managed <- Sys.getenv("MCP_CONSOLE_MANAGED_PYTHON", unset = NA_character_)
+  pending_requirements <- NULL
   source <- NULL
 
   manifest <- function(packages, python_version, exclude_newer) {
@@ -58,6 +59,24 @@ base::local({
       null = "null",
       na = "null"
     )
+  }
+
+  activation_json <- function(requirements) {
+    jsonlite::toJSON(
+      manifest(
+        requirements$packages,
+        requirements$python_version,
+        requirements$exclude_newer
+      ),
+      auto_unbox = TRUE,
+      null = "null",
+      na = "null"
+    )
+  }
+
+  report_activation <- function(requirements) {
+    .Call("mcp_console_python_activated", activation_json(requirements))
+    invisible()
   }
 
   install_managed_python <- function(...) {
@@ -122,6 +141,30 @@ base::local({
       )))
       globals$python_requirements <- requirements
     }
+    stopifnot(
+      !bindingIsActive("python_requirements", globals),
+      !bindingIsLocked("python_requirements", globals)
+    )
+    rm(list = "python_requirements", envir = globals)
+    makeActiveBinding("python_requirements", function(value) {
+      if (missing(value)) {
+        return(requirements)
+      }
+      if (!is.null(pending_requirements)) {
+        committed <- manifest(
+          value$packages,
+          value$python_version,
+          value$exclude_newer
+        )
+        stopifnot(identical(committed, pending_requirements))
+      }
+      requirements <<- value
+      if (!is.null(pending_requirements)) {
+        pending_requirements <<- NULL
+        report_activation(committed)
+      }
+      invisible(value)
+    }, globals)
 
     replace_binding <- function(name, value) {
       was_locked <- bindingIsLocked(name, namespace)
@@ -135,8 +178,23 @@ base::local({
       assign(name, value, envir = namespace)
       invisible()
     }
+    original_activate <- get("py_reqs_activate", envir = namespace)
+    activate <- function(requirements) {
+      stopifnot(is.null(pending_requirements))
+      config <- original_activate(requirements)
+      pending_requirements <<- manifest(
+        requirements$packages,
+        requirements$python_version,
+        requirements$exclude_newer
+      )
+      config
+    }
     replace_binding("uv_get_or_create_env", resolve)
     replace_binding("resolve_python_version", resolve_version)
+    replace_binding("py_reqs_activate", activate)
+    setHook("reticulate.onPyInit", function() {
+      report_activation(current_requirements())
+    }, action = "append")
     invisible()
   }
 
@@ -538,6 +596,19 @@ def _mcp_console_eval_cell(
         let python =
             crate::worker::resolve_python(request).map_err(|error| harp::anyhow!("{error}"))?;
         Ok(harp::object::RObject::from(python).sexp)
+    }
+
+    #[allow(clippy::result_large_err)]
+    #[harp::register]
+    pub extern "C-unwind" fn mcp_console_python_activated(
+        requirements: SEXP,
+    ) -> harp::Result<SEXP> {
+        let requirements = String::try_from(harp::object::RObject::view(requirements))?;
+        let requirements =
+            serde_json::from_str(&requirements).map_err(|error| harp::anyhow!("{error}"))?;
+        crate::worker::publish_python_activation(requirements)
+            .map_err(|error| harp::anyhow!("{error}"))?;
+        unsafe { Ok(libr::R_NilValue) }
     }
 
     #[allow(clippy::result_large_err)]
