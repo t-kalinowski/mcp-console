@@ -78,6 +78,10 @@ impl Reader {
         }
     }
 
+    pub(crate) fn has_buffered_data(&self) -> bool {
+        !self.inner.buffer().is_empty()
+    }
+
     /// Receives one newline-delimited JSON message from the worker.
     pub(crate) fn receive<T: DeserializeOwned>(&mut self) -> io::Result<T> {
         let mut line = String::new();

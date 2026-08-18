@@ -17,6 +17,7 @@ from _support import (
     normalize_python_resolution_error,
     r_test_environment,
     reference_plots,
+    release_worker_callback_gate,
     run_this_suite,
     stop_client,
     wait_for_worker_file,
@@ -448,6 +449,42 @@ def test_prepares_python_requirements_after_worker_startup(binary: Path) -> Tran
         """)
     client.send(python=python)
     assert last_tool_text(client) == "(False, 'yaml12')\n"
+    return client._finish()
+
+
+def test_prepares_after_idle_python_resolution(binary: Path) -> Transcript:
+    client = McpClient(binary, ("serve",))
+    client._initialize_and_list_tools()
+    client.session(action="prepare", requirements={"r": ["later"]})
+
+    # fmt: r
+    r = code(r"""
+        callback_gate <- tempfile("mcp-console-callback-gate-")
+        callback_checkpoint <- tempfile("mcp-console-callback-checkpoint-")
+        run_callback <- function() {
+          if (!file.exists(callback_gate)) {
+            later::later(run_callback, delay = 0.01)
+            return(invisible(NULL))
+          }
+          stopifnot(file.create(callback_checkpoint))
+          reticulate::py_require("py-yaml12")
+          reticulate::py_config()
+          cat("idle Python ready\n")
+        }
+        later::later(run_callback, delay = 0.01)
+        cat(callback_gate, callback_checkpoint, sep = "\n")
+        """)
+    client.send(r=r)
+    release_worker_callback_gate(client, "idle Python callback")
+
+    client.session(
+        action="prepare",
+        requirements={"python": ["py-yaml12"]},
+    )
+    assert last_tool_text(client) == "[prepared]"
+    client.send(r="reticulate::py_require()$packages")
+    assert "idle Python ready\n" in last_tool_text(client)
+    assert '"py-yaml12"' in last_tool_text(client)
     return client._finish()
 
 

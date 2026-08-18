@@ -11,6 +11,7 @@ from _support import (
     code,
     normalize_python_resolution_error,
     r_test_environment,
+    release_worker_callback_gate,
     run_this_suite,
 )
 
@@ -203,6 +204,53 @@ def test_prepares_r_requirements_after_worker_startup(binary: Path) -> Transcrip
         """)
     client.send(r=r)
     assert last_tool_text(client) == "[1] 42\n"
+    return client._finish()
+
+
+def test_stops_live_preparation_for_idle_callback_input(binary: Path) -> Transcript:
+    client = McpClient(binary, ("serve",))
+    client._initialize_and_list_tools()
+    client.session(action="prepare", requirements={"r": ["later"]})
+
+    # fmt: r
+    r = code(r"""
+        callback_gate <- tempfile("mcp-console-callback-gate-")
+        callback_checkpoint <- tempfile("mcp-console-callback-checkpoint-")
+        run_callback <- function() {
+          if (!file.exists(callback_gate)) {
+            later::later(run_callback, delay = 0.01)
+            return(invisible(NULL))
+          }
+          stopifnot(file.create(callback_checkpoint))
+          reticulate::py_require("py-yaml12")
+          reticulate::py_config()
+          # later caps one top-level handler turn at 20 callback passes.
+          # Leave the input callback ready for the next handler turn.
+          request_input <- function(turns) {
+            if (turns == 0L) {
+              readline("later> ")
+            } else {
+              later::later(function() request_input(turns - 1L), delay = 0)
+            }
+          }
+          request_input(25L)
+        }
+        later::later(run_callback, delay = 0.01)
+        cat(callback_gate, callback_checkpoint, sep = "\n")
+        """)
+    client.send(r=r)
+    release_worker_callback_gate(client, "idle input callback")
+    result = client.session(
+        action="prepare",
+        requirements={"python": ["py-yaml12"]},
+    )
+    assert result["isError"] is True, result
+    assert result["content"][0]["text"] == (
+        '[input requested: "later> "]\n'
+        '[idle R callback requested input "later> " during requirement '
+        "preparation; collect callback input with send before preparing "
+        "requirements]\n[worker stopped: in-memory state lost]"
+    )
     return client._finish()
 
 

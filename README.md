@@ -250,7 +250,12 @@ Immediately before every R, Python, or SQL cell, the worker gives R's registered
 It gives them a second turn after a normal language outcome only if worker shutdown has not begun and the cell recorded no infrastructure failure.
 Shutdown or an infrastructure failure during the initial turn aborts the submitted cell; an infrastructure failure recorded by the cell skips the final turn.
 After either turn, a worker-stdin hangup marks shutdown before the worker can dispatch or complete the cell, including when a callback reads fd 0 directly.
-Ready callbacks from packages such as `later` therefore run at those cell boundaries; the worker does not yet wake for timers while otherwise idle.
+Between cells, the worker uses `R_checkActivity()` to wait for either a registered R handler or the server sideband, without busy polling or a worker-owned fixed interval.
+Callbacks registered by packages such as `later` can therefore run after a cell has returned, and their output is collected by the next code-bearing `send` or live requirement preparation.
+The server does not continuously drain idle callback output, so pipe backpressure or a host-side Python resolution can pause a callback until one of those operations begins.
+A code-bearing `send` can also supply input requested by an idle callback.
+Before applying a live requirement preparation, the built-in worker gives registered R handlers one nonblocking turn, so a callback already ready when the command arrives is collected first.
+A noninteractive requirement preparation stops the worker if it encounters such an input request instead of waiting indefinitely.
 If a cell ends while an expression is incomplete, earlier complete expressions from that cell remain applied.
 The worker installs a worker-owned `grDevices::png()` function as R's default graphics device and opens it lazily when a cell draws.
 Each managed page is returned as an MCP image when its device finalizes it by opening a new page or closing.

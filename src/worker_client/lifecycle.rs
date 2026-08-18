@@ -88,10 +88,8 @@ pub(super) struct ProcessStopHandles {
 
 impl ProcessStopHandles {
     fn shutdown(&self, deadline: Instant) -> Result<(), String> {
-        let resolver = self
-            .resolver
-            .as_ref()
-            .map_or(Ok(()), |handle| handle.stop());
+        // Stop the worker before cancelling its nested resolver so resolver
+        // cancellation cannot release work queued on the retiring worker.
         let worker = self
             .worker
             .as_ref()
@@ -103,7 +101,11 @@ impl ProcessStopHandles {
                     .map_err(|_| "worker shutdown sender task failed".to_string())
             })
         });
-        resolver.and(worker)
+        let resolver = self
+            .resolver
+            .as_ref()
+            .map_or(Ok(()), |handle| handle.stop());
+        worker.and(resolver)
     }
 }
 
@@ -685,20 +687,7 @@ impl Client {
         };
         let client = self.clone();
         tokio::task::spawn_blocking(move || {
-            let resolver = stop_handles
-                .resolver
-                .map_or(Ok(()), |resolver| resolver.stop());
-            let worker = stop_handles
-                .worker
-                .map_or(Ok(None), |worker| worker.shutdown(deadline).map(Some));
-            let worker = worker.and_then(|shutdown| {
-                shutdown.map_or(Ok(()), |shutdown| {
-                    shutdown
-                        .join()
-                        .map_err(|_| "worker shutdown sender task failed".to_string())
-                })
-            });
-            let stopped = resolver.and(worker);
+            let stopped = stop_handles.shutdown(deadline);
             if stopped.is_ok() {
                 let mut owner = client
                     .0
