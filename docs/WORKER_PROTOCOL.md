@@ -243,6 +243,7 @@ The complete implemented message set is:
 | worker → server | `{"kind":"r_preparation_failed","message":"..."}` | Report a synchronized live R update failure without discarding the worker. |
 | worker → server | `{"kind":"resolve_python","request":{"requirements":{"packages":["numpy","pandas"]},"retained_requirements":{"packages":["numpy","pandas"]},"environment":{}}}` | Resolve the complete proposed reticulate manifest outside the sandbox. |
 | worker → server | `{"kind":"resolve_python_version","request":{"constraints":[],"environment":{}}}` | Select a Python version with reticulate and uv outside the sandbox. |
+| worker → server | `{"kind":"python_activated","requirements":{"packages":["numpy","pandas","py-yaml12"]}}` | Report that a resolved Python environment has been activated. Reserved for server-managed workers. |
 | worker → server | `{"kind":"python_prepared","python_checkpoint":{"packages":["numpy","pandas","py-yaml12"]}}` | Finish explicit Python preparation and report its normalized manifest. |
 | worker → server | `{"kind":"python_preparation_failed","message":"..."}` | Report an ordinary explicit-preparation failure without discarding the worker. |
 | worker → server | `{"kind":"completed","python_checkpoint":{"packages":["numpy","pandas","py-yaml12"]}}` | Complete the evaluation and report its normalized Python manifest. |
@@ -258,6 +259,12 @@ Their packages and `exclude_newer` must match; only `python_version` may differ 
 The `environment` object may contain only `UV_*` settings other than `UV_OFFLINE`.
 The optional `python_checkpoint` is the complete normalized manifest, not reticulate's request history.
 Custom workers, caller-configured Python workers, and server-managed workers that never load reticulate omit it.
+
+`python_activated` is an accepted receipt reserved for server-managed workers.
+During evaluation or explicit Python preparation, the server immediately retains the matching resolved candidate, or its current environment when the manifest is unchanged.
+It leaves the candidate available for the existing terminal checkpoint validation.
+The current built-in worker does not emit this receipt; it continues to report manifest changes through `completed.python_checkpoint` or `python_prepared.python_checkpoint`, so this receipt adds no supported external behavior yet.
+A custom worker that sends it fails the active operation with a managed-Python-activation protocol error.
 
 ## Handshake and evaluation
 
@@ -460,6 +467,7 @@ New code is rejected while an evaluation or its uncollected result is active.
 | evaluating | worker → server `resolve_python_version` | host selecting version; worker waiting |
 | host selecting version | server → worker `python_version_resolved` | evaluating; no candidate created |
 | host selecting version | server → worker `python_version_resolution_failed` | evaluating; no checkpoint change |
+| evaluating or preparing Python | worker → server `python_activated` | retain matching environment; operation unchanged |
 | evaluating, with or without input reported | MCP stdin submission | evaluating |
 | evaluating, no provisional input | worker → server `completed` | validate checkpoint, then idle |
 | preparing R | worker → server `r_prepared` | validate library path, then idle |
@@ -704,6 +712,7 @@ The current sandbox child does not yet supervise descendants after its direct pr
 Zod implements the protocol as an executable uv script requiring Python 3.11 or newer.
 As a custom worker, it omits `python_checkpoint` from every `completed` frame.
 It acknowledges `prepare_r` and can report whether the server supplied its live R library and prepared the JSON extension in DuckDB's native cache.
+Dedicated modes send managed Python checkpoint and activation frames to verify that the server rejects both from a custom worker with specific protocol errors.
 The `emit console kinds` mode sends adjacent `console_output` and `console_diagnostic` frames to verify that MCP still returns one merged text block.
 When an R `source` is exactly `echo`, it sends two output chunks followed by `completed`:
 

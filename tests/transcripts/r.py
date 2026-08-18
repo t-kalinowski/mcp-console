@@ -691,6 +691,10 @@ def test_restart_skips_direct_stdin_boundary_callback(binary: Path) -> Transcrip
                 cat("direct callback waiting")
                 connection <- suppressWarnings(file("/dev/stdin"))
                 on.exit(close(connection))
+                stopifnot(file.create(file.path(
+                  tempdir(),
+                  "direct-stdin-boundary-checkpoint"
+                )))
                 readLines(connection, n = 1)
                 cat("direct callback released\n")
               }
@@ -705,12 +709,23 @@ def test_restart_skips_direct_stdin_boundary_callback(binary: Path) -> Transcrip
         )
         fifo.write_bytes(b"x")
 
-        client.send(r='cat("direct stdin cell ran\\n")', timeout_ms=1_000)
-        assert last_tool_text(client) == "direct callback waiting\n[running]"
-        client.session(action="restart")
-        output = last_tool_text(client)
-        assert "direct callback released" in output
-        assert "direct stdin cell ran" not in output
+        waiting = client._start_send(
+            r='cat("direct stdin cell ran\\n")',
+            timeout_ms=30_000,
+        )
+        wait_for_worker_file(
+            directory,
+            "direct-stdin-boundary-checkpoint",
+            client,
+        )
+
+        restarted = client._start_session(action="restart")
+        client._receive(waiting)
+        client._receive(restarted)
+        assert "direct callback waiting" in waiting["result"]["content"][0]["text"]
+        assert "direct callback released" in waiting["result"]["content"][0]["text"]
+        assert "direct stdin cell ran" not in waiting["result"]["content"][0]["text"]
+        assert "direct stdin cell ran" not in restarted["result"]["content"][0]["text"]
         return client._finish()
 
 

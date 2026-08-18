@@ -832,6 +832,11 @@ def test_custom_worker_prepares_r_and_duckdb_requirements(binary: Path) -> Trans
         assert result["isError"] is True, result
         failure = result["content"][0]["text"]
         assert "custom worker reported a managed Python checkpoint" in failure, failure
+
+        result = client.send(r="report managed python activation")
+        assert result["isError"] is True, result
+        failure = result["content"][0]["text"]
+        assert "custom worker reported a managed Python activation" in failure, failure
         return client._finish()
 
 

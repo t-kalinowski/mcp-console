@@ -80,4 +80,17 @@ result:
         [starting new worker]
         [idle]
   isError: true
+---
+id: 10
+send:
+  r: report managed python activation
+result:
+  content:
+    - type: text
+      text: |-
+        [custom worker reported a managed Python activation]
+        [worker stopped: in-memory state lost]
+        [starting new worker]
+        [idle]
+  isError: true
 ...
