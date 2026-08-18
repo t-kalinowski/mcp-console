@@ -753,6 +753,8 @@ def test_custom_worker_skips_managed_python_preflight(binary: Path) -> Transcrip
     )
     client.send(r="echo")
     assert last_tool_text(client) == "zod: echo\n"
+    client.send()
+    assert last_tool_text(client) == "\n[idle]"
     return client._finish()
 
 
@@ -935,7 +937,7 @@ def test_custom_worker_resolves_idle_activity_before_evaluation(
     )
     client._initialize_and_list_tools()
     client.send(r="resolve python while idle")
-    assert last_tool_text(client) == "[done]"
+    assert last_tool_text(client) == "[done]", repr(last_tool_text(client))
 
     client.send(r="echo")
     assert last_tool_text(client) == "zod: echo\n"
@@ -943,7 +945,9 @@ def test_custom_worker_resolves_idle_activity_before_evaluation(
     client.send(r="request input while idle")
     assert last_tool_text(client) == "[done]"
     client.send(r="echo", stdin="continue\n")
-    assert last_tool_text(client) == '[input requested: "idle> "]\nzod: echo\n'
+    assert last_tool_text(client) == ('[input requested: "idle> "]\nzod: echo\n'), repr(
+        last_tool_text(client)
+    )
     return client._finish()
 
 

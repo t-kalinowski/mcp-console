@@ -14,6 +14,16 @@ result:
   isError: false
 ---
 id: 4
+send: {}
+result:
+  content:
+    - type: text
+      text: |-
+
+        [idle]
+  isError: false
+---
+id: 5
 send:
   r: |
     callback_gate <- tempfile("mcp-console-callback-gate-")
@@ -23,8 +33,8 @@ send:
         later::later(run_callback, delay = 0.01)
         return(invisible(NULL))
       }
-      cat("idle plot\n")
-      plot(1:3)
+      collected_value <<- 84
+      cat("collected callback")
       stopifnot(file.create(callback_checkpoint))
     }
     later::later(run_callback, delay = 0.01)
@@ -37,19 +47,23 @@ result:
         <worker callback checkpoint>
   isError: false
 ---
-id: 5
+id: 6
 send: {}
 result:
   content:
     - type: text
-      text: |
-        idle plot
-    - type: image
-      data: <PNG byte-identical to live Rscript page 1>
-      mimeType: image/png
-    - type: text
       text: |-
-
+        collected callback
         [idle]
+  isError: false
+---
+id: 7
+send:
+  r: collected_value
+result:
+  content:
+    - type: text
+      text: |
+        [1] 84
   isError: false
 ...

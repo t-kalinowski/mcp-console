@@ -18,8 +18,12 @@ pub(super) struct OutputTape(Arc<Mutex<OutputTapeState>>);
 struct OutputTapeState {
     direct_stdout: Vec<u8>,
     direct_stderr: Vec<u8>,
-    events: Vec<OutputEvent>,
+    next_event: u64,
+    events: Vec<(u64, OutputEvent)>,
 }
+
+#[derive(Clone, Copy)]
+pub(super) struct OutputCheckpoint(u64);
 
 /// One publication from a directly captured worker file descriptor.
 ///
@@ -98,6 +102,7 @@ pub(crate) enum Content {
 
 pub(super) enum SendResponse {
     Idle(Response),
+    Failed(Response),
     Running(Response),
     InputRequested(Response),
     Completed(Response),
@@ -318,9 +323,7 @@ impl OutputTape {
     ) {
         let text = text.into();
         if !text.is_empty() {
-            self.lock()
-                .events
-                .push(OutputEvent::WorkerConsoleText { channel, text });
+            self.push_event(OutputEvent::WorkerConsoleText { channel, text });
         }
     }
 
@@ -330,7 +333,7 @@ impl OutputTape {
         mime_type: String,
         artifact: Option<crate::transcript::Artifact>,
     ) {
-        self.lock().events.push(OutputEvent::WorkerImage {
+        self.push_event(OutputEvent::WorkerImage {
             data,
             mime_type,
             artifact,
@@ -339,22 +342,34 @@ impl OutputTape {
 
     /// Publishes a server notice that ends its line before later worker output.
     pub(super) fn push_notice_line(&self, message: impl Into<String>) {
-        self.lock().events.push(OutputEvent::ServerNotice {
+        self.push_event(OutputEvent::ServerNotice {
             message: message.into(),
             terminate_line: true,
         });
     }
 
     pub(super) fn push_failure(&self, failure: SendFailure) {
-        self.lock().events.push(OutputEvent::ServerFailure(failure));
+        self.push_event(OutputEvent::ServerFailure(failure));
+    }
+
+    pub(super) fn checkpoint(&self) -> OutputCheckpoint {
+        OutputCheckpoint(self.lock().next_event)
     }
 
     pub(super) fn take(&self) -> Response {
+        self.take_until(OutputCheckpoint(u64::MAX))
+    }
+
+    pub(super) fn take_until(&self, checkpoint: OutputCheckpoint) -> Response {
         let mut state = self.lock();
-        let events = std::mem::take(&mut state.events);
+        let boundary = state
+            .events
+            .partition_point(|(sequence, _)| *sequence < checkpoint.0);
+        let remaining = state.events.split_off(boundary);
+        let events = std::mem::replace(&mut state.events, remaining);
         let mut output = Response::default();
 
-        for event in events {
+        for (_, event) in events {
             match event {
                 OutputEvent::DirectStdout(event) => {
                     append_direct_output(&mut output, &mut state.direct_stdout, event);
@@ -397,6 +412,13 @@ impl OutputTape {
         output
     }
 
+    fn push_event(&self, event: OutputEvent) {
+        let mut state = self.lock();
+        let sequence = state.next_event;
+        state.next_event = state.next_event.wrapping_add(1);
+        state.events.push((sequence, event));
+    }
+
     fn lock(&self) -> std::sync::MutexGuard<'_, OutputTapeState> {
         self.0
             .lock()
@@ -419,7 +441,7 @@ impl DirectOutput {
             DirectOutputStream::Stdout => OutputEvent::DirectStdout(event),
             DirectOutputStream::Stderr => OutputEvent::DirectStderr(event),
         };
-        self.output.lock().events.push(event);
+        self.output.push_event(event);
     }
 }
 
@@ -451,9 +473,17 @@ pub(super) fn project_replacement_ready(mut output: Response) -> Response {
     output
 }
 
+pub(super) fn project_idle(mut output: Response) -> Response {
+    if !output.is_error() {
+        append_state_banner(&mut output, WORKER_IDLE_NOTICE);
+    }
+    output
+}
+
 pub(super) fn render_response(response: SendResponse) -> Response {
     match response {
         SendResponse::Completed(output) => project_completed(output),
+        SendResponse::Failed(output) => output,
         SendResponse::InputRequested(mut output) => {
             append_input_banner(&mut output);
             output
@@ -462,12 +492,7 @@ pub(super) fn render_response(response: SendResponse) -> Response {
             append_state_banner(&mut output, "running");
             output
         }
-        SendResponse::Idle(mut output) => {
-            if !output.is_error() {
-                append_state_banner(&mut output, "idle");
-            }
-            output
-        }
+        SendResponse::Idle(output) => project_idle(output),
         SendResponse::ReplacementStarting(mut output) => {
             output.push_notice(WORKER_STARTING_STATE);
             output

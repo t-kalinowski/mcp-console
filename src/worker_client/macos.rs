@@ -5,16 +5,16 @@ use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::Instant;
 
+use super::activity::{Activity, OperationResult};
 use crate::worker_protocol::{ServerMessage, WorkerMessage};
 
 /// Spawns workers through the platform's runtime boundary.
 pub(super) struct WorkerRuntime;
 
 pub(super) struct Worker {
-    reader: crate::sideband::Reader,
     writer: crate::sideband::Writer,
     stdin: StdinSender,
-    output: super::OutputTape,
+    activity: Activity,
     process: WorkerProcess,
 }
 
@@ -32,6 +32,7 @@ struct WorkerProcess {
 }
 
 struct WorkerThreads {
+    sideband: Option<thread::JoinHandle<()>>,
     stdin: WorkerIoThread,
     stdout: WorkerIoThread,
     stderr: WorkerIoThread,
@@ -68,8 +69,9 @@ impl WorkerRuntime {
             arguments,
             managed_python,
             managed_r,
+            callbacks,
         } = spec;
-        let (reader, writer, child_fds) = crate::sideband::bind()
+        let (mut reader, writer, child_fds) = crate::sideband::bind()
             .map_err(|error| format!("failed to create worker sideband: {error}"))?;
         let mut command = crate::sandbox::SandboxedCommand::new(executable.as_os_str())
             .map_err(|error| format!("failed to prepare worker sandbox: {error}"))?;
@@ -118,6 +120,7 @@ impl WorkerRuntime {
         let process = WorkerProcess {
             child,
             threads: Some(WorkerThreads {
+                sideband: None,
                 stdin: stdin_thread,
                 stdout,
                 stderr,
@@ -125,18 +128,19 @@ impl WorkerRuntime {
         };
 
         let mut worker = Worker {
-            reader,
             writer,
             stdin,
-            output,
+            activity: Activity::new(),
             process,
         };
         if let Err(error) = on_started(worker.shutdown_handle()) {
             return Err(worker.startup_failure(error));
         }
-        let ready = match worker.receive() {
+        let ready = match reader.receive() {
             Ok(message) => message,
-            Err(error) => return Err(worker.startup_failure(error)),
+            Err(error) => {
+                return Err(worker.startup_failure(format!("worker sideband read failed: {error}")));
+            }
         };
         let error = match ready {
             WorkerMessage::Ready => None,
@@ -151,6 +155,10 @@ impl WorkerRuntime {
         if let Some(error) = error {
             return Err(worker.startup_failure(error));
         }
+        let sideband = worker
+            .activity
+            .start(reader, worker.writer.clone(), output, callbacks);
+        worker.process.attach_sideband(sideband);
         Ok(worker)
     }
 }
@@ -160,38 +168,25 @@ impl Worker {
     pub(super) fn prepare_r(
         &mut self,
         library: &std::path::Path,
-        mut resolve_python: impl FnMut(
-            crate::worker_protocol::PythonResolveRequest,
-        ) -> Result<crate::resolver::ManagedPython, String>,
-        mut resolve_python_version: impl FnMut(
-            crate::worker_protocol::PythonVersionResolveRequest,
-        ) -> Result<String, String>,
-        mut activate_python: impl FnMut(
-            crate::worker_protocol::PythonRequirementManifest,
-            &mut Vec<crate::resolver::ManagedPython>,
-        ) -> Result<(), String>,
     ) -> Result<Result<(), String>, String> {
         let library = library
             .to_str()
             .ok_or_else(|| "resolved R library path is not UTF-8".to_string())?
             .to_string();
-        self.writer
-            .send(&ServerMessage::PrepareR {
-                library: library.clone(),
-            })
-            .map_err(|error| format!("worker sideband write failed: {error}"))?;
-        let mut python_candidates = Vec::new();
-        match self.receive_preparation_message(
-            &mut python_candidates,
-            &mut resolve_python,
-            &mut resolve_python_version,
-            &mut activate_python,
-        )? {
-            WorkerMessage::RPrepared { library: prepared } if prepared == library => Ok(Ok(())),
-            WorkerMessage::RPrepared { .. } => {
+        let result = self.activity.begin_r_preparation()?;
+        if let Err(error) = self.writer.send(&ServerMessage::PrepareR {
+            library: library.clone(),
+        }) {
+            let error = format!("worker sideband write failed: {error}");
+            self.activity.fail(error.clone());
+            return Err(error);
+        }
+        match receive_operation(result)? {
+            OperationResult::RPrepared(prepared) if prepared == library => Ok(Ok(())),
+            OperationResult::RPrepared(_) => {
                 Err("worker prepared an unexpected R library".to_string())
             }
-            WorkerMessage::RPreparationFailed { message } => Ok(Err(message)),
+            OperationResult::RPreparationFailed(message) => Ok(Err(message)),
             _ => Err("worker sent an unexpected R preparation message".to_string()),
         }
     }
@@ -200,200 +195,51 @@ impl Worker {
     pub(super) fn prepare_python(
         &mut self,
         packages: Vec<String>,
-        mut resolve_python: impl FnMut(
-            crate::worker_protocol::PythonResolveRequest,
-        ) -> Result<crate::resolver::ManagedPython, String>,
-        mut resolve_python_version: impl FnMut(
-            crate::worker_protocol::PythonVersionResolveRequest,
-        ) -> Result<String, String>,
-        mut activate_python: impl FnMut(
-            crate::worker_protocol::PythonRequirementManifest,
-            &mut Vec<crate::resolver::ManagedPython>,
-        ) -> Result<(), String>,
     ) -> Result<Result<Option<crate::resolver::ManagedPython>, String>, String> {
-        self.writer
-            .send(&ServerMessage::PreparePython { packages })
-            .map_err(|error| format!("worker sideband write failed: {error}"))?;
-        let mut python_candidates = Vec::new();
-
-        match self.receive_preparation_message(
-            &mut python_candidates,
-            &mut resolve_python,
-            &mut resolve_python_version,
-            &mut activate_python,
-        )? {
-            WorkerMessage::PythonPrepared => Ok(Ok(python_candidates.pop())),
-            WorkerMessage::PythonPreparationFailed { message } => Ok(Err(message)),
+        let result = self.activity.begin_python_preparation()?;
+        if let Err(error) = self.writer.send(&ServerMessage::PreparePython { packages }) {
+            let error = format!("worker sideband write failed: {error}");
+            self.activity.fail(error.clone());
+            return Err(error);
+        }
+        match receive_operation(result)? {
+            OperationResult::PythonPrepared(candidate) => Ok(Ok(candidate)),
+            OperationResult::PythonPreparationFailed(message) => Ok(Err(message)),
             _ => Err("worker sent an unexpected Python preparation message".to_string()),
         }
     }
 
-    /// Sends one cell and collects output until the completed message.
+    /// Sends one cell and waits for its terminal sideband message.
     pub(super) fn evaluate(
         &mut self,
         cell: crate::cell::Cell,
-        evaluation: &super::Evaluation,
-        mut resolve_python: impl FnMut(
-            crate::worker_protocol::PythonResolveRequest,
-        ) -> Result<crate::resolver::ManagedPython, String>,
-        mut resolve_python_version: impl FnMut(
-            crate::worker_protocol::PythonVersionResolveRequest,
-        ) -> Result<String, String>,
-        mut activate_python: impl FnMut(
-            crate::worker_protocol::PythonRequirementManifest,
-            &mut Vec<crate::resolver::ManagedPython>,
-        ) -> Result<(), String>,
-    ) -> Result<(), String> {
+        evaluation: Arc<super::Evaluation>,
+    ) -> Result<super::output::OutputCheckpoint, String> {
+        let result = self.activity.begin_cell(evaluation.clone())?;
         let crate::cell::Cell { language, source } = cell;
-        self.writer
+        if let Err(error) = self
+            .writer
             .send(&ServerMessage::Evaluate { language, source })
-            .map_err(|error| format!("worker sideband write failed: {error}"))?;
-        evaluation.attach_writer(self.stdin.clone())?;
-        let mut python_candidates = Vec::new();
-
-        loop {
-            match self.receive()? {
-                WorkerMessage::ConsoleOutput { data } => {
-                    evaluation.output(crate::worker_protocol::ConsoleChannel::Output, data)?;
-                }
-                WorkerMessage::ConsoleDiagnostic { data } => {
-                    evaluation.output(crate::worker_protocol::ConsoleChannel::Diagnostic, data)?;
-                }
-                WorkerMessage::Image { data, mime_type } => {
-                    evaluation.image(data, mime_type)?;
-                }
-                WorkerMessage::InputRequested { prompt } => {
-                    evaluation.input_requested(prompt)?;
-                }
-                WorkerMessage::InputReceived => evaluation.input_received()?,
-                WorkerMessage::ResolvePython { request } => {
-                    python_candidates
-                        .extend(self.resolve_python_request(request, &mut resolve_python)?);
-                }
-                WorkerMessage::ResolvePythonVersion { request } => {
-                    self.resolve_python_version_request(request, &mut resolve_python_version)?;
-                }
-                WorkerMessage::PythonActivated { requirements } => {
-                    activate_python(requirements, &mut python_candidates)?;
-                }
-                WorkerMessage::Completed => {
-                    evaluation.input_complete()?;
-                    return Ok(());
-                }
-                WorkerMessage::Ready => {
-                    return Err("worker sent an unexpected ready message".to_string());
-                }
-                WorkerMessage::PythonPrepared
-                | WorkerMessage::PythonPreparationFailed { .. }
-                | WorkerMessage::RPrepared { .. }
-                | WorkerMessage::RPreparationFailed { .. } => {
-                    return Err("worker sent an unexpected Python preparation result".to_string());
-                }
-            }
+        {
+            let error = format!("worker sideband write failed: {error}");
+            self.activity.fail(error.clone());
+            return Err(error);
+        }
+        if let Err(error) = evaluation.attach_writer(self.stdin.clone()) {
+            self.activity.fail(error.clone());
+            return Err(error);
+        }
+        match receive_operation(result)? {
+            OperationResult::Completed(checkpoint) => Ok(checkpoint),
+            _ => Err("worker sent an unexpected evaluation result".to_string()),
         }
     }
 
-    fn receive_preparation_message(
-        &mut self,
-        python_candidates: &mut Vec<crate::resolver::ManagedPython>,
-        resolve_python: &mut impl FnMut(
-            crate::worker_protocol::PythonResolveRequest,
-        ) -> Result<crate::resolver::ManagedPython, String>,
-        resolve_python_version: &mut impl FnMut(
-            crate::worker_protocol::PythonVersionResolveRequest,
-        ) -> Result<String, String>,
-        activate_python: &mut impl FnMut(
-            crate::worker_protocol::PythonRequirementManifest,
-            &mut Vec<crate::resolver::ManagedPython>,
-        ) -> Result<(), String>,
-    ) -> Result<WorkerMessage, String> {
-        use crate::worker_protocol::ConsoleChannel::{Diagnostic, Output};
-
-        loop {
-            match self.receive()? {
-                WorkerMessage::ConsoleOutput { data } => {
-                    self.output.push_console_text(Output, data)
-                }
-                WorkerMessage::ConsoleDiagnostic { data } => {
-                    self.output.push_console_text(Diagnostic, data)
-                }
-                WorkerMessage::Image { data, mime_type } => {
-                    crate::transcript::validate_image_data(&data)?;
-                    self.output.push_image(data, mime_type, None);
-                }
-                WorkerMessage::ResolvePython { request } => {
-                    python_candidates.extend(self.resolve_python_request(request, resolve_python)?);
-                }
-                WorkerMessage::ResolvePythonVersion { request } => {
-                    self.resolve_python_version_request(request, resolve_python_version)?;
-                }
-                WorkerMessage::PythonActivated { requirements } => {
-                    activate_python(requirements, python_candidates)?;
-                }
-                WorkerMessage::InputRequested { prompt } => {
-                    let prompt = serde_json::to_string(&prompt).map_err(|error| {
-                        format!("failed to render worker input prompt: {error}")
-                    })?;
-                    self.output
-                        .push_notice_line(format!("input requested: {prompt}"));
-                    return Err(format!(
-                        "idle R callback requested input {prompt} during requirement preparation; collect callback input with send before preparing requirements"
-                    ));
-                }
-                WorkerMessage::InputReceived => {
-                    return Err(
-                        "worker reported received input during requirement preparation".to_string(),
-                    );
-                }
-                message => return Ok(message),
-            }
-        }
-    }
-
-    fn resolve_python_version_request(
-        &mut self,
-        request: crate::worker_protocol::PythonVersionResolveRequest,
-        resolve_python_version: &mut impl FnMut(
-            crate::worker_protocol::PythonVersionResolveRequest,
-        ) -> Result<String, String>,
-    ) -> Result<(), String> {
-        let message = match resolve_python_version(request) {
-            Ok(version) => ServerMessage::PythonVersionResolved { version },
-            Err(message) => ServerMessage::PythonVersionResolutionFailed { message },
-        };
-        self.writer
-            .send(&message)
-            .map_err(|error| format!("worker sideband write failed: {error}"))
-    }
-
-    fn resolve_python_request(
-        &mut self,
-        request: crate::worker_protocol::PythonResolveRequest,
-        resolve_python: &mut impl FnMut(
-            crate::worker_protocol::PythonResolveRequest,
-        ) -> Result<crate::resolver::ManagedPython, String>,
-    ) -> Result<Option<crate::resolver::ManagedPython>, String> {
-        match resolve_python(request) {
-            Ok(managed) => {
-                let python = managed.python().to_string_lossy().into_owned();
-                self.writer
-                    .send(&ServerMessage::PythonResolved { python })
-                    .map_err(|error| format!("worker sideband write failed: {error}"))?;
-                Ok(Some(managed))
-            }
-            Err(message) => {
-                self.writer
-                    .send(&ServerMessage::PythonResolutionFailed { message })
-                    .map_err(|error| format!("worker sideband write failed: {error}"))?;
-                Ok(None)
-            }
-        }
-    }
-
-    fn receive(&mut self) -> Result<WorkerMessage, String> {
-        self.reader
-            .receive()
-            .map_err(|error| format!("worker sideband read failed: {error}"))
+    pub(super) fn snapshot(
+        &self,
+        output: &super::OutputTape,
+    ) -> Result<super::WorkerSnapshot, String> {
+        self.activity.snapshot(output)
     }
 
     pub(super) fn write_stdin(&self, stdin: String) -> Result<(), String> {
@@ -434,6 +280,14 @@ impl Worker {
             Err(error) => format!("{message}; additionally failed to stop the worker: {error}"),
         }
     }
+}
+
+fn receive_operation(
+    receiver: mpsc::Receiver<Result<OperationResult, String>>,
+) -> Result<OperationResult, String> {
+    receiver
+        .recv()
+        .map_err(|_| "worker sideband dispatcher stopped".to_string())?
 }
 
 fn start_output_reader(
@@ -638,17 +492,27 @@ impl WorkerShutdownHandle {
 }
 
 impl WorkerProcess {
+    fn attach_sideband(&mut self, sideband: thread::JoinHandle<()>) {
+        self.threads
+            .as_mut()
+            .expect("worker threads should still be active")
+            .sideband = Some(sideband);
+    }
+
     fn finish_threads(&mut self) -> Result<(), String> {
         let Some(threads) = self.threads.take() else {
             return Ok(());
         };
+        let sideband = threads.sideband.map_or(Ok(()), |thread| {
+            join_worker_thread(thread, "sideband reader")
+        });
         let stdin = threads.stdin.cancel();
         let stdout = threads.stdout.cancel();
         let stderr = threads.stderr.cancel();
         let stdin = join_worker_thread(stdin, "stdin writer");
         let stdout = join_worker_thread(stdout, "stdout reader");
         let stderr = join_worker_thread(stderr, "stderr reader");
-        stdin.and(stdout).and(stderr)
+        sideband.and(stdin).and(stdout).and(stderr)
     }
 }
 

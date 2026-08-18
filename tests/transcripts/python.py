@@ -7,6 +7,7 @@ import socket
 import subprocess
 import tempfile
 import threading
+import time
 from pathlib import Path
 
 from _support import (
@@ -485,6 +486,60 @@ def test_prepares_after_idle_python_resolution(binary: Path) -> Transcript:
     client.send(r="reticulate::py_require()$packages")
     assert "idle Python ready\n" in last_tool_text(client)
     assert '"py-yaml12"' in last_tool_text(client)
+    return client._finish()
+
+
+def test_retains_idle_python_activation_during_continuous_collection(
+    binary: Path,
+) -> Transcript:
+    client = McpClient(binary, ("serve",))
+    client._initialize_and_list_tools()
+    client.session(action="prepare", requirements={"r": ["later"]})
+    client.send(r="invisible(reticulate::py_config())")
+    assert last_tool_text(client) == "[done]"
+
+    # fmt: r
+    r = code(r"""
+        callback_gate <- tempfile("mcp-console-callback-gate-")
+        callback_checkpoint <- tempfile("mcp-console-callback-checkpoint-")
+        callback_complete <- tempfile("mcp-console-callback-complete-")
+        run_callback <- function() {
+          if (!file.exists(callback_gate)) {
+            later::later(run_callback, delay = 0.01)
+            return(invisible(NULL))
+          }
+          stopifnot(file.create(callback_checkpoint))
+          reticulate::py_require("py-yaml12")
+          cat("idle Python activated\n")
+          stopifnot(file.create(callback_complete))
+        }
+        later::later(run_callback, delay = 0.01)
+        cat(callback_gate, callback_checkpoint, callback_complete, sep = "\n")
+        """)
+    client.send(r=r)
+    (callback_complete,) = release_worker_callback_gate(
+        client,
+        "idle Python activation",
+        ("complete",),
+    )
+    deadline = time.monotonic() + 30
+    while not callback_complete.exists():
+        assert client.process.poll() is None, (
+            "mcp-console stopped before idle Python activation completed"
+        )
+        if time.monotonic() >= deadline:
+            raise AssertionError("idle Python activation did not complete")
+        time.sleep(0.01)
+    client.send()
+    output = last_tool_text(client)
+    assert output == "idle Python activated\n\n[idle]", repr(output)
+
+    client.session(action="restart")
+    assert last_tool_text(client) == (
+        "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
+    )
+    client.send(python="import yaml12; yaml12.__name__")
+    assert last_tool_text(client) == "'yaml12'\n"
     return client._finish()
 
 
