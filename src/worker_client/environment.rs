@@ -334,6 +334,7 @@ impl Client {
             let result = running.prepare_python(
                 python_packages,
                 |request| self.resolve_runtime_python(generation.clone(), request),
+                |request| self.resolve_runtime_python_version(generation.clone(), request),
                 |requirements, candidates| {
                     self.activate_runtime_python(generation.clone(), requirements, candidates)
                 },
@@ -372,7 +373,14 @@ impl Client {
             }
         }
         if let Some(managed_r) = managed_r.as_ref() {
-            match running.prepare_r(managed_r.library()) {
+            match running.prepare_r(
+                managed_r.library(),
+                |request| self.resolve_runtime_python(generation.clone(), request),
+                |request| self.resolve_runtime_python_version(generation.clone(), request),
+                |requirements, candidates| {
+                    self.activate_runtime_python(generation.clone(), requirements, candidates)
+                },
+            ) {
                 Ok(Ok(())) => {}
                 Ok(Err(error)) => {
                     self.require_restart_for_requirement_changes(generation)?;

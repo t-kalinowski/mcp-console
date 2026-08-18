@@ -272,11 +272,14 @@ impl ConsoleServer {
 }
 
 fn response_to_tool_result(
-    response: crate::worker_client::Response,
+    mut response: crate::worker_client::Response,
     call: &crate::transcript::Call,
     transcript: &crate::transcript::Transcript,
     delivery: &crate::server_transport::ResponseDeliveryCall,
 ) -> CallToolResult {
+    if let Err(error) = response.persist_images(transcript, call.id()) {
+        transcript.disable(error);
+    }
     let (content, is_error, response_delivery) = response.into_parts();
     let mut result_images = Vec::new();
     let content = content

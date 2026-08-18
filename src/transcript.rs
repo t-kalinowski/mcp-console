@@ -92,9 +92,7 @@ impl Transcript {
         data: &str,
         mime_type: &str,
     ) -> Result<Option<Artifact>, String> {
-        let bytes = base64::engine::general_purpose::STANDARD
-            .decode(data)
-            .map_err(|error| format!("worker returned invalid base64 image data: {error}"))?;
+        let bytes = decode_image_data(data)?;
         let Some(call_id) = call_id else {
             return Ok(None);
         };
@@ -153,6 +151,16 @@ impl Transcript {
             }
         }
     }
+}
+
+pub(crate) fn validate_image_data(data: &str) -> Result<(), String> {
+    decode_image_data(data).map(drop)
+}
+
+fn decode_image_data(data: &str) -> Result<Vec<u8>, String> {
+    base64::engine::general_purpose::STANDARD
+        .decode(data)
+        .map_err(|error| format!("worker returned invalid base64 image data: {error}"))
 }
 
 impl TranscriptState {
