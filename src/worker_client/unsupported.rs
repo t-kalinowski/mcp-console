@@ -25,6 +25,16 @@ impl Worker {
     pub(super) fn prepare_r(
         &mut self,
         _library: &std::path::Path,
+        _resolve_python: impl FnMut(
+            crate::worker_protocol::PythonResolveRequest,
+        ) -> Result<crate::resolver::ManagedPython, String>,
+        _resolve_python_version: impl FnMut(
+            crate::worker_protocol::PythonVersionResolveRequest,
+        ) -> Result<String, String>,
+        _activate_python: impl FnMut(
+            crate::worker_protocol::PythonRequirementManifest,
+            &mut Vec<crate::resolver::ManagedPython>,
+        ) -> Result<(), String>,
     ) -> Result<Result<(), String>, String> {
         unreachable!("unsupported workers cannot start")
     }
@@ -35,6 +45,9 @@ impl Worker {
         _resolve_python: impl FnMut(
             crate::worker_protocol::PythonResolveRequest,
         ) -> Result<crate::resolver::ManagedPython, String>,
+        _resolve_python_version: impl FnMut(
+            crate::worker_protocol::PythonVersionResolveRequest,
+        ) -> Result<String, String>,
         _activate_python: impl FnMut(
             crate::worker_protocol::PythonRequirementManifest,
             &mut Vec<crate::resolver::ManagedPython>,

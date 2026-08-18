@@ -36,6 +36,12 @@ def send(stream: TextIO, message: dict[str, Any]) -> None:
     stream.flush()
 
 
+def send_batch(stream: TextIO, messages: list[dict[str, Any]]) -> None:
+    for message in messages:
+        stream.write(json.dumps(message, separators=(",", ":")) + "\n")
+    stream.flush()
+
+
 def send_output(
     stream: TextIO,
     data: str,
@@ -129,6 +135,8 @@ def main() -> None:
     send(writer, {"kind": "ready"})
     prepared_r_library: str | None = None
     fail_next_r_preparation = False
+    emit_output_before_r_preparation_failure = False
+    queued_message: dict[str, Any] | None = None
 
     if os.environ.get("ZOD_BLOCK_SIDEBAND_WRITE") == "1":
         reader.read(1)
@@ -136,8 +144,15 @@ def main() -> None:
         while True:
             time.sleep(60)
 
-    for line in reader:
-        message = json.loads(line)
+    while True:
+        if queued_message is None:
+            line = reader.readline()
+            if line == "":
+                return
+            message = json.loads(line)
+        else:
+            message = queued_message
+            queued_message = None
         message_kind = message["kind"]
         if message_kind == "shutdown":
             return
@@ -146,6 +161,17 @@ def main() -> None:
             assert set(message) == {"kind", "library"}
             if fail_next_r_preparation:
                 fail_next_r_preparation = False
+                if emit_output_before_r_preparation_failure:
+                    emit_output_before_r_preparation_failure = False
+                    send_output(writer, "before failed preparation\n")
+                    send(
+                        writer,
+                        {
+                            "kind": "image",
+                            "data": PNG_1X1,
+                            "mime_type": "image/png",
+                        },
+                    )
                 send(
                     writer,
                     {
@@ -312,6 +338,57 @@ def main() -> None:
             send(writer, {"kind": "completed"})
             continue
 
+        if source == "request input while idle":
+            send_batch(
+                writer,
+                [
+                    {"kind": "completed"},
+                    {"kind": "input_requested", "prompt": "idle> "},
+                ],
+            )
+            try:
+                value = input()
+            except EOFError:
+                return
+            assert value == "continue"
+            send_batch(
+                writer,
+                [{"kind": "input_received"}],
+            )
+            continue
+
+        if source == "resolve python while idle":
+            send_batch(
+                writer,
+                [
+                    {"kind": "completed"},
+                    {
+                        "kind": "resolve_python_version",
+                        "request": {"constraints": [">=3.11"], "environment": {}},
+                    },
+                ],
+            )
+            response = json.loads(reader.readline())
+            if response["kind"] != "python_version_resolution_failed":
+                queued_message = response
+                response = json.loads(reader.readline())
+            assert response["kind"] == "python_version_resolution_failed", response
+            requirements = {"packages": ["numpy", "pandas", "idle-package"]}
+            send(
+                writer,
+                {
+                    "kind": "resolve_python",
+                    "request": {
+                        "requirements": requirements,
+                        "retained_requirements": requirements,
+                        "environment": {},
+                    },
+                },
+            )
+            response = json.loads(reader.readline())
+            assert response["kind"] == "python_resolution_failed", response
+            continue
+
         if source == "report process group":
             send_output(writer, f"zod process group: {os.getpgrp()}\n")
             send(writer, {"kind": "completed"})
@@ -342,6 +419,12 @@ def main() -> None:
 
         if source == "fail next r preparation":
             fail_next_r_preparation = True
+            send(writer, {"kind": "completed"})
+            continue
+
+        if source == "fail next r preparation after output":
+            fail_next_r_preparation = True
+            emit_output_before_r_preparation_failure = True
             send(writer, {"kind": "completed"})
             continue
 

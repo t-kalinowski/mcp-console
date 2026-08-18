@@ -47,7 +47,7 @@ result:
 ---
 id: 7
 send:
-  r: fail next r preparation
+  r: fail next r preparation after output
 result:
   content:
     - type: text
@@ -63,9 +63,15 @@ session:
 result:
   content:
     - type: text
-      text: >-
-        zod rejected R preparation; further requirement changes are unavailable
-        until session restart
+      text: |
+        before failed preparation
+    - type: image
+      data: iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=
+      mimeType: image/png
+    - type: text
+      text: |-
+
+        zod rejected R preparation; further requirement changes are unavailable until session restart
   isError: true
 ---
 id: 9

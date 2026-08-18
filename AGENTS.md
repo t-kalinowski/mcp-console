@@ -26,7 +26,9 @@ On Unix, newly created record directories use mode `0700`, and journal and artif
 It appends schema-versioned `session_started`, `tool_call`, `artifact_created`, and `tool_result` records for ordinary, non-task `send` and `session` calls to `internal/events.jsonl`.
 Tool records preserve timestamps, MCP request IDs, normalized parsed call parameters, final results or errors, and content-block order.
 `tool_result` records server assembly, not delivery; cancellation or disconnection may suppress the response.
-Image blocks remain in MCP results and are also decoded byte-for-byte under the run's `artifacts/` directory as soon as the worker publishes them, including when the evaluation is never polled again; the journal replaces their base64 data with relative paths.
+Image blocks received during a `send` operation remain in MCP results and are also decoded byte-for-byte under the run's `artifacts/` directory immediately, including when the evaluation is never polled again; the journal replaces their base64 data with relative paths.
+A background image first received during live requirement preparation is validated and queued.
+It is persisted when a response drains and assembles that pending output, including the current failed preparation response, a later `send`, or a restart response.
 Journal writes are flushed before a tool begins and after its result is assembled.
 If the run record cannot be created or a later recording write fails, the server disables recording, emits one diagnostic to standard error, and continues serving console calls.
 An existing journal may therefore end with the last successfully flushed event.
@@ -48,6 +50,10 @@ Worker `image` frames carry base64 data and a MIME type.
 Worker `console_output` and `console_diagnostic` frames carry ordinary and diagnostic console text.
 The server retains console channels and direct fd 1/2 identity until MCP projection.
 The server preserves sideband text and image order as MCP content blocks, coalesces adjacent text, and does not add `[done]` when an image is the only output.
+Explicit operation readers accept leading background console, image, input, Python-resolution, Python-version-selection, and Python-activation frames after sending their command.
+A worker whose background callback is waiting for a nested resolver reply queues the unrelated command, finishes the callback after the reply arrives, and then processes that command.
+The explicit operation's ordinary terminal includes the preceding background activity.
+An input request joins an evaluation's ordinary stdin flow, but fails a noninteractive requirement-preparation operation instead of leaving it blocked.
 The implemented `session` surface accepts `action = "prepare"` with one or more R or Python requirement strings or DuckDB extension names, `action = "interrupt"` without requirements, or `action = "restart"` with optional R, Python, and DuckDB requirements for the implicit session.
 Interrupt requests `SIGINT` for an active host resolver process group, or otherwise sends it to the live worker, and returns `[interrupt sent]` after the resolver accepts the request or the worker signal succeeds, without waiting for the resolver or evaluation to finish.
 It does not start a process, and a worker signal is not assigned to a cell.

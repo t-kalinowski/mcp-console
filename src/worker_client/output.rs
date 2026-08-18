@@ -139,6 +139,27 @@ impl SendFailure {
 }
 
 impl Response {
+    pub(crate) fn persist_images(
+        &mut self,
+        transcript: &crate::transcript::Transcript,
+        call_id: Option<u64>,
+    ) -> Result<(), String> {
+        for content in &mut self.content {
+            let Content::Image {
+                data,
+                mime_type,
+                artifact,
+            } = content
+            else {
+                continue;
+            };
+            if artifact.is_none() {
+                *artifact = transcript.persist_image(call_id, data, mime_type)?;
+            }
+        }
+        Ok(())
+    }
+
     /// Consumes the response for the MCP adapter.
     pub(crate) fn into_parts(mut self) -> (Vec<Content>, bool, Option<ResponseDelivery>) {
         let content = std::mem::take(&mut self.content);
@@ -235,6 +256,11 @@ impl Response {
 
     pub(super) fn push_server_failure(&mut self, message: impl Into<String>) {
         self.push_notice(message);
+        self.mark_error();
+    }
+
+    pub(super) fn push_tool_error(&mut self, message: impl Into<String>) {
+        self.push_line(message);
         self.mark_error();
     }
 

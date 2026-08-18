@@ -297,6 +297,12 @@ Only one request may be outstanding: a second request, a receipt without a reque
 `completed` ends the sideband evaluation.
 It carries no managed-Python state.
 
+The server sends an explicit evaluation or live-preparation command without first probing the worker sideband.
+Its operation reader accepts console, image, input, Python-resolution, Python-version-resolution, and Python-activation frames that preceding background work may already have published.
+A worker that is waiting for a nested resolver reply must queue an unrelated command, finish that callback after the reply arrives, and then process the command.
+The explicit operation's ordinary terminal therefore also fences the preceding background work.
+Background input joins an evaluation's normal input flow, but fails a noninteractive live preparation instead of leaving it blocked.
+
 An explicit live R preparation has this shape after the server resolves the complete R requirement set:
 
 ```text
@@ -461,17 +467,17 @@ New code is rejected while an evaluation or its uncollected result is active.
 | idle | server → worker `prepare_r` | preparing R |
 | idle | server → worker `prepare_python` | preparing Python |
 | any phase with an active resolver or registered live worker | MCP `session` interrupt | unchanged; request `SIGINT` outside sideband |
-| evaluating | worker → server `output` | evaluating |
-| evaluating | worker → server `image` | evaluating |
+| evaluating or preparing R or Python | worker → server `output` or `image` | unchanged |
 | evaluating | worker → server `input_requested` | append request record; evaluating, input provisional |
 | evaluating, input provisional | worker → server `input_received` | retain request record; evaluating |
-| evaluating or preparing Python | worker → server `resolve_python` | host resolving; worker waiting |
+| preparing R or Python | worker → server `input_requested` | append request record; fail preparation and stop worker |
+| evaluating or preparing R or Python | worker → server `resolve_python` | host resolving; worker waiting |
 | host resolving | server → worker `python_resolved` | prior operation; retain candidate |
 | host resolving | server → worker `python_resolution_failed` | prior operation; no activation |
-| evaluating or preparing Python | worker → server `python_activated` | retain matching environment; prior operation |
-| evaluating | worker → server `resolve_python_version` | host selecting version; worker waiting |
-| host selecting version | server → worker `python_version_resolved` | evaluating; no candidate created |
-| host selecting version | server → worker `python_version_resolution_failed` | evaluating; retained Python state unchanged |
+| evaluating or preparing R or Python | worker → server `python_activated` | retain matching environment; prior operation |
+| evaluating or preparing R or Python | worker → server `resolve_python_version` | host selecting version; worker waiting |
+| host selecting version | server → worker `python_version_resolved` | prior operation; no candidate created |
+| host selecting version | server → worker `python_version_resolution_failed` | prior operation; retained Python state unchanged |
 | evaluating, with or without input reported | MCP stdin submission | evaluating |
 | evaluating, no provisional input | worker → server `completed` | idle |
 | preparing R | worker → server `r_prepared` | validate library path, then idle |
