@@ -6,7 +6,7 @@ use std::thread;
 use std::time::Instant;
 
 use super::TerminalCommit;
-use super::activity::{Activity, IdleSynchronization, OperationResult};
+use super::activity::{Activity, OperationResult};
 use crate::worker_protocol::{ServerMessage, WorkerMessage};
 
 /// Spawns workers through the platform's runtime boundary.
@@ -248,16 +248,11 @@ impl Worker {
         cell: crate::cell::Cell,
         evaluation: Arc<super::Evaluation>,
     ) -> Result<TerminalCommit<super::output::OutputCheckpoint>, String> {
-        let (result, synchronization) = self.activity.begin_cell(evaluation.clone())?;
+        let result = self.activity.begin_cell(evaluation.clone())?;
         let crate::cell::Cell { language, source } = cell;
         if let Err(error) = self
             .writer
             .send(&ServerMessage::Evaluate { language, source })
-            .and_then(|()| {
-                self.writer.send(&ServerMessage::Synchronize {
-                    token: synchronization,
-                })
-            })
         {
             let error = format!("worker sideband write failed: {error}");
             self.activity.fail(error.clone());
@@ -273,12 +268,15 @@ impl Worker {
         })
     }
 
-    pub(super) fn write_stdin(&self, stdin: String) -> Result<(), String> {
-        self.stdin.send(stdin.into_bytes())
+    pub(super) fn snapshot(
+        &self,
+        output: &super::OutputTape,
+    ) -> Result<super::WorkerSnapshot, String> {
+        self.activity.snapshot(output)
     }
 
-    pub(super) fn synchronize(&self) -> Result<IdleSynchronization, String> {
-        self.activity.synchronize(&self.writer)
+    pub(super) fn write_stdin(&self, stdin: String) -> Result<(), String> {
+        self.stdin.send(stdin.into_bytes())
     }
 
     pub(super) fn shutdown(&mut self, deadline: Instant) -> Result<(), String> {
@@ -582,9 +580,11 @@ impl WorkerIoThread {
 
 impl WorkerCancellation {
     fn cancel(&self) {
-        if let Ok(mut cancel) = self.0.lock() {
-            drop(cancel.take());
-        }
+        let mut cancel = match self.0.lock() {
+            Ok(cancel) => cancel,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        drop(cancel.take());
     }
 }
 

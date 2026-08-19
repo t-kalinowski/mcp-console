@@ -37,8 +37,7 @@ result:
   isError: false
 ---
 id: 5
-send:
-  timeout_ms: 100
+send: {}
 result:
   content:
     - type: text
@@ -51,14 +50,25 @@ id: 6
 send:
   stdin: |
     yes
-  timeout_ms: 3000
 result:
   content:
     - type: text
-      text: "\n[idle]"
+      text: |-
+
+        [stdin needed]
   isError: false
 ---
 id: 7
+send: {}
+result:
+  content:
+    - type: text
+      text: |-
+
+        [idle]
+  isError: false
+---
+id: 8
 send:
   r: collected_answer
 result:

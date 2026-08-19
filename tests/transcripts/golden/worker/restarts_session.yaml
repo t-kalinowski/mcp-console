@@ -9,10 +9,6 @@ server:
     restart_marker <- "old generation"
     cat("before restart\n")
 ---
-server:
-  kind: synchronize
-  token: 1
----
 worker:
   kind: console_output
   data: |
@@ -20,10 +16,6 @@ worker:
 ---
 worker:
   kind: completed
----
-worker:
-  kind: synchronized
-  token: 1
 ---
 server:
   kind: shutdown
@@ -44,10 +36,6 @@ server:
     stopifnot(!exists("restart_marker", inherits = FALSE))
     cat("after restart\n")
 ---
-server:
-  kind: synchronize
-  token: 1
----
 worker:
   kind: console_output
   data: |
@@ -55,8 +43,4 @@ worker:
 ---
 worker:
   kind: completed
----
-worker:
-  kind: synchronized
-  token: 1
 ...

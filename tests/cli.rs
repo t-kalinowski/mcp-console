@@ -55,7 +55,7 @@ impl Drop for KillOnDrop {
 #[test]
 fn stdio_console_accepts_long_multibyte_source_lines() {
     let mut client = McpClient::start(&["serve"]);
-    let long_value = "é".repeat(3000);
+    let long_value = "é".repeat(100_000);
     let long_line = format!(
         r#"
 long_line_value <- "{long_value}"
@@ -64,7 +64,7 @@ nchar(long_line_value)
     );
     assert_eq!(
         client.call_console(2, json!({"r": long_line})),
-        "[1] 3000\n"
+        "[1] 100000\n"
     );
 }
 
@@ -657,20 +657,16 @@ cat("\n")
 fn stdio_console_shutdown_is_bounded_while_r_waits_for_input() {
     let mut client = McpClient::start(&["serve"]);
     assert_eq!(
-        client.call_console(2, json!({"r": "invisible(NULL)"})),
-        "[done]"
-    );
-    assert_eq!(
         client.call_console(
-            3,
+            2,
             json!({"r": r#"
 readline("value> ")
 Sys.sleep(60)
-"#, "timeout_ms": 100}),
+"#}),
         ),
         "[input requested: \"value> \"]\n[stdin needed]"
     );
-    client.send_console(4, json!({"stdin": "resume\n"}));
+    client.send_console(3, json!({"stdin": "resume\n"}));
 
     let elapsed = client.close_within(Duration::from_secs(2));
     assert!(

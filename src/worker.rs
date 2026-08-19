@@ -189,9 +189,6 @@ mod platform {
                     }
                     self.writer.send(&WorkerMessage::Completed)?;
                 }
-                ServerMessage::Synchronize { token } => {
-                    self.writer.send(&WorkerMessage::Synchronized { token })?;
-                }
                 // Keep worker-owned preparation state transitions atomic. Any
                 // nested host resolver registers its own interrupt target.
                 ServerMessage::PreparePython { packages } => {
@@ -315,9 +312,9 @@ mod platform {
                 WORKER_SHUTDOWN.store(true, Ordering::SeqCst);
                 Err("worker is shutting down".to_string())
             }
-            ServerMessage::Evaluate { .. } | ServerMessage::Synchronize { .. } => {
-                unreachable!("unrelated commands are queued by receive_resolver_message")
-            }
+            ServerMessage::Evaluate { .. } => Err(infrastructure_failure(
+                "worker received an evaluation while resolving Python".to_string(),
+            )),
             ServerMessage::PreparePython { .. } => Err(infrastructure_failure(
                 "worker received Python preparation while resolving Python".to_string(),
             )),
@@ -344,9 +341,9 @@ mod platform {
                 WORKER_SHUTDOWN.store(true, Ordering::SeqCst);
                 Err("worker is shutting down".to_string())
             }
-            ServerMessage::Evaluate { .. } | ServerMessage::Synchronize { .. } => {
-                unreachable!("unrelated commands are queued by receive_resolver_message")
-            }
+            ServerMessage::Evaluate { .. } => Err(infrastructure_failure(
+                "worker received an evaluation while resolving a Python version".to_string(),
+            )),
             ServerMessage::PreparePython { .. } => Err(infrastructure_failure(
                 "worker received Python preparation while resolving a Python version".to_string(),
             )),
@@ -367,7 +364,6 @@ mod platform {
             let message = receive_sideband_message()?;
             match message {
                 ServerMessage::Evaluate { .. }
-                | ServerMessage::Synchronize { .. }
                 | ServerMessage::PreparePython { .. }
                 | ServerMessage::PrepareR { .. } => queue_server_message(message)?,
                 _ => return Ok(message),

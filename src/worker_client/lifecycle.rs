@@ -39,13 +39,16 @@ impl LifecycleControl {
         }
     }
 
-    fn start_restart(&mut self, grace: Duration) -> (ProcessStopHandles, Instant) {
+    fn start_restart(
+        &mut self,
+        grace: Duration,
+    ) -> (ProcessStopHandles, Instant, WorkerGeneration) {
         let deadline = Instant::now() + grace;
         let stop_handles = self.processes.clone();
         self.state = LifecycleState::Restarting { deadline };
         self.generation = WorkerGeneration::new();
         self.processes.resolver = None;
-        (stop_handles, deadline)
+        (stop_handles, deadline, self.generation.clone())
     }
 }
 
@@ -77,6 +80,7 @@ pub(super) enum FailedWorkerStop {
 struct RestartContext {
     processes: ProcessStopHandles,
     deadline: Instant,
+    generation: WorkerGeneration,
     evaluation: Option<RestartReservation>,
 }
 
@@ -170,9 +174,9 @@ impl Client {
             self.0.output.push_failure(SendFailure::from(error));
             return Ok(self.0.output.take());
         }
-        match self.replace_worker(restart.evaluation) {
+        match self.replace_worker(restart.evaluation, restart.generation.clone()) {
             Ok(response) => {
-                self.finish_restart()?;
+                self.finish_restart(&restart.generation)?;
                 Ok(response)
             }
             Err(error) => {
@@ -302,10 +306,11 @@ impl Client {
         environment.python = managed_python;
         environment.r = managed_r;
         environment.duckdb_extensions = duckdb_extensions;
-        let (processes, deadline) = lifecycle.start_restart(grace);
+        let (processes, deadline, generation) = lifecycle.start_restart(grace);
         Ok(RestartContext {
             processes,
             deadline,
+            generation,
             evaluation,
         })
     }
@@ -315,8 +320,11 @@ impl Client {
     /// Acquiring the worker waits for its sideband operation to end, and
     /// `finish_retirement()` joins its remaining I/O tasks. No old-worker output
     /// can be published after the stopped notice below.
-    fn replace_worker(&self, evaluation: Option<RestartReservation>) -> Result<Response, String> {
-        let generation = self.worker_generation()?;
+    fn replace_worker(
+        &self,
+        evaluation: Option<RestartReservation>,
+        generation: WorkerGeneration,
+    ) -> Result<Response, String> {
         let mut worker = self
             .0
             .worker
@@ -381,12 +389,13 @@ impl Client {
         self.ensure_restarting()?;
         response.push_notice_line(super::output::WORKER_STARTING_NOTICE);
 
+        let completion_generation = generation.clone();
         if let Err(message) = self.start_worker(
             &mut worker,
             generation,
             false,
             |stop_handle| self.register_restart_stop_handle(stop_handle),
-            || self.finish_restart(),
+            || self.finish_restart(&completion_generation),
         ) {
             let message = match self.clear_restart_stop_handle() {
                 Ok(()) => message,
@@ -414,14 +423,6 @@ impl Client {
             LifecycleState::Restarting { .. } => Err("worker is restarting".to_string()),
             LifecycleState::ShuttingDown { .. } => Err("worker is shutting down".to_string()),
         }
-    }
-
-    fn worker_generation(&self) -> Result<WorkerGeneration, String> {
-        self.0
-            .lifecycle
-            .lock()
-            .map_err(|_| "worker lifecycle lock poisoned".to_string())
-            .map(|lifecycle| lifecycle.generation.clone())
     }
 
     pub(super) fn generation_status(
@@ -489,20 +490,24 @@ impl Client {
             .take()
             .map(|active| active.evaluation.reserve_for_restart())
             .transpose()?;
-        let (processes, deadline) = lifecycle.start_restart(grace);
+        let (processes, deadline, generation) = lifecycle.start_restart(grace);
         Ok(RestartContext {
             processes,
             deadline,
+            generation,
             evaluation,
         })
     }
 
-    fn finish_restart(&self) -> Result<(), String> {
+    fn finish_restart(&self, expected: &WorkerGeneration) -> Result<(), String> {
         let mut lifecycle = self
             .0
             .lifecycle
             .lock()
             .map_err(|_| "worker lifecycle lock poisoned".to_string())?;
+        if !lifecycle.generation.is(expected) {
+            return Ok(());
+        }
         match lifecycle.state {
             LifecycleState::Restarting { .. } => {
                 lifecycle.state = LifecycleState::Ready;

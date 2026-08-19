@@ -3,19 +3,9 @@
 ---
 id: 3
 send:
-  r: invisible(NULL)
-result:
-  content:
-    - type: text
-      text: "[done]"
-  isError: false
----
-id: 4
-send:
   r: |
     restart_marker <- TRUE
     readline("restart> ")
-  timeout_ms: 100
 result:
   content:
     - type: text
@@ -24,7 +14,7 @@ result:
         [stdin needed]
   isError: false
 ---
-id: 5
+id: 4
 session:
   action: restart
 result:
@@ -38,7 +28,7 @@ result:
         [idle]
   isError: false
 ---
-id: 6
+id: 5
 send:
   r: exists("restart_marker", inherits = FALSE)
 result:

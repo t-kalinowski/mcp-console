@@ -9,10 +9,6 @@ server:
     crash_marker <- "old generation"
     cat("before crash\n")
 ---
-server:
-  kind: synchronize
-  token: 1
----
 worker:
   kind: console_output
   data: |
@@ -21,10 +17,6 @@ worker:
 worker:
   kind: completed
 ---
-worker:
-  kind: synchronized
-  token: 1
----
 server:
   kind: evaluate
   language: python
@@ -32,10 +24,6 @@ server:
     import ctypes
 
     ctypes.string_at(0)
----
-server:
-  kind: synchronize
-  token: 2
 ---
 worker_sideband:
   closed: true
@@ -50,10 +38,6 @@ server:
     stopifnot(!exists("crash_marker", inherits = FALSE))
     cat("after crash\n")
 ---
-server:
-  kind: synchronize
-  token: 1
----
 worker:
   kind: console_output
   data: |
@@ -61,8 +45,4 @@ worker:
 ---
 worker:
   kind: completed
----
-worker:
-  kind: synchronized
-  token: 1
 ...

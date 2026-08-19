@@ -12,7 +12,6 @@ pub(crate) const DEFAULT_PYTHON_PACKAGES: &[&str] = &["numpy", "pandas"];
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum ServerMessage {
     Evaluate { language: Language, source: String },
-    Synchronize { token: u64 },
     PrepareR { library: String },
     PreparePython { packages: Vec<String> },
     PythonResolved { python: String },
@@ -87,9 +86,6 @@ pub(crate) enum ConsoleChannel {
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum WorkerMessage {
     Ready,
-    Synchronized {
-        token: u64,
-    },
     ConsoleOutput {
         data: String,
     },

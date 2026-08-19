@@ -90,6 +90,17 @@ def wait_for_server_to_process_sideband(stream: TextIO) -> None:
     stream.flush()
 
 
+def send_padded_output(stream: TextIO, data: str) -> None:
+    frame = json.dumps(
+        {"kind": ConsoleKind.OUTPUT, "data": data},
+        separators=(",", ":"),
+    )
+    # The trailing JSON whitespace makes the frame exceed Darwin's pipe
+    # capacity without changing the decoded message.
+    stream.write(frame + (" " * (2 * 1024 * 1024)) + "\n")
+    stream.flush()
+
+
 def configure_startup(root: Path) -> bool:
     control_path = os.environ.get("ZOD_STARTUP_CONTROL")
     if control_path is None:
@@ -173,10 +184,6 @@ def main() -> None:
         message_kind = message["kind"]
         if message_kind == "shutdown":
             return
-        if message_kind == "synchronize":
-            assert set(message) == {"kind", "token"}
-            send(writer, {"kind": "synchronized", "token": message["token"]})
-            continue
 
         if message_kind == "prepare_r":
             assert set(message) == {"kind", "library"}
@@ -268,19 +275,19 @@ def main() -> None:
             send(writer, {"kind": "completed"})
             continue
 
-        if source == "start sideband descendant":
+        if source == "start background sideband":
             child = os.fork()
             if child == 0:
-                os.setsid()
                 reader.close()
                 for descriptor in (0, 1, 2):
                     os.close(descriptor)
-                while True:
-                    signal.pause()
-            (temporary / "zod-sideband-descendant-pid").write_text(
-                str(child),
-                encoding="utf-8",
-            )
+                release = temporary / "zod-release-background-sideband"
+                while not release.exists():
+                    time.sleep(0.01)
+                send_padded_output(writer, "zod background sideband\n")
+                (temporary / "zod-background-sideband-emitted").touch()
+                os._exit(0)
+            (temporary / "zod-background-sideband-started").touch()
             send(writer, {"kind": "completed"})
             continue
 
@@ -300,6 +307,24 @@ def main() -> None:
             writer.write('{"kind":"console_output"')
             writer.flush()
             os._exit(86)
+
+        if source == "complete before partial sideband descendant":
+            child = os.fork()
+            if child == 0:
+                os.setsid()
+                reader.close()
+                for descriptor in (0, 1, 2):
+                    os.close(descriptor)
+                while True:
+                    signal.pause()
+            (temporary / "zod-sideband-descendant-pid").write_text(
+                str(child),
+                encoding="utf-8",
+            )
+            send(writer, {"kind": "completed"})
+            writer.write('{"kind":"console_output"')
+            writer.flush()
+            continue
 
         if source == "stall with detached stdin":
             child = os.fork()
@@ -347,8 +372,8 @@ def main() -> None:
             stdin = input()
             send(writer, {"kind": "input_received"})
             send_output(writer, f"zod stdin: {stdin}\n")
-            # Prove that the receipt has cleared the outstanding request before
-            # the client polls.
+            # Prove that the receipt has cleared the provisional request before
+            # the client polls, so the fixed grace cannot add another boundary.
             wait_for_server_to_process_sideband(writer)
             (temporary / "zod-input-received").touch()
             send(writer, {"kind": "completed"})
@@ -393,17 +418,13 @@ def main() -> None:
             continue
 
         if source == "request input while idle":
-            send(writer, {"kind": "completed"})
-            synchronization = json.loads(reader.readline())
-            assert synchronization["kind"] == "synchronize", synchronization
-            send(
+            send_batch(
                 writer,
-                {
-                    "kind": "synchronized",
-                    "token": synchronization["token"],
-                },
+                [
+                    {"kind": "completed"},
+                    {"kind": "input_requested", "prompt": "idle> "},
+                ],
             )
-            send(writer, {"kind": "input_requested", "prompt": "idle> "})
             try:
                 value = input()
             except EOFError:

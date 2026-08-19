@@ -13,10 +13,6 @@ server:
       editor = Sys.which("true")
     )
 ---
-server:
-  kind: synchronize
-  token: 1
----
 worker:
   kind: console_output
   data: |
@@ -34,8 +30,4 @@ worker:
 ---
 worker:
   kind: completed
----
-worker:
-  kind: synchronized
-  token: 1
 ...

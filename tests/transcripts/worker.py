@@ -326,14 +326,10 @@ def test_drains_standard_streams_while_evaluating(binary: Path) -> Transcript:
     assert output.count("y") == size
 
     transcript = client._finish()
-    streams = [
-        event for event in transcript if set(event) == {"stdout", "stderr"}
-    ]
-    assert streams == [{"stdout": "x" * size, "stderr": "y" * size}]
-    assert transcript[-2] == {"worker": {"kind": "completed"}}
-    assert transcript[-1] == {"worker": {"kind": "synchronized", "token": 1}}
-    streams[0]["stdout"] = f"<{size} bytes>"
-    streams[0]["stderr"] = f"<{size} bytes>"
+    assert transcript[-2] == {"stdout": "x" * size, "stderr": "y" * size}
+    assert transcript[-1] == {"worker": {"kind": "completed"}}
+    transcript[-2]["stdout"] = f"<{size} bytes>"
+    transcript[-2]["stderr"] = f"<{size} bytes>"
     return transcript
 
 

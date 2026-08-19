@@ -39,7 +39,6 @@ result:
 id: 6
 send:
   r: request input
-  timeout_ms: 100
 result:
   content:
     - type: text
@@ -51,7 +50,6 @@ result:
 id: 7
 send:
   stdin: ""
-  timeout_ms: 100
 result:
   content:
     - type: text

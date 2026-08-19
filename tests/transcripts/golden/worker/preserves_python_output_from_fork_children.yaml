@@ -11,16 +11,8 @@ server:
     reticulate::use_python(python, required = TRUE)
     suppressWarnings(invisible(reticulate::py_run_string("fork_ready = True")))
 ---
-server:
-  kind: synchronize
-  token: 1
----
 worker:
   kind: completed
----
-worker:
-  kind: synchronized
-  token: 1
 ---
 server:
   kind: evaluate
@@ -42,10 +34,6 @@ server:
     parent_stdout = sys.stdout.write("parent stdout\n")
     parent_stderr = sys.stderr.write("parent stderr\n")
 ---
-server:
-  kind: synchronize
-  token: 2
----
 stdout: |
   fork child stdout
 stderr: |
@@ -63,8 +51,4 @@ worker:
 ---
 worker:
   kind: completed
----
-worker:
-  kind: synchronized
-  token: 2
 ...

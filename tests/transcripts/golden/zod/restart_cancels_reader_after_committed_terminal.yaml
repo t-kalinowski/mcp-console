@@ -3,7 +3,7 @@
 ---
 id: 3
 send:
-  r: start sideband descendant
+  r: complete before partial sideband descendant
 result:
   content:
     - type: text
