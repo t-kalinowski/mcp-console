@@ -455,6 +455,7 @@ def test_routes_input_to_idle_later_callback(
     release_worker_callback_gate(client, "collected input callback")
     client.send()
     assert last_tool_text(client) == ('[input requested: "later> "]\n[stdin needed]')
+    poll_start = len(client.transcript)
     client.send(stdin="yes\n")
     deadline = time.monotonic() + 3
     while last_tool_text(client) != "\n[idle]":
@@ -463,8 +464,14 @@ def test_routes_input_to_idle_later_callback(
             raise AssertionError("idle callback did not receive submitted stdin")
         time.sleep(0.01)
         client.send()
+    polls = client.transcript[poll_start:]
+    final_poll = polls[-1]
+    final_poll["id"] = polls[0]["id"]
+    final_poll["send"] = polls[0]["send"]
+    client.transcript[poll_start:] = [final_poll]
     client.send(r="collected_answer")
     assert last_tool_text(client) == '[1] "yes"\n'
+    client.transcript[-1]["id"] = final_poll["id"] + 1
     return client._finish()
 
 

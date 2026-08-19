@@ -101,7 +101,7 @@ def send_padded_output(stream: TextIO, data: str) -> None:
     stream.flush()
 
 
-def configure_startup(root: Path) -> bool:
+def configure_startup(root: Path, reader: TextIO, writer: TextIO) -> bool:
     control_path = os.environ.get("ZOD_STARTUP_CONTROL")
     if control_path is None:
         return False
@@ -112,6 +112,23 @@ def configure_startup(root: Path) -> bool:
     if mode == "fail with stderr":
         write_all(2, b"zod replacement startup failed\n")
         os._exit(86)
+    if mode == "block with detached sideband writer":
+        child = os.fork()
+        if child == 0:
+            os.setsid()
+            sideband_writer = os.dup(writer.fileno())
+            reader.close()
+            writer.close()
+            for descriptor in (0, 1, 2):
+                os.close(descriptor)
+            (root / "zod-detached-startup-sideband-pid").write_text(
+                str(os.getpid()),
+                encoding="utf-8",
+            )
+            while True:
+                signal.pause()
+            os.close(sideband_writer)
+        mode = "block"
     if mode in {"block", "block then ready with stdout"}:
         (root / "zod-replacement-waiting-ready").touch()
         release = Path(os.environ["ZOD_STARTUP_RELEASE"])
@@ -145,7 +162,7 @@ def main() -> None:
             str(os.getpgrp()),
             encoding="utf-8",
         )
-    startup_callback = configure_startup(temporary)
+    startup_callback = configure_startup(temporary, reader, writer)
     send(writer, {"kind": "ready"})
     if startup_callback:
         send(

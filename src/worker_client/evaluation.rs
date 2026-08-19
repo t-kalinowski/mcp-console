@@ -64,6 +64,7 @@ pub(super) struct RestartReservation {
     evaluation: Arc<Evaluation>,
     unfinished: bool,
     completion: Option<CompletionKind>,
+    completion_checkpoint: Option<OutputCheckpoint>,
     pub(super) waiting: bool,
 }
 
@@ -140,6 +141,7 @@ impl Evaluation {
             evaluation: self.clone(),
             unfinished,
             completion,
+            completion_checkpoint: completion.and(state.completion_checkpoint),
             waiting,
         })
     }
@@ -435,13 +437,23 @@ impl RestartReservation {
         self.unfinished
     }
 
-    pub(super) fn project_response(&self, response: Response) -> Response {
+    fn project_response(&self, response: Response) -> Response {
         match self.completion {
             Some(CompletionKind::Cell | CompletionKind::ReplacementFailed) => {
                 project_completed(response)
             }
             Some(CompletionKind::ReplacementReady) => project_replacement_ready(response),
             None => response,
+        }
+    }
+
+    pub(super) fn take_output(&self, output: &OutputTape) -> (Response, Response) {
+        match self.completion_checkpoint {
+            Some(checkpoint) => (
+                self.project_response(output.take_until(checkpoint)),
+                output.take(),
+            ),
+            None => (self.project_response(output.take()), Response::default()),
         }
     }
 

@@ -336,7 +336,10 @@ impl Client {
             *worker = WorkerState::Stopped;
         }
         let retired_worker = matches!(retirement, WorkerRetirement::Stopped);
-        let old_output = self.0.output.take();
+        let (old_output, post_completion_output) = evaluation.as_ref().map_or_else(
+            || (self.0.output.take(), Response::default()),
+            |evaluation| evaluation.take_output(&self.0.output),
+        );
         drop(worker);
 
         let mut response = Response::default();
@@ -347,7 +350,6 @@ impl Client {
             if unfinished {
                 interrupted_notice = Some(evaluation.active_stopped_notice());
             }
-            let old_output = evaluation.project_response(old_output);
             if evaluation.waiting {
                 let mut send_output = old_output;
                 if unfinished {
@@ -374,6 +376,7 @@ impl Client {
         {
             response.extend(output);
         }
+        response.extend_at_boundary(post_completion_output);
         if let Some(notice) = interrupted_notice {
             response.push_notice(notice);
         }

@@ -1,0 +1,29 @@
+---
+!same-as tests/transcripts/golden/server/initializes_and_lists_tools.yaml
+---
+id: 3
+send:
+  r: start background sideband
+  timeout_ms: 0
+result:
+  content:
+    - type: text
+      text: |-
+
+        [running]
+  isError: false
+---
+id: 4
+session:
+  action: restart
+result:
+  content:
+    - type: text
+      text: |-
+        [done]
+        zod background sideband
+        [worker stopped: in-memory state lost]
+        [starting new worker]
+        [idle]
+  isError: false
+...
