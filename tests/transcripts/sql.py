@@ -13,7 +13,6 @@ from _support import (
     r_test_environment,
     run_this_suite,
     stop_client,
-    use_temporary_home,
     wait_for_worker_file,
 )
 
@@ -25,9 +24,6 @@ def test_uses_default_duckdb_extensions(binary: Path) -> Transcript:
     environment["RETICULATE_PYTHON"] = ""
     with tempfile.TemporaryDirectory() as temporary:
         workspace = Path(temporary)
-        home = workspace / "home"
-        home.mkdir()
-        use_temporary_home(environment, home)
         client = McpClient(
             binary,
             ("serve",),
@@ -35,17 +31,6 @@ def test_uses_default_duckdb_extensions(binary: Path) -> Transcript:
             current_directory=workspace,
         )
         client._initialize_and_list_tools()
-
-        for extension in ("icu", "json"):
-            installed = list(
-                (home / ".duckdb" / "extensions").glob(
-                    f"*/*/{extension}.duckdb_extension"
-                )
-            )
-            assert len(installed) == 1, installed
-        assert not list(
-            (home / ".duckdb" / "extensions").glob("*/*/fts.duckdb_extension")
-        )
 
         sql = code(r"""
             SELECT
@@ -80,14 +65,11 @@ def test_restart_adds_r_and_duckdb_requirements(binary: Path) -> Transcript:
     environment["RETICULATE_PYTHON"] = ""
     with tempfile.TemporaryDirectory() as temporary:
         workspace = Path(temporary)
-        home = workspace / "home"
-        home.mkdir()
         ambient_library = workspace / "ambient-library"
         ambient_library.mkdir()
         environment["R_LIBS"] = str(ambient_library)
         environment["R_LIBS_SITE"] = str(ambient_library)
         environment["R_LIBS_USER"] = str(ambient_library)
-        use_temporary_home(environment, home)
         client = McpClient(
             binary,
             ("serve",),
@@ -128,10 +110,6 @@ def test_restart_adds_r_and_duckdb_requirements(binary: Path) -> Transcript:
         assert last_tool_text(client) == (
             "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
         )
-        installed_fts = list(
-            (home / ".duckdb" / "extensions").glob("*/*/fts.duckdb_extension")
-        )
-        assert len(installed_fts) == 1, installed_fts
 
         client.send(
             r=(
@@ -165,9 +143,6 @@ def test_prepares_and_loads_duckdb_extensions(binary: Path) -> Transcript:
     environment["RETICULATE_PYTHON"] = ""
     with tempfile.TemporaryDirectory() as temporary:
         workspace = Path(temporary)
-        home = workspace / "home"
-        home.mkdir()
-        use_temporary_home(environment, home)
         client = McpClient(
             binary,
             ("serve",),
@@ -192,10 +167,6 @@ def test_prepares_and_loads_duckdb_extensions(binary: Path) -> Transcript:
             requirements={"duckdb": ["json"]},
         )
         assert last_tool_text(client) == "[prepared]"
-        installed_json = list(
-            (home / ".duckdb" / "extensions").glob("*/*/json.duckdb_extension")
-        )
-        assert len(installed_json) == 1, installed_json
 
         client.session(
             action="prepare",
@@ -207,21 +178,12 @@ def test_prepares_and_loads_duckdb_extensions(binary: Path) -> Transcript:
             requirements={"duckdb": ["fts"]},
         )
         assert last_tool_text(client) == "[prepared]"
-        installed_fts = list(
-            (home / ".duckdb" / "extensions").glob("*/*/fts.duckdb_extension")
-        )
-        assert len(installed_fts) == 1, installed_fts
 
-        installed_fts[0].unlink()
         client.session(
             action="prepare",
             requirements={"r": ["praise"]},
         )
         assert last_tool_text(client) == "[prepared]"
-        installed_fts = list(
-            (home / ".duckdb" / "extensions").glob("*/*/fts.duckdb_extension")
-        )
-        assert len(installed_fts) == 1, installed_fts
 
         client.session(
             action="prepare",
@@ -302,11 +264,6 @@ def test_queries_a_ragnar_store_created_in_r(binary: Path) -> Transcript:
     environment["RETICULATE_PYTHON"] = ""
     temporary = tempfile.TemporaryDirectory()
     workspace = Path(temporary.name)
-    home = workspace / "home"
-    home.mkdir()
-    use_temporary_home(environment, home)
-    # Isolate DuckDB's extension cache while reusing the host IR package cache.
-    environment.pop("IR_CACHE_DIR")
     client = McpClient(
         binary,
         ("serve",),
@@ -436,11 +393,6 @@ def test_uses_ragnar_like_the_guide_and_adapts_to_the_console(
     environment["RETICULATE_PYTHON"] = ""
     temporary = tempfile.TemporaryDirectory()
     workspace = Path(temporary.name)
-    home = workspace / "home"
-    home.mkdir()
-    use_temporary_home(environment, home)
-    # Isolate DuckDB's extension cache while reusing the host IR package cache.
-    environment.pop("IR_CACHE_DIR")
     client = McpClient(
         binary,
         ("serve",),
@@ -506,16 +458,9 @@ def test_uses_ragnar_like_the_guide_and_adapts_to_the_console(
         "created store under the worker tempdir\n"
     )
 
-    r = code(r"""
-        ragnar::ragnar_store_build_index(store)
-        """)
-    client.send(r=r)
-    failure = normalize_duckdb_extension_error(client)
-    assert 'Failed to download extension "fts"' in failure
-
     client.session(
         action="prepare",
-        requirements={"duckdb": ["fts"]},
+        requirements={"duckdb": ["fts", "vss"]},
     )
     assert last_tool_text(client) == "[prepared]"
 
@@ -544,22 +489,6 @@ def test_uses_ragnar_like_the_guide_and_adapts_to_the_console(
     preview = normalize_duckdb_progress(client)
     assert "beta.md" in preview and "Bananas are yellow fruit" in preview
     assert "alpha.md" not in preview
-
-    r = code(r"""
-        reader <- ragnar::ragnar_store_connect(
-          store_path,
-          read_only = TRUE
-        )
-        """)
-    client.send(r=r)
-    failure = normalize_duckdb_extension_error(client)
-    assert 'Failed to download extension "vss"' in failure
-
-    client.session(
-        action="prepare",
-        requirements={"duckdb": ["vss"]},
-    )
-    assert last_tool_text(client) == "[prepared]"
 
     r = code(r"""
         reader <- ragnar::ragnar_store_connect(

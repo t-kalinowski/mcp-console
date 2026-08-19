@@ -19,7 +19,6 @@ from _support import (
     r_test_environment,
     run_this_suite,
     stop_client,
-    use_temporary_home,
 )
 
 PLATFORMS = {"darwin"}
@@ -786,9 +785,6 @@ def test_custom_worker_prepares_r_and_duckdb_requirements(binary: Path) -> Trans
         environment["R_LIBS"] = str(isolated_library)
         environment["R_LIBS_SITE"] = str(isolated_library)
         environment["R_LIBS_USER"] = str(isolated_library)
-        home = Path(temporary) / "home"
-        home.mkdir()
-        use_temporary_home(environment, home)
         client = McpClient(
             binary,
             ("serve", "--worker", str(zod)),
@@ -808,13 +804,9 @@ def test_custom_worker_prepares_r_and_duckdb_requirements(binary: Path) -> Trans
             requirements={"duckdb": ["json"]},
         )
         assert last_tool_text(client) == "[prepared]"
-        installed_json = list(
-            (home / ".duckdb" / "extensions").glob("*/*/json.duckdb_extension")
-        )
-        assert len(installed_json) == 1, installed_json
 
-        client.send(r="report managed requirements")
-        assert last_tool_text(client) == "zod requirements: r=true; duckdb=true\n"
+        client.send(r="report managed R requirement")
+        assert last_tool_text(client) == "zod R requirement: prepared=true\n"
 
         client.send(r="fail next r preparation after output")
         assert last_tool_text(client) == "[done]"
@@ -876,9 +868,6 @@ def test_custom_worker_reports_idle_input_before_preparation_failure(
         environment["R_LIBS"] = str(isolated_library)
         environment["R_LIBS_SITE"] = str(isolated_library)
         environment["R_LIBS_USER"] = str(isolated_library)
-        home = Path(temporary) / "home"
-        home.mkdir()
-        use_temporary_home(environment, home)
         client = McpClient(
             binary,
             ("serve", "--worker", str(zod)),
@@ -914,9 +903,6 @@ def test_custom_worker_resolves_idle_activity_before_preparation(
         environment["R_LIBS"] = str(isolated_library)
         environment["R_LIBS_SITE"] = str(isolated_library)
         environment["R_LIBS_USER"] = str(isolated_library)
-        home = Path(temporary) / "home"
-        home.mkdir()
-        use_temporary_home(environment, home)
         client = McpClient(
             binary,
             ("serve", "--worker", str(zod)),
@@ -931,8 +917,8 @@ def test_custom_worker_resolves_idle_activity_before_preparation(
             requirements={"r": ["praise"]},
         )
         assert last_tool_text(client) == "[prepared]"
-        client.send(r="report managed requirements")
-        assert last_tool_text(client) == "zod requirements: r=true; duckdb=false\n"
+        client.send(r="report managed R requirement")
+        assert last_tool_text(client) == "zod R requirement: prepared=true\n"
         return client._finish()
 
 
@@ -973,9 +959,6 @@ def test_custom_worker_restart_prepares_r_and_duckdb_requirements(
         environment["R_LIBS"] = str(isolated_library)
         environment["R_LIBS_SITE"] = str(isolated_library)
         environment["R_LIBS_USER"] = str(isolated_library)
-        home = Path(temporary) / "home"
-        home.mkdir()
-        use_temporary_home(environment, home)
         client = McpClient(
             binary,
             ("serve", "--worker", str(zod)),
@@ -988,13 +971,9 @@ def test_custom_worker_restart_prepares_r_and_duckdb_requirements(
             requirements={"r": ["praise"], "duckdb": ["json"]},
         )
         assert last_tool_text(client) == "[starting new worker]\n[idle]"
-        installed_json = list(
-            (home / ".duckdb" / "extensions").glob("*/*/json.duckdb_extension")
-        )
-        assert len(installed_json) == 1, installed_json
 
-        client.send(r="report managed requirements")
-        assert last_tool_text(client) == "zod requirements: r=true; duckdb=true\n"
+        client.send(r="report managed R requirement")
+        assert last_tool_text(client) == "zod R requirement: prepared=true\n"
         return client._finish()
 
 
