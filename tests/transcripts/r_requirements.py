@@ -3,7 +3,6 @@
 import os
 import shutil
 import tempfile
-import time
 from pathlib import Path
 
 from _support import (
@@ -222,38 +221,34 @@ def test_stops_live_preparation_for_idle_callback_input(binary: Path) -> Transcr
             later::later(run_callback, delay = 0.01)
             return(invisible(NULL))
           }
+          stopifnot(file.create(callback_checkpoint))
           reticulate::py_require("py-yaml12")
           reticulate::py_config()
-          stopifnot(file.create(callback_checkpoint))
-          readline("later> ")
+          # later caps one top-level handler turn at 20 callback passes.
+          # Leave the input callback ready for the next handler turn.
+          request_input <- function(turns) {
+            if (turns == 0L) {
+              readline("later> ")
+            } else {
+              later::later(function() request_input(turns - 1L), delay = 0)
+            }
+          }
+          request_input(25L)
         }
         later::later(run_callback, delay = 0.01)
         cat(callback_gate, callback_checkpoint, sep = "\n")
         """)
     client.send(r=r)
     release_worker_callback_gate(client, "idle input callback")
-    poll_start = len(client.transcript)
-    deadline = time.monotonic() + 3
-    while True:
-        client.send()
-        if last_tool_text(client) == (
-            '[input requested: "later> "]\n[stdin needed]'
-        ):
-            break
-        assert last_tool_text(client) == "\n[idle]"
-        if time.monotonic() >= deadline:
-            raise AssertionError("idle callback did not request input")
-        time.sleep(0.01)
-    polls = client.transcript[poll_start:]
-    final_poll = polls[-1]
-    final_poll["id"] = polls[0]["id"]
-    client.transcript[poll_start:] = [final_poll]
+    # Keep this distinct from the callback's retained requirement so activation
+    # cannot turn the preparation into an idempotent server-side no-op.
     result = client.session(
         action="prepare",
-        requirements={"python": ["matplotlib"]},
+        requirements={"python": ["py-yaml12>=0"]},
     )
     assert result["isError"] is True, result
     assert result["content"][0]["text"] == (
+        '[input requested: "later> "]\n'
         '[idle R callback requested input "later> " during requirement '
         "preparation; collect callback input with send before preparing "
         "requirements]\n[worker stopped: in-memory state lost]"

@@ -23,10 +23,19 @@ send:
         later::later(run_callback, delay = 0.01)
         return(invisible(NULL))
       }
+      stopifnot(file.create(callback_checkpoint))
       reticulate::py_require("py-yaml12")
       reticulate::py_config()
-      stopifnot(file.create(callback_checkpoint))
-      readline("later> ")
+      # later caps one top-level handler turn at 20 callback passes.
+      # Leave the input callback ready for the next handler turn.
+      request_input <- function(turns) {
+        if (turns == 0L) {
+          readline("later> ")
+        } else {
+          later::later(function() request_input(turns - 1L), delay = 0)
+        }
+      }
+      request_input(25L)
     }
     later::later(run_callback, delay = 0.01)
     cat(callback_gate, callback_checkpoint, sep = "\n")
@@ -39,25 +48,16 @@ result:
   isError: false
 ---
 id: 5
-send: {}
+session:
+  action: prepare
+  requirements:
+    python:
+      - py-yaml12>=0
 result:
   content:
     - type: text
       text: |-
         [input requested: "later> "]
-        [stdin needed]
-  isError: false
----
-id: 6
-session:
-  action: prepare
-  requirements:
-    python:
-      - matplotlib
-result:
-  content:
-    - type: text
-      text: |-
         [idle R callback requested input "later> " during requirement preparation; collect callback input with send before preparing requirements]
         [worker stopped: in-memory state lost]
   isError: true
