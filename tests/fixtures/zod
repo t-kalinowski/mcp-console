@@ -173,7 +173,7 @@ def main() -> None:
         if source == "interrupt":
             (temporary / "zod-interrupt-evaluation-started").touch()
             while not received_sigint:
-                signal.pause()
+                time.sleep(0.01)
             received_sigint = False
             send_output(writer, "zod interrupted\n")
             send(writer, {"kind": "completed"})

@@ -1106,6 +1106,9 @@ def test_evaluates_cells_in_persistent_reticulate_state(binary: Path) -> Transcr
           r"---(
         test_sys = __import__("sys")
         test_types = __import__("types")
+        __import__ = None
+        exec = None
+        setattr = None
         _io = "user io"
         _main = "user main"
         _sys = "user sys"
@@ -1124,12 +1127,13 @@ def test_evaluates_cells_in_persistent_reticulate_state(binary: Path) -> Transcr
         print("from Python")
         (
             answer + 1,
+            (__import__, exec, setattr) == (None, None, None),
             (_io, _main, _sys, sorted) == ("user io", "user main", "user sys", "user sorted"),
         )
         """)
     client.send(python=python)
     output = last_tool_text(client)
-    assert output == "from Python\n(42, True)\n", repr(output)
+    assert output == "from Python\n(42, True, True)\n", repr(output)
     # fmt: python
     python = code("""
         1

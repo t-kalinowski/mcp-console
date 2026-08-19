@@ -17,6 +17,11 @@ mod platform {
 base::local({
   initialized <- FALSE
   managed <- Sys.getenv("MCP_CONSOLE_MANAGED_PYTHON", unset = NA_character_)
+  python_builtins <- "(lambda: None).__builtins__"
+  python_runtime <- paste0(
+    python_builtins,
+    "['__import__']('sys').modules['_mcp_console_runtime']"
+  )
   source <- NULL
 
   manifest <- function(packages, python_version, exclude_newer) {
@@ -245,15 +250,21 @@ base::local({
       matplotlib_hook <- function() {
         invisible(reticulate::py_eval(
           paste0(
-            "setattr(",
-            "__import__('sys').modules['matplotlib.pyplot'], ",
+            python_builtins,
+            "['setattr'](",
+            python_builtins,
+            "['__import__']('sys').modules['matplotlib.pyplot'], ",
             "'show', lambda *args, **kwargs: None)"
           ),
           convert = TRUE
         ))
       }
       if (reticulate::py_eval(
-        "'matplotlib.pyplot' in __import__('sys').modules",
+        paste0(
+          "'matplotlib.pyplot' in ",
+          python_builtins,
+          "['__import__']('sys').modules"
+        ),
         convert = TRUE
       )) {
         matplotlib_hook()
@@ -381,7 +392,8 @@ _sys.modules[_mcp_console_runtime.__name__] = _mcp_console_runtime
 )---"
       reticulate::py_eval(
         paste0(
-          "exec(",
+          python_builtins,
+          "['exec'](",
           jsonlite::toJSON(script, auto_unbox = TRUE),
           ", {'__name__': '_mcp_console_runtime'})"
         ),
@@ -393,7 +405,7 @@ _sys.modules[_mcp_console_runtime.__name__] = _mcp_console_runtime
     filename <- paste0("<mcp-console:python:", id, ">")
     on.exit({
       images <- reticulate::py_eval(
-        "__import__('sys').modules['_mcp_console_runtime'].take_images()",
+        paste0(python_runtime, ".take_images()"),
         convert = TRUE
       )
       for (image in images) {
@@ -403,7 +415,8 @@ _sys.modules[_mcp_console_runtime.__name__] = _mcp_console_runtime
     cell <- jsonlite::toJSON(list(source, filename), auto_unbox = TRUE)
     reticulate::py_eval(
       paste0(
-        "__import__('sys').modules['_mcp_console_runtime'].run(*",
+        python_runtime,
+        ".run(*",
         cell,
         ")"
       ),
