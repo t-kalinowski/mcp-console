@@ -20,18 +20,10 @@ base::local({
   # Python 3.9 and older are intentionally outside the bridge contract.
   minimum_python <- base::numeric_version("3.10")
   # Reticulate callable proxies convert results through an interruptible wrapper.
-  # Keep helpers private, then dispatch through py_eval's direct conversion path.
-  python_runtime <- NULL
-  python_globals <- NULL
-  python_runtime_name <- base::basename(base::tempfile(
-    pattern = "_mcp_console_bridge_"
-  ))
-  python_dispatch <- base::sprintf(
-    "%s['_mcp_console_dispatch'](%s, '%s')",
-    python_runtime_name,
-    python_runtime_name,
-    python_runtime_name
-  )
+  # Keep helpers in one module, then use py_eval's direct conversion path.
+  python_dispatch <-
+    "(lambda: None).__builtins__['__import__']('_mcp_console').dispatch()"
+  python_module <- NULL
   pending_requirements <- NULL
   source <- NULL
 
@@ -44,6 +36,7 @@ import io as _io
 import logging as _logging
 import sys as _sys
 import traceback as _traceback
+import types as _types
 
 
 class _McpConsoleMatplotlibLogFilter(_logging.Filter):
@@ -150,11 +143,20 @@ def _mcp_console_take_images(_image_state=_mcp_console_image_state):
     return images
 
 
-def _mcp_console_dispatch(private, runtime_name, _main=_main):
-    operation = private.pop("_mcp_console_operation")
-    arguments = private.pop("_mcp_console_arguments")
-    _main.__dict__.pop(runtime_name, None)
-    return private[operation](*arguments)
+_mcp_console = _types.ModuleType("_mcp_console")
+
+
+def _mcp_console_dispatch(state=_mcp_console.__dict__):
+    operation = state.pop("operation")
+    arguments = state.pop("arguments")
+    return state[operation](*arguments)
+
+
+_mcp_console.disable_matplotlib_show = _mcp_console_disable_matplotlib_show
+_mcp_console.eval_cell = _mcp_console_eval_cell
+_mcp_console.take_images = _mcp_console_take_images
+_mcp_console.dispatch = _mcp_console_dispatch
+_sys.modules[_mcp_console.__name__] = _mcp_console
 )---"
 
   manifest <- function(packages, python_version, exclude_newer) {
@@ -348,22 +350,24 @@ def _mcp_console_dispatch(private, runtime_name, _main=_main):
   }
 
   dispatch_python <- function(operation, arguments = list()) {
-    reticulate::py_set_item(
-      python_runtime, "_mcp_console_operation", operation
+    reticulate::py_set_attr(
+      python_module, "operation", operation
     )
-    reticulate::py_set_item(
-      python_runtime, "_mcp_console_arguments", arguments
+    reticulate::py_set_attr(
+      python_module, "arguments", arguments
     )
-    reticulate::py_set_item(python_globals, python_runtime_name, python_runtime)
     reticulate::py_eval(python_dispatch, convert = TRUE)
   }
 
   initialize_python_runtime <- function(strict = FALSE) {
-    if (!is.null(python_runtime)) {
+    if (!is.null(python_module)) {
       return(invisible(TRUE))
     }
 
     python_config <- reticulate::py_config()
+    if (!is.null(python_module)) {
+      return(invisible(TRUE))
+    }
     if (python_config$version < minimum_python) {
       if (!strict) {
         return(invisible(FALSE))
@@ -377,21 +381,16 @@ def _mcp_console_dispatch(private, runtime_name, _main=_main):
         call. = FALSE
       )
     }
-
-    runtime <- reticulate::py_run_string(
+    reticulate::py_run_string(
       python_runtime_source,
       local = TRUE,
       convert = FALSE
     )
-    main <- reticulate::import_main(convert = FALSE)
-    globals <- reticulate::py_get_attr(main, "__dict__")
-
-    python_runtime <<- runtime
-    python_globals <<- globals
+    python_module <<- reticulate::import("_mcp_console", convert = FALSE)
     base::setHook(
       "reticulate::matplotlib.pyplot::load",
       function(...) {
-        invisible(dispatch_python("_mcp_console_disable_matplotlib_show"))
+        invisible(dispatch_python("disable_matplotlib_show"))
       },
       action = "append"
     )
@@ -485,19 +484,19 @@ def _mcp_console_dispatch(private, runtime_name, _main=_main):
   evaluate_impl <- function(id) {
     if (!initialized) {
       initialize_python_runtime(strict = TRUE)
-      dispatch_python("_mcp_console_disable_matplotlib_show")
+      dispatch_python("disable_matplotlib_show")
       initialized <<- TRUE
     }
 
     filename <- paste0("<mcp-console:python:", id, ">")
     on.exit({
-      images <- dispatch_python("_mcp_console_take_images")
+      images <- dispatch_python("take_images")
       for (image in images) {
         invisible(.Call("mcp_console_publish_python_plot", image))
       }
     }, add = TRUE)
     dispatch_python(
-      "_mcp_console_eval_cell",
+      "eval_cell",
       list(source, filename)
     )
     invisible()

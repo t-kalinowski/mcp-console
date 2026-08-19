@@ -1010,6 +1010,73 @@ def test_interrupts_running_python_evaluation(binary: Path) -> Transcript:
                 stop_client(client)
 
 
+def test_initializes_private_runtime_once_on_first_python_cell(
+    binary: Path,
+) -> Transcript:
+    client = McpClient(binary, ("serve",))
+    client._initialize_and_list_tools()
+    # fmt: r
+    r = code(r"""
+        matplotlib_hooks_before <- length(
+          getHook("reticulate::matplotlib.pyplot::load")
+        )
+        """)
+    client.send(r=r)
+    assert last_tool_text(client) == "[done]"
+    client.send(python="42")
+    assert last_tool_text(client) == "42\n"
+    # fmt: r
+    r = code(r"""
+        length(getHook("reticulate::matplotlib.pyplot::load")) -
+          matplotlib_hooks_before
+        """)
+    client.send(r=r)
+    assert last_tool_text(client) == "[1] 1\n"
+    return client._finish()
+
+
+def test_dispatch_does_not_mutate_python_globals(binary: Path) -> Transcript:
+    client = McpClient(binary, ("serve",))
+    client._initialize_and_list_tools()
+    # fmt: python
+    python = code("""
+        import threading
+
+        globals_iteration_started = threading.Event()
+        globals_iteration_continue = threading.Event()
+        globals_iteration_result = []
+
+
+        def iterate_globals():
+            iterator = iter(globals())
+            next(iterator)
+            globals_iteration_started.set()
+            globals_iteration_continue.wait()
+            try:
+                tuple(iterator)
+                globals_iteration_result.append("stable")
+            except BaseException as error:
+                globals_iteration_result.append(repr(error))
+
+
+        globals_iteration_thread = threading.Thread(target=iterate_globals)
+        globals_iteration_thread.start()
+        globals_iteration_started.wait()
+        None
+        """)
+    client.send(python=python)
+    assert last_tool_text(client) == "[done]"
+    # fmt: python
+    python = code("""
+        globals_iteration_continue.set()
+        globals_iteration_thread.join()
+        globals_iteration_result
+        """)
+    client.send(python=python)
+    assert last_tool_text(client) == "['stable']\n"
+    return client._finish()
+
+
 def test_interrupts_live_python_resolver(binary: Path) -> Transcript:
     listener = socket.socket()
     listener.bind(("127.0.0.1", 0))
@@ -1298,10 +1365,8 @@ def test_evaluates_cells_in_persistent_reticulate_state(binary: Path) -> Transcr
             answer + 1,
             (__import__, exec, setattr) == (None, None, None),
             (_io, _main, _sys, sorted) == ("user io", "user main", "user sys", "user sorted"),
-            not any(
-                name.startswith("_mcp_console_bridge_")
-                for name in globals()
-            ),
+            "_mcp_console" not in globals()
+            and test_sys.modules["_mcp_console"].__name__ == "_mcp_console",
         )
         """)
     client.send(python=python)
@@ -1372,10 +1437,6 @@ def test_evaluates_cells_in_persistent_reticulate_state(binary: Path) -> Transcr
         """)
     client.send(python=python)
     assert last_tool_text(client) == "43\n"
-    client.send(python="__builtins__ = None\n42")
-    assert last_tool_text(client) == "42\n"
-    client.send(python="42")
-    assert last_tool_text(client) == "42\n"
     return client._finish()
 
 

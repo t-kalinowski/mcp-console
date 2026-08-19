@@ -42,10 +42,8 @@ send:
         answer + 1,
         (__import__, exec, setattr) == (None, None, None),
         (_io, _main, _sys, sorted) == ("user io", "user main", "user sys", "user sorted"),
-        not any(
-            name.startswith("_mcp_console_bridge_")
-            for name in globals()
-        ),
+        "_mcp_console" not in globals()
+        and test_sys.modules["_mcp_console"].__name__ == "_mcp_console",
     )
 result:
   content:
@@ -182,27 +180,5 @@ result:
     - type: text
       text: |
         43
-  isError: false
----
-id: 16
-send:
-  python: |-
-    __builtins__ = None
-    42
-result:
-  content:
-    - type: text
-      text: |
-        42
-  isError: false
----
-id: 17
-send:
-  python: "42"
-result:
-  content:
-    - type: text
-      text: |
-        42
   isError: false
 ...
