@@ -193,13 +193,13 @@ result:
 ---
 id: 14
 send:
-  stdin: preserved fragment
+  stdin: "<5000 x bytes>"
   timeout_ms: 50
 result:
   content:
     - type: text
       text: |-
-
+        [input requested: "interrupt> "]
         [stdin needed]
   isError: false
 ---
@@ -226,14 +226,15 @@ result:
 ---
 id: 17
 send:
-  r: "readline(\"after interrupt> \")"
+  r: "identical(readline(\"after interrupt> \"), strrep(\"x\", 5000))"
   stdin: "\n"
 result:
   content:
     - type: text
       text: |
         [input requested: "after interrupt> "]
-        [1] "preserved fragment"
+        [input requested: "after interrupt> "]
+        [1] TRUE
   isError: false
 ---
 id: 18

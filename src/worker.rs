@@ -22,6 +22,7 @@ mod platform {
     static CELL_SOURCE: Mutex<Option<CellSource>> = Mutex::new(None);
     static PENDING_SERVER_MESSAGES: Mutex<VecDeque<ServerMessage>> = Mutex::new(VecDeque::new());
     static CONSOLE_STDIN_CARRY: Mutex<Vec<u8>> = Mutex::new(Vec::new());
+    static CONSOLE_STDIN_PARTIAL: Mutex<Vec<u8>> = Mutex::new(Vec::new());
     static WORKER_FAILURE: Mutex<Option<String>> = Mutex::new(None);
     static WORKER_SHUTDOWN: AtomicBool = AtomicBool::new(false);
     static EVALUATION_STARTED: AtomicBool = AtomicBool::new(false);
@@ -1010,19 +1011,38 @@ mod platform {
         unsafe {
             *buf.add(length) = 0;
         }
+        record_console_stdin_chunk(buf, length)?;
         Ok(i32::from(length > 0))
     }
 
     fn preserve_console_stdin(buf: *const c_uchar, length: usize) -> Result<(), String> {
-        if length == 0 {
-            return Ok(());
-        }
-        let mut preserved = unsafe { std::slice::from_raw_parts(buf, length) }.to_vec();
+        let mut partial = CONSOLE_STDIN_PARTIAL
+            .lock()
+            .map_err(|_| "R worker partial stdin lock poisoned".to_string())?;
+        let mut preserved = std::mem::take(&mut *partial);
+        drop(partial);
+        preserved.extend_from_slice(unsafe { std::slice::from_raw_parts(buf, length) });
         let mut carry = CONSOLE_STDIN_CARRY
             .lock()
             .map_err(|_| "R worker stdin carry lock poisoned".to_string())?;
         preserved.append(&mut carry);
         *carry = preserved;
+        Ok(())
+    }
+
+    fn record_console_stdin_chunk(buf: *const c_uchar, length: usize) -> Result<(), String> {
+        if length == 0 {
+            return Ok(());
+        }
+        let chunk = unsafe { std::slice::from_raw_parts(buf, length) };
+        let mut partial = CONSOLE_STDIN_PARTIAL
+            .lock()
+            .map_err(|_| "R worker partial stdin lock poisoned".to_string())?;
+        if chunk.last() == Some(&b'\n') {
+            partial.clear();
+        } else {
+            partial.extend_from_slice(chunk);
+        }
         Ok(())
     }
 }

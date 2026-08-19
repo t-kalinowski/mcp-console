@@ -1190,8 +1190,13 @@ def test_interrupts_running_r_evaluation(binary: Path) -> Transcript:
                 "r-readline-started",
                 client,
             )
-            client.send(stdin="preserved fragment", timeout_ms=50)
-            assert last_tool_text(client) == "\n[stdin needed]"
+            partial_line = "x" * 5_000
+            client.send(stdin=partial_line, timeout_ms=50)
+            output = last_tool_text(client)
+            assert output == (
+                '[input requested: "interrupt> "]\n[stdin needed]'
+            ), repr(output)
+            client.transcript[-1]["send"]["stdin"] = "<5000 x bytes>"
 
             client.session(action="interrupt")
             assert last_tool_text(client) == "[interrupt sent]"
@@ -1202,10 +1207,16 @@ def test_interrupts_running_r_evaluation(binary: Path) -> Transcript:
                 "continued after readline\n"
             )
 
-            client.send(r='readline("after interrupt> ")', stdin="\n")
-            assert last_tool_text(client) == (
-                '[input requested: "after interrupt> "]\n[1] "preserved fragment"\n'
+            client.send(
+                r='identical(readline("after interrupt> "), strrep("x", 5000))',
+                stdin="\n",
             )
+            output = last_tool_text(client)
+            assert output == (
+                '[input requested: "after interrupt> "]\n'
+                '[input requested: "after interrupt> "]\n'
+                "[1] TRUE\n"
+            ), repr(output)
 
             client.send(r="interrupt_state")
             assert last_tool_text(client) == "[1] 43\n"

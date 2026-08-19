@@ -82,11 +82,28 @@ def identical(left: object, right: object) -> bool:
 def format_transcript_yaml(value: YamlStream) -> str:
     escaped: list[tuple[str, str]] = []
 
+    def marker(replacement: str) -> str:
+        value = f"__MCP_CONSOLE_ESCAPED_WHITESPACE_{len(escaped):04d}__"
+        escaped.append((value, replacement))
+        return value
+
+    def protect_string(value: str) -> str:
+        lines = value.splitlines()
+        first_nonempty = next((line for line in lines if line), "")
+        if value and (
+            not value.strip()
+            or first_nonempty.startswith((" ", "\t"))
+            or any(
+                (line and not line.strip()) or line.endswith((" ", "\t"))
+                for line in lines
+            )
+        ):
+            return marker(json.dumps(value, ensure_ascii=False))
+        return value
+
     def protect(node: object) -> object:
-        if isinstance(node, str) and node and not node.strip():
-            marker = f"__MCP_CONSOLE_ESCAPED_WHITESPACE_{len(escaped):04d}__"
-            escaped.append((marker, node))
-            return marker
+        if isinstance(node, str):
+            return protect_string(node)
         if isinstance(node, Yaml):
             return Yaml(protect(node.value), tag=node.tag)
         if isinstance(node, list):
@@ -97,9 +114,11 @@ def format_transcript_yaml(value: YamlStream) -> str:
 
     protected = protect(value)
     text = format_yaml(protected, multi=True)
-    for marker, original in escaped:
-        assert text.count(marker) == 1, f"escaped YAML marker is not unique: {marker}"
-        text = text.replace(marker, json.dumps(original, ensure_ascii=False))
+    for marker_value, replacement in escaped:
+        assert text.count(marker_value) == 1, (
+            f"escaped YAML marker is not unique: {marker_value}"
+        )
+        text = text.replace(marker_value, replacement)
     text = "\n".join(line.rstrip() for line in text.splitlines()) + "\n"
     assert identical(parse_yaml(text, multi=True), value), (
         "formatted transcript YAML did not round-trip"
