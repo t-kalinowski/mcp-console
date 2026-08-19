@@ -3,7 +3,7 @@
 ---
 id: 3
 send:
-  r: reticulate::py_run_string("interrupt_state = 41")
+  r: "reticulate::py_run_string(\"interrupt_state = 41\")"
 result:
   content:
     - type: text
@@ -158,7 +158,7 @@ result:
 ---
 id: 12
 send:
-  r: c(boundary_interrupt_state, boundary_interrupt_cleanup)
+  r: "c(boundary_interrupt_state, boundary_interrupt_cleanup)"
 result:
   content:
     - type: text
@@ -226,7 +226,7 @@ result:
 ---
 id: 17
 send:
-  r: readline("after interrupt> ")
+  r: "readline(\"after interrupt> \")"
   stdin: "\n"
 result:
   content:
@@ -280,7 +280,7 @@ result:
 ---
 id: 22
 send:
-  r: '"idle time does not consume a cell limit"'
+  r: "\"idle time does not consume a cell limit\""
 result:
   content:
     - type: text

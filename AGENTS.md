@@ -3,6 +3,12 @@
 Keep this file synchronized with the code that exists in the repository.
 The documents under `design-sketches/` describe intended behavior, not implemented behavior.
 
+## Transcript goldens
+
+Never hand-edit files under `tests/transcripts/golden/`.
+They may change only through `scripts/test --update ...` or Yamark via `scripts/format`.
+If regeneration produces an incorrect snapshot, fix the code or serializer and regenerate it.
+
 ## Current state
 
 MCP Console is an initial Rust binary package.
