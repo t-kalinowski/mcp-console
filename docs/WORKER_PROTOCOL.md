@@ -587,6 +587,8 @@ An exec descendant that retains fd 1/2 creates fresh standard streams backed by 
 There is no relative ordering guarantee between those pipes and sideband output, as described under [Transport](#transport).
 
 The built-in worker receives either a server-managed requirement manifest selected by startup or explicit preparation, or the caller's existing `RETICULATE_PYTHON` value when no managed resolution occurred.
+Both sources must select Python 3.10 or later.
+The Python bridge checks the initialized interpreter before its first cell and rejects an older version before dispatch.
 Before initializing R, it forces `UV_OFFLINE=1`, overwriting any inherited value before user code runs.
 For a server-managed worker, MCP Console seeds reticulate's manifest and replaces the namespace bindings for its internal `uv_get_or_create_env` and `resolve_python_version` functions.
 It does not replace `py_require()`, so reticulate retains its package attribution, manifest history, compatibility checks, activation, and configuration behavior within the live R process.

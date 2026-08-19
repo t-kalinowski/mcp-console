@@ -333,6 +333,7 @@ The resolver may access the network and write DuckDB's native version- and platf
 The extension resolver shares the cancellable process-group lifecycle used by the R and Python resolvers; no DuckDB-specific message is added to the worker sideband protocol, though an accompanying R-library change still uses `prepare_r`.
 When `RETICULATE_PYTHON` is unset or is `managed`, `mcp-console serve` runs reticulate's uv environment resolver outside the worker sandbox with its NumPy and pandas baseline, where it can use the normal host caches and network access.
 Other configured values, including an empty value, are preserved when no Python requirements are prepared and skip the Python startup preflight; they do not skip the default R or DuckDB extension preflight.
+Both managed and configured interpreters must provide Python 3.10 or later; the Python bridge rejects an older interpreter before evaluating a cell.
 An explicit `session` preparation selects its resolved managed environment even when `RETICULATE_PYTHON` was configured, so a successful call guarantees that its requirements are present.
 The server retains the selected interpreter and normalized manifest and applies them to each sandboxed worker; the worker forces `UV_OFFLINE=1` and otherwise uses the existing sandbox policy unchanged.
 For a server-managed worker, MCP Console seeds reticulate's requirement manifest and intercepts its internal uv environment and Python-version resolution.

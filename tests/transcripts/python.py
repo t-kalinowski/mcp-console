@@ -53,6 +53,46 @@ def test_preserves_empty_python_environment(binary: Path) -> Transcript:
     return client._finish()
 
 
+def test_rejects_python_older_than_3_10(binary: Path) -> Transcript:
+    interpreter = Path("/usr/bin/python3")
+    version = subprocess.run(
+        (interpreter, "-c", "import sys; print(sys.version_info[:2])"),
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert version.stdout.strip() == "(3, 9)", version.stdout
+
+    environment = os.environ.copy()
+    environment["RETICULATE_PYTHON"] = str(interpreter)
+    client = McpClient(binary, ("serve",), environment)
+    client._initialize_and_list_tools()
+    client.send(python="6 * 7")
+    result = client.transcript[-1]["result"]
+    assert result["isError"] is True
+    bridge_failure = "Python bridge failed during R evaluation\n"
+    version_failure = (
+        "Error: MCP Console requires Python 3.10 or later; "
+        "selected interpreter reports Python 3.9\n"
+    )
+    worker_failure = (
+        "[worker sideband read failed: worker sideband closed]\n"
+        "[worker stopped: in-memory state lost]\n"
+        "[starting new worker]\n"
+        "[idle]"
+    )
+    output = result["content"][0]["text"]
+    expected = {
+        bridge_failure + version_failure + worker_failure,
+        version_failure + bridge_failure + worker_failure,
+    }
+    assert output in expected, output
+    result["content"][0]["text"] = (
+        bridge_failure + version_failure + worker_failure
+    )
+    return client._finish()
+
+
 def managed_python_transcript(binary: Path, configured: bool) -> Transcript:
     environment = os.environ.copy()
     if configured:

@@ -167,6 +167,7 @@ R, Python, and DuckDB resolution may access the network and write normal host ca
 Requirement strings remain process-argument or JSON data rather than R source, and no submitted cell is evaluated by the resolver.
 Before initializing R, the worker forces `UV_OFFLINE=1`, overwriting any inherited value to match the sandbox's network denial.
 Reticulate reuses the server-resolved or caller-selected interpreter.
+Both managed and caller-selected interpreters must provide Python 3.10 or later; the Python bridge rejects an older interpreter before evaluating a cell.
 For a server-managed worker, MCP Console seeds reticulate's requirement manifest and intercepts its internal `uv_get_or_create_env` and `resolve_python_version` bindings, without wrapping `py_require()`.
 Environment resolution and Python-version selection become separate typed sideband requests, and the host resolver runs reticulate and uv with the requested `UV_*` settings outside the sandbox.
 Version selection returns only the selected version and does not create a candidate environment or alter checkpoint state.

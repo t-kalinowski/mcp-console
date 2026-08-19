@@ -17,6 +17,9 @@ mod platform {
 base::local({
   initialized <- FALSE
   managed <- Sys.getenv("MCP_CONSOLE_MANAGED_PYTHON", unset = NA_character_)
+  minimum_python <- base::numeric_version("3.10")
+  # Python 3.10 added function.__builtins__, which lets bridge expressions
+  # bypass names that persistent user globals can shadow.
   python_builtins <- "(lambda: None).__builtins__"
   python_runtime <- paste0(
     python_builtins,
@@ -247,6 +250,17 @@ base::local({
 
   evaluate_impl <- function(id) {
     if (!initialized) {
+      python_config <- reticulate::py_config()
+      if (python_config$version < minimum_python) {
+        stop(
+          paste0(
+            "MCP Console requires Python 3.10 or later; selected ",
+            "interpreter reports Python ",
+            as.character(python_config$version)
+          ),
+          call. = FALSE
+        )
+      }
       matplotlib_hook <- function() {
         invisible(reticulate::py_eval(
           paste0(
