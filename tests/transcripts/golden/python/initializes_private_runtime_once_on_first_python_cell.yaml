@@ -4,13 +4,12 @@
 id: 3
 send:
   r: |
-    matplotlib_hooks_before <- length(
-      getHook("reticulate::matplotlib.pyplot::load")
-    )
+    length(getHook("reticulate::matplotlib.pyplot::load"))
 result:
   content:
     - type: text
-      text: "[done]"
+      text: |
+        [1] 1
   isError: false
 ---
 id: 4
@@ -26,8 +25,7 @@ result:
 id: 5
 send:
   r: |
-    length(getHook("reticulate::matplotlib.pyplot::load")) -
-      matplotlib_hooks_before
+    length(getHook("reticulate::matplotlib.pyplot::load"))
 result:
   content:
     - type: text

@@ -1,0 +1,81 @@
+---
+!same-as tests/transcripts/golden/server/initializes_and_lists_tools.yaml
+---
+id: 3
+send:
+  r: |
+    invisible(suppressMessages(base::trace(
+      "import",
+      exit = quote({
+        if (identical(module, "_mcp_console")) {
+          invisible(file.create(file.path(
+            tempdir(),
+            "python-runtime-imported"
+          )))
+          repeat {}
+        }
+      }),
+      print = FALSE,
+      where = asNamespace("reticulate")
+    )))
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+id: 4
+send:
+  python: "42"
+  timeout_ms: 0
+result:
+  content:
+    - type: text
+      text: |-
+        
+        [running]
+  isError: false
+---
+id: 5
+session:
+  action: interrupt
+result:
+  content:
+    - type: text
+      text: "[interrupt sent]"
+  isError: false
+---
+id: 6
+send:
+  timeout_ms: 3000
+result:
+  content:
+    - type: text
+      text: "<interrupted>"
+  isError: false
+---
+id: 7
+send:
+  r: |
+    invisible(suppressMessages(base::untrace(
+      "import",
+      where = asNamespace("reticulate")
+    )))
+    length(getHook("reticulate::matplotlib.pyplot::load"))
+result:
+  content:
+    - type: text
+      text: |
+        [1] 1
+  isError: false
+---
+id: 8
+send:
+  python: "42"
+result:
+  content:
+    - type: text
+      text: |
+        42
+  isError: false
+...

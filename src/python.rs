@@ -387,15 +387,19 @@ _sys.modules[_mcp_console.__name__] = _mcp_console
       convert = FALSE
     )
     python_module <<- reticulate::import("_mcp_console", convert = FALSE)
-    base::setHook(
-      "reticulate::matplotlib.pyplot::load",
-      function(...) {
-        invisible(dispatch_python("disable_matplotlib_show"))
-      },
-      action = "append"
-    )
     invisible(TRUE)
   }
+
+  disable_matplotlib_show <- function(...) {
+    if (initialize_python_runtime(strict = FALSE)) {
+      invisible(dispatch_python("disable_matplotlib_show"))
+    }
+  }
+  base::setHook(
+    "reticulate::matplotlib.pyplot::load",
+    disable_matplotlib_show,
+    action = "append"
+  )
 
   console_width <- getOption("width")
   install_python_hooks <- function(...) {

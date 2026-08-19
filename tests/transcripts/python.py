@@ -1017,22 +1017,88 @@ def test_initializes_private_runtime_once_on_first_python_cell(
     client._initialize_and_list_tools()
     # fmt: r
     r = code(r"""
-        matplotlib_hooks_before <- length(
-          getHook("reticulate::matplotlib.pyplot::load")
-        )
+        length(getHook("reticulate::matplotlib.pyplot::load"))
         """)
     client.send(r=r)
-    assert last_tool_text(client) == "[done]"
+    assert last_tool_text(client) == "[1] 1\n"
     client.send(python="42")
     assert last_tool_text(client) == "42\n"
     # fmt: r
     r = code(r"""
-        length(getHook("reticulate::matplotlib.pyplot::load")) -
-          matplotlib_hooks_before
+        length(getHook("reticulate::matplotlib.pyplot::load"))
         """)
     client.send(r=r)
     assert last_tool_text(client) == "[1] 1\n"
     return client._finish()
+
+
+def test_retries_python_runtime_initialization_after_interrupt(
+    binary: Path,
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        temporary_path = Path(temporary_directory)
+        environment = os.environ.copy()
+        environment["TMPDIR"] = temporary_directory
+        client = McpClient(binary, ("serve",), environment)
+        passed = False
+        try:
+            client._initialize_and_list_tools()
+            # fmt: r
+            r = code(r"""
+                invisible(suppressMessages(base::trace(
+                  "import",
+                  exit = quote({
+                    if (identical(module, "_mcp_console")) {
+                      invisible(file.create(file.path(
+                        tempdir(),
+                        "python-runtime-imported"
+                      )))
+                      repeat {}
+                    }
+                  }),
+                  print = FALSE,
+                  where = asNamespace("reticulate")
+                )))
+                """)
+            client.send(r=r)
+            assert last_tool_text(client) == "[done]"
+
+            client.send(python="42", timeout_ms=0)
+            assert last_tool_text(client) == "\n[running]"
+            wait_for_worker_file(
+                temporary_path,
+                "python-runtime-imported",
+                client,
+            )
+
+            client.session(action="interrupt")
+            assert last_tool_text(client) == "[interrupt sent]"
+            client.send(timeout_ms=3_000)
+            result = client.transcript[-1]["result"]
+            assert result["isError"] is False, result
+            output = last_tool_text(client)
+            assert output in {"", "\n"}, repr(output)
+            result["content"][0]["text"] = "<interrupted>"
+
+            # fmt: r
+            r = code(r"""
+                invisible(suppressMessages(base::untrace(
+                  "import",
+                  where = asNamespace("reticulate")
+                )))
+                length(getHook("reticulate::matplotlib.pyplot::load"))
+                """)
+            client.send(r=r)
+            assert last_tool_text(client) == "[1] 1\n"
+
+            client.send(python="42")
+            assert last_tool_text(client) == "42\n"
+            transcript = client._finish()
+            passed = True
+            return transcript
+        finally:
+            if not passed:
+                stop_client(client)
 
 
 def test_dispatch_does_not_mutate_python_globals(binary: Path) -> Transcript:
