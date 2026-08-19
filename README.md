@@ -139,8 +139,8 @@ It does not start a process; when neither target exists, it returns `worker is n
 A resolver signal error is returned by both the interrupt and resolution calls; an interrupted resolver otherwise reports its ordinary resolution failure.
 A worker signal is not assigned to a cell: an idle signal is consumed at the next managed boundary, and a signal during R, reticulate Python, or DuckDB is handled by that runtime.
 Code can catch or delay the signal, so use `restart` when the worker does not return.
-An interrupt cancels a managed `readline()`, Python `input()`, or debugger prompt.
-Bytes already consumed by that managed read are replayed before fd 0 on the next managed console read.
+An interrupt cancels a managed `readline()`, Python `input()`, or debugger prompt when runtime interrupt handling is active; a read inside R's `suspendInterrupts()` keeps waiting and the pending interrupt is handled at a later managed boundary after input arrives.
+All bytes already consumed for an interrupted logical line, including prior full callback buffers, are replayed before fd 0 on the next managed console read.
 Code reading fd 0 directly does not consume that pushback, and restart discards it with the worker.
 `interrupt` accepts no `requirements`.
 

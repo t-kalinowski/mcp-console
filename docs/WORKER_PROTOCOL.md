@@ -605,13 +605,15 @@ The Python and SQL bridges observe escaping R interrupt conditions without handl
 Host resolution remains interruptible through its own process-group target while worker-side runtime interrupt handling stays suspended across preparation.
 
 The worker supplies cell source through `ReadConsole` before each top-level evaluation starts.
-For every evaluation-time `ReadConsole` call, the callback sends `input_requested`, then polls fd 0 while checking R's pending-interrupt flag until one newline arrives or R's supplied buffer is full.
+For every evaluation-time `ReadConsole` call, the callback sends `input_requested`, then polls fd 0 while checking whether R has a pending, unsuspended interrupt until one newline arrives or R's supplied buffer is full.
 The built-in worker sends R's prompt field verbatim, including trailing spaces or an empty prompt.
 The server preserves that value but JSON-quotes it in the MCP input-request record instead of appending it as bare prompt text.
 After a nonempty read succeeds, it sends `input_received` before returning the bytes to R.
-On an interrupt, it sends `input_cancelled`, moves bytes already consumed by that read into worker-local managed-input pushback, and checks the pending interrupt from a C-owned frame so R's jump cannot cross a live Rust frame.
+Each full callback buffer without a newline remains part of the current logical line until a later callback returns its newline.
+On an unsuspended interrupt, the callback sends `input_cancelled`, moves every consumed chunk of that logical line into worker-local managed-input pushback, and checks the pending interrupt from a C-owned frame so R's jump cannot cross a live Rust frame.
+When R has suspended interrupt handling, the callback remains blocked until input completes the line; the pending interrupt is handled at a later managed boundary after the suspension ends.
 The next managed `ReadConsole` call drains that pushback before fd 0; bytes not yet consumed remain in the fd-0 pipe.
-A newline-free fragment shorter than the buffer keeps the callback blocked until more input or an interrupt arrives, while bytes after a returned chunk remain in the pipe for a later `ReadConsole` call or a direct fd-0 reader.
+A newline-free fragment shorter than the buffer keeps the callback blocked until more input or an active interrupt arrives, while bytes not yet read remain in the pipe for a later `ReadConsole` call or a direct fd-0 reader.
 It uses R's busy callback rather than prompt text to distinguish cell source from evaluated-code input.
 Unread fd-0 input remains available across evaluation boundaries.
 Submitted source references are not retained.

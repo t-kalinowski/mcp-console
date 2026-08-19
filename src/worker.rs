@@ -20,7 +20,10 @@ mod platform {
     static R_EVENTS: OnceLock<REvents> = OnceLock::new();
     static R_CHECK_USER_INTERRUPT: OnceLock<CheckUserInterrupt> = OnceLock::new();
     static CELL_SOURCE: Mutex<Option<CellSource>> = Mutex::new(None);
-    static CONSOLE_STDIN_PUSHBACK: Mutex<Vec<u8>> = Mutex::new(Vec::new());
+    static CONSOLE_STDIN: Mutex<ConsoleStdin> = Mutex::new(ConsoleStdin {
+        pushback: Vec::new(),
+        line_prefix: Vec::new(),
+    });
     static PENDING_SERVER_MESSAGES: Mutex<VecDeque<ServerMessage>> = Mutex::new(VecDeque::new());
     static WORKER_FAILURE: Mutex<Option<String>> = Mutex::new(None);
     static WORKER_SHUTDOWN: AtomicBool = AtomicBool::new(false);
@@ -51,6 +54,11 @@ mod platform {
     struct CellSource {
         text: String,
         offset: usize,
+    }
+
+    struct ConsoleStdin {
+        pushback: Vec<u8>,
+        line_prefix: Vec<u8>,
     }
 
     struct REvents {
@@ -313,6 +321,11 @@ mod platform {
 
     fn interrupt_pending() -> bool {
         unsafe { libr::get(libr::R_interrupts_pending) != 0 }
+    }
+
+    fn console_interrupt_pending() -> bool {
+        interrupt_pending()
+            && unsafe { libr::get(libr::R_interrupts_suspended) == libr::Rboolean_FALSE }
     }
 
     pub(crate) fn resolve_python(
@@ -943,24 +956,24 @@ mod platform {
 
     fn read_console_stdin(buf: *mut c_uchar, buflen: c_int) -> Result<c_int, String> {
         let capacity = (buflen as usize) - 1;
-        if interrupt_pending() {
-            return Ok(-1);
+        if console_interrupt_pending() {
+            return cancel_console_stdin_read(buf, 0);
         }
-        let mut pushback = CONSOLE_STDIN_PUSHBACK
+        let mut stdin = CONSOLE_STDIN
             .lock()
-            .map_err(|_| "R worker stdin pushback lock poisoned".to_string())?;
-        let mut length = pushback.len().min(capacity);
+            .map_err(|_| "R worker console stdin lock poisoned".to_string())?;
+        let mut length = stdin.pushback.len().min(capacity);
         if length > 0 {
             unsafe {
-                std::ptr::copy_nonoverlapping(pushback.as_ptr(), buf, length);
+                std::ptr::copy_nonoverlapping(stdin.pushback.as_ptr(), buf, length);
             }
-            pushback.drain(..length);
+            stdin.pushback.drain(..length);
         }
-        drop(pushback);
+        drop(stdin);
 
         while length < capacity {
-            if interrupt_pending() {
-                return push_back_console_stdin(buf, length);
+            if console_interrupt_pending() {
+                return cancel_console_stdin_read(buf, length);
             }
             let mut descriptor = libc::pollfd {
                 fd: libc::STDIN_FILENO,
@@ -987,8 +1000,8 @@ mod platform {
                     descriptor.revents
                 ));
             }
-            if interrupt_pending() {
-                return push_back_console_stdin(buf, length);
+            if console_interrupt_pending() {
+                return cancel_console_stdin_read(buf, length);
             }
             let byte = unsafe { buf.add(length) };
             let count = unsafe { libc::read(libc::STDIN_FILENO, byte.cast(), 1) };
@@ -1013,19 +1026,32 @@ mod platform {
         unsafe {
             *buf.add(length) = 0;
         }
+        record_console_stdin_chunk(buf, length)?;
         Ok(i32::from(length > 0))
     }
 
-    fn push_back_console_stdin(buf: *const c_uchar, length: usize) -> Result<c_int, String> {
-        if length == 0 {
-            return Ok(-1);
-        }
-        let mut preserved = unsafe { std::slice::from_raw_parts(buf, length) }.to_vec();
-        let mut pushback = CONSOLE_STDIN_PUSHBACK
+    fn record_console_stdin_chunk(buf: *const c_uchar, length: usize) -> Result<(), String> {
+        let chunk = unsafe { std::slice::from_raw_parts(buf, length) };
+        let mut stdin = CONSOLE_STDIN
             .lock()
-            .map_err(|_| "R worker stdin pushback lock poisoned".to_string())?;
-        preserved.append(&mut pushback);
-        *pushback = preserved;
+            .map_err(|_| "R worker console stdin lock poisoned".to_string())?;
+        if chunk.last() == Some(&b'\n') {
+            stdin.line_prefix.clear();
+        } else {
+            stdin.line_prefix.extend_from_slice(chunk);
+        }
+        Ok(())
+    }
+
+    fn cancel_console_stdin_read(buf: *const c_uchar, length: usize) -> Result<c_int, String> {
+        let chunk = unsafe { std::slice::from_raw_parts(buf, length) };
+        let mut stdin = CONSOLE_STDIN
+            .lock()
+            .map_err(|_| "R worker console stdin lock poisoned".to_string())?;
+        let mut preserved = std::mem::take(&mut stdin.line_prefix);
+        preserved.extend_from_slice(chunk);
+        preserved.append(&mut stdin.pushback);
+        stdin.pushback = preserved;
         Ok(-1)
     }
 }

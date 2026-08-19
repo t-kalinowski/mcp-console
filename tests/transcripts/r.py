@@ -1140,6 +1140,7 @@ def test_interrupts_managed_console_input(binary: Path) -> Transcript:
     try:
         client._initialize_and_list_tools()
 
+        r_prefix = "R" * 4_095
         # fmt: r
         r = code(r"""
             r_input_state <- 41L
@@ -1148,19 +1149,57 @@ def test_interrupts_managed_console_input(binary: Path) -> Transcript:
               interrupt = function(condition) cat("R input interrupted\n")
             )
             """)
-        client.send(r=r, stdin="R partial")
+        client.send(r=r, stdin=r_prefix + " partial")
+        client.transcript[-1]["send"]["stdin"] = "<R input spanning ReadConsole buffers>"
         assert last_tool_text(client) == (
-            '[input requested: "R interrupt> "]\n[stdin needed]'
+            '[input requested: "R interrupt> "]\n'
+            '[input requested: "R interrupt> "]\n'
+            "[stdin needed]"
         )
         time.sleep(0.05)
         client.session(action="interrupt")
         assert last_tool_text(client) == "[interrupt sent]"
         client.send(timeout_ms=3_000)
         assert last_tool_text(client) == "R input interrupted\n"
-        client.send(r='readline("R replay> ")', stdin="!\n")
+        # fmt: r
+        r = code(r"""
+            replayed <- readline("R replay> ")
+            cat(
+              nchar(replayed, type = "bytes"),
+              identical(replayed, paste0(strrep("R", 4095), " partial!")),
+              "\n",
+              sep = "|"
+            )
+            """)
+        client.send(r=r, stdin="!\n")
         assert last_tool_text(client) == (
-            '[input requested: "R replay> "]\n[1] "R partial!"\n'
+            '[input requested: "R replay> "]\n'
+            '[input requested: "R replay> "]\n'
+            "4104|TRUE|\n"
         )
+
+        # fmt: r
+        r = code(r"""
+            suspended_input <- "not read"
+            suspendInterrupts({
+              suspended_input <- readline("R suspended> ")
+            })
+            """)
+        client.send(r=r)
+        assert last_tool_text(client) == (
+            '[input requested: "R suspended> "]\n[stdin needed]'
+        )
+        time.sleep(0.05)
+        client.session(action="interrupt")
+        assert last_tool_text(client) == "[interrupt sent]"
+        client.send(stdin="accepted\n", timeout_ms=3_000)
+        output = last_tool_text(client)
+        assert output == "\n", repr(output)
+        client.transcript[-1]["result"]["content"][0]["text"] = (
+            "<deferred interrupt handled>"
+        )
+        client.send(r="suspended_input")
+        assert last_tool_text(client) == '[1] "accepted"\n'
 
         # fmt: python
         python = code("""

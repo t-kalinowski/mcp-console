@@ -48,7 +48,8 @@ void mcp_r_console_configure(
 
 /*
  * Rust returns -1 after reporting a cancelled read. Check the pending
- * interrupt here so R's jump cannot cross a live Rust frame.
+ * interrupt here so R's jump cannot cross a live Rust frame, and retry if R
+ * defers the interrupt instead of translating the cancellation into EOF.
  */
 int mcp_r_read_console(
     const char *prompt,
@@ -56,10 +57,9 @@ int mcp_r_read_console(
     int length,
     int add_history
 ) {
-    int status = read_console(prompt, buffer, length, add_history);
-    if (status < 0) {
+    int status;
+    while ((status = read_console(prompt, buffer, length, add_history)) < 0) {
         if (*interrupts_pending != 0) check_interrupt();
-        return 0;
     }
     return status;
 }

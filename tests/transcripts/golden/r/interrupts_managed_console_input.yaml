@@ -9,11 +9,12 @@ send:
       readline("R interrupt> "),
       interrupt = function(condition) cat("R input interrupted\n")
     )
-  stdin: R partial
+  stdin: "<R input spanning ReadConsole buffers>"
 result:
   content:
     - type: text
       text: |-
+        [input requested: "R interrupt> "]
         [input requested: "R interrupt> "]
         [stdin needed]
   isError: false
@@ -39,7 +40,14 @@ result:
 ---
 id: 6
 send:
-  r: "readline(\"R replay> \")"
+  r: |
+    replayed <- readline("R replay> ")
+    cat(
+      nchar(replayed, type = "bytes"),
+      identical(replayed, paste0(strrep("R", 4095), " partial!")),
+      "\n",
+      sep = "|"
+    )
   stdin: |
     !
 result:
@@ -47,10 +55,56 @@ result:
     - type: text
       text: |
         [input requested: "R replay> "]
-        [1] "R partial!"
+        [input requested: "R replay> "]
+        4104|TRUE|
   isError: false
 ---
 id: 7
+send:
+  r: |
+    suspended_input <- "not read"
+    suspendInterrupts({
+      suspended_input <- readline("R suspended> ")
+    })
+result:
+  content:
+    - type: text
+      text: |-
+        [input requested: "R suspended> "]
+        [stdin needed]
+  isError: false
+---
+id: 8
+session:
+  action: interrupt
+result:
+  content:
+    - type: text
+      text: "[interrupt sent]"
+  isError: false
+---
+id: 9
+send:
+  stdin: |
+    accepted
+  timeout_ms: 3000
+result:
+  content:
+    - type: text
+      text: "<deferred interrupt handled>"
+  isError: false
+---
+id: 10
+send:
+  r: suspended_input
+result:
+  content:
+    - type: text
+      text: |
+        [1] "accepted"
+  isError: false
+---
+id: 11
 send:
   python: |
     python_input_state = 41
@@ -67,7 +121,7 @@ result:
         [stdin needed]
   isError: false
 ---
-id: 8
+id: 12
 session:
   action: interrupt
 result:
@@ -76,7 +130,7 @@ result:
       text: "[interrupt sent]"
   isError: false
 ---
-id: 9
+id: 13
 send:
   timeout_ms: 3000
 result:
@@ -86,7 +140,7 @@ result:
         Python input interrupted
   isError: false
 ---
-id: 10
+id: 14
 send:
   python: "input(\"Python replay> \")"
   stdin: |
@@ -99,7 +153,7 @@ result:
         'Python partial!'
   isError: false
 ---
-id: 11
+id: 15
 send:
   r: r_input_state + 1L
 result:
@@ -109,7 +163,7 @@ result:
         [1] 42
   isError: false
 ---
-id: 12
+id: 16
 send:
   python: python_input_state + 1
 result:
