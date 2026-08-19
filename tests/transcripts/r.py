@@ -222,7 +222,6 @@ def test_snapshots_output_while_idle_later_callback_runs(binary: Path) -> Transc
         assert last_tool_text(client) == "\n[idle]"
         if time.monotonic() >= deadline:
             raise AssertionError("idle callback output was not collected")
-        time.sleep(0.01)
     polls = client.transcript[poll_start:]
     final_poll = polls[-1]
     final_poll["id"] = polls[0]["id"]
