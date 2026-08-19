@@ -272,6 +272,77 @@ result:
 id: 21
 send:
   r: |
+    tryCatch(
+      {
+        invisible(file.create(file.path(
+          tempdir(),
+          "caught-before-console-read"
+        )))
+        repeat {}
+      },
+      interrupt = function(condition) {
+        cat("caught before console read\n")
+      }
+    )
+    partial_after_interrupt <- .Call(
+      "mcp_test_read_console_once",
+      "after caught interrupt> "
+    )
+    nchar(partial_after_interrupt, type = "bytes")
+  timeout_ms: 0
+result:
+  content:
+    - type: text
+      text: "\n[running]"
+  isError: false
+---
+id: 22
+session:
+  action: interrupt
+result:
+  content:
+    - type: text
+      text: "[interrupt sent]"
+  isError: false
+---
+id: 23
+send:
+  timeout_ms: 3000
+result:
+  content:
+    - type: text
+      text: |-
+        caught before console read
+        [input requested: "after caught interrupt> "]
+        [stdin needed]
+  isError: false
+---
+id: 24
+send:
+  stdin: "<5000 c bytes>"
+  timeout_ms: 3000
+result:
+  content:
+    - type: text
+      text: |
+        [1] 4095
+  isError: false
+---
+id: 25
+send:
+  r: "identical(readline(\"after caught read> \"), strrep(\"c\", 905))"
+  stdin: "\n"
+result:
+  content:
+    - type: text
+      text: |
+        [input requested: "after caught read> "]
+        [1] TRUE
+  isError: false
+---
+id: 26
+send:
+  r: |
     invisible(.Call(
       "mcp_test_register_input_handler",
       file.path(tempdir(), "partial-handler-fifo"),
@@ -288,7 +359,7 @@ result:
       text: "[done]"
   isError: false
 ---
-id: 22
+id: 27
 send:
   r: "nchar(handler_partial, type = \"bytes\")"
 result:
@@ -299,7 +370,7 @@ result:
         [stdin needed]
   isError: false
 ---
-id: 23
+id: 28
 send:
   stdin: "<5000 h bytes>"
   timeout_ms: 3000
@@ -310,7 +381,7 @@ result:
         [1] 4095
   isError: false
 ---
-id: 24
+id: 29
 send:
   r: "identical(readline(\"after handler> \"), strrep(\"h\", 905))"
   stdin: "\n"
@@ -322,7 +393,7 @@ result:
         [1] TRUE
   isError: false
 ---
-id: 25
+id: 30
 send:
   r: |
     tryCatch(
@@ -350,7 +421,7 @@ result:
         [stdin needed]
   isError: false
 ---
-id: 26
+id: 31
 send:
   stdin: "<5000 x bytes>"
   timeout_ms: 50
@@ -360,7 +431,7 @@ result:
       text: "\n[running]"
   isError: false
 ---
-id: 27
+id: 32
 session:
   action: interrupt
 result:
@@ -369,7 +440,7 @@ result:
       text: "[interrupt sent]"
   isError: false
 ---
-id: 28
+id: 33
 send:
   timeout_ms: 3000
 result:
@@ -379,7 +450,7 @@ result:
         caught between-callback interrupt
   isError: false
 ---
-id: 29
+id: 34
 send:
   r: "identical(readline(\"after boundary> \"), strrep(\"x\", 5000))"
   stdin: "\n"
@@ -392,7 +463,7 @@ result:
         [1] TRUE
   isError: false
 ---
-id: 30
+id: 35
 send:
   r: interrupt_state
 result:
@@ -402,7 +473,7 @@ result:
         [1] 43
   isError: false
 ---
-id: 31
+id: 36
 session:
   action: interrupt
 result:
@@ -411,7 +482,7 @@ result:
       text: "[interrupt sent]"
   isError: false
 ---
-id: 32
+id: 37
 send:
   r: 6 * 7
 result:
@@ -420,7 +491,7 @@ result:
       text: "\n[1] 42\n"
   isError: false
 ---
-id: 33
+id: 38
 send:
   r: |
     setTimeLimit(elapsed = 10, transient = FALSE)
@@ -432,7 +503,7 @@ result:
       text: "[done]"
   isError: false
 ---
-id: 34
+id: 39
 send:
   r: "\"idle time does not consume a cell limit\""
 result:

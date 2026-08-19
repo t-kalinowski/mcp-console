@@ -1196,11 +1196,16 @@ def test_interrupts_running_r_evaluation(binary: Path) -> Transcript:
             client.session(action="interrupt")
             assert last_tool_text(client) == "[interrupt sent]"
             client.send(timeout_ms=3_000)
-            assert last_tool_text(client) == (
+            result = client.transcript[-1]["result"]
+            assert result["isError"] is False, result
+            output = last_tool_text(client)
+            expected = (
                 "caught readline interrupt\n"
                 "readline cleanup\n"
                 "continued after readline\n"
             )
+            assert output in {expected, f"\n{expected}"}, repr(output)
+            result["content"][0]["text"] = expected
 
             client.send(r='readline("after interrupt> ")', stdin="\n")
             assert last_tool_text(client) == (
@@ -1233,6 +1238,56 @@ def test_interrupts_running_r_evaluation(binary: Path) -> Transcript:
             )
             assert last_tool_text(client) == (
                 '[input requested: "after success> "]\n[1] TRUE\n'
+            )
+
+            # An earlier caught interrupt does not make a later successful
+            # buffer-full read tentative.
+            # fmt: r
+            r = code(r"""
+                tryCatch(
+                  {
+                    invisible(file.create(file.path(
+                      tempdir(),
+                      "caught-before-console-read"
+                    )))
+                    repeat {}
+                  },
+                  interrupt = function(condition) {
+                    cat("caught before console read\n")
+                  }
+                )
+                partial_after_interrupt <- .Call(
+                  "mcp_test_read_console_once",
+                  "after caught interrupt> "
+                )
+                nchar(partial_after_interrupt, type = "bytes")
+                """)
+            client.send(r=r, timeout_ms=0)
+            assert last_tool_text(client) == "\n[running]"
+            wait_for_worker_file(
+                temporary_path,
+                "caught-before-console-read",
+                client,
+            )
+            client.session(action="interrupt")
+            assert last_tool_text(client) == "[interrupt sent]"
+            client.send(timeout_ms=3_000)
+            assert last_tool_text(client) == (
+                "caught before console read\n"
+                '[input requested: "after caught interrupt> "]\n'
+                "[stdin needed]"
+            )
+            post_interrupt_line = "c" * 5_000
+            client.send(stdin=post_interrupt_line, timeout_ms=3_000)
+            assert last_tool_text(client) == "[1] 4095\n"
+            client.transcript[-1]["send"]["stdin"] = "<5000 c bytes>"
+
+            client.send(
+                r='identical(readline("after caught read> "), strrep("c", 905))',
+                stdin="\n",
+            )
+            assert last_tool_text(client) == (
+                '[input requested: "after caught read> "]\n[1] TRUE\n'
             )
 
             # The same commit rule applies when a ready input handler owns the
