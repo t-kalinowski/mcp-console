@@ -478,6 +478,7 @@ mod platform {
             Language::Python => evaluate_python_cell(cell.source, graphics, python),
             Language::Sql => evaluate_sql_cell(cell.source, sql),
         };
+        preserve_console_stdin_partial()?;
         if result.is_ok() && !WORKER_SHUTDOWN.load(Ordering::SeqCst) {
             if let Some(message) = take_worker_failure() {
                 return Err(message);
@@ -645,6 +646,7 @@ mod platform {
                 r_input_handlers(),
             );
         }
+        preserve_console_stdin_partial()?;
         EVALUATION_STARTED.store(false, Ordering::SeqCst);
         defer_interrupts(|| graphics.finish(), check_interrupts)?;
         observe_stdin_shutdown()
@@ -1019,9 +1021,22 @@ mod platform {
         let mut partial = CONSOLE_STDIN_PARTIAL
             .lock()
             .map_err(|_| "R worker partial stdin lock poisoned".to_string())?;
+        partial.extend_from_slice(unsafe { std::slice::from_raw_parts(buf, length) });
+        drop(partial);
+        preserve_console_stdin_partial()
+    }
+
+    fn preserve_console_stdin_partial() -> Result<(), String> {
+        // A top-level R unwind can bypass the next console callback that would
+        // otherwise finish or cancel this logical line.
+        let mut partial = CONSOLE_STDIN_PARTIAL
+            .lock()
+            .map_err(|_| "R worker partial stdin lock poisoned".to_string())?;
+        if partial.is_empty() {
+            return Ok(());
+        }
         let mut preserved = std::mem::take(&mut *partial);
         drop(partial);
-        preserved.extend_from_slice(unsafe { std::slice::from_raw_parts(buf, length) });
         let mut carry = CONSOLE_STDIN_CARRY
             .lock()
             .map_err(|_| "R worker stdin carry lock poisoned".to_string())?;

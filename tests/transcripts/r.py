@@ -1190,13 +1190,8 @@ def test_interrupts_running_r_evaluation(binary: Path) -> Transcript:
                 "r-readline-started",
                 client,
             )
-            partial_line = "x" * 5_000
-            client.send(stdin=partial_line, timeout_ms=50)
-            output = last_tool_text(client)
-            assert output == (
-                '[input requested: "interrupt> "]\n[stdin needed]'
-            ), repr(output)
-            client.transcript[-1]["send"]["stdin"] = "<5000 x bytes>"
+            client.send(stdin="preserved fragment", timeout_ms=50)
+            assert last_tool_text(client) == "\n[stdin needed]"
 
             client.session(action="interrupt")
             assert last_tool_text(client) == "[interrupt sent]"
@@ -1207,14 +1202,60 @@ def test_interrupts_running_r_evaluation(binary: Path) -> Transcript:
                 "continued after readline\n"
             )
 
+            client.send(r='readline("after interrupt> ")', stdin="\n")
+            assert last_tool_text(client) == (
+                '[input requested: "after interrupt> "]\n[1] "preserved fragment"\n'
+            )
+
+            # Return one full console buffer, then interrupt before another
+            # callback can commit the partial line.
+            # fmt: r
+            r = code(r"""
+                tryCatch(
+                  {
+                    partial <- .Call(
+                      "mcp_test_read_console_once",
+                      "between callbacks> "
+                    )
+                    stopifnot(nchar(partial, type = "bytes") == 4095L)
+                    invisible(file.create(file.path(
+                      tempdir(),
+                      "between-console-callbacks-started"
+                    )))
+                    repeat {}
+                  },
+                  interrupt = function(condition) {
+                    cat("caught between-callback interrupt\n")
+                  }
+                )
+                """)
+            client.send(r=r)
+            assert last_tool_text(client) == (
+                '[input requested: "between callbacks> "]\n[stdin needed]'
+            )
+            partial_line = "x" * 5_000
+            client.send(stdin=partial_line, timeout_ms=50)
+            assert last_tool_text(client) == "\n[running]"
+            client.transcript[-1]["send"]["stdin"] = "<5000 x bytes>"
+            wait_for_worker_file(
+                temporary_path,
+                "between-console-callbacks-started",
+                client,
+            )
+
+            client.session(action="interrupt")
+            assert last_tool_text(client) == "[interrupt sent]"
+            client.send(timeout_ms=3_000)
+            assert last_tool_text(client) == "caught between-callback interrupt\n"
+
             client.send(
-                r='identical(readline("after interrupt> "), strrep("x", 5000))',
+                r='identical(readline("after boundary> "), strrep("x", 5000))',
                 stdin="\n",
             )
             output = last_tool_text(client)
             assert output == (
-                '[input requested: "after interrupt> "]\n'
-                '[input requested: "after interrupt> "]\n'
+                '[input requested: "after boundary> "]\n'
+                '[input requested: "after boundary> "]\n'
                 "[1] TRUE\n"
             ), repr(output)
 

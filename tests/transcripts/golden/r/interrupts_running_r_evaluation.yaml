@@ -58,9 +58,7 @@ send:
 result:
   content:
     - type: text
-      text: |-
-
-        [running]
+      text: "\n[running]"
   isError: false
 ---
 id: 5
@@ -133,9 +131,7 @@ send:
 result:
   content:
     - type: text
-      text: |-
-
-        [running]
+      text: "\n[running]"
   isError: false
 ---
 id: 10
@@ -193,14 +189,12 @@ result:
 ---
 id: 14
 send:
-  stdin: "<5000 x bytes>"
+  stdin: preserved fragment
   timeout_ms: 50
 result:
   content:
     - type: text
-      text: |-
-        [input requested: "interrupt> "]
-        [stdin needed]
+      text: "\n[stdin needed]"
   isError: false
 ---
 id: 15
@@ -226,18 +220,87 @@ result:
 ---
 id: 17
 send:
-  r: "identical(readline(\"after interrupt> \"), strrep(\"x\", 5000))"
+  r: "readline(\"after interrupt> \")"
   stdin: "\n"
 result:
   content:
     - type: text
       text: |
         [input requested: "after interrupt> "]
-        [input requested: "after interrupt> "]
-        [1] TRUE
+        [1] "preserved fragment"
   isError: false
 ---
 id: 18
+send:
+  r: |
+    tryCatch(
+      {
+        partial <- .Call(
+          "mcp_test_read_console_once",
+          "between callbacks> "
+        )
+        stopifnot(nchar(partial, type = "bytes") == 4095L)
+        invisible(file.create(file.path(
+          tempdir(),
+          "between-console-callbacks-started"
+        )))
+        repeat {}
+      },
+      interrupt = function(condition) {
+        cat("caught between-callback interrupt\n")
+      }
+    )
+result:
+  content:
+    - type: text
+      text: |-
+        [input requested: "between callbacks> "]
+        [stdin needed]
+  isError: false
+---
+id: 19
+send:
+  stdin: "<5000 x bytes>"
+  timeout_ms: 50
+result:
+  content:
+    - type: text
+      text: "\n[running]"
+  isError: false
+---
+id: 20
+session:
+  action: interrupt
+result:
+  content:
+    - type: text
+      text: "[interrupt sent]"
+  isError: false
+---
+id: 21
+send:
+  timeout_ms: 3000
+result:
+  content:
+    - type: text
+      text: |
+        caught between-callback interrupt
+  isError: false
+---
+id: 22
+send:
+  r: "identical(readline(\"after boundary> \"), strrep(\"x\", 5000))"
+  stdin: "\n"
+result:
+  content:
+    - type: text
+      text: |
+        [input requested: "after boundary> "]
+        [input requested: "after boundary> "]
+        [1] TRUE
+  isError: false
+---
+id: 23
 send:
   r: interrupt_state
 result:
@@ -247,7 +310,7 @@ result:
         [1] 43
   isError: false
 ---
-id: 19
+id: 24
 session:
   action: interrupt
 result:
@@ -256,18 +319,16 @@ result:
       text: "[interrupt sent]"
   isError: false
 ---
-id: 20
+id: 25
 send:
   r: 6 * 7
 result:
   content:
     - type: text
-      text: |
-
-        [1] 42
+      text: "\n[1] 42\n"
   isError: false
 ---
-id: 21
+id: 26
 send:
   r: |
     setTimeLimit(elapsed = 10, transient = FALSE)
@@ -279,7 +340,7 @@ result:
       text: "[done]"
   isError: false
 ---
-id: 22
+id: 27
 send:
   r: "\"idle time does not consume a cell limit\""
 result:
