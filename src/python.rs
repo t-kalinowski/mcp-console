@@ -22,7 +22,7 @@ base::local({
   # Reticulate callable proxies convert results through an interruptible wrapper.
   # Keep helpers in one module, then use py_eval's direct conversion path.
   python_dispatch <-
-    "(lambda: None).__builtins__['__import__']('_mcp_console').dispatch()"
+    "(lambda: None).__builtins__['_mcp_console_dispatch']()"
   python_module <- NULL
   pending_requirements <- NULL
   source <- NULL
@@ -40,15 +40,22 @@ import types as _types
 
 
 class _McpConsoleMatplotlibLogFilter(_logging.Filter):
+    _mcp_console_filter = True
+
     def filter(self, record):
         return record.getMessage() != (
             "Matplotlib is building the font cache; this may take a moment."
         )
 
 
-_logging.getLogger("matplotlib.font_manager").addFilter(
-    _McpConsoleMatplotlibLogFilter()
-)
+_mcp_console_logger = _logging.getLogger("matplotlib.font_manager")
+_mcp_console_filter_installed = False
+for _mcp_console_filter in _mcp_console_logger.filters:
+    if _builtins.getattr(_mcp_console_filter, "_mcp_console_filter", False):
+        _mcp_console_filter_installed = True
+        break
+if not _mcp_console_filter_installed:
+    _mcp_console_logger.addFilter(_McpConsoleMatplotlibLogFilter())
 
 _mcp_console_image_state = [()]
 
@@ -157,6 +164,7 @@ _mcp_console.eval_cell = _mcp_console_eval_cell
 _mcp_console.take_images = _mcp_console_take_images
 _mcp_console.dispatch = _mcp_console_dispatch
 _sys.modules[_mcp_console.__name__] = _mcp_console
+_builtins.__dict__["_mcp_console_dispatch"] = _mcp_console_dispatch
 )---"
 
   manifest <- function(packages, python_version, exclude_newer) {

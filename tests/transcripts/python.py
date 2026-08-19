@@ -1078,7 +1078,7 @@ def test_retries_python_runtime_initialization_after_interrupt(
             assert result["isError"] is False, result
             output = last_tool_text(client)
             assert output in {"", "\n"}, repr(output)
-            result["content"][0]["text"] = "<interrupted>"
+            result["content"][0]["text"] = output.rstrip("\n")
 
             # fmt: r
             r = code(r"""
@@ -1092,7 +1092,21 @@ def test_retries_python_runtime_initialization_after_interrupt(
             assert last_tool_text(client) == "[1] 1\n"
 
             client.send(python="42")
-            assert last_tool_text(client) == "42\n"
+            output = last_tool_text(client)
+            assert output == "42\n", repr(output)
+            # fmt: python
+            python = code("""
+                import logging
+
+                sum(
+                    getattr(filter_, "_mcp_console_filter", False)
+                    for filter_ in logging.getLogger(
+                        "matplotlib.font_manager"
+                    ).filters
+                )
+                """)
+            client.send(python=python)
+            assert last_tool_text(client) == "1\n"
             transcript = client._finish()
             passed = True
             return transcript
@@ -1486,6 +1500,22 @@ def test_evaluates_cells_in_persistent_reticulate_state(binary: Path) -> Transcr
     client.send(python=python)
     assert last_tool_text(client) == "[done]"
     client.send(python="answer + 1")
+    assert last_tool_text(client) == "42\n"
+    # fmt: python
+    python = code("""
+        import builtins as test_builtins
+
+        test_original_import = test_builtins.__import__
+        test_builtins.__import__ = None
+        """)
+    client.send(python=python)
+    assert last_tool_text(client) == "[done]"
+    # fmt: python
+    python = code("""
+        test_builtins.__import__ = test_original_import
+        answer + 1
+        """)
+    client.send(python=python)
     assert last_tool_text(client) == "42\n"
     client.send(python="silent = True")
     assert last_tool_text(client) == "[done]"

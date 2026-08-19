@@ -151,7 +151,11 @@ result:
 ---
 id: 13
 send:
-  python: silent = True
+  python: |
+    import builtins as test_builtins
+
+    test_original_import = test_builtins.__import__
+    test_builtins.__import__ = None
 result:
   content:
     - type: text
@@ -159,6 +163,27 @@ result:
   isError: false
 ---
 id: 14
+send:
+  python: |
+    test_builtins.__import__ = test_original_import
+    answer + 1
+result:
+  content:
+    - type: text
+      text: |
+        42
+  isError: false
+---
+id: 15
+send:
+  python: silent = True
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+id: 16
 send:
   r: |
     rm(list = ls())
@@ -171,7 +196,7 @@ result:
         [1] 41
   isError: false
 ---
-id: 15
+id: 17
 send:
   python: |
     assigned_from_r

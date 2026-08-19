@@ -45,7 +45,7 @@ worker:
 worker:
   kind: console_diagnostic
   data: |2
-      File "<string>", line 98, in _mcp_console_eval_cell
+      File "<string>", line 105, in _mcp_console_eval_cell
 ---
 worker:
   kind: console_diagnostic

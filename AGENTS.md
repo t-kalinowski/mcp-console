@@ -156,7 +156,8 @@ A silent successful R cell sends `completed` without a console-text frame and pr
 Submitted R functions do not currently retain a source filename.
 Python cells run in the same worker through reticulate, retain `__main__` state, execute statements, and display a final expression through `sys.displayhook()`.
 Bridge helpers initialize before user Python runs in the reserved `_mcp_console` module, which remains available through `sys.modules` without adding a `__main__` binding.
-The Matplotlib load hook is registered before runtime initialization, and the module reference is retained only after import completes, so an interrupted first initialization retries without losing or duplicating the hook.
+The reserved `_mcp_console_dispatch` builtins entry holds the stable direct-conversion callable, so changing `builtins.__import__` does not affect dispatch.
+The Matplotlib load hook is registered before runtime initialization, and the module reference is retained only after import completes, so an interrupted first initialization retries without losing or duplicating the hook or its logging filter.
 Dispatch does not add or remove globals, and rebinding `__import__`, `exec`, `setattr`, or other ordinary globals does not replace bridge dispatch.
 Replacing `__main__.__builtins__` itself is unsupported.
 Python sees a 200-column terminal width, and NumPy `linewidth` and pandas `display.width` start at 200 when those modules load; evaluated code can change those settings.

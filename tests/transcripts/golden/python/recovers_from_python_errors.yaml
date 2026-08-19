@@ -17,7 +17,7 @@ result:
     - type: text
       text: |
         Traceback (most recent call last):
-          File "<string>", line 100, in _mcp_console_eval_cell
+          File "<string>", line 107, in _mcp_console_eval_cell
           File "<mcp-console:python:e1>", line 8, in <module>
           File "<mcp-console:python:e1>", line 5, in fail
         ValueError: boom
@@ -33,7 +33,7 @@ result:
     - type: text
       text: |
         Traceback (most recent call last):
-          File "<string>", line 92, in _mcp_console_eval_cell
+          File "<string>", line 99, in _mcp_console_eval_cell
           File "<mcp-console:python:e2>", line 2
         SyntaxError: 'await' outside function
   isError: false

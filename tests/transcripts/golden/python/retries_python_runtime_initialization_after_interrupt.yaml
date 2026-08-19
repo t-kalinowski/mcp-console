@@ -51,7 +51,7 @@ send:
 result:
   content:
     - type: text
-      text: "<interrupted>"
+      text: ""
   isError: false
 ---
 id: 7
@@ -77,5 +77,23 @@ result:
     - type: text
       text: |
         42
+  isError: false
+---
+id: 9
+send:
+  python: |
+    import logging
+
+    sum(
+        getattr(filter_, "_mcp_console_filter", False)
+        for filter_ in logging.getLogger(
+            "matplotlib.font_manager"
+        ).filters
+    )
+result:
+  content:
+    - type: text
+      text: |
+        1
   isError: false
 ...
