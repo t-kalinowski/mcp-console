@@ -247,6 +247,23 @@ def main() -> None:
             send(writer, {"kind": "completed"})
             continue
 
+        if source == "start partial sideband descendant":
+            child = os.fork()
+            if child == 0:
+                os.setsid()
+                reader.close()
+                for descriptor in (0, 1, 2):
+                    os.close(descriptor)
+                while True:
+                    signal.pause()
+            (temporary / "zod-sideband-descendant-pid").write_text(
+                str(child),
+                encoding="utf-8",
+            )
+            writer.write('{"kind":"console_output"')
+            writer.flush()
+            os._exit(86)
+
         if source == "stall with detached stdin":
             child = os.fork()
             if child == 0:

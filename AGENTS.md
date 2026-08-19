@@ -50,6 +50,7 @@ Worker `image` frames carry base64 data and a MIME type.
 Worker `console_output` and `console_diagnostic` frames carry ordinary and diagnostic console text.
 The server retains console channels and direct fd 1/2 identity until MCP projection.
 The server preserves sideband text and image order as MCP content blocks, coalesces adjacent text, and does not add `[done]` when an image is the only output.
+The server assembles sideband frames incrementally and checks a lifecycle-owned cancellation descriptor between pipe chunks, so a partial frame cannot hold worker retirement open.
 Explicit operation readers accept leading background console, image, input, Python-resolution, Python-version-selection, and Python-activation frames after sending their command.
 A worker whose background callback is waiting for a nested resolver reply queues the unrelated command, finishes the callback after the reply arrives, and then processes that command.
 The explicit operation's ordinary terminal includes the preceding background activity.
@@ -102,7 +103,9 @@ A failed restart resolution leaves the current worker, its in-memory state, requ
 After every required resolution succeeds, restart commits the R library, DuckDB extension set, and Python environment together, loses all worker-owned in-memory state and unread stdin, eagerly starts a replacement, and returns `[idle]` after it reports ready.
 The implicit session exists for the server lifetime, so restart starts its first worker if none exists yet.
 It first queues worker-stdin closure and the sideband shutdown message without waiting behind an evaluation, then force-stops the process group and reaps the direct sandbox process at the one-second deadline if that process remains live.
-It then waits for the active sideband operation to end, cancels the worker's stdin writer and standard-stream readers, drains standard-stream bytes already buffered at that boundary, and joins the tasks before reporting `[worker stopped: in-memory state lost]` or launching the replacement.
+Once the direct process stops, it cancels any active sideband read outside the worker-owner lock.
+The reader descriptor and any partial frame remain owned until the operation releases the worker for retirement.
+The server then cancels the worker's stdin writer and standard-stream readers, drains standard-stream bytes already buffered at that boundary, and joins the tasks before reporting `[worker stopped: in-memory state lost]` or launching the replacement.
 Each admitted evaluation or idle stdin write carries its worker generation, so work admitted before restart cannot reach the replacement.
 An R preparation cancelled while its IR resolver is active reports resolver cancellation.
 After preparation reaches the live worker, restart cancellation returns `R preparation cancelled by restart` when the call includes R and `Python preparation cancelled by restart` otherwise; active-generation sideband failures retain their transport diagnostics.
