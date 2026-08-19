@@ -76,9 +76,20 @@ def emit_background_stderr(root: Path) -> None:
     (root / "zod-background-stderr-emitted").touch()
 
 
-def wait_for_server_to_process_sideband(stream: TextIO) -> None:
-    """Block until the server has processed the preceding sideband frames."""
-    send_padded_output(stream, "")
+def wait_for_server_to_process_sideband(
+    reader: TextIO,
+    writer: TextIO,
+) -> None:
+    """Round trip through the operation consumer after preceding frames."""
+    send(
+        writer,
+        {
+            "kind": "resolve_python_version",
+            "request": {"constraints": [], "environment": {}},
+        },
+    )
+    response = json.loads(reader.readline())
+    assert response["kind"] == "python_version_resolution_failed", response
 
 
 def send_padded_output(stream: TextIO, data: str) -> None:
@@ -88,8 +99,8 @@ def send_padded_output(stream: TextIO, data: str) -> None:
     )
     # Flushing a frame only proves that it entered the kernel pipe.
     # The appended spaces are valid trailing JSON whitespace, so they do not
-    # change the message. Its size exceeds Darwin's pipe capacity, and FIFO
-    # backpressure forces the server to process prior frames before flush returns.
+    # change the message. Its size exceeds Darwin's pipe capacity, so flush can
+    # return only after the dedicated reader drains the frame from the pipe.
     stream.write(frame + (" " * (2 * 1024 * 1024)) + "\n")
     stream.flush()
 
@@ -332,7 +343,7 @@ def main() -> None:
             send_output(writer, f"zod stdin: {stdin}\n")
             # Prove that the receipt has cleared the provisional request before
             # the client polls, so the fixed grace cannot add another boundary.
-            wait_for_server_to_process_sideband(writer)
+            wait_for_server_to_process_sideband(reader, writer)
             (temporary / "zod-input-received").touch()
             send(writer, {"kind": "completed"})
             continue
@@ -504,7 +515,7 @@ def main() -> None:
             )
             if source == "emit output and image before completion":
                 send_output(writer, "after pending image\n")
-            wait_for_server_to_process_sideband(writer)
+            wait_for_server_to_process_sideband(reader, writer)
             (temporary / "zod-image-processed").touch()
             while not (temporary / "zod-release-image-completion").exists():
                 time.sleep(0.01)

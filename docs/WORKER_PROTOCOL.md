@@ -565,9 +565,9 @@ The minimum positive `R_wait_usec` or `Rg_wait_usec` value bounds the wait so `R
 This uses R's descriptor wait without a separate event loop or worker-owned fixed polling interval.
 
 After an idle handler turn, the worker returns to the same wait without sending an activity-specific terminal frame.
-Idle callback frames remain in the worker-to-server pipe until a code-bearing `send` or live requirement preparation reads them.
-The explicit command is queued when necessary, its reader handles the preceding frames, and its ordinary terminal fences the combined work.
-Because there is no continuous server reader, pipe-sized output or a managed-Python request can pause a callback until one of those operations begins collecting it.
+The dedicated server reader continuously removes idle callback frames from the worker-to-server pipe and queues decoded messages in memory.
+When a code-bearing `send` or live requirement preparation begins, its operation consumes those preceding messages before the explicit command's ordinary terminal fences the combined work.
+Pipe-sized output therefore no longer pauses a callback at pipe capacity; a managed-Python request can still pause it until an explicit operation consumes the queued request and sends the host reply.
 A code-bearing `send` can continue an idle callback's input request through the normal evaluation input state.
 Requirement preparation is noninteractive, so an idle input request stops the worker instead of blocking indefinitely.
 
