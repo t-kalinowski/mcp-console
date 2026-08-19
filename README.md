@@ -262,7 +262,7 @@ After either turn, a worker-stdin hangup marks shutdown before the worker can di
 Between cells, the worker uses `R_checkActivity()` to wait for either a registered R handler or the server sideband, without busy polling or a worker-owned fixed interval.
 Callbacks registered by packages such as `later` can therefore run after a cell has returned.
 A generation-long server reader continuously publishes their console output and images, services nested managed-Python requests, and tracks console input state.
-It assembles newline-delimited frames incrementally so retirement can cancel a partially received frame.
+It assembles newline-delimited frames incrementally so retirement can cancel a partially received frame and idle output is not bounded by sideband pipe capacity.
 An empty `send` snapshots the output already collected without signaling the worker or waiting for the callback.
 Before applying a live requirement preparation, the built-in worker gives registered R handlers one nonblocking turn, so a callback already ready when the command arrives is collected first.
 An empty `send` surfaces an idle callback's input request as `[stdin needed]`; a later stdin-only `send` continues it, and a call that already includes stdin can prequeue the input.

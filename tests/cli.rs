@@ -55,7 +55,7 @@ impl Drop for KillOnDrop {
 #[test]
 fn stdio_console_accepts_long_multibyte_source_lines() {
     let mut client = McpClient::start(&["serve"]);
-    let long_value = "é".repeat(3000);
+    let long_value = "é".repeat(100_000);
     let long_line = format!(
         r#"
 long_line_value <- "{long_value}"
@@ -64,7 +64,7 @@ nchar(long_line_value)
     );
     assert_eq!(
         client.call_console(2, json!({"r": long_line})),
-        "[1] 3000\n"
+        "[1] 100000\n"
     );
 }
 

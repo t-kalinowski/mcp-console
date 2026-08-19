@@ -127,6 +127,7 @@ impl Evaluation {
             .lock()
             .map_err(|_| "worker evaluation state lock poisoned".to_string())?;
         state.restart_reserved = true;
+        let waiting = state.waiting;
         let unfinished = !matches!(state.phase, EvaluationPhase::Complete(_));
         let completion = match state.phase {
             EvaluationPhase::Complete(completion) if !state.completion_collected => {
@@ -135,7 +136,6 @@ impl Evaluation {
             EvaluationPhase::Complete(_) => None,
             EvaluationPhase::Evaluating | EvaluationPhase::ReplacementStarting => None,
         };
-        let waiting = state.waiting;
         Ok(RestartReservation {
             evaluation: self.clone(),
             unfinished,

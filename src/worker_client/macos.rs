@@ -580,9 +580,11 @@ impl WorkerIoThread {
 
 impl WorkerCancellation {
     fn cancel(&self) {
-        if let Ok(mut cancel) = self.0.lock() {
-            drop(cancel.take());
-        }
+        let mut cancel = match self.0.lock() {
+            Ok(cancel) => cancel,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        drop(cancel.take());
     }
 }
 

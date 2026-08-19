@@ -3,10 +3,13 @@
 ---
 id: 3
 send:
-  r: start sideband descendant
+  r: start partial sideband descendant
+  timeout_ms: 0
 result:
   content:
     - type: text
-      text: "[done]"
+      text: |-
+
+        [running]
   isError: false
 ...

@@ -585,6 +585,7 @@ This uses R's descriptor wait without a separate event loop or worker-owned fixe
 After an idle handler turn, the worker returns to the same wait without sending an activity-specific terminal frame.
 The generation-long server reader publishes idle callback output and images as they arrive, services managed-Python requests, and retains idle input state.
 It assembles newline-delimited frames incrementally so a partial frame can be abandoned when retirement cancels the reader.
+Because it keeps draining complete chunks while the worker is idle, ordinary callback output is not bounded by sideband pipe capacity.
 An empty `send` only snapshots that server state; it sends no frame and does not wait for the callback to finish.
 A later stdin-only `send` can continue an outstanding idle input request, and a later code-bearing `send` adopts that request into the evaluation's ordinary input state.
 Requirement preparation is noninteractive, so an idle input request stops the worker instead of blocking indefinitely.
@@ -781,9 +782,11 @@ When the source is `complete after timeout`, it pauses briefly before returning 
 When the source is `violate protocol`, it sends an unexpected second `ready` message.
 When the source is `exit unexpectedly`, it exits with status 86 without replying.
 The `emit stdout` and `start background stderr` modes exercise continuous standard-stream capture during evaluation and after completion.
-The `start partial sideband descendant` mode leaves an incomplete JSON frame open in a detached descendant so restart coverage can verify cancellable framing.
+The `start background sideband` mode writes a pipe-filling console frame after its initiating evaluation completes to verify continuous idle draining.
+The `start partial sideband descendant` mode leaves an incomplete JSON frame open in a detached descendant so restart and shutdown coverage can verify cancellable framing.
 A startup mode emits a resolver callback immediately after `ready` to verify that replacement lifecycle readiness precedes callback dispatch.
-The `stall with detached stdin` mode leaves fd 0 open in a session-detached child without reading it so shutdown coverage can fill the pipe and verify bounded writer cancellation.
+The `stall
+with detached stdin` mode leaves fd 0 open in a session-detached child without reading it so shutdown coverage can fill the pipe and verify bounded writer cancellation.
 When the source is `request input`, it sends `input_requested`, calls Python `input()` to consume one line from fd 0, and sends `input_received` after that call returns.
 The `request input after timeout` mode gates that request until an earlier MCP wait expires, consumes prequeued stdin, emits output while the request remains provisional, then checkpoints after its receipt is processed to cover retention and delimiting of that still-unexposed request record.
 The `input without request` and `input length without request` modes call `input()` without first sending a frame, covering proactive fd-0 delivery, including input queued while Zod is idle.

@@ -90,6 +90,17 @@ def wait_for_server_to_process_sideband(stream: TextIO) -> None:
     stream.flush()
 
 
+def send_padded_output(stream: TextIO, data: str) -> None:
+    frame = json.dumps(
+        {"kind": ConsoleKind.OUTPUT, "data": data},
+        separators=(",", ":"),
+    )
+    # The trailing JSON whitespace makes the frame exceed Darwin's pipe
+    # capacity without changing the decoded message.
+    stream.write(frame + (" " * (2 * 1024 * 1024)) + "\n")
+    stream.flush()
+
+
 def configure_startup(root: Path) -> bool:
     control_path = os.environ.get("ZOD_STARTUP_CONTROL")
     if control_path is None:
@@ -264,19 +275,19 @@ def main() -> None:
             send(writer, {"kind": "completed"})
             continue
 
-        if source == "start sideband descendant":
+        if source == "start background sideband":
             child = os.fork()
             if child == 0:
-                os.setsid()
                 reader.close()
                 for descriptor in (0, 1, 2):
                     os.close(descriptor)
-                while True:
-                    signal.pause()
-            (temporary / "zod-sideband-descendant-pid").write_text(
-                str(child),
-                encoding="utf-8",
-            )
+                release = temporary / "zod-release-background-sideband"
+                while not release.exists():
+                    time.sleep(0.01)
+                send_padded_output(writer, "zod background sideband\n")
+                (temporary / "zod-background-sideband-emitted").touch()
+                os._exit(0)
+            (temporary / "zod-background-sideband-started").touch()
             send(writer, {"kind": "completed"})
             continue
 

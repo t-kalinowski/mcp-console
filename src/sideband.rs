@@ -9,16 +9,21 @@ use serde::de::DeserializeOwned;
 
 const READ_FD_ENV: &str = "MCP_CONSOLE_SIDEBAND_READ_FD";
 const WRITE_FD_ENV: &str = "MCP_CONSOLE_SIDEBAND_WRITE_FD";
+const READ_CHUNK_SIZE: usize = 8 * 1024;
 
 static SIDEBAND_ALLOWED: AtomicBool = AtomicBool::new(true);
 static FORK_READ_FD: AtomicI32 = AtomicI32::new(-1);
 static FORK_WRITE_FD: AtomicI32 = AtomicI32::new(-1);
 static ATFORK_RESULT: OnceLock<libc::c_int> = OnceLock::new();
 
+trait ReadFd: Read + AsRawFd {}
+
+impl<T: Read + AsRawFd> ReadFd for T {}
+
 pub(crate) struct Reader {
-    inner: Box<dyn Read + Send>,
+    inner: Box<dyn ReadFd + Send>,
     buffer: Vec<u8>,
-    raw_fd: RawFd,
+    scanned: usize,
 }
 
 #[derive(Clone)]
@@ -72,11 +77,10 @@ pub(crate) fn connect_from_env() -> io::Result<(Reader, Writer)> {
 
 impl Reader {
     fn new(reader: impl Read + AsRawFd + Send + 'static) -> Self {
-        let raw_fd = reader.as_raw_fd();
         Self {
             inner: Box::new(reader),
             buffer: Vec::new(),
-            raw_fd,
+            scanned: 0,
         }
     }
 
@@ -90,24 +94,22 @@ impl Reader {
             if let Some(message) = self.take_message()? {
                 return Ok(message);
             }
-            self.read_more()?;
+            match self.read_chunk() {
+                Ok(()) => {}
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                Err(error) => return Err(error),
+            }
         }
     }
 
-    /// Reads at most the bytes currently available and returns one complete frame.
-    pub(crate) fn receive_available<T: DeserializeOwned>(&mut self) -> io::Result<Option<T>> {
-        if let Some(message) = self.take_message()? {
-            return Ok(Some(message));
-        }
-        match self.read_more() {
-            Ok(()) => self.take_message(),
-            Err(error) if error.kind() == io::ErrorKind::WouldBlock => Ok(None),
-            Err(error) => Err(error),
-        }
+    /// Returns one complete frame already assembled from prior reads.
+    pub(crate) fn receive_buffered<T: DeserializeOwned>(&mut self) -> io::Result<Option<T>> {
+        self.take_message()
     }
 
-    fn read_more(&mut self) -> io::Result<()> {
-        let mut buffer = [0; 8 * 1024];
+    /// Reads one chunk after the caller observes descriptor readiness.
+    pub(crate) fn read_chunk(&mut self) -> io::Result<()> {
+        let mut buffer = [0; READ_CHUNK_SIZE];
         match self.inner.read(&mut buffer)? {
             0 if self.buffer.is_empty() => Err(io::Error::new(
                 io::ErrorKind::UnexpectedEof,
@@ -125,10 +127,17 @@ impl Reader {
     }
 
     fn take_message<T: DeserializeOwned>(&mut self) -> io::Result<Option<T>> {
-        let Some(newline) = self.buffer.iter().position(|byte| *byte == b'\n') else {
+        let Some(newline) = self.buffer[self.scanned..]
+            .iter()
+            .position(|byte| *byte == b'\n')
+            .map(|newline| self.scanned + newline)
+        else {
+            self.scanned = self.buffer.len();
             return Ok(None);
         };
         let mut line = self.buffer.drain(..=newline).collect::<Vec<_>>();
+        self.scanned = 0;
+        self.buffer.shrink_to(READ_CHUNK_SIZE);
         line.pop();
         if line.last() == Some(&b'\r') {
             line.pop();
@@ -141,7 +150,7 @@ impl Reader {
 
 impl AsRawFd for Reader {
     fn as_raw_fd(&self) -> RawFd {
-        self.raw_fd
+        self.inner.as_raw_fd()
     }
 }
 

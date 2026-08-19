@@ -3,7 +3,7 @@
 ---
 id: 3
 send:
-  r: start sideband descendant
+  r: start background sideband
 result:
   content:
     - type: text
@@ -11,24 +11,13 @@ result:
   isError: false
 ---
 id: 4
-session:
-  action: restart
-result:
-  content:
-    - type: text
-      text: |-
-        [worker stopped: in-memory state lost]
-        [starting new worker]
-        [idle]
-  isError: false
----
-id: 5
 send:
   r: echo
 result:
   content:
     - type: text
       text: |
+        zod background sideband
         zod: echo
   isError: false
 ...

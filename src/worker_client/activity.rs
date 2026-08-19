@@ -62,51 +62,62 @@ impl Activity {
         thread::spawn(move || {
             let mut python_candidates = Vec::new();
             loop {
-                let message = match reader.receive_available() {
-                    Ok(Some(message)) => message,
-                    Ok(None) => {
-                        let events = match super::platform::wait_for_worker_io(
-                            reader.as_raw_fd(),
-                            libc::POLLIN,
-                            &cancelled,
-                        ) {
-                            Ok(events) => events,
-                            Err(error) => {
-                                activity.fail(format!("worker sideband read failed: {error}"));
-                                return;
-                            }
-                        };
-                        if events.cancelled {
-                            activity.fail("worker sideband reader cancelled".to_string());
+                while let Some(message) = match reader.receive_buffered() {
+                    Ok(message) => message,
+                    Err(error) => {
+                        activity.fail(format!("worker sideband read failed: {error}"));
+                        return;
+                    }
+                } {
+                    let keep_reading = match handle_message(
+                        message,
+                        &activity,
+                        &writer,
+                        &output,
+                        &callbacks,
+                        &mut python_candidates,
+                        &cancelled,
+                    ) {
+                        Ok(keep_reading) => keep_reading,
+                        Err(error) => {
+                            activity.fail(error);
                             return;
                         }
-                        if !events.ready {
-                            continue;
-                        }
-                        continue;
+                    };
+                    if !keep_reading {
+                        return;
                     }
+                }
+
+                let events = match super::platform::wait_for_worker_io(
+                    reader.as_raw_fd(),
+                    libc::POLLIN,
+                    &cancelled,
+                ) {
+                    Ok(events) => events,
                     Err(error) => {
                         activity.fail(format!("worker sideband read failed: {error}"));
                         return;
                     }
                 };
-                let keep_reading = match handle_message(
-                    message,
-                    &activity,
-                    &writer,
-                    &output,
-                    &callbacks,
-                    &mut python_candidates,
-                    &cancelled,
-                ) {
-                    Ok(keep_reading) => keep_reading,
+                if events.cancelled {
+                    activity.fail("worker sideband reader cancelled".to_string());
+                    return;
+                }
+                if !events.ready {
+                    continue;
+                }
+                match reader.read_chunk() {
+                    Ok(()) => {}
+                    Err(error)
+                        if matches!(
+                            error.kind(),
+                            std::io::ErrorKind::Interrupted | std::io::ErrorKind::WouldBlock
+                        ) => {}
                     Err(error) => {
-                        activity.fail(error);
+                        activity.fail(format!("worker sideband read failed: {error}"));
                         return;
                     }
-                };
-                if !keep_reading {
-                    return;
                 }
             }
         })

@@ -58,7 +58,7 @@ Worker `console_output` and `console_diagnostic` frames carry ordinary and diagn
 The server retains console channels and direct fd 1/2 identity until MCP projection.
 The server preserves sideband text and image order as MCP content blocks, coalesces adjacent text, and does not add `[done]` when an image is the only output.
 One generation-long sideband reader continuously publishes background console and image frames, handles Python-resolution, Python-version-selection, and Python-activation frames, and retains idle input state.
-It assembles newline-delimited frames incrementally and returns to its cancellation poll after each available chunk, so an incomplete frame cannot block retirement.
+It assembles newline-delimited frames incrementally and returns to its cancellation poll after each available chunk, so an incomplete frame cannot block retirement and idle output is not bounded by sideband pipe capacity.
 A worker whose background callback is waiting for a nested resolver reply queues an unrelated command, finishes the callback after the reply arrives, and then processes that command.
 An explicit operation registers only its expected terminal.
 At evaluation `completed`, the reader records an output-tape checkpoint so later background activity remains pending for the next response.
@@ -136,7 +136,7 @@ Between cells, the worker temporarily adds the sideband descriptor to R's input-
 It removes that temporary handler before running R code, so fork children inherit no stale sideband handler.
 R handler errors remain below `R_ToplevelExec()`, and the worker uses no worker-owned fixed polling interval or second event loop.
 A generation-long server reader continuously consumes idle console output and images, services nested managed-Python requests, and retains idle console-input state.
-It assembles newline-delimited sideband frames incrementally, returning to the cancellation poll after each available chunk, so a partial frame cannot block worker retirement.
+It assembles newline-delimited sideband frames incrementally, returning to the cancellation poll after each available chunk, so a partial frame cannot block worker retirement and pipe backpressure cannot pause ordinary idle output.
 Before applying a live requirement preparation, the built-in worker gives registered R handlers one nonblocking turn, so a callback already ready when the command arrives is collected first.
 An empty `send` immediately snapshots an idle callback's pending output and surfaces an outstanding input request as `[stdin needed]`; a later stdin-only `send` continues it, and a call that already includes stdin can prequeue the input.
 A code-bearing `send` can also continue an idle input request.
