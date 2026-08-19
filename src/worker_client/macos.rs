@@ -50,8 +50,13 @@ struct WorkerIoEvents {
     cancelled: bool,
 }
 
+struct SidebandCancellationState {
+    signal: Option<std::io::PipeWriter>,
+    retirement_bytes: Option<usize>,
+}
+
 #[derive(Clone)]
-struct SidebandCancellation(Arc<Mutex<Option<std::io::PipeWriter>>>);
+struct SidebandCancellation(Arc<Mutex<SidebandCancellationState>>);
 
 #[derive(Clone)]
 pub(super) struct StdinSender(mpsc::Sender<StdinMessage>);
@@ -408,6 +413,20 @@ impl Worker {
                     return Err(format!("worker sideband read failed: {error}"));
                 }
             }
+            if let Some(remaining) = self.sideband_cancel.retirement_bytes()? {
+                if remaining == 0 {
+                    return Err("worker sideband reader cancelled".to_string());
+                }
+                let length = match self.reader.read_chunk_up_to(remaining) {
+                    Ok(length) => length,
+                    Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                    Err(error) => {
+                        return Err(format!("worker sideband read failed: {error}"));
+                    }
+                };
+                self.sideband_cancel.record_retirement_read(length)?;
+                continue;
+            }
             let events = wait_for_worker_io(
                 self.reader.as_raw_fd(),
                 libc::POLLIN,
@@ -415,13 +434,16 @@ impl Worker {
             )
             .map_err(|error| format!("worker sideband read failed: {error}"))?;
             if events.cancelled {
-                return Err("worker sideband reader cancelled".to_string());
+                let readable = buffered_worker_bytes(self.reader.as_raw_fd())
+                    .map_err(|error| format!("worker sideband read failed: {error}"))?;
+                self.sideband_cancel.begin_retirement(readable)?;
+                continue;
             }
             if !events.ready {
                 continue;
             }
             match self.reader.read_chunk() {
-                Ok(()) => {}
+                Ok(_) => {}
                 Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
                 Err(error) => {
                     return Err(format!("worker sideband read failed: {error}"));
@@ -550,13 +572,9 @@ fn drain_buffered_output(
     output: &super::DirectOutput,
     buffer: &mut [u8],
 ) {
-    let mut remaining: libc::c_int = 0;
-    // SAFETY: `stream` remains open and `remaining` points to writable storage
-    // of the type expected by FIONREAD.
-    if unsafe { libc::ioctl(stream.as_raw_fd(), libc::FIONREAD, &mut remaining) } < 0 {
+    let Ok(mut remaining) = buffered_worker_bytes(stream.as_raw_fd()) else {
         return;
-    }
-    let mut remaining = remaining.max(0) as usize;
+    };
     while remaining > 0 {
         let length = remaining.min(buffer.len());
         match stream.read(&mut buffer[..length]) {
@@ -569,6 +587,16 @@ fn drain_buffered_output(
             Err(_) => break,
         }
     }
+}
+
+fn buffered_worker_bytes(descriptor: RawFd) -> std::io::Result<usize> {
+    let mut remaining: libc::c_int = 0;
+    // SAFETY: `descriptor` remains open and `remaining` points to writable
+    // storage of the type expected by FIONREAD.
+    if unsafe { libc::ioctl(descriptor, libc::FIONREAD, &mut remaining) } < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(remaining.max(0) as usize)
 }
 
 fn wait_for_worker_io(
@@ -619,7 +647,10 @@ fn sideband_cancellation_pipe() -> Result<(std::io::PipeReader, SidebandCancella
     let (cancelled, cancel) = cancellation_pipe("sideband")?;
     Ok((
         cancelled,
-        SidebandCancellation(Arc::new(Mutex::new(Some(cancel)))),
+        SidebandCancellation(Arc::new(Mutex::new(SidebandCancellationState {
+            signal: Some(cancel),
+            retirement_bytes: None,
+        }))),
     ))
 }
 
@@ -707,12 +738,43 @@ impl WorkerIoThread {
 }
 
 impl SidebandCancellation {
+    fn retirement_bytes(&self) -> Result<Option<usize>, String> {
+        self.0
+            .lock()
+            .map(|state| state.retirement_bytes)
+            .map_err(|_| "worker sideband cancellation lock poisoned".to_string())
+    }
+
+    fn begin_retirement(&self, readable: usize) -> Result<(), String> {
+        let mut state = self
+            .0
+            .lock()
+            .map_err(|_| "worker sideband cancellation lock poisoned".to_string())?;
+        state.retirement_bytes.get_or_insert(readable);
+        Ok(())
+    }
+
+    fn record_retirement_read(&self, length: usize) -> Result<(), String> {
+        let mut state = self
+            .0
+            .lock()
+            .map_err(|_| "worker sideband cancellation lock poisoned".to_string())?;
+        let remaining = state
+            .retirement_bytes
+            .as_mut()
+            .ok_or_else(|| "worker sideband retirement was not started".to_string())?;
+        *remaining = remaining
+            .checked_sub(length)
+            .ok_or_else(|| "worker sideband retirement read exceeded its boundary".to_string())?;
+        Ok(())
+    }
+
     fn cancel(&self) {
-        let mut cancel = match self.0.lock() {
-            Ok(cancel) => cancel,
+        let mut state = match self.0.lock() {
+            Ok(state) => state,
             Err(poisoned) => poisoned.into_inner(),
         };
-        drop(cancel.take());
+        drop(state.signal.take());
     }
 }
 

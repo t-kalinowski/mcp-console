@@ -1657,7 +1657,6 @@ def test_orders_explicit_restart_output(binary: Path) -> Transcript:
         result = client.transcript[-1]["result"]
         assert result["isError"] is False, result
         expected = large_output("zod stdin closed\n") + (
-            "\n[active evaluation stopped by session restart request]"
             "\n[worker stopped: in-memory state lost]"
             "\n[starting new worker]"
             "\nzod replacement startup ready"
@@ -1666,7 +1665,6 @@ def test_orders_explicit_restart_output(binary: Path) -> Transcript:
         assert result["content"] == [{"type": "text", "text": expected}], result
         result["content"][0]["text"] = (
             "zod stdin closed\n<large output>\n"
-            "[active evaluation stopped by session restart request]\n"
             "[worker stopped: in-memory state lost]\n"
             "[starting new worker]\n"
             "zod replacement startup ready\n"
@@ -1943,14 +1941,12 @@ def test_restart_closes_worker_stdin(binary: Path) -> Transcript:
         output = last_tool_text(client)
         prefix = "zod stdin closed\n" + ("x" * LARGE_OUTPUT_SIZE)
         suffix = "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
-        suffix = "[active evaluation stopped by session restart request]\n" + suffix
         assert output.startswith(prefix), "worker stdin did not close before restart"
         assert output.endswith(suffix), "lifecycle notices followed old-worker output"
         barrier = output.removeprefix(prefix).removesuffix(suffix)
         assert barrier and not barrier.strip("y\n"), "unexpected old-worker output"
         client.transcript[-1]["result"]["content"][0]["text"] = (
             "zod stdin closed\n<large output>\n"
-            "[active evaluation stopped by session restart request]\n"
             "[worker stopped: in-memory state lost]\n"
             "[starting new worker]\n"
             "[idle]"
@@ -2258,6 +2254,58 @@ def test_shuts_down_stalled_worker(binary: Path) -> Transcript:
         finally:
             if not passed:
                 stop_process_group(worker_group)
+                stop_process(client.process)
+
+
+def test_restart_drains_completion_emitted_during_shutdown(
+    binary: Path,
+) -> Transcript:
+    zod = Path(__file__).resolve().parents[1] / "fixtures" / "zod"
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        temporary_path = Path(temporary_directory)
+        environment = os.environ.copy()
+        environment["TMPDIR"] = temporary_directory
+        client = McpClient(
+            binary,
+            ("serve", "--worker", str(zod)),
+            environment,
+        )
+        descendant_group = None
+        passed = False
+        try:
+            client._initialize_and_list_tools()
+            client.send(r="complete during shutdown", timeout_ms=0)
+            assert last_tool_text(client) == "\n[running]"
+            wait_for_marker(
+                temporary_path,
+                "zod-waiting-for-shutdown",
+                client,
+            )
+            marker = wait_for_marker(
+                temporary_path,
+                "zod-sideband-descendant-pid",
+                client,
+            )
+            descendant_group = int(marker.read_text(encoding="utf-8"))
+
+            client.session(action="restart")
+            assert last_tool_text(client) == (
+                "zod completed during shutdown\n"
+                "[worker stopped: in-memory state lost]\n"
+                "[starting new worker]\n"
+                "[idle]"
+            )
+
+            stop_process_group(descendant_group)
+            descendant_group = None
+            client.send(r="echo")
+            assert last_tool_text(client) == "zod: echo\n"
+            transcript = client._finish()
+            passed = True
+            return transcript
+        finally:
+            stop_process_group(descendant_group)
+            if not passed:
                 stop_process(client.process)
 
 

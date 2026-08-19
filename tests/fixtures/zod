@@ -247,6 +247,26 @@ def main() -> None:
             send(writer, {"kind": "completed"})
             continue
 
+        if source == "complete during shutdown":
+            child = os.fork()
+            if child == 0:
+                os.setsid()
+                reader.close()
+                for descriptor in (0, 1, 2):
+                    os.close(descriptor)
+                while True:
+                    signal.pause()
+            (temporary / "zod-sideband-descendant-pid").write_text(
+                str(child),
+                encoding="utf-8",
+            )
+            (temporary / "zod-waiting-for-shutdown").touch()
+            shutdown = json.loads(reader.readline())
+            assert shutdown == {"kind": "shutdown"}, shutdown
+            send_output(writer, "zod completed during shutdown\n")
+            send(writer, {"kind": "completed"})
+            os._exit(0)
+
         if source == "start partial sideband descendant":
             child = os.fork()
             if child == 0:

@@ -759,6 +759,7 @@ When the source is `complete after timeout`, it pauses briefly before returning 
 When the source is `violate protocol`, it sends an unexpected second `ready` message.
 When the source is `exit unexpectedly`, it exits with status 86 without replying.
 The `emit stdout` and `start background stderr` modes exercise continuous standard-stream capture during evaluation and after completion.
+The `complete during shutdown` mode emits console output and `completed` after receiving the server's shutdown frame, then leaves the write descriptor open in a session-detached child so restart coverage can verify retirement-boundary draining.
 The `start partial sideband descendant` mode writes an incomplete JSON frame, exits the direct worker, and leaves the write descriptor open in a session-detached child so restart and shutdown can verify cancellable framing.
 The `stall with detached stdin` mode leaves fd 0 open in a session-detached child without reading it so shutdown coverage can fill the pipe and verify bounded writer cancellation.
 When the source is `request input`, it sends `input_requested`, calls Python `input()` to consume one line from fd 0, and sends `input_received` after that call returns.

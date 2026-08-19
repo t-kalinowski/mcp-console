@@ -334,9 +334,8 @@ impl Client {
         let mut wait_for_send = None;
         let mut interrupted = false;
         if let Some(evaluation) = evaluation {
-            let unfinished = evaluation.unfinished();
+            let (unfinished, old_output) = evaluation.project_response(old_output)?;
             interrupted = unfinished;
-            let old_output = evaluation.project_response(old_output);
             if evaluation.waiting {
                 let mut send_output = old_output;
                 if unfinished {

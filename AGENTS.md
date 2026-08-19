@@ -104,6 +104,7 @@ After every required resolution succeeds, restart commits the R library, DuckDB 
 The implicit session exists for the server lifetime, so restart starts its first worker if none exists yet.
 It first queues worker-stdin closure and the sideband shutdown message without waiting behind an evaluation, then force-stops the process group and reaps the direct sandbox process at the one-second deadline if that process remains live.
 Once the direct process stops, it cancels any active sideband read outside the worker-owner lock.
+At that boundary, the reader drains only the sideband bytes already readable before honoring cancellation, preserving complete queued frames without allowing later descendant writes to extend retirement.
 The reader descriptor and any partial frame remain owned until the operation releases the worker for retirement.
 The server then cancels the worker's stdin writer and standard-stream readers, drains standard-stream bytes already buffered at that boundary, and joins the tasks before reporting `[worker stopped: in-memory state lost]` or launching the replacement.
 Each admitted evaluation or idle stdin write carries its worker generation, so work admitted before restart cannot reach the replacement.
