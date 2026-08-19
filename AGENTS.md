@@ -155,6 +155,7 @@ Graphics devices opened explicitly by evaluated code, such as with `grDevices::p
 A silent successful R cell sends `completed` without a console-text frame and projects to `[done]` when no other response text is pending.
 Submitted R functions do not currently retain a source filename.
 Python cells run in the same worker through reticulate, retain `__main__` state, execute statements, and display a final expression through `sys.displayhook()`.
+Bridge helpers initialize before user Python runs and remain outside `__main__`; rebinding `__builtins__`, `__import__`, `exec`, `setattr`, or helper-like globals does not replace bridge dispatch.
 Python sees a 200-column terminal width, and NumPy `linewidth` and pandas `display.width` start at 200 when those modules load; evaluated code can change those settings.
 Python source uses a synthetic evaluation filename, and uncaught exceptions print a Python traceback as a normal language outcome with `isError: false`.
 R plots invoked through reticulate's `r` bridge use the managed R graphics lifecycle and return as MCP images under the same sizing, cell-scope, and device-ownership rules as R cells.

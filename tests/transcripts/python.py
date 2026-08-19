@@ -952,9 +952,9 @@ def test_interrupts_running_python_evaluation(binary: Path) -> Transcript:
                   "py_eval",
                   where = asNamespace("reticulate")
                 )))
-                # Poison reticulate's cached result wrapper before MCP Console
-                # initializes its private Python evaluator. The evaluator must
-                # return through direct conversion instead of that wrapper.
+                # Poison reticulate's cached result wrapper after MCP Console
+                # initializes its private Python evaluator. Cell results must
+                # still return through direct conversion instead of that wrapper.
                 invisible(reticulate::py_eval(
                   r"---(
                 exec(
@@ -1298,11 +1298,15 @@ def test_evaluates_cells_in_persistent_reticulate_state(binary: Path) -> Transcr
             answer + 1,
             (__import__, exec, setattr) == (None, None, None),
             (_io, _main, _sys, sorted) == ("user io", "user main", "user sys", "user sorted"),
+            not any(
+                name.startswith("_mcp_console_bridge_")
+                for name in globals()
+            ),
         )
         """)
     client.send(python=python)
     output = last_tool_text(client)
-    assert output == "from Python\n(42, True, True)\n", repr(output)
+    assert output == "from Python\n(42, True, True, True)\n", repr(output)
     # fmt: python
     python = code("""
         1
@@ -1368,6 +1372,10 @@ def test_evaluates_cells_in_persistent_reticulate_state(binary: Path) -> Transcr
         """)
     client.send(python=python)
     assert last_tool_text(client) == "43\n"
+    client.send(python="__builtins__ = None\n42")
+    assert last_tool_text(client) == "42\n"
+    client.send(python="42")
+    assert last_tool_text(client) == "42\n"
     return client._finish()
 
 
