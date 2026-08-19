@@ -147,10 +147,15 @@ impl WorkerRuntime {
         if let Err(error) = on_started(worker.shutdown_handle()) {
             return Err(worker.startup_failure(error));
         }
-        let ready = match reader.receive() {
+        if let Err(error) = set_nonblocking(&reader) {
+            return Err(
+                worker.startup_failure(format!("failed to configure worker sideband: {error}"))
+            );
+        }
+        let ready = match receive_startup_message(&mut reader, &sideband_cancelled) {
             Ok(message) => message,
             Err(error) => {
-                return Err(worker.startup_failure(format!("worker sideband read failed: {error}")));
+                return Err(worker.startup_failure(error));
             }
         };
         let error = match ready {
@@ -165,11 +170,6 @@ impl WorkerRuntime {
         };
         if let Some(error) = error {
             return Err(worker.startup_failure(error));
-        }
-        if let Err(error) = set_nonblocking(&reader) {
-            return Err(
-                worker.startup_failure(format!("failed to configure worker sideband: {error}"))
-            );
         }
         let sideband_guard = duplicate_fd(&reader).map_err(|error| {
             worker.startup_failure(format!(
@@ -312,6 +312,37 @@ impl Worker {
         match self.shutdown(Instant::now()) {
             Ok(()) => message,
             Err(error) => format!("{message}; additionally failed to stop the worker: {error}"),
+        }
+    }
+}
+
+fn receive_startup_message(
+    reader: &mut crate::sideband::Reader,
+    cancelled: &std::io::PipeReader,
+) -> Result<WorkerMessage, String> {
+    loop {
+        if let Some(message) = reader
+            .receive_buffered()
+            .map_err(|error| format!("worker sideband read failed: {error}"))?
+        {
+            return Ok(message);
+        }
+        let events = wait_for_worker_io(reader.as_raw_fd(), libc::POLLIN, cancelled)
+            .map_err(|error| format!("worker sideband read failed: {error}"))?;
+        if events.cancelled {
+            return Err("worker sideband reader cancelled".to_string());
+        }
+        if !events.ready {
+            continue;
+        }
+        match reader.read_chunk() {
+            Ok(()) => {}
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::Interrupted | std::io::ErrorKind::WouldBlock
+                ) => {}
+            Err(error) => return Err(format!("worker sideband read failed: {error}")),
         }
     }
 }

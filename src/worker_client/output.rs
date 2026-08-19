@@ -197,6 +197,15 @@ impl Response {
         self.is_error |= other.is_error;
     }
 
+    pub(super) fn extend_at_boundary(&mut self, other: Self) {
+        if matches!(self.content.last(), Some(Content::Text(text)) if !text.ends_with('\n'))
+            && matches!(other.content.first(), Some(Content::Text(_)))
+        {
+            self.push_text("\n");
+        }
+        self.extend(other);
+    }
+
     pub(super) fn acknowledge_with(&mut self, acknowledgment: SyncSender<ResponseAcknowledgment>) {
         assert!(
             self.acknowledgment.is_none(),
