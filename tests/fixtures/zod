@@ -452,10 +452,7 @@ def main() -> None:
             send(writer, {"kind": "completed"})
             continue
 
-        if source in {
-            "report managed R requirement",
-            "report managed requirements",
-        }:
+        if source == "report managed R requirement":
             r_prepared = str(
                 prepared_r_library is not None
                 or any(
@@ -464,21 +461,7 @@ def main() -> None:
                     if library
                 )
             ).lower()
-            if source == "report managed R requirement":
-                send_output(writer, f"zod R requirement: prepared={r_prepared}\n")
-                send(writer, {"kind": "completed"})
-                continue
-            duckdb_prepared = str(
-                any(
-                    Path(os.environ["HOME"], ".duckdb", "extensions").glob(
-                        "*/*/json.duckdb_extension"
-                    )
-                )
-            ).lower()
-            send_output(
-                writer,
-                f"zod requirements: r={r_prepared}; duckdb={duckdb_prepared}\n",
-            )
+            send_output(writer, f"zod R requirement: prepared={r_prepared}\n")
             send(writer, {"kind": "completed"})
             continue
 

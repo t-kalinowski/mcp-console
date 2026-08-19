@@ -18,61 +18,6 @@ ToolResult = dict[str, Any]
 YamlStream = list[Any]
 
 
-def command_output(command: list[str]) -> str | None:
-    executable = shutil.which(command[0])
-    if executable is None:
-        return None
-    result = subprocess.run(
-        [executable, *command[1:]],
-        capture_output=True,
-        text=True,
-    )
-    if result.returncode != 0:
-        return None
-    output = result.stdout.strip()
-    return output or None
-
-
-def host_cache_environment() -> dict[str, str]:
-    environment: dict[str, str] = {}
-    if cache := os.environ.get("IR_CACHE_DIR"):
-        environment["IR_CACHE_DIR"] = cache
-    elif cache := command_output(["ir", "cache", "dir"]):
-        environment["IR_CACHE_DIR"] = cache
-
-    if cache := os.environ.get("UV_CACHE_DIR"):
-        environment["UV_CACHE_DIR"] = cache
-    elif cache := command_output(["uv", "cache", "dir"]):
-        environment["UV_CACHE_DIR"] = cache
-
-    if cache := os.environ.get("R_USER_CACHE_DIR"):
-        environment["R_USER_CACHE_DIR"] = cache
-    elif cache := command_output(
-        [
-            "Rscript",
-            "--vanilla",
-            "-e",
-            (
-                'cat(dirname(dirname(tools::R_user_dir('
-                '"mcp-console-cache-probe", "cache"))))'
-            ),
-        ]
-    ):
-        environment["R_USER_CACHE_DIR"] = cache
-
-    if cache := os.environ.get("RENV_PATHS_CACHE"):
-        environment["RENV_PATHS_CACHE"] = cache
-    elif cache_root := environment.get("R_USER_CACHE_DIR"):
-        environment["RENV_PATHS_CACHE"] = str(
-            Path(cache_root) / "R" / "renv" / "cache"
-        )
-
-    return environment
-
-
-HOST_CACHE_ENVIRONMENT = host_cache_environment()
-
-
 @dataclass(frozen=True)
 class TranscriptWithCompanion:
     transcript: Transcript
@@ -144,12 +89,6 @@ def build_r_input_handler(
         capture_output=True,
         text=True,
     )
-
-
-def use_isolated_duckdb_home(environment: dict[str, str], home: Path) -> None:
-    # DuckDB's native extension cache is rooted under HOME. Other resolver
-    # caches remain shared through McpClient's host-cache defaults.
-    environment["HOME"] = str(home)
 
 
 def reference_plots(
@@ -285,10 +224,6 @@ class McpClient:
         current_directory: Path | None = None,
         umask: int = -1,
     ) -> None:
-        if environment is not None:
-            environment = environment.copy()
-            for name, value in HOST_CACHE_ENVIRONMENT.items():
-                environment.setdefault(name, value)
         self.temporary_directory = (
             tempfile.TemporaryDirectory() if current_directory is None else None
         )
