@@ -3,108 +3,51 @@
 ---
 id: 3
 send:
-  r: "reticulate::py_run_string(\"interrupt_state = 41\")"
-result:
-  content:
-    - type: text
-      text: "[done]"
-  isError: false
----
-id: 4
-send:
   r: |
-    interrupt_state <- 40L
-    tryCatch(
-      {
-        invisible(file.create(file.path(
-          tempdir(),
-          "r-native-interrupt-started"
-        )))
-        repeat {}
-      },
-      interrupt = function(condition) {
-        interrupt_state <<- interrupt_state + 1L
-        cat("caught native R interrupt\n")
-      },
-      finally = cat("native R cleanup\n")
-    )
-    for (attempt in 1:2) {
-      py$interrupt_marker <- file.path(
-        tempdir(),
-        paste0("r-interrupt-", attempt, "-started")
-      )
-      body <- if (attempt == 1L) {
-        "import time\ntime.sleep(60)"
-      } else {
-        "while True:\n    pass"
-      }
-      python <- paste(
-        "from pathlib import Path",
-        "Path(interrupt_marker).touch()",
-        body,
-        sep = "\n"
-      )
-      tryCatch(
-        reticulate::py_run_string(python),
-        interrupt = function(condition) {
-          interrupt_state <<- interrupt_state + 1L
-          cat("caught R interrupt ", attempt, "\n", sep = "")
-        },
-        finally = cat("cleanup ", attempt, "\n", sep = "")
-      )
-    }
-    cat("continued with state ", interrupt_state, "\n", sep = "")
+    interrupt_state <- 41L
+    invisible(file.create(file.path(
+      tempdir(),
+      "r-interrupt-started"
+    )))
+    repeat {}
   timeout_ms: 0
 result:
   content:
     - type: text
-      text: "\n[running]"
+      text: |-
+
+        [running]
+  isError: false
+---
+id: 4
+session:
+  action: interrupt
+result:
+  content:
+    - type: text
+      text: "[interrupt sent]"
   isError: false
 ---
 id: 5
-session:
-  action: interrupt
-result:
-  content:
-    - type: text
-      text: "[interrupt sent]"
-  isError: false
----
-id: 6
-session:
-  action: interrupt
-result:
-  content:
-    - type: text
-      text: "[interrupt sent]"
-  isError: false
----
-id: 7
-session:
-  action: interrupt
-result:
-  content:
-    - type: text
-      text: "[interrupt sent]"
-  isError: false
----
-id: 8
 send:
   timeout_ms: 3000
 result:
   content:
     - type: text
-      text: |
-        caught native R interrupt
-        native R cleanup
-        caught R interrupt 1
-        cleanup 1
-        caught R interrupt 2
-        cleanup 2
-        continued with state 43
+      text: "\n"
   isError: false
 ---
-id: 9
+id: 6
+send:
+  r: interrupt_state + 1L
+result:
+  content:
+    - type: text
+      text: |
+        [1] 42
+  isError: false
+---
+id: 7
 send:
   r: |
     dyn.load("./mcp_test_input_handler.so")
@@ -131,10 +74,12 @@ send:
 result:
   content:
     - type: text
-      text: "\n[running]"
+      text: |-
+
+        [running]
   isError: false
 ---
-id: 10
+id: 8
 session:
   action: interrupt
 result:
@@ -143,7 +88,7 @@ result:
       text: "[interrupt sent]"
   isError: false
 ---
-id: 11
+id: 9
 send:
   timeout_ms: 3000
 result:
@@ -152,9 +97,9 @@ result:
       text: "\n"
   isError: false
 ---
-id: 12
+id: 10
 send:
-  r: "c(boundary_interrupt_state, boundary_interrupt_cleanup)"
+  r: c(boundary_interrupt_state, boundary_interrupt_cleanup)
 result:
   content:
     - type: text
@@ -162,42 +107,7 @@ result:
         [1] 42  1
   isError: false
 ---
-id: 13
-send:
-  r: |
-    tryCatch(
-      {
-        invisible(file.create(file.path(
-          tempdir(),
-          "r-readline-started"
-        )))
-        readline("interrupt> ")
-      },
-      interrupt = function(condition) {
-        cat("caught readline interrupt\n")
-      },
-      finally = cat("readline cleanup\n")
-    )
-    cat("continued after readline\n")
-result:
-  content:
-    - type: text
-      text: |-
-        [input requested: "interrupt> "]
-        [stdin needed]
-  isError: false
----
-id: 14
-send:
-  stdin: preserved fragment
-  timeout_ms: 50
-result:
-  content:
-    - type: text
-      text: "\n[stdin needed]"
-  isError: false
----
-id: 15
+id: 11
 session:
   action: interrupt
 result:
@@ -206,418 +116,18 @@ result:
       text: "[interrupt sent]"
   isError: false
 ---
-id: 16
-send:
-  timeout_ms: 3000
-result:
-  content:
-    - type: text
-      text: |
-        caught readline interrupt
-        readline cleanup
-        continued after readline
-  isError: false
----
-id: 17
-send:
-  r: "readline(\"after interrupt> \")"
-  stdin: "\n"
-result:
-  content:
-    - type: text
-      text: |
-        [input requested: "after interrupt> "]
-        [1] "preserved fragment"
-  isError: false
----
-id: 18
-send:
-  r: |
-    partial <- .Call(
-      "mcp_test_read_console_once",
-      "successful chunk> "
-    )
-    nchar(partial, type = "bytes")
-result:
-  content:
-    - type: text
-      text: |-
-        [input requested: "successful chunk> "]
-        [stdin needed]
-  isError: false
----
-id: 19
-send:
-  stdin: "<5000 s bytes>"
-  timeout_ms: 3000
-result:
-  content:
-    - type: text
-      text: |
-        [1] 4095
-  isError: false
----
-id: 20
-send:
-  r: "identical(readline(\"after success> \"), strrep(\"s\", 905))"
-  stdin: "\n"
-result:
-  content:
-    - type: text
-      text: |
-        [input requested: "after success> "]
-        [1] TRUE
-  isError: false
----
-id: 21
-send:
-  r: |
-    tryCatch(
-      {
-        invisible(file.create(file.path(
-          tempdir(),
-          "caught-before-console-read"
-        )))
-        repeat {}
-      },
-      interrupt = function(condition) {
-        cat("caught before console read\n")
-      }
-    )
-    partial_after_interrupt <- .Call(
-      "mcp_test_read_console_once",
-      "after caught interrupt> "
-    )
-    nchar(partial_after_interrupt, type = "bytes")
-  timeout_ms: 0
-result:
-  content:
-    - type: text
-      text: "\n[running]"
-  isError: false
----
-id: 22
-session:
-  action: interrupt
-result:
-  content:
-    - type: text
-      text: "[interrupt sent]"
-  isError: false
----
-id: 23
-send:
-  timeout_ms: 3000
-result:
-  content:
-    - type: text
-      text: |-
-        caught before console read
-        [input requested: "after caught interrupt> "]
-        [stdin needed]
-  isError: false
----
-id: 24
-send:
-  stdin: "<5000 c bytes>"
-  timeout_ms: 3000
-result:
-  content:
-    - type: text
-      text: |
-        [1] 4095
-  isError: false
----
-id: 25
-send:
-  r: "identical(readline(\"after caught read> \"), strrep(\"c\", 905))"
-  stdin: "\n"
-result:
-  content:
-    - type: text
-      text: |
-        [input requested: "after caught read> "]
-        [1] TRUE
-  isError: false
----
-id: 26
-send:
-  r: |
-    tryCatch(
-      {
-        invisible(file.create(file.path(
-          tempdir(),
-          "first-same-cell-interrupt-started"
-        )))
-        repeat {}
-      },
-      interrupt = function(condition) {
-        cat("caught first same-cell interrupt\n")
-      }
-    )
-    twice_interrupted_partial <- .Call(
-      "mcp_test_read_console_once",
-      "between same-cell interrupts> "
-    )
-    stopifnot(
-      nchar(twice_interrupted_partial, type = "bytes") == 4095L
-    )
-    invisible(file.create(file.path(
-      tempdir(),
-      "second-same-cell-interrupt-started"
-    )))
-    tryCatch(
-      repeat {},
-      interrupt = function(condition) {
-        cat("caught second same-cell interrupt\n")
-      }
-    )
-  timeout_ms: 0
-result:
-  content:
-    - type: text
-      text: "\n[running]"
-  isError: false
----
-id: 27
-session:
-  action: interrupt
-result:
-  content:
-    - type: text
-      text: "[interrupt sent]"
-  isError: false
----
-id: 28
-send:
-  timeout_ms: 3000
-result:
-  content:
-    - type: text
-      text: |-
-        caught first same-cell interrupt
-        [input requested: "between same-cell interrupts> "]
-        [stdin needed]
-  isError: false
----
-id: 29
-send:
-  stdin: "<5000 d bytes>"
-  timeout_ms: 50
-result:
-  content:
-    - type: text
-      text: "\n[running]"
-  isError: false
----
-id: 30
-session:
-  action: interrupt
-result:
-  content:
-    - type: text
-      text: "[interrupt sent]"
-  isError: false
----
-id: 31
-send:
-  timeout_ms: 3000
-result:
-  content:
-    - type: text
-      text: |
-        caught second same-cell interrupt
-  isError: false
----
-id: 32
-send:
-  r: "identical(readline(\"after same-cell interrupts> \"), strrep(\"d\", 5000))"
-  stdin: "\n"
-result:
-  content:
-    - type: text
-      text: |
-        [input requested: "after same-cell interrupts> "]
-        [input requested: "after same-cell interrupts> "]
-        [1] TRUE
-  isError: false
----
-id: 33
-send:
-  r: |
-    ignored_interrupt_state <- 41L
-    invisible(.Call("mcp_test_ignore_sigint"))
-result:
-  content:
-    - type: text
-      text: "[done]"
-  isError: false
----
-id: 34
-send:
-  r: |
-    ignored_interrupt_state <- ignored_interrupt_state + 1L
-    invisible(.Call("mcp_test_restore_sigint"))
-    ignored_interrupt_state
-result:
-  content:
-    - type: text
-      text: |
-        [1] 42
-  isError: false
----
-id: 35
-send:
-  r: |
-    invisible(.Call(
-      "mcp_test_register_input_handler",
-      file.path(tempdir(), "partial-handler-fifo"),
-      function() {
-        handler_partial <<- .Call(
-          "mcp_test_read_console_once",
-          "handler chunk> "
-        )
-      }
-    ))
-result:
-  content:
-    - type: text
-      text: "[done]"
-  isError: false
----
-id: 36
-send:
-  r: "nchar(handler_partial, type = \"bytes\")"
-result:
-  content:
-    - type: text
-      text: |-
-        [input requested: "handler chunk> "]
-        [stdin needed]
-  isError: false
----
-id: 37
-send:
-  stdin: "<5000 h bytes>"
-  timeout_ms: 3000
-result:
-  content:
-    - type: text
-      text: |
-        [1] 4095
-  isError: false
----
-id: 38
-send:
-  r: "identical(readline(\"after handler> \"), strrep(\"h\", 905))"
-  stdin: "\n"
-result:
-  content:
-    - type: text
-      text: |
-        [input requested: "after handler> "]
-        [1] TRUE
-  isError: false
----
-id: 39
-send:
-  r: |
-    tryCatch(
-      {
-        partial <- .Call(
-          "mcp_test_read_console_once",
-          "between callbacks> "
-        )
-        stopifnot(nchar(partial, type = "bytes") == 4095L)
-        invisible(file.create(file.path(
-          tempdir(),
-          "between-console-callbacks-started"
-        )))
-        repeat {}
-      },
-      interrupt = function(condition) {
-        cat("caught between-callback interrupt\n")
-      }
-    )
-result:
-  content:
-    - type: text
-      text: |-
-        [input requested: "between callbacks> "]
-        [stdin needed]
-  isError: false
----
-id: 40
-send:
-  stdin: "<5000 x bytes>"
-  timeout_ms: 50
-result:
-  content:
-    - type: text
-      text: "\n[running]"
-  isError: false
----
-id: 41
-session:
-  action: interrupt
-result:
-  content:
-    - type: text
-      text: "[interrupt sent]"
-  isError: false
----
-id: 42
-send:
-  timeout_ms: 3000
-result:
-  content:
-    - type: text
-      text: |
-        caught between-callback interrupt
-  isError: false
----
-id: 43
-send:
-  r: "identical(readline(\"after boundary> \"), strrep(\"x\", 5000))"
-  stdin: "\n"
-result:
-  content:
-    - type: text
-      text: |
-        [input requested: "after boundary> "]
-        [input requested: "after boundary> "]
-        [1] TRUE
-  isError: false
----
-id: 44
-send:
-  r: interrupt_state
-result:
-  content:
-    - type: text
-      text: |
-        [1] 43
-  isError: false
----
-id: 45
-session:
-  action: interrupt
-result:
-  content:
-    - type: text
-      text: "[interrupt sent]"
-  isError: false
----
-id: 46
+id: 12
 send:
   r: 6 * 7
 result:
   content:
     - type: text
-      text: "\n[1] 42\n"
+      text: |
+
+        [1] 42
   isError: false
 ---
-id: 47
+id: 13
 send:
   r: |
     setTimeLimit(elapsed = 10, transient = FALSE)
@@ -629,9 +139,9 @@ result:
       text: "[done]"
   isError: false
 ---
-id: 48
+id: 14
 send:
-  r: "\"idle time does not consume a cell limit\""
+  r: '"idle time does not consume a cell limit"'
 result:
   content:
     - type: text

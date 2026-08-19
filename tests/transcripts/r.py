@@ -1041,89 +1041,31 @@ def test_interrupts_running_r_evaluation(binary: Path) -> Transcript:
         passed = False
         try:
             client._initialize_and_list_tools()
-            client.send(r='reticulate::py_run_string("interrupt_state = 41")')
-            assert last_tool_text(client) == "[done]"
-
             # fmt: r
             r = code(r"""
-                interrupt_state <- 40L
-                tryCatch(
-                  {
-                    invisible(file.create(file.path(
-                      tempdir(),
-                      "r-native-interrupt-started"
-                    )))
-                    repeat {}
-                  },
-                  interrupt = function(condition) {
-                    interrupt_state <<- interrupt_state + 1L
-                    cat("caught native R interrupt\n")
-                  },
-                  finally = cat("native R cleanup\n")
-                )
-                for (attempt in 1:2) {
-                  py$interrupt_marker <- file.path(
-                    tempdir(),
-                    paste0("r-interrupt-", attempt, "-started")
-                  )
-                  body <- if (attempt == 1L) {
-                    "import time\ntime.sleep(60)"
-                  } else {
-                    "while True:\n    pass"
-                  }
-                  python <- paste(
-                    "from pathlib import Path",
-                    "Path(interrupt_marker).touch()",
-                    body,
-                    sep = "\n"
-                  )
-                  tryCatch(
-                    reticulate::py_run_string(python),
-                    interrupt = function(condition) {
-                      interrupt_state <<- interrupt_state + 1L
-                      cat("caught R interrupt ", attempt, "\n", sep = "")
-                    },
-                    finally = cat("cleanup ", attempt, "\n", sep = "")
-                  )
-                }
-                cat("continued with state ", interrupt_state, "\n", sep = "")
+                interrupt_state <- 41L
+                invisible(file.create(file.path(
+                  tempdir(),
+                  "r-interrupt-started"
+                )))
+                repeat {}
                 """)
             client.send(r=r, timeout_ms=0)
             assert last_tool_text(client) == "\n[running]"
             wait_for_worker_file(
                 temporary_path,
-                "r-native-interrupt-started",
-                client,
-            )
-
-            client.session(action="interrupt")
-            assert last_tool_text(client) == "[interrupt sent]"
-            wait_for_worker_file(
-                temporary_path,
-                "r-interrupt-1-started",
-                client,
-            )
-
-            client.session(action="interrupt")
-            assert last_tool_text(client) == "[interrupt sent]"
-            wait_for_worker_file(
-                temporary_path,
-                "r-interrupt-2-started",
+                "r-interrupt-started",
                 client,
             )
 
             client.session(action="interrupt")
             assert last_tool_text(client) == "[interrupt sent]"
             client.send(timeout_ms=3_000)
-            assert last_tool_text(client) == (
-                "caught native R interrupt\n"
-                "native R cleanup\n"
-                "caught R interrupt 1\n"
-                "cleanup 1\n"
-                "caught R interrupt 2\n"
-                "cleanup 2\n"
-                "continued with state 43\n"
-            )
+            output = last_tool_text(client)
+            assert output == "\n", repr(output)
+
+            client.send(r="interrupt_state + 1L")
+            assert last_tool_text(client) == "[1] 42\n"
 
             # fmt: r
             r = code(r"""
@@ -1164,332 +1106,6 @@ def test_interrupts_running_r_evaluation(binary: Path) -> Transcript:
             client.send(r="c(boundary_interrupt_state, boundary_interrupt_cleanup)")
             assert last_tool_text(client) == "[1] 42  1\n"
 
-            # fmt: r
-            r = code(r"""
-                tryCatch(
-                  {
-                    invisible(file.create(file.path(
-                      tempdir(),
-                      "r-readline-started"
-                    )))
-                    readline("interrupt> ")
-                  },
-                  interrupt = function(condition) {
-                    cat("caught readline interrupt\n")
-                  },
-                  finally = cat("readline cleanup\n")
-                )
-                cat("continued after readline\n")
-                """)
-            client.send(r=r)
-            assert last_tool_text(client) == (
-                '[input requested: "interrupt> "]\n[stdin needed]'
-            )
-            wait_for_worker_file(
-                temporary_path,
-                "r-readline-started",
-                client,
-            )
-            client.send(stdin="preserved fragment", timeout_ms=50)
-            assert last_tool_text(client) == "\n[stdin needed]"
-
-            client.session(action="interrupt")
-            assert last_tool_text(client) == "[interrupt sent]"
-            client.send(timeout_ms=3_000)
-            result = client.transcript[-1]["result"]
-            assert result["isError"] is False, result
-            output = last_tool_text(client)
-            expected = (
-                "caught readline interrupt\n"
-                "readline cleanup\n"
-                "continued after readline\n"
-            )
-            assert output in {expected, f"\n{expected}"}, repr(output)
-            result["content"][0]["text"] = expected
-
-            client.send(r='readline("after interrupt> ")', stdin="\n")
-            assert last_tool_text(client) == (
-                '[input requested: "after interrupt> "]\n[1] "preserved fragment"\n'
-            )
-
-            # A consumer may intentionally return after one full console
-            # buffer. A successful cell commits that chunk instead of
-            # replaying it during the next managed read.
-            # fmt: r
-            r = code(r"""
-                partial <- .Call(
-                  "mcp_test_read_console_once",
-                  "successful chunk> "
-                )
-                nchar(partial, type = "bytes")
-                """)
-            client.send(r=r)
-            assert last_tool_text(client) == (
-                '[input requested: "successful chunk> "]\n[stdin needed]'
-            )
-            successful_line = "s" * 5_000
-            client.send(stdin=successful_line, timeout_ms=3_000)
-            assert last_tool_text(client) == "[1] 4095\n"
-            client.transcript[-1]["send"]["stdin"] = "<5000 s bytes>"
-
-            client.send(
-                r='identical(readline("after success> "), strrep("s", 905))',
-                stdin="\n",
-            )
-            assert last_tool_text(client) == (
-                '[input requested: "after success> "]\n[1] TRUE\n'
-            )
-
-            # An earlier caught interrupt does not make a later successful
-            # buffer-full read tentative.
-            # fmt: r
-            r = code(r"""
-                tryCatch(
-                  {
-                    invisible(file.create(file.path(
-                      tempdir(),
-                      "caught-before-console-read"
-                    )))
-                    repeat {}
-                  },
-                  interrupt = function(condition) {
-                    cat("caught before console read\n")
-                  }
-                )
-                partial_after_interrupt <- .Call(
-                  "mcp_test_read_console_once",
-                  "after caught interrupt> "
-                )
-                nchar(partial_after_interrupt, type = "bytes")
-                """)
-            client.send(r=r, timeout_ms=0)
-            assert last_tool_text(client) == "\n[running]"
-            wait_for_worker_file(
-                temporary_path,
-                "caught-before-console-read",
-                client,
-            )
-            client.session(action="interrupt")
-            assert last_tool_text(client) == "[interrupt sent]"
-            client.send(timeout_ms=3_000)
-            assert last_tool_text(client) == (
-                "caught before console read\n"
-                '[input requested: "after caught interrupt> "]\n'
-                "[stdin needed]"
-            )
-            post_interrupt_line = "c" * 5_000
-            client.send(stdin=post_interrupt_line, timeout_ms=3_000)
-            assert last_tool_text(client) == "[1] 4095\n"
-            client.transcript[-1]["send"]["stdin"] = "<5000 c bytes>"
-
-            client.send(
-                r='identical(readline("after caught read> "), strrep("c", 905))',
-                stdin="\n",
-            )
-            assert last_tool_text(client) == (
-                '[input requested: "after caught read> "]\n[1] TRUE\n'
-            )
-
-            # R reinstalls its native SIGINT handler after a caught signal.
-            # A second signal in the same cell must still mark a partial
-            # console line as interrupted.
-            # fmt: r
-            r = code(r"""
-                tryCatch(
-                  {
-                    invisible(file.create(file.path(
-                      tempdir(),
-                      "first-same-cell-interrupt-started"
-                    )))
-                    repeat {}
-                  },
-                  interrupt = function(condition) {
-                    cat("caught first same-cell interrupt\n")
-                  }
-                )
-                twice_interrupted_partial <- .Call(
-                  "mcp_test_read_console_once",
-                  "between same-cell interrupts> "
-                )
-                stopifnot(
-                  nchar(twice_interrupted_partial, type = "bytes") == 4095L
-                )
-                invisible(file.create(file.path(
-                  tempdir(),
-                  "second-same-cell-interrupt-started"
-                )))
-                tryCatch(
-                  repeat {},
-                  interrupt = function(condition) {
-                    cat("caught second same-cell interrupt\n")
-                  }
-                )
-                """)
-            client.send(r=r, timeout_ms=0)
-            assert last_tool_text(client) == "\n[running]"
-            wait_for_worker_file(
-                temporary_path,
-                "first-same-cell-interrupt-started",
-                client,
-            )
-            client.session(action="interrupt")
-            assert last_tool_text(client) == "[interrupt sent]"
-            client.send(timeout_ms=3_000)
-            result = client.transcript[-1]["result"]
-            output = last_tool_text(client)
-            expected = (
-                "caught first same-cell interrupt\n"
-                '[input requested: "between same-cell interrupts> "]\n'
-                "[stdin needed]"
-            )
-            assert output in {expected, f"\n{expected}"}, repr(output)
-            result["content"][0]["text"] = expected
-
-            twice_interrupted_line = "d" * 5_000
-            client.send(stdin=twice_interrupted_line, timeout_ms=50)
-            assert last_tool_text(client) == "\n[running]"
-            client.transcript[-1]["send"]["stdin"] = "<5000 d bytes>"
-            wait_for_worker_file(
-                temporary_path,
-                "second-same-cell-interrupt-started",
-                client,
-            )
-            client.session(action="interrupt")
-            assert last_tool_text(client) == "[interrupt sent]"
-            client.send(timeout_ms=3_000)
-            result = client.transcript[-1]["result"]
-            output = last_tool_text(client)
-            expected = "caught second same-cell interrupt\n"
-            assert output in {expected, f"\n{expected}"}, repr(output)
-            result["content"][0]["text"] = expected
-
-            client.send(
-                r=(
-                    'identical(readline("after same-cell interrupts> "), '
-                    'strrep("d", 5000))'
-                ),
-                stdin="\n",
-            )
-            assert last_tool_text(client) == (
-                '[input requested: "after same-cell interrupts> "]\n'
-                '[input requested: "after same-cell interrupts> "]\n'
-                "[1] TRUE\n"
-            )
-
-            # A program may temporarily ignore SIGINT. Boundaries remain
-            # usable while no handler can be observed, and restoring the
-            # prior action keeps the same worker and R state.
-            client.send(
-                r=code(r"""
-                    ignored_interrupt_state <- 41L
-                    invisible(.Call("mcp_test_ignore_sigint"))
-                    """)
-            )
-            assert last_tool_text(client) == "[done]"
-            client.send(
-                r=code(r"""
-                    ignored_interrupt_state <- ignored_interrupt_state + 1L
-                    invisible(.Call("mcp_test_restore_sigint"))
-                    ignored_interrupt_state
-                    """)
-            )
-            assert last_tool_text(client) == "[1] 42\n"
-
-            # The same commit rule applies when a ready input handler owns the
-            # top-level boundary instead of a submitted cell.
-            # fmt: r
-            r = code(r"""
-                invisible(.Call(
-                  "mcp_test_register_input_handler",
-                  file.path(tempdir(), "partial-handler-fifo"),
-                  function() {
-                    handler_partial <<- .Call(
-                      "mcp_test_read_console_once",
-                      "handler chunk> "
-                    )
-                  }
-                ))
-                """)
-            client.send(r=r)
-            assert last_tool_text(client) == "[done]"
-            handler_fifo = wait_for_worker_file(
-                temporary_path,
-                "partial-handler-fifo",
-                client,
-            )
-            handler_fifo.write_bytes(b"x")
-            client.send(r='nchar(handler_partial, type = "bytes")')
-            assert last_tool_text(client) == (
-                '[input requested: "handler chunk> "]\n[stdin needed]'
-            )
-            handler_line = "h" * 5_000
-            client.send(stdin=handler_line, timeout_ms=3_000)
-            assert last_tool_text(client) == "[1] 4095\n"
-            client.transcript[-1]["send"]["stdin"] = "<5000 h bytes>"
-
-            client.send(
-                r='identical(readline("after handler> "), strrep("h", 905))',
-                stdin="\n",
-            )
-            assert last_tool_text(client) == (
-                '[input requested: "after handler> "]\n[1] TRUE\n'
-            )
-
-            # Return one full console buffer, then interrupt before another
-            # callback can commit the partial line.
-            # fmt: r
-            r = code(r"""
-                tryCatch(
-                  {
-                    partial <- .Call(
-                      "mcp_test_read_console_once",
-                      "between callbacks> "
-                    )
-                    stopifnot(nchar(partial, type = "bytes") == 4095L)
-                    invisible(file.create(file.path(
-                      tempdir(),
-                      "between-console-callbacks-started"
-                    )))
-                    repeat {}
-                  },
-                  interrupt = function(condition) {
-                    cat("caught between-callback interrupt\n")
-                  }
-                )
-                """)
-            client.send(r=r)
-            assert last_tool_text(client) == (
-                '[input requested: "between callbacks> "]\n[stdin needed]'
-            )
-            partial_line = "x" * 5_000
-            client.send(stdin=partial_line, timeout_ms=50)
-            assert last_tool_text(client) == "\n[running]"
-            client.transcript[-1]["send"]["stdin"] = "<5000 x bytes>"
-            wait_for_worker_file(
-                temporary_path,
-                "between-console-callbacks-started",
-                client,
-            )
-
-            client.session(action="interrupt")
-            assert last_tool_text(client) == "[interrupt sent]"
-            client.send(timeout_ms=3_000)
-            assert last_tool_text(client) == "caught between-callback interrupt\n"
-
-            client.send(
-                r='identical(readline("after boundary> "), strrep("x", 5000))',
-                stdin="\n",
-            )
-            output = last_tool_text(client)
-            assert output == (
-                '[input requested: "after boundary> "]\n'
-                '[input requested: "after boundary> "]\n'
-                "[1] TRUE\n"
-            ), repr(output)
-
-            client.send(r="interrupt_state")
-            assert last_tool_text(client) == "[1] 43\n"
-
             client.session(action="interrupt")
             assert last_tool_text(client) == "[interrupt sent]"
             client.send(r="6 * 7")
@@ -1516,6 +1132,58 @@ def test_interrupts_running_r_evaluation(binary: Path) -> Transcript:
         finally:
             if not passed:
                 stop_client(client)
+
+
+def test_interrupts_managed_console_input(binary: Path) -> Transcript:
+    client = McpClient(binary, ("serve",))
+    passed = False
+    try:
+        client._initialize_and_list_tools()
+
+        # fmt: r
+        r = code(r"""
+            r_input_state <- 41L
+            tryCatch(
+              readline("R interrupt> "),
+              interrupt = function(condition) cat("R input interrupted\n")
+            )
+            """)
+        client.send(r=r)
+        assert last_tool_text(client) == (
+            '[input requested: "R interrupt> "]\n[stdin needed]'
+        )
+        client.session(action="interrupt")
+        assert last_tool_text(client) == "[interrupt sent]"
+        client.send(timeout_ms=3_000)
+        assert last_tool_text(client) == "R input interrupted\n"
+
+        # fmt: python
+        python = code("""
+            python_input_state = 41
+            try:
+                input("Python interrupt> ")
+            except KeyboardInterrupt:
+                print("Python input interrupted")
+            """)
+        client.send(python=python)
+        assert last_tool_text(client) == (
+            '[input requested: "Python interrupt> "]\n[stdin needed]'
+        )
+        client.session(action="interrupt")
+        assert last_tool_text(client) == "[interrupt sent]"
+        client.send(timeout_ms=3_000)
+        assert last_tool_text(client) == "Python input interrupted\n"
+
+        client.send(r="r_input_state + 1L")
+        assert last_tool_text(client) == "[1] 42\n"
+        client.send(python="python_input_state + 1")
+        assert last_tool_text(client) == "42\n"
+        transcript = client._finish()
+        passed = True
+        return transcript
+    finally:
+        if not passed:
+            stop_client(client)
 
 
 def test_routes_idle_and_timed_out_stdin(binary: Path) -> Transcript:

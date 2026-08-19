@@ -256,20 +256,6 @@ impl Evaluation {
     }
 
     #[cfg(target_os = "macos")]
-    pub(super) fn input_cancelled(&self) -> Result<(), String> {
-        let mut state = self
-            .state
-            .lock()
-            .map_err(|_| "worker evaluation state lock poisoned".to_string())?;
-        state
-            .input_report_at
-            .take()
-            .ok_or_else(|| "worker cancelled input without requesting it".to_string())?;
-        self.changed.notify_one();
-        Ok(())
-    }
-
-    #[cfg(target_os = "macos")]
     pub(super) fn input_complete(&self) -> Result<(), String> {
         let state = self
             .state

@@ -54,8 +54,8 @@ The server sends the cell first, then queues the string's UTF-8 bytes to worker 
 A stdin-only call while idle lazily starts the worker when needed, queues the bytes, and immediately returns the current output snapshot.
 Queuing bytes does not acknowledge that a callback consumed them, so that response may still end with `\n[stdin needed]`; a later empty call observes an `input_received` frame and returns `\n[idle]`.
 Every `input_requested` event adds a server-owned record such as `[input requested: "name> "]`; the prompt is encoded as a JSON string so spaces and escaped characters remain explicit.
-When that request remains outstanding for up to 10 milliseconds, bounded by the call deadline, `send` follows the record with the newline-prefixed banner `\n[stdin needed]`; a later call can supply more bytes with `{ "stdin": "Ada\n" }`.
-An immediate `input_received` or `input_cancelled` receipt retains the request record but suppresses `[stdin needed]`; prequeued input can satisfy a console read without another tool call, and an interrupt can end the read.
+During an evaluation, when that request remains outstanding for up to 10 milliseconds, bounded by the call deadline, `send` follows the record with the newline-prefixed banner `\n[stdin needed]`; a later call can supply more bytes with `{ "stdin": "Ada\n" }`.
+An immediate `input_received` or `input_cancelled` receipt retains the request record but suppresses `[stdin needed]`, so prequeued input can satisfy a console read without forcing another tool call and an interrupt can cancel it.
 That receipt describes the runtime read, not a particular stdin payload; direct fd-0 reads emit no request or receipt.
 Payload end is not EOF, and queued input is not an acknowledgment of consumption.
 Unread bytes may be completed by later stdin or satisfy a later worker read or evaluation.
@@ -139,8 +139,8 @@ It does not start a process; when neither target exists, it returns `worker is n
 A resolver signal error is returned by both the interrupt and resolution calls; an interrupted resolver otherwise reports its ordinary resolution failure.
 A worker signal is not assigned to a cell: an idle signal is consumed at the next managed boundary, and a signal during R, reticulate Python, or DuckDB is handled by that runtime.
 Code can catch or delay the signal, so use `restart` when the worker does not return.
-An interrupt cancels an empty managed `readline()`, Python `input()`, or debugger prompt and preserves any partial line for a later managed console read.
-Code reading fd 0 directly does not provide that managed boundary.
+An interrupt cancels a managed `readline()`, Python `input()`, or debugger prompt.
+Bytes already consumed by that managed read are discarded; code reading fd 0 directly is unchanged.
 `interrupt` accepts no `requirements`.
 
 The client can explicitly replace the worker and add R, Python, and DuckDB requirements in the same call:

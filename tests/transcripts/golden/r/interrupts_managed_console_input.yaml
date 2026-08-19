@@ -1,0 +1,93 @@
+---
+!same-as tests/transcripts/golden/server/initializes_and_lists_tools.yaml
+---
+id: 3
+send:
+  r: |
+    r_input_state <- 41L
+    tryCatch(
+      readline("R interrupt> "),
+      interrupt = function(condition) cat("R input interrupted\n")
+    )
+result:
+  content:
+    - type: text
+      text: |-
+        [input requested: "R interrupt> "]
+        [stdin needed]
+  isError: false
+---
+id: 4
+session:
+  action: interrupt
+result:
+  content:
+    - type: text
+      text: "[interrupt sent]"
+  isError: false
+---
+id: 5
+send:
+  timeout_ms: 3000
+result:
+  content:
+    - type: text
+      text: |
+        R input interrupted
+  isError: false
+---
+id: 6
+send:
+  python: |
+    python_input_state = 41
+    try:
+        input("Python interrupt> ")
+    except KeyboardInterrupt:
+        print("Python input interrupted")
+result:
+  content:
+    - type: text
+      text: |-
+        [input requested: "Python interrupt> "]
+        [stdin needed]
+  isError: false
+---
+id: 7
+session:
+  action: interrupt
+result:
+  content:
+    - type: text
+      text: "[interrupt sent]"
+  isError: false
+---
+id: 8
+send:
+  timeout_ms: 3000
+result:
+  content:
+    - type: text
+      text: |
+        Python input interrupted
+  isError: false
+---
+id: 9
+send:
+  r: r_input_state + 1L
+result:
+  content:
+    - type: text
+      text: |
+        [1] 42
+  isError: false
+---
+id: 10
+send:
+  python: python_input_state + 1
+result:
+  content:
+    - type: text
+      text: |
+        42
+  isError: false
+...

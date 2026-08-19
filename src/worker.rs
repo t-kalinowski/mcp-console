@@ -21,11 +21,6 @@ mod platform {
     static R_CHECK_USER_INTERRUPT: OnceLock<CheckUserInterrupt> = OnceLock::new();
     static CELL_SOURCE: Mutex<Option<CellSource>> = Mutex::new(None);
     static PENDING_SERVER_MESSAGES: Mutex<VecDeque<ServerMessage>> = Mutex::new(VecDeque::new());
-    static CONSOLE_STDIN_CARRY: Mutex<Vec<u8>> = Mutex::new(Vec::new());
-    static CONSOLE_STDIN_PARTIAL: Mutex<ConsoleStdinPartial> = Mutex::new(ConsoleStdinPartial {
-        bytes: Vec::new(),
-        interrupt_generation: 0,
-    });
     static WORKER_FAILURE: Mutex<Option<String>> = Mutex::new(None);
     static WORKER_SHUTDOWN: AtomicBool = AtomicBool::new(false);
     static EVALUATION_STARTED: AtomicBool = AtomicBool::new(false);
@@ -55,11 +50,6 @@ mod platform {
     struct CellSource {
         text: String,
         offset: usize,
-    }
-
-    struct ConsoleStdinPartial {
-        bytes: Vec<u8>,
-        interrupt_generation: c_int,
     }
 
     struct REvents {
@@ -105,8 +95,6 @@ mod platform {
     }
 
     unsafe extern "C-unwind" {
-        fn mcp_r_install_interrupt_observer() -> c_int;
-        fn mcp_r_interrupt_generation() -> c_int;
         fn mcp_r_console_configure(
             read_console: ReadConsole,
             check_interrupt: CheckUserInterrupt,
@@ -483,13 +471,11 @@ mod platform {
         if let Some(message) = take_worker_failure() {
             return Err(message);
         }
-        start_console_stdin_boundary()?;
         let result = match cell.language {
             Language::R => evaluate_r_cell(cell.source, graphics),
             Language::Python => evaluate_python_cell(cell.source, graphics, python),
             Language::Sql => evaluate_sql_cell(cell.source, sql),
         };
-        finish_console_stdin_boundary()?;
         if result.is_ok() && !WORKER_SHUTDOWN.load(Ordering::SeqCst) {
             if let Some(message) = take_worker_failure() {
                 return Err(message);
@@ -637,10 +623,6 @@ mod platform {
         R_CHECK_USER_INTERRUPT
             .set(check_interrupt)
             .map_err(|_| io::Error::other("R interrupt checker was already initialized"))?;
-        let observer_error = unsafe { mcp_r_install_interrupt_observer() };
-        if observer_error != 0 {
-            return Err(io::Error::from_raw_os_error(observer_error).into());
-        }
         unsafe {
             mcp_r_console_configure(r_read_console, check_interrupt, libr::R_interrupts_pending)
         };
@@ -653,7 +635,6 @@ mod platform {
         let events = R_EVENTS
             .get()
             .expect("R event handlers should be initialized");
-        start_console_stdin_boundary()?;
         unsafe {
             mcp_r_run_ready_handlers(
                 events.top_level_exec,
@@ -662,7 +643,6 @@ mod platform {
                 r_input_handlers(),
             );
         }
-        finish_console_stdin_boundary()?;
         EVALUATION_STARTED.store(false, Ordering::SeqCst);
         defer_interrupts(|| graphics.finish(), check_interrupts)?;
         observe_stdin_shutdown()
@@ -897,17 +877,16 @@ mod platform {
 
         match read_console_stdin(buf, buflen) {
             Ok(read) => {
-                if read != 0
-                    && let Err(error) = send_input_received()
-                {
+                let receipt = if read < 0 {
+                    send_input_cancelled()
+                } else if read != 0 {
+                    send_input_received()
+                } else {
+                    Ok(())
+                };
+                if let Err(error) = receipt {
                     record_worker_failure(error);
                     return console_eof(buf);
-                } else if read == 0 && interrupt_pending() {
-                    if let Err(error) = send_input_cancelled() {
-                        record_worker_failure(error);
-                        return console_eof(buf);
-                    }
-                    return -1;
                 }
                 read
             }
@@ -962,23 +941,10 @@ mod platform {
     }
 
     fn read_console_stdin(buf: *mut c_uchar, buflen: c_int) -> Result<c_int, String> {
-        prepare_console_stdin_read()?;
-        let interrupt_generation = console_interrupt_generation();
-        let capacity = (buflen as usize) - 1;
-        let mut carry = CONSOLE_STDIN_CARRY
-            .lock()
-            .map_err(|_| "R worker stdin carry lock poisoned".to_string())?;
-        let mut length = carry.len().min(capacity);
-        unsafe {
-            std::ptr::copy_nonoverlapping(carry.as_ptr(), buf, length);
-        }
-        carry.drain(..length);
-        drop(carry);
-
-        while length < capacity {
+        let mut length = 0;
+        while length < (buflen as usize) - 1 {
             if interrupt_pending() {
-                preserve_console_stdin(buf, length)?;
-                return Ok(console_eof(buf));
+                return Ok(-1);
             }
             let mut descriptor = libc::pollfd {
                 fd: libc::STDIN_FILENO,
@@ -1006,8 +972,7 @@ mod platform {
                 ));
             }
             if interrupt_pending() {
-                preserve_console_stdin(buf, length)?;
-                return Ok(console_eof(buf));
+                return Ok(-1);
             }
             let byte = unsafe { buf.add(length) };
             let count = unsafe { libc::read(libc::STDIN_FILENO, byte.cast(), 1) };
@@ -1024,109 +989,15 @@ mod platform {
             }
 
             let error = io::Error::last_os_error();
-            if error.kind() != io::ErrorKind::Interrupted {
-                return Err(format!("R worker stdin read failed: {error}"));
+            if error.kind() == io::ErrorKind::Interrupted {
+                continue;
             }
+            return Err(format!("R worker stdin read failed: {error}"));
         }
         unsafe {
             *buf.add(length) = 0;
         }
-        record_console_stdin_chunk(buf, length, interrupt_generation)?;
         Ok(i32::from(length > 0))
-    }
-
-    fn preserve_console_stdin(buf: *const c_uchar, length: usize) -> Result<(), String> {
-        let mut partial = CONSOLE_STDIN_PARTIAL
-            .lock()
-            .map_err(|_| "R worker partial stdin lock poisoned".to_string())?;
-        partial
-            .bytes
-            .extend_from_slice(unsafe { std::slice::from_raw_parts(buf, length) });
-        drop(partial);
-        preserve_console_stdin_partial()
-    }
-
-    fn preserve_console_stdin_partial() -> Result<(), String> {
-        let mut partial = CONSOLE_STDIN_PARTIAL
-            .lock()
-            .map_err(|_| "R worker partial stdin lock poisoned".to_string())?;
-        if partial.bytes.is_empty() {
-            return Ok(());
-        }
-        let mut preserved = std::mem::take(&mut partial.bytes);
-        drop(partial);
-        let mut carry = CONSOLE_STDIN_CARRY
-            .lock()
-            .map_err(|_| "R worker stdin carry lock poisoned".to_string())?;
-        preserved.append(&mut carry);
-        *carry = preserved;
-        Ok(())
-    }
-
-    fn console_interrupt_generation() -> c_int {
-        unsafe { mcp_r_interrupt_generation() }
-    }
-
-    fn start_console_stdin_boundary() -> Result<(), String> {
-        let observer_error = unsafe { mcp_r_install_interrupt_observer() };
-        if observer_error != 0 {
-            return Err(format!(
-                "R worker failed to observe interrupts: {}",
-                io::Error::from_raw_os_error(observer_error)
-            ));
-        }
-        Ok(())
-    }
-
-    fn prepare_console_stdin_read() -> Result<(), String> {
-        let interrupted = {
-            let partial = CONSOLE_STDIN_PARTIAL
-                .lock()
-                .map_err(|_| "R worker partial stdin lock poisoned".to_string())?;
-            !partial.bytes.is_empty()
-                && partial.interrupt_generation != console_interrupt_generation()
-        };
-        if interrupted {
-            return preserve_console_stdin_partial();
-        }
-        Ok(())
-    }
-
-    fn finish_console_stdin_boundary() -> Result<(), String> {
-        let mut partial = CONSOLE_STDIN_PARTIAL
-            .lock()
-            .map_err(|_| "R worker partial stdin lock poisoned".to_string())?;
-        if !partial.bytes.is_empty()
-            && partial.interrupt_generation != console_interrupt_generation()
-        {
-            drop(partial);
-            return preserve_console_stdin_partial();
-        }
-        partial.bytes.clear();
-        Ok(())
-    }
-
-    fn record_console_stdin_chunk(
-        buf: *const c_uchar,
-        length: usize,
-        interrupt_generation: c_int,
-    ) -> Result<(), String> {
-        if length == 0 {
-            return Ok(());
-        }
-        let chunk = unsafe { std::slice::from_raw_parts(buf, length) };
-        let mut partial = CONSOLE_STDIN_PARTIAL
-            .lock()
-            .map_err(|_| "R worker partial stdin lock poisoned".to_string())?;
-        if chunk.last() == Some(&b'\n') {
-            partial.bytes.clear();
-        } else {
-            if partial.bytes.is_empty() {
-                partial.interrupt_generation = interrupt_generation;
-            }
-            partial.bytes.extend_from_slice(chunk);
-        }
-        Ok(())
     }
 }
 

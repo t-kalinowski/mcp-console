@@ -10,7 +10,7 @@ The current implementation provides one worker for one server process.
 It evaluates one complete R, Python, or SQL cell at a time and accepts exact `stdin` text whether the worker is evaluating or idle.
 One generation-long server reader continuously consumes worker sideband frames; evaluations and live preparations register only their expected terminal messages.
 
-The sideband protocol does not include interrupt frames, request IDs, general structured errors, sessions, capabilities, or protocol version negotiation.
+The sideband protocol does not include an interrupt command, request IDs, general structured errors, sessions, capabilities, or protocol version negotiation.
 MCP `session` interrupt is out of band: the server requests `SIGINT` for an active host resolver process group, or otherwise sends it to the live worker process.
 
 Plain `serve` selects the built-in worker.
@@ -245,7 +245,7 @@ The complete implemented message set is:
 | worker → server | `{"kind":"image","data":"...","mime_type":"image/png"}` | Append one base64-encoded image. |
 | worker → server | `{"kind":"input_requested","prompt":"..."}` | Report that the runtime requested input. |
 | worker → server | `{"kind":"input_received"}` | Report that the current read succeeded. |
-| worker → server | `{"kind":"input_cancelled"}` | Report that an interrupt cancelled the current managed read. |
+| worker → server | `{"kind":"input_cancelled"}` | Report that `SIGINT` cancelled the current managed read. |
 | worker → server | `{"kind":"r_prepared","library":"..."}` | Confirm the normalized live R library path. |
 | worker → server | `{"kind":"r_preparation_failed","message":"..."}` | Report a live R update failure without discarding the worker. |
 | worker → server | `{"kind":"resolve_python","request":{"requirements":{"packages":["numpy","pandas"]},"retained_requirements":{"packages":["numpy","pandas"]},"environment":{}}}` | Resolve the complete proposed reticulate manifest outside the sandbox. |
@@ -289,7 +289,7 @@ worker -> server  {"kind":"console_output","data":"echo\n"}
 worker -> server  {"kind":"completed"}
 ```
 
-No sideband interrupt, poll, synchronization, or acknowledgment frame exists.
+No sideband interrupt command, poll, synchronization, or acknowledgment frame exists.
 A `SIGINT` that reaches the process while it is idle remains pending until the next managed boundary; the entry check consumes it and the next cell proceeds.
 A signal that arrives after a cell's final check is handled at the same later boundary.
 
@@ -299,9 +299,9 @@ An image frame's `data` must be valid base64.
 The recorder decodes it byte-for-byte into an artifact, while the MCP image retains the original string.
 The frame's `mime_type` becomes the MCP image `mimeType` unchanged; only `image/png` receives a format-specific `.png` artifact suffix, and other MIME types use `.bin`.
 `input_requested` appends one server-owned MCP request record and starts one provisional input state.
-The matching `input_received` clears that state after the runtime read succeeds without removing the record.
-An interrupting built-in worker instead sends `input_cancelled` before the runtime unwinds; this clears the same provisional state and preserves the request record.
-Only one request may be outstanding: a second request, a receipt or cancellation without a request, or completion before either terminal frame is a protocol failure.
+The matching `input_received` clears that state after the runtime read succeeds; `input_cancelled` clears it after `SIGINT` cancels the read.
+Neither removes the request record.
+Only one request may be outstanding: a second request, a terminal input frame without a request, or completion before that terminal frame is a protocol failure.
 `completed` ends the sideband evaluation.
 It carries no managed-Python state.
 
@@ -465,10 +465,10 @@ A newline-free fragment remains pending until later stdin completes it or worker
 The R console callback consumes only through one newline or its supplied buffer; it does not prefetch later lines from fd 0.
 `input_requested` is an observation of worker state, not permission to write.
 After a nonempty callback read, `input_received` closes that provisional request before the runtime resumes.
-When an interrupt ends the managed read, `input_cancelled` closes it before the runtime unwinds.
+`input_cancelled` closes it before an interrupt unwinds the runtime.
 Each request frame produces one record, regardless of how many stdin payloads or polls occur while it remains outstanding.
 It does not acknowledge a particular stdin submission, identify which bytes satisfied the read, or report bytes consumed by code that reads fd 0 directly.
-If no receipt arrives during the grace window, the request remains exposed as `\n[stdin needed]`; a partial follow-up therefore returns only `\n[stdin needed]` again rather than repeating the request record or returning `\n[running]`.
+If no terminal input frame arrives during the grace window, the request remains exposed as `\n[stdin needed]`; a partial follow-up therefore returns only `\n[stdin needed]` again rather than repeating the request record or returning `\n[running]`.
 Empty stdin writes no bytes and leaves an exposed request immediately reportable.
 Python `sys.stdin` and other code that reads fd 0 directly can consume bundled input or input sent after a polling timeout without sending either input frame.
 
@@ -497,6 +497,7 @@ Later idle frames therefore cannot overtake environment retention or evaluation 
 | idle, evaluating, or preparing R or Python | worker → server `output` or `image` | unchanged; publish pending output |
 | idle | worker → server `input_requested` | append request record; idle, input outstanding |
 | idle, input outstanding | worker → server `input_received` | retain request record; idle |
+| idle, input outstanding | worker → server `input_cancelled` | retain request record; idle |
 | evaluating | worker → server `input_requested` | append request record; evaluating, input provisional |
 | evaluating, input provisional | worker → server `input_received` | retain request record; evaluating |
 | evaluating, input provisional | worker → server `input_cancelled` | retain request record; evaluating |
@@ -604,22 +605,21 @@ The Python and SQL bridges observe escaping R interrupt conditions without handl
 Host resolution remains interruptible through its own process-group target while worker-side runtime interrupt handling stays suspended across preparation.
 
 The worker supplies cell source through `ReadConsole` before each top-level evaluation starts.
-For every evaluation-time `ReadConsole` call, the callback sends `input_requested`, consumes any preserved managed-input carry, then reads fd 0 until one newline arrives or R's supplied buffer is full.
+For every evaluation-time `ReadConsole` call, the callback sends `input_requested`, then polls fd 0 while checking R's pending-interrupt flag until one newline arrives or R's supplied buffer is full.
 The built-in worker sends R's prompt field verbatim, including trailing spaces or an empty prompt.
 The server preserves that value but JSON-quotes it in the MCP input-request record instead of appending it as bare prompt text.
 After a nonempty read succeeds, it sends `input_received` before returning the bytes to R.
-A newline-free fragment shorter than that buffer keeps the callback blocked, while bytes after a returned chunk remain in the pipe for a later `ReadConsole` call or a direct fd-0 reader.
-While the callback is waiting, it polls fd 0 and R's pending-interrupt flag.
-On an interrupt, it preserves any partial line, sends `input_cancelled`, unwinds its Rust frames, and checks the interrupt from a C-owned frame so R or reticulate can handle it normally.
-That carry belongs to the managed console callback; a direct fd-0 reader cannot access bytes the callback already consumed.
+On an interrupt, it sends `input_cancelled`, discards bytes already consumed by that read, and checks the pending interrupt from a C-owned frame so R's jump cannot cross a live Rust frame.
+Bytes not yet consumed remain in the fd-0 pipe.
+A newline-free fragment shorter than the buffer keeps the callback blocked until more input or an interrupt arrives, while bytes after a returned chunk remain in the pipe for a later `ReadConsole` call or a direct fd-0 reader.
 It uses R's busy callback rather than prompt text to distinguish cell source from evaluated-code input.
 Unread fd-0 input remains available across evaluation boundaries.
 Submitted source references are not retained.
 Parse, evaluation, and print errors are returned as console text followed by `completed`, so the worker remains available even though the protocol has no structured language-error message.
 The worker maps `R_WriteConsoleEx` type 0 to `console_output` and every nonzero type to `console_diagnostic`.
 It also maps `R_ShowMessage` and worker-generated language diagnostics to `console_diagnostic`.
-This managed cancellation applies to R `readline()` and to Python `input()` and debugger prompts routed through reticulate.
-Direct fd-0 readers do not emit input frames or add a periodic interrupt boundary.
+Managed cancellation applies to R `readline()` and to Python `input()` and debugger prompts routed through reticulate.
+Direct fd-0 readers emit no input frames and are unaffected.
 Subprocesses and descendants that write directly to retained fd 1 or fd 2 bypass the R console callbacks, but their output is still collected through the standard-stream pipes.
 
 At startup, the worker installs a managed function as R's default graphics device.

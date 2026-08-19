@@ -247,23 +247,6 @@ impl Activity {
         }
     }
 
-    fn input_cancelled(&self) -> Result<(), String> {
-        let mut state = self.lock()?;
-        match state.operation.as_ref().map(|operation| &operation.kind) {
-            Some(OperationKind::Cell(evaluation)) => evaluation.input_cancelled(),
-            Some(OperationKind::PrepareR | OperationKind::PreparePython) => {
-                Err("worker cancelled input during requirement preparation".to_string())
-            }
-            None => {
-                state
-                    .idle_input
-                    .take()
-                    .ok_or_else(|| "worker cancelled input without requesting it".to_string())?;
-                Ok(())
-            }
-        }
-    }
-
     fn complete(
         &self,
         message: WorkerMessage,
@@ -414,8 +397,9 @@ fn handle_message(
                 .input_requested(prompt, rendered, output)
                 .map(|()| true)
         }
-        WorkerMessage::InputReceived => activity.input_received().map(|()| true),
-        WorkerMessage::InputCancelled => activity.input_cancelled().map(|()| true),
+        WorkerMessage::InputReceived | WorkerMessage::InputCancelled => {
+            activity.input_received().map(|()| true)
+        }
         WorkerMessage::ResolvePython { request } => {
             let response = match callbacks.resolve_python(request) {
                 Ok(managed) => {

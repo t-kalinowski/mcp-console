@@ -662,44 +662,29 @@ def test_interrupts_running_sql_query(binary: Path) -> Transcript:
         passed = False
         try:
             client._initialize_and_list_tools()
-            client.send(python="sql_python_state = 42")
-            assert last_tool_text(client) == "[done]"
-
             # fmt: r
             r = code(r"""
                 sql_interrupt_armed <- FALSE
                 dyn.load("./mcp_test_input_handler.so")
-                sql_interrupt_attempt <- 0L
+                invisible(.Call(
+                  "mcp_test_register_input_handler",
+                  file.path(tempdir(), "sql-interrupt-finished-fifo"),
+                  function() {
+                    invisible(file.create(file.path(
+                      tempdir(),
+                      "sql-interrupt-finished"
+                    )))
+                  }
+                ))
                 options(duckdb.progress_display = function(percentage) {
                   if (isTRUE(sql_interrupt_armed)) {
                     invisible(file.create(file.path(
                       tempdir(),
-                      paste0(
-                        "sql-interrupt-",
-                        sql_interrupt_attempt,
-                        "-started"
-                      )
+                      "sql-interrupt-started"
                     )))
                   }
                 })
-                arm_sql_interrupt <- function() {
-                  sql_interrupt_armed <<- FALSE
-                  invisible(DBI::dbExecute(
-                    sql_connection(),
-                    "SET enable_progress_bar = true"
-                  ))
-                  invisible(DBI::dbExecute(
-                    sql_connection(),
-                    "SET progress_bar_time = 0"
-                  ))
-                  sql_interrupt_armed <<- TRUE
-                  invisible(NULL)
-                }
                 invisible(sql_connection())
-                invisible(DBI::dbExecute(
-                  sql_connection(),
-                  "SET threads = 1"
-                ))
                 """)
             client.send(r=r)
             output = last_tool_text(client)
@@ -712,70 +697,56 @@ def test_interrupts_running_sql_query(binary: Path) -> Transcript:
             client.send(sql=sql)
             assert last_tool_text(client) == "[done]"
 
-            def interrupt_sql(attempt: int) -> None:
-                # fmt: r
-                r = code(r"""
-                    invisible(.Call(
-                      "mcp_test_register_input_handler",
-                      file.path(
-                        tempdir(),
-                        "sql-interrupt-ATTEMPT_ID-finished-fifo"
-                      ),
-                      function() {
-                        invisible(file.create(file.path(
-                          tempdir(),
-                          "sql-interrupt-ATTEMPT_ID-finished"
-                        )))
-                      }
-                    ))
-                    sql_interrupt_attempt <- ATTEMPT_VALUE
-                    arm_sql_interrupt()
-                    """)
-                r = r.replace("ATTEMPT_ID", str(attempt))
-                r = r.replace("ATTEMPT_VALUE", f"{attempt}L")
-                client.send(r=r)
-                assert last_tool_text(client) == "[done]"
+            # fmt: r
+            r = code(r"""
+                sql_interrupt_armed <- TRUE
+                invisible(DBI::dbExecute(
+                  sql_connection(),
+                  "SET enable_progress_bar = true"
+                ))
+                invisible(DBI::dbExecute(
+                  sql_connection(),
+                  "SET progress_bar_time = 0"
+                ))
+                """)
+            client.send(r=r)
+            assert last_tool_text(client) == "[done]"
 
-                sql = code(r"""
-                    SELECT sum(hash(value)) AS total
-                    FROM range(1000000000000) AS values(value)
-                    """)
-                client.send(sql=sql, timeout_ms=0)
-                assert last_tool_text(client) == "\n[running]"
-                wait_for_worker_file(
-                    temporary_path,
-                    f"sql-interrupt-{attempt}-started",
-                    client,
-                )
-                finished_fifo = wait_for_worker_file(
-                    temporary_path,
-                    f"sql-interrupt-{attempt}-finished-fifo",
-                    client,
-                )
-                finished_fifo.write_bytes(b"x")
+            sql = code(r"""
+                SELECT sum(hash(value)) AS total
+                FROM range(1000000000000) AS values(value)
+                """)
+            client.send(sql=sql, timeout_ms=0)
+            assert last_tool_text(client) == "\n[running]"
+            wait_for_worker_file(
+                temporary_path,
+                "sql-interrupt-started",
+                client,
+            )
+            finished_fifo = wait_for_worker_file(
+                temporary_path,
+                "sql-interrupt-finished-fifo",
+                client,
+            )
+            finished_fifo.write_bytes(b"x")
 
-                client.session(action="interrupt")
-                assert last_tool_text(client) == "[interrupt sent]"
-                wait_for_worker_file(
-                    temporary_path,
-                    f"sql-interrupt-{attempt}-finished",
-                    client,
-                )
-                client.send(timeout_ms=1_000)
-                result = client.transcript[-1]["result"]
-                assert result["isError"] is False, result
-                output = last_tool_text(client)
-                assert output in {"\n", "\n\n"}, repr(output)
-                # DuckDB and R can each publish the native interrupt newline.
-                result["content"][0]["text"] = "\n"
-
-            interrupt_sql(1)
-            interrupt_sql(2)
+            client.session(action="interrupt")
+            assert last_tool_text(client) == "[interrupt sent]"
+            wait_for_worker_file(
+                temporary_path,
+                "sql-interrupt-finished",
+                client,
+            )
+            client.send(timeout_ms=1_000)
+            result = client.transcript[-1]["result"]
+            assert result["isError"] is False, result
+            output = last_tool_text(client)
+            assert output in {"\n", "\n\n"}, repr(output)
+            # DuckDB and R can each publish the native interrupt newline.
+            result["content"][0]["text"] = "\n"
 
             client.send(sql="SELECT answer FROM interrupt_state")
             assert "42" in last_tool_text(client)
-            client.send(python="sql_python_state + 1")
-            assert last_tool_text(client) == "43\n"
             transcript = client._finish()
             passed = True
             return transcript
