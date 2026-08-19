@@ -58,16 +58,6 @@ result:
   content:
     - type: text
       text: |-
-
-        [idle]
-  isError: false
----
-id: 7
-send: {}
-result:
-  content:
-    - type: text
-      text: |-
         long callback
         [idle]
   isError: false
