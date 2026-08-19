@@ -11,9 +11,8 @@ use crate::worker_protocol::{ServerMessage, WorkerMessage};
 pub(super) struct WorkerRuntime;
 
 pub(super) struct Worker {
-    reader: crate::sideband::Reader,
+    sideband: mpsc::Receiver<Result<WorkerMessage, String>>,
     writer: crate::sideband::Writer,
-    sideband_cancelled: std::io::PipeReader,
     sideband_cancel: SidebandCancellation,
     stdin: StdinSender,
     output: super::OutputTape,
@@ -35,6 +34,7 @@ struct WorkerProcess {
 }
 
 struct WorkerThreads {
+    sideband: thread::JoinHandle<()>,
     stdin: WorkerIoThread,
     stdout: WorkerIoThread,
     stderr: WorkerIoThread,
@@ -50,13 +50,8 @@ struct WorkerIoEvents {
     cancelled: bool,
 }
 
-struct SidebandCancellationState {
-    signal: Option<std::io::PipeWriter>,
-    retirement_bytes: Option<usize>,
-}
-
 #[derive(Clone)]
-struct SidebandCancellation(Arc<Mutex<SidebandCancellationState>>);
+struct SidebandCancellation(Arc<Mutex<Option<std::io::PipeWriter>>>);
 
 #[derive(Clone)]
 pub(super) struct StdinSender(mpsc::Sender<StdinMessage>);
@@ -101,6 +96,8 @@ impl WorkerRuntime {
         let stdin_cancel = cancellation_pipe("stdin")?;
         let stdout_cancel = cancellation_pipe("stdout")?;
         let stderr_cancel = cancellation_pipe("stderr")?;
+        set_nonblocking(&reader)
+            .map_err(|error| format!("failed to configure worker sideband: {error}"))?;
         let mut child = command
             .spawn()
             .map_err(|error| format!("failed to launch worker: {error}"))?;
@@ -123,6 +120,7 @@ impl WorkerRuntime {
                 )),
             };
         }
+        let (sideband, sideband_thread) = start_sideband_reader(reader, sideband_cancelled);
         let stdout = start_output_reader(stdout, output.direct_stdout(), stdout_cancel);
         let stderr = start_output_reader(stderr, output.direct_stderr(), stderr_cancel);
         let child = Arc::new(Mutex::new(child));
@@ -130,6 +128,7 @@ impl WorkerRuntime {
         let process = WorkerProcess {
             child,
             threads: Some(WorkerThreads {
+                sideband: sideband_thread,
                 stdin: stdin_thread,
                 stdout,
                 stderr,
@@ -137,9 +136,8 @@ impl WorkerRuntime {
         };
 
         let mut worker = Worker {
-            reader,
+            sideband,
             writer,
-            sideband_cancelled,
             sideband_cancel,
             stdin,
             output,
@@ -405,51 +403,9 @@ impl Worker {
     }
 
     fn receive(&mut self) -> Result<WorkerMessage, String> {
-        loop {
-            match self.reader.receive_buffered() {
-                Ok(Some(message)) => return Ok(message),
-                Ok(None) => {}
-                Err(error) => {
-                    return Err(format!("worker sideband read failed: {error}"));
-                }
-            }
-            if let Some(remaining) = self.sideband_cancel.retirement_bytes()? {
-                if remaining == 0 {
-                    return Err("worker sideband reader cancelled".to_string());
-                }
-                let length = match self.reader.read_chunk_up_to(remaining) {
-                    Ok(length) => length,
-                    Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
-                    Err(error) => {
-                        return Err(format!("worker sideband read failed: {error}"));
-                    }
-                };
-                self.sideband_cancel.record_retirement_read(length)?;
-                continue;
-            }
-            let events = wait_for_worker_io(
-                self.reader.as_raw_fd(),
-                libc::POLLIN,
-                &self.sideband_cancelled,
-            )
-            .map_err(|error| format!("worker sideband read failed: {error}"))?;
-            if events.cancelled {
-                let readable = buffered_worker_bytes(self.reader.as_raw_fd())
-                    .map_err(|error| format!("worker sideband read failed: {error}"))?;
-                self.sideband_cancel.begin_retirement(readable)?;
-                continue;
-            }
-            if !events.ready {
-                continue;
-            }
-            match self.reader.read_chunk() {
-                Ok(_) => {}
-                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
-                Err(error) => {
-                    return Err(format!("worker sideband read failed: {error}"));
-                }
-            }
-        }
+        self.sideband
+            .recv()
+            .map_err(|_| "worker sideband reader stopped".to_string())?
     }
 
     pub(super) fn write_stdin(&self, stdin: String) -> Result<(), String> {
@@ -473,6 +429,7 @@ impl Worker {
     }
 
     pub(super) fn finish_retirement(&mut self) -> Result<(), String> {
+        self.sideband_cancel.cancel();
         self.process.finish_threads()
     }
 
@@ -491,6 +448,65 @@ impl Worker {
             Err(error) => format!("{message}; additionally failed to stop the worker: {error}"),
         }
     }
+}
+
+fn start_sideband_reader(
+    mut reader: crate::sideband::Reader,
+    cancelled: std::io::PipeReader,
+) -> (
+    mpsc::Receiver<Result<WorkerMessage, String>>,
+    thread::JoinHandle<()>,
+) {
+    let (sender, receiver) = mpsc::channel();
+    let thread = thread::spawn(move || {
+        loop {
+            loop {
+                match reader.receive_buffered() {
+                    Ok(Some(message)) => {
+                        if sender.send(Ok(message)).is_err() {
+                            return;
+                        }
+                    }
+                    Ok(None) => break,
+                    Err(error) => {
+                        let _ = sender.send(Err(format!("worker sideband read failed: {error}")));
+                        return;
+                    }
+                }
+            }
+
+            let events = match wait_for_worker_io(reader.as_raw_fd(), libc::POLLIN, &cancelled) {
+                Ok(events) => events,
+                Err(error) => {
+                    let _ = sender.send(Err(format!("worker sideband read failed: {error}")));
+                    return;
+                }
+            };
+            if events.cancelled {
+                let _ = sender.send(Err("worker sideband reader cancelled".to_string()));
+                return;
+            }
+            if !events.ready {
+                continue;
+            }
+            match reader.read_chunk() {
+                Ok(()) => {}
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        std::io::ErrorKind::Interrupted | std::io::ErrorKind::WouldBlock
+                    ) =>
+                {
+                    continue;
+                }
+                Err(error) => {
+                    let _ = sender.send(Err(format!("worker sideband read failed: {error}")));
+                    return;
+                }
+            }
+        }
+    });
+    (receiver, thread)
 }
 
 fn start_output_reader(
@@ -647,10 +663,7 @@ fn sideband_cancellation_pipe() -> Result<(std::io::PipeReader, SidebandCancella
     let (cancelled, cancel) = cancellation_pipe("sideband")?;
     Ok((
         cancelled,
-        SidebandCancellation(Arc::new(Mutex::new(SidebandCancellationState {
-            signal: Some(cancel),
-            retirement_bytes: None,
-        }))),
+        SidebandCancellation(Arc::new(Mutex::new(Some(cancel)))),
     ))
 }
 
@@ -690,7 +703,7 @@ impl WorkerShutdownHandle {
 
     /// Closes worker input, requests protocol shutdown, and enforces the process deadline.
     ///
-    /// The owning `Worker` separately joins the stdin and standard-stream tasks.
+    /// The owning `Worker` separately joins the sideband and standard-stream tasks.
     pub(super) fn shutdown(&self, deadline: Instant) -> Result<thread::JoinHandle<()>, String> {
         let writer = self.writer.clone();
         let stdin = self.stdin.clone();
@@ -720,13 +733,14 @@ impl WorkerProcess {
         let Some(threads) = self.threads.take() else {
             return Ok(());
         };
+        let sideband = join_worker_thread(threads.sideband, "sideband reader");
         let stdin = threads.stdin.cancel();
         let stdout = threads.stdout.cancel();
         let stderr = threads.stderr.cancel();
         let stdin = join_worker_thread(stdin, "stdin writer");
         let stdout = join_worker_thread(stdout, "stdout reader");
         let stderr = join_worker_thread(stderr, "stderr reader");
-        stdin.and(stdout).and(stderr)
+        sideband.and(stdin).and(stdout).and(stderr)
     }
 }
 
@@ -738,43 +752,12 @@ impl WorkerIoThread {
 }
 
 impl SidebandCancellation {
-    fn retirement_bytes(&self) -> Result<Option<usize>, String> {
-        self.0
-            .lock()
-            .map(|state| state.retirement_bytes)
-            .map_err(|_| "worker sideband cancellation lock poisoned".to_string())
-    }
-
-    fn begin_retirement(&self, readable: usize) -> Result<(), String> {
-        let mut state = self
-            .0
-            .lock()
-            .map_err(|_| "worker sideband cancellation lock poisoned".to_string())?;
-        state.retirement_bytes.get_or_insert(readable);
-        Ok(())
-    }
-
-    fn record_retirement_read(&self, length: usize) -> Result<(), String> {
-        let mut state = self
-            .0
-            .lock()
-            .map_err(|_| "worker sideband cancellation lock poisoned".to_string())?;
-        let remaining = state
-            .retirement_bytes
-            .as_mut()
-            .ok_or_else(|| "worker sideband retirement was not started".to_string())?;
-        *remaining = remaining
-            .checked_sub(length)
-            .ok_or_else(|| "worker sideband retirement read exceeded its boundary".to_string())?;
-        Ok(())
-    }
-
     fn cancel(&self) {
-        let mut state = match self.0.lock() {
-            Ok(state) => state,
+        let mut cancel = match self.0.lock() {
+            Ok(cancel) => cancel,
             Err(poisoned) => poisoned.into_inner(),
         };
-        drop(state.signal.take());
+        drop(cancel.take());
     }
 }
 

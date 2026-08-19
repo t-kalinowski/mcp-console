@@ -95,7 +95,7 @@ impl Reader {
                 return Ok(message);
             }
             match self.read_chunk() {
-                Ok(_) => {}
+                Ok(()) => {}
                 Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
                 Err(error) => return Err(error),
             }
@@ -108,15 +108,9 @@ impl Reader {
     }
 
     /// Reads one chunk after the caller observes descriptor readiness.
-    pub(crate) fn read_chunk(&mut self) -> io::Result<usize> {
-        self.read_chunk_up_to(READ_CHUNK_SIZE)
-    }
-
-    /// Reads no more than `limit` bytes after the caller observes readiness.
-    pub(crate) fn read_chunk_up_to(&mut self, limit: usize) -> io::Result<usize> {
-        debug_assert!(limit > 0);
+    pub(crate) fn read_chunk(&mut self) -> io::Result<()> {
         let mut buffer = [0; READ_CHUNK_SIZE];
-        match self.inner.read(&mut buffer[..limit.min(READ_CHUNK_SIZE)])? {
+        match self.inner.read(&mut buffer)? {
             0 if self.buffer.is_empty() => Err(io::Error::new(
                 io::ErrorKind::UnexpectedEof,
                 "worker sideband closed",
@@ -127,7 +121,7 @@ impl Reader {
             )),
             length => {
                 self.buffer.extend_from_slice(&buffer[..length]);
-                Ok(length)
+                Ok(())
             }
         }
     }

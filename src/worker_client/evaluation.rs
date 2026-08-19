@@ -39,7 +39,7 @@ enum EvaluationPhase {
 
 #[derive(Clone, Copy)]
 enum CompletionKind {
-    Cell { succeeded: bool },
+    Cell,
     ReplacementReady,
     ReplacementFailed,
 }
@@ -245,8 +245,7 @@ impl Evaluation {
     }
 
     pub(super) fn complete_cell(&self, result: Result<(), SendFailure>) {
-        let succeeded = result.is_ok();
-        self.complete(result, CompletionKind::Cell { succeeded });
+        self.complete(result, CompletionKind::Cell);
     }
 
     pub(super) fn start_replacement(&self, failure: SendFailure) {
@@ -351,7 +350,7 @@ impl Evaluation {
             });
         }
         match state.phase {
-            EvaluationPhase::Complete(CompletionKind::Cell { .. })
+            EvaluationPhase::Complete(CompletionKind::Cell)
             | EvaluationPhase::Complete(CompletionKind::ReplacementFailed) => {
                 state.completion_collected = true;
                 return Ok(EvaluationStatus::Report(EvaluationWait::Completed(
@@ -390,31 +389,18 @@ impl Evaluation {
 }
 
 impl RestartReservation {
-    pub(super) fn project_response(&self, response: Response) -> Result<(bool, Response), String> {
-        let state = self
-            .evaluation
-            .state
-            .lock()
-            .map_err(|_| "worker evaluation state lock poisoned".to_string())?;
-        let completed_during_restart =
-            match state.phase {
-                EvaluationPhase::Complete(
-                    completion @ CompletionKind::Cell { succeeded: true },
-                ) if self.unfinished && !state.completion_collected => Some(completion),
-                EvaluationPhase::Evaluating
-                | EvaluationPhase::ReplacementStarting
-                | EvaluationPhase::Complete(_) => None,
-            };
-        let unfinished = self.unfinished && completed_during_restart.is_none();
-        let completion = self.completion.or(completed_during_restart);
-        let response = match completion {
-            Some(CompletionKind::Cell { .. } | CompletionKind::ReplacementFailed) => {
+    pub(super) fn unfinished(&self) -> bool {
+        self.unfinished
+    }
+
+    pub(super) fn project_response(&self, response: Response) -> Response {
+        match self.completion {
+            Some(CompletionKind::Cell | CompletionKind::ReplacementFailed) => {
                 project_completed(response)
             }
             Some(CompletionKind::ReplacementReady) => project_replacement_ready(response),
             None => response,
-        };
-        Ok((unfinished, response))
+        }
     }
 
     pub(super) fn deliver(self, mut response: Response) -> Result<RestartDelivery, String> {

@@ -78,13 +78,17 @@ def emit_background_stderr(root: Path) -> None:
 
 def wait_for_server_to_process_sideband(stream: TextIO) -> None:
     """Block until the server has processed the preceding sideband frames."""
+    send_padded_output(stream, "")
+
+
+def send_padded_output(stream: TextIO, data: str) -> None:
     frame = json.dumps(
-        {"kind": ConsoleKind.OUTPUT, "data": ""},
+        {"kind": ConsoleKind.OUTPUT, "data": data},
         separators=(",", ":"),
     )
     # Flushing a frame only proves that it entered the kernel pipe.
-    # The appended spaces are valid trailing JSON whitespace, so this remains
-    # a no-output frame. Its size exceeds Darwin's pipe capacity, and FIFO
+    # The appended spaces are valid trailing JSON whitespace, so they do not
+    # change the message. Its size exceeds Darwin's pipe capacity, and FIFO
     # backpressure forces the server to process prior frames before flush returns.
     stream.write(frame + (" " * (2 * 1024 * 1024)) + "\n")
     stream.flush()
@@ -247,25 +251,21 @@ def main() -> None:
             send(writer, {"kind": "completed"})
             continue
 
-        if source == "complete during shutdown":
+        if source == "start background sideband":
             child = os.fork()
             if child == 0:
-                os.setsid()
                 reader.close()
                 for descriptor in (0, 1, 2):
                     os.close(descriptor)
-                while True:
-                    signal.pause()
-            (temporary / "zod-sideband-descendant-pid").write_text(
-                str(child),
-                encoding="utf-8",
-            )
-            (temporary / "zod-waiting-for-shutdown").touch()
-            shutdown = json.loads(reader.readline())
-            assert shutdown == {"kind": "shutdown"}, shutdown
-            send_output(writer, "zod completed during shutdown\n")
+                release = temporary / "zod-release-background-sideband"
+                while not release.exists():
+                    time.sleep(0.01)
+                send_padded_output(writer, "zod background sideband\n")
+                (temporary / "zod-background-sideband-emitted").touch()
+                os._exit(0)
+            (temporary / "zod-background-sideband-started").touch()
             send(writer, {"kind": "completed"})
-            os._exit(0)
+            continue
 
         if source == "start partial sideband descendant":
             child = os.fork()

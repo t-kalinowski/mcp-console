@@ -212,8 +212,11 @@ Each frame is one UTF-8 JSON object followed by `\n`.
 The sender flushes every frame.
 Console text is carried directly in a JSON string, with `console_output` and `console_diagnostic` kinds distinguishing ordinary and diagnostic text.
 JSON escaping represents newlines, quotes, and other control characters on the wire.
-The server assembles frames from bounded pipe chunks instead of waiting for a complete line in one blocking operation.
-Buffered complete frames are decoded first; every additional chunk requires a poll that also observes the generation's cancellation descriptor.
+The server starts one dedicated reader thread for the worker-to-server pipe and continuously queues its decoded messages in an unbounded channel.
+The thread polls the nonblocking sideband descriptor with a lifecycle-owned cancellation descriptor, reads bounded chunks, and splits its byte buffer at raw newline bytes.
+It publishes every complete frame before polling again and retains an incomplete suffix during normal operation.
+If cancellation is ready, including at the same time as sideband input, cancellation wins: the thread publishes a cancellation result, discards unread pipe bytes and any incomplete suffix, and exits.
+Explicit operations consume the queued messages in protocol order; server-to-worker writes are unchanged.
 
 Worker standard output and standard error are not protocol frames.
 Each pipe reader queues raw byte chunks without decoding them.
@@ -520,10 +523,11 @@ It runs independently of the deadline so a blocked stdin writer or full sideband
 The sandbox child waits only for the time remaining before the original deadline.
 If its direct process is still running at the deadline, the sandbox force-stops its process group and reaps that direct process.
 After the worker stops, shutdown cancels the sideband reader through a handle that does not require the worker-owner lock.
-The cancellation poll releases an operation waiting for another frame chunk, including one holding a partial frame while a detached descendant retains the write descriptor.
-The reader descriptor and buffered bytes remain owned by the worker until that operation releases the owner for retirement.
+The dedicated reader publishes a cancellation result and exits immediately, including when it holds a partial frame and a detached descendant retains the write descriptor.
+Unread sideband bytes and the partial frame are discarded; decoded messages already queued for an operation remain ordered ahead of cancellation.
+An operation waiting on the message channel wakes and releases the worker owner for retirement.
 Shutdown then force-stops any resolver process group that was active for explicit preparation or worker-triggered Python resolution and reaps its direct process.
-After both stop paths complete, shutdown cancels its stdin writer and standard-stream readers, drains the finite standard-stream bytes already buffered at that boundary, and joins those tasks.
+After both stop paths complete, shutdown joins the sideband reader, cancels its stdin writer and standard-stream readers, drains the finite standard-stream bytes already buffered at that boundary, and joins those tasks.
 This closes the old generation's server-side pipe boundary before shutdown returns, even when a background descendant retains a pipe descriptor or a blocked stdin write.
 The descendant itself remains unsupervised as described below, and any later write to the closed pipe is not captured.
 
@@ -759,7 +763,7 @@ When the source is `complete after timeout`, it pauses briefly before returning 
 When the source is `violate protocol`, it sends an unexpected second `ready` message.
 When the source is `exit unexpectedly`, it exits with status 86 without replying.
 The `emit stdout` and `start background stderr` modes exercise continuous standard-stream capture during evaluation and after completion.
-The `complete during shutdown` mode emits console output and `completed` after receiving the server's shutdown frame, then leaves the write descriptor open in a session-detached child so restart coverage can verify retirement-boundary draining.
+The `start background sideband` mode writes a pipe-filling console frame after its initiating evaluation completes, verifying that the dedicated reader continues draining sideband data while the worker is idle and that a later operation consumes the queued frame.
 The `start partial sideband descendant` mode writes an incomplete JSON frame, exits the direct worker, and leaves the write descriptor open in a session-detached child so restart and shutdown can verify cancellable framing.
 The `stall with detached stdin` mode leaves fd 0 open in a session-detached child without reading it so shutdown coverage can fill the pipe and verify bounded writer cancellation.
 When the source is `request input`, it sends `input_requested`, calls Python `input()` to consume one line from fd 0, and sends `input_received` after that call returns.

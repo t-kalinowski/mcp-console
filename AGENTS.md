@@ -50,8 +50,9 @@ Worker `image` frames carry base64 data and a MIME type.
 Worker `console_output` and `console_diagnostic` frames carry ordinary and diagnostic console text.
 The server retains console channels and direct fd 1/2 identity until MCP projection.
 The server preserves sideband text and image order as MCP content blocks, coalesces adjacent text, and does not add `[done]` when an image is the only output.
-The server assembles sideband frames incrementally and checks a lifecycle-owned cancellation descriptor between pipe chunks, so a partial frame cannot hold worker retirement open.
-Explicit operation readers accept leading background console, image, input, Python-resolution, Python-version-selection, and Python-activation frames after sending their command.
+The server continuously reads the worker-to-server sideband on a dedicated thread, assembles newline-delimited frames from bounded pipe chunks, and queues decoded messages in order for explicit operations.
+A lifecycle-owned cancellation descriptor stops that reader outside the worker-owner lock; cancellation takes priority over simultaneous sideband readiness and discards unread pipe bytes and any partial frame.
+Explicit operations accept queued leading background console, image, input, Python-resolution, Python-version-selection, and Python-activation frames after sending their command.
 A worker whose background callback is waiting for a nested resolver reply queues the unrelated command, finishes the callback after the reply arrives, and then processes that command.
 The explicit operation's ordinary terminal includes the preceding background activity.
 An input request joins an evaluation's ordinary stdin flow, but fails a noninteractive requirement-preparation operation instead of leaving it blocked.
@@ -103,10 +104,9 @@ A failed restart resolution leaves the current worker, its in-memory state, requ
 After every required resolution succeeds, restart commits the R library, DuckDB extension set, and Python environment together, loses all worker-owned in-memory state and unread stdin, eagerly starts a replacement, and returns `[idle]` after it reports ready.
 The implicit session exists for the server lifetime, so restart starts its first worker if none exists yet.
 It first queues worker-stdin closure and the sideband shutdown message without waiting behind an evaluation, then force-stops the process group and reaps the direct sandbox process at the one-second deadline if that process remains live.
-Once the direct process stops, it cancels any active sideband read outside the worker-owner lock.
-At that boundary, the reader drains only the sideband bytes already readable before honoring cancellation, preserving complete queued frames without allowing later descendant writes to extend retirement.
-The reader descriptor and any partial frame remain owned until the operation releases the worker for retirement.
-The server then cancels the worker's stdin writer and standard-stream readers, drains standard-stream bytes already buffered at that boundary, and joins the tasks before reporting `[worker stopped: in-memory state lost]` or launching the replacement.
+Once the direct process stops, it cancels the dedicated sideband reader outside the worker-owner lock.
+The reader publishes a cancellation result, discards unread pipe bytes and any partial frame, and exits even when a descendant retains the write descriptor.
+An active operation wakes through its message channel and releases the worker for retirement; the server then joins the sideband reader, cancels the worker's stdin writer and standard-stream readers, drains standard-stream bytes already buffered at that boundary, and joins those tasks before reporting `[worker stopped: in-memory state lost]` or launching the replacement.
 Each admitted evaluation or idle stdin write carries its worker generation, so work admitted before restart cannot reach the replacement.
 An R preparation cancelled while its IR resolver is active reports resolver cancellation.
 After preparation reaches the live worker, restart cancellation returns `R preparation cancelled by restart` when the call includes R and `Python preparation cancelled by restart` otherwise; active-generation sideband failures retain their transport diagnostics.
@@ -125,7 +125,8 @@ Ready callbacks run within a managed graphics scope and their output precedes ce
 Between cells, the worker temporarily adds the sideband descriptor to R's input-handler set and blocks in `R_checkActivity()` for either R activity or a server command.
 It removes that temporary handler before running R code, so fork children inherit no stale sideband handler.
 R handler errors remain below `R_ToplevelExec()`, and the worker uses no worker-owned fixed polling interval or second event loop.
-Idle console output and images remain in the worker sideband until a code-bearing `send` or live requirement preparation drains them; pipe backpressure and managed-Python requests can therefore pause a callback until one of those operations begins.
+Idle console output, images, and managed-Python requests are continuously removed from the sideband pipe and queued in server memory until a code-bearing `send` or live requirement preparation consumes them.
+A managed-Python request still pauses its callback until an explicit operation handles the queued request, but idle sideband output is no longer bounded by pipe backpressure.
 Before applying a live requirement preparation, the built-in worker gives registered R handlers one nonblocking turn, so a callback already ready when the command arrives is collected first.
 Idle callbacks that request input can be continued by a code-bearing `send`; a noninteractive requirement preparation that encounters the request stops the worker instead of blocking indefinitely.
 Each worker generation starts with `options(width = 200L)`; evaluated code can change that persistent option.
@@ -226,7 +227,7 @@ DDL and DML results without columns are silent; affected-row summaries do not ex
 DuckDB errors are normal language outcomes with `isError: false`, and the connection remains reusable.
 Automatic Python relation sharing and a separate relation-registration API do not exist.
 Sideband text and images, worker standard-output and standard-error bytes, failures, and lifecycle notices share one pending output tape in publication order.
-Each pipe reader queues raw byte chunks, and each successful `send` response drains all tape events available at its response boundary, decoding complete UTF-8 prefixes and retaining incomplete suffixes for a later response.
+The standard-stream readers queue raw byte chunks, the sideband reader queues decoded protocol messages, and each successful `send` response drains all tape events available at its response boundary, decoding complete UTF-8 prefixes and retaining incomplete standard-stream suffixes for a later response.
 Idle, running, and outstanding-input responses append the literal `\n[idle]`, `\n[running]`, or `\n[stdin needed]` banner; its leading newline is present even when no output precedes it.
 After an infrastructure failure, the server finishes worker shutdown and its I/O readers before appending `[worker stopped: in-memory state lost]` after the specific error.
 After an established worker fails during evaluation, the same `send` appends `[starting new worker]\n` and makes one replacement attempt.
@@ -236,7 +237,7 @@ Initial lazy startup and retries before a worker reaches ready are silent.
 Completion returns pending text, images, and input-request records instead of `[done]` when any content was produced.
 A failed evaluation likewise returns all pending output before its infrastructure or protocol error.
 Server-owned timeline, state, and admission facts are bracketed and separated from worker output; request-validation and standalone resolver diagnostics remain ordinary MCP tool errors.
-Ordering between the two standard streams and sideband output is best effort; incomplete UTF-8 remains with its pipe until a later response, and invalid UTF-8 is replaced when output is rendered.
+Ordering between the two standard streams and sideband output is best effort; incomplete standard-stream UTF-8 remains with its pipe until a later response, and invalid UTF-8 is replaced when output is rendered.
 The built-in worker and custom workers send console prompt fields verbatim; the server preserves each value without trimming it and renders it as a JSON-quoted `[input requested: ...]` record.
 Writes to inherited fd 1 or fd 2 from descendants follow the same path until worker retirement cancels those pipe readers; a descendant retaining fd 0 likewise cannot keep a blocked server write alive past retirement.
 This does not add descendant supervision, and forked descendants cannot use the inherited sideband.
