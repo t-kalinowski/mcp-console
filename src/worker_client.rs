@@ -516,11 +516,13 @@ impl Client {
             .map_err(|_| SendFailure::from("worker lock poisoned".to_string()))?;
         self.ensure_generation(&generation)
             .map_err(SendFailure::from)?;
-        if let Err(error) =
-            self.start_worker(&mut worker, generation.clone(), true, |stop_handle| {
-                self.register_stop_handle(&generation, stop_handle)
-            })
-        {
+        if let Err(error) = self.start_worker(
+            &mut worker,
+            generation.clone(),
+            true,
+            |stop_handle| self.register_stop_handle(&generation, stop_handle),
+            || Ok(()),
+        ) {
             let error = match self.clear_worker_stop_handle(&generation) {
                 Ok(()) => error,
                 Err(clear_error) => format!(
@@ -557,9 +559,13 @@ impl Client {
         let _replacement_startup = self.0.preparation.blocking_read();
         evaluation.start_replacement(failure.worker_stopped());
         let replacement = self
-            .start_worker(&mut worker, generation.clone(), true, |stop_handle| {
-                self.register_stop_handle(&generation, stop_handle)
-            })
+            .start_worker(
+                &mut worker,
+                generation.clone(),
+                true,
+                |stop_handle| self.register_stop_handle(&generation, stop_handle),
+                || Ok(()),
+            )
             .map_err(|error| {
                 let error = match self.clear_worker_stop_handle(&generation) {
                     Ok(()) => error,
@@ -589,11 +595,13 @@ impl Client {
         self.ensure_generation(generation)
             .map_err(SendFailure::from)?;
 
-        if let Err(error) =
-            self.start_worker(&mut worker, generation.clone(), true, |stop_handle| {
-                self.register_stop_handle(generation, stop_handle)
-            })
-        {
+        if let Err(error) = self.start_worker(
+            &mut worker,
+            generation.clone(),
+            true,
+            |stop_handle| self.register_stop_handle(generation, stop_handle),
+            || Ok(()),
+        ) {
             let error = match self.clear_worker_stop_handle(generation) {
                 Ok(()) => error,
                 Err(clear_error) => format!(
@@ -626,6 +634,7 @@ impl Client {
         generation: WorkerGeneration,
         announce_replacement: bool,
         on_started: impl FnOnce(platform::WorkerShutdownHandle) -> Result<(), String>,
+        on_ready: impl FnOnce() -> Result<(), String>,
     ) -> Result<(), String> {
         let replacing = matches!(&*worker, WorkerState::Stopped);
         if !matches!(&*worker, WorkerState::Running(_)) {
@@ -658,10 +667,10 @@ impl Client {
                     .output
                     .push_notice_line(output::WORKER_STARTING_NOTICE);
             }
-            let running = self
-                .0
-                .runtime
-                .spawn(spec, self.0.output.clone(), on_started)?;
+            let running =
+                self.0
+                    .runtime
+                    .spawn(spec, self.0.output.clone(), on_started, on_ready)?;
             if let Some(environment) = environment.as_mut() {
                 // An external `--worker` must apply its first managed R layer before
                 // loading DuckDB; arbitrary preloaded namespaces are not tracked.

@@ -2154,6 +2154,45 @@ def test_restart_does_not_report_never_ready_worker_as_stopped(
                 stop_process(client.process)
 
 
+def test_restart_commits_lifecycle_before_replacement_callbacks(
+    binary: Path,
+) -> Transcript:
+    zod = Path(__file__).resolve().parents[1] / "fixtures" / "zod"
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        temporary_path = Path(temporary_directory)
+        startup_control = temporary_path / "zod-startup-control"
+        startup_control.write_text("ready", encoding="utf-8")
+        environment = os.environ.copy()
+        environment["TMPDIR"] = temporary_directory
+        environment["ZOD_STARTUP_CONTROL"] = str(startup_control)
+        client = McpClient(
+            binary,
+            ("serve", "--worker", str(zod)),
+            environment,
+        )
+        client._initialize_and_list_tools()
+        client.send(r="complete silently")
+        assert last_tool_text(client) == "[done]"
+
+        startup_control.write_text("ready with callback", encoding="utf-8")
+        client.session(action="restart")
+        assert last_tool_text(client) == (
+            "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
+        )
+        callback = wait_for_marker(
+            temporary_path,
+            "zod-startup-callback-response",
+            client,
+        )
+        assert callback.read_text(encoding="utf-8") == (
+            "Python requirements are unavailable with a custom worker"
+        )
+
+        client.send(r="echo")
+        assert last_tool_text(client) == "zod: echo\n"
+        return client._finish()
+
+
 def test_restart_discards_unread_stdin(binary: Path) -> Transcript:
     zod = Path(__file__).resolve().parents[1] / "fixtures" / "zod"
     client = McpClient(
@@ -2370,6 +2409,68 @@ def test_shutdown_does_not_wait_for_sideband_descendant(binary: Path) -> Transcr
             descendant_group = None
             passed = True
             return client.transcript
+        finally:
+            stop_process_group(descendant_group)
+            if not passed:
+                stop_process(client.process)
+
+
+def test_restart_cancels_partial_sideband_frame(binary: Path) -> Transcript:
+    zod = Path(__file__).resolve().parents[1] / "fixtures" / "zod"
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        temporary_path = Path(temporary_directory)
+        environment = os.environ.copy()
+        environment["TMPDIR"] = temporary_directory
+        client = McpClient(
+            binary,
+            ("serve", "--worker", str(zod)),
+            environment,
+        )
+        descendant_group = None
+        passed = False
+        try:
+            client._initialize_and_list_tools()
+            client.send(r="start partial sideband descendant", timeout_ms=0)
+            assert last_tool_text(client) == "\n[running]"
+            marker = wait_for_marker(
+                temporary_path,
+                "zod-sideband-descendant-pid",
+                client,
+            )
+            descendant_group = int(marker.read_text(encoding="utf-8"))
+
+            restarted = client._start_session(action="restart")
+            received = threading.Event()
+            errors: list[BaseException] = []
+
+            def receive_restart() -> None:
+                try:
+                    client._receive(restarted)
+                except BaseException as error:
+                    errors.append(error)
+                finally:
+                    received.set()
+
+            receiver = threading.Thread(target=receive_restart, daemon=True)
+            receiver.start()
+            assert received.wait(3), "restart waited for a partial sideband frame"
+            receiver.join()
+            if errors:
+                raise errors[0]
+            assert last_tool_text(client) == (
+                "[active evaluation stopped by session restart request]\n"
+                "[worker stopped: in-memory state lost]\n"
+                "[starting new worker]\n"
+                "[idle]"
+            )
+
+            stop_process_group(descendant_group)
+            descendant_group = None
+            client.send(r="echo")
+            assert last_tool_text(client) == "zod: echo\n"
+            transcript = client._finish()
+            passed = True
+            return transcript
         finally:
             stop_process_group(descendant_group)
             if not passed:

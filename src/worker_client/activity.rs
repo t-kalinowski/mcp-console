@@ -62,27 +62,29 @@ impl Activity {
         thread::spawn(move || {
             let mut python_candidates = Vec::new();
             loop {
-                if !reader.has_buffered_data() {
-                    let events = match super::platform::wait_for_worker_io(
-                        reader.as_raw_fd(),
-                        libc::POLLIN,
-                        &cancelled,
-                    ) {
-                        Ok(events) => events,
-                        Err(error) => {
-                            activity.fail(format!("worker sideband read failed: {error}"));
+                let message = match reader.receive_available() {
+                    Ok(Some(message)) => message,
+                    Ok(None) => {
+                        let events = match super::platform::wait_for_worker_io(
+                            reader.as_raw_fd(),
+                            libc::POLLIN,
+                            &cancelled,
+                        ) {
+                            Ok(events) => events,
+                            Err(error) => {
+                                activity.fail(format!("worker sideband read failed: {error}"));
+                                return;
+                            }
+                        };
+                        if events.cancelled {
+                            activity.fail("worker sideband reader cancelled".to_string());
                             return;
                         }
-                    };
-                    if events.cancelled {
-                        return;
-                    }
-                    if !events.ready {
+                        if !events.ready {
+                            continue;
+                        }
                         continue;
                     }
-                }
-                let message = match reader.receive() {
-                    Ok(message) => message,
                     Err(error) => {
                         activity.fail(format!("worker sideband read failed: {error}"));
                         return;

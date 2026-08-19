@@ -274,6 +274,7 @@ Custom workers and caller-configured Python workers do not send `python_activate
 
 The first worker message must be `ready`.
 The server does not send an evaluation before receiving it.
+For a restart replacement, the server commits the new lifecycle generation as ready after this frame and before starting the continuous dispatcher, so an immediate resolver or activation callback observes the replacement generation.
 
 One evaluation has this shape:
 
@@ -305,6 +306,7 @@ After `ready`, the generation-long reader accepts console, image, input, Python-
 Console output and images are published to the shared output tape immediately.
 Nested Python requests are serviced even while no explicit operation is active, so an idle callback does not wait for a later client command.
 Idle input state is retained until fd 0 satisfies the read or a later evaluation adopts it.
+The reader assembles newline-delimited JSON incrementally and returns to the cancellation poll after each currently available chunk, so an incomplete frame cannot block retirement.
 Evaluations and live preparations register only the terminal they expect.
 A worker that is waiting for a nested resolver reply queues an unrelated command, finishes that callback after the reply arrives, and then processes the command.
 Before applying a live preparation command, the built-in worker gives registered R handlers one nonblocking turn, so a ready callback is handled first.
@@ -538,10 +540,11 @@ The shutdown task queues worker-stdin closure, then attempts the sideband write.
 It runs independently of the deadline so a blocked stdin writer or full sideband pipe cannot postpone forced termination.
 The sandbox child waits only for the time remaining before the original deadline.
 If its direct process is still running at the deadline, the sandbox force-stops its process group and reaps that direct process.
-After the worker stops, shutdown force-stops any resolver process group that was active for explicit preparation or worker-triggered Python resolution and reaps its direct process.
-After both stop paths complete, shutdown cancels the continuous sideband reader, its stdin writer, and its standard-stream readers.
-Sideband cancellation also interrupts a wait for terminal-state commit.
-Shutdown drains the finite standard-stream bytes already buffered at that boundary and joins the tasks.
+Once the direct process has stopped, shutdown cancels the continuous sideband reader.
+Cancellation interrupts partial-frame assembly and terminal-state commit waits, and releases an operation owner that must return the worker lock.
+Shutdown then force-stops any resolver process group that was active for explicit preparation or worker-triggered Python resolution and reaps its direct process.
+After both stop paths complete, shutdown cancels the stdin writer and standard-stream readers.
+It drains the finite standard-stream bytes already buffered at that boundary and joins the tasks.
 This closes the old generation's server-side pipe boundary before shutdown returns, even when a background descendant retains a pipe descriptor or a blocked stdin write.
 The descendant itself remains unsupervised as described below, and any later write to the closed pipe is not captured.
 
@@ -580,6 +583,7 @@ This uses R's descriptor wait without a separate event loop or worker-owned fixe
 
 After an idle handler turn, the worker returns to the same wait without sending an activity-specific terminal frame.
 The generation-long server reader publishes idle callback output and images as they arrive, services managed-Python requests, and retains idle input state.
+It assembles newline-delimited frames incrementally so a partial frame can be abandoned when retirement cancels the reader.
 An empty `send` only snapshots that server state; it sends no frame and does not wait for the callback to finish.
 A later stdin-only `send` can continue an outstanding idle input request, and a later code-bearing `send` adopts that request into the evaluation's ordinary input state.
 Requirement preparation is noninteractive, so an idle input request stops the worker instead of blocking indefinitely.
@@ -776,6 +780,8 @@ When the source is `complete after timeout`, it pauses briefly before returning 
 When the source is `violate protocol`, it sends an unexpected second `ready` message.
 When the source is `exit unexpectedly`, it exits with status 86 without replying.
 The `emit stdout` and `start background stderr` modes exercise continuous standard-stream capture during evaluation and after completion.
+The `start partial sideband descendant` mode leaves an incomplete JSON frame open in a detached descendant so restart coverage can verify cancellable framing.
+A startup mode emits a resolver callback immediately after `ready` to verify that replacement lifecycle readiness precedes callback dispatch.
 The `stall with detached stdin` mode leaves fd 0 open in a session-detached child without reading it so shutdown coverage can fill the pipe and verify bounded writer cancellation.
 When the source is `request input`, it sends `input_requested`, calls Python `input()` to consume one line from fd 0, and sends `input_received` after that call returns.
 The `request input after timeout` mode gates that request until an earlier MCP wait expires, consumes prequeued stdin, emits output while the request remains provisional, then checkpoints after its receipt is processed to cover retention and delimiting of that still-unexposed request record.

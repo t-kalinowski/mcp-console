@@ -58,6 +58,7 @@ Worker `console_output` and `console_diagnostic` frames carry ordinary and diagn
 The server retains console channels and direct fd 1/2 identity until MCP projection.
 The server preserves sideband text and image order as MCP content blocks, coalesces adjacent text, and does not add `[done]` when an image is the only output.
 One generation-long sideband reader continuously publishes background console and image frames, handles Python-resolution, Python-version-selection, and Python-activation frames, and retains idle input state.
+It assembles newline-delimited frames incrementally and returns to its cancellation poll after each available chunk, so an incomplete frame cannot block retirement.
 A worker whose background callback is waiting for a nested resolver reply queues an unrelated command, finishes the callback after the reply arrives, and then processes that command.
 An explicit operation registers only its expected terminal.
 At evaluation `completed`, the reader records an output-tape checkpoint so later background activity remains pending for the next response.
@@ -110,8 +111,10 @@ A newly resolved R candidate repeats the complete retained DuckDB extension inst
 A failed restart resolution leaves the current worker, its in-memory state, requirements, R library, Python interpreter, and DuckDB extension set unchanged.
 After every required resolution succeeds, restart commits the R library, DuckDB extension set, and Python environment together, loses all worker-owned in-memory state and unread stdin, eagerly starts a replacement, and returns `[idle]` after it reports ready.
 The implicit session exists for the server lifetime, so restart starts its first worker if none exists yet.
-It first queues worker-stdin closure and the sideband shutdown message without waiting behind an active cell, then force-stops the process group and reaps the direct sandbox process at the one-second deadline if that process remains live.
-It then waits for the active evaluation or preparation to end, cancels the worker's continuous sideband reader, stdin writer, and output readers, drains standard-stream bytes already buffered at that boundary, and joins the tasks before reporting `[worker stopped: in-memory state lost]` or launching the replacement.
+The replacement generation becomes lifecycle ready after its `ready` frame and before its continuous dispatcher starts, so immediate resolver and activation callbacks observe the new generation as ready.
+Restart first queues worker-stdin closure and the sideband shutdown message without waiting behind an active cell, then force-stops the process group and reaps the direct sandbox process at the one-second deadline if that process remains live.
+Once the direct process has stopped, it cancels the continuous sideband reader to release any operation waiting on an incomplete frame.
+It then waits for the active evaluation or preparation owner to release the worker, cancels the stdin writer and output readers, drains standard-stream bytes already buffered at that boundary, and joins the tasks before reporting `[worker stopped: in-memory state lost]` or launching the replacement.
 Each admitted cell or idle stdin write carries its worker generation, so work admitted before restart cannot reach the replacement.
 An R preparation cancelled while its IR resolver is active reports resolver cancellation.
 After preparation reaches the live worker, restart cancellation returns `R preparation cancelled by restart` when the call includes R and `Python preparation cancelled by restart` otherwise; active-generation sideband failures retain their transport diagnostics.
@@ -132,6 +135,7 @@ Between cells, the worker temporarily adds the sideband descriptor to R's input-
 It removes that temporary handler before running R code, so fork children inherit no stale sideband handler.
 R handler errors remain below `R_ToplevelExec()`, and the worker uses no worker-owned fixed polling interval or second event loop.
 A generation-long server reader continuously consumes idle console output and images, services nested managed-Python requests, and retains idle console-input state.
+It assembles newline-delimited sideband frames incrementally, returning to the cancellation poll after each available chunk, so a partial frame cannot block worker retirement.
 Before applying a live requirement preparation, the built-in worker gives registered R handlers one nonblocking turn, so a callback already ready when the command arrives is collected first.
 An empty `send` immediately snapshots an idle callback's pending output and surfaces an outstanding input request as `[stdin needed]`; a later stdin-only `send` continues it, and a call that already includes stdin can prequeue the input.
 A code-bearing `send` can also continue an idle input request.

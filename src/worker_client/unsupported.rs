@@ -9,6 +9,7 @@ impl WorkerRuntime {
         spec: super::WorkerSpec<'_>,
         _output: super::OutputTape,
         _on_started: impl FnOnce(WorkerShutdownHandle) -> Result<(), String>,
+        _on_ready: impl FnOnce() -> Result<(), String>,
     ) -> Result<Worker, String> {
         let super::WorkerSpec {
             executable,
