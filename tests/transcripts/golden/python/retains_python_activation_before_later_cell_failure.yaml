@@ -27,33 +27,10 @@ result:
   content:
     - type: text
       text: |
-        [1] FALSE
-  isError: false
----
-id: 5
-session:
-  action: prepare
-  requirements:
-    python:
-      - py-yaml12
-result:
-  content:
-    - type: text
-      text: "[prepared]"
-  isError: false
----
-id: 6
-send:
-  r: |
-    identical(Sys.getpid(), worker_pid) && !reticulate::py_available(FALSE)
-result:
-  content:
-    - type: text
-      text: |
         [1] TRUE
   isError: false
 ---
-id: 7
+id: 5
 send:
   python: |
     import yaml12

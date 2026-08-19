@@ -25,6 +25,7 @@ base::local({
     python_builtins,
     "['__import__']('sys').modules['_mcp_console_runtime']"
   )
+  pending_requirements <- NULL
   source <- NULL
 
   manifest <- function(packages, python_version, exclude_newer) {
@@ -68,6 +69,24 @@ base::local({
     )
   }
 
+  activation_json <- function(requirements) {
+    jsonlite::toJSON(
+      manifest(
+        requirements$packages,
+        requirements$python_version,
+        requirements$exclude_newer
+      ),
+      auto_unbox = TRUE,
+      null = "null",
+      na = "null"
+    )
+  }
+
+  report_activation <- function(requirements) {
+    .Call("mcp_console_python_activated", activation_json(requirements))
+    invisible()
+  }
+
   install_managed_python <- function(...) {
     namespace <- asNamespace("reticulate")
     current_requirements <- function() {
@@ -98,7 +117,6 @@ base::local({
         version_request_json(constraints)
       )
     }
-
     seed <- jsonlite::fromJSON(managed)
     packages <- unlist(seed$packages, use.names = FALSE)
     python_version <- unlist(seed$python_version, use.names = FALSE)
@@ -130,6 +148,30 @@ base::local({
       )))
       globals$python_requirements <- requirements
     }
+    stopifnot(
+      !bindingIsActive("python_requirements", globals),
+      !bindingIsLocked("python_requirements", globals)
+    )
+    rm(list = "python_requirements", envir = globals)
+    makeActiveBinding("python_requirements", function(value) {
+      if (missing(value)) {
+        return(requirements)
+      }
+      if (!is.null(pending_requirements)) {
+        committed <- manifest(
+          value$packages,
+          value$python_version,
+          value$exclude_newer
+        )
+        stopifnot(identical(committed, pending_requirements))
+      }
+      requirements <<- value
+      if (!is.null(pending_requirements)) {
+        pending_requirements <<- NULL
+        report_activation(committed)
+      }
+      invisible(value)
+    }, globals)
 
     replace_binding <- function(name, value) {
       was_locked <- bindingIsLocked(name, namespace)
@@ -143,8 +185,23 @@ base::local({
       assign(name, value, envir = namespace)
       invisible()
     }
+    original_activate <- get("py_reqs_activate", envir = namespace)
+    activate <- function(requirements) {
+      stopifnot(is.null(pending_requirements))
+      config <- original_activate(requirements)
+      pending_requirements <<- manifest(
+        requirements$packages,
+        requirements$python_version,
+        requirements$exclude_newer
+      )
+      config
+    }
     replace_binding("uv_get_or_create_env", resolve)
     replace_binding("resolve_python_version", resolve_version)
+    replace_binding("py_reqs_activate", activate)
+    setHook("reticulate.onPyInit", function() {
+      report_activation(current_requirements())
+    }, action = "append")
     invisible()
   }
 
@@ -187,7 +244,7 @@ base::local({
     install_console_width()
   }
 
-  checkpoint_manifest <- function() {
+  materialize_manifest <- function() {
     if (is.na(managed) || !"reticulate" %in% loadedNamespaces()) {
       return(NULL)
     }
@@ -208,19 +265,6 @@ base::local({
     )
   }
 
-  checkpoint <- function() {
-    checkpoint <- checkpoint_manifest()
-    if (is.null(checkpoint)) {
-      return(NA_character_)
-    }
-    jsonlite::toJSON(
-      checkpoint,
-      auto_unbox = TRUE,
-      null = "null",
-      na = "null"
-    )
-  }
-
   prepare <- function(request) {
     if (is.na(managed)) {
       stop("Python preparation requires a server-managed interpreter")
@@ -231,11 +275,11 @@ base::local({
     result <- tryCatch({
       packages <- unlist(jsonlite::fromJSON(request), use.names = FALSE)
       reticulate::py_require(packages, action = "add")
-      checkpoint <- checkpoint_manifest()
-      if (is.null(checkpoint)) {
-        stop("Python preparation did not produce a managed checkpoint")
+      requirements <- materialize_manifest()
+      if (is.null(requirements)) {
+        stop("Python preparation did not produce a managed manifest")
       }
-      list(kind = "prepared", checkpoint = checkpoint)
+      list(kind = "prepared")
     }, error = function(error) {
       globals$python_requirements <- snapshot
       list(kind = "failed", message = conditionMessage(error))
@@ -458,12 +502,8 @@ _sys.modules[_mcp_console_runtime.__name__] = _mcp_console_runtime
     #[derive(serde::Deserialize)]
     #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
     pub(crate) enum PreparationOutcome {
-        Prepared {
-            checkpoint: crate::worker_protocol::PythonRequirementManifest,
-        },
-        Failed {
-            message: String,
-        },
+        Prepared,
+        Failed { message: String },
     }
 
     pub(crate) struct Bridge(crate::r_bridge::Bridge);
@@ -486,18 +526,6 @@ _sys.modules[_mcp_console_runtime.__name__] = _mcp_console_runtime
                 .ok_or_else(|| "Python preparation bridge returned no response".to_string())?;
             serde_json::from_str(&response)
                 .map_err(|error| format!("invalid Python preparation response: {error}"))
-        }
-
-        pub(crate) fn checkpoint(
-            &self,
-        ) -> Result<Option<crate::worker_protocol::PythonRequirementManifest>, String> {
-            self.0
-                .call0_string(c"checkpoint")?
-                .map(|checkpoint| {
-                    serde_json::from_str(&checkpoint)
-                        .map_err(|error| format!("invalid Python checkpoint: {error}"))
-                })
-                .transpose()
         }
     }
 
@@ -627,6 +655,19 @@ _sys.modules[_mcp_console_runtime.__name__] = _mcp_console_runtime
         let python =
             crate::worker::resolve_python(request).map_err(|error| harp::anyhow!("{error}"))?;
         Ok(harp::object::RObject::from(python).sexp)
+    }
+
+    #[allow(clippy::result_large_err)]
+    #[harp::register]
+    pub extern "C-unwind" fn mcp_console_python_activated(
+        requirements: SEXP,
+    ) -> harp::Result<SEXP> {
+        let requirements = String::try_from(harp::object::RObject::view(requirements))?;
+        let requirements =
+            serde_json::from_str(&requirements).map_err(|error| harp::anyhow!("{error}"))?;
+        crate::worker::publish_python_activation(requirements)
+            .map_err(|error| harp::anyhow!("{error}"))?;
+        unsafe { Ok(libr::R_NilValue) }
     }
 
     #[allow(clippy::result_large_err)]

@@ -2,28 +2,33 @@
 !same-as tests/transcripts/golden/server/initializes_and_lists_tools.yaml
 ---
 id: 3
+send:
+  r: complete before partial sideband descendant
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+id: 4
 session:
   action: restart
-  requirements:
-    r:
-      - praise
-    duckdb:
-      - json
 result:
   content:
     - type: text
       text: |-
+        [worker stopped: in-memory state lost]
         [starting new worker]
         [idle]
   isError: false
 ---
-id: 4
+id: 5
 send:
-  r: report managed R requirement
+  r: echo
 result:
   content:
     - type: text
       text: |
-        zod R requirement: prepared=true
+        zod: echo
   isError: false
 ...

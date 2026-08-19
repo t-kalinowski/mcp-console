@@ -2,7 +2,7 @@ use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
 
 use super::output::{
-    OutputTape, Response, ResponseAcknowledgment, SendFailure, project_completed,
+    OutputCheckpoint, OutputTape, Response, ResponseAcknowledgment, SendFailure, project_completed,
     project_replacement_ready,
 };
 
@@ -18,6 +18,7 @@ pub(super) struct Evaluation {
 
 struct EvaluationState {
     phase: EvaluationPhase,
+    completion_checkpoint: Option<OutputCheckpoint>,
     /// Whether a waiter already drained the response for a terminal phase.
     completion_collected: bool,
     input_report_at: Option<Instant>,
@@ -63,6 +64,7 @@ pub(super) struct RestartReservation {
     evaluation: Arc<Evaluation>,
     unfinished: bool,
     completion: Option<CompletionKind>,
+    completion_checkpoint: Option<OutputCheckpoint>,
     pub(super) waiting: bool,
 }
 
@@ -85,6 +87,7 @@ impl Evaluation {
         Self {
             state: Mutex::new(EvaluationState {
                 phase: EvaluationPhase::Evaluating,
+                completion_checkpoint: None,
                 completion_collected: false,
                 input_report_at: None,
                 waiting: false,
@@ -125,6 +128,7 @@ impl Evaluation {
             .lock()
             .map_err(|_| "worker evaluation state lock poisoned".to_string())?;
         state.restart_reserved = true;
+        let waiting = state.waiting;
         let unfinished = !matches!(state.phase, EvaluationPhase::Complete(_));
         let completion = match state.phase {
             EvaluationPhase::Complete(completion) if !state.completion_collected => {
@@ -133,11 +137,11 @@ impl Evaluation {
             EvaluationPhase::Complete(_) => None,
             EvaluationPhase::Evaluating | EvaluationPhase::ReplacementStarting => None,
         };
-        let waiting = state.waiting;
         Ok(RestartReservation {
             evaluation: self.clone(),
             unfinished,
             completion,
+            completion_checkpoint: completion.and(state.completion_checkpoint),
             waiting,
         })
     }
@@ -219,6 +223,25 @@ impl Evaluation {
     }
 
     #[cfg(target_os = "macos")]
+    pub(super) fn resume_input_request(&self) -> Result<(), String> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| "worker evaluation state lock poisoned".to_string())?;
+        if state.input_report_at.is_some() {
+            return Err("worker evaluation already has an outstanding input request".to_string());
+        }
+        let grace = if state.pending_stdin.is_empty() {
+            Duration::ZERO
+        } else {
+            INPUT_REQUEST_GRACE
+        };
+        state.input_report_at = Some(Instant::now() + grace);
+        self.changed.notify_one();
+        Ok(())
+    }
+
+    #[cfg(target_os = "macos")]
     pub(super) fn input_received(&self) -> Result<(), String> {
         let mut state = self
             .state
@@ -245,7 +268,19 @@ impl Evaluation {
     }
 
     pub(super) fn complete_cell(&self, result: Result<(), SendFailure>) {
-        self.complete(result, CompletionKind::Cell);
+        self.complete(result, CompletionKind::Cell, None);
+    }
+
+    pub(super) fn complete_cell_at(&self, checkpoint: OutputCheckpoint) {
+        self.complete(Ok(()), CompletionKind::Cell, Some(checkpoint));
+    }
+
+    pub(super) fn reject_new_cell_message(&self) -> &'static str {
+        "worker is already evaluating a cell; poll without a code field"
+    }
+
+    pub(super) fn reject_preparation_message(&self) -> &'static str {
+        "worker is already evaluating a cell; poll it before preparing requirements"
     }
 
     pub(super) fn start_replacement(&self, failure: SendFailure) {
@@ -253,6 +288,7 @@ impl Evaluation {
             return;
         };
         state.input_report_at = None;
+        state.completion_checkpoint = None;
         self.output.push_failure(failure);
         state.phase = EvaluationPhase::ReplacementStarting;
         self.changed.notify_one();
@@ -264,10 +300,15 @@ impl Evaluation {
         } else {
             CompletionKind::ReplacementFailed
         };
-        self.complete(result, completion);
+        self.complete(result, completion, None);
     }
 
-    fn complete(&self, result: Result<(), SendFailure>, completion: CompletionKind) {
+    fn complete(
+        &self,
+        result: Result<(), SendFailure>,
+        completion: CompletionKind,
+        checkpoint: Option<OutputCheckpoint>,
+    ) {
         let Ok(mut state) = self.state.lock() else {
             return;
         };
@@ -278,6 +319,7 @@ impl Evaluation {
             self.output.push_failure(failure);
         }
         state.phase = EvaluationPhase::Complete(completion);
+        state.completion_checkpoint = checkpoint;
         state.completion_collected = false;
         self.changed.notify_one();
     }
@@ -353,9 +395,11 @@ impl Evaluation {
             EvaluationPhase::Complete(CompletionKind::Cell)
             | EvaluationPhase::Complete(CompletionKind::ReplacementFailed) => {
                 state.completion_collected = true;
-                return Ok(EvaluationStatus::Report(EvaluationWait::Completed(
-                    self.output.take(),
-                )));
+                let output = state.completion_checkpoint.take().map_or_else(
+                    || self.output.take(),
+                    |checkpoint| self.output.take_until(checkpoint),
+                );
+                return Ok(EvaluationStatus::Report(EvaluationWait::Completed(output)));
             }
             EvaluationPhase::Complete(CompletionKind::ReplacementReady) => {
                 state.completion_collected = true;
@@ -393,7 +437,7 @@ impl RestartReservation {
         self.unfinished
     }
 
-    pub(super) fn project_response(&self, response: Response) -> Response {
+    fn project_response(&self, response: Response) -> Response {
         match self.completion {
             Some(CompletionKind::Cell | CompletionKind::ReplacementFailed) => {
                 project_completed(response)
@@ -401,6 +445,24 @@ impl RestartReservation {
             Some(CompletionKind::ReplacementReady) => project_replacement_ready(response),
             None => response,
         }
+    }
+
+    pub(super) fn take_output(&self, output: &OutputTape) -> (Response, Response) {
+        match self.completion_checkpoint {
+            Some(checkpoint) => (
+                self.project_response(output.take_until(checkpoint)),
+                output.take(),
+            ),
+            None => (self.project_response(output.take()), Response::default()),
+        }
+    }
+
+    pub(super) fn stopped_notice(&self) -> &'static str {
+        super::output::EVALUATION_STOPPED_BY_RESTART_NOTICE
+    }
+
+    pub(super) fn active_stopped_notice(&self) -> &'static str {
+        super::output::ACTIVE_EVALUATION_STOPPED_NOTICE
     }
 
     pub(super) fn deliver(self, mut response: Response) -> Result<RestartDelivery, String> {

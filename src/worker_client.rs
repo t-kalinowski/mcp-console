@@ -9,6 +9,9 @@ mod lifecycle;
 mod output;
 
 #[cfg(target_os = "macos")]
+mod activity;
+
+#[cfg(target_os = "macos")]
 #[path = "worker_client/macos.rs"]
 mod platform;
 
@@ -63,6 +66,69 @@ struct WorkerSpec<'a> {
     arguments: &'a [OsString],
     managed_python: Option<&'a crate::resolver::ManagedPython>,
     managed_r: Option<&'a crate::resolver::ManagedR>,
+    callbacks: WorkerCallbacks,
+}
+
+struct WorkerSnapshot {
+    checkpoint: output::OutputCheckpoint,
+    failure: Option<String>,
+    input_requested: bool,
+}
+
+/// Keeps the sideband reader behind a terminal frame until its owner commits.
+struct TerminalCommit<T> {
+    value: Option<T>,
+    acknowledgment: Option<std::io::PipeWriter>,
+}
+
+impl<T> TerminalCommit<T> {
+    fn new(value: T, acknowledgment: std::io::PipeWriter) -> Self {
+        Self {
+            value: Some(value),
+            acknowledgment: Some(acknowledgment),
+        }
+    }
+
+    fn try_map<U, E>(
+        mut self,
+        map: impl FnOnce(T) -> Result<U, E>,
+    ) -> Result<TerminalCommit<U>, E> {
+        let value = self
+            .value
+            .take()
+            .expect("terminal result should be available until commit");
+        let value = map(value)?;
+        Ok(TerminalCommit {
+            value: Some(value),
+            acknowledgment: self.acknowledgment.take(),
+        })
+    }
+
+    fn commit_with<U>(mut self, commit: impl FnOnce(T) -> U) -> U {
+        let value = self
+            .value
+            .take()
+            .expect("terminal result should be available until commit");
+        let result = commit(value);
+        self.acknowledge();
+        result
+    }
+
+    fn acknowledge(&mut self) {
+        drop(self.acknowledgment.take());
+    }
+}
+
+impl<T> Drop for TerminalCommit<T> {
+    fn drop(&mut self) {
+        self.acknowledge();
+    }
+}
+
+#[derive(Clone)]
+struct WorkerCallbacks {
+    client: Client,
+    generation: WorkerGeneration,
 }
 
 enum WorkerState {
@@ -178,7 +244,7 @@ impl Client {
         }))
     }
 
-    /// Starts one cell, supplies its stdin, or polls the cell already running.
+    /// Starts one cell, supplies stdin, or snapshots output while idle.
     pub(crate) async fn send(
         &self,
         cell: Option<crate::cell::Cell>,
@@ -236,7 +302,7 @@ impl Client {
                             }
                         }
                     }
-                    return Ok(SendResponse::Idle(self.take_idle_output(&generation)?));
+                    return self.take_idle_response(&generation);
                 }
             },
         };
@@ -277,10 +343,8 @@ impl Client {
         }
 
         let mut active = self.evaluation()?;
-        if active.is_some() {
-            return Err(
-                "worker is already evaluating a cell; poll without a code field".to_string(),
-            );
+        if let Some(active) = active.as_ref() {
+            return Err(active.evaluation.reject_new_cell_message().to_string());
         }
         self.ensure_generation(&generation)?;
         *active = Some(ActiveEvaluation {
@@ -292,7 +356,7 @@ impl Client {
         let client = self.clone();
         let evaluator = evaluation.clone();
         let evaluation_task = tokio::task::spawn_blocking(move || {
-            client.evaluate_blocking(cell, &evaluator, generation);
+            client.evaluate_blocking(cell, evaluator, generation);
         });
         let failed = evaluation.clone();
         let _completion_task = tokio::spawn(async move {
@@ -372,53 +436,66 @@ impl Client {
         Ok(())
     }
 
-    /// Drains idle output only while this call still owns the admitted generation.
-    fn take_idle_output(&self, generation: &WorkerGeneration) -> Result<Response, String> {
+    /// Drains the output snapshot only while this call owns the admitted generation.
+    fn take_idle_response(
+        &self,
+        generation: &WorkerGeneration,
+    ) -> Result<SendResponse, SendFailure> {
         let evaluation = self.evaluation()?;
         if evaluation.is_some() {
-            return Err("worker started evaluating before idle output was collected".to_string());
+            return Err("worker started evaluating before idle output was collected"
+                .to_string()
+                .into());
         }
-        let lifecycle = self
+        drop(evaluation);
+        self.ensure_generation(generation)?;
+
+        let mut worker = self
             .0
-            .lifecycle
+            .worker
             .lock()
-            .map_err(|_| "worker lifecycle lock poisoned".to_string())?;
-        if lifecycle.state != lifecycle::LifecycleState::Ready
-            || !lifecycle.generation.is(generation)
-        {
-            return Err("session restarted before the operation completed".to_string());
+            .map_err(|_| "worker lock poisoned".to_string())?;
+        self.ensure_generation(generation)?;
+        let snapshot = match &mut *worker {
+            WorkerState::Running(running) => running.snapshot(&self.0.output)?,
+            WorkerState::Initial | WorkerState::Stopped => WorkerSnapshot {
+                checkpoint: self.0.output.checkpoint(),
+                failure: None,
+                input_requested: false,
+            },
+        };
+        if let Some(message) = snapshot.failure {
+            let mut failure = SendFailure::from(message);
+            match self.stop_failed_worker(&mut worker, generation) {
+                Ok(lifecycle::FailedWorkerStop::Stopped) => {
+                    failure = failure.worker_stopped();
+                }
+                Ok(lifecycle::FailedWorkerStop::RestartOwnsWorker) => {}
+                Err(stop_error) => {
+                    failure.message.push_str(&format!(
+                        "; additionally failed to stop the worker: {stop_error}"
+                    ));
+                }
+            }
+            self.0.output.push_failure(failure);
+            return Ok(SendResponse::Failed(self.0.output.take()));
         }
-        Ok(self.0.output.take())
+        drop(worker);
+        let output = self.0.output.take_until(snapshot.checkpoint);
+        Ok(if snapshot.input_requested {
+            SendResponse::InputRequested(output)
+        } else {
+            SendResponse::Idle(output)
+        })
     }
 
     fn evaluate_blocking(
         &self,
         cell: crate::cell::Cell,
-        evaluation: &Evaluation,
+        evaluation: Arc<Evaluation>,
         generation: WorkerGeneration,
     ) {
-        let resolver = self.clone();
-        let version_resolver = self.clone();
-        let checkpointer = self.clone();
-        let resolver_generation = generation.clone();
-        let version_generation = generation.clone();
-        let checkpoint_generation = generation.clone();
-        let result = self.evaluate_with_worker(
-            cell,
-            evaluation,
-            generation,
-            move |request| resolver.resolve_runtime_python(resolver_generation.clone(), request),
-            move |request| {
-                version_resolver.resolve_runtime_python_version(version_generation.clone(), request)
-            },
-            move |checkpoint, candidates| {
-                checkpointer.checkpoint_runtime_python(
-                    checkpoint_generation.clone(),
-                    checkpoint,
-                    candidates,
-                )
-            },
-        );
+        let result = self.evaluate_with_worker(cell, &evaluation, generation);
         if let Err(failure) = result {
             evaluation.complete_cell(Err(failure));
         }
@@ -427,18 +504,8 @@ impl Client {
     fn evaluate_with_worker(
         &self,
         cell: crate::cell::Cell,
-        evaluation: &Evaluation,
+        evaluation: &Arc<Evaluation>,
         generation: WorkerGeneration,
-        resolve_python: impl FnMut(
-            crate::worker_protocol::PythonResolveRequest,
-        ) -> Result<crate::resolver::ManagedPython, String>,
-        resolve_python_version: impl FnMut(
-            crate::worker_protocol::PythonVersionResolveRequest,
-        ) -> Result<String, String>,
-        checkpoint_python: impl FnMut(
-            Option<crate::worker_protocol::PythonRequirementManifest>,
-            Vec<crate::resolver::ManagedPython>,
-        ) -> Result<(), String>,
     ) -> Result<(), SendFailure> {
         self.ensure_generation(&generation)
             .map_err(SendFailure::from)?;
@@ -449,9 +516,13 @@ impl Client {
             .map_err(|_| SendFailure::from("worker lock poisoned".to_string()))?;
         self.ensure_generation(&generation)
             .map_err(SendFailure::from)?;
-        if let Err(error) = self.start_worker(&mut worker, true, |stop_handle| {
-            self.register_stop_handle(&generation, stop_handle)
-        }) {
+        if let Err(error) = self.start_worker(
+            &mut worker,
+            generation.clone(),
+            true,
+            |stop_handle| self.register_stop_handle(&generation, stop_handle),
+            || Ok(()),
+        ) {
             let error = match self.clear_worker_stop_handle(&generation) {
                 Ok(()) => error,
                 Err(clear_error) => format!(
@@ -461,20 +532,14 @@ impl Client {
             return Err(SendFailure::from(error));
         }
         let WorkerState::Running(running) = &mut *worker else {
-            unreachable!("worker should be running");
+            return Err(SendFailure::from("worker is not running".to_string()));
         };
         let result = running
-            .evaluate(
-                cell,
-                evaluation,
-                resolve_python,
-                resolve_python_version,
-                checkpoint_python,
-            )
+            .evaluate(cell, evaluation.clone())
             .map_err(|message| evaluation.classify_failure(message));
         let failure = match result {
-            Ok(()) => {
-                evaluation.complete_cell(Ok(()));
+            Ok(completion) => {
+                completion.commit_with(|checkpoint| evaluation.complete_cell_at(checkpoint));
                 return Ok(());
             }
             Err(failure) => failure,
@@ -494,9 +559,13 @@ impl Client {
         let _replacement_startup = self.0.preparation.blocking_read();
         evaluation.start_replacement(failure.worker_stopped());
         let replacement = self
-            .start_worker(&mut worker, true, |stop_handle| {
-                self.register_stop_handle(&generation, stop_handle)
-            })
+            .start_worker(
+                &mut worker,
+                generation.clone(),
+                true,
+                |stop_handle| self.register_stop_handle(&generation, stop_handle),
+                || Ok(()),
+            )
             .map_err(|error| {
                 let error = match self.clear_worker_stop_handle(&generation) {
                     Ok(()) => error,
@@ -526,9 +595,13 @@ impl Client {
         self.ensure_generation(generation)
             .map_err(SendFailure::from)?;
 
-        if let Err(error) = self.start_worker(&mut worker, true, |stop_handle| {
-            self.register_stop_handle(generation, stop_handle)
-        }) {
+        if let Err(error) = self.start_worker(
+            &mut worker,
+            generation.clone(),
+            true,
+            |stop_handle| self.register_stop_handle(generation, stop_handle),
+            || Ok(()),
+        ) {
             let error = match self.clear_worker_stop_handle(generation) {
                 Ok(()) => error,
                 Err(clear_error) => format!(
@@ -558,8 +631,10 @@ impl Client {
     fn start_worker(
         &self,
         worker: &mut WorkerState,
+        generation: WorkerGeneration,
         announce_replacement: bool,
         on_started: impl FnOnce(platform::WorkerShutdownHandle) -> Result<(), String>,
+        on_ready: impl FnOnce() -> Result<(), String>,
     ) -> Result<(), String> {
         let replacing = matches!(&*worker, WorkerState::Stopped);
         if !matches!(&*worker, WorkerState::Running(_)) {
@@ -582,16 +657,20 @@ impl Client {
                 arguments: &self.0.arguments,
                 managed_python,
                 managed_r,
+                callbacks: WorkerCallbacks {
+                    client: self.clone(),
+                    generation,
+                },
             };
             if replacing && announce_replacement {
                 self.0
                     .output
                     .push_notice_line(output::WORKER_STARTING_NOTICE);
             }
-            let running = self
-                .0
-                .runtime
-                .spawn(spec, self.0.output.clone(), on_started)?;
+            let running =
+                self.0
+                    .runtime
+                    .spawn(spec, self.0.output.clone(), on_started, on_ready)?;
             if let Some(environment) = environment.as_mut() {
                 // An external `--worker` must apply its first managed R layer before
                 // loading DuckDB; arbitrary preloaded namespaces are not tracked.
@@ -600,5 +679,32 @@ impl Client {
             *worker = WorkerState::Running(running);
         }
         Ok(())
+    }
+}
+
+impl WorkerCallbacks {
+    fn resolve_python(
+        &self,
+        request: crate::worker_protocol::PythonResolveRequest,
+    ) -> Result<crate::resolver::ManagedPython, String> {
+        self.client
+            .resolve_runtime_python(self.generation.clone(), request)
+    }
+
+    fn resolve_python_version(
+        &self,
+        request: crate::worker_protocol::PythonVersionResolveRequest,
+    ) -> Result<String, String> {
+        self.client
+            .resolve_runtime_python_version(self.generation.clone(), request)
+    }
+
+    fn activate_python(
+        &self,
+        requirements: crate::worker_protocol::PythonRequirementManifest,
+        candidates: &mut Vec<crate::resolver::ManagedPython>,
+    ) -> Result<(), String> {
+        self.client
+            .activate_runtime_python(self.generation.clone(), requirements, candidates)
     }
 }

@@ -5,6 +5,17 @@ id: 3
 send:
   r: |
     sql_interrupt_armed <- FALSE
+    dyn.load("./mcp_test_input_handler.so")
+    invisible(.Call(
+      "mcp_test_register_input_handler",
+      file.path(tempdir(), "sql-interrupt-finished-fifo"),
+      function() {
+        invisible(file.create(file.path(
+          tempdir(),
+          "sql-interrupt-finished"
+        )))
+      }
+    ))
     options(duckdb.progress_display = function(percentage) {
       if (isTRUE(sql_interrupt_armed)) {
         invisible(file.create(file.path(
@@ -74,7 +85,7 @@ result:
 ---
 id: 8
 send:
-  timeout_ms: 5000
+  timeout_ms: 1000
 result:
   content:
     - type: text

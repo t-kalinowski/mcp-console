@@ -152,7 +152,7 @@ impl ConsoleServer {
 #[tool_router]
 impl ConsoleServer {
     #[tool(
-        description = "Persistent mixed-language computational workbench. Use it whenever exact computation or direct inspection would improve accuracy—from arithmetic, string counting, parsing, and file or binary-data inspection to data wrangling, exploratory analysis, visualization, statistics, simulation, and model training or tuning. Choose the clearest language for each step and switch freely between calls. The default R environment includes tidyverse, reticulate, DBI, and duckdb, together with their full dependency sets, such as ggplot2, dplyr, readr, and jsonlite. The built-in managed Python environment includes NumPy and pandas. DuckDB SQL is also available. State persists across calls. Python reads R globals through `r.name`; R reads Python globals through `py$name`; SQL queries R data frames by name; R accesses the DuckDB catalog through `sql_connection()`. Language-native help and introspection are available. Do not probe package availability in cells. Use `session` to prepare other packages or DuckDB extensions before loading or importing them. If you use a custom Python installation, import packages already installed there directly. R default-device plots and open `matplotlib.pyplot` figures return as PNG images. Send exactly one complete `r`, `python`, or `sql` cell. Call `send` sequentially; concurrent calls are unsupported. Use `stdin` for interactive reads or debugger commands; omit code and stdin to poll. A wait timeout does not stop computation, and running work must be collected before new code is sent. R errors, Python exceptions, and DuckDB errors are ordinary console output, so inspect result text and continue or correct the cell. Evaluated code can read host files but cannot directly access the network and can write only within the worker's private temporary directory. Managed Python requirement resolution triggered by R code such as `reticulate::py_require()` or by an R package load is a host-side exception: it may access the network and execute installation or build code, so use only trusted requirements."
+        description = "Persistent mixed-language computational workbench. Use it whenever exact computation or direct inspection would improve accuracy—from arithmetic, string counting, parsing, and file or binary-data inspection to data wrangling, exploratory analysis, visualization, statistics, simulation, and model training or tuning. Choose the clearest language for each step and switch freely between calls. The default R environment includes tidyverse, reticulate, DBI, and duckdb, together with their full dependency sets, such as ggplot2, dplyr, readr, and jsonlite. The built-in managed Python environment includes NumPy and pandas. DuckDB SQL is also available. State persists across calls. Python reads R globals through `r.name`; R reads Python globals through `py$name`; SQL queries R data frames by name; R accesses the DuckDB catalog through `sql_connection()`. Language-native help and introspection are available. Do not probe package availability in cells. Use `session` to prepare other packages or DuckDB extensions before loading or importing them. If you use a custom Python installation, import packages already installed there directly. R default-device plots and open `matplotlib.pyplot` figures return as PNG images. Send exactly one complete `r`, `python`, or `sql` cell. Call `send` sequentially; concurrent calls are unsupported. Use `stdin` for interactive reads or debugger commands; omit code and stdin to poll an active evaluation or immediately collect output produced while the worker is idle. A wait timeout does not stop computation, and running work must be collected before new code is sent. R errors, Python exceptions, and DuckDB errors are ordinary console output, so inspect result text and continue or correct the cell. Evaluated code can read host files but cannot directly access the network and can write only within the worker's private temporary directory. Managed Python requirement resolution triggered by R code such as `reticulate::py_require()` or by an R package load is a host-side exception: it may access the network and execute installation or build code, so use only trusted requirements."
     )]
     async fn send(
         &self,
@@ -229,6 +229,14 @@ impl ConsoleServer {
                 {
                     crate::worker_client::PrepareResult::Prepared => "[prepared]",
                     crate::worker_client::PrepareResult::RestartRequired => "[restart required]",
+                    crate::worker_client::PrepareResult::Failed(response) => {
+                        return Ok(response_to_tool_result(
+                            response,
+                            &call,
+                            &self.transcript,
+                            &delivery,
+                        ));
+                    }
                     crate::worker_client::PrepareResult::WorkerStopped(response) => {
                         return Ok(response_to_tool_result(
                             response,
@@ -272,11 +280,14 @@ impl ConsoleServer {
 }
 
 fn response_to_tool_result(
-    response: crate::worker_client::Response,
+    mut response: crate::worker_client::Response,
     call: &crate::transcript::Call,
     transcript: &crate::transcript::Transcript,
     delivery: &crate::server_transport::ResponseDeliveryCall,
 ) -> CallToolResult {
+    if let Err(error) = response.persist_images(transcript, call.id()) {
+        transcript.disable(error);
+    }
     let (content, is_error, response_delivery) = response.into_parts();
     let mut result_images = Vec::new();
     let content = content

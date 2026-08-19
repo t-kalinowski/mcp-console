@@ -2,22 +2,27 @@
 !same-as tests/transcripts/golden/server/initializes_and_lists_tools.yaml
 ---
 id: 3
-session:
-  action: restart
-  requirements:
-    r:
-      - praise
-    duckdb:
-      - json
+send:
+  r: resolve python while idle
 result:
   content:
     - type: text
-      text: |-
-        [starting new worker]
-        [idle]
+      text: "[done]"
   isError: false
 ---
 id: 4
+session:
+  action: prepare
+  requirements:
+    r:
+      - praise
+result:
+  content:
+    - type: text
+      text: "[prepared]"
+  isError: false
+---
+id: 5
 send:
   r: report managed R requirement
 result:

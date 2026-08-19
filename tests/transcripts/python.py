@@ -7,6 +7,7 @@ import socket
 import subprocess
 import tempfile
 import threading
+import time
 from pathlib import Path
 
 from _support import (
@@ -17,6 +18,7 @@ from _support import (
     normalize_python_resolution_error,
     r_test_environment,
     reference_plots,
+    release_worker_callback_gate,
     run_this_suite,
     stop_client,
     wait_for_worker_file,
@@ -491,6 +493,142 @@ def test_prepares_python_requirements_after_worker_startup(binary: Path) -> Tran
     return client._finish()
 
 
+def test_prepares_after_idle_python_resolution(binary: Path) -> Transcript:
+    client = McpClient(binary, ("serve",))
+    client._initialize_and_list_tools()
+    client.session(action="prepare", requirements={"r": ["later"]})
+
+    # fmt: r
+    r = code(r"""
+        callback_gate <- tempfile("mcp-console-callback-gate-")
+        callback_checkpoint <- tempfile("mcp-console-callback-checkpoint-")
+        run_callback <- function() {
+          if (!file.exists(callback_gate)) {
+            later::later(run_callback, delay = 0.01)
+            return(invisible(NULL))
+          }
+          stopifnot(file.create(callback_checkpoint))
+          reticulate::py_require("py-yaml12")
+          reticulate::py_config()
+          cat("idle Python ready\n")
+        }
+        later::later(run_callback, delay = 0.01)
+        cat(callback_gate, callback_checkpoint, sep = "\n")
+        """)
+    client.send(r=r)
+    release_worker_callback_gate(client, "idle Python callback")
+
+    client.session(
+        action="prepare",
+        requirements={"python": ["py-yaml12"]},
+    )
+    assert last_tool_text(client) == "[prepared]"
+    client.send(r="reticulate::py_require()$packages")
+    assert "idle Python ready\n" in last_tool_text(client)
+    assert '"py-yaml12"' in last_tool_text(client)
+    return client._finish()
+
+
+def test_retains_idle_python_activation_during_continuous_collection(
+    binary: Path,
+) -> Transcript:
+    client = McpClient(binary, ("serve",))
+    client._initialize_and_list_tools()
+    client.session(action="prepare", requirements={"r": ["later"]})
+    client.send(r="invisible(reticulate::py_config())")
+    assert last_tool_text(client) == "[done]"
+
+    # fmt: r
+    r = code(r"""
+        callback_gate <- tempfile("mcp-console-callback-gate-")
+        callback_checkpoint <- tempfile("mcp-console-callback-checkpoint-")
+        callback_complete <- tempfile("mcp-console-callback-complete-")
+        run_callback <- function() {
+          if (!file.exists(callback_gate)) {
+            later::later(run_callback, delay = 0.01)
+            return(invisible(NULL))
+          }
+          stopifnot(file.create(callback_checkpoint))
+          reticulate::py_require("py-yaml12")
+          cat("idle Python activated\n")
+          stopifnot(file.create(callback_complete))
+        }
+        later::later(run_callback, delay = 0.01)
+        cat(callback_gate, callback_checkpoint, callback_complete, sep = "\n")
+        """)
+    client.send(r=r)
+    (callback_complete,) = release_worker_callback_gate(
+        client,
+        "idle Python activation",
+        ("complete",),
+    )
+    deadline = time.monotonic() + 30
+    while not callback_complete.exists():
+        assert client.process.poll() is None, (
+            "mcp-console stopped before idle Python activation completed"
+        )
+        if time.monotonic() >= deadline:
+            raise AssertionError("idle Python activation did not complete")
+        time.sleep(0.01)
+    client.send()
+    output = last_tool_text(client)
+    assert output == "idle Python activated\n\n[idle]", repr(output)
+
+    client.session(action="restart")
+    assert last_tool_text(client) == (
+        "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
+    )
+    client.send(python="import yaml12; yaml12.__name__")
+    assert last_tool_text(client) == "'yaml12'\n"
+    return client._finish()
+
+
+def test_does_not_retain_stale_python_materialization(binary: Path) -> Transcript:
+    client = McpClient(binary, ("serve",))
+    client._initialize_and_list_tools()
+    client.send(r="invisible(reticulate::py_config())")
+    assert last_tool_text(client) == "[done]"
+
+    # Make explicit preparation resolve the unchanged environment before its
+    # real activation. The first candidate is materialized but never activated.
+    # fmt: r
+    r = code(r"""
+        namespace <- asNamespace("reticulate")
+        original_py_require <- get("py_require", envir = namespace)
+        injected <- FALSE
+        replacement <- function(...) {
+          if (!injected) {
+            injected <<- TRUE
+            requirements <- original_py_require()
+            invisible(get("uv_get_or_create_env", envir = namespace)(
+              requirements$packages,
+              requirements$python_version,
+              requirements$exclude_newer
+            ))
+          }
+          original_py_require(...)
+        }
+        unlockBinding("py_require", namespace)
+        assign("py_require", replacement, envir = namespace)
+        lockBinding("py_require", namespace)
+        """)
+    client.send(r=r)
+    assert last_tool_text(client) == "[done]"
+
+    client.session(
+        action="prepare",
+        requirements={"python": ["py-yaml12"]},
+    )
+    assert last_tool_text(client) == "[prepared]"
+    client.session(action="restart")
+    assert last_tool_text(client) == (
+        "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
+    )
+    client.send(python="import yaml12; yaml12.__name__")
+    assert last_tool_text(client) == "'yaml12'\n"
+    return client._finish()
+
+
 def test_failed_restart_requirements_preserve_worker(binary: Path) -> Transcript:
     client = McpClient(binary, ("serve",))
     client._initialize_and_list_tools()
@@ -520,7 +658,13 @@ def test_layers_python_requirements_declared_by_r_packages(
     fixture = Path(__file__).parents[1] / "fixtures" / "py_require"
     with tempfile.TemporaryDirectory() as library:
         subprocess.run(
-            [rscript.with_name("R"), "CMD", "INSTALL", "--library", library, fixture],
+            [
+                rscript.with_name("R"),
+                "CMD",
+                "INSTALL",
+                f"--library={library}",
+                fixture,
+            ],
             check=True,
             capture_output=True,
             text=True,
@@ -594,14 +738,20 @@ def test_layers_python_requirements_declared_by_r_packages(
         return client._finish()
 
 
-def test_resolves_package_requirements_before_python_initializes(
+def test_does_not_retain_package_requirements_before_python_initializes(
     binary: Path,
 ) -> Transcript:
     environment, rscript = r_test_environment()
     fixture = Path(__file__).parents[1] / "fixtures" / "py_require"
     with tempfile.TemporaryDirectory() as library:
         subprocess.run(
-            [rscript.with_name("R"), "CMD", "INSTALL", "--library", library, fixture],
+            [
+                rscript.with_name("R"),
+                "CMD",
+                "INSTALL",
+                f"--library={library}",
+                fixture,
+            ],
             check=True,
             capture_output=True,
             text=True,
@@ -624,8 +774,8 @@ def test_resolves_package_requirements_before_python_initializes(
         client.send(r=r)
         assert last_tool_text(client) == "[done]"
 
-        # Replace the worker after the requirement declaration has completed,
-        # but before Python has initialized.
+        # A lazy declaration is worker-owned until Python initializes or an
+        # explicit preparation materializes it.
         # fmt: r
         r = code(r"""
             tools::pskill(Sys.getpid(), signal = 9L)
@@ -647,20 +797,11 @@ def test_resolves_package_requirements_before_python_initializes(
             """)
         client.send(r=r)
         output = last_tool_text(client)
-        assert output == "[1] TRUE\n", repr(output)
-
-        # fmt: python
-        python = code("""
-            import yaml12
-
-            yaml12.__name__
-            """)
-        client.send(python=python)
-        assert last_tool_text(client) == "'yaml12'\n"
+        assert output == "[1] FALSE\n", repr(output)
         return client._finish()
 
 
-def test_does_not_checkpoint_python_requirements_from_failed_cell(
+def test_retains_python_activation_before_later_cell_failure(
     binary: Path,
 ) -> Transcript:
     client = McpClient(binary, ("serve",))
@@ -682,7 +823,8 @@ def test_does_not_checkpoint_python_requirements_from_failed_cell(
         "[idle]"
     )
 
-    # Confirm that the failed cell did not advance the replacement's manifest.
+    # The successful activation is retained even though the cell later kills
+    # the worker before its ordinary completion message.
     # fmt: r
     r = code(r"""
         worker_pid <- Sys.getpid()
@@ -690,21 +832,8 @@ def test_does_not_checkpoint_python_requirements_from_failed_cell(
         """)
     client.send(r=r)
     output = last_tool_text(client)
-    assert output == "[1] FALSE\n", repr(output)
+    assert output == "[1] TRUE\n", repr(output)
 
-    client.session(
-        action="prepare",
-        requirements={"python": ["py-yaml12"]},
-    )
-    assert last_tool_text(client) == "[prepared]"
-
-    # Preparing materializes the manifest without initializing Python.
-    # fmt: r
-    r = code(r"""
-        identical(Sys.getpid(), worker_pid) && !reticulate::py_available(FALSE)
-        """)
-    client.send(r=r)
-    assert last_tool_text(client) == "[1] TRUE\n"
     # fmt: python
     python = code("""
         import yaml12
@@ -1334,6 +1463,7 @@ def test_returns_matplotlib_plots(binary: Path) -> Transcript:
         # fmt: r
         r = code(r"""
             reticulate::py_require("matplotlib")
+            invisible(reticulate::py_config())
             """)
         client.send(r=r)
         assert last_tool_text(client) == "[done]"

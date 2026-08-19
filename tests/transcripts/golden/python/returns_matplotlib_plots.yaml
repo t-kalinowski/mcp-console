@@ -5,6 +5,7 @@ id: 3
 send:
   r: |
     reticulate::py_require("matplotlib")
+    invisible(reticulate::py_config())
 result:
   content:
     - type: text
