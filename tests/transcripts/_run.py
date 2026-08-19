@@ -5,7 +5,6 @@
 
 import argparse
 import difflib
-import json
 import os
 import runpy
 import shutil
@@ -15,7 +14,7 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 
 from _support import Transcript, TranscriptWithCompanion, YamlStream
-from yaml12 import Yaml, format_yaml, parse_yaml, read_yaml
+from yaml12 import Yaml, format_yaml, read_yaml
 
 directory = Path(__file__).resolve().parent
 root = directory.parents[1]
@@ -79,55 +78,8 @@ def identical(left: object, right: object) -> bool:
     return left == right
 
 
-def format_transcript_yaml(value: YamlStream) -> str:
-    escaped: list[tuple[str, str]] = []
-
-    def marker(replacement: str) -> str:
-        value = f"__MCP_CONSOLE_ESCAPED_WHITESPACE_{len(escaped):04d}__"
-        escaped.append((value, replacement))
-        return value
-
-    def protect_string(value: str) -> str:
-        lines = value.splitlines()
-        first_nonempty = next((line for line in lines if line), "")
-        if value and (
-            not value.strip()
-            or first_nonempty.startswith((" ", "\t"))
-            or any(
-                (line and not line.strip()) or line.endswith((" ", "\t"))
-                for line in lines
-            )
-        ):
-            return marker(json.dumps(value, ensure_ascii=False))
-        return value
-
-    def protect(node: object) -> object:
-        if isinstance(node, str):
-            return protect_string(node)
-        if isinstance(node, Yaml):
-            return Yaml(protect(node.value), tag=node.tag)
-        if isinstance(node, list):
-            return [protect(item) for item in node]
-        if isinstance(node, dict):
-            return {protect(key): protect(item) for key, item in node.items()}
-        return node
-
-    protected = protect(value)
-    text = format_yaml(protected, multi=True)
-    for marker_value, replacement in escaped:
-        assert text.count(marker_value) == 1, (
-            f"escaped YAML marker is not unique: {marker_value}"
-        )
-        text = text.replace(marker_value, replacement)
-    text = "\n".join(line.rstrip() for line in text.splitlines()) + "\n"
-    assert identical(parse_yaml(text, multi=True), value), (
-        "formatted transcript YAML did not round-trip"
-    )
-    return text
-
-
 def check_golden(golden: Path, actual: YamlStream, case: str, *, update: bool) -> None:
-    actual_text = format_transcript_yaml(actual)
+    actual_text = format_yaml(actual, multi=True)
 
     if update:
         golden.parent.mkdir(parents=True, exist_ok=True)
@@ -141,7 +93,7 @@ def check_golden(golden: Path, actual: YamlStream, case: str, *, update: bool) -
 
     expected = read_yaml(golden, multi=True)
     if not identical(actual, expected):
-        expected_text = format_transcript_yaml(expected)
+        expected_text = format_yaml(expected, multi=True)
         sys.stderr.writelines(
             difflib.unified_diff(
                 expected_text.splitlines(keepends=True),
