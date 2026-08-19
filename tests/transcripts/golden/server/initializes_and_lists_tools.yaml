@@ -46,14 +46,15 @@ result:
         `matplotlib.pyplot` figures return as PNG images. Send exactly one
         complete `r`, `python`, or `sql` cell. Call `send` sequentially;
         concurrent calls are unsupported. Use `stdin` for interactive reads or
-        debugger commands; omit code and stdin to poll. A wait timeout does not
-        stop computation, and running work must be collected before new code is
-        sent. R errors, Python exceptions, and DuckDB errors are ordinary
-        console output, so inspect result text and continue or correct the cell.
-        Evaluated code can read host files but cannot directly access the
-        network and can write only within the worker's private temporary
-        directory. Managed Python requirement resolution triggered by R code
-        such as `reticulate::py_require()` or by an R package load is a
+        debugger commands; omit code and stdin to poll an active evaluation or
+        immediately collect output produced while the worker is idle. A wait
+        timeout does not stop computation, and running work must be collected
+        before new code is sent. R errors, Python exceptions, and DuckDB errors
+        are ordinary console output, so inspect result text and continue or
+        correct the cell. Evaluated code can read host files but cannot directly
+        access the network and can write only within the worker's private
+        temporary directory. Managed Python requirement resolution triggered by
+        R code such as `reticulate::py_require()` or by an R package load is a
         host-side exception: it may access the network and execute installation
         or build code, so use only trusted requirements.
       inputSchema:

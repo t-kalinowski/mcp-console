@@ -179,16 +179,23 @@ def assert_result_content(
 def release_worker_callback_gate(
     client: "McpClient",
     description: str,
-) -> None:
+    extra_path_labels: tuple[str, ...] = (),
+) -> tuple[Path, ...]:
     result = client.transcript[-1]["result"]
     assert result.get("isError") is not True, result
     content = result["content"]
     assert len(content) == 1 and content[0]["type"] == "text", content
     paths = content[0]["text"].splitlines()
-    assert len(paths) == 2, content
-    content[0]["text"] = "<worker callback gate>\n<worker callback checkpoint>"
+    assert len(paths) == 2 + len(extra_path_labels), content
+    content[0]["text"] = "\n".join(
+        (
+            "<worker callback gate>",
+            "<worker callback checkpoint>",
+            *(f"<worker callback {label}>" for label in extra_path_labels),
+        )
+    )
 
-    gate, checkpoint = map(Path, paths)
+    gate, checkpoint, *extra_paths = map(Path, paths)
     gate.touch()
     deadline = time.monotonic() + 5
     while not checkpoint.exists():
@@ -199,6 +206,7 @@ def release_worker_callback_gate(
             f"{description} did not reach its checkpoint"
         )
         time.sleep(0.01)
+    return tuple(extra_paths)
 
 
 def run_this_suite(suite_path: str) -> None:

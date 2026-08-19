@@ -148,6 +148,121 @@ def test_services_later_callbacks_while_idle(binary: Path) -> Transcript:
     return client._finish()
 
 
+def test_collects_idle_later_callbacks_with_empty_send(binary: Path) -> Transcript:
+    client = McpClient(binary, ("serve",))
+    client._initialize_and_list_tools()
+    client.session(action="prepare", requirements={"r": ["later"]})
+    client.send()
+    assert last_tool_text(client) == "\n[idle]"
+
+    # fmt: r
+    r = code(r"""
+        callback_gate <- tempfile("mcp-console-callback-gate-")
+        callback_checkpoint <- tempfile("mcp-console-callback-checkpoint-")
+        run_callback <- function() {
+          if (!file.exists(callback_gate)) {
+            later::later(run_callback, delay = 0.01)
+            return(invisible(NULL))
+          }
+          collected_value <<- 84
+          cat("collected callback")
+          stopifnot(file.create(callback_checkpoint))
+        }
+        later::later(run_callback, delay = 0.01)
+        cat(callback_gate, callback_checkpoint, sep = "\n")
+        """)
+    client.send(r=r)
+    release_worker_callback_gate(client, "collected callback")
+    client.send()
+    assert last_tool_text(client) == "collected callback\n[idle]"
+    client.send(r="collected_value")
+    assert last_tool_text(client) == "[1] 84\n"
+    return client._finish()
+
+
+def test_snapshots_output_while_idle_later_callback_runs(binary: Path) -> Transcript:
+    client = McpClient(binary, ("serve",))
+    client._initialize_and_list_tools()
+    client.session(action="prepare", requirements={"r": ["later"]})
+
+    # fmt: r
+    r = code(r"""
+        callback_gate <- tempfile("mcp-console-callback-gate-")
+        callback_checkpoint <- tempfile("mcp-console-callback-checkpoint-")
+        callback_release <- tempfile("mcp-console-callback-release-")
+        run_callback <- function() {
+          if (!file.exists(callback_gate)) {
+            later::later(run_callback, delay = 0.01)
+            return(invisible(NULL))
+          }
+          stopifnot(file.create(callback_checkpoint))
+          while (!file.exists(callback_release)) {
+            Sys.sleep(0.01)
+          }
+          cat("long callback")
+        }
+        later::later(run_callback, delay = 0.01)
+        cat(callback_gate, callback_checkpoint, callback_release, sep = "\n")
+        """)
+    client.send(r=r)
+    (callback_release,) = release_worker_callback_gate(
+        client,
+        "long idle callback",
+        ("release",),
+    )
+    client.send(timeout_ms=10)
+    assert last_tool_text(client) == "\n[idle]"
+    callback_release.touch()
+    deadline = time.monotonic() + 3
+    poll_start = len(client.transcript)
+    while True:
+        client.send()
+        if last_tool_text(client) == "long callback\n[idle]":
+            break
+        assert last_tool_text(client) == "\n[idle]"
+        if time.monotonic() >= deadline:
+            raise AssertionError("idle callback output was not collected")
+    polls = client.transcript[poll_start:]
+    final_poll = polls[-1]
+    final_poll["id"] = polls[0]["id"]
+    client.transcript[poll_start:] = [final_poll]
+    return client._finish()
+
+
+def test_restarts_while_idle_callback_runs(binary: Path) -> Transcript:
+    client = McpClient(binary, ("serve",))
+    client._initialize_and_list_tools()
+    client.session(action="prepare", requirements={"r": ["later"]})
+
+    # fmt: r
+    r = code(r"""
+        callback_gate <- tempfile("mcp-console-callback-gate-")
+        callback_checkpoint <- tempfile("mcp-console-callback-checkpoint-")
+        run_callback <- function() {
+          if (!file.exists(callback_gate)) {
+            later::later(run_callback, delay = 0.01)
+            return(invisible(NULL))
+          }
+          cat("callback started")
+          stopifnot(file.create(callback_checkpoint))
+          repeat {
+            Sys.sleep(1)
+          }
+        }
+        later::later(run_callback, delay = 0.01)
+        cat(callback_gate, callback_checkpoint, sep = "\n")
+        """)
+    client.send(r=r)
+    release_worker_callback_gate(client, "restarted idle callback")
+    client.send(timeout_ms=10)
+    assert last_tool_text(client) == "callback started\n[idle]"
+    client.session(action="restart")
+    assert last_tool_text(client) == (
+        "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
+    )
+    return client._finish()
+
+
 def test_returns_plots_from_idle_later_callbacks(binary: Path) -> Transcript:
     environment, rscript = r_test_environment()
     client = McpClient(binary, ("serve",), environment)
@@ -181,10 +296,10 @@ def test_returns_plots_from_idle_later_callbacks(binary: Path) -> Transcript:
         dpi=96,
         pages=1,
     )
-    client.send(r='cat("cell body\\n")')
+    client.send()
     assert_result_content(
         client,
-        ["idle plot\n", expected_plot[0], "cell body\n"],
+        ["idle plot\n", expected_plot[0], "\n[idle]"],
     )
     return client._finish()
 
@@ -307,7 +422,55 @@ def test_routes_input_to_idle_later_callbacks_before_a_cell(binary: Path) -> Tra
         r='cat("cell: ", idle_answer, "\\n", sep = "")',
         stdin="yes\n",
     )
-    assert last_tool_text(client) == ('[input requested: "later> "]\ncell: yes\n')
+    assert last_tool_text(client) == ('[input requested: "later> "]\ncell: yes\n'), (
+        repr(last_tool_text(client))
+    )
+    return client._finish()
+
+
+def test_routes_input_to_idle_later_callback(
+    binary: Path,
+) -> Transcript:
+    client = McpClient(binary, ("serve",))
+    client._initialize_and_list_tools()
+    client.session(action="prepare", requirements={"r": ["later"]})
+
+    # fmt: r
+    r = code(r"""
+        callback_gate <- tempfile("mcp-console-callback-gate-")
+        callback_checkpoint <- tempfile("mcp-console-callback-checkpoint-")
+        run_callback <- function() {
+          if (!file.exists(callback_gate)) {
+            later::later(run_callback, delay = 0.01)
+            return(invisible(NULL))
+          }
+          stopifnot(file.create(callback_checkpoint))
+          collected_answer <<- readline("later> ")
+        }
+        later::later(run_callback, delay = 0.01)
+        cat(callback_gate, callback_checkpoint, sep = "\n")
+        """)
+    client.send(r=r)
+    release_worker_callback_gate(client, "collected input callback")
+    client.send()
+    assert last_tool_text(client) == ('[input requested: "later> "]\n[stdin needed]')
+    poll_start = len(client.transcript)
+    client.send(stdin="yes\n")
+    deadline = time.monotonic() + 3
+    while last_tool_text(client) != "\n[idle]":
+        assert last_tool_text(client) == "\n[stdin needed]"
+        if time.monotonic() >= deadline:
+            raise AssertionError("idle callback did not receive submitted stdin")
+        time.sleep(0.01)
+        client.send()
+    polls = client.transcript[poll_start:]
+    final_poll = polls[-1]
+    final_poll["id"] = polls[0]["id"]
+    final_poll["send"] = polls[0]["send"]
+    client.transcript[poll_start:] = [final_poll]
+    client.send(r="collected_answer")
+    assert last_tool_text(client) == '[1] "yes"\n'
+    client.transcript[-1]["id"] = final_poll["id"] + 1
     return client._finish()
 
 

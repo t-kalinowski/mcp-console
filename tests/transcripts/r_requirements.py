@@ -240,9 +240,11 @@ def test_stops_live_preparation_for_idle_callback_input(binary: Path) -> Transcr
         """)
     client.send(r=r)
     release_worker_callback_gate(client, "idle input callback")
+    # Keep this distinct from the callback's retained requirement so activation
+    # cannot turn the preparation into an idempotent server-side no-op.
     result = client.session(
         action="prepare",
-        requirements={"python": ["py-yaml12"]},
+        requirements={"python": ["py-yaml12>=0"]},
     )
     assert result["isError"] is True, result
     assert result["content"][0]["text"] == (

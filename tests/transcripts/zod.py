@@ -753,6 +753,8 @@ def test_custom_worker_skips_managed_python_preflight(binary: Path) -> Transcrip
     )
     client.send(r="echo")
     assert last_tool_text(client) == "zod: echo\n"
+    client.send()
+    assert last_tool_text(client) == "\n[idle]"
     return client._finish()
 
 
@@ -935,7 +937,7 @@ def test_custom_worker_resolves_idle_activity_before_evaluation(
     )
     client._initialize_and_list_tools()
     client.send(r="resolve python while idle")
-    assert last_tool_text(client) == "[done]"
+    assert last_tool_text(client) == "[done]", repr(last_tool_text(client))
 
     client.send(r="echo")
     assert last_tool_text(client) == "zod: echo\n"
@@ -943,7 +945,9 @@ def test_custom_worker_resolves_idle_activity_before_evaluation(
     client.send(r="request input while idle")
     assert last_tool_text(client) == "[done]"
     client.send(r="echo", stdin="continue\n")
-    assert last_tool_text(client) == '[input requested: "idle> "]\nzod: echo\n'
+    assert last_tool_text(client) == ('[input requested: "idle> "]\nzod: echo\n'), repr(
+        last_tool_text(client)
+    )
     return client._finish()
 
 
@@ -1723,6 +1727,46 @@ def test_restart_preserves_pending_sideband_output(binary: Path) -> Transcript:
         return client._finish()
 
 
+def test_restart_preserves_completion_boundary_before_idle_output(
+    binary: Path,
+) -> Transcript:
+    zod = Path(__file__).resolve().parents[1] / "fixtures" / "zod"
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        temporary_path = Path(temporary_directory)
+        environment = os.environ.copy()
+        environment["TMPDIR"] = temporary_directory
+        client = McpClient(
+            binary,
+            ("serve", "--worker", str(zod)),
+            environment,
+        )
+        client._initialize_and_list_tools()
+
+        client.send(r="start background sideband", timeout_ms=0)
+        assert last_tool_text(client) == "\n[running]"
+        started = wait_for_marker(
+            temporary_path,
+            "zod-background-sideband-started",
+            client,
+        )
+        (started.parent / "zod-release-background-sideband").touch()
+        wait_for_marker(
+            temporary_path,
+            "zod-background-sideband-emitted",
+            client,
+        )
+
+        client.session(action="restart")
+        assert last_tool_text(client) == (
+            "[done]\n"
+            "zod background sideband\n"
+            "[worker stopped: in-memory state lost]\n"
+            "[starting new worker]\n"
+            "[idle]"
+        )
+        return client._finish()
+
+
 def test_restart_interrupts_waiting_send(binary: Path) -> Transcript:
     zod = Path(__file__).resolve().parents[1] / "fixtures" / "zod"
     with tempfile.TemporaryDirectory() as temporary_directory:
@@ -1942,12 +1986,8 @@ def test_restart_closes_worker_stdin(binary: Path) -> Transcript:
         client.session(action="restart")
         output = last_tool_text(client)
         prefix = "zod stdin closed\n" + ("x" * LARGE_OUTPUT_SIZE)
-        suffix = (
-            "[active evaluation stopped by session restart request]\n"
-            "[worker stopped: in-memory state lost]\n"
-            "[starting new worker]\n"
-            "[idle]"
-        )
+        suffix = "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
+        suffix = "[active evaluation stopped by session restart request]\n" + suffix
         assert output.startswith(prefix), "worker stdin did not close before restart"
         assert output.endswith(suffix), "lifecycle notices followed old-worker output"
         barrier = output.removeprefix(prefix).removesuffix(suffix)
@@ -2077,7 +2117,10 @@ def test_restart_does_not_report_never_ready_worker_as_stopped(
         temporary_path = Path(temporary_directory)
         startup_control = temporary_path / "zod-startup-control"
         startup_release = temporary_path / "zod-startup-release"
-        startup_control.write_text("block", encoding="utf-8")
+        startup_control.write_text(
+            "block with detached sideband writer",
+            encoding="utf-8",
+        )
         environment = os.environ.copy()
         environment["TMPDIR"] = temporary_directory
         environment["ZOD_STARTUP_CONTROL"] = str(startup_control)
@@ -2087,6 +2130,7 @@ def test_restart_does_not_report_never_ready_worker_as_stopped(
             ("serve", "--worker", str(zod)),
             environment,
         )
+        descendant_group = None
         passed = False
         try:
             client._initialize_and_list_tools()
@@ -2096,6 +2140,12 @@ def test_restart_does_not_report_never_ready_worker_as_stopped(
                 "zod-replacement-waiting-ready",
                 client,
             )
+            marker = wait_for_marker(
+                temporary_path,
+                "zod-detached-startup-sideband-pid",
+                client,
+            )
+            descendant_group = int(marker.read_text(encoding="utf-8"))
 
             startup_control.write_text("ready", encoding="utf-8")
             restarted = client._start_session(action="restart")
@@ -2150,8 +2200,62 @@ def test_restart_does_not_report_never_ready_worker_as_stopped(
             return transcript
         finally:
             startup_release.touch()
+            stop_process_group(descendant_group)
             if not passed:
                 stop_process(client.process)
+
+
+def test_restart_commits_lifecycle_before_replacement_callbacks(
+    binary: Path,
+) -> Transcript:
+    zod = Path(__file__).resolve().parents[1] / "fixtures" / "zod"
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        temporary_path = Path(temporary_directory)
+        startup_control = temporary_path / "zod-startup-control"
+        startup_control.write_text("ready", encoding="utf-8")
+        environment = os.environ.copy()
+        environment["TMPDIR"] = temporary_directory
+        environment["ZOD_STARTUP_CONTROL"] = str(startup_control)
+        client = McpClient(
+            binary,
+            ("serve", "--worker", str(zod)),
+            environment,
+        )
+        client._initialize_and_list_tools()
+        client.send(r="complete silently")
+        assert last_tool_text(client) == "[done]"
+
+        startup_control.write_text("ready with callback", encoding="utf-8")
+        client.session(action="restart")
+        assert last_tool_text(client) == (
+            "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
+        )
+        callback = wait_for_marker(
+            temporary_path,
+            "zod-startup-callback-response",
+            client,
+        )
+        assert callback.read_text(encoding="utf-8") == (
+            "Python requirements are unavailable with a custom worker"
+        )
+        callback.unlink()
+
+        client.session(action="restart")
+        assert last_tool_text(client) == (
+            "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
+        )
+        callback = wait_for_marker(
+            temporary_path,
+            "zod-startup-callback-response",
+            client,
+        )
+        assert callback.read_text(encoding="utf-8") == (
+            "Python requirements are unavailable with a custom worker"
+        )
+
+        client.send(r="echo")
+        assert last_tool_text(client) == "zod: echo\n"
+        return client._finish()
 
 
 def test_restart_discards_unread_stdin(binary: Path) -> Transcript:
@@ -2351,6 +2455,67 @@ def test_restart_cancels_partial_sideband_frame(binary: Path) -> Transcript:
                 "[worker stopped: in-memory state lost]\n"
                 "[starting new worker]\n"
                 "[idle]"
+            )
+
+            stop_process_group(descendant_group)
+            descendant_group = None
+            client.send(r="echo")
+            assert last_tool_text(client) == "zod: echo\n"
+            transcript = client._finish()
+            passed = True
+            return transcript
+        finally:
+            stop_process_group(descendant_group)
+            if not passed:
+                stop_process(client.process)
+
+
+def test_restart_cancels_reader_after_committed_terminal(
+    binary: Path,
+) -> Transcript:
+    zod = Path(__file__).resolve().parents[1] / "fixtures" / "zod"
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        temporary_path = Path(temporary_directory)
+        environment = os.environ.copy()
+        environment["TMPDIR"] = temporary_directory
+        client = McpClient(
+            binary,
+            ("serve", "--worker", str(zod)),
+            environment,
+        )
+        descendant_group = None
+        passed = False
+        try:
+            client._initialize_and_list_tools()
+            client.send(r="complete before partial sideband descendant")
+            assert last_tool_text(client) == "[done]"
+            marker = wait_for_marker(
+                temporary_path,
+                "zod-sideband-descendant-pid",
+                client,
+            )
+            descendant_group = int(marker.read_text(encoding="utf-8"))
+
+            restarted = client._start_session(action="restart")
+            received = threading.Event()
+            errors: list[BaseException] = []
+
+            def receive_restart() -> None:
+                try:
+                    client._receive(restarted)
+                except BaseException as error:
+                    errors.append(error)
+                finally:
+                    received.set()
+
+            receiver = threading.Thread(target=receive_restart, daemon=True)
+            receiver.start()
+            assert received.wait(3), "restart waited for the sideband reader"
+            receiver.join()
+            if errors:
+                raise errors[0]
+            assert last_tool_text(client) == (
+                "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
             )
 
             stop_process_group(descendant_group)

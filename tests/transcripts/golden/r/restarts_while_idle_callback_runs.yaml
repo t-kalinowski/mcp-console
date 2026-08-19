@@ -23,9 +23,11 @@ send:
         later::later(run_callback, delay = 0.01)
         return(invisible(NULL))
       }
-      cat("idle plot\n")
-      plot(1:3)
+      cat("callback started")
       stopifnot(file.create(callback_checkpoint))
+      repeat {
+        Sys.sleep(1)
+      }
     }
     later::later(run_callback, delay = 0.01)
     cat(callback_gate, callback_checkpoint, sep = "\n")
@@ -38,18 +40,25 @@ result:
   isError: false
 ---
 id: 5
-send: {}
+send:
+  timeout_ms: 10
 result:
   content:
     - type: text
-      text: |
-        idle plot
-    - type: image
-      data: <PNG byte-identical to live Rscript page 1>
-      mimeType: image/png
+      text: |-
+        callback started
+        [idle]
+  isError: false
+---
+id: 6
+session:
+  action: restart
+result:
+  content:
     - type: text
       text: |-
-
+        [worker stopped: in-memory state lost]
+        [starting new worker]
         [idle]
   isError: false
 ...
