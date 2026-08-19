@@ -5,12 +5,15 @@
 #include <Rinterface.h>
 
 #include <fcntl.h>
+#include <signal.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
 static InputHandler *registered_handler = NULL;
 static int registered_fd = -1;
 static SEXP registered_callback = NULL;
+static struct sigaction saved_sigint_action;
+static int sigint_action_saved = 0;
 
 static void handle_input(void *user_data) {
   (void)user_data;
@@ -78,9 +81,40 @@ static SEXP read_console_once(SEXP prompt) {
   return Rf_mkString((const char *)buffer);
 }
 
+static SEXP ignore_sigint(void) {
+  if (sigint_action_saved) {
+    Rf_error("test SIGINT action is already saved");
+  }
+  if (sigaction(SIGINT, NULL, &saved_sigint_action) < 0) {
+    Rf_error("failed to save test SIGINT action");
+  }
+
+  struct sigaction ignored = {0};
+  ignored.sa_handler = SIG_IGN;
+  sigemptyset(&ignored.sa_mask);
+  if (sigaction(SIGINT, &ignored, NULL) < 0) {
+    Rf_error("failed to ignore SIGINT");
+  }
+  sigint_action_saved = 1;
+  return R_NilValue;
+}
+
+static SEXP restore_sigint(void) {
+  if (!sigint_action_saved) {
+    Rf_error("test SIGINT action is not saved");
+  }
+  if (sigaction(SIGINT, &saved_sigint_action, NULL) < 0) {
+    Rf_error("failed to restore test SIGINT action");
+  }
+  sigint_action_saved = 0;
+  return R_NilValue;
+}
+
 static const R_CallMethodDef call_methods[] = {
     {"mcp_test_register_input_handler", (DL_FUNC)&register_input_handler, 2},
     {"mcp_test_read_console_once", (DL_FUNC)&read_console_once, 1},
+    {"mcp_test_ignore_sigint", (DL_FUNC)&ignore_sigint, 0},
+    {"mcp_test_restore_sigint", (DL_FUNC)&restore_sigint, 0},
     {NULL, NULL, 0},
 };
 

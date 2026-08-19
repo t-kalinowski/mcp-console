@@ -112,6 +112,7 @@ def format_transcript_yaml(value: YamlStream) -> str:
         if value and (
             not value.strip()
             or value.startswith("\n")
+            or value.endswith("\n\n")
             or first_nonempty.startswith((" ", "\t"))
             or any(line.endswith((" ", "\t")) for line in lines)
         ):
@@ -144,6 +145,7 @@ def format_transcript_yaml(value: YamlStream) -> str:
 def check_transcript_yaml_formatter() -> None:
     value = [
         "\n[idle]",
+        "foo\n\n",
         "__MCP_CONSOLE_WHITESPACE_0_0000__",
         {
             "__MCP_CONSOLE_WHITESPACE_1_0001__": (

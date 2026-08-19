@@ -1290,6 +1290,111 @@ def test_interrupts_running_r_evaluation(binary: Path) -> Transcript:
                 '[input requested: "after caught read> "]\n[1] TRUE\n'
             )
 
+            # R reinstalls its native SIGINT handler after a caught signal.
+            # A second signal in the same cell must still mark a partial
+            # console line as interrupted.
+            # fmt: r
+            r = code(r"""
+                tryCatch(
+                  {
+                    invisible(file.create(file.path(
+                      tempdir(),
+                      "first-same-cell-interrupt-started"
+                    )))
+                    repeat {}
+                  },
+                  interrupt = function(condition) {
+                    cat("caught first same-cell interrupt\n")
+                  }
+                )
+                twice_interrupted_partial <- .Call(
+                  "mcp_test_read_console_once",
+                  "between same-cell interrupts> "
+                )
+                stopifnot(
+                  nchar(twice_interrupted_partial, type = "bytes") == 4095L
+                )
+                invisible(file.create(file.path(
+                  tempdir(),
+                  "second-same-cell-interrupt-started"
+                )))
+                tryCatch(
+                  repeat {},
+                  interrupt = function(condition) {
+                    cat("caught second same-cell interrupt\n")
+                  }
+                )
+                """)
+            client.send(r=r, timeout_ms=0)
+            assert last_tool_text(client) == "\n[running]"
+            wait_for_worker_file(
+                temporary_path,
+                "first-same-cell-interrupt-started",
+                client,
+            )
+            client.session(action="interrupt")
+            assert last_tool_text(client) == "[interrupt sent]"
+            client.send(timeout_ms=3_000)
+            result = client.transcript[-1]["result"]
+            output = last_tool_text(client)
+            expected = (
+                "caught first same-cell interrupt\n"
+                '[input requested: "between same-cell interrupts> "]\n'
+                "[stdin needed]"
+            )
+            assert output in {expected, f"\n{expected}"}, repr(output)
+            result["content"][0]["text"] = expected
+
+            twice_interrupted_line = "d" * 5_000
+            client.send(stdin=twice_interrupted_line, timeout_ms=50)
+            assert last_tool_text(client) == "\n[running]"
+            client.transcript[-1]["send"]["stdin"] = "<5000 d bytes>"
+            wait_for_worker_file(
+                temporary_path,
+                "second-same-cell-interrupt-started",
+                client,
+            )
+            client.session(action="interrupt")
+            assert last_tool_text(client) == "[interrupt sent]"
+            client.send(timeout_ms=3_000)
+            result = client.transcript[-1]["result"]
+            output = last_tool_text(client)
+            expected = "caught second same-cell interrupt\n"
+            assert output in {expected, f"\n{expected}"}, repr(output)
+            result["content"][0]["text"] = expected
+
+            client.send(
+                r=(
+                    'identical(readline("after same-cell interrupts> "), '
+                    'strrep("d", 5000))'
+                ),
+                stdin="\n",
+            )
+            assert last_tool_text(client) == (
+                '[input requested: "after same-cell interrupts> "]\n'
+                '[input requested: "after same-cell interrupts> "]\n'
+                "[1] TRUE\n"
+            )
+
+            # A program may temporarily ignore SIGINT. Boundaries remain
+            # usable while no handler can be observed, and restoring the
+            # prior action keeps the same worker and R state.
+            client.send(
+                r=code(r"""
+                    ignored_interrupt_state <- 41L
+                    invisible(.Call("mcp_test_ignore_sigint"))
+                    """)
+            )
+            assert last_tool_text(client) == "[done]"
+            client.send(
+                r=code(r"""
+                    ignored_interrupt_state <- ignored_interrupt_state + 1L
+                    invisible(.Call("mcp_test_restore_sigint"))
+                    ignored_interrupt_state
+                    """)
+            )
+            assert last_tool_text(client) == "[1] 42\n"
+
             # The same commit rule applies when a ready input handler owns the
             # top-level boundary instead of a submitted cell.
             # fmt: r

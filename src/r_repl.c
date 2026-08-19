@@ -40,6 +40,18 @@ static const volatile int *interrupts_pending;
 static struct sigaction original_sigint_action;
 static volatile sig_atomic_t interrupt_generation = 0;
 
+static int signal_action_matches(
+    const struct sigaction *action,
+    const struct sigaction *expected
+) {
+    if ((expected->sa_flags & SA_SIGINFO) != 0) {
+        return action->sa_sigaction == expected->sa_sigaction;
+    }
+    return action->sa_handler == expected->sa_handler;
+}
+
+static int install_interrupt_observer_action(void);
+
 static void observe_interrupt(
     int signal,
     siginfo_t *info,
@@ -53,6 +65,31 @@ static void observe_interrupt(
     } else {
         original_sigint_action.sa_handler(signal);
     }
+
+    /*
+     * R may reinstall its own handler while processing a caught interrupt.
+     * Restore the observer only when that handler is still current, leaving
+     * an intentional disposition change made by user code alone.
+     */
+    struct sigaction current;
+    if (
+        sigaction(SIGINT, NULL, &current) == 0 &&
+        signal_action_matches(&current, &original_sigint_action)
+    ) {
+        original_sigint_action = current;
+        (void)install_interrupt_observer_action();
+    }
+}
+
+static int install_interrupt_observer_action(void) {
+    struct sigaction action = original_sigint_action;
+    action.sa_sigaction = observe_interrupt;
+    action.sa_flags |= SA_SIGINFO;
+    action.sa_flags &= ~SA_RESETHAND;
+    if (sigaction(SIGINT, &action, NULL) < 0) {
+        return errno;
+    }
+    return 0;
 }
 
 int mcp_r_install_interrupt_observer(void) {
@@ -64,24 +101,20 @@ int mcp_r_install_interrupt_observer(void) {
     if (current.sa_sigaction == observe_interrupt) {
         return 0;
     }
-    original_sigint_action = current;
     if (
-        (original_sigint_action.sa_flags & SA_SIGINFO) != 0
-            ? original_sigint_action.sa_sigaction == NULL
-            : original_sigint_action.sa_handler == SIG_DFL ||
-                original_sigint_action.sa_handler == SIG_IGN
+        current.sa_handler == SIG_DFL ||
+        current.sa_handler == SIG_IGN ||
+        (
+            (current.sa_flags & SA_SIGINFO) != 0
+                ? current.sa_sigaction == NULL
+                : current.sa_handler == NULL
+        )
     ) {
-        return EINVAL;
+        return 0;
     }
 
-    struct sigaction action = original_sigint_action;
-    action.sa_sigaction = observe_interrupt;
-    action.sa_flags |= SA_SIGINFO;
-    action.sa_flags &= ~SA_RESETHAND;
-    if (sigaction(SIGINT, &action, NULL) < 0) {
-        return errno;
-    }
-    return 0;
+    original_sigint_action = current;
+    return install_interrupt_observer_action();
 }
 
 int mcp_r_interrupt_generation(void) {
