@@ -297,6 +297,24 @@ def main() -> None:
             writer.flush()
             os._exit(86)
 
+        if source == "complete before partial sideband descendant":
+            child = os.fork()
+            if child == 0:
+                os.setsid()
+                reader.close()
+                for descriptor in (0, 1, 2):
+                    os.close(descriptor)
+                while True:
+                    signal.pause()
+            (temporary / "zod-sideband-descendant-pid").write_text(
+                str(child),
+                encoding="utf-8",
+            )
+            send(writer, {"kind": "completed"})
+            writer.write('{"kind":"console_output"')
+            writer.flush()
+            continue
+
         if source == "stall with detached stdin":
             child = os.fork()
             if child == 0:

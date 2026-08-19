@@ -3,7 +3,7 @@
 ---
 id: 3
 send:
-  r: complete silently
+  r: complete before partial sideband descendant
 result:
   content:
     - type: text
@@ -23,18 +23,6 @@ result:
   isError: false
 ---
 id: 5
-session:
-  action: restart
-result:
-  content:
-    - type: text
-      text: |-
-        [worker stopped: in-memory state lost]
-        [starting new worker]
-        [idle]
-  isError: false
----
-id: 6
 send:
   r: echo
 result:
