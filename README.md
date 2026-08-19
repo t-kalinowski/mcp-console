@@ -140,7 +140,8 @@ A resolver signal error is returned by both the interrupt and resolution calls; 
 A worker signal is not assigned to a cell: an idle signal is consumed at the next managed boundary, and a signal during R, reticulate Python, or DuckDB is handled by that runtime.
 Code can catch or delay the signal, so use `restart` when the worker does not return.
 An interrupt cancels a managed `readline()`, Python `input()`, or debugger prompt.
-Bytes already consumed by that managed read are discarded; code reading fd 0 directly is unchanged.
+Bytes already consumed by that managed read are replayed before fd 0 on the next managed console read.
+Code reading fd 0 directly does not consume that pushback, and restart discards it with the worker.
 `interrupt` accepts no `requirements`.
 
 The client can explicitly replace the worker and add R, Python, and DuckDB requirements in the same call:

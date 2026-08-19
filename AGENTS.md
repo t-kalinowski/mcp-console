@@ -76,7 +76,8 @@ The built-in worker checks pending interrupts at managed evaluation boundaries, 
 User code can catch or delay the signal.
 A resolver signal error is returned by both the interrupt and resolution calls; an interrupted host resolver otherwise reports its ordinary resolution failure.
 Managed R and Python console input waits poll R's pending-interrupt flag and cancel when `SIGINT` arrives.
-Bytes already consumed by the interrupted managed read are discarded; direct fd-0 readers are unchanged.
+Bytes already consumed by the interrupted managed read are pushed back ahead of fd 0 for the next managed console read.
+Direct fd-0 readers do not consume that pushback, and restart discards it with the worker.
 Requirements are exact, additive, and idempotent.
 On macOS, plain built-in `serve` resolves the retained default R requirements `tidyverse`, `github::rstudio/reticulate`, `DBI`, `duckdb`, `arrow`, and `nanoarrow` through IR before accepting MCP input.
 The GitHub reticulate requirement supplies the fork-aware output restoration required by the worker; host R must also provide reticulate to bootstrap managed Python before the worker library is applied.

@@ -9,6 +9,7 @@ send:
       readline("R interrupt> "),
       interrupt = function(condition) cat("R input interrupted\n")
     )
+  stdin: R partial
 result:
   content:
     - type: text
@@ -38,12 +39,26 @@ result:
 ---
 id: 6
 send:
+  r: "readline(\"R replay> \")"
+  stdin: |
+    !
+result:
+  content:
+    - type: text
+      text: |
+        [input requested: "R replay> "]
+        [1] "R partial!"
+  isError: false
+---
+id: 7
+send:
   python: |
     python_input_state = 41
     try:
         input("Python interrupt> ")
     except KeyboardInterrupt:
         print("Python input interrupted")
+  stdin: Python partial
 result:
   content:
     - type: text
@@ -52,7 +67,7 @@ result:
         [stdin needed]
   isError: false
 ---
-id: 7
+id: 8
 session:
   action: interrupt
 result:
@@ -61,7 +76,7 @@ result:
       text: "[interrupt sent]"
   isError: false
 ---
-id: 8
+id: 9
 send:
   timeout_ms: 3000
 result:
@@ -71,7 +86,20 @@ result:
         Python input interrupted
   isError: false
 ---
-id: 9
+id: 10
+send:
+  python: "input(\"Python replay> \")"
+  stdin: |
+    !
+result:
+  content:
+    - type: text
+      text: |
+        [input requested: "Python replay> "]
+        'Python partial!'
+  isError: false
+---
+id: 11
 send:
   r: r_input_state + 1L
 result:
@@ -81,7 +109,7 @@ result:
         [1] 42
   isError: false
 ---
-id: 10
+id: 12
 send:
   python: python_input_state + 1
 result:

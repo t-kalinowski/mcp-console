@@ -20,6 +20,7 @@ mod platform {
     static R_EVENTS: OnceLock<REvents> = OnceLock::new();
     static R_CHECK_USER_INTERRUPT: OnceLock<CheckUserInterrupt> = OnceLock::new();
     static CELL_SOURCE: Mutex<Option<CellSource>> = Mutex::new(None);
+    static CONSOLE_STDIN_PUSHBACK: Mutex<Vec<u8>> = Mutex::new(Vec::new());
     static PENDING_SERVER_MESSAGES: Mutex<VecDeque<ServerMessage>> = Mutex::new(VecDeque::new());
     static WORKER_FAILURE: Mutex<Option<String>> = Mutex::new(None);
     static WORKER_SHUTDOWN: AtomicBool = AtomicBool::new(false);
@@ -941,10 +942,25 @@ mod platform {
     }
 
     fn read_console_stdin(buf: *mut c_uchar, buflen: c_int) -> Result<c_int, String> {
-        let mut length = 0;
-        while length < (buflen as usize) - 1 {
+        let capacity = (buflen as usize) - 1;
+        if interrupt_pending() {
+            return Ok(-1);
+        }
+        let mut pushback = CONSOLE_STDIN_PUSHBACK
+            .lock()
+            .map_err(|_| "R worker stdin pushback lock poisoned".to_string())?;
+        let mut length = pushback.len().min(capacity);
+        if length > 0 {
+            unsafe {
+                std::ptr::copy_nonoverlapping(pushback.as_ptr(), buf, length);
+            }
+            pushback.drain(..length);
+        }
+        drop(pushback);
+
+        while length < capacity {
             if interrupt_pending() {
-                return Ok(-1);
+                return push_back_console_stdin(buf, length);
             }
             let mut descriptor = libc::pollfd {
                 fd: libc::STDIN_FILENO,
@@ -972,7 +988,7 @@ mod platform {
                 ));
             }
             if interrupt_pending() {
-                return Ok(-1);
+                return push_back_console_stdin(buf, length);
             }
             let byte = unsafe { buf.add(length) };
             let count = unsafe { libc::read(libc::STDIN_FILENO, byte.cast(), 1) };
@@ -998,6 +1014,19 @@ mod platform {
             *buf.add(length) = 0;
         }
         Ok(i32::from(length > 0))
+    }
+
+    fn push_back_console_stdin(buf: *const c_uchar, length: usize) -> Result<c_int, String> {
+        if length == 0 {
+            return Ok(-1);
+        }
+        let mut preserved = unsafe { std::slice::from_raw_parts(buf, length) }.to_vec();
+        let mut pushback = CONSOLE_STDIN_PUSHBACK
+            .lock()
+            .map_err(|_| "R worker stdin pushback lock poisoned".to_string())?;
+        preserved.append(&mut pushback);
+        *pushback = preserved;
+        Ok(-1)
     }
 }
 

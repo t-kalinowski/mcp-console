@@ -609,8 +609,8 @@ For every evaluation-time `ReadConsole` call, the callback sends `input_requeste
 The built-in worker sends R's prompt field verbatim, including trailing spaces or an empty prompt.
 The server preserves that value but JSON-quotes it in the MCP input-request record instead of appending it as bare prompt text.
 After a nonempty read succeeds, it sends `input_received` before returning the bytes to R.
-On an interrupt, it sends `input_cancelled`, discards bytes already consumed by that read, and checks the pending interrupt from a C-owned frame so R's jump cannot cross a live Rust frame.
-Bytes not yet consumed remain in the fd-0 pipe.
+On an interrupt, it sends `input_cancelled`, moves bytes already consumed by that read into worker-local managed-input pushback, and checks the pending interrupt from a C-owned frame so R's jump cannot cross a live Rust frame.
+The next managed `ReadConsole` call drains that pushback before fd 0; bytes not yet consumed remain in the fd-0 pipe.
 A newline-free fragment shorter than the buffer keeps the callback blocked until more input or an interrupt arrives, while bytes after a returned chunk remain in the pipe for a later `ReadConsole` call or a direct fd-0 reader.
 It uses R's busy callback rather than prompt text to distinguish cell source from evaluated-code input.
 Unread fd-0 input remains available across evaluation boundaries.
@@ -619,7 +619,8 @@ Parse, evaluation, and print errors are returned as console text followed by `co
 The worker maps `R_WriteConsoleEx` type 0 to `console_output` and every nonzero type to `console_diagnostic`.
 It also maps `R_ShowMessage` and worker-generated language diagnostics to `console_diagnostic`.
 Managed cancellation applies to R `readline()` and to Python `input()` and debugger prompts routed through reticulate.
-Direct fd-0 readers emit no input frames and are unaffected.
+Direct fd-0 readers emit no input frames and bypass managed-input pushback.
+Restart discards the pushback with the worker.
 Subprocesses and descendants that write directly to retained fd 1 or fd 2 bypass the R console callbacks, but their output is still collected through the standard-stream pipes.
 
 At startup, the worker installs a managed function as R's default graphics device.

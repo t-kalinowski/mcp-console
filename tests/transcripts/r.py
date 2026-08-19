@@ -1148,14 +1148,19 @@ def test_interrupts_managed_console_input(binary: Path) -> Transcript:
               interrupt = function(condition) cat("R input interrupted\n")
             )
             """)
-        client.send(r=r)
+        client.send(r=r, stdin="R partial")
         assert last_tool_text(client) == (
             '[input requested: "R interrupt> "]\n[stdin needed]'
         )
+        time.sleep(0.05)
         client.session(action="interrupt")
         assert last_tool_text(client) == "[interrupt sent]"
         client.send(timeout_ms=3_000)
         assert last_tool_text(client) == "R input interrupted\n"
+        client.send(r='readline("R replay> ")', stdin="!\n")
+        assert last_tool_text(client) == (
+            '[input requested: "R replay> "]\n[1] "R partial!"\n'
+        )
 
         # fmt: python
         python = code("""
@@ -1165,14 +1170,19 @@ def test_interrupts_managed_console_input(binary: Path) -> Transcript:
             except KeyboardInterrupt:
                 print("Python input interrupted")
             """)
-        client.send(python=python)
+        client.send(python=python, stdin="Python partial")
         assert last_tool_text(client) == (
             '[input requested: "Python interrupt> "]\n[stdin needed]'
         )
+        time.sleep(0.05)
         client.session(action="interrupt")
         assert last_tool_text(client) == "[interrupt sent]"
         client.send(timeout_ms=3_000)
         assert last_tool_text(client) == "Python input interrupted\n"
+        client.send(python='input("Python replay> ")', stdin="!\n")
+        assert last_tool_text(client) == (
+            "[input requested: \"Python replay> \"]\n'Python partial!'\n"
+        )
 
         client.send(r="r_input_state + 1L")
         assert last_tool_text(client) == "[1] 42\n"
