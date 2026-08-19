@@ -212,6 +212,11 @@ Each frame is one UTF-8 JSON object followed by `\n`.
 The sender flushes every frame.
 Console text is carried directly in a JSON string, with `console_output` and `console_diagnostic` kinds distinguishing ordinary and diagnostic text.
 JSON escaping represents newlines, quotes, and other control characters on the wire.
+The server starts one dedicated reader thread for the worker-to-server pipe and continuously queues its decoded messages in an unbounded channel.
+The thread polls the nonblocking sideband descriptor with a lifecycle-owned cancellation descriptor, reads bounded chunks, and splits its byte buffer at raw newline bytes.
+It publishes every complete frame before polling again and retains an incomplete suffix during normal operation.
+If cancellation is ready, including at the same time as sideband input, cancellation wins: the thread publishes a cancellation result, discards unread pipe bytes and any incomplete suffix, and exits.
+Explicit operations consume the queued messages in protocol order; server-to-worker writes are unchanged.
 
 Worker standard output and standard error are not protocol frames.
 Each pipe reader queues raw byte chunks without decoding them.
@@ -517,8 +522,12 @@ The shutdown task queues worker-stdin closure, then attempts the sideband write.
 It runs independently of the deadline so a blocked stdin writer or full sideband pipe cannot postpone forced termination.
 The sandbox child waits only for the time remaining before the original deadline.
 If its direct process is still running at the deadline, the sandbox force-stops its process group and reaps that direct process.
-After the worker stops, shutdown force-stops any resolver process group that was active for explicit preparation or worker-triggered Python resolution and reaps its direct process.
-After both stop paths complete and the active sideband operation returns, shutdown cancels its stdin writer and standard-stream readers, drains the finite standard-stream bytes already buffered at that boundary, and joins those tasks.
+After the worker stops, shutdown cancels the sideband reader through a handle that does not require the worker-owner lock.
+The dedicated reader publishes a cancellation result and exits immediately, including when it holds a partial frame and a detached descendant retains the write descriptor.
+Unread sideband bytes and the partial frame are discarded; decoded messages already queued for an operation remain ordered ahead of cancellation.
+An operation waiting on the message channel wakes and releases the worker owner for retirement.
+Shutdown then force-stops any resolver process group that was active for explicit preparation or worker-triggered Python resolution and reaps its direct process.
+After both stop paths complete, shutdown joins the sideband reader, cancels its stdin writer and standard-stream readers, drains the finite standard-stream bytes already buffered at that boundary, and joins those tasks.
 This closes the old generation's server-side pipe boundary before shutdown returns, even when a background descendant retains a pipe descriptor or a blocked stdin write.
 The descendant itself remains unsupervised as described below, and any later write to the closed pipe is not captured.
 
@@ -556,9 +565,9 @@ The minimum positive `R_wait_usec` or `Rg_wait_usec` value bounds the wait so `R
 This uses R's descriptor wait without a separate event loop or worker-owned fixed polling interval.
 
 After an idle handler turn, the worker returns to the same wait without sending an activity-specific terminal frame.
-Idle callback frames remain in the worker-to-server pipe until a code-bearing `send` or live requirement preparation reads them.
-The explicit command is queued when necessary, its reader handles the preceding frames, and its ordinary terminal fences the combined work.
-Because there is no continuous server reader, pipe-sized output or a managed-Python request can pause a callback until one of those operations begins collecting it.
+The dedicated server reader continuously removes idle callback frames from the worker-to-server pipe and queues decoded messages in memory.
+When a code-bearing `send` or live requirement preparation begins, its operation consumes those preceding messages before the explicit command's ordinary terminal fences the combined work.
+Pipe-sized output therefore no longer pauses a callback at pipe capacity; a managed-Python request can still pause it until an explicit operation consumes the queued request and sends the host reply.
 A code-bearing `send` can continue an idle callback's input request through the normal evaluation input state.
 Requirement preparation is noninteractive, so an idle input request stops the worker instead of blocking indefinitely.
 
@@ -754,6 +763,8 @@ When the source is `complete after timeout`, it pauses briefly before returning 
 When the source is `violate protocol`, it sends an unexpected second `ready` message.
 When the source is `exit unexpectedly`, it exits with status 86 without replying.
 The `emit stdout` and `start background stderr` modes exercise continuous standard-stream capture during evaluation and after completion.
+The `start background sideband` mode writes a pipe-filling console frame after its initiating evaluation completes, verifying that the dedicated reader continues draining sideband data while the worker is idle and that a later operation consumes the queued frame.
+The `start partial sideband descendant` mode writes an incomplete JSON frame, exits the direct worker, and leaves the write descriptor open in a session-detached child so restart and shutdown can verify cancellable framing.
 The `stall with detached stdin` mode leaves fd 0 open in a session-detached child without reading it so shutdown coverage can fill the pipe and verify bounded writer cancellation.
 When the source is `request input`, it sends `input_requested`, calls Python `input()` to consume one line from fd 0, and sends `input_received` after that call returns.
 The `request input after timeout` mode gates that request until an earlier MCP wait expires, consumes prequeued stdin, emits output while the request remains provisional, then checkpoints after its receipt is processed to cover retention and delimiting of that still-unexposed request record.

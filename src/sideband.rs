@@ -1,5 +1,5 @@
 use std::fs::File;
-use std::io::{self, BufRead, BufReader, Read, Write};
+use std::io::{self, Read, Write};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -9,15 +9,21 @@ use serde::de::DeserializeOwned;
 
 const READ_FD_ENV: &str = "MCP_CONSOLE_SIDEBAND_READ_FD";
 const WRITE_FD_ENV: &str = "MCP_CONSOLE_SIDEBAND_WRITE_FD";
+const READ_CHUNK_SIZE: usize = 8 * 1024;
 
 static SIDEBAND_ALLOWED: AtomicBool = AtomicBool::new(true);
 static FORK_READ_FD: AtomicI32 = AtomicI32::new(-1);
 static FORK_WRITE_FD: AtomicI32 = AtomicI32::new(-1);
 static ATFORK_RESULT: OnceLock<libc::c_int> = OnceLock::new();
 
+trait ReadFd: Read + AsRawFd {}
+
+impl<T: Read + AsRawFd> ReadFd for T {}
+
 pub(crate) struct Reader {
-    inner: BufReader<Box<dyn Read + Send>>,
-    raw_fd: RawFd,
+    inner: Box<dyn ReadFd + Send>,
+    buffer: Vec<u8>,
+    scanned: usize,
 }
 
 #[derive(Clone)]
@@ -71,35 +77,80 @@ pub(crate) fn connect_from_env() -> io::Result<(Reader, Writer)> {
 
 impl Reader {
     fn new(reader: impl Read + AsRawFd + Send + 'static) -> Self {
-        let raw_fd = reader.as_raw_fd();
         Self {
-            inner: BufReader::new(Box::new(reader)),
-            raw_fd,
+            inner: Box::new(reader),
+            buffer: Vec::new(),
+            scanned: 0,
         }
     }
 
     pub(crate) fn has_buffered_data(&self) -> bool {
-        !self.inner.buffer().is_empty()
+        !self.buffer.is_empty()
     }
 
     /// Receives one newline-delimited JSON message from the worker.
     pub(crate) fn receive<T: DeserializeOwned>(&mut self) -> io::Result<T> {
-        let mut line = String::new();
-        if self.inner.read_line(&mut line)? == 0 {
-            return Err(io::Error::new(
+        loop {
+            if let Some(message) = self.take_message()? {
+                return Ok(message);
+            }
+            match self.read_chunk() {
+                Ok(()) => {}
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                Err(error) => return Err(error),
+            }
+        }
+    }
+
+    /// Returns one complete frame already assembled from prior reads.
+    pub(crate) fn receive_buffered<T: DeserializeOwned>(&mut self) -> io::Result<Option<T>> {
+        self.take_message()
+    }
+
+    /// Reads one chunk after the caller observes descriptor readiness.
+    pub(crate) fn read_chunk(&mut self) -> io::Result<()> {
+        let mut buffer = [0; READ_CHUNK_SIZE];
+        match self.inner.read(&mut buffer)? {
+            0 if self.buffer.is_empty() => Err(io::Error::new(
                 io::ErrorKind::UnexpectedEof,
                 "worker sideband closed",
-            ));
+            )),
+            0 => Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "worker sideband closed midway through a frame",
+            )),
+            length => {
+                self.buffer.extend_from_slice(&buffer[..length]);
+                Ok(())
+            }
         }
+    }
 
-        serde_json::from_str(line.trim_end_matches(['\n', '\r']))
+    fn take_message<T: DeserializeOwned>(&mut self) -> io::Result<Option<T>> {
+        let Some(newline) = self.buffer[self.scanned..]
+            .iter()
+            .position(|byte| *byte == b'\n')
+            .map(|newline| self.scanned + newline)
+        else {
+            self.scanned = self.buffer.len();
+            return Ok(None);
+        };
+        let mut line = self.buffer.drain(..=newline).collect::<Vec<_>>();
+        self.scanned = 0;
+        self.buffer.shrink_to(READ_CHUNK_SIZE);
+        line.pop();
+        if line.last() == Some(&b'\r') {
+            line.pop();
+        }
+        serde_json::from_slice(&line)
+            .map(Some)
             .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
     }
 }
 
 impl AsRawFd for Reader {
     fn as_raw_fd(&self) -> RawFd {
-        self.raw_fd
+        self.inner.as_raw_fd()
     }
 }
 

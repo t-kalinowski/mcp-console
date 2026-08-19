@@ -157,7 +157,8 @@ Restart returns `[idle]` after the replacement reports ready.
 It loses all in-memory R, Python, SQL, debugger, and unread-stdin state.
 The implicit session exists for the server lifetime, so restart starts its first worker if none exists yet.
 The server closes worker stdin and sends the sideband shutdown message, then force-stops the worker process group and reaps the direct sandbox process if that process has not exited after one second.
-It waits for the active sideband operation to end, cancels the worker's stdin writer and standard-stream readers, and joins them before reporting that the worker stopped or launching a replacement.
+It then cancels the dedicated sideband reader outside the worker-owner lock, discarding unread sideband bytes and any partial frame so a descriptor retained by a detached descendant cannot delay retirement.
+After the operation owner releases the worker, the server joins the sideband reader, cancels the worker's stdin writer and standard-stream readers, and joins those tasks before reporting that the worker stopped or launching a replacement.
 Code and idle stdin remain associated with the worker that admitted them and cannot run in the replacement.
 Without a waiting `send`, the restart response includes retained output from the old worker, `[active evaluation stopped by session restart request]` when restart interrupts an unfinished cell, `[worker stopped: in-memory state lost]` when restart retires a ready worker, `[starting new worker]`, startup output, and finally `[idle]`, in that order.
 If a `send` is waiting on the interrupted cell, that call receives the old worker's text and images through retirement, followed by `[stopped by session restart request before evaluation finished]` and, when restart retires a ready worker, `[worker stopped: in-memory state lost]`.
@@ -252,7 +253,8 @@ Shutdown or an infrastructure failure during the initial turn aborts the submitt
 After either turn, a worker-stdin hangup marks shutdown before the worker can dispatch or complete the cell, including when a callback reads fd 0 directly.
 Between cells, the worker uses `R_checkActivity()` to wait for either a registered R handler or the server sideband, without busy polling or a worker-owned fixed interval.
 Callbacks registered by packages such as `later` can therefore run after a cell has returned, and their output is collected by the next code-bearing `send` or live requirement preparation.
-The server does not continuously drain idle callback output, so pipe backpressure or a host-side Python resolution can pause a callback until one of those operations begins.
+The server continuously removes complete sideband frames from the pipe and queues their decoded messages in memory.
+A host-side Python resolution still pauses its callback until a code-bearing `send` or live requirement preparation consumes and handles that queued request, but idle sideband output is no longer bounded by pipe backpressure.
 A code-bearing `send` can also supply input requested by an idle callback.
 Before applying a live requirement preparation, the built-in worker gives registered R handlers one nonblocking turn, so a callback already ready when the command arrives is collected first.
 A noninteractive requirement preparation stops the worker if it encounters such an input request instead of waiting indefinitely.

@@ -11,8 +11,9 @@ use crate::worker_protocol::{ServerMessage, WorkerMessage};
 pub(super) struct WorkerRuntime;
 
 pub(super) struct Worker {
-    reader: crate::sideband::Reader,
+    sideband: mpsc::Receiver<Result<WorkerMessage, String>>,
     writer: crate::sideband::Writer,
+    sideband_cancel: SidebandCancellation,
     stdin: StdinSender,
     output: super::OutputTape,
     process: WorkerProcess,
@@ -22,6 +23,7 @@ pub(super) struct Worker {
 #[derive(Clone)]
 pub(super) struct WorkerShutdownHandle {
     writer: crate::sideband::Writer,
+    sideband_cancel: SidebandCancellation,
     stdin: StdinSender,
     child: Arc<Mutex<crate::sandbox::SandboxedChild>>,
 }
@@ -32,6 +34,7 @@ struct WorkerProcess {
 }
 
 struct WorkerThreads {
+    sideband: thread::JoinHandle<()>,
     stdin: WorkerIoThread,
     stdout: WorkerIoThread,
     stderr: WorkerIoThread,
@@ -46,6 +49,9 @@ struct WorkerIoEvents {
     ready: bool,
     cancelled: bool,
 }
+
+#[derive(Clone)]
+struct SidebandCancellation(Arc<Mutex<Option<std::io::PipeWriter>>>);
 
 #[derive(Clone)]
 pub(super) struct StdinSender(mpsc::Sender<StdinMessage>);
@@ -86,9 +92,12 @@ impl WorkerRuntime {
             .stderr(Stdio::piped())
             .new_process_group();
         child_fds.configure(&mut command);
+        let (sideband_cancelled, sideband_cancel) = sideband_cancellation_pipe()?;
         let stdin_cancel = cancellation_pipe("stdin")?;
         let stdout_cancel = cancellation_pipe("stdout")?;
         let stderr_cancel = cancellation_pipe("stderr")?;
+        set_nonblocking(&reader)
+            .map_err(|error| format!("failed to configure worker sideband: {error}"))?;
         let mut child = command
             .spawn()
             .map_err(|error| format!("failed to launch worker: {error}"))?;
@@ -111,6 +120,7 @@ impl WorkerRuntime {
                 )),
             };
         }
+        let (sideband, sideband_thread) = start_sideband_reader(reader, sideband_cancelled);
         let stdout = start_output_reader(stdout, output.direct_stdout(), stdout_cancel);
         let stderr = start_output_reader(stderr, output.direct_stderr(), stderr_cancel);
         let child = Arc::new(Mutex::new(child));
@@ -118,6 +128,7 @@ impl WorkerRuntime {
         let process = WorkerProcess {
             child,
             threads: Some(WorkerThreads {
+                sideband: sideband_thread,
                 stdin: stdin_thread,
                 stdout,
                 stderr,
@@ -125,8 +136,9 @@ impl WorkerRuntime {
         };
 
         let mut worker = Worker {
-            reader,
+            sideband,
             writer,
+            sideband_cancel,
             stdin,
             output,
             process,
@@ -391,9 +403,9 @@ impl Worker {
     }
 
     fn receive(&mut self) -> Result<WorkerMessage, String> {
-        self.reader
-            .receive()
-            .map_err(|error| format!("worker sideband read failed: {error}"))
+        self.sideband
+            .recv()
+            .map_err(|_| "worker sideband reader stopped".to_string())?
     }
 
     pub(super) fn write_stdin(&self, stdin: String) -> Result<(), String> {
@@ -417,12 +429,14 @@ impl Worker {
     }
 
     pub(super) fn finish_retirement(&mut self) -> Result<(), String> {
+        self.sideband_cancel.cancel();
         self.process.finish_threads()
     }
 
     pub(super) fn shutdown_handle(&self) -> WorkerShutdownHandle {
         WorkerShutdownHandle {
             writer: self.writer.clone(),
+            sideband_cancel: self.sideband_cancel.clone(),
             stdin: self.stdin.clone(),
             child: self.process.child.clone(),
         }
@@ -434,6 +448,65 @@ impl Worker {
             Err(error) => format!("{message}; additionally failed to stop the worker: {error}"),
         }
     }
+}
+
+fn start_sideband_reader(
+    mut reader: crate::sideband::Reader,
+    cancelled: std::io::PipeReader,
+) -> (
+    mpsc::Receiver<Result<WorkerMessage, String>>,
+    thread::JoinHandle<()>,
+) {
+    let (sender, receiver) = mpsc::channel();
+    let thread = thread::spawn(move || {
+        loop {
+            loop {
+                match reader.receive_buffered() {
+                    Ok(Some(message)) => {
+                        if sender.send(Ok(message)).is_err() {
+                            return;
+                        }
+                    }
+                    Ok(None) => break,
+                    Err(error) => {
+                        let _ = sender.send(Err(format!("worker sideband read failed: {error}")));
+                        return;
+                    }
+                }
+            }
+
+            let events = match wait_for_worker_io(reader.as_raw_fd(), libc::POLLIN, &cancelled) {
+                Ok(events) => events,
+                Err(error) => {
+                    let _ = sender.send(Err(format!("worker sideband read failed: {error}")));
+                    return;
+                }
+            };
+            if events.cancelled {
+                let _ = sender.send(Err("worker sideband reader cancelled".to_string()));
+                return;
+            }
+            if !events.ready {
+                continue;
+            }
+            match reader.read_chunk() {
+                Ok(()) => {}
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        std::io::ErrorKind::Interrupted | std::io::ErrorKind::WouldBlock
+                    ) =>
+                {
+                    continue;
+                }
+                Err(error) => {
+                    let _ = sender.send(Err(format!("worker sideband read failed: {error}")));
+                    return;
+                }
+            }
+        }
+    });
+    (receiver, thread)
 }
 
 fn start_output_reader(
@@ -515,13 +588,9 @@ fn drain_buffered_output(
     output: &super::DirectOutput,
     buffer: &mut [u8],
 ) {
-    let mut remaining: libc::c_int = 0;
-    // SAFETY: `stream` remains open and `remaining` points to writable storage
-    // of the type expected by FIONREAD.
-    if unsafe { libc::ioctl(stream.as_raw_fd(), libc::FIONREAD, &mut remaining) } < 0 {
+    let Ok(mut remaining) = buffered_worker_bytes(stream.as_raw_fd()) else {
         return;
-    }
-    let mut remaining = remaining.max(0) as usize;
+    };
     while remaining > 0 {
         let length = remaining.min(buffer.len());
         match stream.read(&mut buffer[..length]) {
@@ -534,6 +603,16 @@ fn drain_buffered_output(
             Err(_) => break,
         }
     }
+}
+
+fn buffered_worker_bytes(descriptor: RawFd) -> std::io::Result<usize> {
+    let mut remaining: libc::c_int = 0;
+    // SAFETY: `descriptor` remains open and `remaining` points to writable
+    // storage of the type expected by FIONREAD.
+    if unsafe { libc::ioctl(descriptor, libc::FIONREAD, &mut remaining) } < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(remaining.max(0) as usize)
 }
 
 fn wait_for_worker_io(
@@ -580,6 +659,14 @@ fn cancellation_pipe(stream: &str) -> Result<(std::io::PipeReader, std::io::Pipe
         .map_err(|error| format!("failed to create worker {stream} cancellation pipe: {error}"))
 }
 
+fn sideband_cancellation_pipe() -> Result<(std::io::PipeReader, SidebandCancellation), String> {
+    let (cancelled, cancel) = cancellation_pipe("sideband")?;
+    Ok((
+        cancelled,
+        SidebandCancellation(Arc::new(Mutex::new(Some(cancel)))),
+    ))
+}
+
 fn set_nonblocking(descriptor: &impl AsRawFd) -> std::io::Result<()> {
     let descriptor = descriptor.as_raw_fd();
     // SAFETY: `descriptor` is an open worker pipe owned by the caller.
@@ -616,7 +703,7 @@ impl WorkerShutdownHandle {
 
     /// Closes worker input, requests protocol shutdown, and enforces the process deadline.
     ///
-    /// The owning `Worker` separately joins the stdin and standard-stream tasks.
+    /// The owning `Worker` separately joins the sideband and standard-stream tasks.
     pub(super) fn shutdown(&self, deadline: Instant) -> Result<thread::JoinHandle<()>, String> {
         let writer = self.writer.clone();
         let stdin = self.stdin.clone();
@@ -625,15 +712,19 @@ impl WorkerShutdownHandle {
             let _ = writer.send(&ServerMessage::Shutdown);
         });
 
-        let mut child = self
-            .child
-            .lock()
-            .map_err(|_| "worker child lock poisoned".to_string())?;
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        if child.wait_timeout(remaining)?.is_none() {
-            child.force_stop()?;
-        }
-        Ok(shutdown)
+        let stopped = (|| {
+            let mut child = self
+                .child
+                .lock()
+                .map_err(|_| "worker child lock poisoned".to_string())?;
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if child.wait_timeout(remaining)?.is_none() {
+                child.force_stop()?;
+            }
+            Ok(())
+        })();
+        self.sideband_cancel.cancel();
+        stopped.map(|()| shutdown)
     }
 }
 
@@ -642,13 +733,14 @@ impl WorkerProcess {
         let Some(threads) = self.threads.take() else {
             return Ok(());
         };
+        let sideband = join_worker_thread(threads.sideband, "sideband reader");
         let stdin = threads.stdin.cancel();
         let stdout = threads.stdout.cancel();
         let stderr = threads.stderr.cancel();
         let stdin = join_worker_thread(stdin, "stdin writer");
         let stdout = join_worker_thread(stdout, "stdout reader");
         let stderr = join_worker_thread(stderr, "stderr reader");
-        stdin.and(stdout).and(stderr)
+        sideband.and(stdin).and(stdout).and(stderr)
     }
 }
 
@@ -656,6 +748,16 @@ impl WorkerIoThread {
     fn cancel(self) -> thread::JoinHandle<()> {
         drop(self.cancel);
         self.thread
+    }
+}
+
+impl SidebandCancellation {
+    fn cancel(&self) {
+        let mut cancel = match self.0.lock() {
+            Ok(cancel) => cancel,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        drop(cancel.take());
     }
 }
 

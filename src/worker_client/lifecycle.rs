@@ -312,9 +312,9 @@ impl Client {
 
     /// Crosses the physical worker boundary before starting its replacement.
     ///
-    /// Acquiring the worker waits for its sideband operation to end, and
-    /// `finish_retirement()` joins its remaining I/O tasks. No old-worker output
-    /// can be published after the stopped notice below.
+    /// Acquiring the worker waits for its active operation to end, and
+    /// `finish_retirement()` joins the sideband and standard-stream readers. No
+    /// old-worker output can be published after the stopped notice below.
     fn replace_worker(&self, evaluation: Option<RestartReservation>) -> Result<Response, String> {
         let mut worker = self
             .0
