@@ -55,6 +55,7 @@ id: 6
 send:
   r: |
     paste("color", readline("color> "))
+  timeout_ms: 100
 result:
   content:
     - type: text

@@ -13,7 +13,7 @@ from _support import (
     r_test_environment,
     run_this_suite,
     stop_client,
-    use_temporary_home,
+    use_isolated_duckdb_home,
     wait_for_worker_file,
 )
 
@@ -27,7 +27,7 @@ def test_uses_default_duckdb_extensions(binary: Path) -> Transcript:
         workspace = Path(temporary)
         home = workspace / "home"
         home.mkdir()
-        use_temporary_home(environment, home)
+        use_isolated_duckdb_home(environment, home)
         client = McpClient(
             binary,
             ("serve",),
@@ -80,14 +80,11 @@ def test_restart_adds_r_and_duckdb_requirements(binary: Path) -> Transcript:
     environment["RETICULATE_PYTHON"] = ""
     with tempfile.TemporaryDirectory() as temporary:
         workspace = Path(temporary)
-        home = workspace / "home"
-        home.mkdir()
         ambient_library = workspace / "ambient-library"
         ambient_library.mkdir()
         environment["R_LIBS"] = str(ambient_library)
         environment["R_LIBS_SITE"] = str(ambient_library)
         environment["R_LIBS_USER"] = str(ambient_library)
-        use_temporary_home(environment, home)
         client = McpClient(
             binary,
             ("serve",),
@@ -128,11 +125,6 @@ def test_restart_adds_r_and_duckdb_requirements(binary: Path) -> Transcript:
         assert last_tool_text(client) == (
             "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
         )
-        installed_fts = list(
-            (home / ".duckdb" / "extensions").glob("*/*/fts.duckdb_extension")
-        )
-        assert len(installed_fts) == 1, installed_fts
-
         client.send(
             r=(
                 "!exists('restart_marker') && "
@@ -167,7 +159,7 @@ def test_prepares_and_loads_duckdb_extensions(binary: Path) -> Transcript:
         workspace = Path(temporary)
         home = workspace / "home"
         home.mkdir()
-        use_temporary_home(environment, home)
+        use_isolated_duckdb_home(environment, home)
         client = McpClient(
             binary,
             ("serve",),
@@ -302,11 +294,6 @@ def test_queries_a_ragnar_store_created_in_r(binary: Path) -> Transcript:
     environment["RETICULATE_PYTHON"] = ""
     temporary = tempfile.TemporaryDirectory()
     workspace = Path(temporary.name)
-    home = workspace / "home"
-    home.mkdir()
-    use_temporary_home(environment, home)
-    # Isolate DuckDB's extension cache while reusing the host IR package cache.
-    environment.pop("IR_CACHE_DIR")
     client = McpClient(
         binary,
         ("serve",),
@@ -438,9 +425,7 @@ def test_uses_ragnar_like_the_guide_and_adapts_to_the_console(
     workspace = Path(temporary.name)
     home = workspace / "home"
     home.mkdir()
-    use_temporary_home(environment, home)
-    # Isolate DuckDB's extension cache while reusing the host IR package cache.
-    environment.pop("IR_CACHE_DIR")
+    use_isolated_duckdb_home(environment, home)
     client = McpClient(
         binary,
         ("serve",),

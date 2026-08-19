@@ -10,8 +10,16 @@ server:
       invisible(reticulate::py_run_string("initialized_from_r = True"))
     )
 ---
+server:
+  kind: synchronize
+  token: 1
+---
 worker:
   kind: completed
+---
+worker:
+  kind: synchronized
+  token: 1
 ---
 server:
   kind: evaluate
@@ -23,6 +31,10 @@ server:
     print("Python stdout")
     sys.stderr.write("Python stderr\n")
     raise ValueError("boom")
+---
+server:
+  kind: synchronize
+  token: 2
 ---
 worker:
   kind: console_output
@@ -60,6 +72,10 @@ worker:
 worker:
   kind: completed
 ---
+worker:
+  kind: synchronized
+  token: 2
+---
 server:
   kind: evaluate
   language: python
@@ -80,6 +96,10 @@ server:
         check=True,
     )
 ---
+server:
+  kind: synchronize
+  token: 3
+---
 stdout: |
   buffer stdout
   direct stdout
@@ -91,4 +111,8 @@ stderr: |
 ---
 worker:
   kind: completed
+---
+worker:
+  kind: synchronized
+  token: 3
 ...

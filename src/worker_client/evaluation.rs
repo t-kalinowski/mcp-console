@@ -6,8 +6,6 @@ use super::output::{
     project_replacement_ready,
 };
 
-const INPUT_REQUEST_GRACE: Duration = Duration::from_millis(10);
-
 pub(super) struct Evaluation {
     state: Mutex<EvaluationState>,
     changed: tokio::sync::Notify,
@@ -21,7 +19,7 @@ struct EvaluationState {
     completion_checkpoint: Option<OutputCheckpoint>,
     /// Whether a waiter already drained the response for a terminal phase.
     completion_collected: bool,
-    input_report_at: Option<Instant>,
+    input_requested: bool,
     /// Whether one `send` currently owns the right to drain this evaluation's response.
     waiting: bool,
     restart_reserved: bool,
@@ -56,7 +54,6 @@ pub(super) enum EvaluationWait {
 
 enum EvaluationStatus {
     Waiting,
-    Grace(Duration),
     Report(EvaluationWait),
 }
 
@@ -88,7 +85,7 @@ impl Evaluation {
                 phase: EvaluationPhase::Evaluating,
                 completion_checkpoint: None,
                 completion_collected: false,
-                input_report_at: None,
+                input_requested: false,
                 waiting: false,
                 restart_reserved: false,
                 restart_handoff: None,
@@ -144,7 +141,7 @@ impl Evaluation {
         })
     }
 
-    /// Queues bytes and briefly defers any outstanding input report for its receipt.
+    /// Queues exact bytes without treating submission as receipt.
     pub(super) fn submit_stdin(&self, stdin: String) -> Result<(), String> {
         let mut state = self
             .state
@@ -154,9 +151,6 @@ impl Evaluation {
             return Ok(());
         }
 
-        if let Some(report_at) = state.input_report_at.as_mut() {
-            *report_at = Instant::now() + INPUT_REQUEST_GRACE;
-        }
         let bytes = stdin.into_bytes();
         #[cfg(target_os = "macos")]
         if let Some(writer) = &state.stdin {
@@ -208,14 +202,14 @@ impl Evaluation {
             .state
             .lock()
             .map_err(|_| "worker evaluation state lock poisoned".to_string())?;
-        if state.input_report_at.is_some() {
+        if state.input_requested {
             return Err("worker requested new input before receiving prior input".to_string());
         }
         let prompt = serde_json::to_string(&prompt)
             .map_err(|error| format!("failed to render worker input prompt: {error}"))?;
         self.output
             .push_notice_line(format!("input requested: {prompt}"));
-        state.input_report_at = Some(Instant::now() + INPUT_REQUEST_GRACE);
+        state.input_requested = true;
         self.changed.notify_one();
         Ok(())
     }
@@ -226,15 +220,10 @@ impl Evaluation {
             .state
             .lock()
             .map_err(|_| "worker evaluation state lock poisoned".to_string())?;
-        if state.input_report_at.is_some() {
+        if state.input_requested {
             return Err("worker evaluation already has an outstanding input request".to_string());
         }
-        let grace = if state.pending_stdin.is_empty() {
-            Duration::ZERO
-        } else {
-            INPUT_REQUEST_GRACE
-        };
-        state.input_report_at = Some(Instant::now() + grace);
+        state.input_requested = true;
         self.changed.notify_one();
         Ok(())
     }
@@ -245,10 +234,10 @@ impl Evaluation {
             .state
             .lock()
             .map_err(|_| "worker evaluation state lock poisoned".to_string())?;
-        state
-            .input_report_at
-            .take()
-            .ok_or_else(|| "worker reported received input without requesting it".to_string())?;
+        if !state.input_requested {
+            return Err("worker reported received input without requesting it".to_string());
+        }
+        state.input_requested = false;
         self.changed.notify_one();
         Ok(())
     }
@@ -259,7 +248,7 @@ impl Evaluation {
             .state
             .lock()
             .map_err(|_| "worker evaluation state lock poisoned".to_string())?;
-        if state.input_report_at.is_some() {
+        if state.input_requested {
             return Err("worker completed with an outstanding input request".to_string());
         }
         Ok(())
@@ -285,7 +274,7 @@ impl Evaluation {
         let Ok(mut state) = self.state.lock() else {
             return;
         };
-        state.input_report_at = None;
+        state.input_requested = false;
         state.completion_checkpoint = None;
         self.output.push_failure(failure);
         state.phase = EvaluationPhase::ReplacementStarting;
@@ -310,7 +299,7 @@ impl Evaluation {
         let Ok(mut state) = self.state.lock() else {
             return;
         };
-        state.input_report_at = None;
+        state.input_requested = false;
         if let Err(failure) = result
             && (!state.restart_reserved || failure.should_survive_restart())
         {
@@ -344,11 +333,10 @@ impl Evaluation {
         let started = Instant::now();
         loop {
             let changed = self.changed.notified();
-            let grace = match self.reported_state(false)? {
-                EvaluationStatus::Waiting => None,
-                EvaluationStatus::Grace(grace) => Some(grace),
+            match self.reported_state(false)? {
+                EvaluationStatus::Waiting => {}
                 EvaluationStatus::Report(state) => break Ok(state),
-            };
+            }
             let remaining = timeout.saturating_sub(started.elapsed());
             if remaining.is_zero() {
                 match self.reported_state(true)? {
@@ -357,22 +345,12 @@ impl Evaluation {
                         changed.await;
                         continue;
                     }
-                    EvaluationStatus::Grace(_) => {
-                        unreachable!("the deadline makes input state reportable")
-                    }
                 }
             }
-            let wait = grace.map_or(remaining, |grace| grace.min(remaining));
-            if tokio::time::timeout(wait, changed).await.is_err() {
-                if grace.is_some_and(|grace| grace <= remaining) {
-                    continue;
-                }
+            if tokio::time::timeout(remaining, changed).await.is_err() {
                 match self.reported_state(true)? {
                     EvaluationStatus::Report(state) => break Ok(state),
                     EvaluationStatus::Waiting => continue,
-                    EvaluationStatus::Grace(_) => {
-                        unreachable!("the deadline makes input state reportable")
-                    }
                 }
             }
         }
@@ -412,21 +390,18 @@ impl Evaluation {
             }
             EvaluationPhase::Evaluating | EvaluationPhase::ReplacementStarting => {}
         }
-        let Some(report_at) = state.input_report_at else {
-            if at_deadline {
-                return Ok(EvaluationStatus::Report(EvaluationWait::Running(
-                    self.output.take(),
-                )));
-            }
+        if !at_deadline {
             return Ok(EvaluationStatus::Waiting);
-        };
-        let grace = report_at.saturating_duration_since(Instant::now());
-        if !at_deadline && !grace.is_zero() {
-            return Ok(EvaluationStatus::Grace(grace));
         }
-        Ok(EvaluationStatus::Report(EvaluationWait::InputRequested(
-            self.output.take(),
-        )))
+        if state.input_requested {
+            Ok(EvaluationStatus::Report(EvaluationWait::InputRequested(
+                self.output.take(),
+            )))
+        } else {
+            Ok(EvaluationStatus::Report(EvaluationWait::Running(
+                self.output.take(),
+            )))
+        }
     }
 }
 

@@ -381,9 +381,13 @@ impl Client {
         self.ensure_restarting()?;
         response.push_notice_line(super::output::WORKER_STARTING_NOTICE);
 
-        if let Err(message) = self.start_worker(&mut worker, generation, false, |stop_handle| {
-            self.register_restart_stop_handle(stop_handle)
-        }) {
+        if let Err(message) = self.start_worker(
+            &mut worker,
+            generation,
+            false,
+            |stop_handle| self.register_restart_stop_handle(stop_handle),
+            || self.finish_restart(),
+        ) {
             let message = match self.clear_restart_stop_handle() {
                 Ok(()) => message,
                 Err(clear_error) => format!(
@@ -506,7 +510,7 @@ impl Client {
                 Ok(())
             }
             LifecycleState::ShuttingDown { .. } => Err("worker is shutting down".to_string()),
-            LifecycleState::Ready => Err("worker restart state changed".to_string()),
+            LifecycleState::Ready => Ok(()),
         }
     }
 

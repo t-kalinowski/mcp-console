@@ -3,7 +3,7 @@
 ---
 id: 3
 send:
-  r: resolve python while idle
+  r: complete silently
 result:
   content:
     - type: text
@@ -12,23 +12,23 @@ result:
 ---
 id: 4
 session:
-  action: prepare
-  requirements:
-    r:
-      - praise
+  action: restart
 result:
   content:
     - type: text
-      text: "[prepared]"
+      text: |-
+        [worker stopped: in-memory state lost]
+        [starting new worker]
+        [idle]
   isError: false
 ---
 id: 5
 send:
-  r: report managed R requirement
+  r: echo
 result:
   content:
     - type: text
       text: |
-        zod R requirement: prepared=true
+        zod: echo
   isError: false
 ...

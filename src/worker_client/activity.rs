@@ -1,11 +1,14 @@
 use std::os::fd::AsRawFd;
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
+use std::time::Duration;
 
 use crate::worker_protocol::{ServerMessage, WorkerMessage};
 
 use super::output::OutputCheckpoint;
-use super::{Evaluation, OutputTape, TerminalCommit, WorkerCallbacks};
+use super::{Evaluation, OutputTape, TerminalCommit, WorkerCallbacks, WorkerSnapshot};
+
+type OperationReceiver = mpsc::Receiver<Result<TerminalCommit<OperationResult>, String>>;
 
 #[derive(Clone)]
 pub(super) struct Activity(Arc<Mutex<ActivityState>>);
@@ -14,6 +17,8 @@ struct ActivityState {
     operation: Option<Operation>,
     failure: Option<String>,
     idle_input: Option<String>,
+    idle_synchronization: Option<IdleSynchronizationState>,
+    next_synchronization: u64,
 }
 
 struct Operation {
@@ -22,9 +27,23 @@ struct Operation {
 }
 
 enum OperationKind {
-    Cell(Arc<Evaluation>),
+    Cell {
+        evaluation: Arc<Evaluation>,
+        synchronization: u64,
+        completion: Option<OutputCheckpoint>,
+    },
     PrepareR,
     PreparePython,
+}
+
+struct IdleSynchronizationState {
+    token: u64,
+    result: tokio::sync::watch::Sender<Option<Result<WorkerSnapshot, String>>>,
+}
+
+pub(super) struct IdleSynchronization {
+    activity: Activity,
+    result: tokio::sync::watch::Receiver<Option<Result<WorkerSnapshot, String>>>,
 }
 
 enum Route {
@@ -47,6 +66,8 @@ impl Activity {
             operation: None,
             failure: None,
             idle_input: None,
+            idle_synchronization: None,
+            next_synchronization: 1,
         })))
     }
 
@@ -62,27 +83,29 @@ impl Activity {
         thread::spawn(move || {
             let mut python_candidates = Vec::new();
             loop {
-                if !reader.has_buffered_data() {
-                    let events = match super::platform::wait_for_worker_io(
-                        reader.as_raw_fd(),
-                        libc::POLLIN,
-                        &cancelled,
-                    ) {
-                        Ok(events) => events,
-                        Err(error) => {
-                            activity.fail(format!("worker sideband read failed: {error}"));
+                let message = match reader.receive_available() {
+                    Ok(Some(message)) => message,
+                    Ok(None) => {
+                        let events = match super::platform::wait_for_worker_io(
+                            reader.as_raw_fd(),
+                            libc::POLLIN,
+                            &cancelled,
+                        ) {
+                            Ok(events) => events,
+                            Err(error) => {
+                                activity.fail(format!("worker sideband read failed: {error}"));
+                                return;
+                            }
+                        };
+                        if events.cancelled {
+                            activity.fail("worker sideband reader cancelled".to_string());
                             return;
                         }
-                    };
-                    if events.cancelled {
-                        return;
-                    }
-                    if !events.ready {
+                        if !events.ready {
+                            continue;
+                        }
                         continue;
                     }
-                }
-                let message = match reader.receive() {
-                    Ok(message) => message,
                     Err(error) => {
                         activity.fail(format!("worker sideband read failed: {error}"));
                         return;
@@ -113,36 +136,65 @@ impl Activity {
     pub(super) fn begin_cell(
         &self,
         evaluation: Arc<Evaluation>,
-    ) -> Result<mpsc::Receiver<Result<TerminalCommit<OperationResult>, String>>, String> {
+    ) -> Result<(OperationReceiver, u64), String> {
         let (result, receiver) = mpsc::channel();
         let mut state = self.lock()?;
         state.ensure_available()?;
         if state.idle_input.take().is_some() {
             evaluation.resume_input_request()?;
         }
+        let synchronization = state.allocate_synchronization();
         state.operation = Some(Operation {
-            kind: OperationKind::Cell(evaluation),
+            kind: OperationKind::Cell {
+                evaluation,
+                synchronization,
+                completion: None,
+            },
             result,
         });
-        Ok(receiver)
+        Ok((receiver, synchronization))
     }
 
-    pub(super) fn begin_r_preparation(
+    pub(super) fn synchronize(
         &self,
-    ) -> Result<mpsc::Receiver<Result<TerminalCommit<OperationResult>, String>>, String> {
+        writer: &crate::sideband::Writer,
+    ) -> Result<IdleSynchronization, String> {
+        let (token, result, send) = {
+            let mut state = self.lock()?;
+            state.ensure_healthy()?;
+            if let Some(synchronization) = state.idle_synchronization.as_ref() {
+                (
+                    synchronization.token,
+                    synchronization.result.subscribe(),
+                    false,
+                )
+            } else {
+                let token = state.allocate_synchronization();
+                let (result, receiver) = tokio::sync::watch::channel(None);
+                state.idle_synchronization = Some(IdleSynchronizationState { token, result });
+                (token, receiver, true)
+            }
+        };
+        if send && let Err(error) = writer.send(&ServerMessage::Synchronize { token }) {
+            let error = format!("worker sideband write failed: {error}");
+            self.fail(error.clone());
+            return Err(error);
+        }
+        Ok(IdleSynchronization {
+            activity: self.clone(),
+            result,
+        })
+    }
+
+    pub(super) fn begin_r_preparation(&self) -> Result<OperationReceiver, String> {
         self.begin_preparation(OperationKind::PrepareR)
     }
 
-    pub(super) fn begin_python_preparation(
-        &self,
-    ) -> Result<mpsc::Receiver<Result<TerminalCommit<OperationResult>, String>>, String> {
+    pub(super) fn begin_python_preparation(&self) -> Result<OperationReceiver, String> {
         self.begin_preparation(OperationKind::PreparePython)
     }
 
-    fn begin_preparation(
-        &self,
-        kind: OperationKind,
-    ) -> Result<mpsc::Receiver<Result<TerminalCommit<OperationResult>, String>>, String> {
+    fn begin_preparation(&self, kind: OperationKind) -> Result<OperationReceiver, String> {
         let (result, receiver) = mpsc::channel();
         let mut state = self.lock()?;
         state.ensure_available()?;
@@ -156,17 +208,20 @@ impl Activity {
     }
 
     pub(super) fn fail(&self, error: String) {
-        let operation = {
+        let (operation, synchronization) = {
             let Ok(mut state) = self.0.lock() else {
                 return;
             };
             if state.failure.is_none() {
                 state.failure = Some(error.clone());
             }
-            state.operation.take()
+            (state.operation.take(), state.idle_synchronization.take())
         };
         if let Some(operation) = operation {
-            let _ = operation.result.send(Err(error));
+            let _ = operation.result.send(Err(error.clone()));
+        }
+        if let Some(synchronization) = synchronization {
+            synchronization.result.send_replace(Some(Err(error)));
         }
     }
 
@@ -183,7 +238,7 @@ impl Activity {
         let state = self.lock()?;
         Ok(
             match state.operation.as_ref().map(|operation| &operation.kind) {
-                Some(OperationKind::Cell(evaluation)) => Route::Cell(evaluation.clone()),
+                Some(OperationKind::Cell { evaluation, .. }) => Route::Cell(evaluation.clone()),
                 Some(OperationKind::PrepareR | OperationKind::PreparePython) => Route::Preparation,
                 None => Route::Idle,
             },
@@ -198,7 +253,7 @@ impl Activity {
     ) -> Result<(), String> {
         let mut state = self.lock()?;
         match state.operation.as_ref().map(|operation| &operation.kind) {
-            Some(OperationKind::Cell(evaluation)) => evaluation.input_requested(prompt),
+            Some(OperationKind::Cell { evaluation, .. }) => evaluation.input_requested(prompt),
             Some(OperationKind::PrepareR | OperationKind::PreparePython) => {
                 output.push_notice_line(format!("input requested: {rendered}"));
                 Err(format!(
@@ -221,7 +276,7 @@ impl Activity {
     fn input_received(&self) -> Result<(), String> {
         let mut state = self.lock()?;
         match state.operation.as_ref().map(|operation| &operation.kind) {
-            Some(OperationKind::Cell(evaluation)) => evaluation.input_received(),
+            Some(OperationKind::Cell { evaluation, .. }) => evaluation.input_received(),
             Some(OperationKind::PrepareR | OperationKind::PreparePython) => {
                 Err("worker reported received input during requirement preparation".to_string())
             }
@@ -234,30 +289,48 @@ impl Activity {
         }
     }
 
-    fn complete(
+    fn complete_cell(
+        &self,
+        python_candidates: &mut Vec<crate::resolver::ManagedPython>,
+        output: &OutputTape,
+    ) -> Result<(), String> {
+        let mut state = self.lock()?;
+        let Some(Operation {
+            kind:
+                OperationKind::Cell {
+                    evaluation,
+                    completion,
+                    ..
+                },
+            ..
+        }) = state.operation.as_mut()
+        else {
+            return Err(
+                "worker sent an evaluation result without an active evaluation".to_string(),
+            );
+        };
+        if completion.is_some() {
+            return Err("worker sent more than one evaluation result".to_string());
+        }
+        evaluation.input_complete()?;
+        *completion = Some(output.checkpoint());
+        python_candidates.clear();
+        Ok(())
+    }
+
+    fn complete_preparation(
         &self,
         message: WorkerMessage,
         python_candidates: &mut Vec<crate::resolver::ManagedPython>,
-        output: &OutputTape,
         cancelled: &std::io::PipeReader,
     ) -> Result<bool, String> {
-        let (Operation { kind, result }, checkpoint) = {
+        let Operation { kind, result } = {
             let mut state = self.lock()?;
-            let operation = state.operation.take().ok_or_else(|| {
+            state.operation.take().ok_or_else(|| {
                 "worker sent an operation result without an active operation".to_string()
-            })?;
-            (operation, output.checkpoint())
+            })?
         };
         let outcome = match (kind, message) {
-            (OperationKind::Cell(evaluation), WorkerMessage::Completed) => {
-                match evaluation.input_complete() {
-                    Ok(()) => {
-                        python_candidates.clear();
-                        Ok(OperationResult::Completed(checkpoint))
-                    }
-                    Err(error) => Err(error),
-                }
-            }
             (OperationKind::PrepareR, WorkerMessage::RPrepared { library }) => {
                 python_candidates.clear();
                 Ok(OperationResult::RPrepared(library))
@@ -275,7 +348,7 @@ impl Activity {
                 python_candidates.clear();
                 Ok(OperationResult::PythonPreparationFailed(message))
             }
-            (OperationKind::Cell(_), _) => {
+            (OperationKind::Cell { .. }, _) => {
                 Err("worker sent an unexpected evaluation result".to_string())
             }
             (OperationKind::PrepareR, _) => {
@@ -286,40 +359,86 @@ impl Activity {
             }
         };
         match outcome {
-            Ok(outcome) => {
-                let (acknowledged, acknowledgment) = match std::io::pipe() {
-                    Ok(pipe) => pipe,
-                    Err(error) => {
-                        let error = format!(
-                            "failed to create worker terminal acknowledgment pipe: {error}"
-                        );
-                        let _ = result.send(Err(error.clone()));
-                        return Err(error);
-                    }
-                };
-                result
-                    .send(Ok(TerminalCommit::new(outcome, acknowledgment)))
-                    .map_err(|_| "worker operation receiver stopped".to_string())?;
-                loop {
-                    let events = super::platform::wait_for_worker_io(
-                        acknowledged.as_raw_fd(),
-                        libc::POLLIN,
-                        cancelled,
-                    )
-                    .map_err(|error| {
-                        format!("worker terminal acknowledgment wait failed: {error}")
-                    })?;
-                    if events.cancelled {
-                        return Ok(false);
-                    }
-                    if events.ready {
-                        return Ok(true);
-                    }
-                }
-            }
+            Ok(outcome) => send_terminal(result, outcome, cancelled),
             Err(error) => {
                 let _ = result.send(Err(error.clone()));
                 Err(error)
+            }
+        }
+    }
+
+    fn synchronized(
+        &self,
+        token: u64,
+        output: &OutputTape,
+        cancelled: &std::io::PipeReader,
+    ) -> Result<bool, String> {
+        enum Completion {
+            Cell {
+                result: mpsc::Sender<Result<TerminalCommit<OperationResult>, String>>,
+                checkpoint: OutputCheckpoint,
+            },
+            Idle {
+                result: tokio::sync::watch::Sender<Option<Result<WorkerSnapshot, String>>>,
+                snapshot: WorkerSnapshot,
+            },
+        }
+
+        let completion = {
+            let mut state = self.lock()?;
+            if state
+                .idle_synchronization
+                .as_ref()
+                .is_some_and(|synchronization| synchronization.token == token)
+            {
+                if state.idle_input.is_some() {
+                    return Err("worker synchronized with an outstanding input request".to_string());
+                }
+                let synchronization = state
+                    .idle_synchronization
+                    .take()
+                    .expect("matching idle synchronization should exist");
+                Completion::Idle {
+                    result: synchronization.result,
+                    snapshot: WorkerSnapshot {
+                        checkpoint: output.checkpoint(),
+                        failure: state.failure.clone(),
+                        input_requested: false,
+                    },
+                }
+            } else {
+                let matches_cell = matches!(
+                    state.operation.as_ref().map(|operation| &operation.kind),
+                    Some(OperationKind::Cell { synchronization, .. })
+                        if *synchronization == token
+                );
+                if !matches_cell {
+                    return Err("worker acknowledged an unknown synchronization token".to_string());
+                }
+                let Operation { kind, result } = state
+                    .operation
+                    .take()
+                    .expect("matching cell operation should exist");
+                let OperationKind::Cell { completion, .. } = kind else {
+                    unreachable!("the matching operation was a cell");
+                };
+                completion.ok_or_else(|| {
+                    "worker synchronized before completing its evaluation".to_string()
+                })?;
+                Completion::Cell {
+                    result,
+                    checkpoint: output.checkpoint(),
+                }
+            }
+        };
+
+        match completion {
+            Completion::Cell { result, checkpoint } => {
+                send_terminal(result, OperationResult::Completed(checkpoint), cancelled)
+            }
+            Completion::Idle { result, snapshot } => {
+                result.send_replace(Some(Ok(snapshot)));
+                Ok(true)
             }
         }
     }
@@ -332,14 +451,80 @@ impl Activity {
 }
 
 impl ActivityState {
-    fn ensure_available(&self) -> Result<(), String> {
+    fn ensure_healthy(&self) -> Result<(), String> {
         if let Some(error) = self.failure.as_ref() {
             return Err(error.clone());
         }
+        Ok(())
+    }
+
+    fn ensure_available(&self) -> Result<(), String> {
+        self.ensure_healthy()?;
         if self.operation.is_some() {
             return Err("worker already has an active sideband operation".to_string());
         }
         Ok(())
+    }
+
+    fn allocate_synchronization(&mut self) -> u64 {
+        let token = self.next_synchronization;
+        self.next_synchronization = self.next_synchronization.wrapping_add(1).max(1);
+        token
+    }
+}
+
+impl IdleSynchronization {
+    pub(super) async fn wait(
+        &mut self,
+        timeout: Duration,
+    ) -> Option<Result<WorkerSnapshot, String>> {
+        if let Some(result) = self.result.borrow().clone() {
+            return Some(result);
+        }
+        let changed = async {
+            loop {
+                if self.result.changed().await.is_err() {
+                    return Err("worker idle synchronization stopped".to_string());
+                }
+                if let Some(result) = self.result.borrow().clone() {
+                    return result;
+                }
+            }
+        };
+        tokio::time::timeout(timeout, changed).await.ok()
+    }
+
+    pub(super) fn snapshot(&self, output: &OutputTape) -> Result<WorkerSnapshot, String> {
+        self.activity.snapshot(output)
+    }
+}
+
+fn send_terminal(
+    result: mpsc::Sender<Result<TerminalCommit<OperationResult>, String>>,
+    outcome: OperationResult,
+    cancelled: &std::io::PipeReader,
+) -> Result<bool, String> {
+    let (acknowledged, acknowledgment) = match std::io::pipe() {
+        Ok(pipe) => pipe,
+        Err(error) => {
+            let error = format!("failed to create worker terminal acknowledgment pipe: {error}");
+            let _ = result.send(Err(error.clone()));
+            return Err(error);
+        }
+    };
+    result
+        .send(Ok(TerminalCommit::new(outcome, acknowledgment)))
+        .map_err(|_| "worker operation receiver stopped".to_string())?;
+    loop {
+        let events =
+            super::platform::wait_for_worker_io(acknowledged.as_raw_fd(), libc::POLLIN, cancelled)
+                .map_err(|error| format!("worker terminal acknowledgment wait failed: {error}"))?;
+        if events.cancelled {
+            return Ok(false);
+        }
+        if events.ready {
+            return Ok(true);
+        }
     }
 }
 
@@ -412,12 +597,15 @@ fn handle_message(
         WorkerMessage::PythonActivated { requirements } => callbacks
             .activate_python(requirements, python_candidates)
             .map(|()| true),
-        message @ (WorkerMessage::Completed
-        | WorkerMessage::RPrepared { .. }
+        WorkerMessage::Completed => activity
+            .complete_cell(python_candidates, output)
+            .map(|()| true),
+        WorkerMessage::Synchronized { token } => activity.synchronized(token, output, cancelled),
+        message @ (WorkerMessage::RPrepared { .. }
         | WorkerMessage::RPreparationFailed { .. }
         | WorkerMessage::PythonPrepared
         | WorkerMessage::PythonPreparationFailed { .. }) => {
-            activity.complete(message, python_candidates, output, cancelled)
+            activity.complete_preparation(message, python_candidates, cancelled)
         }
         WorkerMessage::Ready => Err("worker sent an unexpected ready message".to_string()),
     }
@@ -435,18 +623,16 @@ mod tests {
         let operation = activity
             .begin_r_preparation()
             .expect("R preparation should begin");
-        let output = OutputTape::new();
         let (cancelled, _cancel) =
             std::io::pipe().expect("reader cancellation pipe should be created");
         let (finished, completion_finished) = mpsc::channel();
         let completing = activity.clone();
         let completion = thread::spawn(move || {
-            let result = completing.complete(
+            let result = completing.complete_preparation(
                 WorkerMessage::RPrepared {
                     library: "library".to_string(),
                 },
                 &mut Vec::new(),
-                &output,
                 &cancelled,
             );
             finished
@@ -483,18 +669,16 @@ mod tests {
         let operation = activity
             .begin_r_preparation()
             .expect("R preparation should begin");
-        let output = OutputTape::new();
         let (cancelled, cancel) =
             std::io::pipe().expect("reader cancellation pipe should be created");
         let (finished, completion_finished) = mpsc::channel();
         let completing = activity.clone();
         let completion = thread::spawn(move || {
-            let result = completing.complete(
+            let result = completing.complete_preparation(
                 WorkerMessage::RPrepared {
                     library: "library".to_string(),
                 },
                 &mut Vec::new(),
-                &output,
                 &cancelled,
             );
             finished

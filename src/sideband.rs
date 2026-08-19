@@ -1,5 +1,5 @@
 use std::fs::File;
-use std::io::{self, BufRead, BufReader, Read, Write};
+use std::io::{self, Read, Write};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -16,7 +16,8 @@ static FORK_WRITE_FD: AtomicI32 = AtomicI32::new(-1);
 static ATFORK_RESULT: OnceLock<libc::c_int> = OnceLock::new();
 
 pub(crate) struct Reader {
-    inner: BufReader<Box<dyn Read + Send>>,
+    inner: Box<dyn Read + Send>,
+    buffer: Vec<u8>,
     raw_fd: RawFd,
 }
 
@@ -73,26 +74,67 @@ impl Reader {
     fn new(reader: impl Read + AsRawFd + Send + 'static) -> Self {
         let raw_fd = reader.as_raw_fd();
         Self {
-            inner: BufReader::new(Box::new(reader)),
+            inner: Box::new(reader),
+            buffer: Vec::new(),
             raw_fd,
         }
     }
 
     pub(crate) fn has_buffered_data(&self) -> bool {
-        !self.inner.buffer().is_empty()
+        !self.buffer.is_empty()
     }
 
     /// Receives one newline-delimited JSON message from the worker.
     pub(crate) fn receive<T: DeserializeOwned>(&mut self) -> io::Result<T> {
-        let mut line = String::new();
-        if self.inner.read_line(&mut line)? == 0 {
-            return Err(io::Error::new(
+        loop {
+            if let Some(message) = self.take_message()? {
+                return Ok(message);
+            }
+            self.read_more()?;
+        }
+    }
+
+    /// Reads at most the bytes currently available and returns one complete frame.
+    pub(crate) fn receive_available<T: DeserializeOwned>(&mut self) -> io::Result<Option<T>> {
+        if let Some(message) = self.take_message()? {
+            return Ok(Some(message));
+        }
+        match self.read_more() {
+            Ok(()) => self.take_message(),
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => Ok(None),
+            Err(error) => Err(error),
+        }
+    }
+
+    fn read_more(&mut self) -> io::Result<()> {
+        let mut buffer = [0; 8 * 1024];
+        match self.inner.read(&mut buffer)? {
+            0 if self.buffer.is_empty() => Err(io::Error::new(
                 io::ErrorKind::UnexpectedEof,
                 "worker sideband closed",
-            ));
+            )),
+            0 => Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "worker sideband closed midway through a frame",
+            )),
+            length => {
+                self.buffer.extend_from_slice(&buffer[..length]);
+                Ok(())
+            }
         }
+    }
 
-        serde_json::from_str(line.trim_end_matches(['\n', '\r']))
+    fn take_message<T: DeserializeOwned>(&mut self) -> io::Result<Option<T>> {
+        let Some(newline) = self.buffer.iter().position(|byte| *byte == b'\n') else {
+            return Ok(None);
+        };
+        let mut line = self.buffer.drain(..=newline).collect::<Vec<_>>();
+        line.pop();
+        if line.last() == Some(&b'\r') {
+            line.pop();
+        }
+        serde_json::from_slice(&line)
+            .map(Some)
             .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
     }
 }

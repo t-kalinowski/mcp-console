@@ -657,16 +657,20 @@ cat("\n")
 fn stdio_console_shutdown_is_bounded_while_r_waits_for_input() {
     let mut client = McpClient::start(&["serve"]);
     assert_eq!(
+        client.call_console(2, json!({"r": "invisible(NULL)"})),
+        "[done]"
+    );
+    assert_eq!(
         client.call_console(
-            2,
+            3,
             json!({"r": r#"
 readline("value> ")
 Sys.sleep(60)
-"#}),
+"#, "timeout_ms": 100}),
         ),
         "[input requested: \"value> \"]\n[stdin needed]"
     );
-    client.send_console(3, json!({"stdin": "resume\n"}));
+    client.send_console(4, json!({"stdin": "resume\n"}));
 
     let elapsed = client.close_within(Duration::from_secs(2));
     assert!(

@@ -18,7 +18,8 @@ result:
 ---
 id: 4
 send:
-  r: cat("cell body ran\n")
+  r: "cat(\"cell body ran\\n\")"
+  timeout_ms: 100
 result:
   content:
     - type: text
@@ -54,6 +55,7 @@ send:
     writeBin(as.raw(1), writer)
     close(writer)
     readline("cell> ")
+  timeout_ms: 100
 result:
   content:
     - type: text

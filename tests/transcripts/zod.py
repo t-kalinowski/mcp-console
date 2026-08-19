@@ -19,7 +19,7 @@ from _support import (
     r_test_environment,
     run_this_suite,
     stop_client,
-    use_temporary_home,
+    use_isolated_duckdb_home,
 )
 
 PLATFORMS = {"darwin"}
@@ -790,7 +790,7 @@ def test_custom_worker_prepares_r_and_duckdb_requirements(binary: Path) -> Trans
         environment["R_LIBS_USER"] = str(isolated_library)
         home = Path(temporary) / "home"
         home.mkdir()
-        use_temporary_home(environment, home)
+        use_isolated_duckdb_home(environment, home)
         client = McpClient(
             binary,
             ("serve", "--worker", str(zod)),
@@ -878,9 +878,6 @@ def test_custom_worker_reports_idle_input_before_preparation_failure(
         environment["R_LIBS"] = str(isolated_library)
         environment["R_LIBS_SITE"] = str(isolated_library)
         environment["R_LIBS_USER"] = str(isolated_library)
-        home = Path(temporary) / "home"
-        home.mkdir()
-        use_temporary_home(environment, home)
         client = McpClient(
             binary,
             ("serve", "--worker", str(zod)),
@@ -916,9 +913,6 @@ def test_custom_worker_resolves_idle_activity_before_preparation(
         environment["R_LIBS"] = str(isolated_library)
         environment["R_LIBS_SITE"] = str(isolated_library)
         environment["R_LIBS_USER"] = str(isolated_library)
-        home = Path(temporary) / "home"
-        home.mkdir()
-        use_temporary_home(environment, home)
         client = McpClient(
             binary,
             ("serve", "--worker", str(zod)),
@@ -933,8 +927,8 @@ def test_custom_worker_resolves_idle_activity_before_preparation(
             requirements={"r": ["praise"]},
         )
         assert last_tool_text(client) == "[prepared]"
-        client.send(r="report managed requirements")
-        assert last_tool_text(client) == "zod requirements: r=true; duckdb=false\n"
+        client.send(r="report managed R requirement")
+        assert last_tool_text(client) == "zod R requirement: prepared=true\n"
         return client._finish()
 
 
@@ -979,7 +973,7 @@ def test_custom_worker_restart_prepares_r_and_duckdb_requirements(
         environment["R_LIBS_USER"] = str(isolated_library)
         home = Path(temporary) / "home"
         home.mkdir()
-        use_temporary_home(environment, home)
+        use_isolated_duckdb_home(environment, home)
         client = McpClient(
             binary,
             ("serve", "--worker", str(zod)),
@@ -1356,6 +1350,84 @@ def test_idle_stdin_startup_blocks_preparation(binary: Path) -> Transcript:
                 stop_process(client.process)
 
 
+def test_idle_stdin_startup_honors_timeout(binary: Path) -> Transcript:
+    zod = Path(__file__).resolve().parents[1] / "fixtures" / "zod"
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        temporary_path = Path(temporary_directory)
+        startup_control = temporary_path / "zod-startup-control"
+        startup_release = temporary_path / "zod-startup-release"
+        startup_control.write_text("block", encoding="utf-8")
+        environment = os.environ.copy()
+        environment["TMPDIR"] = temporary_directory
+        environment["ZOD_STARTUP_CONTROL"] = str(startup_control)
+        environment["ZOD_STARTUP_RELEASE"] = str(startup_release)
+        client = McpClient(
+            binary,
+            ("serve", "--worker", str(zod)),
+            environment,
+        )
+        passed = False
+        try:
+            client._initialize_and_list_tools()
+            idle_stdin = client._start_send(stdin="queued\n", timeout_ms=100)
+            wait_for_marker(
+                temporary_path,
+                "zod-replacement-waiting-ready",
+                client,
+            )
+            client._receive(idle_stdin)
+            assert idle_stdin["result"] == {
+                "content": [{"type": "text", "text": "\n[running]"}],
+                "isError": False,
+            }, idle_stdin
+
+            preparation = client._start_session(
+                action="prepare",
+                requirements={"python": ["py-yaml12"]},
+            )
+            preparation_received = threading.Event()
+            preparation_errors: list[BaseException] = []
+
+            def receive_preparation() -> None:
+                try:
+                    client._receive(preparation)
+                except BaseException as error:
+                    preparation_errors.append(error)
+                finally:
+                    preparation_received.set()
+
+            receiver = threading.Thread(target=receive_preparation, daemon=True)
+            receiver.start()
+            assert preparation_received.wait(
+                1
+            ), "preparation blocked behind timed-out worker startup"
+            receiver.join()
+            if preparation_errors:
+                raise preparation_errors[0]
+            assert preparation["result"] == {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "[requirements not prepared: worker is starting]",
+                    }
+                ],
+                "isError": True,
+            }, preparation
+
+            startup_release.touch()
+            client.send(timeout_ms=3_000)
+            assert last_tool_text(client) == "\n[idle]"
+            client.send(r="input without request")
+            assert last_tool_text(client) == "zod stdin: queued\n"
+            transcript = client._finish()
+            passed = True
+            return transcript
+        finally:
+            startup_release.touch()
+            if not passed:
+                stop_process(client.process)
+
+
 def test_routes_combined_and_followup_stdin(binary: Path) -> Transcript:
     zod = Path(__file__).resolve().parents[1] / "fixtures" / "zod"
     client = McpClient(
@@ -1376,9 +1448,9 @@ def test_routes_combined_and_followup_stdin(binary: Path) -> Transcript:
     client.send(stdin="followup\n", timeout_ms=3_000)
     assert last_tool_text(client) == "zod stdin: followup\n"
 
-    client.send(r="request input")
+    client.send(r="request input", timeout_ms=100)
     assert last_tool_text(client) == '[input requested: "zod> "]\n[stdin needed]'
-    client.send(stdin="")
+    client.send(stdin="", timeout_ms=100)
     assert last_tool_text(client) == "\n[stdin needed]"
     client.send(stdin="prompted\n")
     assert last_tool_text(client) == "zod stdin: prompted\n"
@@ -2090,6 +2162,47 @@ def test_restart_starts_first_worker_and_waits_until_ready(
                 stop_process(client.process)
 
 
+def test_restart_commits_lifecycle_before_replacement_callbacks(
+    binary: Path,
+) -> Transcript:
+    zod = Path(__file__).resolve().parents[1] / "fixtures" / "zod"
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        temporary_path = Path(temporary_directory)
+        startup_control = temporary_path / "zod-startup-control"
+        startup_control.write_text("ready", encoding="utf-8")
+        environment = os.environ.copy()
+        environment["TMPDIR"] = temporary_directory
+        environment["ZOD_STARTUP_CONTROL"] = str(startup_control)
+        client = McpClient(
+            binary,
+            ("serve", "--worker", str(zod)),
+            environment,
+        )
+        client._initialize_and_list_tools()
+        client.send(r="complete silently")
+        assert last_tool_text(client) == "[done]"
+
+        startup_control.write_text("ready with callback", encoding="utf-8")
+        client.session(action="restart")
+        assert last_tool_text(client) == (
+            "[worker stopped: in-memory state lost]\n"
+            "[starting new worker]\n"
+            "[idle]"
+        )
+        callback = wait_for_marker(
+            temporary_path,
+            "zod-startup-callback-response",
+            client,
+        )
+        assert callback.read_text(encoding="utf-8") == (
+            "Python requirements are unavailable with a custom worker"
+        )
+
+        client.send(r="echo")
+        assert last_tool_text(client) == "zod: echo\n"
+        return client._finish()
+
+
 def test_restart_does_not_report_never_ready_worker_as_stopped(
     binary: Path,
 ) -> Transcript:
@@ -2329,6 +2442,68 @@ def test_restart_does_not_wait_for_sideband_descendant(binary: Path) -> Transcri
             if errors:
                 raise errors[0]
             assert last_tool_text(client) == (
+                "[worker stopped: in-memory state lost]\n"
+                "[starting new worker]\n"
+                "[idle]"
+            )
+
+            stop_process_group(descendant_group)
+            descendant_group = None
+            client.send(r="echo")
+            assert last_tool_text(client) == "zod: echo\n"
+            transcript = client._finish()
+            passed = True
+            return transcript
+        finally:
+            stop_process_group(descendant_group)
+            if not passed:
+                stop_process(client.process)
+
+
+def test_restart_cancels_partial_sideband_frame(binary: Path) -> Transcript:
+    zod = Path(__file__).resolve().parents[1] / "fixtures" / "zod"
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        temporary_path = Path(temporary_directory)
+        environment = os.environ.copy()
+        environment["TMPDIR"] = temporary_directory
+        client = McpClient(
+            binary,
+            ("serve", "--worker", str(zod)),
+            environment,
+        )
+        descendant_group = None
+        passed = False
+        try:
+            client._initialize_and_list_tools()
+            client.send(r="start partial sideband descendant", timeout_ms=0)
+            assert last_tool_text(client) == "\n[running]"
+            marker = wait_for_marker(
+                temporary_path,
+                "zod-sideband-descendant-pid",
+                client,
+            )
+            descendant_group = int(marker.read_text(encoding="utf-8"))
+
+            restarted = client._start_session(action="restart")
+            received = threading.Event()
+            errors: list[BaseException] = []
+
+            def receive_restart() -> None:
+                try:
+                    client._receive(restarted)
+                except BaseException as error:
+                    errors.append(error)
+                finally:
+                    received.set()
+
+            receiver = threading.Thread(target=receive_restart, daemon=True)
+            receiver.start()
+            assert received.wait(3), "restart waited for a partial sideband frame"
+            receiver.join()
+            if errors:
+                raise errors[0]
+            assert last_tool_text(client) == (
+                "[active evaluation stopped by session restart request]\n"
                 "[worker stopped: in-memory state lost]\n"
                 "[starting new worker]\n"
                 "[idle]"

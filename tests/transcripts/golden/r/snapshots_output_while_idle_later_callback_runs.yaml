@@ -47,23 +47,12 @@ send:
 result:
   content:
     - type: text
-      text: |-
-
-        [idle]
+      text: "\n[running]"
   isError: false
 ---
 id: 6
-send: {}
-result:
-  content:
-    - type: text
-      text: |-
-
-        [idle]
-  isError: false
----
-id: 7
-send: {}
+send:
+  timeout_ms: 3000
 result:
   content:
     - type: text

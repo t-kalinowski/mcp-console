@@ -1,12 +1,12 @@
 use std::io::{Read, Write};
-use std::os::fd::{AsRawFd, RawFd};
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::process::Stdio;
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::Instant;
 
 use super::TerminalCommit;
-use super::activity::{Activity, OperationResult};
+use super::activity::{Activity, IdleSynchronization, OperationResult};
 use crate::worker_protocol::{ServerMessage, WorkerMessage};
 
 /// Spawns workers through the platform's runtime boundary.
@@ -16,6 +16,7 @@ pub(super) struct Worker {
     writer: crate::sideband::Writer,
     stdin: StdinSender,
     activity: Activity,
+    sideband_cancel: WorkerCancellation,
     process: WorkerProcess,
 }
 
@@ -24,6 +25,7 @@ pub(super) struct Worker {
 pub(super) struct WorkerShutdownHandle {
     writer: crate::sideband::Writer,
     stdin: StdinSender,
+    sideband_cancel: WorkerCancellation,
     child: Arc<Mutex<crate::sandbox::SandboxedChild>>,
 }
 
@@ -34,15 +36,19 @@ struct WorkerProcess {
 
 struct WorkerThreads {
     sideband: Option<WorkerIoThread>,
+    sideband_guard: Option<OwnedFd>,
     stdin: WorkerIoThread,
     stdout: WorkerIoThread,
     stderr: WorkerIoThread,
 }
 
 struct WorkerIoThread {
-    cancel: std::io::PipeWriter,
+    cancel: WorkerCancellation,
     thread: thread::JoinHandle<()>,
 }
+
+#[derive(Clone)]
+struct WorkerCancellation(Arc<Mutex<Option<std::io::PipeWriter>>>);
 
 pub(super) struct WorkerIoEvents {
     pub(super) ready: bool,
@@ -64,6 +70,7 @@ impl WorkerRuntime {
         spec: super::WorkerSpec<'_>,
         output: super::OutputTape,
         on_started: impl FnOnce(WorkerShutdownHandle) -> Result<(), String>,
+        on_ready: impl FnOnce() -> Result<(), String>,
     ) -> Result<Worker, String> {
         let super::WorkerSpec {
             executable,
@@ -90,7 +97,7 @@ impl WorkerRuntime {
             .new_process_group();
         child_fds.configure(&mut command);
         let stdin_cancel = cancellation_pipe("stdin")?;
-        let sideband_cancel = cancellation_pipe("sideband")?;
+        let (sideband_cancelled, sideband_cancel) = cancellation_pipe("sideband")?;
         let stdout_cancel = cancellation_pipe("stdout")?;
         let stderr_cancel = cancellation_pipe("stderr")?;
         let mut child = command
@@ -123,6 +130,7 @@ impl WorkerRuntime {
             child,
             threads: Some(WorkerThreads {
                 sideband: None,
+                sideband_guard: None,
                 stdin: stdin_thread,
                 stdout,
                 stderr,
@@ -133,6 +141,7 @@ impl WorkerRuntime {
             writer,
             stdin,
             activity: Activity::new(),
+            sideband_cancel: sideband_cancel.clone(),
             process,
         };
         if let Err(error) = on_started(worker.shutdown_handle()) {
@@ -157,7 +166,19 @@ impl WorkerRuntime {
         if let Some(error) = error {
             return Err(worker.startup_failure(error));
         }
-        let (sideband_cancelled, sideband_cancel) = sideband_cancel;
+        if let Err(error) = set_nonblocking(&reader) {
+            return Err(
+                worker.startup_failure(format!("failed to configure worker sideband: {error}"))
+            );
+        }
+        let sideband_guard = duplicate_fd(&reader).map_err(|error| {
+            worker.startup_failure(format!(
+                "failed to retain worker sideband during retirement: {error}"
+            ))
+        })?;
+        if let Err(error) = on_ready() {
+            return Err(worker.startup_failure(error));
+        }
         let sideband = worker.activity.start(
             reader,
             worker.writer.clone(),
@@ -169,7 +190,7 @@ impl WorkerRuntime {
             cancel: sideband_cancel,
             thread: sideband,
         };
-        worker.process.attach_sideband(sideband);
+        worker.process.attach_sideband(sideband, sideband_guard);
         Ok(worker)
     }
 }
@@ -227,11 +248,16 @@ impl Worker {
         cell: crate::cell::Cell,
         evaluation: Arc<super::Evaluation>,
     ) -> Result<TerminalCommit<super::output::OutputCheckpoint>, String> {
-        let result = self.activity.begin_cell(evaluation.clone())?;
+        let (result, synchronization) = self.activity.begin_cell(evaluation.clone())?;
         let crate::cell::Cell { language, source } = cell;
         if let Err(error) = self
             .writer
             .send(&ServerMessage::Evaluate { language, source })
+            .and_then(|()| {
+                self.writer.send(&ServerMessage::Synchronize {
+                    token: synchronization,
+                })
+            })
         {
             let error = format!("worker sideband write failed: {error}");
             self.activity.fail(error.clone());
@@ -247,15 +273,12 @@ impl Worker {
         })
     }
 
-    pub(super) fn snapshot(
-        &self,
-        output: &super::OutputTape,
-    ) -> Result<super::WorkerSnapshot, String> {
-        self.activity.snapshot(output)
-    }
-
     pub(super) fn write_stdin(&self, stdin: String) -> Result<(), String> {
         self.stdin.send(stdin.into_bytes())
+    }
+
+    pub(super) fn synchronize(&self) -> Result<IdleSynchronization, String> {
+        self.activity.synchronize(&self.writer)
     }
 
     pub(super) fn shutdown(&mut self, deadline: Instant) -> Result<(), String> {
@@ -282,6 +305,7 @@ impl Worker {
         WorkerShutdownHandle {
             writer: self.writer.clone(),
             stdin: self.stdin.clone(),
+            sideband_cancel: self.sideband_cancel.clone(),
             child: self.process.child.clone(),
         }
     }
@@ -305,7 +329,7 @@ fn receive_operation(
 fn start_output_reader(
     stream: impl Read + AsRawFd + Send + 'static,
     output: super::DirectOutput,
-    (cancelled, cancel): (std::io::PipeReader, std::io::PipeWriter),
+    (cancelled, cancel): (std::io::PipeReader, WorkerCancellation),
 ) -> WorkerIoThread {
     let thread = thread::spawn(move || {
         let mut stream = stream;
@@ -333,7 +357,7 @@ fn start_output_reader(
 fn start_stdin_writer(
     mut stdin: std::process::ChildStdin,
     child: Arc<Mutex<crate::sandbox::SandboxedChild>>,
-    (cancelled, cancel): (std::io::PipeReader, std::io::PipeWriter),
+    (cancelled, cancel): (std::io::PipeReader, WorkerCancellation),
 ) -> (StdinSender, WorkerIoThread) {
     let (sender, receiver) = mpsc::channel();
     let thread = thread::spawn(move || {
@@ -441,9 +465,13 @@ fn stop_worker_after_stdin_failure(child: &Arc<Mutex<crate::sandbox::SandboxedCh
     }
 }
 
-fn cancellation_pipe(stream: &str) -> Result<(std::io::PipeReader, std::io::PipeWriter), String> {
-    std::io::pipe()
-        .map_err(|error| format!("failed to create worker {stream} cancellation pipe: {error}"))
+fn cancellation_pipe(stream: &str) -> Result<(std::io::PipeReader, WorkerCancellation), String> {
+    let (cancelled, cancel) = std::io::pipe()
+        .map_err(|error| format!("failed to create worker {stream} cancellation pipe: {error}"))?;
+    Ok((
+        cancelled,
+        WorkerCancellation(Arc::new(Mutex::new(Some(cancel)))),
+    ))
 }
 
 fn set_nonblocking(descriptor: &impl AsRawFd) -> std::io::Result<()> {
@@ -458,6 +486,16 @@ fn set_nonblocking(descriptor: &impl AsRawFd) -> std::io::Result<()> {
         return Err(std::io::Error::last_os_error());
     }
     Ok(())
+}
+
+fn duplicate_fd(descriptor: &impl AsRawFd) -> std::io::Result<OwnedFd> {
+    // SAFETY: `descriptor` is open for the duration of the call. The returned
+    // descriptor is independent and immediately transferred into `OwnedFd`.
+    let duplicate = unsafe { libc::fcntl(descriptor.as_raw_fd(), libc::F_DUPFD_CLOEXEC, 0) };
+    if duplicate < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(unsafe { OwnedFd::from_raw_fd(duplicate) })
 }
 
 impl StdinSender {
@@ -491,24 +529,30 @@ impl WorkerShutdownHandle {
             let _ = writer.send(&ServerMessage::Shutdown);
         });
 
-        let mut child = self
-            .child
-            .lock()
-            .map_err(|_| "worker child lock poisoned".to_string())?;
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        if child.wait_timeout(remaining)?.is_none() {
-            child.force_stop()?;
-        }
-        Ok(shutdown)
+        let stopped = (|| {
+            let mut child = self
+                .child
+                .lock()
+                .map_err(|_| "worker child lock poisoned".to_string())?;
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if child.wait_timeout(remaining)?.is_none() {
+                child.force_stop()?;
+            }
+            Ok(())
+        })();
+        self.sideband_cancel.cancel();
+        stopped.map(|()| shutdown)
     }
 }
 
 impl WorkerProcess {
-    fn attach_sideband(&mut self, sideband: WorkerIoThread) {
-        self.threads
+    fn attach_sideband(&mut self, sideband: WorkerIoThread, guard: OwnedFd) {
+        let threads = self
+            .threads
             .as_mut()
-            .expect("worker threads should still be active")
-            .sideband = Some(sideband);
+            .expect("worker threads should still be active");
+        threads.sideband = Some(sideband);
+        threads.sideband_guard = Some(guard);
     }
 
     fn finish_threads(&mut self) -> Result<(), String> {
@@ -531,8 +575,16 @@ impl WorkerProcess {
 
 impl WorkerIoThread {
     fn cancel(self) -> thread::JoinHandle<()> {
-        drop(self.cancel);
+        self.cancel.cancel();
         self.thread
+    }
+}
+
+impl WorkerCancellation {
+    fn cancel(&self) {
+        if let Ok(mut cancel) = self.0.lock() {
+            drop(cancel.take());
+        }
     }
 }
 

@@ -47,7 +47,7 @@ result:
     - type: text
       text: |-
         callback started
-        [idle]
+        [running]
   isError: false
 ---
 id: 6

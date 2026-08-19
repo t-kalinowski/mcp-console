@@ -1,7 +1,7 @@
 use std::ffi::OsString;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 mod environment;
 mod evaluation;
@@ -54,7 +54,7 @@ struct ClientInner {
     worker: Mutex<WorkerState>,
     /// The one evaluation occupying this session, independently of who is polling it.
     evaluation: Mutex<Option<ActiveEvaluation>>,
-    preparation: tokio::sync::RwLock<()>,
+    preparation: Arc<tokio::sync::RwLock<()>>,
     output: OutputTape,
     lifecycle: Mutex<LifecycleControl>,
     environment: Option<Mutex<Environment>>,
@@ -69,6 +69,7 @@ struct WorkerSpec<'a> {
     callbacks: WorkerCallbacks,
 }
 
+#[derive(Clone)]
 struct WorkerSnapshot {
     checkpoint: output::OutputCheckpoint,
     failure: Option<String>,
@@ -135,6 +136,12 @@ enum WorkerState {
     Initial,
     Stopped,
     Running(platform::Worker),
+}
+
+#[cfg(target_os = "macos")]
+enum IdleSynchronizationStart {
+    Idle,
+    Waiting(activity::IdleSynchronization),
 }
 
 #[derive(Clone, Copy)]
@@ -237,7 +244,7 @@ impl Client {
             arguments,
             worker: Mutex::new(WorkerState::Initial),
             evaluation: Mutex::new(None),
-            preparation: tokio::sync::RwLock::new(()),
+            preparation: Arc::new(tokio::sync::RwLock::new(())),
             output: OutputTape::new(),
             lifecycle: Mutex::new(LifecycleControl::new()),
             environment: environment.map(Mutex::new),
@@ -270,6 +277,7 @@ impl Client {
         transcript: crate::transcript::Transcript,
         call_id: Option<u64>,
     ) -> Result<SendResponse, SendFailure> {
+        let started = Instant::now();
         let generation = self.admit()?;
         let preparation = self.admit_send()?;
         let (evaluation, wait_claim) = match cell {
@@ -289,26 +297,44 @@ impl Client {
                     (active.evaluation, wait_claim)
                 }
                 None => {
-                    if let Some(stdin) = stdin
-                        && let Err(failure) = self.write_idle_stdin(stdin, generation.clone()).await
+                    let remaining = timeout.saturating_sub(started.elapsed());
+                    let synchronization = match tokio::time::timeout(
+                        remaining,
+                        self.start_idle_synchronization(stdin, generation.clone(), preparation),
+                    )
+                    .await
                     {
-                        match self.generation_status(&generation)? {
-                            lifecycle::GenerationStatus::CurrentReady => {
-                                self.0.output.push_failure(failure);
-                            }
-                            lifecycle::GenerationStatus::CurrentClosing
-                            | lifecycle::GenerationStatus::Changed => {
-                                return Err(failure);
-                            }
+                        Ok(result) => result?,
+                        Err(_) => {
+                            return Ok(SendResponse::Running(self.0.output.take()));
                         }
-                    }
-                    return self.take_idle_response(&generation);
+                    };
+                    let IdleSynchronizationStart::Waiting(mut synchronization) = synchronization
+                    else {
+                        return self.take_idle_response(
+                            WorkerSnapshot {
+                                checkpoint: self.0.output.checkpoint(),
+                                failure: None,
+                                input_requested: false,
+                            },
+                            &generation,
+                            true,
+                        );
+                    };
+                    let remaining = timeout.saturating_sub(started.elapsed());
+                    let synchronized = synchronization.wait(remaining).await;
+                    let (snapshot, idle) = match synchronized {
+                        Some(Ok(snapshot)) => (snapshot, true),
+                        Some(Err(_)) | None => (synchronization.snapshot(&self.0.output)?, false),
+                    };
+                    return self.take_idle_response(snapshot, &generation, idle);
                 }
             },
         };
         drop(preparation);
 
-        match evaluation.wait(wait_claim, timeout).await? {
+        let remaining = timeout.saturating_sub(started.elapsed());
+        match evaluation.wait(wait_claim, remaining).await? {
             EvaluationWait::Running(output) => Ok(SendResponse::Running(output)),
             EvaluationWait::InputRequested(output) => Ok(SendResponse::InputRequested(output)),
             EvaluationWait::ReplacementStarting(output) => {
@@ -380,10 +406,11 @@ impl Client {
             .map_err(|_| "worker evaluation lock poisoned".to_string())
     }
 
-    fn admit_send(&self) -> Result<tokio::sync::RwLockReadGuard<'_, ()>, String> {
+    fn admit_send(&self) -> Result<tokio::sync::OwnedRwLockReadGuard<()>, String> {
         self.0
             .preparation
-            .try_read()
+            .clone()
+            .try_read_owned()
             .map_err(|_| "session is preparing requirements".to_string())
     }
 
@@ -397,28 +424,67 @@ impl Client {
         }
     }
 
-    async fn write_idle_stdin(
+    async fn start_idle_synchronization(
         &self,
-        stdin: String,
+        stdin: Option<String>,
         generation: WorkerGeneration,
-    ) -> Result<(), SendFailure> {
-        if stdin.is_empty() {
-            return Ok(());
-        }
+        preparation: tokio::sync::OwnedRwLockReadGuard<()>,
+    ) -> Result<IdleSynchronizationStart, SendFailure> {
         let client = self.clone();
-        tokio::task::spawn_blocking(move || client.write_idle_stdin_blocking(stdin, generation))
-            .await
-            .map_err(|error| SendFailure::from(format!("worker stdin task failed: {error}")))?
+        tokio::task::spawn_blocking(move || {
+            let _preparation = preparation;
+            client.start_idle_synchronization_blocking(stdin, generation)
+        })
+        .await
+        .map_err(|error| SendFailure::from(format!("worker idle task failed: {error}")))?
     }
 
-    fn write_idle_stdin_blocking(
+    fn start_idle_synchronization_blocking(
         &self,
-        stdin: String,
+        stdin: Option<String>,
         generation: WorkerGeneration,
-    ) -> Result<(), SendFailure> {
-        self.with_worker(&generation, |worker| {
-            worker.write_stdin(stdin).map_err(SendFailure::from)
-        })
+    ) -> Result<IdleSynchronizationStart, SendFailure> {
+        let stdin = stdin.filter(|stdin| !stdin.is_empty());
+        if let Some(stdin) = stdin {
+            return self.with_worker(&generation, |worker| {
+                worker.write_stdin(stdin).map_err(SendFailure::from)?;
+                worker
+                    .synchronize()
+                    .map(IdleSynchronizationStart::Waiting)
+                    .map_err(SendFailure::from)
+            });
+        }
+
+        self.ensure_generation(&generation)
+            .map_err(SendFailure::from)?;
+        let mut worker = self
+            .0
+            .worker
+            .lock()
+            .map_err(|_| SendFailure::from("worker lock poisoned".to_string()))?;
+        self.ensure_generation(&generation)
+            .map_err(SendFailure::from)?;
+        let WorkerState::Running(running) = &mut *worker else {
+            return Ok(IdleSynchronizationStart::Idle);
+        };
+        match running.synchronize() {
+            Ok(synchronization) => Ok(IdleSynchronizationStart::Waiting(synchronization)),
+            Err(message) => {
+                let mut failure = SendFailure::from(message);
+                match self.stop_failed_worker(&mut worker, &generation) {
+                    Ok(lifecycle::FailedWorkerStop::Stopped) => {
+                        failure = failure.worker_stopped();
+                    }
+                    Ok(lifecycle::FailedWorkerStop::RestartOwnsWorker) => {}
+                    Err(stop_error) => {
+                        failure.message.push_str(&format!(
+                            "; additionally failed to stop the worker: {stop_error}"
+                        ));
+                    }
+                }
+                Err(failure)
+            }
+        }
     }
 
     fn clear_evaluation(&self, completed: &Arc<Evaluation>) -> Result<(), String> {
@@ -439,7 +505,9 @@ impl Client {
     /// Drains the output snapshot only while this call owns the admitted generation.
     fn take_idle_response(
         &self,
+        snapshot: WorkerSnapshot,
         generation: &WorkerGeneration,
+        idle: bool,
     ) -> Result<SendResponse, SendFailure> {
         let evaluation = self.evaluation()?;
         if evaluation.is_some() {
@@ -450,21 +518,13 @@ impl Client {
         drop(evaluation);
         self.ensure_generation(generation)?;
 
-        let mut worker = self
-            .0
-            .worker
-            .lock()
-            .map_err(|_| "worker lock poisoned".to_string())?;
-        self.ensure_generation(generation)?;
-        let snapshot = match &mut *worker {
-            WorkerState::Running(running) => running.snapshot(&self.0.output)?,
-            WorkerState::Initial | WorkerState::Stopped => WorkerSnapshot {
-                checkpoint: self.0.output.checkpoint(),
-                failure: None,
-                input_requested: false,
-            },
-        };
         if let Some(message) = snapshot.failure {
+            let mut worker = self
+                .0
+                .worker
+                .lock()
+                .map_err(|_| "worker lock poisoned".to_string())?;
+            self.ensure_generation(generation)?;
             let mut failure = SendFailure::from(message);
             match self.stop_failed_worker(&mut worker, generation) {
                 Ok(lifecycle::FailedWorkerStop::Stopped) => {
@@ -480,12 +540,13 @@ impl Client {
             self.0.output.push_failure(failure);
             return Ok(SendResponse::Failed(self.0.output.take()));
         }
-        drop(worker);
         let output = self.0.output.take_until(snapshot.checkpoint);
-        Ok(if snapshot.input_requested {
+        Ok(if idle {
+            SendResponse::Idle(output)
+        } else if snapshot.input_requested {
             SendResponse::InputRequested(output)
         } else {
-            SendResponse::Idle(output)
+            SendResponse::Running(output)
         })
     }
 
@@ -516,11 +577,13 @@ impl Client {
             .map_err(|_| SendFailure::from("worker lock poisoned".to_string()))?;
         self.ensure_generation(&generation)
             .map_err(SendFailure::from)?;
-        if let Err(error) =
-            self.start_worker(&mut worker, generation.clone(), true, |stop_handle| {
-                self.register_stop_handle(&generation, stop_handle)
-            })
-        {
+        if let Err(error) = self.start_worker(
+            &mut worker,
+            generation.clone(),
+            true,
+            |stop_handle| self.register_stop_handle(&generation, stop_handle),
+            || Ok(()),
+        ) {
             let error = match self.clear_worker_stop_handle(&generation) {
                 Ok(()) => error,
                 Err(clear_error) => format!(
@@ -559,7 +622,7 @@ impl Client {
         let replacement = self
             .start_worker(&mut worker, generation.clone(), true, |stop_handle| {
                 self.register_stop_handle(&generation, stop_handle)
-            })
+            }, || Ok(()))
             .map_err(|error| {
                 let error = match self.clear_worker_stop_handle(&generation) {
                     Ok(()) => error,
@@ -589,11 +652,13 @@ impl Client {
         self.ensure_generation(generation)
             .map_err(SendFailure::from)?;
 
-        if let Err(error) =
-            self.start_worker(&mut worker, generation.clone(), true, |stop_handle| {
-                self.register_stop_handle(generation, stop_handle)
-            })
-        {
+        if let Err(error) = self.start_worker(
+            &mut worker,
+            generation.clone(),
+            true,
+            |stop_handle| self.register_stop_handle(generation, stop_handle),
+            || Ok(()),
+        ) {
             let error = match self.clear_worker_stop_handle(generation) {
                 Ok(()) => error,
                 Err(clear_error) => format!(
@@ -626,6 +691,7 @@ impl Client {
         generation: WorkerGeneration,
         announce_replacement: bool,
         on_started: impl FnOnce(platform::WorkerShutdownHandle) -> Result<(), String>,
+        on_ready: impl FnOnce() -> Result<(), String>,
     ) -> Result<(), String> {
         let replacing = matches!(&*worker, WorkerState::Stopped);
         if !matches!(&*worker, WorkerState::Running(_)) {
@@ -658,10 +724,10 @@ impl Client {
                     .output
                     .push_notice_line(output::WORKER_STARTING_NOTICE);
             }
-            let running = self
-                .0
-                .runtime
-                .spawn(spec, self.0.output.clone(), on_started)?;
+            let running =
+                self.0
+                    .runtime
+                    .spawn(spec, self.0.output.clone(), on_started, on_ready)?;
             if let Some(environment) = environment.as_mut() {
                 // An external `--worker` must apply its first managed R layer before
                 // loading DuckDB; arbitrary preloaded namespaces are not tracked.

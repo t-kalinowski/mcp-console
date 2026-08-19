@@ -3,6 +3,15 @@
 ---
 id: 3
 send:
+  r: invisible(NULL)
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+id: 4
+send:
   r: |
     step <- function() {
       value <- 1
@@ -12,6 +21,7 @@ send:
       value
     }
     step()
+  timeout_ms: 100
 result:
   content:
     - type: text
@@ -21,7 +31,7 @@ result:
         [stdin needed]
   isError: false
 ---
-id: 4
+id: 5
 send:
   r: "1"
 result:
@@ -30,12 +40,13 @@ result:
       text: "[worker is already evaluating a cell; poll without a code field]"
   isError: true
 ---
-id: 5
+id: 6
 send:
   stdin: |
     n
     n
     n
+  timeout_ms: 100
 result:
   content:
     - type: text
@@ -49,7 +60,7 @@ result:
         [stdin needed]
   isError: false
 ---
-id: 6
+id: 7
 send:
   stdin: |
     c

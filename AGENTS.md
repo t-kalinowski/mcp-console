@@ -34,23 +34,27 @@ If the run record cannot be created or a later recording write fails, the server
 An existing journal may therefore end with the last successfully flushed event.
 Submitted source, stdin, and tool-result output are recorded without redaction.
 Generated Quarto transcripts and complete output spools do not exist yet.
-Supplying exactly one of `r`, `python`, or `sql` starts one complete cell and waits for up to `timeout_ms`, which defaults to 60 seconds.
+Every `send` waits until its worker reaches the idle command loop or `timeout_ms`, which defaults to 60 seconds, expires.
+Supplying exactly one of `r`, `python`, or `sql` starts one complete cell and queues a synchronization frame behind it.
+The response completes after the worker reports both `completed` and that synchronization, or at the deadline.
 If an established worker fails during that cell, the same `send` makes one automatic replacement attempt within that deadline.
 If the wait expires while the cell is still evaluating, `send` drains output produced so far, appends the newline-prefixed banner `\n[running]`, and leaves the computation running.
 If it expires while the replacement is starting, the response instead ends with `[worker starting]`; later polls report the same state until the worker reports ready, then return startup output followed by `[idle]`.
 Concurrent `send` calls are unsupported.
 After a worker reports ready, the server continuously consumes sideband, standard-output, and standard-error activity.
-With no evaluation active, an empty `send` immediately drains the output collected so far and returns `\n[idle]`, or `\n[stdin needed]` when an idle callback has an outstanding console read.
-It sends no worker frame, does not wait for idle callbacks, and is not delayed by `timeout_ms`.
-Output accepted after the snapshot remains pending for a later response.
-An empty call does not start an initial or stopped worker.
+With no evaluation active, an empty `send` queues a synchronization frame and waits for it, so an idle callback that is already running must finish before the call returns `\n[idle]`.
+At the deadline it instead returns `\n[stdin needed]` for an outstanding console read or `\n[running]` for other work.
+An empty call against an initial or stopped worker starts no process and returns `\n[idle]` immediately.
 If it discovers an idle worker failure, it stops that worker and reports the failure without starting a replacement; a later nonempty `send` or explicit restart starts the next worker.
 Supplying `stdin` with a code cell, during an evaluation, or while idle queues exact UTF-8 bytes to worker fd 0 without adding a newline, inspecting, echoing, or limiting the text, or waiting for an input request.
-A nonempty idle stdin call lazily starts the worker when needed, queues the bytes, and immediately returns the current output snapshot; `timeout_ms` does not bound that startup or delay the snapshot.
-Queuing bytes does not acknowledge their consumption, so the response may still report `\n[stdin needed]` until the continuous reader receives `input_received`.
+A nonempty idle stdin call lazily starts the worker when needed, queues the bytes, queues or joins the pending synchronization, and waits for idle or its deadline.
+`timeout_ms` bounds both lazy startup and that wait.
+Queuing bytes does not acknowledge their consumption.
 Payload end is not EOF; the R console callback reads through one newline or its supplied buffer, and unread bytes may satisfy later console or direct reads, including in a later evaluation.
 Every `input_requested` frame immediately appends `[input requested: <JSON-quoted prompt>]` to pending response output.
-During an evaluation its outstanding state is provisional for up to 10 milliseconds; a matching `input_received` after a successful console read retains the request record but suppresses the `\n[stdin needed]` banner, while an unmatched request returns that marker after the grace or at the MCP deadline, whichever comes first.
+It does not complete a `send` early.
+A matching `input_received` after a successful console read retains the request record and clears the outstanding state.
+If the MCP deadline arrives first, an outstanding request selects `\n[stdin needed]` instead of `\n[running]`.
 The receipt describes that runtime read, not a submitted payload or byte count, and direct fd-0 reads emit neither frame.
 New code is rejected until the active cell result has been collected.
 Worker `image` frames carry base64 data and a MIME type.
@@ -60,7 +64,8 @@ The server preserves sideband text and image order as MCP content blocks, coales
 One generation-long sideband reader continuously publishes background console and image frames, handles Python-resolution, Python-version-selection, and Python-activation frames, and retains idle input state.
 A worker whose background callback is waiting for a nested resolver reply queues an unrelated command, finishes the callback after the reply arrives, and then processes that command.
 An explicit operation registers only its expected terminal.
-At evaluation `completed`, the reader records an output-tape checkpoint so later background activity remains pending for the next response.
+Each evaluation also registers its synchronization token.
+At `completed`, the reader retains the evaluation terminal; at the matching `synchronized`, it records the output-tape checkpoint and commits the completion before reading later frames.
 An idle input request can join a later evaluation's ordinary stdin flow, but fails a noninteractive requirement-preparation operation instead of leaving it blocked.
 The implemented `session` surface accepts `action = "prepare"` with one or more R or Python requirement strings or DuckDB extension names, `action = "interrupt"` without requirements, or `action = "restart"` with optional R, Python, and DuckDB requirements for the implicit session.
 Interrupt requests `SIGINT` for an active host resolver process group, or otherwise sends it to the live worker, and returns `[interrupt sent]` after the resolver accepts the request or the worker signal succeeds, without waiting for the resolver or evaluation to finish.
@@ -110,8 +115,10 @@ A newly resolved R candidate repeats the complete retained DuckDB extension inst
 A failed restart resolution leaves the current worker, its in-memory state, requirements, R library, Python interpreter, and DuckDB extension set unchanged.
 After every required resolution succeeds, restart commits the R library, DuckDB extension set, and Python environment together, loses all worker-owned in-memory state and unread stdin, eagerly starts a replacement, and returns `[idle]` after it reports ready.
 The implicit session exists for the server lifetime, so restart starts its first worker if none exists yet.
-It first queues worker-stdin closure and the sideband shutdown message without waiting behind an active cell, then force-stops the process group and reaps the direct sandbox process at the one-second deadline if that process remains live.
-It then waits for the active evaluation or preparation to end, cancels the worker's continuous sideband reader, stdin writer, and output readers, drains standard-stream bytes already buffered at that boundary, and joins the tasks before reporting `[worker stopped: in-memory state lost]` or launching the replacement.
+A replacement generation becomes lifecycle ready after its `ready` frame and before its continuous dispatcher starts, so immediate resolver and activation callbacks observe the new generation as ready.
+Restart first queues worker-stdin closure and the sideband shutdown message without waiting behind an active cell, then force-stops the process group and reaps the direct sandbox process at the one-second deadline if that process remains live.
+Once the direct process has stopped, it cancels the continuous sideband reader to release any operation waiting on an incomplete frame.
+It then waits for the active evaluation or preparation owner to release the worker, cancels the stdin writer and output readers, drains standard-stream bytes already buffered at that boundary, and joins the tasks before reporting `[worker stopped: in-memory state lost]` or launching the replacement.
 Each admitted cell or idle stdin write carries its worker generation, so work admitted before restart cannot reach the replacement.
 An R preparation cancelled while its IR resolver is active reports resolver cancellation.
 After preparation reaches the live worker, restart cancellation returns `R preparation cancelled by restart` when the call includes R and `Python preparation cancelled by restart` otherwise; active-generation sideband failures retain their transport diagnostics.
@@ -132,8 +139,10 @@ Between cells, the worker temporarily adds the sideband descriptor to R's input-
 It removes that temporary handler before running R code, so fork children inherit no stale sideband handler.
 R handler errors remain below `R_ToplevelExec()`, and the worker uses no worker-owned fixed polling interval or second event loop.
 A generation-long server reader continuously consumes idle console output and images, services nested managed-Python requests, and retains idle console-input state.
+It assembles newline-delimited sideband frames incrementally, returning to the cancellation poll after each available chunk, so a partial frame cannot block worker retirement.
 Before applying a live requirement preparation, the built-in worker gives registered R handlers one nonblocking turn, so a callback already ready when the command arrives is collected first.
-An empty `send` immediately snapshots an idle callback's pending output and surfaces an outstanding input request as `[stdin needed]`; a later stdin-only `send` continues it, and a call that already includes stdin can prequeue the input.
+An empty `send` queues synchronization behind an idle callback and waits for the callback to finish or for its deadline; an outstanding input request is surfaced as `[stdin needed]` only at that deadline.
+A later stdin-only `send` continues it and waits on the same synchronization, and a call that already includes stdin can prequeue the input.
 A code-bearing `send` can also continue an idle input request.
 A noninteractive requirement preparation that encounters the request stops the worker instead of blocking indefinitely.
 Each worker generation starts with `options(width = 200L)`; evaluated code can change that persistent option.
@@ -241,8 +250,8 @@ After an established worker fails during a cell, the same `send` appends `[start
 If that attempt reports ready before the call deadline, its startup output and `[idle]` complete the failed response; if the deadline expires first, the call returns `[worker starting]` and later polls continue waiting for that same attempt.
 A failed replacement remains stopped; a later call may make a new attempt, which emits its own starting notice.
 Initial lazy startup and retries before a worker reaches ready are silent.
-Cell completion returns text, images, and input-request records through the `completed` tape checkpoint instead of `[done]` when any content was produced.
-Background activity accepted after that checkpoint remains pending for the next response.
+Cell completion returns text, images, and input-request records through the matching `synchronized` tape checkpoint instead of `[done]` when any content was produced.
+Activity accepted after that checkpoint remains pending for the next response.
 A failed cell likewise returns all pending output before its infrastructure or protocol error.
 Server-owned timeline, state, and admission facts are bracketed and separated from worker output; request-validation and standalone resolver diagnostics remain ordinary MCP tool errors.
 Ordering between the two standard streams and sideband output is best effort; incomplete UTF-8 remains with its pipe until a later response, and invalid UTF-8 is replaced when output is rendered.

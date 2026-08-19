@@ -90,10 +90,10 @@ def wait_for_server_to_process_sideband(stream: TextIO) -> None:
     stream.flush()
 
 
-def configure_startup(root: Path) -> None:
+def configure_startup(root: Path) -> bool:
     control_path = os.environ.get("ZOD_STARTUP_CONTROL")
     if control_path is None:
-        return
+        return False
     control = Path(control_path)
     mode = control.read_text(encoding="utf-8")
     if mode == "fail":
@@ -110,7 +110,10 @@ def configure_startup(root: Path) -> None:
     if mode == "ready with stdout":
         write_all(1, b"zod replacement startup ready\n")
         mode = "ready"
+    if mode == "ready with callback":
+        return True
     assert mode == "ready", f"unsupported Zod startup mode: {mode}"
+    return False
 
 
 def main() -> None:
@@ -131,8 +134,22 @@ def main() -> None:
             str(os.getpgrp()),
             encoding="utf-8",
         )
-    configure_startup(temporary)
+    startup_callback = configure_startup(temporary)
     send(writer, {"kind": "ready"})
+    if startup_callback:
+        send(
+            writer,
+            {
+                "kind": "resolve_python_version",
+                "request": {"constraints": [">=3.11"], "environment": {}},
+            },
+        )
+        response = json.loads(reader.readline())
+        assert response["kind"] == "python_version_resolution_failed", response
+        (temporary / "zod-startup-callback-response").write_text(
+            response["message"],
+            encoding="utf-8",
+        )
     prepared_r_library: str | None = None
     fail_next_r_preparation = False
     emit_output_before_r_preparation_failure = False
@@ -156,6 +173,10 @@ def main() -> None:
         message_kind = message["kind"]
         if message_kind == "shutdown":
             return
+        if message_kind == "synchronize":
+            assert set(message) == {"kind", "token"}
+            send(writer, {"kind": "synchronized", "token": message["token"]})
+            continue
 
         if message_kind == "prepare_r":
             assert set(message) == {"kind", "library"}
@@ -263,6 +284,23 @@ def main() -> None:
             send(writer, {"kind": "completed"})
             continue
 
+        if source == "start partial sideband descendant":
+            child = os.fork()
+            if child == 0:
+                os.setsid()
+                reader.close()
+                for descriptor in (0, 1, 2):
+                    os.close(descriptor)
+                while True:
+                    signal.pause()
+            (temporary / "zod-sideband-descendant-pid").write_text(
+                str(child),
+                encoding="utf-8",
+            )
+            writer.write('{"kind":"console_output"')
+            writer.flush()
+            os._exit(86)
+
         if source == "stall with detached stdin":
             child = os.fork()
             if child == 0:
@@ -309,8 +347,8 @@ def main() -> None:
             stdin = input()
             send(writer, {"kind": "input_received"})
             send_output(writer, f"zod stdin: {stdin}\n")
-            # Prove that the receipt has cleared the provisional request before
-            # the client polls, so the fixed grace cannot add another boundary.
+            # Prove that the receipt has cleared the outstanding request before
+            # the client polls.
             wait_for_server_to_process_sideband(writer)
             (temporary / "zod-input-received").touch()
             send(writer, {"kind": "completed"})
@@ -355,13 +393,17 @@ def main() -> None:
             continue
 
         if source == "request input while idle":
-            send_batch(
+            send(writer, {"kind": "completed"})
+            synchronization = json.loads(reader.readline())
+            assert synchronization["kind"] == "synchronize", synchronization
+            send(
                 writer,
-                [
-                    {"kind": "completed"},
-                    {"kind": "input_requested", "prompt": "idle> "},
-                ],
+                {
+                    "kind": "synchronized",
+                    "token": synchronization["token"],
+                },
             )
+            send(writer, {"kind": "input_requested", "prompt": "idle> "})
             try:
                 value = input()
             except EOFError:
@@ -410,7 +452,10 @@ def main() -> None:
             send(writer, {"kind": "completed"})
             continue
 
-        if source == "report managed requirements":
+        if source in {
+            "report managed R requirement",
+            "report managed requirements",
+        }:
             r_prepared = str(
                 prepared_r_library is not None
                 or any(
@@ -419,6 +464,10 @@ def main() -> None:
                     if library
                 )
             ).lower()
+            if source == "report managed R requirement":
+                send_output(writer, f"zod R requirement: prepared={r_prepared}\n")
+                send(writer, {"kind": "completed"})
+                continue
             duckdb_prepared = str(
                 any(
                     Path(os.environ["HOME"], ".duckdb", "extensions").glob(
