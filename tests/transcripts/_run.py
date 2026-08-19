@@ -15,7 +15,7 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 
 from _support import Transcript, TranscriptWithCompanion, YamlStream
-from yaml12 import Yaml, format_yaml, read_yaml
+from yaml12 import Yaml, format_yaml, parse_yaml, read_yaml
 
 directory = Path(__file__).resolve().parent
 root = directory.parents[1]
@@ -80,15 +80,49 @@ def identical(left: object, right: object) -> bool:
 
 
 def format_transcript_yaml(value: YamlStream) -> str:
+    strings: list[str] = []
+
+    def collect(node: object) -> None:
+        if isinstance(node, str):
+            strings.append(node)
+        elif isinstance(node, Yaml):
+            strings.append(node.tag)
+            collect(node.value)
+        elif isinstance(node, list):
+            for item in node:
+                collect(item)
+        elif isinstance(node, dict):
+            for key, item in node.items():
+                collect(key)
+                collect(item)
+
+    collect(value)
+    prefix_index = 0
+    while True:
+        prefix = f"__MCP_CONSOLE_WHITESPACE_{prefix_index}_"
+        if all(prefix not in string for string in strings):
+            break
+        prefix_index += 1
+
     escaped: list[tuple[str, str]] = []
 
-    def protect(node: object) -> object:
-        if isinstance(node, str) and node and (
-            not node.strip() or node.startswith("\n")
+    def protect_string(value: str) -> str:
+        lines = value.splitlines()
+        first_nonempty = next((line for line in lines if line), "")
+        if value and (
+            not value.strip()
+            or value.startswith("\n")
+            or first_nonempty.startswith((" ", "\t"))
+            or any(line.endswith((" ", "\t")) for line in lines)
         ):
-            marker = f"__MCP_CONSOLE_WHITESPACE_{len(escaped):04d}__"
-            escaped.append((marker, node))
+            marker = f"{prefix}{len(escaped):04d}__"
+            escaped.append((marker, value))
             return marker
+        return value
+
+    def protect(node: object) -> object:
+        if isinstance(node, str):
+            return protect_string(node)
         if isinstance(node, Yaml):
             return Yaml(protect(node.value), tag=node.tag)
         if isinstance(node, list):
@@ -99,8 +133,25 @@ def format_transcript_yaml(value: YamlStream) -> str:
 
     text = format_yaml(protect(value), multi=True)
     for marker, original in escaped:
-        text = text.replace(marker, json.dumps(original, ensure_ascii=False))
+        assert text.count(marker) == 1, f"escaped YAML marker is not unique: {marker}"
+        text = text.replace(marker, json.dumps(original, ensure_ascii=False), 1)
+    assert identical(parse_yaml(text, multi=True), value), (
+        "formatted transcript YAML did not round-trip"
+    )
     return text
+
+
+def check_transcript_yaml_formatter() -> None:
+    value = [
+        "\n[idle]",
+        "__MCP_CONSOLE_WHITESPACE_0_0000__",
+        {
+            "__MCP_CONSOLE_WHITESPACE_1_0001__": (
+                "__MCP_CONSOLE_WHITESPACE_2_0002__ "
+            )
+        },
+    ]
+    assert identical(parse_yaml(format_transcript_yaml(value), multi=True), value)
 
 
 def check_golden(golden: Path, actual: YamlStream, case: str, *, update: bool) -> None:
@@ -225,6 +276,7 @@ def main() -> None:
     if options.jobs < 1:
         parser.error("--jobs must be at least 1")
 
+    check_transcript_yaml_formatter()
     assert binary.is_file(), f"{binary.relative_to(root)} is missing; run scripts/test"
     assert suite_paths, "no transcript suites found"
 

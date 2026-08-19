@@ -1207,6 +1207,74 @@ def test_interrupts_running_r_evaluation(binary: Path) -> Transcript:
                 '[input requested: "after interrupt> "]\n[1] "preserved fragment"\n'
             )
 
+            # A consumer may intentionally return after one full console
+            # buffer. A successful cell commits that chunk instead of
+            # replaying it during the next managed read.
+            # fmt: r
+            r = code(r"""
+                partial <- .Call(
+                  "mcp_test_read_console_once",
+                  "successful chunk> "
+                )
+                nchar(partial, type = "bytes")
+                """)
+            client.send(r=r)
+            assert last_tool_text(client) == (
+                '[input requested: "successful chunk> "]\n[stdin needed]'
+            )
+            successful_line = "s" * 5_000
+            client.send(stdin=successful_line, timeout_ms=3_000)
+            assert last_tool_text(client) == "[1] 4095\n"
+            client.transcript[-1]["send"]["stdin"] = "<5000 s bytes>"
+
+            client.send(
+                r='identical(readline("after success> "), strrep("s", 905))',
+                stdin="\n",
+            )
+            assert last_tool_text(client) == (
+                '[input requested: "after success> "]\n[1] TRUE\n'
+            )
+
+            # The same commit rule applies when a ready input handler owns the
+            # top-level boundary instead of a submitted cell.
+            # fmt: r
+            r = code(r"""
+                invisible(.Call(
+                  "mcp_test_register_input_handler",
+                  file.path(tempdir(), "partial-handler-fifo"),
+                  function() {
+                    handler_partial <<- .Call(
+                      "mcp_test_read_console_once",
+                      "handler chunk> "
+                    )
+                  }
+                ))
+                """)
+            client.send(r=r)
+            assert last_tool_text(client) == "[done]"
+            handler_fifo = wait_for_worker_file(
+                temporary_path,
+                "partial-handler-fifo",
+                client,
+            )
+            handler_fifo.write_bytes(b"x")
+            client.send(r='nchar(handler_partial, type = "bytes")')
+            assert last_tool_text(client) == (
+                '[input requested: "handler chunk> "]\n[stdin needed]'
+            )
+            handler_line = "h" * 5_000
+            client.send(stdin=handler_line, timeout_ms=3_000)
+            assert last_tool_text(client) == "[1] 4095\n"
+            client.transcript[-1]["send"]["stdin"] = "<5000 h bytes>"
+
+            client.send(
+                r='identical(readline("after handler> "), strrep("h", 905))',
+                stdin="\n",
+            )
+            assert last_tool_text(client) == (
+                '[input requested: "after handler> "]\n[1] TRUE\n'
+            )
+
             # Return one full console buffer, then interrupt before another
             # callback can commit the partial line.
             # fmt: r

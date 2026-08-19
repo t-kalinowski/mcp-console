@@ -1,5 +1,7 @@
+#include <errno.h>
 #include <signal.h>
 #include <stddef.h>
+#include <stdint.h>
 #include <sys/select.h>
 
 typedef struct _InputHandler InputHandler;
@@ -35,6 +37,56 @@ struct event_wait {
 static read_console_fn read_console;
 static check_interrupt_fn check_interrupt;
 static const volatile int *interrupts_pending;
+static struct sigaction original_sigint_action;
+static volatile sig_atomic_t interrupt_generation = 0;
+
+static void observe_interrupt(
+    int signal,
+    siginfo_t *info,
+    void *context
+) {
+    if (interrupt_generation < SIG_ATOMIC_MAX) {
+        interrupt_generation += 1;
+    }
+    if ((original_sigint_action.sa_flags & SA_SIGINFO) != 0) {
+        original_sigint_action.sa_sigaction(signal, info, context);
+    } else {
+        original_sigint_action.sa_handler(signal);
+    }
+}
+
+int mcp_r_install_interrupt_observer(void) {
+    struct sigaction current;
+    if (sigaction(SIGINT, NULL, &current) < 0) {
+        return errno;
+    }
+    /* R reinstalls its own handler after some interrupts. */
+    if (current.sa_sigaction == observe_interrupt) {
+        return 0;
+    }
+    original_sigint_action = current;
+    if (
+        (original_sigint_action.sa_flags & SA_SIGINFO) != 0
+            ? original_sigint_action.sa_sigaction == NULL
+            : original_sigint_action.sa_handler == SIG_DFL ||
+                original_sigint_action.sa_handler == SIG_IGN
+    ) {
+        return EINVAL;
+    }
+
+    struct sigaction action = original_sigint_action;
+    action.sa_sigaction = observe_interrupt;
+    action.sa_flags |= SA_SIGINFO;
+    action.sa_flags &= ~SA_RESETHAND;
+    if (sigaction(SIGINT, &action, NULL) < 0) {
+        return errno;
+    }
+    return 0;
+}
+
+int mcp_r_interrupt_generation(void) {
+    return interrupt_generation;
+}
 
 void mcp_r_console_configure(
     read_console_fn read,

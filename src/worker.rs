@@ -97,6 +97,8 @@ mod platform {
     }
 
     unsafe extern "C-unwind" {
+        fn mcp_r_install_interrupt_observer() -> c_int;
+        fn mcp_r_interrupt_generation() -> c_int;
         fn mcp_r_console_configure(
             read_console: ReadConsole,
             check_interrupt: CheckUserInterrupt,
@@ -473,12 +475,13 @@ mod platform {
         if let Some(message) = take_worker_failure() {
             return Err(message);
         }
+        let interrupt_generation = start_console_stdin_boundary()?;
         let result = match cell.language {
             Language::R => evaluate_r_cell(cell.source, graphics),
             Language::Python => evaluate_python_cell(cell.source, graphics, python),
             Language::Sql => evaluate_sql_cell(cell.source, sql),
         };
-        preserve_console_stdin_partial()?;
+        finish_console_stdin_boundary(interrupt_generation)?;
         if result.is_ok() && !WORKER_SHUTDOWN.load(Ordering::SeqCst) {
             if let Some(message) = take_worker_failure() {
                 return Err(message);
@@ -626,6 +629,10 @@ mod platform {
         R_CHECK_USER_INTERRUPT
             .set(check_interrupt)
             .map_err(|_| io::Error::other("R interrupt checker was already initialized"))?;
+        let observer_error = unsafe { mcp_r_install_interrupt_observer() };
+        if observer_error != 0 {
+            return Err(io::Error::from_raw_os_error(observer_error).into());
+        }
         unsafe {
             mcp_r_console_configure(r_read_console, check_interrupt, libr::R_interrupts_pending)
         };
@@ -638,6 +645,7 @@ mod platform {
         let events = R_EVENTS
             .get()
             .expect("R event handlers should be initialized");
+        let interrupt_generation = start_console_stdin_boundary()?;
         unsafe {
             mcp_r_run_ready_handlers(
                 events.top_level_exec,
@@ -646,7 +654,7 @@ mod platform {
                 r_input_handlers(),
             );
         }
-        preserve_console_stdin_partial()?;
+        finish_console_stdin_boundary(interrupt_generation)?;
         EVALUATION_STARTED.store(false, Ordering::SeqCst);
         defer_interrupts(|| graphics.finish(), check_interrupts)?;
         observe_stdin_shutdown()
@@ -1027,8 +1035,6 @@ mod platform {
     }
 
     fn preserve_console_stdin_partial() -> Result<(), String> {
-        // A top-level R unwind can bypass the next console callback that would
-        // otherwise finish or cancel this logical line.
         let mut partial = CONSOLE_STDIN_PARTIAL
             .lock()
             .map_err(|_| "R worker partial stdin lock poisoned".to_string())?;
@@ -1042,6 +1048,34 @@ mod platform {
             .map_err(|_| "R worker stdin carry lock poisoned".to_string())?;
         preserved.append(&mut carry);
         *carry = preserved;
+        Ok(())
+    }
+
+    fn console_interrupt_generation() -> c_int {
+        unsafe { mcp_r_interrupt_generation() }
+    }
+
+    fn start_console_stdin_boundary() -> Result<c_int, String> {
+        let observer_error = unsafe { mcp_r_install_interrupt_observer() };
+        if observer_error != 0 {
+            return Err(format!(
+                "R worker failed to observe interrupts: {}",
+                io::Error::from_raw_os_error(observer_error)
+            ));
+        }
+        Ok(console_interrupt_generation())
+    }
+
+    fn finish_console_stdin_boundary(start_generation: c_int) -> Result<(), String> {
+        // Buffer-full chunks remain tentative until their top-level operation
+        // either completes successfully or observes an interrupt.
+        if console_interrupt_generation() != start_generation {
+            return preserve_console_stdin_partial();
+        }
+        CONSOLE_STDIN_PARTIAL
+            .lock()
+            .map_err(|_| "R worker partial stdin lock poisoned".to_string())?
+            .clear();
         Ok(())
     }
 

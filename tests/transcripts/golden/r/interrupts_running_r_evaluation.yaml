@@ -233,6 +233,98 @@ result:
 id: 18
 send:
   r: |
+    partial <- .Call(
+      "mcp_test_read_console_once",
+      "successful chunk> "
+    )
+    nchar(partial, type = "bytes")
+result:
+  content:
+    - type: text
+      text: |-
+        [input requested: "successful chunk> "]
+        [stdin needed]
+  isError: false
+---
+id: 19
+send:
+  stdin: "<5000 s bytes>"
+  timeout_ms: 3000
+result:
+  content:
+    - type: text
+      text: |
+        [1] 4095
+  isError: false
+---
+id: 20
+send:
+  r: "identical(readline(\"after success> \"), strrep(\"s\", 905))"
+  stdin: "\n"
+result:
+  content:
+    - type: text
+      text: |
+        [input requested: "after success> "]
+        [1] TRUE
+  isError: false
+---
+id: 21
+send:
+  r: |
+    invisible(.Call(
+      "mcp_test_register_input_handler",
+      file.path(tempdir(), "partial-handler-fifo"),
+      function() {
+        handler_partial <<- .Call(
+          "mcp_test_read_console_once",
+          "handler chunk> "
+        )
+      }
+    ))
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+id: 22
+send:
+  r: "nchar(handler_partial, type = \"bytes\")"
+result:
+  content:
+    - type: text
+      text: |-
+        [input requested: "handler chunk> "]
+        [stdin needed]
+  isError: false
+---
+id: 23
+send:
+  stdin: "<5000 h bytes>"
+  timeout_ms: 3000
+result:
+  content:
+    - type: text
+      text: |
+        [1] 4095
+  isError: false
+---
+id: 24
+send:
+  r: "identical(readline(\"after handler> \"), strrep(\"h\", 905))"
+  stdin: "\n"
+result:
+  content:
+    - type: text
+      text: |
+        [input requested: "after handler> "]
+        [1] TRUE
+  isError: false
+---
+id: 25
+send:
+  r: |
     tryCatch(
       {
         partial <- .Call(
@@ -258,7 +350,7 @@ result:
         [stdin needed]
   isError: false
 ---
-id: 19
+id: 26
 send:
   stdin: "<5000 x bytes>"
   timeout_ms: 50
@@ -268,7 +360,7 @@ result:
       text: "\n[running]"
   isError: false
 ---
-id: 20
+id: 27
 session:
   action: interrupt
 result:
@@ -277,7 +369,7 @@ result:
       text: "[interrupt sent]"
   isError: false
 ---
-id: 21
+id: 28
 send:
   timeout_ms: 3000
 result:
@@ -287,7 +379,7 @@ result:
         caught between-callback interrupt
   isError: false
 ---
-id: 22
+id: 29
 send:
   r: "identical(readline(\"after boundary> \"), strrep(\"x\", 5000))"
   stdin: "\n"
@@ -300,7 +392,7 @@ result:
         [1] TRUE
   isError: false
 ---
-id: 23
+id: 30
 send:
   r: interrupt_state
 result:
@@ -310,7 +402,7 @@ result:
         [1] 43
   isError: false
 ---
-id: 24
+id: 31
 session:
   action: interrupt
 result:
@@ -319,7 +411,7 @@ result:
       text: "[interrupt sent]"
   isError: false
 ---
-id: 25
+id: 32
 send:
   r: 6 * 7
 result:
@@ -328,7 +420,7 @@ result:
       text: "\n[1] 42\n"
   isError: false
 ---
-id: 26
+id: 33
 send:
   r: |
     setTimeLimit(elapsed = 10, transient = FALSE)
@@ -340,7 +432,7 @@ result:
       text: "[done]"
   isError: false
 ---
-id: 27
+id: 34
 send:
   r: "\"idle time does not consume a cell limit\""
 result:
