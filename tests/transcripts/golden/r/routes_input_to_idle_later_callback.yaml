@@ -55,20 +55,10 @@ result:
     - type: text
       text: |-
 
-        [stdin needed]
-  isError: false
----
-id: 7
-send: {}
-result:
-  content:
-    - type: text
-      text: |-
-
         [idle]
   isError: false
 ---
-id: 8
+id: 7
 send:
   r: collected_answer
 result:

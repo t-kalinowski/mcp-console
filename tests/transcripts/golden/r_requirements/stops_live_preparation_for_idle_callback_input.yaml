@@ -52,7 +52,7 @@ session:
   action: prepare
   requirements:
     python:
-      - py-yaml12
+      - py-yaml12>=0
 result:
   content:
     - type: text
