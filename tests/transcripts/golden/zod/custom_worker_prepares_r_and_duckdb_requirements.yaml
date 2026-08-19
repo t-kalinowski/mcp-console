@@ -37,12 +37,12 @@ result:
 ---
 id: 6
 send:
-  r: report managed requirements
+  r: report managed R requirement
 result:
   content:
     - type: text
       text: |
-        zod requirements: r=true; duckdb=true
+        zod R requirement: prepared=true
   isError: false
 ---
 id: 7

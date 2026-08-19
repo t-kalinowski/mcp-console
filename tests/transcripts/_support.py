@@ -18,26 +18,6 @@ ToolResult = dict[str, Any]
 YamlStream = list[Any]
 
 
-def host_ir_cache_dir() -> str | None:
-    if cache := os.environ.get("IR_CACHE_DIR"):
-        return cache
-    ir = shutil.which("ir")
-    if ir is None:
-        return None
-    result = subprocess.run(
-        [ir, "cache", "dir"],
-        capture_output=True,
-        text=True,
-    )
-    if result.returncode != 0:
-        return None
-    cache = result.stdout.strip()
-    return cache or None
-
-
-HOST_IR_CACHE_DIR = host_ir_cache_dir()
-
-
 @dataclass(frozen=True)
 class TranscriptWithCompanion:
     transcript: Transcript
@@ -109,18 +89,6 @@ def build_r_input_handler(
         capture_output=True,
         text=True,
     )
-
-
-def use_temporary_home(environment: dict[str, str], home: Path) -> None:
-    original_home = Path(environment.get("HOME", str(Path.home())))
-    environment.setdefault(
-        "RENV_PATHS_CACHE",
-        str(original_home / "Library/Caches/org.R-project.R/R/renv/cache"),
-    )
-    # Keep IR resolution records and their package links under the same
-    # lifetime while retaining the host's stable package cache.
-    environment["IR_CACHE_DIR"] = str(home.parent / "ir-cache")
-    environment["HOME"] = str(home)
 
 
 def reference_plots(
@@ -248,10 +216,6 @@ class McpClient:
         current_directory: Path | None = None,
         umask: int = -1,
     ) -> None:
-        if environment is not None:
-            environment = environment.copy()
-            if HOST_IR_CACHE_DIR is not None:
-                environment.setdefault("IR_CACHE_DIR", HOST_IR_CACHE_DIR)
         self.temporary_directory = (
             tempfile.TemporaryDirectory() if current_directory is None else None
         )
