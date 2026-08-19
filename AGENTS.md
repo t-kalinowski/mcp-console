@@ -155,6 +155,11 @@ Graphics devices opened explicitly by evaluated code, such as with `grDevices::p
 A silent successful R cell sends `completed` without a console-text frame and projects to `[done]` when no other response text is pending.
 Submitted R functions do not currently retain a source filename.
 Python cells run in the same worker through reticulate, retain `__main__` state, execute statements, and display a final expression through `sys.displayhook()`.
+Bridge helpers initialize before user Python runs in the reserved `_mcp_console` module, which remains available through `sys.modules` without adding a `__main__` binding.
+The reserved `_mcp_console_dispatch` builtins entry holds the stable direct-conversion callable, so changing `builtins.__import__` does not affect dispatch.
+The Matplotlib load hook is registered before runtime initialization, and the module reference is retained only after import completes, so an interrupted first initialization retries without losing or duplicating the hook or its logging filter.
+Dispatch does not add or remove globals, and rebinding `__import__`, `exec`, `setattr`, or other ordinary globals does not replace bridge dispatch.
+Replacing `__main__.__builtins__` itself is unsupported.
 Python sees a 200-column terminal width, and NumPy `linewidth` and pandas `display.width` start at 200 when those modules load; evaluated code can change those settings.
 Python source uses a synthetic evaluation filename, and uncaught exceptions print a Python traceback as a normal language outcome with `isError: false`.
 R plots invoked through reticulate's `r` bridge use the managed R graphics lifecycle and return as MCP images under the same sizing, cell-scope, and device-ownership rules as R cells.
@@ -196,6 +201,7 @@ R, Python, and DuckDB resolution may access the network and write normal host ca
 Requirement strings remain process-argument or JSON data rather than R source, and no submitted cell is evaluated by the resolver.
 Before initializing R, the worker forces `UV_OFFLINE=1`, overwriting any inherited value to match the sandbox's network denial.
 Reticulate reuses the server-resolved or caller-selected interpreter.
+Both managed and caller-selected interpreters must provide Python 3.10 or later; the Python bridge rejects an older interpreter before evaluating a cell.
 For a server-managed worker, MCP Console seeds reticulate's requirement manifest and intercepts its internal `uv_get_or_create_env` and `resolve_python_version` bindings, without wrapping `py_require()`.
 Environment resolution and Python-version selection become separate typed sideband requests, and the host resolver runs reticulate and uv with the requested `UV_*` settings outside the sandbox.
 Version selection returns only the selected version and does not create a candidate environment or alter retained state.

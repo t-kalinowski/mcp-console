@@ -1,8 +1,8 @@
 #!/usr/bin/env -S uv run --script
 
 import os
-import signal
 import shutil
+import signal
 import socket
 import subprocess
 import tempfile
@@ -52,6 +52,46 @@ def test_preserves_empty_python_environment(binary: Path) -> Transcript:
         """)
     client.send(r=r)
     assert last_tool_text(client) == '[1] ""\n'
+    return client._finish()
+
+
+def test_rejects_python_older_than_3_10(binary: Path) -> Transcript:
+    interpreter = Path("/usr/bin/python3")
+    version = subprocess.run(
+        (interpreter, "-c", "import sys; print(sys.version_info[:2])"),
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert version.stdout.strip() == "(3, 9)", version.stdout
+
+    environment = os.environ.copy()
+    environment["RETICULATE_PYTHON"] = str(interpreter)
+    client = McpClient(binary, ("serve",), environment)
+    client._initialize_and_list_tools()
+    client.send(python="6 * 7")
+    result = client.transcript[-1]["result"]
+    assert result["isError"] is True
+    bridge_failure = "Python bridge failed during R evaluation\n"
+    version_failure = (
+        "Error: MCP Console requires Python 3.10 or later; "
+        "selected interpreter reports Python 3.9\n"
+    )
+    worker_failure = (
+        "[worker sideband read failed: worker sideband closed]\n"
+        "[worker stopped: in-memory state lost]\n"
+        "[starting new worker]\n"
+        "[idle]"
+    )
+    output = result["content"][0]["text"]
+    expected = {
+        bridge_failure + version_failure + worker_failure,
+        version_failure + bridge_failure + worker_failure,
+    }
+    assert output in expected, output
+    result["content"][0]["text"] = (
+        bridge_failure + version_failure + worker_failure
+    )
     return client._finish()
 
 
@@ -874,7 +914,7 @@ def test_interrupts_running_python_evaluation(binary: Path) -> Transcript:
             # fmt: r
             r = code(r"""
                 invisible(suppressMessages(base::trace(
-                  "py_run_string",
+                  "py_eval",
                   tracer = quote({
                     invisible(file.create(file.path(
                       tempdir(),
@@ -909,18 +949,36 @@ def test_interrupts_running_python_evaluation(binary: Path) -> Transcript:
             # fmt: r
             r = code(r"""
                 invisible(suppressMessages(base::untrace(
-                  "py_run_string",
+                  "py_eval",
                   where = asNamespace("reticulate")
                 )))
+                # Poison reticulate's cached result wrapper after MCP Console
+                # initializes its private Python evaluator. Cell results must
+                # still return through direct conversion instead of that wrapper.
+                invisible(reticulate::py_eval(
+                  r"---(
+                exec(
+                    "import inspect\n"
+                    "inspect._mcp_original_getmro_code = inspect.getmro.__code__\n"
+                    "def _mcp_interrupting_getmro(cls):\n"
+                    "    getmro.__code__ = _mcp_original_getmro_code\n"
+                    "    raise KeyboardInterrupt\n"
+                    "inspect.getmro.__code__ = _mcp_interrupting_getmro.__code__\n"
+                )
+                )---",
+                  convert = TRUE
+                ))
                 """)
             client.send(r=r)
             assert last_tool_text(client) == "[done]"
 
             # fmt: python
             python = code("""
+                import inspect
                 import os
                 from pathlib import Path
 
+                inspect.getmro.__code__ = inspect._mcp_original_getmro_code
                 python_interrupt_state = 41
                 Path(
                     os.environ["TMPDIR"],
@@ -950,6 +1008,153 @@ def test_interrupts_running_python_evaluation(binary: Path) -> Transcript:
         finally:
             if not passed:
                 stop_client(client)
+
+
+def test_initializes_private_runtime_once_on_first_python_cell(
+    binary: Path,
+) -> Transcript:
+    client = McpClient(binary, ("serve",))
+    client._initialize_and_list_tools()
+    # fmt: r
+    r = code(r"""
+        length(getHook("reticulate::matplotlib.pyplot::load"))
+        """)
+    client.send(r=r)
+    assert last_tool_text(client) == "[1] 1\n"
+    client.send(python="42")
+    assert last_tool_text(client) == "42\n"
+    # fmt: r
+    r = code(r"""
+        length(getHook("reticulate::matplotlib.pyplot::load"))
+        """)
+    client.send(r=r)
+    assert last_tool_text(client) == "[1] 1\n"
+    return client._finish()
+
+
+def test_retries_python_runtime_initialization_after_interrupt(
+    binary: Path,
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        temporary_path = Path(temporary_directory)
+        environment = os.environ.copy()
+        environment["TMPDIR"] = temporary_directory
+        client = McpClient(binary, ("serve",), environment)
+        passed = False
+        try:
+            client._initialize_and_list_tools()
+            # fmt: r
+            r = code(r"""
+                invisible(suppressMessages(base::trace(
+                  "import",
+                  exit = quote({
+                    if (identical(module, "_mcp_console")) {
+                      invisible(file.create(file.path(
+                        tempdir(),
+                        "python-runtime-imported"
+                      )))
+                      repeat {}
+                    }
+                  }),
+                  print = FALSE,
+                  where = asNamespace("reticulate")
+                )))
+                """)
+            client.send(r=r)
+            assert last_tool_text(client) == "[done]"
+
+            client.send(python="42", timeout_ms=0)
+            assert last_tool_text(client) == "\n[running]"
+            wait_for_worker_file(
+                temporary_path,
+                "python-runtime-imported",
+                client,
+            )
+
+            client.session(action="interrupt")
+            assert last_tool_text(client) == "[interrupt sent]"
+            client.send(timeout_ms=3_000)
+            result = client.transcript[-1]["result"]
+            assert result["isError"] is False, result
+            output = last_tool_text(client)
+            assert output in {"", "\n"}, repr(output)
+            result["content"][0]["text"] = output.rstrip("\n")
+
+            # fmt: r
+            r = code(r"""
+                invisible(suppressMessages(base::untrace(
+                  "import",
+                  where = asNamespace("reticulate")
+                )))
+                length(getHook("reticulate::matplotlib.pyplot::load"))
+                """)
+            client.send(r=r)
+            assert last_tool_text(client) == "[1] 1\n"
+
+            client.send(python="42")
+            output = last_tool_text(client)
+            assert output == "42\n", repr(output)
+            # fmt: python
+            python = code("""
+                import logging
+
+                sum(
+                    getattr(filter_, "_mcp_console_filter", False)
+                    for filter_ in logging.getLogger(
+                        "matplotlib.font_manager"
+                    ).filters
+                )
+                """)
+            client.send(python=python)
+            assert last_tool_text(client) == "1\n"
+            transcript = client._finish()
+            passed = True
+            return transcript
+        finally:
+            if not passed:
+                stop_client(client)
+
+
+def test_dispatch_does_not_mutate_python_globals(binary: Path) -> Transcript:
+    client = McpClient(binary, ("serve",))
+    client._initialize_and_list_tools()
+    # fmt: python
+    python = code("""
+        import threading
+
+        globals_iteration_started = threading.Event()
+        globals_iteration_continue = threading.Event()
+        globals_iteration_result = []
+
+
+        def iterate_globals():
+            iterator = iter(globals())
+            next(iterator)
+            globals_iteration_started.set()
+            globals_iteration_continue.wait()
+            try:
+                tuple(iterator)
+                globals_iteration_result.append("stable")
+            except BaseException as error:
+                globals_iteration_result.append(repr(error))
+
+
+        globals_iteration_thread = threading.Thread(target=iterate_globals)
+        globals_iteration_thread.start()
+        globals_iteration_started.wait()
+        None
+        """)
+    client.send(python=python)
+    assert last_tool_text(client) == "[done]"
+    # fmt: python
+    python = code("""
+        globals_iteration_continue.set()
+        globals_iteration_thread.join()
+        globals_iteration_result
+        """)
+    client.send(python=python)
+    assert last_tool_text(client) == "['stable']\n"
+    return client._finish()
 
 
 def test_interrupts_live_python_resolver(binary: Path) -> Transcript:
@@ -1213,17 +1418,40 @@ def test_evaluates_cells_in_persistent_reticulate_state(binary: Path) -> Transcr
           marker <- paste0("unique_python_", "source_marker")
           any(grepl(marker, calls, fixed = TRUE))
         }
+        reticulate::py_run_string(
+          r"---(
+        test_sys = __import__("sys")
+        test_types = __import__("types")
+        __import__ = None
+        exec = None
+        setattr = None
+        _io = "user io"
+        _main = "user main"
+        _sys = "user sys"
+        sorted = "user sorted"
+        test_sys.modules["matplotlib.pyplot"] = test_types.SimpleNamespace(
+            get_fignums=lambda: [],
+            close=lambda *_args, **_kwargs: None,
+        )
+        )---"
+        )
         """)
     client.send(r=r)
     # fmt: python
     python = code("""
         answer = r.from_r + 1
         print("from Python")
-        answer + 1
+        (
+            answer + 1,
+            (__import__, exec, setattr) == (None, None, None),
+            (_io, _main, _sys, sorted) == ("user io", "user main", "user sys", "user sorted"),
+            "_mcp_console" not in globals()
+            and test_sys.modules["_mcp_console"].__name__ == "_mcp_console",
+        )
         """)
     client.send(python=python)
     output = last_tool_text(client)
-    assert output == "from Python\n42\n", repr(output)
+    assert output == "from Python\n(42, True, True, True)\n", repr(output)
     # fmt: python
     python = code("""
         1
@@ -1272,6 +1500,22 @@ def test_evaluates_cells_in_persistent_reticulate_state(binary: Path) -> Transcr
     client.send(python=python)
     assert last_tool_text(client) == "[done]"
     client.send(python="answer + 1")
+    assert last_tool_text(client) == "42\n"
+    # fmt: python
+    python = code("""
+        import builtins as test_builtins
+
+        test_original_import = test_builtins.__import__
+        test_builtins.__import__ = None
+        """)
+    client.send(python=python)
+    assert last_tool_text(client) == "[done]"
+    # fmt: python
+    python = code("""
+        test_builtins.__import__ = test_original_import
+        answer + 1
+        """)
+    client.send(python=python)
     assert last_tool_text(client) == "42\n"
     client.send(python="silent = True")
     assert last_tool_text(client) == "[done]"

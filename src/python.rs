@@ -15,10 +15,157 @@ mod platform {
 
     const BRIDGE_INIT: &str = r#"
 base::local({
-  evaluator <- NULL
+  initialized <- FALSE
   managed <- Sys.getenv("MCP_CONSOLE_MANAGED_PYTHON", unset = NA_character_)
+  # Python 3.9 and older are intentionally outside the bridge contract.
+  minimum_python <- base::numeric_version("3.10")
+  # Reticulate callable proxies convert results through an interruptible wrapper.
+  # Keep helpers in one module, then use py_eval's direct conversion path.
+  python_dispatch <-
+    "(lambda: None).__builtins__['_mcp_console_dispatch']()"
+  python_module <- NULL
   pending_requirements <- NULL
   source <- NULL
+
+  python_runtime_source <- r"---(
+import __main__ as _main
+import ast as _ast
+import base64 as _base64
+import builtins as _builtins
+import io as _io
+import logging as _logging
+import sys as _sys
+import traceback as _traceback
+import types as _types
+
+
+class _McpConsoleMatplotlibLogFilter(_logging.Filter):
+    _mcp_console_filter = True
+
+    def filter(self, record):
+        return record.getMessage() != (
+            "Matplotlib is building the font cache; this may take a moment."
+        )
+
+
+_mcp_console_logger = _logging.getLogger("matplotlib.font_manager")
+_mcp_console_filter_installed = False
+for _mcp_console_filter in _mcp_console_logger.filters:
+    if _builtins.getattr(_mcp_console_filter, "_mcp_console_filter", False):
+        _mcp_console_filter_installed = True
+        break
+if not _mcp_console_filter_installed:
+    _mcp_console_logger.addFilter(_McpConsoleMatplotlibLogFilter())
+
+_mcp_console_image_state = [()]
+
+
+def _mcp_console_disable_matplotlib_show(
+    _setattr=_builtins.setattr,
+    _sys=_sys,
+):
+    pyplot = _sys.modules.get("matplotlib.pyplot")
+    if pyplot is not None:
+        _setattr(pyplot, "show", lambda *args, **kwargs: None)
+    return None
+
+
+def _mcp_console_collect_plots(
+    _BaseException=_builtins.BaseException,
+    _base64=_base64,
+    _io=_io,
+    _print_exc=_traceback.print_exc,
+    _sorted=_builtins.sorted,
+    _sys=_sys,
+):
+    pyplot = _sys.modules.get("matplotlib.pyplot")
+    if pyplot is None:
+        return ()
+
+    images = []
+    try:
+        for number in _sorted(pyplot.get_fignums()):
+            if number not in pyplot.get_fignums():
+                continue
+            try:
+                figure = pyplot.figure(number)
+                output = _io.BytesIO()
+                figure.savefig(output, format="png")
+                images.append(_base64.b64encode(output.getvalue()).decode("ascii"))
+            except _BaseException:
+                _print_exc()
+    finally:
+        try:
+            pyplot.close("all")
+        except _BaseException:
+            _print_exc()
+    return tuple(images)
+
+
+def _mcp_console_eval_cell(
+    source,
+    filename,
+    _main=_main,
+    _parse=_ast.parse,
+    _Expr=_ast.Expr,
+    _Expression=_ast.Expression,
+    _isinstance=_builtins.isinstance,
+    _compile=_builtins.compile,
+    _exec=_builtins.exec,
+    _eval=_builtins.eval,
+    _BaseException=_builtins.BaseException,
+    _collect_plots=_mcp_console_collect_plots,
+    _image_state=_mcp_console_image_state,
+    _sys=_sys,
+    _print_exc=_traceback.print_exc,
+):
+    try:
+        module = _parse(source, filename=filename, mode="exec")
+        final = module.body[-1] if module.body else None
+        if _isinstance(final, _Expr):
+            module.body.pop()
+            statements = _compile(module, filename, "exec") if module.body else None
+            expression = _compile(_Expression(final.value), filename, "eval")
+        else:
+            statements = _compile(module, filename, "exec")
+            expression = None
+
+        if statements is not None:
+            _exec(statements, _main.__dict__)
+        if expression is not None:
+            _sys.displayhook(_eval(expression, _main.__dict__))
+    except _BaseException:
+        _print_exc()
+    try:
+        _image_state[0] = _collect_plots()
+    except _BaseException:
+        _print_exc()
+        _image_state[0] = ()
+    return None
+
+
+def _mcp_console_take_images(_image_state=_mcp_console_image_state):
+    images = _image_state[0]
+    _image_state[0] = ()
+    return images
+
+
+_mcp_console = _types.ModuleType("_mcp_console")
+
+
+def _mcp_console_dispatch(state=_mcp_console.__dict__):
+    operation = state.pop("operation")
+    arguments = state.pop("arguments")
+    return state[operation](*arguments)
+
+
+_mcp_console.disable_matplotlib_show = _mcp_console_disable_matplotlib_show
+_mcp_console.eval_cell = _mcp_console_eval_cell
+_mcp_console.take_images = _mcp_console_take_images
+_mcp_console.dispatch = _mcp_console_dispatch
+_sys.modules[_mcp_console.__name__] = _mcp_console
+_builtins.__dict__["_mcp_console_dispatch"] = _mcp_console_dispatch
+)---"
 
   manifest <- function(packages, python_version, exclude_newer) {
     list(
@@ -210,8 +357,61 @@ base::local({
     }
   }
 
+  dispatch_python <- function(operation, arguments = list()) {
+    reticulate::py_set_attr(
+      python_module, "operation", operation
+    )
+    reticulate::py_set_attr(
+      python_module, "arguments", arguments
+    )
+    reticulate::py_eval(python_dispatch, convert = TRUE)
+  }
+
+  initialize_python_runtime <- function(strict = FALSE) {
+    if (!is.null(python_module)) {
+      return(invisible(TRUE))
+    }
+
+    python_config <- reticulate::py_config()
+    if (!is.null(python_module)) {
+      return(invisible(TRUE))
+    }
+    if (python_config$version < minimum_python) {
+      if (!strict) {
+        return(invisible(FALSE))
+      }
+      stop(
+        paste0(
+          "MCP Console requires Python 3.10 or later; selected ",
+          "interpreter reports Python ",
+          as.character(python_config$version)
+        ),
+        call. = FALSE
+      )
+    }
+    reticulate::py_run_string(
+      python_runtime_source,
+      local = TRUE,
+      convert = FALSE
+    )
+    python_module <<- reticulate::import("_mcp_console", convert = FALSE)
+    invisible(TRUE)
+  }
+
+  disable_matplotlib_show <- function(...) {
+    if (initialize_python_runtime(strict = FALSE)) {
+      invisible(dispatch_python("disable_matplotlib_show"))
+    }
+  }
+  base::setHook(
+    "reticulate::matplotlib.pyplot::load",
+    disable_matplotlib_show,
+    action = "append"
+  )
+
   console_width <- getOption("width")
-  install_console_width <- function(...) {
+  install_python_hooks <- function(...) {
+    namespace <- asNamespace("reticulate")
     configure_numpy <- function() {
       numpy <- reticulate::import("numpy", convert = FALSE)
       numpy$set_printoptions(linewidth = console_width)
@@ -220,20 +420,29 @@ base::local({
       pandas <- reticulate::import("pandas", convert = FALSE)
       pandas$set_option("display.width", console_width)
     }
-    # Reticulate imports NumPy before its module-load hooks are installed.
-    setHook("reticulate.onPyInit", function() {
+    on_python_init <- function() {
+      # Reticulate imports NumPy before its module-load hooks are installed.
       reticulate::py_register_load_hook("numpy", configure_numpy)
       reticulate::py_register_load_hook("pandas", configure_pandas)
-    }, action = "append")
+      initialize_python_runtime(strict = FALSE)
+    }
+    base::setHook(
+      "reticulate.onPyInit",
+      on_python_init,
+      action = "append"
+    )
+    if (get("is_python_initialized", envir = namespace)()) {
+      on_python_init()
+    }
     invisible()
   }
   setHook(
     packageEvent("reticulate", "onLoad"),
-    install_console_width,
+    install_python_hooks,
     action = "append"
   )
   if ("reticulate" %in% loadedNamespaces()) {
-    install_console_width()
+    install_python_hooks()
   }
 
   materialize_manifest <- function() {
@@ -285,112 +494,23 @@ base::local({
   }
 
   evaluate_impl <- function(id) {
-    if (is.null(evaluator)) {
-      private <- reticulate::py_run_string(r"---(
-import __main__ as _main
-import ast as _ast
-import base64 as _base64
-import builtins as _builtins
-import io as _io
-import logging as _logging
-import sys as _sys
-import traceback as _traceback
-
-
-class _McpConsoleMatplotlibLogFilter(_logging.Filter):
-    def filter(self, record):
-        return record.getMessage() != (
-            "Matplotlib is building the font cache; this may take a moment."
-        )
-
-
-_logging.getLogger("matplotlib.font_manager").addFilter(
-    _McpConsoleMatplotlibLogFilter()
-)
-
-
-def _mcp_console_collect_plots(
-    _BaseException=_builtins.BaseException,
-    _base64=_base64,
-    _io=_io,
-    _print_exc=_traceback.print_exc,
-    _sys=_sys,
-):
-    pyplot = _sys.modules.get("matplotlib.pyplot")
-    if pyplot is None:
-        return ()
-
-    images = []
-    try:
-        for number in sorted(pyplot.get_fignums()):
-            if number not in pyplot.get_fignums():
-                continue
-            try:
-                figure = pyplot.figure(number)
-                output = _io.BytesIO()
-                figure.savefig(output, format="png")
-                images.append(_base64.b64encode(output.getvalue()).decode("ascii"))
-            except _BaseException:
-                _print_exc()
-    finally:
-        try:
-            pyplot.close("all")
-        except _BaseException:
-            _print_exc()
-    return tuple(images)
-
-
-def _mcp_console_eval_cell(
-    source,
-    filename,
-    _main=_main,
-    _parse=_ast.parse,
-    _Expr=_ast.Expr,
-    _Expression=_ast.Expression,
-    _isinstance=_builtins.isinstance,
-    _compile=_builtins.compile,
-    _exec=_builtins.exec,
-    _eval=_builtins.eval,
-    _BaseException=_builtins.BaseException,
-    _collect_plots=_mcp_console_collect_plots,
-    _sys=_sys,
-    _print_exc=_traceback.print_exc,
-):
-    try:
-        module = _parse(source, filename=filename, mode="exec")
-        final = module.body[-1] if module.body else None
-        if _isinstance(final, _Expr):
-            module.body.pop()
-            statements = _compile(module, filename, "exec") if module.body else None
-            expression = _compile(_Expression(final.value), filename, "eval")
-        else:
-            statements = _compile(module, filename, "exec")
-            expression = None
-
-        if statements is not None:
-            _exec(statements, _main.__dict__)
-        if expression is not None:
-            _sys.displayhook(_eval(expression, _main.__dict__))
-    except _BaseException:
-        _print_exc()
-    try:
-        return _collect_plots()
-    except _BaseException:
-        _print_exc()
-        return ()
-)---", local = TRUE, convert = FALSE)
-      reticulate::py_register_load_hook("matplotlib.pyplot", function() {
-        pyplot <- reticulate::import("matplotlib.pyplot", convert = FALSE)
-        pyplot$show <- function(...) reticulate::py_none()
-      })
-      evaluator <<- private$`_mcp_console_eval_cell`
+    if (!initialized) {
+      initialize_python_runtime(strict = TRUE)
+      dispatch_python("disable_matplotlib_show")
+      initialized <<- TRUE
     }
 
     filename <- paste0("<mcp-console:python:", id, ">")
-    images <- reticulate::py_to_r(evaluator(source, filename))
-    for (image in images) {
-      invisible(.Call("mcp_console_publish_python_plot", image))
-    }
+    on.exit({
+      images <- dispatch_python("take_images")
+      for (image in images) {
+        invisible(.Call("mcp_console_publish_python_plot", image))
+      }
+    }, add = TRUE)
+    dispatch_python(
+      "eval_cell",
+      list(source, filename)
+    )
     invisible()
   }
 
