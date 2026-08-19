@@ -66,9 +66,9 @@ send:
       "py_eval",
       where = asNamespace("reticulate")
     )))
-    # Poison reticulate's cached result wrapper before MCP Console
-    # initializes its private Python evaluator. The evaluator must
-    # return through direct conversion instead of that wrapper.
+    # Poison reticulate's cached result wrapper after MCP Console
+    # initializes its private Python evaluator. Cell results must
+    # still return through direct conversion instead of that wrapper.
     invisible(reticulate::py_eval(
       r"---(
     exec(
@@ -129,7 +129,7 @@ result:
     - type: text
       text: |
         Traceback (most recent call last):
-          File "<string>", line 88, in _mcp_console_eval_cell
+          File "<string>", line 105, in _mcp_console_eval_cell
           File "<mcp-console:python:e2>", line 11, in <module>
         KeyboardInterrupt
   isError: false

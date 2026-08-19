@@ -288,7 +288,7 @@ def test_preserves_python_output_from_fork_children(binary: Path) -> Transcript:
 
         _, status = os.waitpid(child, 0)
         assert os.waitstatus_to_exitcode(status) == 0
-        print("parent stdout")
+        parent_stdout = sys.stdout.write("parent stdout\n")
         parent_stderr = sys.stderr.write("parent stderr\n")
         """)
     expected = [

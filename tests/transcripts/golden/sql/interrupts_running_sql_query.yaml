@@ -14,6 +14,7 @@ id: 4
 send:
   r: |
     sql_interrupt_armed <- FALSE
+    dyn.load("./mcp_test_input_handler.so")
     sql_interrupt_attempt <- 0L
     options(duckdb.progress_display = function(percentage) {
       if (isTRUE(sql_interrupt_armed)) {
@@ -65,6 +66,19 @@ result:
 id: 6
 send:
   r: |
+    invisible(.Call(
+      "mcp_test_register_input_handler",
+      file.path(
+        tempdir(),
+        "sql-interrupt-1-finished-fifo"
+      ),
+      function() {
+        invisible(file.create(file.path(
+          tempdir(),
+          "sql-interrupt-1-finished"
+        )))
+      }
+    ))
     sql_interrupt_attempt <- 1L
     arm_sql_interrupt()
 result:
@@ -98,18 +112,29 @@ result:
 ---
 id: 9
 send:
-  timeout_ms: 5000
+  timeout_ms: 1000
 result:
   content:
     - type: text
-      text: |+
-
-
+      text: "\n"
   isError: false
 ---
 id: 10
 send:
   r: |
+    invisible(.Call(
+      "mcp_test_register_input_handler",
+      file.path(
+        tempdir(),
+        "sql-interrupt-2-finished-fifo"
+      ),
+      function() {
+        invisible(file.create(file.path(
+          tempdir(),
+          "sql-interrupt-2-finished"
+        )))
+      }
+    ))
     sql_interrupt_attempt <- 2L
     arm_sql_interrupt()
 result:
@@ -143,13 +168,11 @@ result:
 ---
 id: 13
 send:
-  timeout_ms: 5000
+  timeout_ms: 1000
 result:
   content:
     - type: text
-      text: |+
-
-
+      text: "\n"
   isError: false
 ---
 id: 14

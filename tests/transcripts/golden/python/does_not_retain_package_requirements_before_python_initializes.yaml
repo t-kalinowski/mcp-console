@@ -37,19 +37,6 @@ result:
   content:
     - type: text
       text: |
-        [1] TRUE
-  isError: false
----
-id: 6
-send:
-  python: |
-    import yaml12
-
-    yaml12.__name__
-result:
-  content:
-    - type: text
-      text: |
-        'yaml12'
+        [1] FALSE
   isError: false
 ...

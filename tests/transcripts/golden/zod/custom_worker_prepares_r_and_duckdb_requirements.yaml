@@ -37,17 +37,17 @@ result:
 ---
 id: 6
 send:
-  r: report managed requirements
+  r: report managed R requirement
 result:
   content:
     - type: text
       text: |
-        zod requirements: r=true; duckdb=true
+        zod R requirement: prepared=true
   isError: false
 ---
 id: 7
 send:
-  r: fail next r preparation
+  r: fail next r preparation after output
 result:
   content:
     - type: text
@@ -63,19 +63,25 @@ session:
 result:
   content:
     - type: text
-      text: >-
-        zod rejected R preparation; further requirement changes are unavailable
-        until session restart
+      text: |
+        before failed preparation
+    - type: image
+      data: iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=
+      mimeType: image/png
+    - type: text
+      text: |-
+
+        zod rejected R preparation; further requirement changes are unavailable until session restart
   isError: true
 ---
 id: 9
 send:
-  r: report managed python checkpoint
+  r: report managed python activation
 result:
   content:
     - type: text
       text: |-
-        [custom worker reported a managed Python checkpoint]
+        [custom worker reported a managed Python activation]
         [worker stopped: in-memory state lost]
         [starting new worker]
         [idle]

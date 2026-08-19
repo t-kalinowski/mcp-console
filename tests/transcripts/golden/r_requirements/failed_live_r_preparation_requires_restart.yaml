@@ -109,7 +109,8 @@ send:
     stopifnot(
       identical(saved, 42L),
       !exists("sentinel", inherits = FALSE),
-      !"py-yaml12" %in% reticulate::py_require()$packages,
+      "py-yaml12" %in% reticulate::py_require()$packages,
+      reticulate::py_module_available("yaml12"),
       identical(dirname(find.package("zeallot")), .libPaths()[[1L]])
     )
 result:

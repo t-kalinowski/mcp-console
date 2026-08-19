@@ -8,7 +8,7 @@ The message enums in `src/worker_protocol.rs`, the framing in `src/sideband.rs`,
 
 The current implementation provides one worker for one server process.
 It evaluates one complete R, Python, or SQL cell at a time and accepts exact `stdin` text whether the worker is evaluating or idle.
-Evaluations run sequentially.
+One generation-long server reader continuously consumes worker sideband frames; evaluations and live preparations register only their expected terminal messages.
 
 The sideband protocol does not include interrupt frames, request IDs, general structured errors, sessions, capabilities, or protocol version negotiation.
 MCP `session` interrupt is out of band: the server requests `SIGINT` for an active host resolver process group, or otherwise sends it to the live worker process.
@@ -69,8 +69,10 @@ An idle server-managed worker accepts compatible Python additions through `prepa
 DuckDB extensions can also be prepared while an existing worker is idle without replacing it or changing its in-memory state.
 The extension installation itself is host-only and adds no DuckDB-specific worker request or receipt.
 When the same preparation selects a new R library, including the first custom-worker DuckDB request, that library still uses the existing `prepare_r` exchange.
-For a mixed request, the server keeps all candidates provisional until every requested live operation succeeds, then commits the retained R, Python, and DuckDB configurations together.
-After a synchronized failure may have partially changed the live worker, the server leaves the retained configuration unchanged and rejects new requirement additions until a successful explicit restart.
+A successful Python activation is retained as soon as the worker reports it.
+In a mixed request, that Python activation can therefore remain retained even if a later R update fails.
+The R and DuckDB configurations are retained only after the complete operation succeeds.
+After a live preparation failure may have partially changed the live worker, the server rejects new requirement additions until a successful explicit restart.
 Evaluations remain available so the caller can save in-memory state.
 Transport or protocol failures still stop a worker whose usability is unknown.
 Custom workers skip the default R, Python, and DuckDB extension preflights but can prepare explicit R requirements and DuckDB extensions.
@@ -82,7 +84,7 @@ A custom worker must apply its first resolved R library before loading DuckDB; a
 Managed Python additions remain unavailable with a custom worker.
 If preparation overlaps worker startup, the server returns `[requirements not prepared: worker is starting]` without resolving the additions or changing the retained requirements, R library, Python manifest, or DuckDB extension set.
 
-`session` with `action = "restart"` may include additive R, Python, and DuckDB requirements or omit them to retain the current checkpoints.
+`session` with `action = "restart"` may include additive R, Python, and DuckDB requirements or omit them to retain the current configuration.
 The server merges additions into the complete retained sets and resolves every changed candidate outside the sandbox before terminating the current worker.
 A new R candidate repeats installation of the complete retained DuckDB extension set with that candidate's DuckDB version.
 The server commits the R library, DuckDB extension set, and Python environment together only after every required resolution succeeds.
@@ -109,14 +111,16 @@ These boundary details apply:
 - Evaluations and idle stdin writes stay associated with the worker that admitted them.
   Work from the old worker is rejected rather than delivered to the replacement.
 - An R preparation cancelled while its IR resolver is active reports resolver cancellation.
-  After preparation reaches the live worker, restart cancellation returns `R preparation cancelled by restart` when the call includes R and `Python preparation cancelled by restart` otherwise, regardless of whether resolver cancellation or worker shutdown completes first.
+  After preparation reaches the live worker, restart cancellation returns `R preparation cancelled by restart` when the call includes R and `Python preparation cancelled by restart` otherwise.
+  Worker shutdown precedes host-resolver cancellation so cancellation cannot release an unrelated command queued on the retiring worker.
   Sideband failures from the active generation remain infrastructure errors.
 - Standard-output and standard-error bytes collected from the old worker are retained through retirement.
 - When a `send` is waiting on an unfinished evaluation, that call owns the old worker's text and images.
   Restart releases it only after retirement with `[stopped by session restart request before evaluation finished]` and, when it retired a ready worker, `[worker stopped: in-memory state lost]`.
   The server finishes writing that reply before starting the replacement or returning the restart response.
   The restart response reports `[active evaluation stopped by session restart request]` and its own worker lifecycle facts without repeating that worker output.
-- Without a waiting `send`, restart returns retained old-worker output itself.
+- Idle callbacks do not create a waiting `send`.
+  Without a waiting evaluation response, restart returns retained old-worker output itself.
 
 The IR resolver receives R package references as process arguments.
 The Python environment resolver receives only a requirement manifest on standard input, and the Python version resolver receives only version constraints; neither receives submitted cells or `send` stdin.
@@ -172,7 +176,9 @@ Without a readable matching user index, Matplotlib discovers fonts in the worker
 Caller-selected non-managed Python environments skip resolver-owned prewarming but can reuse an existing matching user index; custom workers receive neither behavior.
 
 The server launches the sandboxed worker with piped standard input, standard output, and standard error.
-Sideband frames carry control and managed output; interactive input bytes travel through the worker's fd 0, while the server drains fd 1 and fd 2 continuously.
+Sideband frames carry control and managed output; interactive input bytes travel through the worker's fd
+0. After the `ready` handshake, one reader owns the sideband for the
+worker generation while independent readers drain fd 1 and fd 2.
 The sandbox child leads a dedicated process group so the current bounded shutdown can stop a live wrapper and its in-group descendants.
 
 This launch contract currently works only on macOS because the sandbox is unsupported elsewhere.
@@ -241,29 +247,36 @@ The complete implemented message set is:
 | worker → server | `{"kind":"input_received"}` | Report that the current read succeeded. |
 | worker → server | `{"kind":"input_cancelled"}` | Report that an interrupt cancelled the current managed read. |
 | worker → server | `{"kind":"r_prepared","library":"..."}` | Confirm the normalized live R library path. |
-| worker → server | `{"kind":"r_preparation_failed","message":"..."}` | Report a synchronized live R update failure without discarding the worker. |
+| worker → server | `{"kind":"r_preparation_failed","message":"..."}` | Report a live R update failure without discarding the worker. |
 | worker → server | `{"kind":"resolve_python","request":{"requirements":{"packages":["numpy","pandas"]},"retained_requirements":{"packages":["numpy","pandas"]},"environment":{}}}` | Resolve the complete proposed reticulate manifest outside the sandbox. |
 | worker → server | `{"kind":"resolve_python_version","request":{"constraints":[],"environment":{}}}` | Select a Python version with reticulate and uv outside the sandbox. |
-| worker → server | `{"kind":"python_prepared","python_checkpoint":{"packages":["numpy","pandas","py-yaml12"]}}` | Finish explicit Python preparation and report its normalized manifest. |
+| worker → server | `{"kind":"python_activated","requirements":{"packages":["numpy","pandas","py-yaml12"]}}` | Report that reticulate accepted this normalized managed-Python manifest. |
+| worker → server | `{"kind":"python_prepared"}` | Finish explicit Python preparation. |
 | worker → server | `{"kind":"python_preparation_failed","message":"..."}` | Report an ordinary explicit-preparation failure without discarding the worker. |
-| worker → server | `{"kind":"completed","python_checkpoint":{"packages":["numpy","pandas","py-yaml12"]}}` | Complete the evaluation and report its normalized Python manifest. |
-| worker → server | `{"kind":"completed"}` | Complete without a managed-Python checkpoint. |
+| worker → server | `{"kind":"completed"}` | Complete an evaluation. |
 
 Every frame uses `kind` to select its message variant.
 Unknown kinds and fields are rejected in either direction.
 The server maps `console_output` and `console_diagnostic` to distinct internal console channels.
 The `language` value is `r`, `python`, or `sql`.
 Python manifests contain `packages` and may contain `python_version` and `exclude_newer`; empty optional fields are omitted.
-For `resolve_python`, `requirements` is the physical manifest submitted to the host resolver and `retained_requirements` is the logical manifest that a successful activation will retain and checkpoint.
+For `resolve_python`, `requirements` is the physical manifest submitted to the host resolver and `retained_requirements` is the logical manifest that a successful activation will retain.
 Their packages and `exclude_newer` must match; only `python_version` may differ when reticulate resolves a late addition against the exact active Python patch version while preserving the user's logical constraint.
 The `environment` object may contain only `UV_*` settings other than `UV_OFFLINE`.
-The optional `python_checkpoint` is the complete normalized manifest, not reticulate's request history.
-Custom workers, caller-configured Python workers, and server-managed workers that never load reticulate omit it.
+`python_activated.requirements` is the complete normalized logical manifest, not reticulate's request history.
+The receipt is reserved for server-managed workers.
+The built-in worker sends it after reticulate accepts a managed environment; the server immediately retains the matching resolved candidate or its unchanged current environment.
+Receipt acceptance and the restart-generation check are atomic.
+A receipt still pending when restart claims the generation is discarded with that worker.
+Custom workers and caller-configured Python workers do not send `python_activated`; a custom worker that sends it fails the active operation with a managed-Python-activation protocol error.
+`completed` and `python_prepared` carry no Python manifest.
 
-## Handshake and evaluation
+## Handshake and explicit operations
 
 The first worker message must be `ready`.
 The server does not send an evaluation before receiving it.
+For a restart replacement, the server commits the new lifecycle generation as ready after this frame and before starting the continuous dispatcher, so an immediate resolver or activation callback observes the replacement generation.
+That completion is scoped to the owning generation, so a later overlapping restart cannot be marked ready by the earlier call.
 
 One evaluation has this shape:
 
@@ -276,7 +289,7 @@ worker -> server  {"kind":"console_output","data":"echo\n"}
 worker -> server  {"kind":"completed"}
 ```
 
-No sideband interrupt or acknowledgment frame exists.
+No sideband interrupt, poll, synchronization, or acknowledgment frame exists.
 A `SIGINT` that reaches the process while it is idle remains pending until the next managed boundary; the entry check consumes it and the next cell proceeds.
 A signal that arrives after a cell's final check is handled at the same later boundary.
 
@@ -290,7 +303,17 @@ The matching `input_received` clears that state after the runtime read succeeds 
 An interrupting built-in worker instead sends `input_cancelled` before the runtime unwinds; this clears the same provisional state and preserves the request record.
 Only one request may be outstanding: a second request, a receipt or cancellation without a request, or completion before either terminal frame is a protocol failure.
 `completed` ends the sideband evaluation.
-The server must accept its optional Python checkpoint before the MCP evaluation completes and the next cell is permitted.
+It carries no managed-Python state.
+
+After `ready`, the generation-long reader accepts console, image, input, Python-resolution, Python-version-resolution, Python-activation, and operation-terminal frames continuously.
+Console output and images are published to the shared output tape immediately.
+Nested Python requests are serviced even while no explicit operation is active, so an idle callback does not wait for a later client command.
+Idle input state is retained until fd 0 satisfies the read or a later evaluation adopts it.
+The reader assembles newline-delimited JSON incrementally and returns to the cancellation poll after each currently available chunk, so an incomplete frame cannot block retirement.
+Evaluations and live preparations register only the terminal they expect.
+A worker that is waiting for a nested resolver reply queues an unrelated command, finishes that callback after the reply arrives, and then processes the command.
+Before applying a live preparation command, the built-in worker gives registered R handlers one nonblocking turn, so a ready callback is handled first.
+An input request from that callback fails the noninteractive preparation instead of leaving it blocked.
 
 An explicit live R preparation has this shape after the server resolves the complete R requirement set:
 
@@ -306,9 +329,9 @@ The built-in worker passes the path to a fixed private R bridge rather than eval
 The bridge tracks the current managed path, prepends the new library, removes its predecessor, and preserves every other live library path.
 The resolved library contains the complete retained R requirement set, so the predecessor is not needed by later worker generations.
 The server accepts only an acknowledgment for the requested normalized path and retains the candidate for future worker generations only after the complete public preparation succeeds.
-`r_preparation_failed` leaves the worker evaluable but prevents new requirement additions until explicit restart because its live search path may have changed without a retained checkpoint.
-While requirement changes are blocked, the server may return the provisional Python environment already activated by the failed mixed operation so the worker can remain evaluable, but completed-cell Python checkpoints remain live-only and are not retained.
-An R bridge infrastructure error or protocol failure still stops the worker and leaves the retained environment unchanged.
+`r_preparation_failed` leaves the worker evaluable but prevents new requirement additions until explicit restart because its live search path may have changed without a retained R configuration.
+A Python environment already accepted by the same mixed operation remains retained.
+An R bridge infrastructure error or protocol failure still stops the worker.
 
 An explicit live Python preparation has this shape:
 
@@ -316,40 +339,46 @@ An explicit live Python preparation has this shape:
 server -> worker  {"kind":"prepare_python","packages":["py-yaml12"]}
 worker -> server  {"kind":"resolve_python","request":{"requirements":{"packages":["numpy","pandas","py-yaml12"]},"retained_requirements":{"packages":["numpy","pandas","py-yaml12"]},"environment":{}}}
 server -> worker  {"kind":"python_resolved","python":"..."}
-worker -> server  {"kind":"python_prepared","python_checkpoint":{"packages":["numpy","pandas","py-yaml12"]}}
+# after live activation
+worker -> server  {"kind":"python_activated","requirements":{"packages":["numpy","pandas","py-yaml12"]}}
+worker -> server  {"kind":"python_prepared"}
 ```
 
 `prepare_python` is idle-only and calls additive `reticulate::py_require()`.
 Before initialization it materializes the manifest; afterward reticulate validates the live `libpython` and activates the candidate.
-Resolver replies remain candidates until `python_prepared` reports a matching checkpoint.
-For a mixed public preparation, that checkpoint remains provisional until the R update also succeeds.
-`python_preparation_failed` restores the live manifest, discards candidates, and leaves the worker usable.
+A matching `python_activated` immediately retains the resolved environment.
+Before initialization, payload-free `python_prepared` accepts the last successfully materialized candidate.
+For a mixed public preparation, an accepted Python environment remains retained if a later R update fails.
+`python_preparation_failed` restores the live manifest, discards unmatched candidates, and leaves the worker usable.
 
-A server-managed worker may send `resolve_python` during an evaluation when reticulate invokes its internal `uv_get_or_create_env` binding.
+A server-managed worker may send `resolve_python` during an evaluation, live preparation, or preceding idle callback when reticulate invokes its internal `uv_get_or_create_env` binding.
 The request contains both the complete physical resolver manifest and the complete logical retained manifest, not a history delta.
-Their packages and `exclude_newer` must match, while the physical manifest may select the exact active Python patch version without replacing the logical constraint that will be checkpointed.
+Their packages and `exclude_newer` must match, while the physical manifest may select the exact active Python patch version without replacing the logical constraint that will be retained.
 The server performs the resolution while the worker waits and replies with exactly one `python_resolved` or `python_resolution_failed` frame on the same sideband.
 No request ID is needed because the worker can have only one such synchronous request in flight.
-Every successful reply remains a candidate until the evaluation completes.
-If managed reticulate is loaded but Python remains uninitialized at cell end, the worker invokes the replacement resolver to materialize the final manifest before sending `completed`.
-For a live interpreter, reticulate must pass its exact-`libpython` check, run the candidate's `activate_this.py`, swap its Python configuration, and update its manifest.
+Every successful reply remains a candidate until a matching `python_activated` event arrives.
+For a live interpreter, reticulate must pass its exact-`libpython` check, run the candidate's `activate_this.py`, swap its Python configuration, and update its manifest before the worker reports the activation.
+The server immediately retains the matching candidate, or its unchanged current environment when that manifest matches.
 The same Python interpreter, `__main__` namespace, and existing objects remain live through a successful activation.
-On `completed`, the server accepts the last candidate whose normalized manifest matches `python_checkpoint`, or retains the prior environment when its manifest matches.
-Any other checkpoint is a protocol failure, and unmatched candidates are discarded.
-Normal R, Python, and SQL language outcomes reach this checkpoint because their side effects remain live in the worker.
-An infrastructure or protocol failure before `completed` leaves the prior server checkpoint unchanged.
+A later language, infrastructure, or protocol failure does not roll back an already reported activation.
+Unmatched candidates are discarded when the operation ends, except that successful explicit preparation accepts its last materialized candidate.
 
-A server-managed worker may send `resolve_python_version` during an evaluation when reticulate invokes its internal `resolve_python_version` binding.
+A pre-initialization `py_require()` call updates only the worker's lazy reticulate manifest.
+It is not durable across worker loss until Python initialization resolves and reports the manifest through `python_activated`, or explicit preparation materializes it and returns `python_prepared`.
+
+A server-managed worker may send `resolve_python_version` during an evaluation, live preparation, or preceding idle callback when reticulate invokes its internal `resolve_python_version` binding.
 The request contains only version constraints and the current `UV_*` settings other than `UV_OFFLINE`.
 The server runs reticulate's version selection while the worker waits and replies with exactly one `python_version_resolved` or `python_version_resolution_failed` frame.
-This request returns no interpreter, creates no environment candidate, and does not affect the Python checkpoint.
+This request returns no interpreter, creates no environment candidate, and does not affect retained Python state.
 The selected version can support managed-Python operations such as displaying or writing the current requirements; an eventual tool command from `uv_run_tool()` still executes inside the worker sandbox.
 
-If no sideband content or input-request record remains pending at `completed` and no standard-stream text is pending, the current MCP projection returns `[done]`.
+When the reader accepts evaluation `completed`, it records the current output-tape position and returns that checkpoint to the evaluation.
+Output accepted after the checkpoint belongs to later background activity and remains pending for the next response.
+If no content or input-request record exists through the checkpoint and no standard-stream text is pending, the MCP projection returns `[done]`.
 That marker is produced by the server; it is not a sideband message.
 
 The protocol has no request IDs because only one evaluation or explicit requirement preparation can be in flight over this sideband, with at most one synchronous nested Python resolver request.
-New code is rejected while an evaluation or its uncollected result is active.
+New code is rejected while an evaluation and its uncollected result are active.
 
 ## MCP waiting and polling
 
@@ -363,33 +392,37 @@ If `input_received` or `input_cancelled` arrives first, the server retains the r
 If the grace expires first, the call returns output collected so far, the request record, and the `\n[stdin needed]` banner before that deadline.
 Supplying nonempty stdin for an outstanding request starts a fresh 10-millisecond grace window; the MCP deadline reports a still-outstanding request immediately, even inside that window.
 A pending input request wins over the `\n[running]` banner at the deadline.
-A later `send` call without a code field polls that evaluation with its own `timeout_ms`; it may include `stdin` to queue bytes before waiting.
-Every successful `send` response drains pending tape events available when that response is assembled, including sideband text and images and complete UTF-8 prefixes from standard-stream bytes.
-Events accepted after that snapshot and incomplete trailing byte sequences remain for the next response; new output does not itself wake a waiting call.
-Completion returns the pending content in tape order, including input-request records not already delivered at an earlier boundary, or `[done]` when the tape is empty.
-If evaluation instead ends in an infrastructure or protocol failure, all pending evaluation output received before the failure precedes the bracketed tool error.
+A later `send` call without a code field polls that operation with its own `timeout_ms`; it may include `stdin` to queue bytes before waiting.
+Every successful `send` response drains pending tape events available at its response boundary, including sideband text and images and complete UTF-8 prefixes from standard-stream bytes.
+For evaluation completion, that boundary is the checkpoint recorded with `completed`; for an idle call, it is the immediate server-side snapshot.
+Events accepted after the boundary and incomplete trailing byte sequences remain for the next response; new output does not itself wake a waiting call.
+Evaluation completion returns the pending content in tape order, including input-request records not already delivered at an earlier boundary, or `[done]` when the tape is empty.
+If the operation instead ends in an infrastructure or protocol failure, all pending operation output received before the failure precedes the bracketed tool error.
 The server inserts a newline before that error only when the preceding output does not already end with one.
 A worker failure adds `[worker stopped: in-memory state lost]` after that error once shutdown has finished and no standard-stream reader can append more output.
 The same `send` then emits `[starting new worker]`, makes one automatic replacement attempt, and waits for it within the call's original deadline.
-If the replacement reports `ready`, startup output and `[idle]` complete the response; the response remains an MCP tool error because the submitted cell failed.
+If the replacement reports `ready`, startup output and `[idle]` complete the response; the response remains an MCP tool error because the operation failed.
 If the deadline expires first, the response ends with `[worker starting]`; a later poll waits on the same attempt and reports `[worker starting]` again if its own deadline expires.
 If startup fails, that error ends the automatic attempt and the worker remains stopped.
 Server-owned timeline, state, and admission facts are bracketed; request-validation and standalone resolver diagnostics remain ordinary MCP tool-error text.
-If the poll wait expires first, the literal `\n[running]` banner is appended to any collected standard-stream text.
-A call without a code field or `stdin` while no evaluation is active appends the literal `\n[idle]` banner to collected standard-stream text.
-A stdin-only call in that state queues the bytes and uses the same idle response projection.
+If the poll wait expires first, the literal `\n[running]` banner is appended to any collected output.
+With no evaluation active, an empty `send` immediately drains the server's pending output tape and returns `\n[idle]`, or `\n[stdin needed]` when the continuous sideband reader is tracking an idle console read.
+It sends no worker frame, does not wait for a callback to finish, and ignores `timeout_ms` because no worker operation is being polled.
+Output accepted after that snapshot remains pending for the next response.
+An initial or stopped worker is not started by an empty call.
+A stdin-only idle call queues the bytes first, lazily starting a worker when needed, and immediately returns the same server-side snapshot.
 
 The server adds `[starting new worker]\n` before each announced replacement attempt, in the `send` or `session` response that waits for it.
 The notice is recorded before launch, so startup output and startup errors follow it.
 A failed replacement remains stopped, and each retry emits a new starting notice.
 Initial lazy startup and its retries before any worker has reached `ready` remain silent because no established worker state was lost.
-Without a waiting `send`, an explicit restart reports retained old-worker output, `[active evaluation stopped by session restart request]` when it interrupts an unfinished cell, the stopped notice when it retires a ready worker, the starting notice, replacement startup output, and `[idle]` in its `session` response.
-If an unfinished evaluation has a waiting `send`, restart gives that response the old-worker tape content, its restart-cancellation notice, and a worker-stopped notice when restart retired a ready worker.
-The restart call waits for that response to be written, then reports `[active evaluation stopped by session restart request]`, its own worker-stopped notice when it retired a ready worker, the starting notice, replacement startup output, and `[idle]`.
+Without a waiting `send`, an explicit restart reports retained old-worker output, an active-operation notice when it interrupts an unfinished cell, the stopped notice when it retires a ready worker, the starting notice, replacement startup output, and `[idle]` in its `session` response.
+If an unfinished operation has a waiting `send`, restart gives that response the old-worker tape content, its operation-specific restart-cancellation notice, and a worker-stopped notice when restart retired a ready worker.
+The restart call waits for that response to be written, then reports its operation-specific active-stop notice, its own worker-stopped notice when it retired a ready worker, the starting notice, replacement startup output, and `[idle]`.
 
-An ordinary `[running]`, `[stdin needed]`, or idle-poll `[idle]` response drains all pending tape content before appending its state banner.
-Each ordinary state banner has a newline before it, including when no worker or evaluation output precedes it.
-An existing trailing newline supplies that boundary for `[stdin needed]`; `[running]` and idle-poll `[idle]` always add one, so their preceding output may leave a blank line.
+An ordinary `[running]`, `[stdin needed]`, or `[idle]` response drains all pending tape content before appending its state banner.
+Each ordinary state banner has a newline before it, including when no worker or operation output precedes it.
+An existing trailing newline supplies that boundary for `[stdin needed]`; `[running]` and `[idle]` always add one, so their preceding output may leave a blank line.
 Replacement readiness appends `[idle]` with one line boundary after startup output.
 Brackets distinguish server timeline facts and operational failures from worker text, and the server inserts a newline before them only when needed.
 Output cursors and general incremental polling remain unimplemented.
@@ -421,7 +454,9 @@ That delimiter separates an immediately received record from later evaluation ou
 An MCP call may contain one code field and `stdin`.
 The server flushes `evaluate` first, then attaches the evaluation to the worker's stdin writer and drains any queued input in submission order.
 A later stdin-only call uses the same route without acquiring the evaluation's worker lock, including after an earlier call returned `\n[running]`.
-When no evaluation is tracked, nonempty stdin lazily starts the worker if necessary and enters the same worker-owned FIFO; empty stdin is a no-op.
+When no operation is tracked, nonempty stdin lazily starts the worker if necessary and enters the same worker-owned FIFO.
+The call then returns the current server-side output snapshot immediately.
+Because queuing bytes does not acknowledge consumption, an outstanding idle input request can remain visible as `[stdin needed]` until the reader accepts `input_received`.
 
 The server writes each string blindly and does not echo it into MCP output.
 It adds no newline, does not split or validate lines, and imposes no stdin size limit.
@@ -440,56 +475,66 @@ Python `sys.stdin` and other code that reads fd 0 directly can consume bundled i
 Acceptance means the bytes were queued, not that an evaluation consumed them.
 The server does not retract or drain bytes after `completed`; data already in the pipe or retained by a runtime reader may satisfy an idle background consumer, later reads, or later evaluations.
 Worker shutdown or failure discards whatever remains.
-New code is rejected while an evaluation or its uncollected result is active.
+New code is rejected while an evaluation and its uncollected result are active.
 
 ## State transitions
+
+Between-cell callbacks do not create a separate server-side operation state.
+The generation-long reader publishes their frames immediately.
+An evaluation's `completed` frame records a tape checkpoint; callback frames accepted after that checkpoint remain pending for the next response.
+After any operation terminal, the reader waits for the operation owner to commit its terminal state before reading another frame.
+Later idle frames therefore cannot overtake environment retention or evaluation completion.
 
 | From | Frame | To |
 | --- | --- | --- |
 | starting | worker → server `ready` | idle |
-| starting, idle, evaluating, preparing R, or preparing Python | worker or descendant → fd 1 or fd 2 | unchanged |
+| starting, idle, evaluating, preparing R, or preparing Python | worker or descendant → fd 1 or fd 2 | unchanged; publish pending output |
 | absent or idle | MCP stdin submission | idle |
-| idle | server → worker `evaluate` | evaluating |
-| idle | server → worker `prepare_r` | preparing R |
-| idle | server → worker `prepare_python` | preparing Python |
+| idle | server → worker `evaluate` | evaluating after any preceding callback finishes |
+| idle | server → worker `prepare_r` | preparing R after any preceding callback finishes |
+| idle | server → worker `prepare_python` | preparing Python after any preceding callback finishes |
 | any phase with an active resolver or registered live worker | MCP `session` interrupt | unchanged; request `SIGINT` outside sideband |
-| evaluating | worker → server `output` | evaluating |
-| evaluating | worker → server `image` | evaluating |
+| idle, evaluating, or preparing R or Python | worker → server `output` or `image` | unchanged; publish pending output |
+| idle | worker → server `input_requested` | append request record; idle, input outstanding |
+| idle, input outstanding | worker → server `input_received` | retain request record; idle |
 | evaluating | worker → server `input_requested` | append request record; evaluating, input provisional |
 | evaluating, input provisional | worker → server `input_received` | retain request record; evaluating |
 | evaluating, input provisional | worker → server `input_cancelled` | retain request record; evaluating |
-| evaluating or preparing Python | worker → server `resolve_python` | host resolving; worker waiting |
+| preparing R or Python | worker → server `input_requested` | append request record; fail preparation and stop worker |
+| idle, evaluating, or preparing R or Python | worker → server `resolve_python` | host resolving; worker waiting |
 | host resolving | server → worker `python_resolved` | prior operation; retain candidate |
-| host resolving | server → worker `python_resolution_failed` | prior operation; prior checkpoint unchanged |
-| evaluating | worker → server `resolve_python_version` | host selecting version; worker waiting |
-| host selecting version | server → worker `python_version_resolved` | evaluating; no candidate created |
-| host selecting version | server → worker `python_version_resolution_failed` | evaluating; no checkpoint change |
-| evaluating, with or without input reported | MCP stdin submission | evaluating |
-| evaluating, no provisional input | worker → server `completed` | validate checkpoint, then idle |
+| host resolving | server → worker `python_resolution_failed` | prior operation; no activation |
+| idle, evaluating, or preparing R or Python | worker → server `python_activated` | retain matching environment; prior operation |
+| idle, evaluating, or preparing R or Python | worker → server `resolve_python_version` | host selecting version; worker waiting |
+| host selecting version | server → worker `python_version_resolved` | prior operation; no candidate created |
+| host selecting version | server → worker `python_version_resolution_failed` | prior operation; retained Python state unchanged |
+| idle or evaluating, with or without input reported | MCP stdin submission | prior operation |
+| evaluating, no provisional input | worker → server `completed` | idle |
 | preparing R | worker → server `r_prepared` | validate library path, then idle |
 | preparing R | worker → server `r_preparation_failed` | block requirement changes; then idle |
-| preparing Python | worker → server `python_prepared` | validate checkpoint, then idle |
+| preparing Python | worker → server `python_prepared` | idle |
 | preparing Python | worker → server `python_preparation_failed` | discard candidates, then idle |
 | starting, idle, evaluating, preparing R or Python, host resolving, or host selecting version | server → worker `shutdown` | terminal |
 | starting, idle, evaluating, preparing R or Python, host resolving, or host selecting version | MCP `session` restart | starting in a new generation |
 
-Malformed JSON, invalid UTF-8, an unexpected message, or sideband EOF fails the active operation.
+Malformed JSON, invalid UTF-8, an unexpected message, or sideband EOF fails the active operation or records an idle worker failure.
 `python_resolution_failed` and `python_version_resolution_failed` reply to valid resolver requests; they are not general protocol error messages.
 There is no structured message for other protocol or infrastructure failures.
 Initial startup failure leaves no cached worker, so a later evaluation retries startup silently.
 After `ready`, a sideband failure retires the worker before its tool error reports `[worker stopped: in-memory state lost]`.
-The failed `send` then makes one announced replacement attempt before its deadline; a later call starts a new announced attempt only if that replacement failed.
+A nonempty `send` that fails during an active operation then makes one announced replacement attempt before its deadline; a later call starts a new announced attempt only if that replacement failed.
+An empty `send` that discovers an idle failure stops the worker and reports the failure without starting a replacement; a later nonempty `send` or explicit restart starts the next worker.
 Sideband content received before that failure is retained and precedes the tool error.
 Worker retirement waits for the standard-stream readers, so all accepted standard-stream text precedes the tool error and stopped notice.
 If either output path contributed text, the server starts the bracketed error on a new line.
-R parse and evaluation errors, Python exceptions, and DuckDB errors are not sideband failures: the built-in worker sends them as output followed by `completed`, checkpoints any resulting manifest, and remains reusable.
+R parse and evaluation errors, Python exceptions, and DuckDB errors are not sideband failures: the built-in worker sends them as output followed by `completed` and remains reusable.
+Any earlier `python_activated` event has already updated retained state.
 
 ## Shutdown
 
 The server begins shutdown when MCP input closes or RMCP releases its transport.
 At that moment it fixes a deadline one second in the future and closes the client lifecycle.
-If explicit preparation or a worker-triggered Python resolution is active, shutdown force-stops the resolver process group and reaps its direct `Rscript` process.
-It then attempts to send:
+It first attempts to send:
 
 ```json
 { "kind": "shutdown" }
@@ -500,13 +545,18 @@ The shutdown task queues worker-stdin closure, then attempts the sideband write.
 It runs independently of the deadline so a blocked stdin writer or full sideband pipe cannot postpone forced termination.
 The sandbox child waits only for the time remaining before the original deadline.
 If its direct process is still running at the deadline, the sandbox force-stops its process group and reaps that direct process.
-After the process stops and the active sideband operation returns, shutdown cancels its stdin writer and standard-stream readers, drains the finite standard-stream bytes already buffered at that boundary, and joins those tasks.
+Once the direct process has stopped, shutdown cancels the continuous sideband reader.
+Cancellation interrupts partial-frame assembly and terminal-state commit waits, and releases an operation owner that must return the worker lock.
+Shutdown then force-stops any resolver process group that was active for explicit preparation or worker-triggered Python resolution and reaps its direct process.
+After both stop paths complete, shutdown cancels the stdin writer and standard-stream readers.
+It drains the finite standard-stream bytes already buffered at that boundary and joins the tasks.
 This closes the old generation's server-side pipe boundary before shutdown returns, even when a background descendant retains a pipe descriptor or a blocked stdin write.
 The descendant itself remains unsupervised as described below, and any later write to the closed pipe is not captured.
 
-Shutdown owns stop handles independently of the evaluation lock, including simultaneous handles for the worker and its nested host resolver.
-This lets the server terminate both processes while another thread is blocked waiting for resolver or worker output.
-If the worker cannot observe the shutdown frame while evaluating, the bounded kill is the completion path.
+Shutdown owns stop handles independently of the active-operation lock, including simultaneous handles for the worker and its nested host resolver.
+This lets the server terminate both processes while another thread is blocked waiting for resolver or worker output, while ensuring the worker stop path completes before resolver cancellation can release queued work.
+A resolver that finishes independently while restart begins remains ordered against the shutdown write by ordinary sideband publication; restart adds no stronger preemption boundary before the worker observes shutdown.
+If the worker cannot observe the shutdown frame while running a cell or R callback, the bounded kill is the completion path.
 
 Shutdown closes a one-way gate that the client checks before and after acquiring the worker lock.
 Startup registers a separate stop handle before waiting for `ready`.
@@ -530,7 +580,19 @@ After either turn, the worker polls fd 0 once without blocking and treats `POLLH
 This also covers callbacks that read fd 0 directly and therefore bypass `ReadConsole`.
 Package callbacks therefore share the cell's console and input routing, while their default-device plots use a separate managed graphics scope.
 Output and images from the final turn precede `completed`.
-The worker does not yet wait on R input handlers between cells, so a timer that becomes ready while the worker is otherwise idle remains pending until a cell boundary.
+Between cells, the worker temporarily registers its sideband read descriptor as an R input handler with no callback and blocks in `R_checkActivity()`.
+R activity wakes the same main thread for one managed handler turn; sideband activity returns control to the existing command dispatcher.
+The temporary handler is removed before any R handler runs, including after an R long jump, so supported fork children never inherit it.
+The minimum positive `R_wait_usec` or `Rg_wait_usec` value bounds the wait so `R_PolledEvents` can run; otherwise the worker blocks until a descriptor is ready.
+This uses R's descriptor wait without a separate event loop or worker-owned fixed polling interval.
+
+After an idle handler turn, the worker returns to the same wait without sending an activity-specific terminal frame.
+The generation-long server reader publishes idle callback output and images as they arrive, services managed-Python requests, and retains idle input state.
+It assembles newline-delimited frames incrementally so a partial frame can be abandoned when retirement cancels the reader.
+Because it keeps draining complete chunks while the worker is idle, ordinary callback output is not bounded by sideband pipe capacity.
+An empty `send` only snapshots that server state; it sends no frame and does not wait for the callback to finish.
+A later stdin-only `send` can continue an outstanding idle input request, and a later code-bearing `send` adopts that request into the evaluation's ordinary input state.
+Requirement preparation is noninteractive, so an idle input request stops the worker instead of blocking indefinitely.
 
 Before R initializes, the worker restores the default `SIGINT` disposition and unblocks the signal so R can install its handler.
 The worker checks whether an interrupt is pending before and after every `R_ReplDLLdo1()` call and at cell boundaries, and calls `R_CheckUserInterrupt()` only when one is pending.
@@ -593,20 +655,22 @@ An exec descendant that retains fd 1/2 creates fresh standard streams backed by 
 There is no relative ordering guarantee between those pipes and sideband output, as described under [Transport](#transport).
 
 The built-in worker receives either a server-managed requirement manifest selected by startup or explicit preparation, or the caller's existing `RETICULATE_PYTHON` value when no managed resolution occurred.
+Both sources must select Python 3.10 or later.
+The Python bridge checks the initialized interpreter before its first cell and rejects an older version before dispatch.
 Before initializing R, it forces `UV_OFFLINE=1`, overwriting any inherited value before user code runs.
 For a server-managed worker, MCP Console seeds reticulate's manifest and replaces the namespace bindings for its internal `uv_get_or_create_env` and `resolve_python_version` functions.
 It does not replace `py_require()`, so reticulate retains its package attribution, manifest history, compatibility checks, activation, and configuration behavior within the live R process.
 When Python is already initialized, only additive package requirements are supported.
-The worker sends the complete physical resolver manifest, the logical manifest to retain after successful activation, and its current `UV_*` settings except `UV_OFFLINE`, then waits for the server's resolver reply within the same evaluation.
+The worker sends the complete physical resolver manifest, the logical manifest to retain after successful activation, and its current `UV_*` settings except `UV_OFFLINE`, then waits for the server's resolver reply before returning to reticulate.
 The two manifests must agree on packages and `exclude_newer`; only the physical manifest may substitute the exact active Python patch version.
 Those settings are not retained after the resolution.
 Reticulate checks that each candidate uses the exact live `libpython`, runs `activate_this.py`, swaps its configuration, and updates its manifest.
+The worker then sends `python_activated`, and the server immediately retains the matching candidate.
 The interpreter is not restarted, so its `__main__` namespace and existing Python objects remain available.
-If reticulate is loaded but Python remains uninitialized at cell end, the worker calls the replacement resolver to materialize the final manifest.
-The worker then sends that normalized manifest as `completed.python_checkpoint`; it does not send reticulate's history.
-The server accepts the last candidate from the evaluation with that manifest, or its prior environment if the manifest did not change.
+The worker sends the complete normalized logical manifest through `python_activated`; it does not send reticulate's history.
+The server immediately retains the matching candidate or its unchanged current environment.
 An R package load hook may trigger this path while its namespace is loading.
-Explicit preparation uses this bridge through `prepare_python`.
+Before Python initializes, that hook's lazy declaration remains worker-owned until initialization or explicit `prepare_python` materializes it.
 
 Each Python cell receives a synthetic filename such as `<mcp-console:python:e1>`.
 The worker stores the source in a process-lifetime private R environment and calls its evaluator with only a short evaluation ID.
@@ -681,7 +745,7 @@ The 12 KiB cap applies only to a recognized SQL query preview; arbitrary R and P
 `timeout_ms` limits one MCP wait through evaluation and one automatic replacement attempt without terminating either operation.
 If replacement startup outlives that wait, later polls continue waiting on it.
 Server shutdown and explicit restart use a process deadline.
-An idle stdin-only call does not wait on an evaluation, so `timeout_ms` does not bound lazy worker startup for that call.
+For an idle stdin-only call, `timeout_ms` does not bound lazy worker startup and does not delay the immediate output snapshot after startup.
 The 10-millisecond input grace controls when provisional state becomes visible as `[stdin needed]`; it does not control request-record retention or limit evaluation or stdin reads.
 It is a latency heuristic: scheduling can delay a receipt past the grace and expose an extra `[stdin needed]` boundary even when queued bytes subsequently satisfy the read.
 
@@ -695,7 +759,7 @@ MCP Console does not automatically install that host-bootstrap package.
 The default preflights must be able to resolve or provision the R library, interpreter, and initial requirements outside the sandbox.
 An explicitly configured interpreter must be initializable under the offline worker policy.
 R requirements, the selected IR library, and Python requirements are retained only in server memory.
-Server-managed workers can activate additive package requirements and checkpoint their final manifest after startup through evaluated `py_require()` calls or idle explicit preparation.
+Server-managed workers can activate additive package requirements and report each accepted manifest after startup through evaluated `py_require()` calls or idle explicit preparation.
 Runtime Python version changes, `exclude_newer` changes, and non-additive package changes after initialization are not supported by the layering path.
 A session interrupt targets an active host resolver before the worker; the resolver owner sends `SIGINT` to its current process group, and the resolver reports its ordinary failure.
 Evaluated code that replaces or blocks the `SIGINT` handler is outside the interrupt contract.
@@ -708,8 +772,9 @@ The current sandbox child does not yet supervise descendants after its direct pr
 ## Zod fixture behavior
 
 Zod implements the protocol as an executable uv script requiring Python 3.11 or newer.
-As a custom worker, it omits `python_checkpoint` from every `completed` frame.
+As a custom worker, it sends no `python_activated` events.
 It acknowledges `prepare_r` and can report whether the server supplied its live R library and prepared the JSON extension in DuckDB's native cache.
+A dedicated mode sends a managed Python activation frame to verify that the server rejects it from a custom worker with a specific protocol error.
 The `emit console kinds` mode sends adjacent `console_output` and `console_diagnostic` frames to verify that MCP still returns one merged text block.
 When an R `source` is exactly `echo`, it sends two output chunks followed by `completed`:
 
@@ -725,7 +790,11 @@ When the source is `complete after timeout`, it pauses briefly before returning 
 When the source is `violate protocol`, it sends an unexpected second `ready` message.
 When the source is `exit unexpectedly`, it exits with status 86 without replying.
 The `emit stdout` and `start background stderr` modes exercise continuous standard-stream capture during evaluation and after completion.
-The `stall with detached stdin` mode leaves fd 0 open in a session-detached child without reading it so shutdown coverage can fill the pipe and verify bounded writer cancellation.
+The `start background sideband` mode writes a pipe-filling console frame after its initiating evaluation completes to verify continuous idle draining.
+The `start partial sideband descendant` mode leaves an incomplete JSON frame open in a detached descendant so restart and shutdown coverage can verify cancellable framing.
+A startup mode emits a resolver callback immediately after `ready` to verify that replacement lifecycle readiness precedes callback dispatch.
+The `stall
+with detached stdin` mode leaves fd 0 open in a session-detached child without reading it so shutdown coverage can fill the pipe and verify bounded writer cancellation.
 When the source is `request input`, it sends `input_requested`, calls Python `input()` to consume one line from fd 0, and sends `input_received` after that call returns.
 The `request input after timeout` mode gates that request until an earlier MCP wait expires, consumes prequeued stdin, emits output while the request remains provisional, then checkpoints after its receipt is processed to cover retention and delimiting of that still-unexposed request record.
 The `input without request` and `input length without request` modes call `input()` without first sending a frame, covering proactive fd-0 delivery, including input queued while Zod is idle.

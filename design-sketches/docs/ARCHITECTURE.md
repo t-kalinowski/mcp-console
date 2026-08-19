@@ -790,12 +790,16 @@ This retains originating-package attribution, manifest history, and reticulate's
 The environment binding reports the physical resolver manifest and the logical manifest to retain if accepted, together with the worker's `UV_*` settings except `UV_OFFLINE`, and waits for the host resolver to return an interpreter path.
 The version binding reports only the requested constraints and UV settings, then waits for the host resolver to return the selected version without creating a candidate environment.
 
-If reticulate is loaded but Python remains uninitialized at cell end, the worker calls the replacement resolver to materialize the final manifest before completing.
-After initialization, reticulate resolves late additions with the exact active Python patch version while leaving the logical `py_require()` Python constraints unchanged, and each host result remains only a candidate until the evaluation completes.
+Before initialization, a lazy `py_require()` declaration remains worker-owned until Python initializes or explicit preparation materializes it.
+Losing the worker before either boundary can therefore lose that declaration.
+After initialization, reticulate resolves late additions with the exact active Python patch version while leaving the logical `py_require()` Python constraints unchanged, and each host result remains only a candidate until reticulate accepts it.
 Reticulate must verify that it uses the exact live `libpython`, run the candidate's `activate_this.py`, swap its Python configuration, and update its manifest.
-The worker reports only the normalized final manifest on `completed`; the supervisor accepts the last matching candidate, or its prior environment when that manifest did not change.
+The worker then reports the normalized logical manifest through a standalone `python_activated` event.
+The supervisor immediately accepts the matching candidate, or its prior environment when that manifest did not change.
+Acceptance and the restart-generation check are atomic; a receipt still pending when restart claims the generation is discarded with that worker.
+The `completed` and `python_prepared` operation receipts carry no Python manifest.
 The Python interpreter and its live objects remain in place throughout a successful activation.
-Reticulate owns the live manifest during an evaluation, while the supervisor owns the last accepted checkpoint between evaluations and worker generations.
+Reticulate owns the live manifest, while the supervisor owns the last reported activation between worker generations.
 
 Only newly added package requirements fit the v1 late-layering contract.
 Removals and constraint changes remain unsupported after initialization.
@@ -824,14 +828,15 @@ Before worker startup, an explicit `prepare` action remains atomic:
 2. resolve and prepare the candidate environment outside the arbitrary-code worker;
 3. commit the R library, Python interpreter, and manifests only after every requested resolution succeeds.
 
-After startup, preparation remains an atomic public operation while the built-in worker is idle:
+After startup, live preparation has one immediate Python commitment boundary:
 
 1. merge additions into the complete retained R and Python requirement sets;
-2. resolve each new candidate through its language-specific host resolver without changing the retained checkpoints;
+2. resolve each new candidate through its language-specific host resolver;
 3. apply the R candidate through the private `.libPaths()` bridge and compatible Python additions through reticulate;
-4. commit both retained configurations only after every requested live change succeeds and the worker generation is still current.
+4. retain a Python environment immediately when the worker reports `python_activated` or successful explicit materialization;
+5. retain the R and DuckDB configurations only after every requested live change succeeds and the worker generation is still current.
 
-A failure leaves the prior retained configuration unchanged.
+A later R failure does not roll back a Python environment already accepted during the same mixed operation.
 If a synchronized failure may have partially changed the live worker, the supervisor keeps it available for evaluation but rejects new requirement additions until a successful explicit restart.
 This gives the caller an opportunity to save in-memory state before replacing the worker.
 Transport or protocol failures still stop a worker whose usability is unknown.
@@ -843,21 +848,21 @@ Its `restart` action reuses the retained R library and accepts only optional Pyt
 
 An explicit `restart` with requirements is atomic until the worker replacement boundary:
 
-1. merge additions into the complete checkpointed manifest;
+1. merge additions into the complete retained manifest;
 2. resolve the candidate outside the arbitrary-code worker while the current worker remains intact;
 3. leave the current worker, manifest, and interpreter unchanged if resolution fails;
 4. after resolution succeeds, commit the candidate and replace the worker.
 
-During a server-managed worker evaluation, runtime layering is atomic at `completed`:
+During a server-managed worker evaluation, runtime layering follows activation events:
 
 1. reticulate updates its live manifest and requests host resolution when it needs an environment;
-2. the supervisor retains every resolved candidate for that evaluation without changing its checkpoint;
+2. the supervisor retains each resolved result as a candidate;
 3. reticulate performs its exact-`libpython` check, activation, and configuration swap when Python is already initialized;
-4. the worker materializes an uninitialized final manifest when needed and reports the normalized manifest on `completed`;
-5. the supervisor accepts the last matching candidate or its unchanged prior environment, then updates its checkpoint.
+4. the worker reports the accepted logical manifest through `python_activated`;
+5. the supervisor immediately retains the matching candidate or its unchanged prior environment.
 
-Normal language outcomes reach this boundary because their state remains live in the worker.
-An infrastructure or protocol failure before `completed` discards the evaluation's candidates and leaves the prior checkpoint unchanged.
+A later normal-language, infrastructure, or protocol failure does not roll back an already reported activation.
+Candidates without a matching activation event are discarded when the operation ends.
 
 ## 15. Output architecture
 

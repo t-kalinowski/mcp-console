@@ -26,7 +26,6 @@ pub(super) struct LifecycleControl {
     pub(super) state: LifecycleState,
     pub(super) generation: WorkerGeneration,
     pub(super) requirement_changes: RequirementChangeState,
-    pub(super) provisional_python: Option<crate::resolver::ManagedPython>,
     pub(super) processes: ProcessStopHandles,
 }
 
@@ -36,18 +35,20 @@ impl LifecycleControl {
             state: LifecycleState::Ready,
             generation: WorkerGeneration::new(),
             requirement_changes: RequirementChangeState::Available,
-            provisional_python: None,
             processes: ProcessStopHandles::default(),
         }
     }
 
-    fn start_restart(&mut self, grace: Duration) -> (ProcessStopHandles, Instant) {
+    fn start_restart(
+        &mut self,
+        grace: Duration,
+    ) -> (ProcessStopHandles, Instant, WorkerGeneration) {
         let deadline = Instant::now() + grace;
         let stop_handles = self.processes.clone();
         self.state = LifecycleState::Restarting { deadline };
         self.generation = WorkerGeneration::new();
         self.processes.resolver = None;
-        (stop_handles, deadline)
+        (stop_handles, deadline, self.generation.clone())
     }
 }
 
@@ -79,6 +80,7 @@ pub(super) enum FailedWorkerStop {
 struct RestartContext {
     processes: ProcessStopHandles,
     deadline: Instant,
+    generation: WorkerGeneration,
     evaluation: Option<RestartReservation>,
 }
 
@@ -90,10 +92,8 @@ pub(super) struct ProcessStopHandles {
 
 impl ProcessStopHandles {
     fn shutdown(&self, deadline: Instant) -> Result<(), String> {
-        let resolver = self
-            .resolver
-            .as_ref()
-            .map_or(Ok(()), |handle| handle.stop());
+        // Stop the worker before cancelling its nested resolver so resolver
+        // cancellation cannot release work queued on the retiring worker.
         let worker = self
             .worker
             .as_ref()
@@ -105,7 +105,11 @@ impl ProcessStopHandles {
                     .map_err(|_| "worker shutdown sender task failed".to_string())
             })
         });
-        resolver.and(worker)
+        let resolver = self
+            .resolver
+            .as_ref()
+            .map_or(Ok(()), |handle| handle.stop());
+        worker.and(resolver)
     }
 }
 
@@ -170,9 +174,9 @@ impl Client {
             self.0.output.push_failure(SendFailure::from(error));
             return Ok(self.0.output.take());
         }
-        match self.replace_worker(restart.evaluation) {
+        match self.replace_worker(restart.evaluation, restart.generation.clone()) {
             Ok(response) => {
-                self.finish_restart()?;
+                self.finish_restart(&restart.generation)?;
                 Ok(response)
             }
             Err(error) => {
@@ -302,10 +306,11 @@ impl Client {
         environment.python = managed_python;
         environment.r = managed_r;
         environment.duckdb_extensions = duckdb_extensions;
-        let (processes, deadline) = lifecycle.start_restart(grace);
+        let (processes, deadline, generation) = lifecycle.start_restart(grace);
         Ok(RestartContext {
             processes,
             deadline,
+            generation,
             evaluation,
         })
     }
@@ -315,7 +320,11 @@ impl Client {
     /// Acquiring the worker waits for its sideband operation to end, and
     /// `finish_retirement()` joins its remaining I/O tasks. No old-worker output
     /// can be published after the stopped notice below.
-    fn replace_worker(&self, evaluation: Option<RestartReservation>) -> Result<Response, String> {
+    fn replace_worker(
+        &self,
+        evaluation: Option<RestartReservation>,
+        generation: WorkerGeneration,
+    ) -> Result<Response, String> {
         let mut worker = self
             .0
             .worker
@@ -327,20 +336,24 @@ impl Client {
             *worker = WorkerState::Stopped;
         }
         let retired_worker = matches!(retirement, WorkerRetirement::Stopped);
-        let old_output = self.0.output.take();
+        let (old_output, post_completion_output) = evaluation.as_ref().map_or_else(
+            || (self.0.output.take(), Response::default()),
+            |evaluation| evaluation.take_output(&self.0.output),
+        );
         drop(worker);
 
         let mut response = Response::default();
         let mut wait_for_send = None;
-        let mut interrupted = false;
+        let mut interrupted_notice = None;
         if let Some(evaluation) = evaluation {
             let unfinished = evaluation.unfinished();
-            interrupted = unfinished;
-            let old_output = evaluation.project_response(old_output);
+            if unfinished {
+                interrupted_notice = Some(evaluation.active_stopped_notice());
+            }
             if evaluation.waiting {
                 let mut send_output = old_output;
                 if unfinished {
-                    send_output.push_notice(super::output::EVALUATION_STOPPED_BY_RESTART_NOTICE);
+                    send_output.push_notice(evaluation.stopped_notice());
                     if retired_worker {
                         send_output.push_notice(super::output::WORKER_STOPPED_NOTICE);
                     }
@@ -363,8 +376,9 @@ impl Client {
         {
             response.extend(output);
         }
-        if interrupted {
-            response.push_notice(super::output::ACTIVE_EVALUATION_STOPPED_NOTICE);
+        response.extend_at_boundary(post_completion_output);
+        if let Some(notice) = interrupted_notice {
+            response.push_notice(notice);
         }
         if retired_worker {
             response.push_notice(super::output::WORKER_STOPPED_NOTICE);
@@ -378,9 +392,14 @@ impl Client {
         self.ensure_restarting()?;
         response.push_notice_line(super::output::WORKER_STARTING_NOTICE);
 
-        if let Err(message) = self.start_worker(&mut worker, false, |stop_handle| {
-            self.register_restart_stop_handle(stop_handle)
-        }) {
+        let completion_generation = generation.clone();
+        if let Err(message) = self.start_worker(
+            &mut worker,
+            generation,
+            false,
+            |stop_handle| self.register_restart_stop_handle(stop_handle),
+            || self.finish_restart(&completion_generation),
+        ) {
             let message = match self.clear_restart_stop_handle() {
                 Ok(()) => message,
                 Err(clear_error) => format!(
@@ -474,29 +493,32 @@ impl Client {
             .take()
             .map(|active| active.evaluation.reserve_for_restart())
             .transpose()?;
-        let (processes, deadline) = lifecycle.start_restart(grace);
+        let (processes, deadline, generation) = lifecycle.start_restart(grace);
         Ok(RestartContext {
             processes,
             deadline,
+            generation,
             evaluation,
         })
     }
 
-    fn finish_restart(&self) -> Result<(), String> {
+    fn finish_restart(&self, expected: &WorkerGeneration) -> Result<(), String> {
         let mut lifecycle = self
             .0
             .lifecycle
             .lock()
             .map_err(|_| "worker lifecycle lock poisoned".to_string())?;
+        if !lifecycle.generation.is(expected) {
+            return Ok(());
+        }
         match lifecycle.state {
             LifecycleState::Restarting { .. } => {
                 lifecycle.state = LifecycleState::Ready;
                 lifecycle.requirement_changes = RequirementChangeState::Available;
-                lifecycle.provisional_python = None;
                 Ok(())
             }
             LifecycleState::ShuttingDown { .. } => Err("worker is shutting down".to_string()),
-            LifecycleState::Ready => Err("worker restart state changed".to_string()),
+            LifecycleState::Ready => Ok(()),
         }
     }
 
@@ -539,7 +561,6 @@ impl Client {
             return Err(error);
         }
         lifecycle.processes.worker = None;
-        lifecycle.provisional_python = None;
         Ok(FailedWorkerStop::Stopped)
     }
 
@@ -689,20 +710,7 @@ impl Client {
         };
         let client = self.clone();
         tokio::task::spawn_blocking(move || {
-            let resolver = stop_handles
-                .resolver
-                .map_or(Ok(()), |resolver| resolver.stop());
-            let worker = stop_handles
-                .worker
-                .map_or(Ok(None), |worker| worker.shutdown(deadline).map(Some));
-            let worker = worker.and_then(|shutdown| {
-                shutdown.map_or(Ok(()), |shutdown| {
-                    shutdown
-                        .join()
-                        .map_err(|_| "worker shutdown sender task failed".to_string())
-                })
-            });
-            let stopped = resolver.and(worker);
+            let stopped = stop_handles.shutdown(deadline);
             if stopped.is_ok() {
                 let mut owner = client
                     .0

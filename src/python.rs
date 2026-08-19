@@ -17,251 +17,17 @@ mod platform {
 base::local({
   initialized <- FALSE
   managed <- Sys.getenv("MCP_CONSOLE_MANAGED_PYTHON", unset = NA_character_)
+  # Python 3.9 and older are intentionally outside the bridge contract.
+  minimum_python <- base::numeric_version("3.10")
+  # Reticulate callable proxies convert results through an interruptible wrapper.
+  # Keep helpers in one module, then use py_eval's direct conversion path.
+  python_dispatch <-
+    "(lambda: None).__builtins__['_mcp_console_dispatch']()"
+  python_module <- NULL
+  pending_requirements <- NULL
   source <- NULL
 
-  manifest <- function(packages, python_version, exclude_newer) {
-    list(
-      packages = I(sort(unique(packages %||% character()))),
-      python_version = I(sort(unique(python_version %||% character()))),
-      exclude_newer = exclude_newer
-    )
-  }
-
-  uv_environment <- function() {
-    environment <- Sys.getenv()
-    as.list(environment[
-      startsWith(names(environment), "UV_") &
-        names(environment) != "UV_OFFLINE"
-    ])
-  }
-
-  request_json <- function(requirements, retained_requirements) {
-    jsonlite::toJSON(
-      list(
-        requirements = requirements,
-        retained_requirements = retained_requirements,
-        environment = uv_environment()
-      ),
-      auto_unbox = TRUE,
-      null = "null",
-      na = "null"
-    )
-  }
-
-  version_request_json <- function(constraints) {
-    jsonlite::toJSON(
-      list(
-        constraints = I(as.character(constraints %||% character())),
-        environment = uv_environment()
-      ),
-      auto_unbox = TRUE,
-      null = "null",
-      na = "null"
-    )
-  }
-
-  install_managed_python <- function(...) {
-    namespace <- asNamespace("reticulate")
-    current_requirements <- function() {
-      get("py_reqs_get", envir = namespace)()
-    }
-    resolve <- function(
-      packages = current_requirements()$packages,
-      python_version = get("py_reqs_python_version", envir = namespace)(),
-      exclude_newer = current_requirements()$exclude_newer
-    ) {
-      current <- current_requirements()
-      requirements <- manifest(packages, python_version, exclude_newer)
-      retained_requirements <- manifest(
-        packages,
-        current$python_version,
-        exclude_newer
-      )
-      .Call(
-        "mcp_console_resolve_python",
-        request_json(requirements, retained_requirements)
-      )
-    }
-    resolve_version <- function(constraints = NULL, uv = NULL) {
-      # The host resolver owns the executable; worker code supplies only
-      # version constraints and supported UV settings.
-      .Call(
-        "mcp_console_resolve_python_version",
-        version_request_json(constraints)
-      )
-    }
-
-    seed <- jsonlite::fromJSON(managed)
-    packages <- unlist(seed$packages, use.names = FALSE)
-    python_version <- unlist(seed$python_version, use.names = FALSE)
-    if (!length(python_version)) {
-      python_version <- NULL
-    }
-    globals <- get(".globals", envir = namespace)
-    requirements <- get("py_reqs_get", envir = namespace)()
-    changed <- !identical(
-      manifest(
-        requirements$packages,
-        requirements$python_version,
-        requirements$exclude_newer
-      ),
-      manifest(packages, python_version, seed$exclude_newer)
-    )
-    if (changed) {
-      requirements$packages <- packages
-      requirements$python_version <- python_version
-      requirements$exclude_newer <- seed$exclude_newer
-      requirements$history <- c(requirements$history, list(list(
-        requested_from = "mcp-console",
-        env_is_package = FALSE,
-        packages = packages,
-        python_version = python_version,
-        exclude_newer = seed$exclude_newer,
-        exclude_newer_supplied = !is.null(seed$exclude_newer),
-        action = "set"
-      )))
-      globals$python_requirements <- requirements
-    }
-
-    replace_binding <- function(name, value) {
-      was_locked <- bindingIsLocked(name, namespace)
-      if (was_locked) {
-        unlockBinding(name, namespace)
-      }
-      on.exit(
-        if (was_locked) lockBinding(name, namespace),
-        add = TRUE
-      )
-      assign(name, value, envir = namespace)
-      invisible()
-    }
-    replace_binding("uv_get_or_create_env", resolve)
-    replace_binding("resolve_python_version", resolve_version)
-    invisible()
-  }
-
-  if (!is.na(managed)) {
-    Sys.unsetenv("MCP_CONSOLE_MANAGED_PYTHON")
-    `%||%` <- function(x, y) if (is.null(x)) y else x
-    setHook(
-      packageEvent("reticulate", "onLoad"),
-      install_managed_python,
-      action = "append"
-    )
-    if ("reticulate" %in% loadedNamespaces()) {
-      install_managed_python()
-    }
-  }
-
-  console_width <- getOption("width")
-  install_console_width <- function(...) {
-    configure_numpy <- function() {
-      numpy <- reticulate::import("numpy", convert = FALSE)
-      numpy$set_printoptions(linewidth = console_width)
-    }
-    configure_pandas <- function() {
-      pandas <- reticulate::import("pandas", convert = FALSE)
-      pandas$set_option("display.width", console_width)
-    }
-    # Reticulate imports NumPy before its module-load hooks are installed.
-    setHook("reticulate.onPyInit", function() {
-      reticulate::py_register_load_hook("numpy", configure_numpy)
-      reticulate::py_register_load_hook("pandas", configure_pandas)
-    }, action = "append")
-    invisible()
-  }
-  setHook(
-    packageEvent("reticulate", "onLoad"),
-    install_console_width,
-    action = "append"
-  )
-  if ("reticulate" %in% loadedNamespaces()) {
-    install_console_width()
-  }
-
-  checkpoint_manifest <- function() {
-    if (is.na(managed) || !"reticulate" %in% loadedNamespaces()) {
-      return(NULL)
-    }
-    namespace <- asNamespace("reticulate")
-    requirements <- reticulate::py_require()
-    initialized <- get("is_python_initialized", envir = namespace)()
-    if (!initialized) {
-      invisible(get("uv_get_or_create_env", envir = namespace)(
-        requirements$packages,
-        requirements$python_version,
-        requirements$exclude_newer
-      ))
-    }
-    manifest(
-      requirements$packages,
-      requirements$python_version,
-      requirements$exclude_newer
-    )
-  }
-
-  checkpoint <- function() {
-    checkpoint <- checkpoint_manifest()
-    if (is.null(checkpoint)) {
-      return(NA_character_)
-    }
-    jsonlite::toJSON(
-      checkpoint,
-      auto_unbox = TRUE,
-      null = "null",
-      na = "null"
-    )
-  }
-
-  prepare <- function(request) {
-    if (is.na(managed)) {
-      stop("Python preparation requires a server-managed interpreter")
-    }
-    namespace <- asNamespace("reticulate")
-    globals <- get(".globals", envir = namespace)
-    snapshot <- get("py_reqs_get", envir = namespace)()
-    result <- tryCatch({
-      packages <- unlist(jsonlite::fromJSON(request), use.names = FALSE)
-      reticulate::py_require(packages, action = "add")
-      checkpoint <- checkpoint_manifest()
-      if (is.null(checkpoint)) {
-        stop("Python preparation did not produce a managed checkpoint")
-      }
-      list(kind = "prepared", checkpoint = checkpoint)
-    }, error = function(error) {
-      globals$python_requirements <- snapshot
-      list(kind = "failed", message = conditionMessage(error))
-    })
-    jsonlite::toJSON(
-      result,
-      auto_unbox = TRUE,
-      null = "null",
-      na = "null"
-    )
-  }
-
-  evaluate_impl <- function(id) {
-    if (!initialized) {
-      matplotlib_hook <- function() {
-        invisible(reticulate::py_eval(
-          paste0(
-            "setattr(",
-            "__import__('sys').modules['matplotlib.pyplot'], ",
-            "'show', lambda *args, **kwargs: None)"
-          ),
-          convert = TRUE
-        ))
-      }
-      if (reticulate::py_eval(
-        "'matplotlib.pyplot' in __import__('sys').modules",
-        convert = TRUE
-      )) {
-        matplotlib_hook()
-      } else {
-        base::setHook("reticulate::matplotlib.pyplot::load", matplotlib_hook)
-      }
-
-      script <- r"---(
+  python_runtime_source <- r"---(
 import __main__ as _main
 import ast as _ast
 import base64 as _base64
@@ -274,18 +40,34 @@ import types as _types
 
 
 class _McpConsoleMatplotlibLogFilter(_logging.Filter):
+    _mcp_console_filter = True
+
     def filter(self, record):
         return record.getMessage() != (
             "Matplotlib is building the font cache; this may take a moment."
         )
 
 
-_logging.getLogger("matplotlib.font_manager").addFilter(
-    _McpConsoleMatplotlibLogFilter()
-)
+_mcp_console_logger = _logging.getLogger("matplotlib.font_manager")
+_mcp_console_filter_installed = False
+for _mcp_console_filter in _mcp_console_logger.filters:
+    if _builtins.getattr(_mcp_console_filter, "_mcp_console_filter", False):
+        _mcp_console_filter_installed = True
+        break
+if not _mcp_console_filter_installed:
+    _mcp_console_logger.addFilter(_McpConsoleMatplotlibLogFilter())
 
 _mcp_console_image_state = [()]
-_mcp_console_runtime = _types.ModuleType("_mcp_console_runtime")
+
+
+def _mcp_console_disable_matplotlib_show(
+    _setattr=_builtins.setattr,
+    _sys=_sys,
+):
+    pyplot = _sys.modules.get("matplotlib.pyplot")
+    if pyplot is not None:
+        _setattr(pyplot, "show", lambda *args, **kwargs: None)
+    return None
 
 
 def _mcp_console_collect_plots(
@@ -293,6 +75,7 @@ def _mcp_console_collect_plots(
     _base64=_base64,
     _io=_io,
     _print_exc=_traceback.print_exc,
+    _sorted=_builtins.sorted,
     _sys=_sys,
 ):
     pyplot = _sys.modules.get("matplotlib.pyplot")
@@ -301,7 +84,7 @@ def _mcp_console_collect_plots(
 
     images = []
     try:
-        for number in sorted(pyplot.get_fignums()):
+        for number in _sorted(pyplot.get_fignums()):
             if number not in pyplot.get_fignums():
                 continue
             try:
@@ -367,47 +150,366 @@ def _mcp_console_take_images(_image_state=_mcp_console_image_state):
     return images
 
 
-def _mcp_console_run(
-    source,
-    filename,
-    _evaluate=_mcp_console_eval_cell,
-):
-    return _evaluate(source, filename)
+_mcp_console = _types.ModuleType("_mcp_console")
 
 
-_mcp_console_runtime.run = _mcp_console_run
-_mcp_console_runtime.take_images = _mcp_console_take_images
-_sys.modules[_mcp_console_runtime.__name__] = _mcp_console_runtime
+def _mcp_console_dispatch(state=_mcp_console.__dict__):
+    operation = state.pop("operation")
+    arguments = state.pop("arguments")
+    return state[operation](*arguments)
+
+
+_mcp_console.disable_matplotlib_show = _mcp_console_disable_matplotlib_show
+_mcp_console.eval_cell = _mcp_console_eval_cell
+_mcp_console.take_images = _mcp_console_take_images
+_mcp_console.dispatch = _mcp_console_dispatch
+_sys.modules[_mcp_console.__name__] = _mcp_console
+_builtins.__dict__["_mcp_console_dispatch"] = _mcp_console_dispatch
 )---"
-      reticulate::py_eval(
-        paste0(
-          "exec(",
-          jsonlite::toJSON(script, auto_unbox = TRUE),
-          ", {'__name__': '_mcp_console_runtime'})"
-        ),
-        convert = TRUE
+
+  manifest <- function(packages, python_version, exclude_newer) {
+    list(
+      packages = I(sort(unique(packages %||% character()))),
+      python_version = I(sort(unique(python_version %||% character()))),
+      exclude_newer = exclude_newer
+    )
+  }
+
+  uv_environment <- function() {
+    environment <- Sys.getenv()
+    as.list(environment[
+      startsWith(names(environment), "UV_") &
+        names(environment) != "UV_OFFLINE"
+    ])
+  }
+
+  request_json <- function(requirements, retained_requirements) {
+    jsonlite::toJSON(
+      list(
+        requirements = requirements,
+        retained_requirements = retained_requirements,
+        environment = uv_environment()
+      ),
+      auto_unbox = TRUE,
+      null = "null",
+      na = "null"
+    )
+  }
+
+  version_request_json <- function(constraints) {
+    jsonlite::toJSON(
+      list(
+        constraints = I(as.character(constraints %||% character())),
+        environment = uv_environment()
+      ),
+      auto_unbox = TRUE,
+      null = "null",
+      na = "null"
+    )
+  }
+
+  activation_json <- function(requirements) {
+    jsonlite::toJSON(
+      manifest(
+        requirements$packages,
+        requirements$python_version,
+        requirements$exclude_newer
+      ),
+      auto_unbox = TRUE,
+      null = "null",
+      na = "null"
+    )
+  }
+
+  report_activation <- function(requirements) {
+    .Call("mcp_console_python_activated", activation_json(requirements))
+    invisible()
+  }
+
+  install_managed_python <- function(...) {
+    namespace <- asNamespace("reticulate")
+    current_requirements <- function() {
+      get("py_reqs_get", envir = namespace)()
+    }
+    resolve <- function(
+      packages = current_requirements()$packages,
+      python_version = get("py_reqs_python_version", envir = namespace)(),
+      exclude_newer = current_requirements()$exclude_newer
+    ) {
+      current <- current_requirements()
+      requirements <- manifest(packages, python_version, exclude_newer)
+      retained_requirements <- manifest(
+        packages,
+        current$python_version,
+        exclude_newer
       )
+      .Call(
+        "mcp_console_resolve_python",
+        request_json(requirements, retained_requirements)
+      )
+    }
+    resolve_version <- function(constraints = NULL, uv = NULL) {
+      # The host resolver owns the executable; worker code supplies only
+      # version constraints and supported UV settings.
+      .Call(
+        "mcp_console_resolve_python_version",
+        version_request_json(constraints)
+      )
+    }
+    seed <- jsonlite::fromJSON(managed)
+    packages <- unlist(seed$packages, use.names = FALSE)
+    python_version <- unlist(seed$python_version, use.names = FALSE)
+    if (!length(python_version)) {
+      python_version <- NULL
+    }
+    globals <- get(".globals", envir = namespace)
+    requirements <- get("py_reqs_get", envir = namespace)()
+    changed <- !identical(
+      manifest(
+        requirements$packages,
+        requirements$python_version,
+        requirements$exclude_newer
+      ),
+      manifest(packages, python_version, seed$exclude_newer)
+    )
+    if (changed) {
+      requirements$packages <- packages
+      requirements$python_version <- python_version
+      requirements$exclude_newer <- seed$exclude_newer
+      requirements$history <- c(requirements$history, list(list(
+        requested_from = "mcp-console",
+        env_is_package = FALSE,
+        packages = packages,
+        python_version = python_version,
+        exclude_newer = seed$exclude_newer,
+        exclude_newer_supplied = !is.null(seed$exclude_newer),
+        action = "set"
+      )))
+      globals$python_requirements <- requirements
+    }
+    stopifnot(
+      !bindingIsActive("python_requirements", globals),
+      !bindingIsLocked("python_requirements", globals)
+    )
+    rm(list = "python_requirements", envir = globals)
+    makeActiveBinding("python_requirements", function(value) {
+      if (missing(value)) {
+        return(requirements)
+      }
+      if (!is.null(pending_requirements)) {
+        committed <- manifest(
+          value$packages,
+          value$python_version,
+          value$exclude_newer
+        )
+        stopifnot(identical(committed, pending_requirements))
+      }
+      requirements <<- value
+      if (!is.null(pending_requirements)) {
+        pending_requirements <<- NULL
+        report_activation(committed)
+      }
+      invisible(value)
+    }, globals)
+
+    replace_binding <- function(name, value) {
+      was_locked <- bindingIsLocked(name, namespace)
+      if (was_locked) {
+        unlockBinding(name, namespace)
+      }
+      on.exit(
+        if (was_locked) lockBinding(name, namespace),
+        add = TRUE
+      )
+      assign(name, value, envir = namespace)
+      invisible()
+    }
+    original_activate <- get("py_reqs_activate", envir = namespace)
+    activate <- function(requirements) {
+      stopifnot(is.null(pending_requirements))
+      config <- original_activate(requirements)
+      pending_requirements <<- manifest(
+        requirements$packages,
+        requirements$python_version,
+        requirements$exclude_newer
+      )
+      config
+    }
+    replace_binding("uv_get_or_create_env", resolve)
+    replace_binding("resolve_python_version", resolve_version)
+    replace_binding("py_reqs_activate", activate)
+    setHook("reticulate.onPyInit", function() {
+      report_activation(current_requirements())
+    }, action = "append")
+    invisible()
+  }
+
+  if (!is.na(managed)) {
+    Sys.unsetenv("MCP_CONSOLE_MANAGED_PYTHON")
+    `%||%` <- function(x, y) if (is.null(x)) y else x
+    setHook(
+      packageEvent("reticulate", "onLoad"),
+      install_managed_python,
+      action = "append"
+    )
+    if ("reticulate" %in% loadedNamespaces()) {
+      install_managed_python()
+    }
+  }
+
+  dispatch_python <- function(operation, arguments = list()) {
+    reticulate::py_set_attr(
+      python_module, "operation", operation
+    )
+    reticulate::py_set_attr(
+      python_module, "arguments", arguments
+    )
+    reticulate::py_eval(python_dispatch, convert = TRUE)
+  }
+
+  initialize_python_runtime <- function(strict = FALSE) {
+    if (!is.null(python_module)) {
+      return(invisible(TRUE))
+    }
+
+    python_config <- reticulate::py_config()
+    if (!is.null(python_module)) {
+      return(invisible(TRUE))
+    }
+    if (python_config$version < minimum_python) {
+      if (!strict) {
+        return(invisible(FALSE))
+      }
+      stop(
+        paste0(
+          "MCP Console requires Python 3.10 or later; selected ",
+          "interpreter reports Python ",
+          as.character(python_config$version)
+        ),
+        call. = FALSE
+      )
+    }
+    reticulate::py_run_string(
+      python_runtime_source,
+      local = TRUE,
+      convert = FALSE
+    )
+    python_module <<- reticulate::import("_mcp_console", convert = FALSE)
+    invisible(TRUE)
+  }
+
+  disable_matplotlib_show <- function(...) {
+    if (initialize_python_runtime(strict = FALSE)) {
+      invisible(dispatch_python("disable_matplotlib_show"))
+    }
+  }
+  base::setHook(
+    "reticulate::matplotlib.pyplot::load",
+    disable_matplotlib_show,
+    action = "append"
+  )
+
+  console_width <- getOption("width")
+  install_python_hooks <- function(...) {
+    namespace <- asNamespace("reticulate")
+    configure_numpy <- function() {
+      numpy <- reticulate::import("numpy", convert = FALSE)
+      numpy$set_printoptions(linewidth = console_width)
+    }
+    configure_pandas <- function() {
+      pandas <- reticulate::import("pandas", convert = FALSE)
+      pandas$set_option("display.width", console_width)
+    }
+    on_python_init <- function() {
+      # Reticulate imports NumPy before its module-load hooks are installed.
+      reticulate::py_register_load_hook("numpy", configure_numpy)
+      reticulate::py_register_load_hook("pandas", configure_pandas)
+      initialize_python_runtime(strict = FALSE)
+    }
+    base::setHook(
+      "reticulate.onPyInit",
+      on_python_init,
+      action = "append"
+    )
+    if (get("is_python_initialized", envir = namespace)()) {
+      on_python_init()
+    }
+    invisible()
+  }
+  setHook(
+    packageEvent("reticulate", "onLoad"),
+    install_python_hooks,
+    action = "append"
+  )
+  if ("reticulate" %in% loadedNamespaces()) {
+    install_python_hooks()
+  }
+
+  materialize_manifest <- function() {
+    if (is.na(managed) || !"reticulate" %in% loadedNamespaces()) {
+      return(NULL)
+    }
+    namespace <- asNamespace("reticulate")
+    requirements <- reticulate::py_require()
+    initialized <- get("is_python_initialized", envir = namespace)()
+    if (!initialized) {
+      invisible(get("uv_get_or_create_env", envir = namespace)(
+        requirements$packages,
+        requirements$python_version,
+        requirements$exclude_newer
+      ))
+    }
+    manifest(
+      requirements$packages,
+      requirements$python_version,
+      requirements$exclude_newer
+    )
+  }
+
+  prepare <- function(request) {
+    if (is.na(managed)) {
+      stop("Python preparation requires a server-managed interpreter")
+    }
+    namespace <- asNamespace("reticulate")
+    globals <- get(".globals", envir = namespace)
+    snapshot <- get("py_reqs_get", envir = namespace)()
+    result <- tryCatch({
+      packages <- unlist(jsonlite::fromJSON(request), use.names = FALSE)
+      reticulate::py_require(packages, action = "add")
+      requirements <- materialize_manifest()
+      if (is.null(requirements)) {
+        stop("Python preparation did not produce a managed manifest")
+      }
+      list(kind = "prepared")
+    }, error = function(error) {
+      globals$python_requirements <- snapshot
+      list(kind = "failed", message = conditionMessage(error))
+    })
+    jsonlite::toJSON(
+      result,
+      auto_unbox = TRUE,
+      null = "null",
+      na = "null"
+    )
+  }
+
+  evaluate_impl <- function(id) {
+    if (!initialized) {
+      initialize_python_runtime(strict = TRUE)
+      dispatch_python("disable_matplotlib_show")
       initialized <<- TRUE
     }
 
     filename <- paste0("<mcp-console:python:", id, ">")
     on.exit({
-      images <- reticulate::py_eval(
-        "__import__('sys').modules['_mcp_console_runtime'].take_images()",
-        convert = TRUE
-      )
+      images <- dispatch_python("take_images")
       for (image in images) {
         invisible(.Call("mcp_console_publish_python_plot", image))
       }
     }, add = TRUE)
-    cell <- jsonlite::toJSON(list(source, filename), auto_unbox = TRUE)
-    reticulate::py_eval(
-      paste0(
-        "__import__('sys').modules['_mcp_console_runtime'].run(*",
-        cell,
-        ")"
-      ),
-      convert = TRUE
+    dispatch_python(
+      "eval_cell",
+      list(source, filename)
     )
     invisible()
   }
@@ -431,12 +533,8 @@ _sys.modules[_mcp_console_runtime.__name__] = _mcp_console_runtime
     #[derive(serde::Deserialize)]
     #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
     pub(crate) enum PreparationOutcome {
-        Prepared {
-            checkpoint: crate::worker_protocol::PythonRequirementManifest,
-        },
-        Failed {
-            message: String,
-        },
+        Prepared,
+        Failed { message: String },
     }
 
     pub(crate) struct Bridge(crate::r_bridge::Bridge);
@@ -459,18 +557,6 @@ _sys.modules[_mcp_console_runtime.__name__] = _mcp_console_runtime
                 .ok_or_else(|| "Python preparation bridge returned no response".to_string())?;
             serde_json::from_str(&response)
                 .map_err(|error| format!("invalid Python preparation response: {error}"))
-        }
-
-        pub(crate) fn checkpoint(
-            &self,
-        ) -> Result<Option<crate::worker_protocol::PythonRequirementManifest>, String> {
-            self.0
-                .call0_string(c"checkpoint")?
-                .map(|checkpoint| {
-                    serde_json::from_str(&checkpoint)
-                        .map_err(|error| format!("invalid Python checkpoint: {error}"))
-                })
-                .transpose()
         }
     }
 
@@ -600,6 +686,19 @@ _sys.modules[_mcp_console_runtime.__name__] = _mcp_console_runtime
         let python =
             crate::worker::resolve_python(request).map_err(|error| harp::anyhow!("{error}"))?;
         Ok(harp::object::RObject::from(python).sexp)
+    }
+
+    #[allow(clippy::result_large_err)]
+    #[harp::register]
+    pub extern "C-unwind" fn mcp_console_python_activated(
+        requirements: SEXP,
+    ) -> harp::Result<SEXP> {
+        let requirements = String::try_from(harp::object::RObject::view(requirements))?;
+        let requirements =
+            serde_json::from_str(&requirements).map_err(|error| harp::anyhow!("{error}"))?;
+        crate::worker::publish_python_activation(requirements)
+            .map_err(|error| harp::anyhow!("{error}"))?;
+        unsafe { Ok(libr::R_NilValue) }
     }
 
     #[allow(clippy::result_large_err)]

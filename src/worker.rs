@@ -1,8 +1,10 @@
 #[cfg(target_os = "macos")]
 mod platform {
+    use std::collections::VecDeque;
     use std::error::Error;
     use std::ffi::{CStr, CString, c_char, c_int, c_uchar, c_void};
     use std::io;
+    use std::os::fd::AsRawFd;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Mutex, OnceLock};
     use std::thread;
@@ -18,6 +20,7 @@ mod platform {
     static R_EVENTS: OnceLock<REvents> = OnceLock::new();
     static R_CHECK_USER_INTERRUPT: OnceLock<CheckUserInterrupt> = OnceLock::new();
     static CELL_SOURCE: Mutex<Option<CellSource>> = Mutex::new(None);
+    static PENDING_SERVER_MESSAGES: Mutex<VecDeque<ServerMessage>> = Mutex::new(VecDeque::new());
     static CONSOLE_STDIN_CARRY: Mutex<Vec<u8>> = Mutex::new(Vec::new());
     static WORKER_FAILURE: Mutex<Option<String>> = Mutex::new(None);
     static WORKER_SHUTDOWN: AtomicBool = AtomicBool::new(false);
@@ -37,6 +40,13 @@ mod platform {
         add_history: c_int,
     ) -> c_int;
     type CheckUserInterrupt = unsafe extern "C-unwind" fn();
+    type AddInputHandler = unsafe extern "C-unwind" fn(
+        *mut c_void,
+        c_int,
+        Option<unsafe extern "C-unwind" fn(*mut c_void)>,
+        c_int,
+    ) -> *mut c_void;
+    type RemoveInputHandler = unsafe extern "C-unwind" fn(*mut *mut c_void, *mut c_void) -> c_int;
 
     struct CellSource {
         text: String,
@@ -47,6 +57,9 @@ mod platform {
         top_level_exec: TopLevelExec,
         check_activity: CheckActivity,
         run_handlers: RunHandlers,
+        add_input_handler: AddInputHandler,
+        remove_input_handler: RemoveInputHandler,
+        rg_wait_usec: usize,
     }
 
     struct Runtime {
@@ -64,6 +77,15 @@ mod platform {
             run_handlers: RunHandlers,
             input_handlers: *mut c_void,
         );
+        fn mcp_r_wait_for_activity(
+            top_level_exec: TopLevelExec,
+            add_input_handler: AddInputHandler,
+            remove_input_handler: RemoveInputHandler,
+            check_activity: CheckActivity,
+            input_handlers: *mut *mut c_void,
+            sideband_fd: c_int,
+            wait_usec: c_int,
+        ) -> c_int;
         fn mcp_r_repl_run_cell(
             init: ReplInit,
             do_one: ReplDoOne,
@@ -122,13 +144,53 @@ mod platform {
     impl Runtime {
         fn run(&mut self) -> Result<(), Box<dyn Error>> {
             loop {
-                if !self.handle(receive_server_message()?)? {
+                if !self.handle(self.wait_for_message()?)? {
                     return Ok(());
                 }
             }
         }
 
+        fn wait_for_message(&self) -> Result<ServerMessage, String> {
+            loop {
+                if WORKER_SHUTDOWN.load(Ordering::SeqCst) {
+                    return Ok(ServerMessage::Shutdown);
+                }
+                if let Some(message) = take_pending_server_message()? {
+                    return Ok(message);
+                }
+
+                let (buffered, sideband_fd) = {
+                    let reader = worker_reader()?;
+                    (reader.has_buffered_data(), reader.as_raw_fd())
+                };
+                if buffered {
+                    return receive_sideband_message();
+                }
+                if wait_for_activity(sideband_fd)? {
+                    return receive_sideband_message();
+                }
+
+                run_ready_handlers(&self.graphics)?;
+                if let Some(message) = take_worker_failure() {
+                    return Err(message);
+                }
+            }
+        }
+
         fn handle(&mut self, message: ServerMessage) -> Result<bool, Box<dyn Error>> {
+            if matches!(
+                &message,
+                ServerMessage::PreparePython { .. } | ServerMessage::PrepareR { .. }
+            ) {
+                run_ready_handlers(&self.graphics).map_err(io::Error::other)?;
+                if WORKER_SHUTDOWN.load(Ordering::SeqCst) {
+                    return Ok(false);
+                }
+                if let Some(message) = take_worker_failure() {
+                    return Err(io::Error::other(message).into());
+                }
+            }
+
             match message {
                 ServerMessage::Evaluate { language, source } => {
                     check_interrupts();
@@ -146,10 +208,7 @@ mod platform {
                     if let Some(message) = take_worker_failure().or_else(|| result.err()) {
                         return Err(io::Error::other(message).into());
                     }
-                    let python_checkpoint =
-                        defer_interrupts(|| self.python.checkpoint(), check_interrupts)?;
-                    self.writer
-                        .send(&WorkerMessage::Completed { python_checkpoint })?;
+                    self.writer.send(&WorkerMessage::Completed)?;
                 }
                 // Keep worker-owned preparation state transitions atomic. Any
                 // nested host resolver registers its own interrupt target.
@@ -163,11 +222,8 @@ mod platform {
                         return Err(io::Error::other(message).into());
                     }
                     match result {
-                        Ok(crate::python::PreparationOutcome::Prepared {
-                            checkpoint: python_checkpoint,
-                        }) => {
-                            self.writer
-                                .send(&WorkerMessage::PythonPrepared { python_checkpoint })?;
+                        Ok(crate::python::PreparationOutcome::Prepared) => {
+                            self.writer.send(&WorkerMessage::PythonPrepared)?;
                         }
                         Ok(crate::python::PreparationOutcome::Failed { message }) => {
                             self.writer
@@ -263,7 +319,7 @@ mod platform {
         request: crate::worker_protocol::PythonResolveRequest,
     ) -> Result<String, String> {
         send_worker_message(&WorkerMessage::ResolvePython { request })?;
-        match receive_server_message().map_err(infrastructure_failure)? {
+        match receive_resolver_message().map_err(infrastructure_failure)? {
             ServerMessage::PythonResolved { python } => {
                 crate::python::link_matplotlib_caches();
                 Ok(python)
@@ -289,11 +345,17 @@ mod platform {
         }
     }
 
+    pub(crate) fn publish_python_activation(
+        requirements: crate::worker_protocol::PythonRequirementManifest,
+    ) -> Result<(), String> {
+        send_worker_message(&WorkerMessage::PythonActivated { requirements })
+    }
+
     pub(crate) fn resolve_python_version(
         request: crate::worker_protocol::PythonVersionResolveRequest,
     ) -> Result<String, String> {
         send_worker_message(&WorkerMessage::ResolvePythonVersion { request })?;
-        match receive_server_message().map_err(infrastructure_failure)? {
+        match receive_resolver_message().map_err(infrastructure_failure)? {
             ServerMessage::PythonVersionResolved { version } => Ok(version),
             ServerMessage::PythonVersionResolutionFailed { message } => Err(message),
             ServerMessage::Shutdown => {
@@ -318,14 +380,45 @@ mod platform {
         }
     }
 
-    fn receive_server_message() -> Result<ServerMessage, String> {
+    fn receive_resolver_message() -> Result<ServerMessage, String> {
+        loop {
+            let message = receive_sideband_message()?;
+            match message {
+                ServerMessage::Evaluate { .. }
+                | ServerMessage::PreparePython { .. }
+                | ServerMessage::PrepareR { .. } => queue_server_message(message)?,
+                _ => return Ok(message),
+            }
+        }
+    }
+
+    fn receive_sideband_message() -> Result<ServerMessage, String> {
+        worker_reader()?
+            .receive()
+            .map_err(|error| format!("worker sideband read failed: {error}"))
+    }
+
+    fn worker_reader() -> Result<std::sync::MutexGuard<'static, crate::sideband::Reader>, String> {
         WORKER_READER
             .get()
             .ok_or_else(|| "R worker sideband reader is not initialized".to_string())?
             .lock()
-            .map_err(|_| "R worker sideband reader lock poisoned".to_string())?
-            .receive()
-            .map_err(|error| format!("worker sideband read failed: {error}"))
+            .map_err(|_| "R worker sideband reader lock poisoned".to_string())
+    }
+
+    fn take_pending_server_message() -> Result<Option<ServerMessage>, String> {
+        PENDING_SERVER_MESSAGES
+            .lock()
+            .map_err(|_| "pending server message lock poisoned".to_string())
+            .map(|mut messages| messages.pop_front())
+    }
+
+    fn queue_server_message(message: ServerMessage) -> Result<(), String> {
+        PENDING_SERVER_MESSAGES
+            .lock()
+            .map_err(|_| "pending server message lock poisoned".to_string())?
+            .push_back(message);
+        Ok(())
     }
 
     fn observe_stdin_shutdown() -> Result<(), String> {
@@ -508,6 +601,10 @@ mod platform {
         let run_handlers = unsafe { *library.get::<RunHandlers>(b"R_runHandlers\0")? };
         let check_interrupt =
             unsafe { *library.get::<CheckUserInterrupt>(b"R_CheckUserInterrupt\0")? };
+        let add_input_handler = unsafe { *library.get::<AddInputHandler>(b"addInputHandler\0")? };
+        let remove_input_handler =
+            unsafe { *library.get::<RemoveInputHandler>(b"removeInputHandler\0")? };
+        let rg_wait_usec = unsafe { *library.get::<*mut c_int>(b"Rg_wait_usec\0")? as usize };
         R_REPL_INIT
             .set(init)
             .map_err(|_| io::Error::other("R REPL was already initialized"))?;
@@ -519,6 +616,9 @@ mod platform {
                 top_level_exec,
                 check_activity,
                 run_handlers,
+                add_input_handler,
+                remove_input_handler,
+                rg_wait_usec,
             })
             .map_err(|_| io::Error::other("R event handlers were already initialized"))?;
         R_CHECK_USER_INTERRUPT
@@ -547,6 +647,33 @@ mod platform {
         EVALUATION_STARTED.store(false, Ordering::SeqCst);
         defer_interrupts(|| graphics.finish(), check_interrupts)?;
         observe_stdin_shutdown()
+    }
+
+    fn wait_for_activity(sideband_fd: c_int) -> Result<bool, String> {
+        let events = R_EVENTS
+            .get()
+            .expect("R event handlers should be initialized");
+        let mut wait_usec = unsafe { libr::get(libr::R_wait_usec) };
+        let graphical_wait_usec = unsafe { *(events.rg_wait_usec as *const c_int) };
+        if graphical_wait_usec > 0 && (wait_usec <= 0 || graphical_wait_usec < wait_usec) {
+            wait_usec = graphical_wait_usec;
+        }
+        let status = unsafe {
+            mcp_r_wait_for_activity(
+                events.top_level_exec,
+                events.add_input_handler,
+                events.remove_input_handler,
+                events.check_activity,
+                libr::R_InputHandlers.cast(),
+                sideband_fd,
+                wait_usec,
+            )
+        };
+        match status {
+            0 => Ok(false),
+            1 => Ok(true),
+            _ => Err("R event wait failed".to_string()),
+        }
     }
 
     fn r_input_handlers() -> *mut c_void {
@@ -901,7 +1028,9 @@ mod platform {
 }
 
 #[cfg(target_os = "macos")]
-pub(crate) use platform::{publish_plot, resolve_python, resolve_python_version, run};
+pub(crate) use platform::{
+    publish_plot, publish_python_activation, resolve_python, resolve_python_version, run,
+};
 
 #[cfg(not(target_os = "macos"))]
 pub(crate) fn run() -> Result<(), Box<dyn std::error::Error>> {

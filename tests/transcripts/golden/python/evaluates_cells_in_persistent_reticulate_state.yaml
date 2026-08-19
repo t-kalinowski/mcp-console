@@ -14,6 +14,9 @@ send:
       r"---(
     test_sys = __import__("sys")
     test_types = __import__("types")
+    __import__ = None
+    exec = None
+    setattr = None
     _io = "user io"
     _main = "user main"
     _sys = "user sys"
@@ -37,14 +40,17 @@ send:
     print("from Python")
     (
         answer + 1,
+        (__import__, exec, setattr) == (None, None, None),
         (_io, _main, _sys, sorted) == ("user io", "user main", "user sys", "user sorted"),
+        "_mcp_console" not in globals()
+        and test_sys.modules["_mcp_console"].__name__ == "_mcp_console",
     )
 result:
   content:
     - type: text
       text: |
         from Python
-        (42, True)
+        (42, True, True, True)
   isError: false
 ---
 id: 5
@@ -145,7 +151,11 @@ result:
 ---
 id: 13
 send:
-  python: silent = True
+  python: |
+    import builtins as test_builtins
+
+    test_original_import = test_builtins.__import__
+    test_builtins.__import__ = None
 result:
   content:
     - type: text
@@ -153,6 +163,27 @@ result:
   isError: false
 ---
 id: 14
+send:
+  python: |
+    test_builtins.__import__ = test_original_import
+    answer + 1
+result:
+  content:
+    - type: text
+      text: |
+        42
+  isError: false
+---
+id: 15
+send:
+  python: silent = True
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+id: 16
 send:
   r: |
     rm(list = ls())
@@ -165,7 +196,7 @@ result:
         [1] 41
   isError: false
 ---
-id: 15
+id: 17
 send:
   python: |
     assigned_from_r

@@ -11,6 +11,7 @@ from _support import (
     code,
     normalize_python_resolution_error,
     r_test_environment,
+    release_worker_callback_gate,
     run_this_suite,
 )
 
@@ -206,6 +207,55 @@ def test_prepares_r_requirements_after_worker_startup(binary: Path) -> Transcrip
     return client._finish()
 
 
+def test_stops_live_preparation_for_idle_callback_input(binary: Path) -> Transcript:
+    client = McpClient(binary, ("serve",))
+    client._initialize_and_list_tools()
+    client.session(action="prepare", requirements={"r": ["later"]})
+
+    # fmt: r
+    r = code(r"""
+        callback_gate <- tempfile("mcp-console-callback-gate-")
+        callback_checkpoint <- tempfile("mcp-console-callback-checkpoint-")
+        run_callback <- function() {
+          if (!file.exists(callback_gate)) {
+            later::later(run_callback, delay = 0.01)
+            return(invisible(NULL))
+          }
+          stopifnot(file.create(callback_checkpoint))
+          reticulate::py_require("py-yaml12")
+          reticulate::py_config()
+          # later caps one top-level handler turn at 20 callback passes.
+          # Leave the input callback ready for the next handler turn.
+          request_input <- function(turns) {
+            if (turns == 0L) {
+              readline("later> ")
+            } else {
+              later::later(function() request_input(turns - 1L), delay = 0)
+            }
+          }
+          request_input(25L)
+        }
+        later::later(run_callback, delay = 0.01)
+        cat(callback_gate, callback_checkpoint, sep = "\n")
+        """)
+    client.send(r=r)
+    release_worker_callback_gate(client, "idle input callback")
+    # Keep this distinct from the callback's retained requirement so activation
+    # cannot turn the preparation into an idempotent server-side no-op.
+    result = client.session(
+        action="prepare",
+        requirements={"python": ["py-yaml12>=0"]},
+    )
+    assert result["isError"] is True, result
+    assert result["content"][0]["text"] == (
+        '[input requested: "later> "]\n'
+        '[idle R callback requested input "later> " during requirement '
+        "preparation; collect callback input with send before preparing "
+        "requirements]\n[worker stopped: in-memory state lost]"
+    )
+    return client._finish()
+
+
 def test_failed_live_r_preparation_requires_restart(binary: Path) -> Transcript:
     environment, _ = r_test_environment()
     client = McpClient(binary, ("serve",), environment)
@@ -291,7 +341,8 @@ def test_failed_live_r_preparation_requires_restart(binary: Path) -> Transcript:
         stopifnot(
           identical(saved, 42L),
           !exists("sentinel", inherits = FALSE),
-          !"py-yaml12" %in% reticulate::py_require()$packages,
+          "py-yaml12" %in% reticulate::py_require()$packages,
+          reticulate::py_module_available("yaml12"),
           identical(dirname(find.package("zeallot")), .libPaths()[[1L]])
         )
         """)
@@ -299,6 +350,65 @@ def test_failed_live_r_preparation_requires_restart(binary: Path) -> Transcript:
     saved_sentinel_literal = f"rawToChar(as.raw(c({saved_sentinel_bytes})))"
     client.send(r=restarted.replace('"<saved sentinel path>"', saved_sentinel_literal))
     client.transcript[-1]["send"]["r"] = restarted
+    assert last_tool_text(client) == "[done]"
+    return client._finish()
+
+
+def test_failed_mixed_preparation_retains_live_python_activation(
+    binary: Path,
+) -> Transcript:
+    environment, _ = r_test_environment()
+    client = McpClient(binary, ("serve",), environment)
+    client._initialize_and_list_tools()
+
+    # fmt: r
+    setup = code(r"""
+        invisible(reticulate::py_config())
+        original_lib_paths <- base::.libPaths
+        replacement_lib_paths <- base::local({
+          original <- original_lib_paths
+          function(new) {
+            if (base::missing(new)) {
+              return(original())
+            }
+            original(new)
+            base::stop("blocked live R preparation")
+          }
+        })
+        base::unlockBinding(".libPaths", base::baseenv())
+        base::assign(
+          ".libPaths",
+          replacement_lib_paths,
+          envir = base::baseenv()
+        )
+        base::lockBinding(".libPaths", base::baseenv())
+        """)
+    client.send(r=setup)
+    assert last_tool_text(client) == "[done]", client.transcript[-1]
+
+    client.session(
+        action="prepare",
+        requirements={"r": ["praise"], "python": ["py-yaml12"]},
+    )
+    result = client.transcript[-1]["result"]
+    assert result["isError"] is True, result
+    assert result["content"][0]["text"] == (
+        "blocked live R preparation; further requirement changes are unavailable "
+        "until session restart"
+    )
+
+    client.session(action="restart")
+    assert last_tool_text(client) == (
+        "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
+    )
+    # fmt: r
+    retained = code(r"""
+        stopifnot(
+          "py-yaml12" %in% reticulate::py_require()$packages,
+          reticulate::py_module_available("yaml12")
+        )
+        """)
+    client.send(r=retained)
     assert last_tool_text(client) == "[done]"
     return client._finish()
 

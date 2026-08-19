@@ -13,6 +13,7 @@ The client validates the omitted JSON-RPC version and response ID before recordi
 Tool calls show the tool name and arguments directly, so a `tools/call` request for `send` is recorded as `send: ARGUMENTS`.
 The response's `result` or `error`, when present, appears directly at the document root after the request.
 The initialization, initialized notification, and tool-list exchange appear in full only in `server::initializes_and_lists_tools`.
+When selected, that case runs to completion before the remaining transcript cases start.
 Before compacting another transcript, the runner verifies that its prefix equals every document in the full snapshot.
 An identical prefix becomes a bare `!same-as PATH` document; a different prefix remains in full.
 `PATH` identifies the snapshot used for comparison, and the tag does not load the file.
@@ -38,10 +39,12 @@ scripts/test server
 scripts/test server::initializes_and_lists_tools
 scripts/test help
 scripts/test --list
+scripts/test --jobs 1 python
 scripts/test --update server::initializes_and_lists_tools
 ```
 
-With no selectors, `scripts/test` runs every suite and case.
+With no selectors, `scripts/test` runs every suite and case in parallel, using at least two worker processes and otherwise one per available CPU by default.
+Pass `--jobs N` to set the maximum concurrency or `--jobs 1` to run serially.
 A suite selector runs every case in that file; a `SUITE::CASE` selector runs one named function.
 Use `--update` only to accept an intentional transcript change.
 A suite may set `PLATFORMS = {"darwin"}` to restrict execution and snapshot updates to those `sys.platform` values.

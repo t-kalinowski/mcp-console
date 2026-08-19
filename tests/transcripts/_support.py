@@ -18,26 +18,6 @@ ToolResult = dict[str, Any]
 YamlStream = list[Any]
 
 
-def host_ir_cache_dir() -> str | None:
-    if cache := os.environ.get("IR_CACHE_DIR"):
-        return cache
-    ir = shutil.which("ir")
-    if ir is None:
-        return None
-    result = subprocess.run(
-        [ir, "cache", "dir"],
-        capture_output=True,
-        text=True,
-    )
-    if result.returncode != 0:
-        return None
-    cache = result.stdout.strip()
-    return cache or None
-
-
-HOST_IR_CACHE_DIR = host_ir_cache_dir()
-
-
 @dataclass(frozen=True)
 class TranscriptWithCompanion:
     transcript: Transcript
@@ -86,16 +66,29 @@ def r_test_environment() -> tuple[dict[str, str], Path]:
     return environment, home / "bin" / "Rscript"
 
 
-def use_temporary_home(environment: dict[str, str], home: Path) -> None:
-    original_home = Path(environment.get("HOME", str(Path.home())))
-    environment.setdefault(
-        "RENV_PATHS_CACHE",
-        str(original_home / "Library/Caches/org.R-project.R/R/renv/cache"),
+def build_r_input_handler(
+    directory: Path,
+    environment: dict[str, str],
+    rscript: Path,
+) -> None:
+    source = Path(__file__).parent.parent / "fixtures" / "r_input_handler.c"
+    local_source = directory / source.name
+    shutil.copyfile(source, local_source)
+    subprocess.run(
+        [
+            rscript.parent / "R",
+            "CMD",
+            "SHLIB",
+            "-o",
+            "mcp_test_input_handler.so",
+            local_source.name,
+        ],
+        cwd=directory,
+        env=environment,
+        check=True,
+        capture_output=True,
+        text=True,
     )
-    # Keep IR resolution records and their package links under the same
-    # lifetime while retaining the host's stable package cache.
-    environment["IR_CACHE_DIR"] = str(home.parent / "ir-cache")
-    environment["HOME"] = str(home)
 
 
 def reference_plots(
@@ -183,6 +176,39 @@ def assert_result_content(
         image["data"] = f"<PNG byte-identical to {reference}>"
 
 
+def release_worker_callback_gate(
+    client: "McpClient",
+    description: str,
+    extra_path_labels: tuple[str, ...] = (),
+) -> tuple[Path, ...]:
+    result = client.transcript[-1]["result"]
+    assert result.get("isError") is not True, result
+    content = result["content"]
+    assert len(content) == 1 and content[0]["type"] == "text", content
+    paths = content[0]["text"].splitlines()
+    assert len(paths) == 2 + len(extra_path_labels), content
+    content[0]["text"] = "\n".join(
+        (
+            "<worker callback gate>",
+            "<worker callback checkpoint>",
+            *(f"<worker callback {label}>" for label in extra_path_labels),
+        )
+    )
+
+    gate, checkpoint, *extra_paths = map(Path, paths)
+    gate.touch()
+    deadline = time.monotonic() + 5
+    while not checkpoint.exists():
+        assert client.process.poll() is None, (
+            f"mcp-console stopped before {description} reached its checkpoint"
+        )
+        assert time.monotonic() < deadline, (
+            f"{description} did not reach its checkpoint"
+        )
+        time.sleep(0.01)
+    return tuple(extra_paths)
+
+
 def run_this_suite(suite_path: str) -> None:
     suite = Path(suite_path).resolve()
     root = suite.parents[2]
@@ -198,10 +224,6 @@ class McpClient:
         current_directory: Path | None = None,
         umask: int = -1,
     ) -> None:
-        if environment is not None:
-            environment = environment.copy()
-            if HOST_IR_CACHE_DIR is not None:
-                environment.setdefault("IR_CACHE_DIR", HOST_IR_CACHE_DIR)
         self.temporary_directory = (
             tempfile.TemporaryDirectory() if current_directory is None else None
         )
