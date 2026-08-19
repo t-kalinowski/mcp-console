@@ -275,6 +275,7 @@ Custom workers and caller-configured Python workers do not send `python_activate
 The first worker message must be `ready`.
 The server does not send an evaluation before receiving it.
 For a restart replacement, the server commits the new lifecycle generation as ready after this frame and before starting the continuous dispatcher, so an immediate resolver or activation callback observes the replacement generation.
+That completion is scoped to the owning generation, so a later overlapping restart cannot be marked ready by the earlier call.
 
 One evaluation has this shape:
 

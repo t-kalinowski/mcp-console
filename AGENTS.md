@@ -112,6 +112,7 @@ A failed restart resolution leaves the current worker, its in-memory state, requ
 After every required resolution succeeds, restart commits the R library, DuckDB extension set, and Python environment together, loses all worker-owned in-memory state and unread stdin, eagerly starts a replacement, and returns `[idle]` after it reports ready.
 The implicit session exists for the server lifetime, so restart starts its first worker if none exists yet.
 The replacement generation becomes lifecycle ready after its `ready` frame and before its continuous dispatcher starts, so immediate resolver and activation callbacks observe the new generation as ready.
+Restart completion is scoped to that generation, so a completed restart cannot mark a later overlapping restart ready.
 Restart first queues worker-stdin closure and the sideband shutdown message without waiting behind an active cell, then force-stops the process group and reaps the direct sandbox process at the one-second deadline if that process remains live.
 Once the direct process has stopped, it cancels the continuous sideband reader to release any operation waiting on an incomplete frame.
 It then waits for the active evaluation or preparation owner to release the worker, cancels the stdin writer and output readers, drains standard-stream bytes already buffered at that boundary, and joins the tasks before reporting `[worker stopped: in-memory state lost]` or launching the replacement.
