@@ -1,0 +1,60 @@
+---
+!same-as tests/transcripts/golden/server/initializes_and_lists_tools.yaml
+---
+id: 3
+send:
+  python: |
+    import os
+    import threading
+    import time
+    from pathlib import Path
+    
+    temporary = Path(os.environ["TMPDIR"])
+    started = temporary / "python-thread-started"
+    release = temporary / "python-thread-release"
+    finished = temporary / "python-thread-finished"
+    background_value = "waiting"
+    
+    
+    def run_in_background():
+        global background_value
+        started.touch()
+        while not release.exists():
+            time.sleep(0.01)
+        background_value = "finished while idle"
+        finished.touch()
+    
+    
+    background_thread = threading.Thread(target=run_in_background)
+    background_thread.start()
+    background_thread.is_alive()
+result:
+  content:
+    - type: text
+      text: |
+        True
+  isError: false
+---
+id: 4
+send:
+  timeout_ms: 0
+result:
+  content:
+    - type: text
+      text: |-
+        
+        [idle]
+  isError: false
+---
+id: 5
+send:
+  python: >-
+    background_thread.join(); (background_thread.is_alive(),
+    background_value)
+result:
+  content:
+    - type: text
+      text: |
+        (False, 'finished while idle')
+  isError: false
+...

@@ -2076,6 +2076,67 @@ def test_runs_async_python_explicitly(binary: Path) -> Transcript:
     return client._finish()
 
 
+def test_runs_python_thread_while_idle(binary: Path) -> Transcript:
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        environment = os.environ.copy()
+        environment["TMPDIR"] = temporary_directory
+        client = McpClient(binary, ("serve",), environment)
+        client._initialize_and_list_tools()
+        # fmt: python
+        python = code("""
+            import os
+            import threading
+            import time
+            from pathlib import Path
+
+            temporary = Path(os.environ["TMPDIR"])
+            started = temporary / "python-thread-started"
+            release = temporary / "python-thread-release"
+            finished = temporary / "python-thread-finished"
+            background_value = "waiting"
+
+
+            def run_in_background():
+                global background_value
+                started.touch()
+                while not release.exists():
+                    time.sleep(0.01)
+                background_value = "finished while idle"
+                finished.touch()
+
+
+            background_thread = threading.Thread(target=run_in_background)
+            background_thread.start()
+            background_thread.is_alive()
+            """)
+        client.send(python=python)
+        assert last_tool_text(client) == "True\n"
+
+        started = wait_for_worker_file(
+            Path(temporary_directory),
+            "python-thread-started",
+            client,
+        )
+        client.send(timeout_ms=0)
+        assert last_tool_text(client) == "\n[idle]"
+
+        (started.parent / "python-thread-release").touch()
+        wait_for_worker_file(
+            Path(temporary_directory),
+            "python-thread-finished",
+            client,
+        )
+
+        client.send(
+            python=(
+                "background_thread.join(); "
+                "(background_thread.is_alive(), background_value)"
+            )
+        )
+        assert last_tool_text(client) == "(False, 'finished while idle')\n"
+        return client._finish()
+
+
 def test_recovers_from_python_errors(binary: Path) -> Transcript:
     client = McpClient(binary, ("serve",))
     client._initialize_and_list_tools()
