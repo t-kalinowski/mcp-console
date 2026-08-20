@@ -3,13 +3,13 @@
 ---
 id: 3
 send:
-  r: exit after invalid stdout
+  r: force stop after checkpointed stdout
 result:
   content:
     - type: text
       text: |-
-        zod invalid stdout: � trailing: �<large output>
-        [worker sideband read failed: worker sideband closed]
+        zod checkpointed stdout: �
+        [worker sent an unexpected ready message]
         [worker stopped: in-memory state lost]
         [starting new worker]
         [idle]
@@ -17,15 +17,25 @@ result:
 ---
 id: 4
 send:
-  r: exit after invalid stderr
+  r: force stop after checkpointed stderr
 result:
   content:
     - type: text
       text: |-
-        zod invalid stderr: � trailing: �<large output>
-        [worker sideband read failed: worker sideband closed]
+        zod checkpointed stderr: �
+        [worker sent an unexpected ready message]
         [worker stopped: in-memory state lost]
         [starting new worker]
         [idle]
   isError: true
+---
+id: 5
+send:
+  r: echo
+result:
+  content:
+    - type: text
+      text: |
+        zod: echo
+  isError: false
 ...

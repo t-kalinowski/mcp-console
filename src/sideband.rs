@@ -76,7 +76,7 @@ pub(crate) fn connect_from_env() -> io::Result<(Reader, Writer)> {
 }
 
 impl Reader {
-    fn new(reader: impl Read + AsRawFd + Send + 'static) -> Self {
+    pub(crate) fn new(reader: impl Read + AsRawFd + Send + 'static) -> Self {
         Self {
             inner: Box::new(reader),
             buffer: Vec::new(),
@@ -155,7 +155,7 @@ impl AsRawFd for Reader {
 }
 
 impl Writer {
-    fn new(writer: impl Write + Send + 'static) -> Self {
+    pub(crate) fn new(writer: impl Write + Send + 'static) -> Self {
         Self {
             inner: Arc::new(Mutex::new(Box::new(writer))),
         }
@@ -174,8 +174,8 @@ impl Writer {
 }
 
 impl ChildFds {
-    /// Passes the inheritable worker endpoints to a child through its environment.
-    pub(crate) fn configure(&self, command: &mut crate::sandbox::SandboxedCommand) {
+    /// Passes the inheritable worker endpoints to an ordinary child process.
+    pub(crate) fn configure_process(&self, command: &mut std::process::Command) {
         command.env(READ_FD_ENV, self.read.as_raw_fd().to_string());
         command.env(WRITE_FD_ENV, self.write.as_raw_fd().to_string());
     }

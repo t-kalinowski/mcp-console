@@ -33,6 +33,11 @@ enum Route {
     Idle,
 }
 
+struct TerminalControl<'a> {
+    cancelled: &'a std::io::PipeReader,
+    acknowledge: &'a dyn Fn() -> Result<(), String>,
+}
+
 pub(super) enum OperationResult {
     Completed(OutputCheckpoint),
     RPrepared(String),
@@ -57,10 +62,15 @@ impl Activity {
         output: OutputTape,
         callbacks: WorkerCallbacks,
         cancelled: std::io::PipeReader,
+        acknowledge_terminal: impl Fn() -> Result<(), String> + Send + 'static,
     ) -> thread::JoinHandle<()> {
         let activity = self.clone();
         thread::spawn(move || {
             let mut python_candidates = Vec::new();
+            let terminal = TerminalControl {
+                cancelled: &cancelled,
+                acknowledge: &acknowledge_terminal,
+            };
             loop {
                 while let Some(message) = match reader.receive_buffered() {
                     Ok(message) => message,
@@ -76,7 +86,7 @@ impl Activity {
                         &output,
                         &callbacks,
                         &mut python_candidates,
-                        &cancelled,
+                        &terminal,
                     ) {
                         Ok(keep_reading) => keep_reading,
                         Err(error) => {
@@ -363,7 +373,7 @@ fn handle_message(
     output: &OutputTape,
     callbacks: &WorkerCallbacks,
     python_candidates: &mut Vec<crate::resolver::ManagedPython>,
-    cancelled: &std::io::PipeReader,
+    terminal: &TerminalControl<'_>,
 ) -> Result<bool, String> {
     use crate::worker_protocol::ConsoleChannel::{Diagnostic, Output};
 
@@ -432,7 +442,12 @@ fn handle_message(
         | WorkerMessage::RPreparationFailed { .. }
         | WorkerMessage::PythonPrepared
         | WorkerMessage::PythonPreparationFailed { .. }) => {
-            activity.complete(message, python_candidates, output, cancelled)
+            let keep_reading =
+                activity.complete(message, python_candidates, output, terminal.cancelled)?;
+            if keep_reading {
+                (terminal.acknowledge)()?;
+            }
+            Ok(keep_reading)
         }
         WorkerMessage::Ready => Err("worker sent an unexpected ready message".to_string()),
     }

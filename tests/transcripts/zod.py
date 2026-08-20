@@ -47,6 +47,7 @@ def build_killpg_denial_interposer(directory: Path) -> Path:
 static pid_t denied_process_group = 0;
 static int added_late_member = 0;
 static pid_t late_member = 0;
+static int killpg_count = 0;
 
 static void write_pid_marker(const char *name, pid_t process_id) {
     const char *marker = getenv(name);
@@ -73,6 +74,16 @@ static void write_member_marker(pid_t process_id, pid_t process_group) {
 }
 
 static int deny_killpg(pid_t process_group, int signal) {
+    if (signal == SIGKILL
+        && getenv("MCP_CONSOLE_TEST_KILLPG_COUNT_MARKER") != NULL) {
+        const char *marker = getenv("MCP_CONSOLE_TEST_KILLPG_COUNT_MARKER");
+        int descriptor = open(marker, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+        if (descriptor >= 0) {
+            killpg_count += 1;
+            dprintf(descriptor, "%d %d\n", killpg_count, process_group);
+            close(descriptor);
+        }
+    }
     if (signal == SIGKILL
         && getenv("MCP_CONSOLE_TEST_KILLPG_MARKER") != NULL) {
         denied_process_group = process_group;
@@ -1007,21 +1018,29 @@ def test_preserves_invalid_raw_output_when_worker_exits(binary: Path) -> Transcr
 
     for stream in ("stdout", "stderr"):
         client.send(r=f"exit after invalid {stream}")
-        assert client.transcript[-1]["result"] == {
-            "content": [
-                {
-                    "type": "text",
-                    "text": (
-                        f"zod invalid {stream}: � trailing: �\n"
-                        "[worker sideband read failed: worker sideband closed]\n"
-                        "[worker stopped: in-memory state lost]\n"
-                        "[starting new worker]\n"
-                        "[idle]"
-                    ),
-                }
-            ],
-            "isError": True,
-        }
+        result = client.transcript[-1]["result"]
+        assert result["isError"] is True, result
+        failure = (
+            "\n[worker sideband read failed: worker sideband closed]\n"
+            "[worker stopped: in-memory state lost]\n"
+            "[starting new worker]\n"
+            "[idle]"
+        )
+        output = result["content"][0]["text"]
+        assert output.endswith(failure), output[-200:]
+        prefix = f"zod invalid {stream}: � trailing: �"
+        raw_output = output.removesuffix(failure)
+        marker_prefix = f"zod expected {stream} crash tail: "
+        marker_start = raw_output.find(marker_prefix)
+        assert marker_start >= 0, f"worker crash lost the {stream} length marker"
+        marker_end = raw_output.find("\n", marker_start) + 1
+        assert marker_end > 0, f"worker crash truncated the {stream} length marker"
+        tail_size = int(raw_output[marker_start + len(marker_prefix) : marker_end])
+        raw_output = raw_output[:marker_start] + raw_output[marker_end:]
+        assert raw_output == large_output(prefix) + ("z" * tail_size), (
+            f"worker crash lost {stream} bytes"
+        )
+        result["content"][0]["text"] = prefix + "<large output>" + failure
 
     return client._finish()
 
@@ -1505,6 +1524,39 @@ def test_orders_failure_and_replacement_output(binary: Path) -> Transcript:
         client.send(r="echo")
         assert last_tool_text(client) == "zod: echo\n"
         return client._finish()
+
+
+def test_preserves_checkpointed_raw_output_during_forced_stop(
+    binary: Path,
+) -> Transcript:
+    zod = Path(__file__).resolve().parents[1] / "fixtures" / "zod"
+    client = McpClient(
+        binary,
+        ("serve", "--worker", str(zod)),
+    )
+    client._initialize_and_list_tools()
+
+    for stream in ("stdout", "stderr"):
+        client.send(r=f"force stop after checkpointed {stream}")
+        assert client.transcript[-1]["result"] == {
+            "content": [
+                {
+                    "type": "text",
+                    "text": (
+                        f"zod checkpointed {stream}: �\n"
+                        "[worker sent an unexpected ready message]\n"
+                        "[worker stopped: in-memory state lost]\n"
+                        "[starting new worker]\n"
+                        "[idle]"
+                    ),
+                }
+            ],
+            "isError": True,
+        }
+
+    client.send(r="echo")
+    assert last_tool_text(client) == "zod: echo\n"
+    return client._finish()
 
 
 def test_reports_replacement_startup_failure_and_retry(
@@ -1992,6 +2044,73 @@ def test_restarts_after_worker_exit(binary: Path) -> Transcript:
     return client._finish()
 
 
+def test_replaces_worker_after_relay_exit(binary: Path) -> Transcript:
+    zod = Path(__file__).resolve().parents[1] / "fixtures" / "zod"
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        temporary_path = Path(temporary_directory)
+        killpg_count = temporary_path / "relay-killpg-count"
+        environment = os.environ.copy()
+        environment["MCP_CONSOLE_TEST_KILLPG_COUNT_MARKER"] = str(killpg_count)
+        environment["DYLD_INSERT_LIBRARIES"] = str(
+            build_killpg_denial_interposer(temporary_path)
+        )
+        client = McpClient(
+            binary,
+            ("serve", "--worker", str(zod)),
+            environment,
+        )
+        worker_pid = None
+        relay_pid = None
+        passed = False
+        try:
+            client._initialize_and_list_tools()
+            client.send(r="kill relay and remain live", timeout_ms=5_000)
+
+            result = client.transcript[-1]["result"]
+            assert result["isError"] is True, result
+            topology, failure = result["content"][0]["text"].split("\n", 1)
+            worker, launcher, relay = topology.split("; ")
+            worker_pid = int(worker.removeprefix("zod worker pid: "))
+            launcher_pid = int(launcher.removeprefix("launcher pid: "))
+            relay_pid = int(relay.removeprefix("relay process group: "))
+            assert len({worker_pid, launcher_pid, relay_pid}) == 3, topology
+            assert failure == (
+                "[worker relay stdout closed before retirement completed]\n"
+                "[worker stopped: in-memory state lost]\n"
+                "[starting new worker]\n"
+                "[idle]"
+            ), failure
+            result["content"][0]["text"] = (
+                "zod worker pid: <worker pid>; "
+                "launcher pid: <launcher pid>; "
+                "relay process group: <relay process group>\n" + failure
+            )
+            assert not process_exists(worker_pid), "worker outlived its relay"
+            assert not process_exists(relay_pid), "server did not reap the relay"
+            assert not process_group_exists(relay_pid), (
+                "relay process group outlived the relay"
+            )
+            count, process_group = map(
+                int,
+                killpg_count.read_text(encoding="utf-8").split(),
+            )
+            assert count == 1, "server tried to stop the retired relay group twice"
+            assert process_group == relay_pid, (
+                "server stopped a different process group"
+            )
+
+            client.send(r="echo")
+            assert last_tool_text(client) == "zod: echo\n"
+            transcript = client._finish()
+            passed = True
+            return transcript
+        finally:
+            if not passed:
+                stop_process_group(relay_pid)
+                stop_process_id(worker_pid)
+                stop_process(client.process)
+
+
 def test_restart_closes_worker_stdin(binary: Path) -> Transcript:
     zod = Path(__file__).resolve().parents[1] / "fixtures" / "zod"
     with tempfile.TemporaryDirectory() as temporary_directory:
@@ -2076,6 +2195,153 @@ def test_restart_force_stops_stalled_worker(binary: Path) -> Transcript:
             passed = True
             return transcript
         finally:
+            if not passed:
+                stop_process_group(worker_group)
+                stop_process(client.process)
+
+
+def test_restart_allows_accepted_relay_shutdown_to_finish(
+    binary: Path,
+) -> Transcript:
+    zod = Path(__file__).resolve().parents[1] / "fixtures" / "zod"
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        temporary_path = Path(temporary_directory)
+        environment = os.environ.copy()
+        environment["TMPDIR"] = temporary_directory
+        client = McpClient(
+            binary,
+            ("serve", "--worker", str(zod)),
+            environment,
+        )
+        helper_pid = None
+        passed = False
+        try:
+            client._initialize_and_list_tools()
+            client.send(r="stall accepted relay shutdown", timeout_ms=0)
+            assert last_tool_text(client) == "\n[running]"
+            helper_marker = wait_for_marker(
+                temporary_path,
+                "zod-relay-resume-helper",
+                client,
+            )
+            helper_pid = int(helper_marker.read_text(encoding="utf-8"))
+
+            restarted = client._start_session(action="restart")
+            wait_for_marker(
+                temporary_path,
+                "zod-relay-stopped-after-shutdown",
+                client,
+            )
+            client._receive(restarted)
+            restart_output = last_tool_text(client)
+            assert restart_output == (
+                "zod output during relay retirement\n"
+                "[active evaluation stopped by session restart request]\n"
+                "[worker stopped: in-memory state lost]\n"
+                "[starting new worker]\n"
+                "[idle]"
+            ), restart_output
+
+            client.send(r="echo")
+            assert last_tool_text(client) == "zod: echo\n"
+            transcript = client._finish()
+            passed = True
+            return transcript
+        finally:
+            stop_process_id(helper_pid)
+            if not passed:
+                stop_process(client.process)
+
+
+def test_restart_outer_force_stops_unresponsive_relay(binary: Path) -> Transcript:
+    zod = Path(__file__).resolve().parents[1] / "fixtures" / "zod"
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        temporary_path = Path(temporary_directory)
+        environment = os.environ.copy()
+        environment["TMPDIR"] = temporary_directory
+        environment["ZOD_REPORT_PROCESS_GROUP"] = "1"
+        client = McpClient(
+            binary,
+            ("serve", "--worker", str(zod)),
+            environment,
+        )
+        helper_pid = None
+        worker_group = None
+        passed = False
+        try:
+            client._initialize_and_list_tools()
+            client.send(r="stall with stopped relay", timeout_ms=0)
+            assert last_tool_text(client) == "\n[running]"
+            helper_marker = wait_for_marker(
+                temporary_path,
+                "zod-relay-stop-helper",
+                client,
+            )
+            helper_pid = int(helper_marker.read_text(encoding="utf-8"))
+            wait_for_marker(temporary_path, "zod-relay-stopped", client)
+            relay_target, launcher_pid = map(
+                int,
+                wait_for_marker(
+                    temporary_path,
+                    "zod-relay-stop-target",
+                    client,
+                )
+                .read_text(encoding="utf-8")
+                .split(),
+            )
+            worker_group = read_worker_group(
+                wait_for_marker(temporary_path, "zod-process-group", client)
+            )
+            assert relay_target == worker_group, (
+                "helper did not stop the sandbox process-group leader"
+            )
+            assert launcher_pid != relay_target, (
+                "Zod launcher unexpectedly identified the relay"
+            )
+            assert os.getpgid(launcher_pid) == relay_target, (
+                "Zod launcher did not inherit the relay process group"
+            )
+
+            restarted = client._start_session(action="restart")
+            received = threading.Event()
+            errors: list[BaseException] = []
+
+            def receive_restart() -> None:
+                try:
+                    client._receive(restarted)
+                except BaseException as error:
+                    errors.append(error)
+                finally:
+                    received.set()
+
+            restart_started = time.monotonic()
+            receiver = threading.Thread(target=receive_restart, daemon=True)
+            receiver.start()
+            assert received.wait(2), "restart outlived its original shutdown deadline"
+            restart_elapsed = time.monotonic() - restart_started
+            receiver.join()
+            if errors:
+                raise errors[0]
+
+            assert restart_elapsed < 2, f"restart took {restart_elapsed:.3f} seconds"
+            assert not process_group_exists(worker_group), (
+                "stopped relay process group outlived restart"
+            )
+            assert not process_exists(relay_target), "server did not reap the relay"
+            assert last_tool_text(client) == (
+                "[active evaluation stopped by session restart request]\n"
+                "[worker stopped: in-memory state lost]\n"
+                "[starting new worker]\n"
+                "[idle]"
+            )
+
+            client.send(r="echo")
+            assert last_tool_text(client) == "zod: echo\n"
+            transcript = client._finish()
+            passed = True
+            return transcript
+        finally:
+            stop_process_id(helper_pid)
             if not passed:
                 stop_process_group(worker_group)
                 stop_process(client.process)
@@ -2693,6 +2959,25 @@ def process_group_exists(process_group: int) -> bool:
     except PermissionError:
         return True
     return True
+
+
+def process_exists(process_id: int) -> bool:
+    try:
+        os.kill(process_id, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def stop_process_id(process_id: int | None) -> None:
+    if process_id is None:
+        return
+    try:
+        os.kill(process_id, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
 
 
 def wait_for_process_group_exit(process_group: int, client: McpClient) -> None:

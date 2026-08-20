@@ -3,6 +3,7 @@
 # requires-python = ">=3.11"
 # ///
 
+import fcntl
 import json
 import os
 import signal
@@ -69,10 +70,24 @@ def emit_large_output(descriptor: int, prefix: bytes) -> None:
     write_all(descriptor, b"y" * LARGE_OUTPUT_SIZE)
 
 
-def emit_background_stderr(root: Path) -> None:
+def fill_nonblocking(descriptor: int, data: bytes) -> int:
+    flags = fcntl.fcntl(descriptor, fcntl.F_GETFL)
+    fcntl.fcntl(descriptor, fcntl.F_SETFL, flags | os.O_NONBLOCK)
+    written = 0
+    while written < len(data):
+        try:
+            written += os.write(descriptor, data[written:])
+        except BlockingIOError:
+            break
+    assert written > 0
+    return written
+
+
+def emit_background_stderr(root: Path, reader: TextIO, writer: TextIO) -> None:
     while not (root / "zod-release-background-stderr").exists():
         time.sleep(0.01)
     emit_large_output(2, b"zod background stderr\n")
+    wait_for_server_to_process_sideband(reader, writer)
     (root / "zod-background-stderr-emitted").touch()
 
 
@@ -243,6 +258,64 @@ def main() -> None:
             while True:
                 time.sleep(60)
 
+        if source == "stall accepted relay shutdown":
+            relay_pid = os.getpgrp()
+            helper = os.fork()
+            if helper == 0:
+                os.setsid()
+                reader.close()
+                writer.close()
+                for descriptor in (1, 2):
+                    os.close(descriptor)
+                while os.read(0, 1) != b"":
+                    pass
+                os.close(0)
+                os.kill(relay_pid, signal.SIGSTOP)
+                (temporary / "zod-relay-stopped-after-shutdown").touch()
+                time.sleep(1.5)
+                try:
+                    os.kill(relay_pid, signal.SIGCONT)
+                except ProcessLookupError:
+                    pass
+                os._exit(0)
+            (temporary / "zod-relay-resume-helper").write_text(
+                str(helper),
+                encoding="utf-8",
+            )
+            stopped = temporary / "zod-relay-stopped-after-shutdown"
+            while not stopped.exists():
+                time.sleep(0.01)
+            write_all(1, b"zod output during relay retirement\n")
+            while True:
+                time.sleep(60)
+
+        if source == "stall with stopped relay":
+            relay_pid = os.getpgrp()
+            launcher_pid = os.getppid()
+            assert relay_pid != launcher_pid
+            assert os.getpgid(launcher_pid) == relay_pid
+            helper = os.fork()
+            if helper == 0:
+                os.setsid()
+                reader.close()
+                writer.close()
+                for descriptor in (0, 1, 2):
+                    os.close(descriptor)
+                os.kill(relay_pid, signal.SIGSTOP)
+                (temporary / "zod-relay-stopped").touch()
+                while True:
+                    signal.pause()
+            (temporary / "zod-relay-stop-helper").write_text(
+                str(helper),
+                encoding="utf-8",
+            )
+            (temporary / "zod-relay-stop-target").write_text(
+                f"{relay_pid} {launcher_pid}",
+                encoding="utf-8",
+            )
+            while True:
+                signal.pause()
+
         if source == "violate protocol":
             send_output(writer, "zod output before protocol failure")
             send(writer, {"kind": "ready"})
@@ -253,8 +326,44 @@ def main() -> None:
             send(writer, {"kind": "ready"})
             continue
 
+        if source in {
+            "force stop after checkpointed stdout",
+            "force stop after checkpointed stderr",
+        }:
+            stream = source.removeprefix("force stop after checkpointed ")
+            descriptor = 1 if stream == "stdout" else 2
+            write_all(
+                descriptor,
+                f"zod checkpointed {stream}: ".encode() + b"\xe2\x82",
+            )
+            # The relay checkpoints raw streams before forwarding this callback.
+            # Its response proves these bytes preceded forced retirement.
+            wait_for_server_to_process_sideband(reader, writer)
+            send(writer, {"kind": "ready"})
+            while True:
+                signal.pause()
+
         if source == "exit unexpectedly":
             os._exit(86)
+
+        if source == "kill relay and remain live":
+            worker_pid = os.getpid()
+            launcher_pid = os.getppid()
+            relay_pid = os.getpgrp()
+            assert len({worker_pid, launcher_pid, relay_pid}) == 3
+            assert os.getpgid(launcher_pid) == relay_pid
+            send_output(
+                writer,
+                (
+                    f"zod worker pid: {worker_pid}; "
+                    f"launcher pid: {launcher_pid}; "
+                    f"relay process group: {relay_pid}\n"
+                ),
+            )
+            wait_for_server_to_process_sideband(reader, writer)
+            os.kill(relay_pid, signal.SIGKILL)
+            while True:
+                signal.pause()
 
         if source == "emit stdout":
             write_all(1, b"zod stdout ")
@@ -267,20 +376,25 @@ def main() -> None:
         if source in {"exit after invalid stdout", "exit after invalid stderr"}:
             stream = source.removeprefix("exit after invalid ")
             descriptor = 1 if stream == "stdout" else 2
-            write_all(
+            emit_large_output(
                 descriptor,
                 f"zod invalid {stream}: ".encode() + b"\xff trailing: \xe2\x82",
             )
-            os.close(descriptor)
+            tail_size = fill_nonblocking(descriptor, b"z" * LARGE_OUTPUT_SIZE)
+            marker_descriptor = 2 if descriptor == 1 else 1
+            write_all(
+                marker_descriptor,
+                f"zod expected {stream} crash tail: {tail_size}\n".encode(),
+            )
             os._exit(86)
 
         if source == "start background stderr":
             temporary = Path(os.environ["TMPDIR"])
             child = os.fork()
             if child == 0:
-                reader.close()
-                writer.close()
-                emit_background_stderr(temporary)
+                for descriptor in (0, 1):
+                    os.close(descriptor)
+                emit_background_stderr(temporary, reader, writer)
                 os._exit(0)
             (temporary / "zod-background-stderr-pid").write_text(
                 str(child),
@@ -288,6 +402,9 @@ def main() -> None:
             )
             (temporary / "zod-background-stderr-started").touch()
             send(writer, {"kind": "completed"})
+            child_pid, status = os.waitpid(child, 0)
+            assert child_pid == child
+            assert os.waitstatus_to_exitcode(status) == 0
             continue
 
         if source == "start background sideband":
