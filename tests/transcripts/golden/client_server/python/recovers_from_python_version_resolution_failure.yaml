@@ -20,21 +20,12 @@ send:
 result:
   content:
     - type: text
-      text: |
-        Error: managed Python version resolution failed with exit status: 1: error: Failed to initialize cache at `/dev/null`
-          Caused by: failed to create directory `/dev/null`: File exists (os error 17)
-        parse error: premature EOF
-                                               
-                             (right here) ------^
-
-        Warning message:
-        In system2(uv, args, ...) :
-          running command ''<uv executable>' python list --all-versions --color never --output-format json --python-preference  only-managed' had status 2
+      text: "Error: managed Python version resolution failed with exit status: 1: error: Failed to initialize cache at `/dev/null`\n  Caused by: failed to create directory `/dev/null`: File exists (os error 17)\nparse error: premature EOF\n                                       \n                     (right here) ------^\n\nWarning message:\nIn system2(uv, args, ...) :\n  running command ''<uv executable>' python list --all-versions --color never --output-format json --python-preference  only-managed' had status 2\n"
   isError: false
 ---
 id: 4
 send:
-  r: identical(Sys.getpid(), worker_pid)
+  r: "identical(Sys.getpid(), worker_pid)"
 result:
   content:
     - type: text

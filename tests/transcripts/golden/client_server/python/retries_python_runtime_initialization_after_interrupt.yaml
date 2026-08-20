@@ -86,9 +86,7 @@ send:
 
     sum(
         getattr(filter_, "_mcp_console_filter", False)
-        for filter_ in logging.getLogger(
-            "matplotlib.font_manager"
-        ).filters
+        for filter_ in logging.getLogger("matplotlib.font_manager").filters
     )
 result:
   content:
