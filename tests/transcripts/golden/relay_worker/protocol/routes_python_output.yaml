@@ -44,11 +44,13 @@ worker:
 ---
 worker:
   kind: console_diagnostic
-  data: "  File \"<string>\", line 105, in _mcp_console_eval_cell\n"
+  data: |2
+      File "<string>", line 105, in _mcp_console_eval_cell
 ---
 worker:
   kind: console_diagnostic
-  data: "  File \"<mcp-console:python:e1>\", line 6, in <module>\n"
+  data: |2
+      File "<mcp-console:python:e1>", line 6, in <module>
 ---
 worker:
   kind: console_diagnostic

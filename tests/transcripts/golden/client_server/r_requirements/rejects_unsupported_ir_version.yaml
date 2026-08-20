@@ -6,7 +6,7 @@ session:
   action: prepare
   requirements:
     r:
-      - "local::package"
+      - local::package
 result:
   content:
     - type: text

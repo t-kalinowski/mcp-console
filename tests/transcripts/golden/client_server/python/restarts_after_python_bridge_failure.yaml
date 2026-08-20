@@ -39,7 +39,7 @@ result:
 ---
 id: 5
 send:
-  r: "exists(\"python_worker_marker\", inherits = FALSE)"
+  r: exists("python_worker_marker", inherits = FALSE)
 result:
   content:
     - type: text

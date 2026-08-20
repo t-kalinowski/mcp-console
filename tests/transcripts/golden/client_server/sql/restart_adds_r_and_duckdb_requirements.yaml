@@ -21,12 +21,16 @@ session:
 result:
   content:
     - type: text
-      text: "Invalid Error: HTTP Error: Failed to download extension \"not_a_real_duckdb_extension\""
+      text: >-
+        Invalid Error: HTTP Error: Failed to download extension
+        "not_a_real_duckdb_extension"
   isError: true
 ---
 id: 5
 send:
-  r: "identical(restart_marker, 42L) && !requireNamespace('praise', quietly = TRUE)"
+  r: >-
+    identical(restart_marker, 42L) && !requireNamespace('praise', quietly =
+    TRUE)
 result:
   content:
     - type: text
@@ -74,7 +78,7 @@ result:
 ---
 id: 9
 send:
-  sql: "PRAGMA create_fts_index('restart_documents', 'id', 'body')"
+  sql: PRAGMA create_fts_index('restart_documents', 'id', 'body')
 result:
   content:
     - type: text

@@ -27,7 +27,7 @@ result:
         before plot
         after plot
     - type: image
-      data: "<PNG byte-identical to live Rscript page 1>"
+      data: <PNG byte-identical to live Rscript page 1>
       mimeType: image/png
   isError: false
 ...

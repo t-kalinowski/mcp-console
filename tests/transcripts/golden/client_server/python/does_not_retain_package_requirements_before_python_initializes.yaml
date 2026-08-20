@@ -18,7 +18,7 @@ result:
 ---
 id: 4
 send:
-  r: "tools::pskill(Sys.getpid(), signal = 9L)"
+  r: tools::pskill(Sys.getpid(), signal = 9L)
 result:
   content:
     - type: text

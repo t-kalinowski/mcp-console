@@ -3,5 +3,5 @@
 ---
 id: 3
 send:
-  r: "<large cell>"
+  r: <large cell>
 ...

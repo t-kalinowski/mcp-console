@@ -38,7 +38,7 @@ result:
 ---
 id: 5
 send:
-  r: "cat(\"cell: \", idle_answer, \"\\n\", sep = \"\")"
+  r: 'cat("cell: ", idle_answer, "\n", sep = "")'
   stdin: |
     yes
 result:

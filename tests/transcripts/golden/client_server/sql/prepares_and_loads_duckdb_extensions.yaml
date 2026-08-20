@@ -73,7 +73,9 @@ session:
 result:
   content:
     - type: text
-      text: "Invalid Error: HTTP Error: Failed to download extension \"not_a_real_duckdb_extension\""
+      text: >-
+        Invalid Error: HTTP Error: Failed to download extension
+        "not_a_real_duckdb_extension"
   isError: true
 ---
 id: 9

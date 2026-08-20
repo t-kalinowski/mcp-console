@@ -38,7 +38,7 @@ result:
 ---
 id: 5
 send:
-  r: "cat(\"cell body\\n\")"
+  r: cat("cell body\n")
 result:
   content:
     - type: text

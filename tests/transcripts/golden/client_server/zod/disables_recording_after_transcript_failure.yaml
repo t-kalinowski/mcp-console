@@ -44,5 +44,7 @@ journal after failure:
   - tool_call
 complete final line: true
 post-failure append: false
-server stderr: "mcp-console: transcript recording disabled: <artifact persistence failed>"
+server stderr: >-
+  mcp-console: transcript recording disabled: <artifact persistence
+  failed>
 ...

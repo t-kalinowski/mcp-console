@@ -2,9 +2,9 @@
 command:
   - mcp-console
   - sandbox
-  - "--"
+  - --
   - python
-  - "-c"
+  - -c
   - |
     print("ran")
 environment:

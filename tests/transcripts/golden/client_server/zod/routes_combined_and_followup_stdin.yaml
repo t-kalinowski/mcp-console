@@ -4,7 +4,7 @@
 id: 3
 send:
   r: input length without request
-  stdin: "<long UTF-8 stdin containing NUL>"
+  stdin: <long UTF-8 stdin containing NUL>
 result:
   content:
     - type: text
@@ -119,7 +119,7 @@ result:
 id: 13
 send:
   r: echo
-  stdin: "<large unread stdin>"
+  stdin: <large unread stdin>
   timeout_ms: 1000
 result:
   content:

@@ -39,7 +39,7 @@ result:
 ---
 id: 6
 send:
-  r: "readline(\"R replay> \")"
+  r: readline("R replay> ")
   stdin: |
     !
 result:
@@ -135,7 +135,7 @@ result:
 ---
 id: 14
 send:
-  python: "input(\"Python replay> \")"
+  python: input("Python replay> ")
   stdin: |
     !
 result:

@@ -17,13 +17,13 @@ send:
 result:
   content:
     - type: image
-      data: "<PNG byte-identical to live Rscript page 1>"
+      data: <PNG byte-identical to live Rscript page 1>
       mimeType: image/png
     - type: text
       text: |
         after first page finalized
     - type: image
-      data: "<PNG byte-identical to live Rscript page 2>"
+      data: <PNG byte-identical to live Rscript page 2>
       mimeType: image/png
   isError: false
 ...

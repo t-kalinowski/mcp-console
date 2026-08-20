@@ -6,7 +6,7 @@ session:
   action: prepare
   requirements:
     r:
-      - "praise, zeallot"
+      - praise, zeallot
 result:
   content:
     - type: text

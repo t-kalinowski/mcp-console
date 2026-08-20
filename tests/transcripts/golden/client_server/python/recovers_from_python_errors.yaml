@@ -40,7 +40,7 @@ result:
 ---
 id: 5
 send:
-  python: "\"compile_partial\" in globals()"
+  python: '"compile_partial" in globals()'
 result:
   content:
     - type: text
@@ -50,7 +50,7 @@ result:
 ---
 id: 6
 send:
-  python: "nul_state = 42\u0000"
+  python: "nul_state = 42\0"
 result:
   content:
     - type: text

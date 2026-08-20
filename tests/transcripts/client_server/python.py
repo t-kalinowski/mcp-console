@@ -93,9 +93,7 @@ def test_rejects_python_older_than_3_10(binary: Path) -> Transcript:
         version_failure + bridge_failure + worker_failure,
     }
     assert output in expected, output
-    result["content"][0]["text"] = (
-        bridge_failure + version_failure + worker_failure
-    )
+    result["content"][0]["text"] = bridge_failure + version_failure + worker_failure
     return client._finish()
 
 
@@ -1108,9 +1106,7 @@ def test_retries_python_runtime_initialization_after_interrupt(
 
                 sum(
                     getattr(filter_, "_mcp_console_filter", False)
-                    for filter_ in logging.getLogger(
-                        "matplotlib.font_manager"
-                    ).filters
+                    for filter_ in logging.getLogger("matplotlib.font_manager").filters
                 )
                 """)
             client.send(python=python)

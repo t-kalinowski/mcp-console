@@ -2,9 +2,9 @@
 command:
   - mcp-console
   - sandbox
-  - "--"
+  - --
   - Rscript
-  - "-e"
+  - -e
   - |
     {
       p <- processx::process$new("/bin/cat", pty = TRUE)

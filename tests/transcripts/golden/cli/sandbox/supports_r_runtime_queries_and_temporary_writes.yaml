@@ -2,9 +2,9 @@
 command:
   - mcp-console
   - sandbox
-  - "--"
+  - --
   - Rscript
-  - "-e"
+  - -e
   - |
     {
       stopifnot(parallel::detectCores() >= 1)

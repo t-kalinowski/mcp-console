@@ -25,7 +25,7 @@ result:
 ---
 id: 4
 send:
-  r: "system(\"printf boundary-cell-ran\")"
+  r: system("printf boundary-cell-ran")
 result:
   content:
     - type: text

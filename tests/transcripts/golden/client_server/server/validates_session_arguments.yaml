@@ -17,7 +17,9 @@ session:
 result:
   content:
     - type: text
-      text: "at least one of `requirements.r`, `requirements.python`, or `requirements.duckdb` is required"
+      text: >-
+        at least one of `requirements.r`, `requirements.python`, or
+        `requirements.duckdb` is required
   isError: true
 ---
 id: 5
@@ -29,7 +31,9 @@ session:
 result:
   content:
     - type: text
-      text: "DuckDB extension names must start with a lowercase ASCII letter and contain only lowercase ASCII letters, digits, and underscores"
+      text: >-
+        DuckDB extension names must start with a lowercase ASCII letter and
+        contain only lowercase ASCII letters, digits, and underscores
   isError: true
 ---
 id: 6
@@ -77,7 +81,9 @@ session:
 result:
   content:
     - type: text
-      text: "at least one of `requirements.r`, `requirements.python`, or `requirements.duckdb` is required"
+      text: >-
+        at least one of `requirements.r`, `requirements.python`, or
+        `requirements.duckdb` is required
   isError: true
 ---
 id: 10
@@ -103,6 +109,8 @@ session:
 result:
   content:
     - type: text
-      text: "DuckDB extension names must start with a lowercase ASCII letter and contain only lowercase ASCII letters, digits, and underscores"
+      text: >-
+        DuckDB extension names must start with a lowercase ASCII letter and
+        contain only lowercase ASCII letters, digits, and underscores
   isError: true
 ...

@@ -45,10 +45,10 @@ send:
 result:
   content:
     - type: image
-      data: "<PNG byte-identical to live matplotlib savefig 1>"
+      data: <PNG byte-identical to live matplotlib savefig 1>
       mimeType: image/png
     - type: image
-      data: "<PNG byte-identical to live matplotlib savefig 2>"
+      data: <PNG byte-identical to live matplotlib savefig 2>
       mimeType: image/png
   isError: false
 ---
@@ -71,7 +71,7 @@ result:
         after show
         <matplotlib figure displayhook representation>
     - type: image
-      data: "<PNG byte-identical to live shown matplotlib savefig 1>"
+      data: <PNG byte-identical to live shown matplotlib savefig 1>
       mimeType: image/png
   isError: false
 ---
@@ -120,7 +120,7 @@ result:
           File "<mcp-console:python:e5>", line 5, in <module>
         ValueError: cell failed
     - type: image
-      data: "<PNG byte-identical to live error-cell matplotlib savefig 1>"
+      data: <PNG byte-identical to live error-cell matplotlib savefig 1>
       mimeType: image/png
   isError: false
 ---
@@ -156,7 +156,7 @@ result:
           File "<mcp-console:python:e7>", line 2, in fail_plot_capture
         RuntimeError: plot render failed
     - type: image
-      data: "<PNG byte-identical to live second matplotlib savefig 1>"
+      data: <PNG byte-identical to live second matplotlib savefig 1>
       mimeType: image/png
   isError: false
 ---
@@ -200,7 +200,7 @@ result:
 ---
 id: 14
 send:
-  python: "(cache_link_replaced, __import__('yaml12').__name__)"
+  python: (cache_link_replaced, __import__('yaml12').__name__)
 result:
   content:
     - type: text

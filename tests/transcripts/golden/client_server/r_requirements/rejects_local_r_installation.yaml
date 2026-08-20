@@ -6,7 +6,7 @@ session:
   action: prepare
   requirements:
     r:
-      - "local::<absolute package path>?reinstall&nocache"
+      - local::<absolute package path>?reinstall&nocache
 result:
   content:
     - type: text

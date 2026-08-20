@@ -4,5 +4,5 @@
 id: 3
 send:
   r: stall
-  stdin: "<large stdin>"
+  stdin: <large stdin>
 ...

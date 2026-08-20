@@ -40,7 +40,9 @@ session:
 result:
   content:
     - type: text
-      text: blocked live R preparation; further requirement changes are unavailable until session restart
+      text: >-
+        blocked live R preparation; further requirement changes are unavailable
+        until session restart
   isError: true
 ---
 id: 5

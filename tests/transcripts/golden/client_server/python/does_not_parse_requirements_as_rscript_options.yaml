@@ -6,8 +6,10 @@ session:
   action: prepare
   requirements:
     python:
-      - "-e"
-      - "base::writeLines('executed', base::Sys.getenv('MCP_CONSOLE_HOST_MARKER'))"
+      - -e
+      - >-
+        base::writeLines('executed',
+        base::Sys.getenv('MCP_CONSOLE_HOST_MARKER'))
 result:
   content:
     - type: text

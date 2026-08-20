@@ -45,7 +45,7 @@ result:
 ---
 id: 6
 send:
-  r: "readline(\"after later callback> \")"
+  r: readline("after later callback> ")
   stdin: |
     !
 result:
@@ -117,7 +117,7 @@ result:
 ---
 id: 11
 send:
-  r: "identical(readline(\"after boundary> \"), paste0(strrep(\"x\", 6), \"!\"))"
+  r: identical(readline("after boundary> "), paste0(strrep("x", 6), "!"))
   stdin: |
     !
 result:

@@ -37,7 +37,7 @@ result:
 ---
 id: 5
 send:
-  r: "stop(\"boom\")"
+  r: stop("boom")
 result:
   content:
     - type: text

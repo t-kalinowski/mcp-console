@@ -43,7 +43,9 @@ session:
 result:
   content:
     - type: text
-      text: blocked live R preparation; further requirement changes are unavailable until session restart
+      text: >-
+        blocked live R preparation; further requirement changes are unavailable
+        until session restart
   isError: true
 ---
 id: 5
@@ -73,7 +75,7 @@ send:
 result:
   content:
     - type: text
-      text: "<worker temporary RDS path>"
+      text: <worker temporary RDS path>
   isError: false
 ---
 id: 7

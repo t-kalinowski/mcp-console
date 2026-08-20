@@ -52,7 +52,7 @@ result:
 ---
 id: 6
 send:
-  r: "reticulate::py_require()$packages"
+  r: reticulate::py_require()$packages
 result:
   content:
     - type: text

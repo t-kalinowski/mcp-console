@@ -9,7 +9,9 @@ send:
 result:
   content:
     - type: text
-      text: "failed to deserialize parameters: unknown field `wait_ms`, expected one of `r`, `python`, `sql`, `stdin`, `timeout_ms`"
+      text: >-
+        failed to deserialize parameters: unknown field `wait_ms`, expected one
+        of `r`, `python`, `sql`, `stdin`, `timeout_ms`
   isError: true
 ---
 id: 4
@@ -20,7 +22,7 @@ send:
 result:
   content:
     - type: text
-      text: "only one of `r`, `python`, or `sql` may be supplied"
+      text: only one of `r`, `python`, or `sql` may be supplied
   isError: true
 ---
 id: 5

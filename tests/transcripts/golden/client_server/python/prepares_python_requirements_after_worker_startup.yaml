@@ -93,7 +93,7 @@ result:
 ---
 id: 9
 send:
-  r: "is.null(reticulate::py_require()$python_version)"
+  r: is.null(reticulate::py_require()$python_version)
 result:
   content:
     - type: text
