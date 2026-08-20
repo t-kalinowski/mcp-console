@@ -1,0 +1,25 @@
+---
+!same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
+---
+id: 3
+send:
+  r: |
+    prompted <- readline("callback> ")
+    direct <- local({
+      connection <- suppressWarnings(file("/dev/stdin"))
+      on.exit(close(connection))
+      readLines(connection, n = 1)
+    })
+    cat(paste(prompted, direct, sep = "|"), "\n", sep = "")
+  stdin: |
+    callback
+    direct
+  timeout_ms: 1000
+result:
+  content:
+    - type: text
+      text: |
+        [input requested: "callback> "]
+        callback|direct
+  isError: false
+...

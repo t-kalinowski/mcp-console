@@ -1,0 +1,49 @@
+---
+!same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
+---
+id: 3
+session:
+  action: prepare
+  requirements:
+    python:
+      - py-yaml12
+result:
+  content:
+    - type: text
+      text: "[prepared]"
+  isError: false
+---
+id: 4
+send:
+  python: restart_marker = 42
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+id: 5
+session:
+  action: restart
+result:
+  content:
+    - type: text
+      text: |-
+        [worker stopped: in-memory state lost]
+        [starting new worker]
+        [idle]
+  isError: false
+---
+id: 6
+send:
+  python: |
+    import yaml12
+
+    "restart_marker" in globals(), yaml12.__name__
+result:
+  content:
+    - type: text
+      text: |
+        (False, 'yaml12')
+  isError: false
+...

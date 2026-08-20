@@ -1,0 +1,107 @@
+---
+!same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
+---
+id: 3
+send:
+  r: |
+    sql_interrupt_armed <- FALSE
+    dyn.load("./mcp_test_input_handler.so")
+    invisible(.Call(
+      "mcp_test_register_input_handler",
+      file.path(tempdir(), "sql-interrupt-finished-fifo"),
+      function() {
+        invisible(file.create(file.path(
+          tempdir(),
+          "sql-interrupt-finished"
+        )))
+      }
+    ))
+    options(duckdb.progress_display = function(percentage) {
+      if (isTRUE(sql_interrupt_armed)) {
+        invisible(file.create(file.path(
+          tempdir(),
+          "sql-interrupt-started"
+        )))
+      }
+    })
+    invisible(sql_connection())
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+id: 4
+send:
+  sql: |
+    CREATE TABLE interrupt_state AS
+    SELECT CAST(42 AS INTEGER) AS answer
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+id: 5
+send:
+  r: |
+    sql_interrupt_armed <- TRUE
+    invisible(DBI::dbExecute(
+      sql_connection(),
+      "SET enable_progress_bar = true"
+    ))
+    invisible(DBI::dbExecute(
+      sql_connection(),
+      "SET progress_bar_time = 0"
+    ))
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+id: 6
+send:
+  sql: |
+    SELECT sum(hash(value)) AS total
+    FROM range(1000000000000) AS values(value)
+  timeout_ms: 0
+result:
+  content:
+    - type: text
+      text: |-
+
+        [running]
+  isError: false
+---
+id: 7
+session:
+  action: interrupt
+result:
+  content:
+    - type: text
+      text: "[interrupt sent]"
+  isError: false
+---
+id: 8
+send:
+  timeout_ms: 1000
+result:
+  content:
+    - type: text
+      text: "\n"
+  isError: false
+---
+id: 9
+send:
+  sql: SELECT answer FROM interrupt_state
+result:
+  content:
+    - type: text
+      text: |
+        # A tibble: 1 × 1
+           answer
+          <int32>
+        1      42
+  isError: false
+...

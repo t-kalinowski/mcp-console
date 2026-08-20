@@ -1,0 +1,33 @@
+---
+!same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
+---
+id: 3
+session:
+  action: prepare
+  requirements:
+    python:
+      - "-e"
+      - "base::writeLines('executed', base::Sys.getenv('MCP_CONSOLE_HOST_MARKER'))"
+result:
+  content:
+    - type: text
+      text: |-
+        managed Python resolution failed:
+        resolver input:
+        {
+          "python": "3.12.x (reticulate default)",
+          "packages": [
+            "numpy",
+            "pandas",
+            "-e",
+            "base::writeLines('executed', base::Sys.getenv('MCP_CONSOLE_HOST_MARKER'))"
+          ]
+        }
+        uv output:
+        error: unexpected argument '-e' found
+
+        Usage: uv tool run [OPTIONS] [COMMAND]
+
+        For more information, try '--help'.
+  isError: true
+...

@@ -1,0 +1,128 @@
+---
+!same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
+---
+id: 3
+session:
+  action: prepare
+  requirements:
+    python:
+      - py-yaml12
+result:
+  content:
+    - type: text
+      text: "[prepared]"
+  isError: false
+---
+id: 4
+session:
+  action: prepare
+  requirements:
+    python:
+      - not a valid requirement !!!
+result:
+  content:
+    - type: text
+      text: |-
+        managed Python resolution failed:
+        resolver input:
+        {
+          "python": "3.12.x (reticulate default)",
+          "packages": [
+            "numpy",
+            "pandas",
+            "not a valid requirement !!!",
+            "py-yaml12"
+          ]
+        }
+        uv output:
+        error: Failed to parse: `not a valid requirement !!!`
+          Caused by: Expected one of `@`, `(`, `<`, `=`, `>`, `~`, `!`, `;`, found `a`
+            not a valid requirement !!!
+                ^
+  isError: true
+---
+id: 5
+session:
+  action: prepare
+  requirements:
+    python:
+      - not a valid requirement !!!
+result:
+  content:
+    - type: text
+      text: |-
+        managed Python resolution failed:
+        resolver input:
+        {
+          "python": "3.12.x (reticulate default)",
+          "packages": [
+            "numpy",
+            "pandas",
+            "not a valid requirement !!!",
+            "py-yaml12"
+          ]
+        }
+        uv output:
+        error: Failed to parse: `not a valid requirement !!!`
+          Caused by: Expected one of `@`, `(`, `<`, `=`, `>`, `~`, `!`, `;`, found `a`
+            not a valid requirement !!!
+                ^
+  isError: true
+---
+id: 6
+session:
+  action: prepare
+  requirements:
+    python:
+      - |-
+        numpy
+        pandas
+result:
+  content:
+    - type: text
+      text: Python requirement strings must not contain NUL or line breaks
+  isError: true
+---
+id: 7
+send:
+  r: |
+    seed <- tail(reticulate::py_require()$history, 1L)[[1L]]
+    printed_requirements <- capture.output(print(reticulate::py_require()))
+    stopifnot(
+      identical(seed$requested_from, "mcp-console"),
+      identical(seed$action, "set"),
+      isFALSE(seed$exclude_newer_supplied),
+      identical(seed$packages, c("numpy", "pandas", "py-yaml12")),
+      length(printed_requirements) > 0L
+    )
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+id: 8
+send:
+  python: |
+    import yaml12
+
+    yaml12.__name__
+result:
+  content:
+    - type: text
+      text: |
+        'yaml12'
+  isError: false
+---
+id: 9
+session:
+  action: prepare
+  requirements:
+    python:
+      - py-yaml12
+result:
+  content:
+    - type: text
+      text: "[prepared]"
+  isError: false
+...

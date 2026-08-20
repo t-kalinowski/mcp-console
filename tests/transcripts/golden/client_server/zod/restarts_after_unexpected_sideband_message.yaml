@@ -1,0 +1,36 @@
+---
+!same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
+---
+id: 3
+send:
+  r: report process group
+result:
+  content:
+    - type: text
+      text: |
+        zod process group: <process group>
+  isError: false
+---
+id: 4
+send:
+  r: violate protocol
+result:
+  content:
+    - type: text
+      text: |-
+        zod output before protocol failure
+        [worker sent an unexpected ready message]
+        [worker stopped: in-memory state lost]
+        [starting new worker]
+        [idle]
+  isError: true
+---
+id: 5
+send:
+  r: complete silently
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+...

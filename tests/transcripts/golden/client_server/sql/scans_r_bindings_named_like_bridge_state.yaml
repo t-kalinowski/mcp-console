@@ -1,0 +1,32 @@
+---
+!same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
+---
+id: 3
+send:
+  r: |
+    connection <- data.frame(name = "connection")
+    source <- data.frame(name = "source")
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+id: 4
+send:
+  sql: |
+    SELECT name FROM connection
+    UNION ALL
+    SELECT name FROM source
+    ORDER BY name
+result:
+  content:
+    - type: text
+      text: |
+        # A tibble: 2 × 1
+          name        
+          <string>    
+        1 "connection"
+        2 "source"    
+  isError: false
+...

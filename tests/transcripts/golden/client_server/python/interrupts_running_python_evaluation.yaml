@@ -1,0 +1,139 @@
+---
+!same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
+---
+id: 3
+send:
+  r: |
+    invisible(suppressMessages(base::trace(
+      "py_eval",
+      tracer = quote({
+        invisible(file.create(file.path(
+          tempdir(),
+          "python-r-interrupt-started"
+        )))
+        repeat {}
+      }),
+      print = FALSE,
+      where = asNamespace("reticulate")
+    )))
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+id: 4
+send:
+  python: "42"
+  timeout_ms: 0
+result:
+  content:
+    - type: text
+      text: |-
+
+        [running]
+  isError: false
+---
+id: 5
+session:
+  action: interrupt
+result:
+  content:
+    - type: text
+      text: "[interrupt sent]"
+  isError: false
+---
+id: 6
+send:
+  timeout_ms: 3000
+result:
+  content:
+    - type: text
+      text: "\n"
+  isError: false
+---
+id: 7
+send:
+  r: |
+    invisible(suppressMessages(base::untrace(
+      "py_eval",
+      where = asNamespace("reticulate")
+    )))
+    # Poison reticulate's cached result wrapper after MCP Console
+    # initializes its private Python evaluator. Cell results must
+    # still return through direct conversion instead of that wrapper.
+    invisible(reticulate::py_eval(
+      r"---(
+    exec(
+        "import inspect\n"
+        "inspect._mcp_original_getmro_code = inspect.getmro.__code__\n"
+        "def _mcp_interrupting_getmro(cls):\n"
+        "    getmro.__code__ = _mcp_original_getmro_code\n"
+        "    raise KeyboardInterrupt\n"
+        "inspect.getmro.__code__ = _mcp_interrupting_getmro.__code__\n"
+    )
+    )---",
+      convert = TRUE
+    ))
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+id: 8
+send:
+  python: |
+    import inspect
+    import os
+    from pathlib import Path
+
+    inspect.getmro.__code__ = inspect._mcp_original_getmro_code
+    python_interrupt_state = 41
+    Path(
+        os.environ["TMPDIR"],
+        "python-interrupt-started",
+    ).touch()
+    while True:
+        pass
+  timeout_ms: 0
+result:
+  content:
+    - type: text
+      text: |-
+
+        [running]
+  isError: false
+---
+id: 9
+session:
+  action: interrupt
+result:
+  content:
+    - type: text
+      text: "[interrupt sent]"
+  isError: false
+---
+id: 10
+send:
+  timeout_ms: 3000
+result:
+  content:
+    - type: text
+      text: |
+        Traceback (most recent call last):
+          File "<string>", line 105, in _mcp_console_eval_cell
+          File "<mcp-console:python:e2>", line 11, in <module>
+        KeyboardInterrupt
+  isError: false
+---
+id: 11
+send:
+  python: python_interrupt_state + 1
+result:
+  content:
+    - type: text
+      text: |
+        42
+  isError: false
+...

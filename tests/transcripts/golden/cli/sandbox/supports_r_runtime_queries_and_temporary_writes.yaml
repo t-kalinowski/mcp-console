@@ -1,0 +1,26 @@
+---
+command:
+  - mcp-console
+  - sandbox
+  - "--"
+  - Rscript
+  - "-e"
+  - |
+    {
+      stopifnot(parallel::detectCores() >= 1)
+      stopifnot(file.exists("Cargo.toml"))
+
+      host_write <- try(
+        suppressWarnings(file("Cargo.toml", open = "r+")),
+        silent = TRUE
+      )
+      stopifnot(inherits(host_write, "try-error"))
+
+      output <- file.path(tempdir(), "result.txt")
+      writeLines("sandboxed R", output)
+      writeLines(readLines(output))
+      writeLines(Sys.getenv("TMPDIR"))
+    }
+stdout: |
+  sandboxed R
+...

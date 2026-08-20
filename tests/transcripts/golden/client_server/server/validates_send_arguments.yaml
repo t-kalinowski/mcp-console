@@ -1,0 +1,36 @@
+---
+!same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
+---
+id: 3
+send:
+  python: |
+    print("hello")
+  wait_ms: 0
+result:
+  content:
+    - type: text
+      text: "failed to deserialize parameters: unknown field `wait_ms`, expected one of `r`, `python`, `sql`, `stdin`, `timeout_ms`"
+  isError: true
+---
+id: 4
+send:
+  r: "1"
+  python: "1"
+  sql: SELECT 1
+result:
+  content:
+    - type: text
+      text: "only one of `r`, `python`, or `sql` may be supplied"
+  isError: true
+---
+id: 5
+send:
+  r: ~
+result:
+  content:
+    - type: text
+      text: |-
+
+        [idle]
+  isError: false
+...

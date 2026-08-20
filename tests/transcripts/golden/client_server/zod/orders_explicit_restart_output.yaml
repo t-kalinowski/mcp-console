@@ -1,0 +1,41 @@
+---
+!same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
+---
+id: 3
+send:
+  r: wait for stdin close
+  timeout_ms: 0
+result:
+  content:
+    - type: text
+      text: |-
+
+        [running]
+  isError: false
+---
+id: 4
+session:
+  action: restart
+result:
+  content:
+    - type: text
+      text: |-
+        zod stdin closed
+        <large output>
+        [active evaluation stopped by session restart request]
+        [worker stopped: in-memory state lost]
+        [starting new worker]
+        zod replacement startup ready
+        [idle]
+  isError: false
+---
+id: 5
+send:
+  r: echo
+result:
+  content:
+    - type: text
+      text: |
+        zod: echo
+  isError: false
+...

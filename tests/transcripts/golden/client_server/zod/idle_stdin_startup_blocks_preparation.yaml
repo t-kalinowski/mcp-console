@@ -1,0 +1,37 @@
+---
+!same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
+---
+id: 3
+send:
+  stdin: |
+    queued
+result:
+  content:
+    - type: text
+      text: |-
+
+        [idle]
+  isError: false
+---
+id: 4
+session:
+  action: prepare
+  requirements:
+    python:
+      - py-yaml12
+result:
+  content:
+    - type: text
+      text: "[requirements not prepared: worker is starting]"
+  isError: true
+---
+id: 5
+send:
+  r: input without request
+result:
+  content:
+    - type: text
+      text: |
+        zod stdin: queued
+  isError: false
+...

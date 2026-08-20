@@ -1,0 +1,116 @@
+---
+!same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
+---
+id: 3
+send:
+  python: |
+    import importlib.util; import os; import sys
+    sentinel = 42; worker_pid = os.getpid(); initial_prefix = sys.prefix
+    importlib.util.find_spec("yaml12") is None
+result:
+  content:
+    - type: text
+      text: |
+        True
+  isError: false
+---
+id: 4
+session:
+  action: prepare
+  requirements:
+    python:
+      - not a valid requirement !!!
+result:
+  content:
+    - type: text
+      text: |-
+        managed Python resolution failed:
+        resolver input:
+        {
+          "python": "3.12.x",
+          "packages": [
+            "numpy",
+            "pandas",
+            "not a valid requirement !!!"
+          ],
+          "python_version": [
+            "3.12.x"
+          ]
+        }
+        uv output:
+        error: Failed to parse: `not a valid requirement !!!`
+          Caused by: Expected one of `@`, `(`, `<`, `=`, `>`, `~`, `!`, `;`, found `a`
+            not a valid requirement !!!
+                ^
+  isError: true
+---
+id: 5
+send:
+  python: |
+    sentinel, os.getpid() == worker_pid, importlib.util.find_spec("yaml12") is None
+result:
+  content:
+    - type: text
+      text: |
+        (42, True, True)
+  isError: false
+---
+id: 6
+session:
+  action: prepare
+  requirements:
+    python:
+      - py-yaml12
+result:
+  content:
+    - type: text
+      text: "[prepared]"
+  isError: false
+---
+id: 7
+send:
+  python: |
+    import os; import sys; import yaml12
+    (sentinel, os.getpid() == worker_pid, sys.prefix != initial_prefix, yaml12.__name__)
+result:
+  content:
+    - type: text
+      text: |
+        (42, True, True, 'yaml12')
+  isError: false
+---
+id: 8
+session:
+  action: restart
+result:
+  content:
+    - type: text
+      text: |-
+        [worker stopped: in-memory state lost]
+        [starting new worker]
+        [idle]
+  isError: false
+---
+id: 9
+send:
+  r: "is.null(reticulate::py_require()$python_version)"
+result:
+  content:
+    - type: text
+      text: |
+        [1] TRUE
+  isError: false
+---
+id: 10
+send:
+  python: |
+    import yaml12
+
+    "sentinel" in globals(), yaml12.__name__
+result:
+  content:
+    - type: text
+      text: |
+        (False, 'yaml12')
+  isError: false
+...

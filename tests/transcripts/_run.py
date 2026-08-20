@@ -5,22 +5,24 @@
 
 import argparse
 import difflib
+import json
 import os
 import runpy
 import shutil
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 
 from _support import Transcript, TranscriptWithCompanion, YamlStream
-from yaml12 import Yaml, format_yaml, read_yaml
+from yaml12 import Yaml, format_yaml, parse_yaml, read_yaml
 
 directory = Path(__file__).resolve().parent
 root = directory.parents[1]
 binary = root / "target" / "debug" / "mcp-console"
-suite_paths = sorted(directory.glob("[!_]*.py"))
-initialization_suite = "server"
+boundaries = {"client_server", "server_relay", "relay_worker", "cli"}
+suite_paths = sorted(directory.rglob("[!_]*.py"))
+initialization_suite = "client_server/server"
 initialization_case = "initializes_and_lists_tools"
 initialization_reference = (
     f"tests/transcripts/golden/{initialization_suite}/{initialization_case}.yaml"
@@ -36,10 +38,18 @@ parser.add_argument(
     default=max(2, os.cpu_count() or 2),
     help="number of transcript cases to run concurrently (default: at least 2)",
 )
-parser.add_argument("selectors", nargs="*", metavar="SUITE[::CASE]")
+parser.add_argument("selectors", nargs="*", metavar="BOUNDARY/SUITE[::CASE]")
 
 TranscriptCase = Callable[[Path], Transcript | TranscriptWithCompanion]
 RecordedTranscript = Transcript | TranscriptWithCompanion
+
+
+def suite_identifier(suite_path: Path) -> str:
+    relative = suite_path.relative_to(directory).with_suffix("")
+    assert len(relative.parts) >= 2 and relative.parts[0] in boundaries, (
+        f"{suite_path.relative_to(root)} is not under a transcript boundary"
+    )
+    return relative.as_posix()
 
 
 def load_suite(
@@ -78,8 +88,66 @@ def identical(left: object, right: object) -> bool:
     return left == right
 
 
+def iter_strings(value: object) -> Iterator[str]:
+    if isinstance(value, Yaml):
+        yield from iter_strings(value.value)
+    elif isinstance(value, dict):
+        for key, item in value.items():
+            yield from iter_strings(key)
+            yield from iter_strings(item)
+    elif isinstance(value, list):
+        for item in value:
+            yield from iter_strings(item)
+    elif isinstance(value, str):
+        yield value
+
+
+def format_transcript(value: YamlStream) -> str:
+    strings = tuple(iter_strings(value))
+    prefix = "__MCP_CONSOLE_WHITESPACE_SCALAR_"
+    while any(prefix in string for string in strings):
+        prefix = f"_{prefix}"
+
+    replacements: dict[str, str] = {}
+
+    def protect(item: object) -> object:
+        if isinstance(item, Yaml):
+            return Yaml(protect(item.value), tag=item.tag)
+        if isinstance(item, dict):
+            return {protect(key): protect(mapped) for key, mapped in item.items()}
+        if isinstance(item, list):
+            return [protect(value) for value in item]
+        if isinstance(item, str) and item:
+            lines = item.splitlines()
+            first_nonempty = next((line for line in lines if line), "")
+            needs_quotes = (
+                item.isspace()
+                or first_nonempty.startswith((" ", "\t"))
+                or any(line.isspace() for line in lines)
+            )
+        else:
+            needs_quotes = False
+        if needs_quotes:
+            placeholder = f"{prefix}{len(replacements)}__"
+            replacements[placeholder] = item
+            return placeholder
+        return item
+
+    formatted = format_yaml(protect(value), multi=True)
+    for placeholder, original in replacements.items():
+        assert formatted.count(placeholder) == 1, placeholder
+        formatted = formatted.replace(placeholder, json.dumps(original))
+    formatted = "\n".join(
+        "" if line.isspace() else line for line in formatted.split("\n")
+    )
+    assert identical(value, parse_yaml(formatted, multi=True)), (
+        "formatted transcript did not round-trip"
+    )
+    return formatted
+
+
 def check_golden(golden: Path, actual: YamlStream, case: str, *, update: bool) -> None:
-    actual_text = format_yaml(actual, multi=True)
+    actual_text = format_transcript(actual)
 
     if update:
         golden.parent.mkdir(parents=True, exist_ok=True)
@@ -203,7 +271,7 @@ def main() -> None:
     assert binary.is_file(), f"{binary.relative_to(root)} is missing; run scripts/test"
     assert suite_paths, "no transcript suites found"
 
-    suites = {path.stem: path for path in suite_paths}
+    suites = {suite_identifier(path): path for path in suite_paths}
     if options.list_tests:
         for suite_name, suite_path in suites.items():
             cases, _, _ = load_suite(suite_path)

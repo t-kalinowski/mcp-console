@@ -1,0 +1,18 @@
+---
+!same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
+---
+id: 3
+send:
+  r: |
+    value <- readline("long> ")
+    cat(paste(nchar(value, type = "bytes"), endsWith(value, "é")), "\n", sep = "")
+  stdin: "<long stdin ending in UTF-8>"
+result:
+  content:
+    - type: text
+      text: |
+        [input requested: "long> "]
+        [input requested: "long> "]
+        4096 TRUE
+  isError: false
+...

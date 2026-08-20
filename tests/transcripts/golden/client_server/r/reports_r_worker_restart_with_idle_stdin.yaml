@@ -1,0 +1,52 @@
+---
+!same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
+---
+id: 3
+send:
+  r: invisible(NULL)
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+id: 4
+send:
+  r: "tools::pskill(Sys.getpid(), signal = 9L)"
+result:
+  content:
+    - type: text
+      text: |-
+        [worker sideband read failed: worker sideband closed]
+        [worker stopped: in-memory state lost]
+        [starting new worker]
+        [idle]
+  isError: true
+---
+id: 5
+send:
+  stdin: |
+    replacement
+result:
+  content:
+    - type: text
+      text: |-
+
+        [idle]
+  isError: false
+---
+id: 6
+send:
+  r: |
+    local({
+      connection <- suppressWarnings(file("/dev/stdin"))
+      on.exit(close(connection))
+      readLines(connection, n = 1)
+    })
+result:
+  content:
+    - type: text
+      text: |
+        [1] "replacement"
+  isError: false
+...

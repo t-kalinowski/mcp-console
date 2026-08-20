@@ -1,0 +1,108 @@
+---
+!same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
+---
+id: 3
+session:
+  action: prepare
+result:
+  content:
+    - type: text
+      text: "`requirements` is required with `prepare`"
+  isError: true
+---
+id: 4
+session:
+  action: prepare
+  requirements: {}
+result:
+  content:
+    - type: text
+      text: "at least one of `requirements.r`, `requirements.python`, or `requirements.duckdb` is required"
+  isError: true
+---
+id: 5
+session:
+  action: prepare
+  requirements:
+    duckdb:
+      - spatial FROM community
+result:
+  content:
+    - type: text
+      text: "DuckDB extension names must start with a lowercase ASCII letter and contain only lowercase ASCII letters, digits, and underscores"
+  isError: true
+---
+id: 6
+session:
+  action: prepare
+  requirements:
+    r:
+      - ""
+result:
+  content:
+    - type: text
+      text: R requirement strings must not be empty
+  isError: true
+---
+id: 7
+session:
+  action: prepare
+  requirements:
+    r:
+      - |-
+        cli
+        dplyr
+result:
+  content:
+    - type: text
+      text: R requirement strings must not contain NUL or line breaks
+  isError: true
+---
+id: 8
+session:
+  action: interrupt
+  requirements:
+    python:
+      - py-yaml12
+result:
+  content:
+    - type: text
+      text: "`requirements` is not supported with `interrupt`"
+  isError: true
+---
+id: 9
+session:
+  action: restart
+  requirements: {}
+result:
+  content:
+    - type: text
+      text: "at least one of `requirements.r`, `requirements.python`, or `requirements.duckdb` is required"
+  isError: true
+---
+id: 10
+session:
+  action: restart
+  requirements:
+    r:
+      - |-
+        cli
+        dplyr
+result:
+  content:
+    - type: text
+      text: R requirement strings must not contain NUL or line breaks
+  isError: true
+---
+id: 11
+session:
+  action: restart
+  requirements:
+    duckdb:
+      - spatial FROM community
+result:
+  content:
+    - type: text
+      text: "DuckDB extension names must start with a lowercase ASCII letter and contain only lowercase ASCII letters, digits, and underscores"
+  isError: true
+...

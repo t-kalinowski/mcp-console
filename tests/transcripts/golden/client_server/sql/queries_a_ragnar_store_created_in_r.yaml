@@ -1,0 +1,129 @@
+---
+!same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
+---
+id: 3
+send:
+  sql: |
+    CREATE TEMP TABLE before_prepare AS
+    SELECT CAST(42 AS INTEGER) AS value
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+id: 4
+session:
+  action: prepare
+  requirements:
+    r:
+      - ragnar
+    duckdb:
+      - fts
+      - vss
+result:
+  content:
+    - type: text
+      text: "[prepared]"
+  isError: false
+---
+id: 5
+send:
+  r: |
+    stopifnot(
+      identical(
+        DBI::dbGetQuery(
+          sql_connection(),
+          "SELECT value FROM before_prepare"
+        )$value,
+        42L
+      ),
+      identical(dirname(find.package("ragnar")), .libPaths()[[1L]])
+    )
+    embed_banana <- function(x) {
+      out <- matrix(1, nrow = length(x), ncol = 2L)
+      out[, 1L] <- grepl("banana", x, ignore.case = TRUE)
+      out
+    }
+    store_path <- file.path(tempdir(), "knowledge.ragnar.duckdb")
+    store <- suppressMessages(ragnar::ragnar_store_create(
+      location = store_path,
+      embed = embed_banana,
+      embedding_size = 2L
+    ))
+    documents <- list(
+      ragnar::MarkdownDocument(
+        "# Alpha\n\nApples are red fruit.",
+        origin = "alpha.md"
+      ),
+      ragnar::MarkdownDocument(
+        "# Beta\n\nBananas are yellow fruit.",
+        origin = "beta.md"
+      )
+    )
+    for (document in documents) {
+      chunks <- ragnar::markdown_chunk(
+        document,
+        target_size = 1000L,
+        target_overlap = 0
+      )
+      ragnar::ragnar_store_insert(store, chunks)
+    }
+    ragnar::ragnar_store_build_index(store, type = c("vss", "fts"))
+    connection <- sql_connection()
+    invisible(DBI::dbExecute(
+      connection,
+      paste(
+        "ATTACH",
+        DBI::dbQuoteString(connection, store_path),
+        "AS knowledge (READ_ONLY)"
+      )
+    ))
+    invisible(DBI::dbExecute(connection, "USE knowledge"))
+    writeLines("ragnar store ready")
+result:
+  content:
+    - type: text
+      text: |
+        ragnar store ready
+  isError: false
+---
+id: 6
+send:
+  sql: |
+    LOAD fts;
+    LOAD vss;
+    SELECT
+      document.origin AS vss_origin,
+      nearest.distance,
+      (
+        SELECT origin
+        FROM chunks
+        WHERE fts_main_chunks.match_bm25(chunk_id, 'bananas') IS NOT NULL
+        ORDER BY origin
+        LIMIT 1
+      ) AS fts_origin,
+      (SELECT value FROM before_prepare) AS retained
+    FROM (
+      SELECT
+        doc_id,
+        array_cosine_distance(
+          embedding,
+          [1, 1]::FLOAT[2]
+        ) AS distance
+      FROM embeddings
+      ORDER BY distance
+      LIMIT 1
+    ) AS nearest
+    JOIN documents AS document USING (doc_id)
+    ORDER BY nearest.distance
+result:
+  content:
+    - type: text
+      text: |
+        # A tibble: 1 × 4
+          vss_origin distance fts_origin retained
+          <string>    <float> <string>    <int32>
+        1 "beta.md"       0.0 "beta.md"        42
+  isError: false
+...

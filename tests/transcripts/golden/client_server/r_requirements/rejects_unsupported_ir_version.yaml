@@ -1,0 +1,15 @@
+---
+!same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
+---
+id: 3
+session:
+  action: prepare
+  requirements:
+    r:
+      - "local::package"
+result:
+  content:
+    - type: text
+      text: R package resolution requires ir 0.4.0 or later; found ir 0.3.0
+  isError: true
+...

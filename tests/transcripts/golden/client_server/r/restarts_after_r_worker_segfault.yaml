@@ -1,0 +1,44 @@
+---
+!same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
+---
+id: 3
+send:
+  r: r_worker_marker <- TRUE
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+id: 4
+send:
+  r: |
+    tools::pskill(Sys.getpid(), signal = 11L)
+  stdin: |
+    1
+result:
+  content:
+    - type: text
+      text: "\n *** caught segfault ***\naddress 0x0, cause 'invalid permissions'\n\nTraceback:\n 1: tools::pskill(Sys.getpid(), signal = 11L)\n\nPossible actions:\n1: abort (with core dump, if enabled)\n2: normal R exit\n3: exit R without saving workspace\n4: exit R saving workspace\n[input requested: \"Selection: \"]\nR is aborting now ...\n[worker sideband read failed: worker sideband closed]\n[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
+  isError: true
+---
+id: 5
+send:
+  r: "exists(\"r_worker_marker\", inherits = FALSE)"
+result:
+  content:
+    - type: text
+      text: |
+        [1] FALSE
+  isError: false
+---
+id: 6
+send:
+  r: 1 + 1
+result:
+  content:
+    - type: text
+      text: |
+        [1] 2
+  isError: false
+...
