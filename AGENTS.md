@@ -111,7 +111,7 @@ An idle server-managed worker can also materialize an uninitialized Python manif
 An idle worker that implements R preparation can prepare DuckDB extensions on the host without replacement or loss of live state.
 The DuckDB resolver uses the existing cancellable resolver process-group lifecycle and adds no DuckDB-specific worker sideband messages; an accompanying R candidate still uses `prepare_r`.
 A successful Python activation or explicit materialization is retained immediately.
-Before forwarding `ready`, `resolve_python`, `resolve_python_version`, any operation terminal, or worker-sideband closure, the relay checkpoints both raw-output readers and first publishes bytes already available from fd 1 and fd 2.
+Before forwarding any worker message or worker-sideband closure, the relay checkpoints both raw-output readers and first publishes bytes already available from fd 1 and fd 2, so a message that the server rejects cannot cause retirement before preceding raw output arrives.
 After any operation terminal, the relay's worker-sideband reader waits for the server operation owner to commit terminal state and acknowledge that terminal before reading the next worker frame, so later idle activity cannot overtake that retention; raw stream readers continue draining during the barrier.
 In a mixed live R, Python, and DuckDB preparation, that activation can remain retained even if a later R update fails.
 The R and DuckDB configurations are retained only after the complete operation succeeds.
@@ -269,6 +269,7 @@ Relay-forwarded sideband text and images, worker standard-output and standard-er
 The relay immediately publishes available raw bytes in chunks of at most 8 KiB as base64 JSONL events, without line buffering or a coalescing timer, so the private transport is binary safe; each successful `send` response drains all tape events available at its response boundary, decoding complete UTF-8 prefixes and retaining incomplete suffixes for a later response.
 Idle, running, and outstanding-input responses append the literal `\n[idle]`, `\n[running]`, or `\n[stdin needed]` banner; its leading newline is present even when no output precedes it.
 After an infrastructure failure, the server finishes worker shutdown and its I/O readers before appending `[worker stopped: in-memory state lost]` after the specific error.
+For a relay-owned protocol or I/O failure, the relay requests worker termination immediately but publishes `fatal` only after its worker transports have stopped and both raw-output readers have drained and joined.
 After an established worker fails during a cell, the same `send` appends `[starting new worker]\n` and makes one replacement attempt.
 If that attempt reports ready before the call deadline, its startup output and `[idle]` complete the failed response; if the deadline expires first, the call returns `[worker starting]` and later polls continue waiting for that same attempt.
 A failed replacement remains stopped; a later call may make a new attempt, which emits its own starting notice.

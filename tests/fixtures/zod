@@ -74,11 +74,14 @@ def fill_nonblocking(descriptor: int, data: bytes) -> int:
     flags = fcntl.fcntl(descriptor, fcntl.F_GETFL)
     fcntl.fcntl(descriptor, fcntl.F_SETFL, flags | os.O_NONBLOCK)
     written = 0
-    while written < len(data):
-        try:
-            written += os.write(descriptor, data[written:])
-        except BlockingIOError:
-            break
+    try:
+        while written < len(data):
+            try:
+                written += os.write(descriptor, data[written:])
+            except BlockingIOError:
+                break
+    finally:
+        fcntl.fcntl(descriptor, fcntl.F_SETFL, flags)
     assert written > 0
     return written
 
@@ -326,6 +329,31 @@ def main() -> None:
             send(writer, {"kind": "ready"})
             continue
 
+        if source == "unexpected input receipt after stdout":
+            emit_large_output(1, b"zod unexpected input receipt: ")
+            tail_size = fill_nonblocking(1, b"z" * LARGE_OUTPUT_SIZE)
+            write_all(1, f"zod expected semantic tail: {tail_size}\n".encode())
+            send(writer, {"kind": "input_received"})
+            while True:
+                signal.pause()
+
+        if source in {
+            "malformed sideband after stdout",
+            "malformed sideband after stderr",
+        }:
+            stream = source.removeprefix("malformed sideband after ")
+            descriptor = 1 if stream == "stdout" else 2
+            emit_large_output(descriptor, f"zod malformed {stream}: ".encode())
+            tail_size = fill_nonblocking(descriptor, b"z" * LARGE_OUTPUT_SIZE)
+            write_all(
+                descriptor,
+                f"zod expected {stream} malformed tail: {tail_size}\n".encode(),
+            )
+            writer.write('{"kind":"console_output","data":}\n')
+            writer.flush()
+            while True:
+                signal.pause()
+
         if source in {
             "force stop after checkpointed stdout",
             "force stop after checkpointed stderr",
@@ -381,9 +409,8 @@ def main() -> None:
                 f"zod invalid {stream}: ".encode() + b"\xff trailing: \xe2\x82",
             )
             tail_size = fill_nonblocking(descriptor, b"z" * LARGE_OUTPUT_SIZE)
-            marker_descriptor = 2 if descriptor == 1 else 1
             write_all(
-                marker_descriptor,
+                descriptor,
                 f"zod expected {stream} crash tail: {tail_size}\n".encode(),
             )
             os._exit(86)

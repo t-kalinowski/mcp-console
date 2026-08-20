@@ -1031,17 +1031,90 @@ def test_preserves_invalid_raw_output_when_worker_exits(binary: Path) -> Transcr
         prefix = f"zod invalid {stream}: � trailing: �"
         raw_output = output.removesuffix(failure)
         marker_prefix = f"zod expected {stream} crash tail: "
-        marker_start = raw_output.find(marker_prefix)
-        assert marker_start >= 0, f"worker crash lost the {stream} length marker"
-        marker_end = raw_output.find("\n", marker_start) + 1
-        assert marker_end > 0, f"worker crash truncated the {stream} length marker"
-        tail_size = int(raw_output[marker_start + len(marker_prefix) : marker_end])
-        raw_output = raw_output[:marker_start] + raw_output[marker_end:]
+        raw_output, tail_size = remove_length_marker(raw_output, marker_prefix)
         assert raw_output == large_output(prefix) + ("z" * tail_size), (
             f"worker crash lost {stream} bytes"
         )
         result["content"][0]["text"] = prefix + "<large output>" + failure
 
+    return client._finish()
+
+
+def test_preserves_raw_output_before_malformed_sideband_failure(
+    binary: Path,
+) -> Transcript:
+    zod = Path(__file__).resolve().parents[1] / "fixtures" / "zod"
+    client = McpClient(
+        binary,
+        ("serve", "--worker", str(zod)),
+    )
+    client._initialize_and_list_tools()
+
+    for stream in ("stdout", "stderr"):
+        client.send(r=f"malformed sideband after {stream}")
+        result = client.transcript[-1]["result"]
+        assert result["isError"] is True, result
+        output = result["content"][0]["text"]
+        failure_start = output.find("\n[worker sideband read failed: ")
+        assert failure_start >= 0, output[-200:]
+        failure = output[failure_start:]
+        assert failure.endswith(
+            "]\n[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
+        ), failure
+
+        prefix = f"zod malformed {stream}: "
+        raw_output = output[:failure_start]
+        marker_prefix = f"zod expected {stream} malformed tail: "
+        raw_output, tail_size = remove_length_marker(raw_output, marker_prefix)
+        assert raw_output == large_output(prefix) + ("z" * tail_size), (
+            f"malformed frame lost {stream} bytes"
+        )
+        result["content"][0]["text"] = (
+            prefix
+            + "<large output>\n"
+            + "[worker sideband read failed: <invalid frame>]\n"
+            + "[worker stopped: in-memory state lost]\n"
+            + "[starting new worker]\n[idle]"
+        )
+
+    transcript, standard_error = client._finish_with_standard_error()
+    diagnostics = standard_error.splitlines()
+    assert len(diagnostics) == 2, standard_error
+    assert all(
+        diagnostic.startswith("worker sideband read failed: ")
+        for diagnostic in diagnostics
+    ), standard_error
+    return transcript
+
+
+def test_preserves_raw_output_before_semantically_invalid_sideband_message(
+    binary: Path,
+) -> Transcript:
+    zod = Path(__file__).resolve().parents[1] / "fixtures" / "zod"
+    client = McpClient(
+        binary,
+        ("serve", "--worker", str(zod)),
+    )
+    client._initialize_and_list_tools()
+
+    client.send(r="unexpected input receipt after stdout")
+    result = client.transcript[-1]["result"]
+    assert result["isError"] is True, result
+    failure = (
+        "\n[worker reported received input without requesting it]\n"
+        "[worker stopped: in-memory state lost]\n"
+        "[starting new worker]\n[idle]"
+    )
+    output = result["content"][0]["text"]
+    assert output.endswith(failure), output[-200:]
+    raw_output = output.removesuffix(failure)
+    marker_prefix = "zod expected semantic tail: "
+    raw_output, tail_size = remove_length_marker(raw_output, marker_prefix)
+    prefix = "zod unexpected input receipt: "
+    assert raw_output == large_output(prefix) + ("z" * tail_size), (
+        "semantic failure lost raw stdout bytes"
+    )
+    result["content"][0]["text"] = prefix + "<large output>" + failure
     return client._finish()
 
 
@@ -1481,6 +1554,19 @@ def assert_large_output(output: str, prefix: str) -> None:
 
 def large_output(prefix: str) -> str:
     return prefix + ("x" * LARGE_OUTPUT_SIZE) + ("y" * LARGE_OUTPUT_SIZE)
+
+
+def remove_length_marker(output: str, marker_prefix: str) -> tuple[str, int]:
+    marker_start = output.find(marker_prefix)
+    assert marker_start >= 0, f"raw output lost length marker {marker_prefix!r}"
+    marker_end = output.find("\n", marker_start)
+    if marker_end < 0:
+        marker_end = len(output)
+        after_marker = marker_end
+    else:
+        after_marker = marker_end + 1
+    length = int(output[marker_start + len(marker_prefix) : marker_end])
+    return output[:marker_start] + output[after_marker:], length
 
 
 def test_orders_failure_and_replacement_output(binary: Path) -> Transcript:

@@ -101,14 +101,13 @@ Relay stdout EOF is a clean retirement only after both output streams, the worke
 ## Ordering barriers
 
 The server must commit operation-terminal state before the relay can publish sideband activity that logically follows an operation-terminal worker message.
+Before the relay publishes any `worker_message`, it checkpoints both raw-output readers and publishes bytes already available from fd 1 and fd 2.
+This prevents a worker message that the server rejects from causing retirement before preceding raw output reaches the server.
 For each `completed`, `r_prepared`, `r_preparation_failed`, `python_prepared`, or `python_preparation_failed` message, the relay publishes the event and waits for an `acknowledge` command naming its sequence before it reads another worker sideband frame.
 The standard-output and standard-error readers continue draining while that sideband barrier is held.
-Before the relay publishes one of those terminal messages, it checkpoints both raw-output readers and publishes bytes already available from fd 1 and fd 2.
 
 The initial `ready` message is not acknowledgment-gated; the server registers the generation as ready before starting its continuous relay dispatcher.
-The relay still checkpoints both raw-output readers before publishing `ready`, so startup bytes already available from worker fd 1 or fd 2 precede readiness.
-It applies the same raw-output checkpoint before `resolve_python` and `resolve_python_version`, so bytes already available before a nested host-resolution request reach the server first.
-These three message kinds are not acknowledgment-gated.
+`ready`, `resolve_python`, and `resolve_python_version` use the common raw-output checkpoint but are not acknowledgment-gated.
 Before publishing `worker_sideband_closed`, the relay also checkpoints both raw-output readers, so worker bytes accepted before sideband EOF cannot be overtaken by the failure that EOF causes on the server.
 The server acknowledges an evaluation or preparation terminal only after the operation owner has committed its terminal state and output checkpoint.
 While the relay is waiting at that barrier, an acknowledgment for any sequence other than the expected one is a protocol error.
@@ -144,5 +143,7 @@ Descendants that leave the group remain unsupported.
 
 Malformed relay JSON, invalid base64, an unexpected command or acknowledgment, a sequence discontinuity, a fatal event, or unexpected relay EOF fails the worker transport.
 Worker-sideband EOF has its own relay event; other worker-sideband read failures become fatal relay events.
+For a relay-owned protocol or I/O failure, the relay requests worker termination immediately but defers the `fatal` event until its worker transports have stopped and both raw-output readers have drained and joined.
+Raw output accepted before the failure therefore precedes `fatal` in the outer stream regardless of which relay task detected the failure.
 The server preserves a fatal message as the worker failure, stops publishing later sideband messages, and continues draining the relay stream through its output-close and worker-exit events before retiring the generation.
 It likewise keeps draining and validating relay events if the local worker-sideband publisher has already closed during server-side retirement.

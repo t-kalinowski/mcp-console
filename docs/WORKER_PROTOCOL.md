@@ -278,7 +278,7 @@ Custom workers and caller-configured Python workers do not send `python_activate
 
 The first worker message must be `ready`.
 The server does not send an evaluation before receiving it.
-Before forwarding `ready`, the relay checkpoints both raw-output readers so bytes already available from worker fd 1 and fd 2 precede the ready event in the outer stream.
+Before forwarding any worker message, including `ready`, the relay checkpoints both raw-output readers so bytes already available from worker fd 1 and fd 2 precede the sideband event in the outer stream.
 For a restart replacement, the server commits the new lifecycle generation as ready after this frame and before starting the continuous dispatcher, so an immediate resolver or activation callback observes the replacement generation.
 That completion is scoped to the owning generation, so a later overlapping restart cannot be marked ready by the earlier call.
 
@@ -487,7 +487,7 @@ New code is rejected while an evaluation and its uncollected result are active.
 Between-cell callbacks do not create a separate server-side operation state.
 The generation-long relay and server readers publish their frames immediately.
 An evaluation's `completed` frame records a tape checkpoint; callback frames accepted after that checkpoint remain pending for the next response.
-Before forwarding `ready`, `resolve_python`, `resolve_python_version`, or any evaluation or preparation terminal, the relay checkpoints both raw-output readers and first publishes bytes already available from fd 1 and fd 2.
+Before forwarding any worker message, the relay checkpoints both raw-output readers and first publishes bytes already available from fd 1 and fd 2, so even a message that the server rejects cannot overtake preceding raw output.
 After any operation terminal, the relay's worker-sideband reader waits for the server operation owner to commit its terminal state and acknowledge that event before reading the next worker-sideband frame.
 The raw-output readers continue draining during that barrier.
 Later idle frames therefore cannot overtake environment retention or evaluation completion.
@@ -534,6 +534,7 @@ A nonempty `send` that fails during an active operation then makes one announced
 An empty `send` that discovers an idle failure stops the worker and reports the failure without starting a replacement; a later nonempty `send` or explicit restart starts the next worker.
 Sideband content received before that failure is retained and precedes the tool error.
 Before publishing worker-sideband closure, the relay checkpoints both standard-stream readers, so bytes accepted before sideband EOF precede the failure it causes.
+For a relay-owned protocol or I/O failure, it stops the worker and joins the worker transports before publishing `fatal`, so the same ordering applies regardless of which relay task detected the failure.
 Worker retirement waits for the relay's standard-stream readers and final events, and the server keeps draining relay events if its local worker-sideband publisher has already closed, so all accepted standard-stream text precedes the tool error and stopped notice.
 If either output path contributed text, the server starts the bracketed error on a new line.
 R parse and evaluation errors, Python exceptions, and DuckDB errors are not sideband failures: the built-in worker sends them as output followed by `completed` and remains reusable.

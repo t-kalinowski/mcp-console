@@ -40,7 +40,7 @@ mod platform {
 
         let (controls, control_receiver) = mpsc::channel();
         let (events, event_writer) = start_event_writer(controls.clone());
-        let failures = FailureReporter::new(events.clone(), controls.clone());
+        let failures = FailureReporter::new(controls.clone());
         let stopping = Arc::new(AtomicBool::new(false));
 
         let (sideband_reader, sideband_writer, child_fds) = crate::sideband::bind()
@@ -127,6 +127,12 @@ mod platform {
         collect_error(&mut finish_error, stdout.cancel_and_join());
         collect_error(&mut finish_error, stderr.cancel_and_join());
 
+        if let Some(message) = failures.take() {
+            collect_error(
+                &mut finish_error,
+                events.send(RelayEventPayload::Fatal { message }),
+            );
+        }
         if let Some(status) = status {
             collect_error(
                 &mut finish_error,
@@ -388,28 +394,42 @@ mod platform {
 
     #[derive(Clone)]
     struct FailureReporter {
-        events: EventSender,
         controls: mpsc::Sender<Control>,
-        reported: Arc<AtomicBool>,
+        message: Arc<Mutex<Option<String>>>,
     }
 
     impl FailureReporter {
-        fn new(events: EventSender, controls: mpsc::Sender<Control>) -> Self {
+        fn new(controls: mpsc::Sender<Control>) -> Self {
             Self {
-                events,
                 controls,
-                reported: Arc::new(AtomicBool::new(false)),
+                message: Arc::new(Mutex::new(None)),
             }
         }
 
         fn report(&self, message: String) {
-            if self.reported.swap(true, Ordering::SeqCst) {
+            let first = {
+                let mut reported = self
+                    .message
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                if reported.is_some() {
+                    false
+                } else {
+                    *reported = Some(message.clone());
+                    true
+                }
+            };
+            if !first {
                 return;
             }
-            let _ = self.events.send(RelayEventPayload::Fatal {
-                message: message.clone(),
-            });
             let _ = self.controls.send(Control::Stop { message });
+        }
+
+        fn take(&self) -> Option<String> {
+            self.message
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .take()
         }
     }
 
@@ -673,19 +693,18 @@ mod platform {
             let (cancelled, cancel) = cancellation_pipe("worker sideband")?;
             let thread = thread::spawn(move || {
                 let mut ordinary_close = false;
+                let mut sideband_failure = None;
                 'read: loop {
                     while let Some(message) = match reader.receive_buffered() {
                         Ok(message) => message,
                         Err(error) => {
-                            failures.report(format!("worker sideband read failed: {error}"));
+                            sideband_failure =
+                                Some(format!("worker sideband read failed: {error}"));
                             break 'read;
                         }
                     } {
                         let terminal = worker_message_requires_acknowledgment(&message);
-                        if worker_message_requires_output_checkpoint(&message)
-                            && let Err(error) =
-                                stdout.checkpoint().and_then(|()| stderr.checkpoint())
-                        {
+                        if let Err(error) = stdout.checkpoint().and_then(|()| stderr.checkpoint()) {
                             failures.report(error);
                             break 'read;
                         }
@@ -721,7 +740,8 @@ mod platform {
                     let ready = match wait_for_io(reader.as_raw_fd(), libc::POLLIN, &cancelled) {
                         Ok(ready) => ready,
                         Err(error) => {
-                            failures.report(format!("worker sideband read failed: {error}"));
+                            sideband_failure =
+                                Some(format!("worker sideband read failed: {error}"));
                             break;
                         }
                     };
@@ -747,7 +767,8 @@ mod platform {
                             break;
                         }
                         Err(error) => {
-                            failures.report(format!("worker sideband read failed: {error}"));
+                            sideband_failure =
+                                Some(format!("worker sideband read failed: {error}"));
                             break;
                         }
                     }
@@ -755,6 +776,9 @@ mod platform {
                 if let Err(error) = stdout.checkpoint().and_then(|()| stderr.checkpoint()) {
                     failures.report(error);
                     return;
+                }
+                if let Some(error) = sideband_failure {
+                    failures.report(error);
                 }
                 let _ = events.send(RelayEventPayload::WorkerSidebandClosed);
                 if ordinary_close {
@@ -781,16 +805,6 @@ mod platform {
                 | WorkerMessage::PythonPrepared
                 | WorkerMessage::PythonPreparationFailed { .. }
         )
-    }
-
-    fn worker_message_requires_output_checkpoint(message: &WorkerMessage) -> bool {
-        worker_message_requires_acknowledgment(message)
-            || matches!(
-                message,
-                WorkerMessage::Ready
-                    | WorkerMessage::ResolvePython { .. }
-                    | WorkerMessage::ResolvePythonVersion { .. }
-            )
     }
 
     struct StdinWriter {
