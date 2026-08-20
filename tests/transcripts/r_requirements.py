@@ -214,6 +214,8 @@ def test_stops_live_preparation_for_idle_callback_input(binary: Path) -> Transcr
 
     # fmt: r
     r = code(r"""
+        reticulate::py_require("py-yaml12")
+        invisible(reticulate::py_config())
         callback_gate <- tempfile("mcp-console-callback-gate-")
         callback_checkpoint <- tempfile("mcp-console-callback-checkpoint-")
         run_callback <- function() {
@@ -221,13 +223,11 @@ def test_stops_live_preparation_for_idle_callback_input(binary: Path) -> Transcr
             later::later(run_callback, delay = 0.01)
             return(invisible(NULL))
           }
-          stopifnot(file.create(callback_checkpoint))
-          reticulate::py_require("py-yaml12")
-          reticulate::py_config()
           # later caps one top-level handler turn at 20 callback passes.
           # Leave the input callback ready for the next handler turn.
           request_input <- function(turns) {
             if (turns == 0L) {
+              stopifnot(file.create(callback_checkpoint))
               readline("later> ")
             } else {
               later::later(function() request_input(turns - 1L), delay = 0)
