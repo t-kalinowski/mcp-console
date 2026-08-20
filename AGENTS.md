@@ -45,7 +45,12 @@ If an established worker fails during that cell, the same `send` makes one autom
 If the wait expires while the cell is still evaluating, `send` drains output produced so far, appends the newline-prefixed banner `\n[running]`, and leaves the computation running.
 If it expires while the replacement is starting, the response instead ends with `[worker starting]`; later polls report the same state until the worker reports ready, then return startup output followed by `[idle]`.
 Concurrent `send` calls are unsupported.
-After a worker reports ready, the server continuously consumes sideband, standard-output, and standard-error activity.
+On macOS, the server remains outside the sandbox and starts one worker relay inside it for each worker generation.
+The relay is the direct sandbox child and process-group leader; it starts the worker inside the same sandbox and process group.
+Only relay fd 0/1/2 cross the server/sandbox boundary.
+Relay stdin and stdout carry ordered framed JSONL, while relay stderr passes through outside the protocol and is normally empty.
+The relay creates the unchanged worker sideband and standard streams after it enters the sandbox.
+After a worker reports ready, the server continuously consumes relay events containing sideband, standard-output, and standard-error activity.
 With no evaluation active, an empty `send` immediately drains the output collected so far and returns `\n[idle]`, or `\n[stdin needed]` when an idle callback has an outstanding console read.
 It sends no worker frame, does not wait for idle callbacks, and is not delayed by `timeout_ms`.
 Output accepted after the snapshot remains pending for a later response.
@@ -63,14 +68,14 @@ Worker `image` frames carry base64 data and a MIME type.
 Worker `console_output` and `console_diagnostic` frames carry ordinary and diagnostic console text.
 The server retains console channels and direct fd 1/2 identity until MCP projection.
 The server preserves sideband text and image order as MCP content blocks, coalesces adjacent text, and does not add `[done]` when an image is the only output.
-One generation-long sideband reader continuously publishes background console and image frames, handles Python-resolution, Python-version-selection, and Python-activation frames, and retains idle input state.
-It assembles newline-delimited frames incrementally and returns to its cancellation poll after each available chunk, so an incomplete frame cannot block retirement and idle output is not bounded by sideband pipe capacity.
+One generation-long relay reader continuously publishes forwarded background console and image frames, handles Python-resolution, Python-version-selection, and Python-activation frames, and retains idle input state.
+The relay continuously assembles worker-sideband frames and drains raw worker standard streams; the server incrementally assembles relay JSONL, so an incomplete frame cannot block retirement and idle output is not bounded by the worker sideband pipe capacity.
 A worker whose background callback is waiting for a nested resolver reply queues an unrelated command, finishes the callback after the reply arrives, and then processes that command.
 An explicit operation registers only its expected terminal.
 At evaluation `completed`, the reader records an output-tape checkpoint so later background activity remains pending for the next response.
 An idle input request can join a later evaluation's ordinary stdin flow, but fails a noninteractive requirement-preparation operation instead of leaving it blocked.
 The implemented `session` surface accepts `action = "prepare"` with one or more R or Python requirement strings or DuckDB extension names, `action = "interrupt"` without requirements, or `action = "restart"` with optional R, Python, and DuckDB requirements for the implicit session.
-Interrupt requests `SIGINT` for an active host resolver process group, or otherwise sends it to the live worker, and returns `[interrupt sent]` after the resolver accepts the request or the worker signal succeeds, without waiting for the resolver or evaluation to finish.
+Interrupt requests `SIGINT` for an active host resolver process group, or otherwise asks the relay to send it to the live worker, and returns `[interrupt sent]` after the resolver accepts the request or the relay reports that the worker signal succeeded, without waiting for the resolver or evaluation to finish.
 It does not start a process, and a worker signal is not assigned to a cell.
 The built-in worker checks pending interrupts at managed evaluation boundaries, while R, reticulate Python, and DuckDB retain their native in-evaluation handling.
 User code can catch or delay the signal.
@@ -106,7 +111,8 @@ An idle server-managed worker can also materialize an uninitialized Python manif
 An idle worker that implements R preparation can prepare DuckDB extensions on the host without replacement or loss of live state.
 The DuckDB resolver uses the existing cancellable resolver process-group lifecycle and adds no DuckDB-specific worker sideband messages; an accompanying R candidate still uses `prepare_r`.
 A successful Python activation or explicit materialization is retained immediately.
-After any operation terminal, the continuous reader waits for the operation owner to commit terminal state before reading another frame, so later idle activity cannot overtake that retention.
+Before forwarding `ready`, `resolve_python`, `resolve_python_version`, any operation terminal, or worker-sideband closure, the relay checkpoints both raw-output readers and first publishes bytes already available from fd 1 and fd 2.
+After any operation terminal, the relay's worker-sideband reader waits for the server operation owner to commit terminal state and acknowledge that terminal before reading the next worker frame, so later idle activity cannot overtake that retention; raw stream readers continue draining during the barrier.
 In a mixed live R, Python, and DuckDB preparation, that activation can remain retained even if a later R update fails.
 The R and DuckDB configurations are retained only after the complete operation succeeds.
 An earlier DuckDB install from a failed multi-extension request may remain in the host cache without entering the retained extension set.
@@ -123,9 +129,14 @@ After every required resolution succeeds, restart commits the R library, DuckDB 
 The implicit session exists for the server lifetime, so restart starts its first worker if none exists yet.
 The replacement generation becomes lifecycle ready after its `ready` frame and before its continuous dispatcher starts, so immediate resolver and activation callbacks observe the new generation as ready.
 Restart completion is scoped to that generation, so a completed restart cannot mark a later overlapping restart ready.
-Restart first queues worker-stdin closure and the sideband shutdown message without waiting behind an active cell, then force-stops the process group and reaps the direct sandbox process at the one-second deadline if that process remains live.
-Once the direct process has stopped, it cancels the continuous sideband reader to release any operation waiting on an incomplete frame.
-It then waits for the active evaluation or preparation owner to release the worker, cancels the stdin writer and output readers, drains standard-stream bytes already buffered at that boundary, and joins the tasks before reporting `[worker stopped: in-memory state lost]` or launching the replacement.
+Restart registers one relay-shutdown request and sends the relay a shutdown command with the time remaining in the existing one-second worker deadline.
+The relay flushes a sequenced `shutdown_started` event before it begins worker shutdown; if the server observes that single acceptance event by the original deadline, it allows up to two additional seconds after the deadline for relay retirement without extending the worker grace.
+The relay queues worker-stdin closure and the unchanged sideband shutdown message without waiting behind an active cell.
+At the worker deadline it first kills the direct worker if needed, then stops every other live process whose current process group is exactly the relay's group while remaining alive as group leader, reaps the direct worker, finishes the worker stream boundaries, and flushes its final events before exiting.
+Clean relay-stdin EOF performs the same worker shutdown with a new one-second grace and no `shutdown_started` event; EOF midway through a frame is a transport failure.
+The server observes relay exit without reaping it, keeping the relay PID unavailable for reuse until the outer sandbox owner always closes the complete process-group lifetime and reaps the relay; this cleanup runs after either wait, including when the relay already exited, and is the fail-safe when the relay does not accept shutdown or stalls.
+The sandbox owner records that retirement before releasing the process-group identity, so concurrent or repeated cleanup returns the stored result without signaling a reused relay PID or process group.
+The server then waits for the active evaluation or preparation owner to release the generation and joins the relay transport tasks before reporting `[worker stopped: in-memory state lost]` or launching the replacement.
 Each admitted cell or idle stdin write carries its worker generation, so work admitted before restart cannot reach the replacement.
 An R preparation cancelled while its IR resolver is active reports resolver cancellation.
 After preparation reaches the live worker, restart cancellation returns `R preparation cancelled by restart` when the call includes R and `Python preparation cancelled by restart` otherwise; active-generation sideband failures retain their transport diagnostics.
@@ -134,7 +145,7 @@ When a `send` is waiting on the interrupted cell, it exclusively receives old-wo
 The server writes that `send` reply before starting the replacement or returning the restart response, which contains `[active evaluation stopped by session restart request]`, its own stopped notice when it retires a ready worker, `[starting new worker]`, replacement startup output, and `[idle]` without repeating the old-worker output.
 Idle callbacks do not create a waiting `send`; continuous collection leaves their output pending for the restart response before the worker is retired.
 Named sessions do not exist yet.
-On macOS, default R and DuckDB extension preflights and managed-Python preflight happen during `serve` startup when required; the first nonempty stdin submission or evaluation still lazily starts the built-in worker under the same sandbox policy as the `sandbox` command.
+On macOS, default R and DuckDB extension preflights and managed-Python preflight happen during `serve` startup when required; the first nonempty stdin submission or evaluation still lazily starts a sandboxed relay and built-in worker under the same sandbox policy as the `sandbox` command.
 The worker embeds R through `libr` and `harp`, retains global state, and feeds each complete R cell through R's DLL REPL iterator.
 R parses and evaluates its expressions sequentially, captures console output, prints visible values, and performs native top-level bookkeeping.
 Immediately before every R, Python, or SQL cell, the worker gives R's registered input handlers one nonblocking turn under an R top-level boundary.
@@ -142,11 +153,11 @@ It gives them a second turn after a normal language outcome only if worker shutd
 Shutdown or an infrastructure failure during the initial turn aborts the submitted cell; an infrastructure failure recorded by the cell skips the final turn.
 After either turn, a worker-stdin hangup marks shutdown before the worker can dispatch or complete the cell, including when a callback reads fd 0 directly.
 Ready callbacks run within a managed graphics scope and their output precedes cell completion.
-Between cells, the worker temporarily adds the sideband descriptor to R's input-handler set and blocks in `R_checkActivity()` for either R activity or a server command.
+Between cells, the worker temporarily adds the sideband descriptor to R's input-handler set and blocks in `R_checkActivity()` for either R activity or a relay-forwarded server command.
 It removes that temporary handler before running R code, so fork children inherit no stale sideband handler.
 R handler errors remain below `R_ToplevelExec()`, and the worker uses no worker-owned fixed polling interval or second event loop.
-A generation-long server reader continuously consumes idle console output and images, services nested managed-Python requests, and retains idle console-input state.
-It assembles newline-delimited sideband frames incrementally, returning to the cancellation poll after each available chunk, so a partial frame cannot block worker retirement and pipe backpressure cannot pause ordinary idle output.
+A generation-long server reader continuously consumes relay events, publishes forwarded idle console output and images, services nested managed-Python requests, and retains idle console-input state.
+The relay assembles newline-delimited worker-sideband frames incrementally while the server does the same for relay JSONL, so a partial frame cannot block worker retirement and pipe backpressure cannot pause ordinary idle output.
 Before applying a live requirement preparation, the built-in worker gives registered R handlers one nonblocking turn, so a callback already ready when the command arrives is collected first.
 An empty `send` immediately snapshots an idle callback's pending output and surfaces an outstanding input request as `[stdin needed]`; a later stdin-only `send` continues it, and a call that already includes stdin can prequeue the input.
 A code-bearing `send` can also continue an idle input request.
@@ -254,8 +265,8 @@ Temporary Arrow relations use collision-checked names and are unregistered after
 DDL and DML results without columns are silent; affected-row summaries do not exist yet.
 DuckDB errors are normal language outcomes with `isError: false`, and the connection remains reusable.
 Automatic Python relation sharing and a separate relation-registration API do not exist.
-Sideband text and images, worker standard-output and standard-error bytes, failures, and lifecycle notices share one pending output tape in publication order.
-Each pipe reader queues raw byte chunks, and each successful `send` response drains all tape events available at its response boundary, decoding complete UTF-8 prefixes and retaining incomplete suffixes for a later response.
+Relay-forwarded sideband text and images, decoded worker standard-output and standard-error bytes, failures, and lifecycle notices share one pending output tape in publication order.
+The relay immediately publishes available raw bytes in chunks of at most 8 KiB as base64 JSONL events, without line buffering or a coalescing timer, so the private transport is binary safe; each successful `send` response drains all tape events available at its response boundary, decoding complete UTF-8 prefixes and retaining incomplete suffixes for a later response.
 Idle, running, and outstanding-input responses append the literal `\n[idle]`, `\n[running]`, or `\n[stdin needed]` banner; its leading newline is present even when no output precedes it.
 After an infrastructure failure, the server finishes worker shutdown and its I/O readers before appending `[worker stopped: in-memory state lost]` after the specific error.
 After an established worker fails during a cell, the same `send` appends `[starting new worker]\n` and makes one replacement attempt.
@@ -268,21 +279,25 @@ A failed cell likewise returns all pending output before its infrastructure or p
 Server-owned timeline, state, and admission facts are bracketed and separated from worker output; request-validation and standalone resolver diagnostics remain ordinary MCP tool errors.
 Ordering between the two standard streams and sideband output is best effort; incomplete UTF-8 remains with its pipe until a later response, and invalid UTF-8 is replaced when output is rendered.
 The built-in worker and custom workers send console prompt fields verbatim; the server preserves each value without trimming it and renders it as a JSON-quoted `[input requested: ...]` record.
-Writes to inherited fd 1 or fd 2 from descendants follow the same path until worker retirement cancels those pipe readers; a descendant retaining fd 0 likewise cannot keep a blocked server write alive past retirement.
-This does not add descendant supervision, and forked descendants cannot use the inherited sideband.
+Writes to inherited fd 1 or fd 2 from descendants follow the same path until worker retirement closes those relay readers; a descendant retaining fd 0 likewise cannot keep a blocked relay write alive past retirement.
+On a forced worker stop, the relay kills its direct worker, terminates the other exact-group members, and then reaps the worker.
+After the relay exits, the server keeps it unreaped while closing the complete outer process-group lifetime, including in-group descendants left by an earlier direct-worker exit, and then reaps it; descendants that leave that group remain unsupported.
+Forked descendants cannot use the inherited sideband.
 The hidden `worker` command takes ownership of the sideband, discovers `R_HOME` through the selected R executable inside the sandbox, and opens `R_HOME/lib/libR.dylib` by its absolute path.
 It does not self-execute or set a dynamic-loader environment variable.
-The worker command runs synchronously on the process main thread; only `serve` creates a Tokio runtime.
+The hidden `worker-relay` command runs inside the sandbox, creates the worker transports, supervises the worker with blocking threads, and serializes relay events to fd 1.
+The worker and worker-relay commands run synchronously; only `serve` creates a Tokio runtime.
 The hidden development option `serve --worker PATH` replaces the built-in worker with an executable that implements the same sideband request/receipt protocol and fd-0 input contract.
 The Python fixture `tests/fixtures/zod` provides deterministic acceptance coverage for R, Python, and SQL language tags at that boundary, MCP image content, direct fd-0 input, captured standard streams, and server-owned timeout and polling mechanics.
-When MCP input closes, the server starts a one-second worker-shutdown deadline, closes worker stdin, sends sideband shutdown, waits for worker exit through that deadline, and then cancels any active host resolver.
-If the direct sandbox process is still running when time expires, the sandbox boundary force-stops its process group and reaps that direct process.
+When MCP input closes, the server starts a one-second worker-shutdown deadline, asks the relay to close worker stdin and send sideband shutdown, waits through that deadline and, only after timely `shutdown_started` acceptance, allows up to two more seconds for relay retirement before cancelling any active host resolver.
+The relay kills the direct worker and remaining exact-group members when its worker misses the grace period, reaps the direct worker, flushes final events, and exits.
+The outer sandbox boundary keeps an exited relay unreaped until it closes the complete process-group lifetime and reaps the relay; the same path is the fail-safe if the relay does not accept shutdown or stalls.
 The version command prints the package name and version.
 On macOS, the sandbox command launches a subprocess under `sandbox-exec` with host filesystem reads allowed, regular-file writes limited to a dedicated per-launch temporary directory, runtime device and IPC exceptions, and network access denied.
 This initial launcher waits only for the direct command.
 Background descendants are unsupported: they may outlive the launcher, which attempts to remove their dedicated temporary directory on a best-effort basis when it returns.
 Descendant supervision is intentionally deferred because it must account for process groups, session-detached children, signal forwarding, and PID reuse together.
-The sandbox command and worker are unsupported on Linux and Windows.
+The sandbox command, worker relay, and worker are unsupported on Linux and Windows.
 Named sessions, Python relation sharing, the sidecar API, viewer, complete output retention, and generated Quarto transcripts do not exist yet.
 
 ## Product direction
@@ -327,17 +342,19 @@ See `design-sketches/README.md` for the product overview and `design-sketches/do
 - `src/sql.rs` — persistent DuckDB/DBI SQL bridge and bounded streaming Arrow previews.
 - `src/transcript.rs` — append-only MCP tool journal and image artifact persistence.
 - `src/r_repl.c` — C-owned per-cell DLL-REPL iterator and long-jump boundary.
-- `src/sideband.rs` — macOS inherited-pipe JSON-lines transport.
+- `src/sideband.rs` — relay-created inherited-pipe JSON-lines worker transport.
 - `src/worker.rs` — embedded R initialization, cell dispatch, and console callbacks.
 - `src/worker_client.rs` — server-side worker orchestration and lazy worker access.
 - `src/worker_client/environment.rs` — requirement preparation and retained managed environments.
-- `src/worker_client/activity.rs` — generation-long sideband dispatcher and operation-terminal routing.
+- `src/worker_client/activity.rs` — generation-long forwarded-sideband dispatcher and operation-terminal routing.
 - `src/worker_client/evaluation.rs` — per-cell stdin, input-request, and wait state.
 - `src/worker_client/lifecycle.rs` — worker generations, restart coordination, and process shutdown.
 - `src/worker_client/output.rs` — response assembly and captured standard-stream buffering.
-- `src/worker_client/macos.rs` — macOS worker launch, sideband dispatcher startup, fd-0 writing, and process control.
+- `src/worker_client/macos.rs` — macOS sandboxed-relay launch, relay dispatcher, and generation process control.
 - `src/worker_client/unsupported.rs` — non-macOS worker-runtime stubs.
+- `src/relay_protocol.rs` — private ordered JSONL protocol between the host server and sandboxed relay.
 - `src/worker_protocol.rs` — shared sideband message definitions.
+- `src/worker_relay.rs` — sandboxed worker launch, local I/O forwarding, signaling, and reaping.
 - `src/sandbox.rs` — platform dispatch for the sandbox process launcher.
 - `src/sandbox/` — platform implementation and macOS Seatbelt policy.
 - `tests/cli.rs` — public binary acceptance tests.
@@ -360,6 +377,7 @@ See `design-sketches/README.md` for the product overview and `design-sketches/do
 - `scripts/check` — local formatting, Clippy, and test checks.
 - `.github/workflows/ci.yaml` — formatting, Clippy, and test checks.
 - `docs/TOOL_DESCRIPTIONS.md` — exact registered MCP tool and property descriptions.
+- `docs/RELAY_PROTOCOL.md` — exact private server-to-relay transport and sandbox process boundary.
 - `docs/WORKER_PROTOCOL.md` — exact implemented worker launch and sideband protocol.
 - `design-sketches/` — tentative product and architecture documents.
 - `README.md` — current user-facing project status.
