@@ -51,8 +51,8 @@ def close(descriptor: int) -> None:
 
 
 def proxy(
-    server_read: int,
-    server_write: int,
+    relay_read: int,
+    relay_write: int,
     worker_read: int,
     worker_write: int,
     stdout: BinaryIO,
@@ -70,8 +70,8 @@ def proxy(
         for descriptor in streams
     }
     pending: dict[str, list[str]] = {"stdout": [], "stderr": []}
-    active = {server_read, worker_read, *streams}
-    buffers = {"server": bytearray(), "worker": bytearray()}
+    active = {relay_read, worker_read, *streams}
+    buffers = {"relay": bytearray(), "worker": bytearray()}
 
     def read_stream(descriptor: int) -> None:
         chunk = os.read(descriptor, BUFFER_SIZE)
@@ -117,9 +117,9 @@ def proxy(
                 read_ready_streams()
                 flush_streams()
             record(capture, {direction: message})
-            frame_is_shutdown = direction == "server" and message == {"kind": "shutdown"}
+            frame_is_shutdown = direction == "relay" and message == {"kind": "shutdown"}
             if frame_is_shutdown and capture_stdin_close:
-                assert os.read(0, 1) == b"", "server stdin contained data at shutdown"
+                assert os.read(0, 1) == b"", "worker stdin contained data at shutdown"
                 record(capture, {"stdin": {"closed": True}})
             send(destination, message)
             shutdown = shutdown or frame_is_shutdown
@@ -136,40 +136,40 @@ def proxy(
             chunk = os.read(worker_read, BUFFER_SIZE)
             if chunk:
                 buffers["worker"].extend(chunk)
-                forward_frames("worker", server_write)
+                forward_frames("worker", relay_write)
             else:
                 active.remove(worker_read)
                 if capture_worker_sideband_close:
                     record(capture, {"worker_sideband": {"closed": True}})
-                close(server_write)
-                server_write = -1
+                close(relay_write)
+                relay_write = -1
 
-        if server_read in ready:
-            chunk = os.read(server_read, BUFFER_SIZE)
+        if relay_read in ready:
+            chunk = os.read(relay_read, BUFFER_SIZE)
             if chunk:
-                buffers["server"].extend(chunk)
-                shutdown = forward_frames("server", worker_write)
+                buffers["relay"].extend(chunk)
+                shutdown = forward_frames("relay", worker_write)
             else:
                 shutdown = True
             if shutdown:
-                active.remove(server_read)
-                close(server_read)
-                server_read = -1
+                active.remove(relay_read)
+                close(relay_read)
+                relay_read = -1
                 close(worker_write)
                 worker_write = -1
 
-    assert not buffers["server"], "server stopped during a sideband frame"
+    assert not buffers["relay"], "relay stopped during a sideband frame"
     assert not buffers["worker"], "worker stopped during a sideband frame"
     flush_streams()
-    close(server_read)
-    close(server_write)
+    close(relay_read)
+    close(relay_write)
     close(worker_read)
     close(worker_write)
 
 
 def main() -> None:
-    server_read = take_sideband(READ_FD_ENV)
-    server_write = take_sideband(WRITE_FD_ENV)
+    relay_read = take_sideband(READ_FD_ENV)
+    relay_write = take_sideband(WRITE_FD_ENV)
     worker_read, proxy_write = os.pipe()
     proxy_read, worker_write = os.pipe()
     environment = os.environ.copy()
@@ -195,8 +195,8 @@ def main() -> None:
     capture_path = Path(os.environ["TMPDIR"], CAPTURE_NAME)
     with capture_path.open("w", encoding="utf-8") as capture:
         proxy(
-            server_read,
-            server_write,
+            relay_read,
+            relay_write,
             proxy_read,
             proxy_write,
             process.stdout,

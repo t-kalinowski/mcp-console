@@ -1,0 +1,35 @@
+---
+!same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
+---
+id: 3
+send:
+  r: |
+    length(getHook("reticulate::matplotlib.pyplot::load"))
+result:
+  content:
+    - type: text
+      text: |
+        [1] 1
+  isError: false
+---
+id: 4
+send:
+  python: "42"
+result:
+  content:
+    - type: text
+      text: |
+        42
+  isError: false
+---
+id: 5
+send:
+  r: |
+    length(getHook("reticulate::matplotlib.pyplot::load"))
+result:
+  content:
+    - type: text
+      text: |
+        [1] 1
+  isError: false
+...

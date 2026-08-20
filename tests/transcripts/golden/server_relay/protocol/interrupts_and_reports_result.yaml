@@ -1,0 +1,29 @@
+---
+relay:
+  kind: worker_message
+  message:
+    kind: ready
+---
+server:
+  kind: worker_message
+  message:
+    kind: evaluate
+    language: r
+    source: "42"
+---
+server:
+  kind: interrupt
+  request_id: 0
+---
+relay:
+  kind: interrupt_result
+  request_id: 0
+---
+relay:
+  kind: worker_message
+  message:
+    kind: completed
+---
+server:
+  kind: terminal_committed
+...

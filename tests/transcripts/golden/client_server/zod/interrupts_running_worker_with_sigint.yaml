@@ -1,0 +1,44 @@
+---
+!same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
+---
+id: 3
+send:
+  r: interrupt
+  timeout_ms: 0
+result:
+  content:
+    - type: text
+      text: |-
+
+        [running]
+  isError: false
+---
+id: 4
+session:
+  action: interrupt
+result:
+  content:
+    - type: text
+      text: "[interrupt sent]"
+  isError: false
+---
+id: 5
+send:
+  timeout_ms: 3000
+result:
+  content:
+    - type: text
+      text: |
+        zod interrupted
+  isError: false
+---
+id: 6
+send:
+  r: echo
+result:
+  content:
+    - type: text
+      text: |
+        zod: echo
+  isError: false
+...

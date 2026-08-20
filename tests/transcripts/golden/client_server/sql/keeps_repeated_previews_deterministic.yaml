@@ -1,0 +1,60 @@
+---
+!same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
+---
+id: 3
+send:
+  sql: |
+    CREATE VIEW wide_values AS SELECT
+      repeat('😀漢é', 2000) AS c01,
+      repeat('界🚀', 2000) AS c02,
+      repeat('á', 5000) AS c03,
+      repeat('🙂', 5000) AS c04,
+      repeat('字', 5000) AS c05,
+      repeat('é', 5000) AS c06,
+      repeat('🚧', 5000) AS c07,
+      repeat('語', 5000) AS c08,
+      repeat('ñ', 5000) AS c09,
+      repeat('🌐', 5000) AS c10,
+      repeat('ß', 5000) AS c11,
+      repeat('文', 5000) AS c12,
+      repeat('extra', 2000) AS c13
+    FROM range(21)
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+id: 4
+send:
+  sql: |
+    SELECT * FROM wide_values
+result:
+  content:
+    - type: text
+      text: |
+        <same bounded preview>
+  isError: false
+---
+id: 5
+send:
+  sql: |
+    SELECT * FROM wide_values
+result:
+  content:
+    - type: text
+      text: |
+        <same bounded preview>
+  isError: false
+---
+id: 6
+send:
+  sql: |
+    SELECT * FROM wide_values
+result:
+  content:
+    - type: text
+      text: |
+        <same bounded preview>
+  isError: false
+...

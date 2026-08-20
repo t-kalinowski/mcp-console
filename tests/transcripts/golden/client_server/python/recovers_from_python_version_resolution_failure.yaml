@@ -1,0 +1,35 @@
+---
+!same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
+---
+id: 3
+send:
+  r: |
+    worker_pid <- Sys.getpid()
+    base::local({
+      old_cache <- Sys.getenv("UV_CACHE_DIR", unset = NA_character_)
+      on.exit(
+        if (is.na(old_cache)) {
+          Sys.unsetenv("UV_CACHE_DIR")
+        } else {
+          Sys.setenv(UV_CACHE_DIR = old_cache)
+        }
+      )
+      Sys.setenv(UV_CACHE_DIR = "/dev/null")
+      print(reticulate::py_require())
+    })
+result:
+  content:
+    - type: text
+      text: "Error: managed Python version resolution failed with exit status: 1: error: Failed to initialize cache at `/dev/null`\n  Caused by: failed to create directory `/dev/null`: File exists (os error 17)\nparse error: premature EOF\n                                       \n                     (right here) ------^\n\nWarning message:\nIn system2(uv, args, ...) :\n  running command ''<uv executable>' python list --all-versions --color never --output-format json --python-preference  only-managed' had status 2\n"
+  isError: false
+---
+id: 4
+send:
+  r: "identical(Sys.getpid(), worker_pid)"
+result:
+  content:
+    - type: text
+      text: |
+        [1] TRUE
+  isError: false
+...

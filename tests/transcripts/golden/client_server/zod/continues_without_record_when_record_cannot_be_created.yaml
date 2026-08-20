@@ -1,0 +1,37 @@
+---
+!same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
+---
+id: 3
+send:
+  r: echo
+result:
+  content:
+    - type: text
+      text: |
+        zod: echo
+  isError: false
+---
+id: 4
+session:
+  action: restart
+result:
+  content:
+    - type: text
+      text: |-
+        [worker stopped: in-memory state lost]
+        [starting new worker]
+        [idle]
+  isError: false
+---
+id: 5
+input:
+  method: tools/call
+  params:
+    name: missing
+    arguments: {}
+error:
+  code: -32602
+  message: tool not found
+---
+server stderr: "mcp-console: transcript recording disabled: <run record creation failed>"
+...

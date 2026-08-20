@@ -47,6 +47,7 @@ If it expires while the replacement is starting, the response instead ends with 
 Concurrent `send` calls are unsupported.
 On macOS, the server remains outside the sandbox and starts one worker relay inside it for each worker generation.
 The relay is the direct sandbox child and process-group leader; it starts the worker inside the same sandbox and process group.
+A hidden development override can replace that relay executable only alongside a custom worker; the replacement remains the direct sandbox child and process-group leader.
 Only relay fd 0/1/2 cross the server/sandbox boundary.
 Relay stdin and stdout carry ordered framed JSONL, while relay stderr passes through outside the protocol and is normally empty.
 The relay creates the unchanged worker sideband and standard streams after it enters the sandbox.
@@ -362,16 +363,18 @@ See `design-sketches/README.md` for the product overview and `design-sketches/do
 - `tests/fixtures/py_require` — minimal R package that declares a Python requirement from its load hook.
 - `tests/fixtures/r_install_escape` — local R package whose configure hook proves rejected sources are not installed.
 - `tests/fixtures/zod` — executable Python sideband worker used by acceptance tests.
-- `tests/fixtures/worker_mitm` — transparent worker proxy used to capture sideband, standard-stream, fd-0 closure, and worker-sideband closure events through `serve`.
-- `tests/transcripts/r.py` — public built-in R worker acceptance suite.
-- `tests/transcripts/r_requirements.py` — real-IR R requirement preparation and failure suite.
-- `tests/transcripts/python.py` — public reticulate Python-cell acceptance suite.
-- `tests/transcripts/sql.py` — public persistent-DuckDB acceptance suite.
-- `tests/transcripts/worker.py` — public-server acceptance plus captured built-in worker wire events.
+- `tests/fixtures/scripted_relay` — deterministic direct-child relay used to capture the server-relay JSONL boundary.
+- `tests/fixtures/worker_mitm` — transparent relay-worker proxy used to capture sideband, standard-stream, fd-0 closure, and worker-sideband closure events through `serve`.
+- `tests/transcripts/client_server/r.py` — public built-in R worker acceptance suite.
+- `tests/transcripts/client_server/r_requirements.py` — real-IR R requirement preparation and failure suite.
+- `tests/transcripts/client_server/python.py` — public reticulate Python-cell acceptance suite.
+- `tests/transcripts/client_server/sql.py` — public persistent-DuckDB acceptance suite.
+- `tests/transcripts/server_relay/protocol.py` — process-level capture of the private server-relay wire contract.
+- `tests/transcripts/relay_worker/protocol.py` — public-server acceptance plus captured relay-worker wire events.
 - `tests/transcripts/_run.py` — discovers transcript suites, checks the selected initialization reference case first, runs remaining cases in parallel by default, and compares case snapshots.
 - `tests/transcripts/_support.py` — shared transcript types and MCP stdio client.
-- `tests/transcripts/<suite>.py` — suites of named imperative transcript cases.
-- `tests/transcripts/golden/SUITE/` — human-readable YAML 1.2 case transcripts.
+- `tests/transcripts/<boundary>/<suite>.py` — suites of named imperative transcript cases organized as `client_server`, `server_relay`, `relay_worker`, or `cli`.
+- `tests/transcripts/golden/<boundary>/<suite>/` — human-readable YAML 1.2 case transcripts.
 - `tests/transcripts/README.md` — transcript test usage and authoring guide.
 - `scripts/test` — builds the binary and runs selected external Python tests through `uv`.
 - `scripts/format` — attempts each repository-wide formatter without requiring it.

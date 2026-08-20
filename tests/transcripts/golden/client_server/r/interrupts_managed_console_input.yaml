@@ -1,0 +1,168 @@
+---
+!same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
+---
+id: 3
+send:
+  r: |
+    r_input_state <- 41L
+    tryCatch(
+      readline("R interrupt> "),
+      interrupt = function(condition) cat("R input interrupted\n")
+    )
+  stdin: R partial
+result:
+  content:
+    - type: text
+      text: |-
+        [input requested: "R interrupt> "]
+        [stdin needed]
+  isError: false
+---
+id: 4
+session:
+  action: interrupt
+result:
+  content:
+    - type: text
+      text: "[interrupt sent]"
+  isError: false
+---
+id: 5
+send:
+  timeout_ms: 3000
+result:
+  content:
+    - type: text
+      text: |
+        R input interrupted
+  isError: false
+---
+id: 6
+send:
+  r: readline("R replay> ")
+  stdin: |
+    !
+result:
+  content:
+    - type: text
+      text: |
+        [input requested: "R replay> "]
+        [1] "R partial!"
+  isError: false
+---
+id: 7
+send:
+  r: |
+    suspended_input <- "not read"
+    suspendInterrupts({
+      suspended_input <- readline("R suspended> ")
+      cat("suspended input accepted")
+    })
+result:
+  content:
+    - type: text
+      text: |-
+        [input requested: "R suspended> "]
+        [stdin needed]
+  isError: false
+---
+id: 8
+session:
+  action: interrupt
+result:
+  content:
+    - type: text
+      text: "[interrupt sent]"
+  isError: false
+---
+id: 9
+send:
+  stdin: |
+    accepted
+  timeout_ms: 3000
+result:
+  content:
+    - type: text
+      text: |
+        suspended input accepted
+  isError: false
+---
+id: 10
+send:
+  r: suspended_input
+result:
+  content:
+    - type: text
+      text: |
+        [1] "accepted"
+  isError: false
+---
+id: 11
+send:
+  python: |
+    python_input_state = 41
+    try:
+        input("Python interrupt> ")
+    except KeyboardInterrupt:
+        print("Python input interrupted")
+  stdin: Python partial
+result:
+  content:
+    - type: text
+      text: |-
+        [input requested: "Python interrupt> "]
+        [stdin needed]
+  isError: false
+---
+id: 12
+session:
+  action: interrupt
+result:
+  content:
+    - type: text
+      text: "[interrupt sent]"
+  isError: false
+---
+id: 13
+send:
+  timeout_ms: 3000
+result:
+  content:
+    - type: text
+      text: |
+        Python input interrupted
+  isError: false
+---
+id: 14
+send:
+  python: input("Python replay> ")
+  stdin: |
+    !
+result:
+  content:
+    - type: text
+      text: |
+        [input requested: "Python replay> "]
+        'Python partial!'
+  isError: false
+---
+id: 15
+send:
+  r: r_input_state + 1L
+result:
+  content:
+    - type: text
+      text: |
+        [1] 42
+  isError: false
+---
+id: 16
+send:
+  python: python_input_state + 1
+result:
+  content:
+    - type: text
+      text: |
+        42
+  isError: false
+...

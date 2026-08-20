@@ -1,0 +1,151 @@
+---
+!same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
+---
+id: 3
+send:
+  r: |
+    interrupt_state <- 41L
+    invisible(file.create(file.path(
+      tempdir(),
+      "r-interrupt-started"
+    )))
+    repeat {}
+  timeout_ms: 0
+result:
+  content:
+    - type: text
+      text: |-
+
+        [running]
+  isError: false
+---
+id: 4
+session:
+  action: interrupt
+result:
+  content:
+    - type: text
+      text: "[interrupt sent]"
+  isError: false
+---
+id: 5
+send:
+  timeout_ms: 3000
+result:
+  content:
+    - type: text
+      text: "\n"
+  isError: false
+---
+id: 6
+send:
+  r: interrupt_state + 1L
+result:
+  content:
+    - type: text
+      text: |
+        [1] 42
+  isError: false
+---
+id: 7
+send:
+  r: |
+    dyn.load("./mcp_test_input_handler.so")
+    invisible(.Call(
+      "mcp_test_register_input_handler",
+      file.path(tempdir(), "input-handler-fifo"),
+      function() {
+        invisible(file.create(file.path(
+          tempdir(),
+          "r-boundary-interrupt-started"
+        )))
+        on.exit(boundary_interrupt_cleanup <<- TRUE)
+        repeat {}
+      }
+    ))
+    boundary_interrupt_state <- 42L
+    writer <- fifo(
+      file.path(tempdir(), "input-handler-fifo"),
+      open = "wb"
+    )
+    writeBin(as.raw(1), writer)
+    close(writer)
+  timeout_ms: 0
+result:
+  content:
+    - type: text
+      text: |-
+
+        [running]
+  isError: false
+---
+id: 8
+session:
+  action: interrupt
+result:
+  content:
+    - type: text
+      text: "[interrupt sent]"
+  isError: false
+---
+id: 9
+send:
+  timeout_ms: 3000
+result:
+  content:
+    - type: text
+      text: "\n"
+  isError: false
+---
+id: 10
+send:
+  r: c(boundary_interrupt_state, boundary_interrupt_cleanup)
+result:
+  content:
+    - type: text
+      text: |
+        [1] 42  1
+  isError: false
+---
+id: 11
+session:
+  action: interrupt
+result:
+  content:
+    - type: text
+      text: "[interrupt sent]"
+  isError: false
+---
+id: 12
+send:
+  r: 6 * 7
+result:
+  content:
+    - type: text
+      text: |
+
+        [1] 42
+  isError: false
+---
+id: 13
+send:
+  r: |
+    setTimeLimit(elapsed = 10, transient = FALSE)
+    invisible(NULL)
+    setTimeLimit(elapsed = 0.05, transient = FALSE)
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+id: 14
+send:
+  r: '"idle time does not consume a cell limit"'
+result:
+  content:
+    - type: text
+      text: |
+        [1] "idle time does not consume a cell limit"
+  isError: false
+...

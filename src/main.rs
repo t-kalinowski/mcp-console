@@ -28,7 +28,7 @@ mod worker_relay;
 
 fn main() -> ExitCode {
     match cli::Cli::parse().command {
-        cli::Command::Serve { worker } => match run_server(worker) {
+        cli::Command::Serve { worker, relay } => match run_server(worker, relay) {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => exit_with_error(error),
         },
@@ -47,11 +47,14 @@ fn main() -> ExitCode {
     }
 }
 
-fn run_server(worker: Option<std::path::PathBuf>) -> Result<(), Box<dyn std::error::Error>> {
+fn run_server(
+    worker: Option<std::path::PathBuf>,
+    relay: Option<std::path::PathBuf>,
+) -> Result<(), Box<dyn std::error::Error>> {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()?;
-    runtime.block_on(server::run(worker))
+    runtime.block_on(server::run(worker, relay))
 }
 
 fn exit_with_error(error: impl std::fmt::Display) -> ExitCode {

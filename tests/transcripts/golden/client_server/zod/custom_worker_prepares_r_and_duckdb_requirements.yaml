@@ -1,0 +1,89 @@
+---
+!same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
+---
+id: 3
+send:
+  r: echo
+result:
+  content:
+    - type: text
+      text: |
+        zod: echo
+  isError: false
+---
+id: 4
+session:
+  action: prepare
+  requirements:
+    r:
+      - praise
+result:
+  content:
+    - type: text
+      text: "[prepared]"
+  isError: false
+---
+id: 5
+session:
+  action: prepare
+  requirements:
+    duckdb:
+      - json
+result:
+  content:
+    - type: text
+      text: "[prepared]"
+  isError: false
+---
+id: 6
+send:
+  r: report managed R requirement
+result:
+  content:
+    - type: text
+      text: |
+        zod R requirement: prepared=true
+  isError: false
+---
+id: 7
+send:
+  r: fail next r preparation after output
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+id: 8
+session:
+  action: prepare
+  requirements:
+    r:
+      - zeallot
+result:
+  content:
+    - type: text
+      text: |
+        before failed preparation
+    - type: image
+      data: iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=
+      mimeType: image/png
+    - type: text
+      text: |-
+
+        zod rejected R preparation; further requirement changes are unavailable until session restart
+  isError: true
+---
+id: 9
+send:
+  r: report managed python activation
+result:
+  content:
+    - type: text
+      text: |-
+        [custom worker reported a managed Python activation]
+        [worker stopped: in-memory state lost]
+        [starting new worker]
+        [idle]
+  isError: true
+...

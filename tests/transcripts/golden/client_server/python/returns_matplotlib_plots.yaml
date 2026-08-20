@@ -1,0 +1,280 @@
+---
+!same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
+---
+id: 3
+send:
+  r: |
+    reticulate::py_require("matplotlib")
+    invisible(reticulate::py_config())
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+id: 4
+send:
+  python: |
+    import os
+    from pathlib import Path
+
+    import matplotlib
+    import matplotlib.pyplot as plt
+
+    assert (
+        Path(matplotlib.matplotlib_fname()).resolve()
+        == Path(os.environ["MCP_CONSOLE_TEST_MATPLOTLIBRC"]).resolve()
+    )
+    assert matplotlib.rcParams["lines.linewidth"] == 7.25
+
+    later_figure, later_axes = plt.subplots(num=20)
+    later_axes.plot([1, 2, 3], [1, 2, 1])
+    later_reference = Path(os.environ["TMPDIR"]) / "matplotlib-later-reference.png"
+    later_figure.savefig(later_reference, format="png")
+
+    figure, axes = plt.subplots(num=10)
+    axes.plot([1, 2, 3], [3, 1, 2])
+    invalid_cache = Path(os.environ["MPLCONFIGDIR"]) / "fontlist-v999.json"
+    invalid_cache.write_text(
+        '{"__class__":"FontManager","_version":999}',
+        encoding="utf-8",
+    )
+
+    reference = Path(os.environ["TMPDIR"]) / "matplotlib-reference.png"
+    figure.savefig(reference, format="png")
+result:
+  content:
+    - type: image
+      data: <PNG byte-identical to live matplotlib savefig 1>
+      mimeType: image/png
+    - type: image
+      data: <PNG byte-identical to live matplotlib savefig 2>
+      mimeType: image/png
+  isError: false
+---
+id: 5
+send:
+  python: |
+    shown_figure, shown_axes = plt.subplots()
+    shown_axes.plot([1, 2, 3], [1, 3, 2])
+    shown_reference = Path(os.environ["TMPDIR"]) / "matplotlib-shown-reference.png"
+    shown_figure.savefig(shown_reference, format="png")
+    print("before show")
+    plt.show()
+    print("after show")
+    shown_figure
+result:
+  content:
+    - type: text
+      text: |
+        before show
+        after show
+        <matplotlib figure displayhook representation>
+    - type: image
+      data: <PNG byte-identical to live shown matplotlib savefig 1>
+      mimeType: image/png
+  isError: false
+---
+id: 6
+send:
+  python: |
+    closed_figure, closed_axes = plt.subplots()
+    closed_axes.plot([1, 2, 3], [2, 1, 3])
+    closed_reference = Path(os.environ["TMPDIR"]) / "matplotlib-closed-reference.png"
+    closed_figure.savefig(closed_reference, format="png")
+    plt.close(closed_figure)
+    plt.get_fignums()
+result:
+  content:
+    - type: text
+      text: |
+        []
+  isError: false
+---
+id: 7
+send:
+  python: |
+    axes.plot([1, 3], [2, 0])
+    plt.get_fignums()
+result:
+  content:
+    - type: text
+      text: |
+        []
+  isError: false
+---
+id: 8
+send:
+  python: |
+    error_figure, error_axes = plt.subplots()
+    error_axes.plot([1, 2], [2, 1])
+    error_reference = Path(os.environ["TMPDIR"]) / "matplotlib-error-reference.png"
+    error_figure.savefig(error_reference, format="png")
+    raise ValueError("cell failed")
+result:
+  content:
+    - type: text
+      text: |
+        Traceback (most recent call last):
+          File "<string>", line 105, in _mcp_console_eval_cell
+          File "<mcp-console:python:e5>", line 5, in <module>
+        ValueError: cell failed
+    - type: image
+      data: <PNG byte-identical to live error-cell matplotlib savefig 1>
+      mimeType: image/png
+  isError: false
+---
+id: 9
+send:
+  python: plt.get_fignums()
+result:
+  content:
+    - type: text
+      text: |
+        []
+  isError: false
+---
+id: 10
+send:
+  python: |
+    def fail_plot_capture(*args, **kwargs):
+        raise RuntimeError("plot render failed")
+
+
+    failed_figure = plt.figure()
+    failed_figure.savefig = fail_plot_capture
+    figure, axes = plt.subplots()
+    axes.plot([1, 3], [2, 0])
+    second_reference = Path(os.environ["TMPDIR"]) / "matplotlib-second-reference.png"
+    figure.savefig(second_reference, format="png")
+result:
+  content:
+    - type: text
+      text: |
+        Traceback (most recent call last):
+          File "<string>", line 64, in _mcp_console_collect_plots
+          File "<mcp-console:python:e7>", line 2, in fail_plot_capture
+        RuntimeError: plot render failed
+    - type: image
+      data: <PNG byte-identical to live second matplotlib savefig 1>
+      mimeType: image/png
+  isError: false
+---
+id: 11
+send:
+  python: plt.get_fignums()
+result:
+  content:
+    - type: text
+      text: |
+        []
+  isError: false
+---
+id: 12
+send:
+  python: |
+    private_cache = next(
+        path
+        for path in Path(os.environ["MPLCONFIGDIR"]).glob("fontlist-v*.json")
+        if path.is_symlink()
+    )
+    private_cache_bytes = private_cache.read_bytes()
+    private_cache.unlink()
+    private_cache.write_bytes(private_cache_bytes)
+    cache_link_replaced = True
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+id: 13
+send:
+  r: |
+    reticulate::py_require("py-yaml12")
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+id: 14
+send:
+  python: (cache_link_replaced, __import__('yaml12').__name__)
+result:
+  content:
+    - type: text
+      text: |
+        (True, 'yaml12')
+  isError: false
+---
+id: 15
+session:
+  action: restart
+result:
+  content:
+    - type: text
+      text: |-
+        [worker stopped: in-memory state lost]
+        [starting new worker]
+        [idle]
+  isError: false
+---
+id: 16
+send:
+  python: |
+    import os
+    from pathlib import Path
+
+    marker = Path(os.environ["TMPDIR"]) / "mcp-console-font-discovery"
+    invalid_cache = Path(os.environ["MPLCONFIGDIR"]) / "fontlist-v999.json"
+    invalid_cache_was_seeded = invalid_cache.exists()
+
+    import matplotlib
+    import matplotlib.font_manager
+
+    config = Path(matplotlib.matplotlib_fname())
+    font_cache = next(Path(os.environ["MPLCONFIGDIR"]).glob("fontlist-v*.json"))
+    try:
+        with font_cache.open("a", encoding="utf-8"):
+            pass
+    except PermissionError:
+        font_cache_read_only = True
+    else:
+        font_cache_read_only = False
+
+    try:
+        with config.open("a", encoding="utf-8"):
+            pass
+    except PermissionError:
+        config_read_only = True
+    else:
+        config_read_only = False
+
+    try:
+        config.with_name("worker-payload").write_text("payload", encoding="utf-8")
+    except PermissionError:
+        config_directory_read_only = True
+    else:
+        config_directory_read_only = False
+
+    private_probe = Path(os.environ["MPLCONFIGDIR"]) / "config-write-probe"
+    private_probe.write_text("ok", encoding="utf-8")
+
+    (
+        config.resolve() == Path(os.environ["MCP_CONSOLE_TEST_MATPLOTLIBRC"]).resolve(),
+        matplotlib.rcParams["lines.linewidth"],
+        font_cache_read_only,
+        config_read_only,
+        config_directory_read_only,
+        private_probe.read_text(encoding="utf-8") == "ok",
+        marker.exists(),
+        invalid_cache_was_seeded,
+    )
+result:
+  content:
+    - type: text
+      text: |
+        (True, 7.25, True, True, True, True, False, False)
+  isError: false
+...

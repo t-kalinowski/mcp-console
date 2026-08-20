@@ -1,0 +1,27 @@
+---
+relay:
+  kind: worker_message
+  message:
+    kind: ready
+---
+server:
+  kind: shutdown
+  grace_millis: <remaining shutdown grace>
+---
+relay:
+  kind: shutdown_started
+---
+relay:
+  kind: stream_closed
+  stream: stdout
+---
+relay:
+  kind: stream_closed
+  stream: stderr
+---
+relay:
+  kind: worker_sideband_closed
+---
+relay:
+  kind: worker_exited
+...

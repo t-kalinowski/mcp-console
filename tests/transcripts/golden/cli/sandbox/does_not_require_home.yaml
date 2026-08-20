@@ -1,0 +1,14 @@
+---
+command:
+  - mcp-console
+  - sandbox
+  - --
+  - python
+  - -c
+  - |
+    print("ran")
+environment:
+  HOME: ~
+stdout: |
+  ran
+...

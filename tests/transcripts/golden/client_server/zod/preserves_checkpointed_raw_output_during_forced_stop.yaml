@@ -1,0 +1,41 @@
+---
+!same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
+---
+id: 3
+send:
+  r: force stop after checkpointed stdout
+result:
+  content:
+    - type: text
+      text: |-
+        zod checkpointed stdout: �
+        [worker sent an unexpected ready message]
+        [worker stopped: in-memory state lost]
+        [starting new worker]
+        [idle]
+  isError: true
+---
+id: 4
+send:
+  r: force stop after checkpointed stderr
+result:
+  content:
+    - type: text
+      text: |-
+        zod checkpointed stderr: �
+        [worker sent an unexpected ready message]
+        [worker stopped: in-memory state lost]
+        [starting new worker]
+        [idle]
+  isError: true
+---
+id: 5
+send:
+  r: echo
+result:
+  content:
+    - type: text
+      text: |
+        zod: echo
+  isError: false
+...

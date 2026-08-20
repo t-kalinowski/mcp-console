@@ -49,6 +49,7 @@ struct ClientInner {
     runtime: platform::WorkerRuntime,
     program: PathBuf,
     arguments: Vec<OsString>,
+    relay: Option<PathBuf>,
     worker: Mutex<WorkerState>,
     /// The one evaluation occupying this session, independently of who is polling it.
     evaluation: Mutex<Option<ActiveEvaluation>>,
@@ -62,6 +63,7 @@ struct ClientInner {
 struct WorkerSpec<'a> {
     executable: &'a std::path::Path,
     arguments: &'a [OsString],
+    relay: Option<&'a std::path::Path>,
     managed_python: Option<&'a crate::resolver::ManagedPython>,
     managed_r: Option<&'a crate::resolver::ManagedR>,
     callbacks: WorkerCallbacks,
@@ -175,10 +177,11 @@ struct ActiveEvaluation {
 }
 
 impl Client {
-    pub(crate) fn new(program: PathBuf) -> Result<Self, String> {
+    pub(crate) fn new(program: PathBuf, relay: Option<PathBuf>) -> Result<Self, String> {
         Ok(Self::with_arguments(
             program,
             Vec::new(),
+            relay,
             Some(Environment {
                 custom_worker: true,
                 duckdb_extensions: Default::default(),
@@ -214,6 +217,7 @@ impl Client {
         Ok(Self::with_arguments(
             program,
             vec![OsString::from("worker")],
+            None,
             Some(Environment {
                 custom_worker: false,
                 duckdb_extensions,
@@ -227,12 +231,14 @@ impl Client {
     fn with_arguments(
         program: PathBuf,
         arguments: Vec<OsString>,
+        relay: Option<PathBuf>,
         environment: Option<Environment>,
     ) -> Self {
         Self(Arc::new(ClientInner {
             runtime: platform::WorkerRuntime,
             program,
             arguments,
+            relay,
             worker: Mutex::new(WorkerState::Initial),
             evaluation: Mutex::new(None),
             preparation: tokio::sync::RwLock::new(()),
@@ -653,6 +659,7 @@ impl Client {
             let spec = WorkerSpec {
                 executable: &self.0.program,
                 arguments: &self.0.arguments,
+                relay: self.0.relay.as_deref(),
                 managed_python,
                 managed_r,
                 callbacks: WorkerCallbacks {

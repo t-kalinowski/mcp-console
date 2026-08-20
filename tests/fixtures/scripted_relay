@@ -1,0 +1,219 @@
+#!/usr/bin/env python3
+
+import base64
+import json
+import os
+import sys
+import time
+from pathlib import Path
+from typing import Any
+
+SCENARIO_ENV = "MCP_CONSOLE_TEST_RELAY_SCENARIO"
+CAPTURE_NAME = "mcp-console-server-relay-wire.jsonl"
+DONE_NAME = "mcp-console-scripted-relay-done"
+EVALUATING_NAME = "mcp-console-scripted-relay-evaluating"
+CHECKPOINT_NAME = "mcp-console-scripted-relay-checkpoint"
+RELEASE_NAME = "mcp-console-scripted-relay-release"
+WAIT_SECONDS = 10
+
+EVALUATION = {
+    "kind": "worker_message",
+    "message": {
+        "kind": "evaluate",
+        "language": "r",
+        "source": "42",
+    },
+}
+COMPLETED = {
+    "kind": "worker_message",
+    "message": {"kind": "completed"},
+}
+TERMINAL_COMMITTED = {"kind": "terminal_committed"}
+
+
+class ScriptedRelay:
+    def __init__(self) -> None:
+        process_id = os.getpid()
+        process_group = os.getpgrp()
+        assert process_id == process_group, (
+            f"scripted relay {process_id} is not process-group leader {process_group}"
+        )
+
+        self.root = Path(os.environ["TMPDIR"])
+        self.capture = (self.root / CAPTURE_NAME).open("w", encoding="utf-8")
+
+    def close(self) -> None:
+        self.capture.close()
+
+    def record(self, entry: dict[str, Any]) -> None:
+        self.capture.write(json.dumps(entry, separators=(",", ":")) + "\n")
+        self.capture.flush()
+
+    def receive(self) -> dict[str, Any]:
+        line = sys.stdin.buffer.readline()
+        assert line, "server closed relay stdin before sending the expected command"
+        assert line.endswith(b"\n"), "server command ended midway through a frame"
+        message = json.loads(line)
+        assert isinstance(message, dict), message
+        self.record({"server": message})
+        return message
+
+    def expect(self, expected: dict[str, Any]) -> None:
+        actual = self.receive()
+        assert actual == expected, f"expected {expected!r}, received {actual!r}"
+
+    def send(self, message: dict[str, Any]) -> None:
+        self.record({"relay": message})
+        frame = json.dumps(message, separators=(",", ":")).encode("utf-8") + b"\n"
+        write_all(1, frame)
+
+    def send_batch(self, messages: list[dict[str, Any]]) -> None:
+        frames = []
+        for message in messages:
+            self.record({"relay": message})
+            frames.append(
+                json.dumps(message, separators=(",", ":")).encode("utf-8") + b"\n"
+            )
+        write_all(1, b"".join(frames))
+
+    def mark_done(self) -> None:
+        (self.root / DONE_NAME).touch()
+
+    def wait_for_release(self) -> None:
+        (self.root / CHECKPOINT_NAME).touch()
+        release = self.root / RELEASE_NAME
+        deadline = time.monotonic() + WAIT_SECONDS
+        while not release.exists():
+            assert time.monotonic() < deadline, "test did not release scripted relay"
+            time.sleep(0.01)
+
+    def ready(self) -> None:
+        self.send(
+            {
+                "kind": "worker_message",
+                "message": {"kind": "ready"},
+            }
+        )
+
+    def complete(self) -> None:
+        self.send(COMPLETED)
+        self.expect(TERMINAL_COMMITTED)
+        self.mark_done()
+
+    def retire(self) -> None:
+        command = self.receive()
+        assert command.get("kind") == "shutdown", command
+        grace_millis = command.get("grace_millis")
+        assert isinstance(grace_millis, int) and 0 <= grace_millis <= 1_000, command
+        self.send({"kind": "shutdown_started"})
+        self.send({"kind": "stream_closed", "stream": "stdout"})
+        self.send({"kind": "stream_closed", "stream": "stderr"})
+        self.send({"kind": "worker_sideband_closed"})
+        self.send({"kind": "worker_exited"})
+
+
+def write_all(descriptor: int, data: bytes) -> None:
+    remaining = memoryview(data)
+    while remaining:
+        remaining = remaining[os.write(descriptor, remaining) :]
+
+
+def run_ready(relay: ScriptedRelay) -> None:
+    relay.ready()
+    relay.mark_done()
+    relay.retire()
+
+
+def run_evaluate(relay: ScriptedRelay) -> None:
+    relay.ready()
+    relay.expect(EVALUATION)
+    relay.complete()
+    relay.retire()
+
+
+def run_raw_output(relay: ScriptedRelay) -> None:
+    relay.ready()
+    relay.expect(EVALUATION)
+    relay.send(
+        {
+            "kind": "stdout",
+            "data": base64.b64encode(b"stdout\n").decode("ascii"),
+        }
+    )
+    relay.send(
+        {
+            "kind": "stderr",
+            "data": base64.b64encode(b"stderr\n").decode("ascii"),
+        }
+    )
+    relay.complete()
+    relay.retire()
+
+
+def run_stdin(relay: ScriptedRelay) -> None:
+    relay.ready()
+    relay.expect(EVALUATION)
+    relay.expect({"kind": "stdin", "data": "answer\n"})
+    relay.complete()
+    relay.retire()
+
+
+def run_interrupt(relay: ScriptedRelay) -> None:
+    relay.ready()
+    relay.expect(EVALUATION)
+    (relay.root / EVALUATING_NAME).touch()
+    relay.expect({"kind": "interrupt", "request_id": 0})
+    relay.send({"kind": "interrupt_result", "request_id": 0})
+    relay.complete()
+    relay.retire()
+
+
+def run_shutdown(relay: ScriptedRelay) -> None:
+    relay.ready()
+    relay.mark_done()
+    relay.retire()
+
+
+def run_fatal(relay: ScriptedRelay) -> None:
+    relay.wait_for_release()
+    relay.send_batch(
+        [
+            {"kind": "fatal", "message": "scripted relay failure"},
+            {"kind": "stream_closed", "stream": "stdout"},
+            {"kind": "stream_closed", "stream": "stderr"},
+            {"kind": "worker_sideband_closed"},
+            {"kind": "worker_exited"},
+        ]
+    )
+
+
+def run_truncated(relay: ScriptedRelay) -> None:
+    relay.wait_for_release()
+    raw = b'{"kind":"worker_message"'
+    relay.record({"relay_raw": base64.b64encode(raw).decode("ascii")})
+    write_all(1, raw)
+
+
+def main() -> None:
+    scenarios = {
+        "ready": run_ready,
+        "evaluate": run_evaluate,
+        "raw_output": run_raw_output,
+        "stdin": run_stdin,
+        "interrupt": run_interrupt,
+        "shutdown": run_shutdown,
+        "fatal": run_fatal,
+        "truncated": run_truncated,
+    }
+    scenario = os.environ[SCENARIO_ENV]
+    assert scenario in scenarios, f"unknown scripted relay scenario: {scenario}"
+
+    relay = ScriptedRelay()
+    try:
+        scenarios[scenario](relay)
+    finally:
+        relay.close()
+
+
+if __name__ == "__main__":
+    main()

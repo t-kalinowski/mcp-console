@@ -135,11 +135,12 @@ fn default_timeout_ms() -> u64 {
 }
 
 impl ConsoleServer {
-    fn new(worker: Option<PathBuf>) -> Result<Self, String> {
+    fn new(worker: Option<PathBuf>, relay: Option<PathBuf>) -> Result<Self, String> {
         let transcript = crate::transcript::Transcript::new();
-        let worker = match worker {
-            Some(program) => crate::worker_client::Client::new(program)?,
-            None => crate::worker_client::Client::builtin()?,
+        let worker = match (worker, relay) {
+            (Some(program), relay) => crate::worker_client::Client::new(program, relay)?,
+            (None, None) => crate::worker_client::Client::builtin()?,
+            (None, Some(_)) => return Err("a custom relay requires a custom worker".to_string()),
         };
         Ok(Self {
             worker,
@@ -440,8 +441,8 @@ impl ServerHandler for ConsoleServer {
 /// Runs the MCP stdio server and owns the selected worker.
 ///
 /// Closing MCP input also stops a worker whose evaluation is still running.
-pub async fn run(worker: Option<PathBuf>) -> Result<(), Box<dyn Error>> {
-    let server = ConsoleServer::new(worker).map_err(std::io::Error::other)?;
+pub async fn run(worker: Option<PathBuf>, relay: Option<PathBuf>) -> Result<(), Box<dyn Error>> {
+    let server = ConsoleServer::new(worker, relay).map_err(std::io::Error::other)?;
     let worker = server.worker.clone();
     let (input_closed, wait_for_input_close) = oneshot::channel();
     let input = ShutdownReader::new(tokio::io::stdin(), input_closed);

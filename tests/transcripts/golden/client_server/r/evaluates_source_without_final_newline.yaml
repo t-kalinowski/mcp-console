@@ -1,0 +1,15 @@
+---
+!same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
+---
+id: 3
+send:
+  r: |-
+    answer <- 40
+    answer + 2
+result:
+  content:
+    - type: text
+      text: |
+        [1] 42
+  isError: false
+...

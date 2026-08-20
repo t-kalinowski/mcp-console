@@ -1,0 +1,47 @@
+---
+!same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
+---
+id: 3
+send:
+  stdin: |
+    cold
+result:
+  content:
+    - type: text
+      text: |-
+
+        [idle]
+  isError: false
+---
+id: 4
+send:
+  r: input without request
+result:
+  content:
+    - type: text
+      text: |
+        zod stdin: cold
+  isError: false
+---
+id: 5
+send:
+  stdin: |
+    idle
+result:
+  content:
+    - type: text
+      text: |-
+
+        [idle]
+  isError: false
+---
+id: 6
+send:
+  r: input without request
+result:
+  content:
+    - type: text
+      text: |
+        zod stdin: idle
+  isError: false
+...

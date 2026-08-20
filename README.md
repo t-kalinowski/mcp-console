@@ -423,12 +423,13 @@ scripts/format
 
 Formatter errors remain visible but do not stop the remaining formatters or make the script fail.
 
-See [`tests/transcripts/README.md`](tests/transcripts/README.md) for running and authoring external server transcript tests.
-The `r` suite exercises the built-in worker.
-The `python` suite exercises Python cells through reticulate in that worker.
-The `sql` suite exercises DuckDB cells through DBI in that worker.
-The `worker` suite drives `serve` through a transparent proxy, asserts the public MCP result, and records the built-in worker's sideband and standard-stream events.
-The `zod` suite uses the hidden `serve --worker PATH` development option to exercise the same protocol with an executable Python fixture.
+See [`tests/transcripts/README.md`](tests/transcripts/README.md) for running and authoring process-boundary transcript tests.
+The `client_server/r` suite exercises the built-in worker.
+The `client_server/python` suite exercises Python cells through reticulate in that worker.
+The `client_server/sql` suite exercises DuckDB cells through DBI in that worker.
+The `server_relay/protocol` suite launches a deterministic relay as the server's direct sandbox child and records the private JSONL frames in both directions.
+The `relay_worker/protocol` suite drives `serve` through a transparent proxy, asserts the public MCP result, and records the relay-worker sideband and standard-stream boundary.
+The `client_server/zod` suite uses the hidden `serve --worker PATH` development option to exercise the same protocol with an executable Python fixture.
 These built-in-worker and protocol suites run on macOS, where the sandbox policy is implemented.
 See [`docs/WORKER_PROTOCOL.md`](docs/WORKER_PROTOCOL.md) for the exact implemented launch and message contract.
 See [`docs/RELAY_PROTOCOL.md`](docs/RELAY_PROTOCOL.md) for the private server-to-relay transport and sandbox process boundary.

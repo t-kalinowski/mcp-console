@@ -1,0 +1,72 @@
+---
+!same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
+---
+id: 3
+send:
+  r: |
+    invisible(reticulate::py_config())
+    original_lib_paths <- base::.libPaths
+    replacement_lib_paths <- base::local({
+      original <- original_lib_paths
+      function(new) {
+        if (base::missing(new)) {
+          return(original())
+        }
+        original(new)
+        base::stop("blocked live R preparation")
+      }
+    })
+    base::unlockBinding(".libPaths", base::baseenv())
+    base::assign(
+      ".libPaths",
+      replacement_lib_paths,
+      envir = base::baseenv()
+    )
+    base::lockBinding(".libPaths", base::baseenv())
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+id: 4
+session:
+  action: prepare
+  requirements:
+    r:
+      - praise
+    python:
+      - py-yaml12
+result:
+  content:
+    - type: text
+      text: >-
+        blocked live R preparation; further requirement changes are unavailable
+        until session restart
+  isError: true
+---
+id: 5
+session:
+  action: restart
+result:
+  content:
+    - type: text
+      text: |-
+        [worker stopped: in-memory state lost]
+        [starting new worker]
+        [idle]
+  isError: false
+---
+id: 6
+send:
+  r: |
+    stopifnot(
+      "py-yaml12" %in% reticulate::py_require()$packages,
+      reticulate::py_module_available("yaml12")
+    )
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+...

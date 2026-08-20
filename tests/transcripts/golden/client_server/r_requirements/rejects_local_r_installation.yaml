@@ -1,0 +1,24 @@
+---
+!same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
+---
+id: 3
+session:
+  action: prepare
+  requirements:
+    r:
+      - local::<absolute package path>?reinstall&nocache
+result:
+  content:
+    - type: text
+      text: |-
+        R package resolution failed with exit status: 1: ℹ Loading metadata database
+        ✔ Loading metadata database ... done
+
+        <run-specific IR progress frames>
+        Error: IR_NO_LOCAL_SOURCES is set, but installing this environment would use packages from the local file system:
+        - requested package `mcpconsolerinstallescape` from `file://<absolute package path>`
+        Use a remote package source or unset IR_NO_LOCAL_SOURCES.
+        Execution halted
+        ir: dependency resolution failed
+  isError: true
+...

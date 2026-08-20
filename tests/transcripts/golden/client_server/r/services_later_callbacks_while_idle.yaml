@@ -1,0 +1,50 @@
+---
+!same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
+---
+id: 3
+session:
+  action: prepare
+  requirements:
+    r:
+      - later
+result:
+  content:
+    - type: text
+      text: "[prepared]"
+  isError: false
+---
+id: 4
+send:
+  r: |
+    callback_gate <- tempfile("mcp-console-callback-gate-")
+    callback_checkpoint <- tempfile("mcp-console-callback-checkpoint-")
+    run_callback <- function() {
+      if (!file.exists(callback_gate)) {
+        later::later(run_callback, delay = 0.01)
+        return(invisible(NULL))
+      }
+      idle_value <<- 42
+      cat("idle callback\n")
+      stopifnot(file.create(callback_checkpoint))
+    }
+    later::later(run_callback, delay = 0.01)
+    cat(callback_gate, callback_checkpoint, sep = "\n")
+result:
+  content:
+    - type: text
+      text: |-
+        <worker callback gate>
+        <worker callback checkpoint>
+  isError: false
+---
+id: 5
+send:
+  r: idle_value
+result:
+  content:
+    - type: text
+      text: |
+        idle callback
+        [1] 42
+  isError: false
+...

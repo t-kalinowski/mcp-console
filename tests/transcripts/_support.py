@@ -241,8 +241,12 @@ def wait_for_idle_output(
 
 def run_this_suite(suite_path: str) -> None:
     suite = Path(suite_path).resolve()
-    root = suite.parents[2]
-    subprocess.run([root / "scripts" / "test", suite.stem], check=True)
+    directory = next(
+        parent for parent in suite.parents if (parent / "_run.py").is_file()
+    )
+    root = directory.parents[1]
+    suite_name = suite.relative_to(directory).with_suffix("").as_posix()
+    subprocess.run([root / "scripts" / "test", suite_name], check=True)
 
 
 class McpClient:

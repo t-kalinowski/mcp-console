@@ -1,0 +1,63 @@
+---
+!same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
+---
+id: 3
+send:
+  sql: |
+    CREATE TABLE sql_values AS
+    SELECT * FROM (VALUES ('a', 2), ('b', 5)) AS values(label, value);
+    CREATE VIEW live_sql_values AS SELECT * FROM sql_values
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+id: 4
+send:
+  r: |
+    connection <- sql_connection()
+    table_values <- dplyr::tbl(connection, "sql_values")
+    lazy_values <- dplyr::tbl(connection, "live_sql_values") |>
+      dplyr::mutate(doubled = value * 2L)
+    cat(
+      "same connection: ", identical(connection, sql_connection()), "\n",
+      "lazy table: ", inherits(table_values, "tbl_lazy"), "\n",
+      "lazy view: ", inherits(lazy_values, "tbl_lazy"), "\n",
+      sep = ""
+    )
+result:
+  content:
+    - type: text
+      text: |
+        same connection: TRUE
+        lazy table: TRUE
+        lazy view: TRUE
+  isError: false
+---
+id: 5
+send:
+  sql: |
+    INSERT INTO sql_values VALUES ('c', 11)
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+id: 6
+send:
+  r: |
+    values <- lazy_values |>
+      dplyr::arrange(label) |>
+      dplyr::collect()
+    writeLines(paste(values$label, values$value, values$doubled, sep = ":"))
+result:
+  content:
+    - type: text
+      text: |
+        a:2:4
+        b:5:10
+        c:11:22
+  isError: false
+...
