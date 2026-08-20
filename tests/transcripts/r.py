@@ -1140,7 +1140,6 @@ def test_interrupts_managed_console_input(binary: Path) -> Transcript:
     try:
         client._initialize_and_list_tools()
 
-        r_prefix = "R" * 4_095
         # fmt: r
         r = code(r"""
             r_input_state <- 41L
@@ -1149,33 +1148,18 @@ def test_interrupts_managed_console_input(binary: Path) -> Transcript:
               interrupt = function(condition) cat("R input interrupted\n")
             )
             """)
-        client.send(r=r, stdin=r_prefix + " partial")
-        client.transcript[-1]["send"]["stdin"] = "<R input spanning ReadConsole buffers>"
+        client.send(r=r, stdin="R partial")
         assert last_tool_text(client) == (
-            '[input requested: "R interrupt> "]\n'
-            '[input requested: "R interrupt> "]\n'
-            "[stdin needed]"
+            '[input requested: "R interrupt> "]\n[stdin needed]'
         )
         time.sleep(0.05)
         client.session(action="interrupt")
         assert last_tool_text(client) == "[interrupt sent]"
         client.send(timeout_ms=3_000)
         assert last_tool_text(client) == "R input interrupted\n"
-        # fmt: r
-        r = code(r"""
-            replayed <- readline("R replay> ")
-            cat(
-              nchar(replayed, type = "bytes"),
-              identical(replayed, paste0(strrep("R", 4095), " partial!")),
-              "\n",
-              sep = "|"
-            )
-            """)
-        client.send(r=r, stdin="!\n")
+        client.send(r='readline("R replay> ")', stdin="!\n")
         assert last_tool_text(client) == (
-            '[input requested: "R replay> "]\n'
-            '[input requested: "R replay> "]\n'
-            "4104|TRUE|\n"
+            '[input requested: "R replay> "]\n[1] "R partial!"\n'
         )
 
         # fmt: r
@@ -1183,6 +1167,7 @@ def test_interrupts_managed_console_input(binary: Path) -> Transcript:
             suspended_input <- "not read"
             suspendInterrupts({
               suspended_input <- readline("R suspended> ")
+              cat("suspended input accepted")
             })
             """)
         client.send(r=r)
@@ -1194,10 +1179,7 @@ def test_interrupts_managed_console_input(binary: Path) -> Transcript:
         assert last_tool_text(client) == "[interrupt sent]"
         client.send(stdin="accepted\n", timeout_ms=3_000)
         output = last_tool_text(client)
-        assert output == "\n", repr(output)
-        client.transcript[-1]["result"]["content"][0]["text"] = (
-            "<deferred interrupt handled>"
-        )
+        assert output == "suspended input accepted\n", repr(output)
         client.send(r="suspended_input")
         assert last_tool_text(client) == '[1] "accepted"\n'
 
@@ -1241,18 +1223,50 @@ def test_replays_console_prefix_after_operation_boundary_interrupt(
     with r_input_handler_client(binary) as (client, directory):
         client._initialize_and_list_tools()
 
+        # A small native buffer makes a later managed callback deterministic
+        # without relying on the server's 10 millisecond request grace.
+        # fmt: r
+        r = code(r"""
+            dyn.load("./mcp_test_input_handler.so")
+            tryCatch(
+              .Call(
+                "mcp_test_read_console_line",
+                "small callbacks> "
+              ),
+              interrupt = function(condition) {
+                cat("caught later-callback interrupt\n")
+              }
+            )
+            """)
+        client.send(r=r, stdin="part")
+        assert last_tool_text(client) == (
+            '[input requested: "small callbacks> "]\n'
+            '[input requested: "small callbacks> "]\n'
+            "[stdin needed]"
+        )
+
+        client.session(action="interrupt")
+        assert last_tool_text(client) == "[interrupt sent]"
+        client.send(timeout_ms=3_000)
+        output = last_tool_text(client)
+        assert output == "caught later-callback interrupt\n", repr(output)
+
+        client.send(r='readline("after later callback> ")', stdin="!\n")
+        assert last_tool_text(client) == (
+            '[input requested: "after later callback> "]\n[1] "part!"\n'
+        )
+
         # Return one full console buffer, then interrupt before another
         # callback can complete the logical line.
         # fmt: r
         r = code(r"""
-            dyn.load("./mcp_test_input_handler.so")
             tryCatch(
               {
                 partial <- .Call(
                   "mcp_test_read_console_once",
                   "between callbacks> "
                 )
-                stopifnot(nchar(partial, type = "bytes") == 4095L)
+                stopifnot(nchar(partial, type = "bytes") == 3L)
                 invisible(file.create(file.path(
                   tempdir(),
                   "between-console-callbacks-started"
@@ -1268,10 +1282,8 @@ def test_replays_console_prefix_after_operation_boundary_interrupt(
         assert last_tool_text(client) == (
             '[input requested: "between callbacks> "]\n[stdin needed]'
         )
-        client.send(stdin="x" * 5_000, timeout_ms=50)
+        client.send(stdin="x" * 6, timeout_ms=50)
         assert last_tool_text(client) == "\n[running]"
-        client.transcript[-1]["send"]["stdin"] = "<5000 x bytes>"
-        client.transcript[-1]["result"]["content"][0]["text"] = "[running]"
         wait_for_worker_file(
             directory,
             "between-console-callbacks-started",
@@ -1284,16 +1296,13 @@ def test_replays_console_prefix_after_operation_boundary_interrupt(
         assert last_tool_text(client) == "caught between-callback interrupt\n"
 
         client.send(
-            r='identical(readline("after boundary> "), strrep("x", 5000))',
-            stdin="\n",
+            r='identical(readline("after boundary> "), paste0(strrep("x", 6), "!"))',
+            stdin="!\n",
         )
-        client.transcript[-1]["send"]["stdin"] = "<newline>"
         output = last_tool_text(client)
-        assert output == (
-            '[input requested: "after boundary> "]\n'
-            '[input requested: "after boundary> "]\n'
-            "[1] TRUE\n"
-        ), repr(output)
+        assert output == ('[input requested: "after boundary> "]\n[1] TRUE\n'), repr(
+            output
+        )
         return client._finish()
 
 

@@ -9,12 +9,11 @@ send:
       readline("R interrupt> "),
       interrupt = function(condition) cat("R input interrupted\n")
     )
-  stdin: "<R input spanning ReadConsole buffers>"
+  stdin: R partial
 result:
   content:
     - type: text
       text: |-
-        [input requested: "R interrupt> "]
         [input requested: "R interrupt> "]
         [stdin needed]
   isError: false
@@ -40,14 +39,7 @@ result:
 ---
 id: 6
 send:
-  r: |
-    replayed <- readline("R replay> ")
-    cat(
-      nchar(replayed, type = "bytes"),
-      identical(replayed, paste0(strrep("R", 4095), " partial!")),
-      "\n",
-      sep = "|"
-    )
+  r: readline("R replay> ")
   stdin: |
     !
 result:
@@ -55,8 +47,7 @@ result:
     - type: text
       text: |
         [input requested: "R replay> "]
-        [input requested: "R replay> "]
-        4104|TRUE|
+        [1] "R partial!"
   isError: false
 ---
 id: 7
@@ -65,6 +56,7 @@ send:
     suspended_input <- "not read"
     suspendInterrupts({
       suspended_input <- readline("R suspended> ")
+      cat("suspended input accepted")
     })
 result:
   content:
@@ -91,7 +83,8 @@ send:
 result:
   content:
     - type: text
-      text: "<deferred interrupt handled>"
+      text: |
+        suspended input accepted
   isError: false
 ---
 id: 10
@@ -142,7 +135,7 @@ result:
 ---
 id: 14
 send:
-  python: "input(\"Python replay> \")"
+  python: input("Python replay> ")
   stdin: |
     !
 result:

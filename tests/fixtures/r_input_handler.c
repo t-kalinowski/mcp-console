@@ -5,8 +5,11 @@
 #include <Rinterface.h>
 
 #include <fcntl.h>
+#include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
+
+#define TEST_CONSOLE_BUFFER_SIZE 4
 
 static InputHandler *registered_handler = NULL;
 static int registered_fd = -1;
@@ -65,7 +68,7 @@ static SEXP register_input_handler(SEXP path, SEXP callback) {
 }
 
 static SEXP read_console_once(SEXP prompt) {
-  unsigned char buffer[4096];
+  unsigned char buffer[TEST_CONSOLE_BUFFER_SIZE];
   int status = R_ReadConsole(
       CHAR(STRING_ELT(prompt, 0)),
       buffer,
@@ -78,9 +81,25 @@ static SEXP read_console_once(SEXP prompt) {
   return Rf_mkString((const char *)buffer);
 }
 
+static SEXP read_console_line(SEXP prompt) {
+  unsigned char buffer[TEST_CONSOLE_BUFFER_SIZE];
+  for (;;) {
+    int status = R_ReadConsole(
+        CHAR(STRING_ELT(prompt, 0)),
+        buffer,
+        sizeof(buffer),
+        0
+    );
+    if (status <= 0 || strchr((const char *)buffer, '\n') != NULL) {
+      return R_NilValue;
+    }
+  }
+}
+
 static const R_CallMethodDef call_methods[] = {
     {"mcp_test_register_input_handler", (DL_FUNC)&register_input_handler, 2},
     {"mcp_test_read_console_once", (DL_FUNC)&read_console_once, 1},
+    {"mcp_test_read_console_line", (DL_FUNC)&read_console_line, 1},
     {NULL, NULL, 0},
 };
 
