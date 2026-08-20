@@ -9,6 +9,7 @@ typedef void (*before_do_one_fn)(void);
 typedef int (*top_level_exec_fn)(void (*)(void *), void *);
 typedef void *(*check_activity_fn)(int, int);
 typedef void (*run_handlers_fn)(void *, void *);
+typedef int (*read_console_fn)(const char *, unsigned char *, int, int);
 typedef void (*check_interrupt_fn)(void);
 typedef InputHandler *(*add_input_handler_fn)(
     InputHandler *, int, void (*)(void *), int
@@ -30,6 +31,38 @@ struct event_wait {
     int wait_usec;
     int sideband_ready;
 };
+
+static read_console_fn read_console;
+static check_interrupt_fn check_interrupt;
+static const volatile int *interrupts_pending;
+
+void mcp_r_console_configure(
+    read_console_fn read,
+    check_interrupt_fn check,
+    const volatile int *pending
+) {
+    read_console = read;
+    check_interrupt = check;
+    interrupts_pending = pending;
+}
+
+/*
+ * Rust returns -1 after reporting a cancelled read. Check the pending
+ * interrupt here so R's jump cannot cross a live Rust frame, and retry if R
+ * defers the interrupt instead of translating the cancellation into EOF.
+ */
+int mcp_r_read_console(
+    const char *prompt,
+    unsigned char *buffer,
+    int length,
+    int add_history
+) {
+    int status;
+    while ((status = read_console(prompt, buffer, length, add_history)) < 0) {
+        if (*interrupts_pending != 0) check_interrupt();
+    }
+    return status;
+}
 
 /*
  * R errors jump to the context installed by R_ReplDLLinit(). Keep that

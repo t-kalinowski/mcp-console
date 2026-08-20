@@ -3,6 +3,12 @@
 Keep this file synchronized with the code that exists in the repository.
 The documents under `design-sketches/` describe intended behavior, not implemented behavior.
 
+## Transcript goldens
+
+Never hand-edit files under `tests/transcripts/golden/`.
+They may change only through `scripts/test --update ...` or Yamark via `scripts/format`.
+If regeneration produces an incorrect snapshot, fix the code or serializer and regenerate it.
+
 ## Current state
 
 MCP Console is an initial Rust binary package.
@@ -47,11 +53,11 @@ An empty call does not start an initial or stopped worker.
 If it discovers an idle worker failure, it stops that worker and reports the failure without starting a replacement; a later nonempty `send` or explicit restart starts the next worker.
 Supplying `stdin` with a code cell, during an evaluation, or while idle queues exact UTF-8 bytes to worker fd 0 without adding a newline, inspecting, echoing, or limiting the text, or waiting for an input request.
 A nonempty idle stdin call lazily starts the worker when needed, queues the bytes, and immediately returns the current output snapshot; `timeout_ms` does not bound that startup or delay the snapshot.
-Queuing bytes does not acknowledge their consumption, so the response may still report `\n[stdin needed]` until the continuous reader receives `input_received`.
+Queuing bytes does not acknowledge their consumption, so the response may still report `\n[stdin needed]` until the continuous reader receives `input_received` or `input_cancelled`.
 Payload end is not EOF; the R console callback reads through one newline or its supplied buffer, and unread bytes may satisfy later console or direct reads, including in a later evaluation.
 Every `input_requested` frame immediately appends `[input requested: <JSON-quoted prompt>]` to pending response output.
-During an evaluation its outstanding state is provisional for up to 10 milliseconds; a matching `input_received` after a successful console read retains the request record but suppresses the `\n[stdin needed]` banner, while an unmatched request returns that marker after the grace or at the MCP deadline, whichever comes first.
-The receipt describes that runtime read, not a submitted payload or byte count, and direct fd-0 reads emit neither frame.
+During an evaluation its outstanding state is provisional for up to 10 milliseconds; a matching `input_received` after a successful console read or `input_cancelled` after an interrupt retains the request record but suppresses the `\n[stdin needed]` banner, while an unmatched request returns that marker after the grace or at the MCP deadline, whichever comes first.
+The terminal frame describes that runtime read, not a submitted payload or byte count, and direct fd-0 reads emit neither frame.
 New code is rejected until the active cell result has been collected.
 Worker `image` frames carry base64 data and a MIME type.
 Worker `console_output` and `console_diagnostic` frames carry ordinary and diagnostic console text.
@@ -69,7 +75,11 @@ It does not start a process, and a worker signal is not assigned to a cell.
 The built-in worker checks pending interrupts at managed evaluation boundaries, while R, reticulate Python, and DuckDB retain their native in-evaluation handling.
 User code can catch or delay the signal.
 A resolver signal error is returned by both the interrupt and resolution calls; an interrupted host resolver otherwise reports its ordinary resolution failure.
-Managed console input waits do not add periodic interrupt checks; restart remains the bounded recovery path.
+Managed R and Python console input waits poll R's pending-interrupt flag and cancel when `SIGINT` arrives while runtime interrupts are active.
+A wait inside R's `suspendInterrupts()` remains active until input arrives, after which the worker handles the deferred interrupt at a managed boundary.
+Full callback buffers without a newline remain provisional for the current evaluation or ready-handler turn.
+A newline commits that logical line; if the operation ends first, including after an interrupt between callbacks, the worker pushes every provisional chunk back ahead of fd 0 for the next managed console read.
+Direct fd-0 readers do not consume that pushback, and restart discards it with the worker.
 Requirements are exact, additive, and idempotent.
 On macOS, plain built-in `serve` resolves the retained default R requirements `tidyverse`, `github::rstudio/reticulate`, `DBI`, `duckdb`, `arrow`, and `nanoarrow` through IR before accepting MCP input.
 The GitHub reticulate requirement supplies the fork-aware output restoration required by the worker; host R must also provide reticulate to bootstrap managed Python before the worker library is applied.
@@ -220,7 +230,7 @@ The live Python interpreter and its state are retained during successful activat
 Evaluated R code or an R package load can therefore trigger host resolution, which may use the network, write host caches, and execute package build backends outside the worker sandbox; the structured requirements and forwarded settings are data, and the submitted cell is not evaluated by the resolver.
 Python reads R globals through reticulate's `r.name` bridge, and R reads Python globals through the worker-attached `py$name` binding.
 A silent successful Python cell sends `completed` without a console-text frame and projects to `[done]` when no other response text is pending.
-Python `input()` and `breakpoint()`/`pdb` use reticulate's R console bridge, so they emit `input_requested` before a read and `input_received` after it succeeds.
+Python `input()` and `breakpoint()`/`pdb` use reticulate's R console bridge, so they emit `input_requested` before a read, then `input_received` after success or `input_cancelled` after an interrupt.
 They accept proactively queued or follow-up stdin, including repeated debugger commands.
 Python `sys.stdin` and other direct fd-0 reads bypass the bridge and emit neither frame.
 SQL cells use the `duckdb` and `DBI` R packages through a private R bridge.

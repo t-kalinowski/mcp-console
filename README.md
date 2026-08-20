@@ -55,7 +55,7 @@ A stdin-only call while idle lazily starts the worker when needed, queues the by
 Queuing bytes does not acknowledge that a callback consumed them, so that response may still end with `\n[stdin needed]`; a later empty call observes an `input_received` frame and returns `\n[idle]`.
 Every `input_requested` event adds a server-owned record such as `[input requested: "name> "]`; the prompt is encoded as a JSON string so spaces and escaped characters remain explicit.
 During an evaluation, when that request remains outstanding for up to 10 milliseconds, bounded by the call deadline, `send` follows the record with the newline-prefixed banner `\n[stdin needed]`; a later call can supply more bytes with `{ "stdin": "Ada\n" }`.
-An immediate `input_received` receipt retains the request record but suppresses `[stdin needed]`, so prequeued input can satisfy a console read without forcing another tool call.
+An immediate `input_received` or `input_cancelled` receipt retains the request record but suppresses `[stdin needed]`, so prequeued input can satisfy a console read without forcing another tool call and an interrupt can cancel it.
 That receipt describes the runtime read, not a particular stdin payload; direct fd-0 reads emit no request or receipt.
 Payload end is not EOF, and queued input is not an acknowledgment of consumption.
 Unread bytes may be completed by later stdin or satisfy a later worker read or evaluation.
@@ -139,7 +139,10 @@ It does not start a process; when neither target exists, it returns `worker is n
 A resolver signal error is returned by both the interrupt and resolution calls; an interrupted resolver otherwise reports its ordinary resolution failure.
 A worker signal is not assigned to a cell: an idle signal is consumed at the next managed boundary, and a signal during R, reticulate Python, or DuckDB is handled by that runtime.
 Code can catch or delay the signal, so use `restart` when the worker does not return.
-An empty managed `readline()`, Python `input()`, or debugger prompt does not provide a periodic worker boundary and may continue waiting.
+An interrupt cancels a managed `readline()`, Python `input()`, or debugger prompt when runtime interrupt handling is active; a read inside R's `suspendInterrupts()` keeps waiting and the pending interrupt is handled at a later managed boundary after input arrives.
+Full callback buffers without a newline remain provisional until that managed operation completes a logical line.
+If the operation ends first, including after an interrupt between callbacks, every provisional chunk is replayed before fd 0 on the next managed console read.
+Code reading fd 0 directly does not consume that pushback, and restart discards it with the worker.
 `interrupt` accepts no `requirements`.
 
 The client can explicitly replace the worker and add R, Python, and DuckDB requirements in the same call:
@@ -376,7 +379,7 @@ For uv tool failures, the error includes a JSON resolver-input manifest with ret
 It omits reticulate's helper command, temporary output path, and interactive `py_require()` guidance.
 Resolution has no per-call timeout.
 When its direct resolver process exits, MCP Console stops any remaining in-group descendants before collecting resolver output; closing MCP input force-stops an in-flight resolver group.
-Python `input()` and `breakpoint()`/`pdb` use reticulate's R console bridge, so each read emits `input_requested` before reading and `input_received` after a successful read.
+Python `input()` and `breakpoint()`/`pdb` use reticulate's R console bridge, so each read emits `input_requested` before reading, then `input_received` after success or `input_cancelled` after an interrupt.
 They accept proactively queued or follow-up stdin, including repeated debugger commands.
 Reads through Python `sys.stdin` or fd 0 directly bypass the bridge and emit neither event.
 Its MCP initialization identity remains `mcp-console`.

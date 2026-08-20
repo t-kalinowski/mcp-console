@@ -397,7 +397,9 @@ fn handle_message(
                 .input_requested(prompt, rendered, output)
                 .map(|()| true)
         }
-        WorkerMessage::InputReceived => activity.input_received().map(|()| true),
+        WorkerMessage::InputReceived | WorkerMessage::InputCancelled => {
+            activity.input_received().map(|()| true)
+        }
         WorkerMessage::ResolvePython { request } => {
             let response = match callbacks.resolve_python(request) {
                 Ok(managed) => {

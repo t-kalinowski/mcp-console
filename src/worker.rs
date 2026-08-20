@@ -20,6 +20,10 @@ mod platform {
     static R_EVENTS: OnceLock<REvents> = OnceLock::new();
     static R_CHECK_USER_INTERRUPT: OnceLock<CheckUserInterrupt> = OnceLock::new();
     static CELL_SOURCE: Mutex<Option<CellSource>> = Mutex::new(None);
+    static CONSOLE_STDIN: Mutex<ConsoleStdin> = Mutex::new(ConsoleStdin {
+        pushback: VecDeque::new(),
+        line_prefix: Vec::new(),
+    });
     static PENDING_SERVER_MESSAGES: Mutex<VecDeque<ServerMessage>> = Mutex::new(VecDeque::new());
     static WORKER_FAILURE: Mutex<Option<String>> = Mutex::new(None);
     static WORKER_SHUTDOWN: AtomicBool = AtomicBool::new(false);
@@ -32,6 +36,12 @@ mod platform {
     ) -> c_int;
     type CheckActivity = unsafe extern "C-unwind" fn(c_int, c_int) -> *mut c_void;
     type RunHandlers = unsafe extern "C-unwind" fn(*mut c_void, *mut c_void);
+    type ReadConsole = unsafe extern "C-unwind" fn(
+        prompt: *const c_char,
+        buffer: *mut c_uchar,
+        length: c_int,
+        add_history: c_int,
+    ) -> c_int;
     type CheckUserInterrupt = unsafe extern "C-unwind" fn();
     type AddInputHandler = unsafe extern "C-unwind" fn(
         *mut c_void,
@@ -44,6 +54,77 @@ mod platform {
     struct CellSource {
         text: String,
         offset: usize,
+    }
+
+    struct ConsoleStdin {
+        pushback: VecDeque<ConsoleStdinChunk>,
+        line_prefix: Vec<u8>,
+    }
+
+    struct ConsoleStdinChunk {
+        bytes: Vec<u8>,
+        offset: usize,
+    }
+
+    impl ConsoleStdin {
+        unsafe fn copy_pushback(&mut self, destination: *mut u8, capacity: usize) -> usize {
+            let mut copied = 0;
+            while copied < capacity {
+                let Some(chunk) = self.pushback.front_mut() else {
+                    break;
+                };
+                debug_assert!(chunk.offset <= chunk.bytes.len());
+                let remaining = &chunk.bytes[chunk.offset..];
+                let length = remaining.len().min(capacity - copied);
+                unsafe {
+                    std::ptr::copy_nonoverlapping(
+                        remaining.as_ptr(),
+                        destination.add(copied),
+                        length,
+                    );
+                }
+                copied += length;
+                chunk.offset += length;
+                if chunk.offset == chunk.bytes.len() {
+                    self.pushback.pop_front();
+                }
+            }
+            if self.pushback.is_empty() {
+                self.pushback = VecDeque::new();
+            }
+            copied
+        }
+
+        fn record_chunk(&mut self, chunk: &[u8]) {
+            if chunk.last() == Some(&b'\n') {
+                self.line_prefix = Vec::new();
+            } else {
+                self.line_prefix.extend_from_slice(chunk);
+            }
+        }
+
+        fn preserve_line(&mut self, chunk: &[u8]) {
+            if self.line_prefix.is_empty() && chunk.is_empty() {
+                return;
+            }
+            if !chunk.is_empty() {
+                self.pushback.push_front(ConsoleStdinChunk {
+                    bytes: chunk.to_vec(),
+                    offset: 0,
+                });
+            }
+            if !self.line_prefix.is_empty() {
+                self.pushback.push_front(ConsoleStdinChunk {
+                    bytes: std::mem::take(&mut self.line_prefix),
+                    offset: 0,
+                });
+            }
+        }
+
+        fn finish_operation(&mut self) {
+            // A later callback cannot be assumed to continue this operation.
+            self.preserve_line(&[]);
+        }
     }
 
     struct REvents {
@@ -85,6 +166,20 @@ mod platform {
             before_do_one: extern "C" fn(),
             check_interrupt: CheckUserInterrupt,
             interrupts_pending: *const c_int,
+        ) -> c_int;
+    }
+
+    unsafe extern "C-unwind" {
+        fn mcp_r_console_configure(
+            read_console: ReadConsole,
+            check_interrupt: CheckUserInterrupt,
+            interrupts_pending: *const c_int,
+        );
+        fn mcp_r_read_console(
+            prompt: *const c_char,
+            buffer: *mut c_uchar,
+            length: c_int,
+            add_history: c_int,
         ) -> c_int;
     }
 
@@ -294,6 +389,11 @@ mod platform {
         unsafe { libr::get(libr::R_interrupts_pending) != 0 }
     }
 
+    fn console_interrupt_pending() -> bool {
+        interrupt_pending()
+            && unsafe { libr::get(libr::R_interrupts_suspended) == libr::Rboolean_FALSE }
+    }
+
     pub(crate) fn resolve_python(
         request: crate::worker_protocol::PythonResolveRequest,
     ) -> Result<String, String> {
@@ -456,6 +556,7 @@ mod platform {
             Language::Python => evaluate_python_cell(cell.source, graphics, python),
             Language::Sql => evaluate_sql_cell(cell.source, sql),
         };
+        finish_console_stdin_operation()?;
         if result.is_ok() && !WORKER_SHUTDOWN.load(Ordering::SeqCst) {
             if let Some(message) = take_worker_failure() {
                 return Err(message);
@@ -554,7 +655,7 @@ mod platform {
             libr::set(libr::R_Outputfile, std::ptr::null_mut());
             libr::set(libr::ptr_R_WriteConsole, None);
             libr::set(libr::ptr_R_WriteConsoleEx, Some(r_write_console));
-            libr::set(libr::ptr_R_ReadConsole, Some(r_read_console));
+            libr::set(libr::ptr_R_ReadConsole, Some(mcp_r_read_console));
             libr::set(libr::ptr_R_ShowMessage, Some(r_show_message));
             libr::set(libr::ptr_R_Busy, Some(r_busy));
             libr::setup_Rmainloop();
@@ -603,6 +704,9 @@ mod platform {
         R_CHECK_USER_INTERRUPT
             .set(check_interrupt)
             .map_err(|_| io::Error::other("R interrupt checker was already initialized"))?;
+        unsafe {
+            mcp_r_console_configure(r_read_console, check_interrupt, libr::R_interrupts_pending)
+        };
         Ok(())
     }
 
@@ -621,6 +725,7 @@ mod platform {
             );
         }
         EVALUATION_STARTED.store(false, Ordering::SeqCst);
+        finish_console_stdin_operation()?;
         defer_interrupts(|| graphics.finish(), check_interrupts)?;
         observe_stdin_shutdown()
     }
@@ -854,9 +959,14 @@ mod platform {
 
         match read_console_stdin(buf, buflen) {
             Ok(read) => {
-                if read != 0
-                    && let Err(error) = send_input_received()
-                {
+                let receipt = if read < 0 {
+                    send_input_cancelled()
+                } else if read != 0 {
+                    send_input_received()
+                } else {
+                    Ok(())
+                };
+                if let Err(error) = receipt {
                     record_worker_failure(error);
                     return console_eof(buf);
                 }
@@ -887,6 +997,14 @@ mod platform {
             .map_err(|error| format!("R worker failed to report received input: {error}"))
     }
 
+    fn send_input_cancelled() -> Result<(), String> {
+        WORKER_WRITER
+            .get()
+            .expect("R worker sideband writer should be initialized")
+            .send(&WorkerMessage::InputCancelled)
+            .map_err(|error| format!("R worker failed to cancel an input request: {error}"))
+    }
+
     fn send_image(data: String) -> Result<(), String> {
         WORKER_WRITER
             .get()
@@ -905,8 +1023,49 @@ mod platform {
     }
 
     fn read_console_stdin(buf: *mut c_uchar, buflen: c_int) -> Result<c_int, String> {
-        let mut length = 0;
-        while length < (buflen as usize) - 1 {
+        let capacity = (buflen as usize) - 1;
+        if console_interrupt_pending() {
+            return cancel_console_stdin_read(buf, 0);
+        }
+        let mut stdin = CONSOLE_STDIN
+            .lock()
+            .map_err(|_| "R worker console stdin lock poisoned".to_string())?;
+        // SAFETY: r_read_console validated buf and reserved one byte for NUL.
+        let mut length = unsafe { stdin.copy_pushback(buf, capacity) };
+        drop(stdin);
+
+        while length < capacity {
+            if console_interrupt_pending() {
+                return cancel_console_stdin_read(buf, length);
+            }
+            let mut descriptor = libc::pollfd {
+                fd: libc::STDIN_FILENO,
+                events: libc::POLLIN,
+                revents: 0,
+            };
+            let ready = unsafe { libc::poll(&mut descriptor, 1, 10) };
+            if ready == 0 {
+                continue;
+            }
+            if ready < 0 {
+                let error = io::Error::last_os_error();
+                if error.kind() == io::ErrorKind::Interrupted {
+                    continue;
+                }
+                return Err(format!("R worker stdin poll failed: {error}"));
+            }
+            if descriptor.revents & libc::POLLNVAL != 0 {
+                return Err("R worker stdin descriptor is invalid".to_string());
+            }
+            if descriptor.revents & (libc::POLLIN | libc::POLLHUP) == 0 {
+                return Err(format!(
+                    "R worker stdin poll returned unexpected events {}",
+                    descriptor.revents
+                ));
+            }
+            if console_interrupt_pending() {
+                return cancel_console_stdin_read(buf, length);
+            }
             let byte = unsafe { buf.add(length) };
             let count = unsafe { libc::read(libc::STDIN_FILENO, byte.cast(), 1) };
             if count == 1 {
@@ -922,14 +1081,42 @@ mod platform {
             }
 
             let error = io::Error::last_os_error();
-            if error.kind() != io::ErrorKind::Interrupted {
-                return Err(format!("R worker stdin read failed: {error}"));
+            if error.kind() == io::ErrorKind::Interrupted {
+                continue;
             }
+            return Err(format!("R worker stdin read failed: {error}"));
         }
         unsafe {
             *buf.add(length) = 0;
         }
+        record_console_stdin_chunk(buf, length)?;
         Ok(i32::from(length > 0))
+    }
+
+    fn record_console_stdin_chunk(buf: *const c_uchar, length: usize) -> Result<(), String> {
+        let chunk = unsafe { std::slice::from_raw_parts(buf, length) };
+        let mut stdin = CONSOLE_STDIN
+            .lock()
+            .map_err(|_| "R worker console stdin lock poisoned".to_string())?;
+        stdin.record_chunk(chunk);
+        Ok(())
+    }
+
+    fn cancel_console_stdin_read(buf: *const c_uchar, length: usize) -> Result<c_int, String> {
+        let chunk = unsafe { std::slice::from_raw_parts(buf, length) };
+        let mut stdin = CONSOLE_STDIN
+            .lock()
+            .map_err(|_| "R worker console stdin lock poisoned".to_string())?;
+        stdin.preserve_line(chunk);
+        Ok(-1)
+    }
+
+    fn finish_console_stdin_operation() -> Result<(), String> {
+        let mut stdin = CONSOLE_STDIN
+            .lock()
+            .map_err(|_| "R worker console stdin lock poisoned".to_string())?;
+        stdin.finish_operation();
+        Ok(())
     }
 }
 

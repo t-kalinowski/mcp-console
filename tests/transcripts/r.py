@@ -1134,6 +1134,178 @@ def test_interrupts_running_r_evaluation(binary: Path) -> Transcript:
                 stop_client(client)
 
 
+def test_interrupts_managed_console_input(binary: Path) -> Transcript:
+    client = McpClient(binary, ("serve",))
+    passed = False
+    try:
+        client._initialize_and_list_tools()
+
+        # fmt: r
+        r = code(r"""
+            r_input_state <- 41L
+            tryCatch(
+              readline("R interrupt> "),
+              interrupt = function(condition) cat("R input interrupted\n")
+            )
+            """)
+        client.send(r=r, stdin="R partial")
+        assert last_tool_text(client) == (
+            '[input requested: "R interrupt> "]\n[stdin needed]'
+        )
+        time.sleep(0.05)
+        client.session(action="interrupt")
+        assert last_tool_text(client) == "[interrupt sent]"
+        client.send(timeout_ms=3_000)
+        assert last_tool_text(client) == "R input interrupted\n"
+        client.send(r='readline("R replay> ")', stdin="!\n")
+        assert last_tool_text(client) == (
+            '[input requested: "R replay> "]\n[1] "R partial!"\n'
+        )
+
+        # fmt: r
+        r = code(r"""
+            suspended_input <- "not read"
+            suspendInterrupts({
+              suspended_input <- readline("R suspended> ")
+              cat("suspended input accepted")
+            })
+            """)
+        client.send(r=r)
+        assert last_tool_text(client) == (
+            '[input requested: "R suspended> "]\n[stdin needed]'
+        )
+        time.sleep(0.05)
+        client.session(action="interrupt")
+        assert last_tool_text(client) == "[interrupt sent]"
+        client.send(stdin="accepted\n", timeout_ms=3_000)
+        output = last_tool_text(client)
+        assert output == "suspended input accepted\n", repr(output)
+        client.send(r="suspended_input")
+        assert last_tool_text(client) == '[1] "accepted"\n'
+
+        # fmt: python
+        python = code("""
+            python_input_state = 41
+            try:
+                input("Python interrupt> ")
+            except KeyboardInterrupt:
+                print("Python input interrupted")
+            """)
+        client.send(python=python, stdin="Python partial")
+        assert last_tool_text(client) == (
+            '[input requested: "Python interrupt> "]\n[stdin needed]'
+        )
+        time.sleep(0.05)
+        client.session(action="interrupt")
+        assert last_tool_text(client) == "[interrupt sent]"
+        client.send(timeout_ms=3_000)
+        assert last_tool_text(client) == "Python input interrupted\n"
+        client.send(python='input("Python replay> ")', stdin="!\n")
+        assert last_tool_text(client) == (
+            "[input requested: \"Python replay> \"]\n'Python partial!'\n"
+        )
+
+        client.send(r="r_input_state + 1L")
+        assert last_tool_text(client) == "[1] 42\n"
+        client.send(python="python_input_state + 1")
+        assert last_tool_text(client) == "42\n"
+        transcript = client._finish()
+        passed = True
+        return transcript
+    finally:
+        if not passed:
+            stop_client(client)
+
+
+def test_replays_console_prefix_after_operation_boundary_interrupt(
+    binary: Path,
+) -> Transcript:
+    with r_input_handler_client(binary) as (client, directory):
+        client._initialize_and_list_tools()
+
+        # A small native buffer makes a later managed callback deterministic
+        # without relying on the server's 10 millisecond request grace.
+        # fmt: r
+        r = code(r"""
+            dyn.load("./mcp_test_input_handler.so")
+            tryCatch(
+              .Call(
+                "mcp_test_read_console_line",
+                "small callbacks> "
+              ),
+              interrupt = function(condition) {
+                cat("caught later-callback interrupt\n")
+              }
+            )
+            """)
+        client.send(r=r, stdin="part")
+        assert last_tool_text(client) == (
+            '[input requested: "small callbacks> "]\n'
+            '[input requested: "small callbacks> "]\n'
+            "[stdin needed]"
+        )
+
+        client.session(action="interrupt")
+        assert last_tool_text(client) == "[interrupt sent]"
+        client.send(timeout_ms=3_000)
+        output = last_tool_text(client)
+        assert output == "caught later-callback interrupt\n", repr(output)
+
+        client.send(r='readline("after later callback> ")', stdin="!\n")
+        assert last_tool_text(client) == (
+            '[input requested: "after later callback> "]\n[1] "part!"\n'
+        )
+
+        # Return one full console buffer, then interrupt before another
+        # callback can complete the logical line.
+        # fmt: r
+        r = code(r"""
+            tryCatch(
+              {
+                partial <- .Call(
+                  "mcp_test_read_console_once",
+                  "between callbacks> "
+                )
+                stopifnot(nchar(partial, type = "bytes") == 3L)
+                invisible(file.create(file.path(
+                  tempdir(),
+                  "between-console-callbacks-started"
+                )))
+                repeat {}
+              },
+              interrupt = function(condition) {
+                cat("caught between-callback interrupt\n")
+              }
+            )
+            """)
+        client.send(r=r)
+        assert last_tool_text(client) == (
+            '[input requested: "between callbacks> "]\n[stdin needed]'
+        )
+        client.send(stdin="x" * 6, timeout_ms=50)
+        assert last_tool_text(client) == "\n[running]"
+        wait_for_worker_file(
+            directory,
+            "between-console-callbacks-started",
+            client,
+        )
+
+        client.session(action="interrupt")
+        assert last_tool_text(client) == "[interrupt sent]"
+        client.send(timeout_ms=3_000)
+        assert last_tool_text(client) == "caught between-callback interrupt\n"
+
+        client.send(
+            r='identical(readline("after boundary> "), paste0(strrep("x", 6), "!"))',
+            stdin="!\n",
+        )
+        output = last_tool_text(client)
+        assert output == ('[input requested: "after boundary> "]\n[1] TRUE\n'), repr(
+            output
+        )
+        return client._finish()
+
+
 def test_routes_idle_and_timed_out_stdin(binary: Path) -> Transcript:
     client = McpClient(binary, ("serve",))
     client._initialize_and_list_tools()
