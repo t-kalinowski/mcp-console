@@ -427,6 +427,7 @@ See [`tests/transcripts/README.md`](tests/transcripts/README.md) for running and
 The `client_server/r` suite exercises the built-in worker.
 The `client_server/python` suite exercises Python cells through reticulate in that worker.
 The `client_server/sql` suite exercises DuckDB cells through DBI in that worker.
+The `server_relay/protocol` suite launches a deterministic relay as the server's direct sandbox child and records the private JSONL frames in both directions.
 The `relay_worker/protocol` suite drives `serve` through a transparent proxy, asserts the public MCP result, and records the relay-worker sideband and standard-stream boundary.
 The `client_server/zod` suite uses the hidden `serve --worker PATH` development option to exercise the same protocol with an executable Python fixture.
 These built-in-worker and protocol suites run on macOS, where the sandbox policy is implemented.

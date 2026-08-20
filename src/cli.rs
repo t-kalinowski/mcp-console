@@ -32,6 +32,10 @@ pub enum Command {
         /// Replace the runtime worker during development
         #[arg(long, hide = true, value_name = "PATH")]
         worker: Option<PathBuf>,
+
+        /// Replace the sandboxed worker relay during development
+        #[arg(long, hide = true, value_name = "PATH", requires = "worker")]
+        relay: Option<PathBuf>,
     },
 
     /// Run the internal R worker

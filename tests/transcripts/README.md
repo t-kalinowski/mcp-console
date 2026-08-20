@@ -26,6 +26,11 @@ An identical prefix becomes a bare `!same-as PATH` document; a different prefix 
 When accepting a handshake change, update the full snapshot before the abbreviated transcripts.
 The `cli/help` suite records command lines and stdout in one stream with color disabled.
 It adds the exit code for failures and stderr when nonempty.
+The `server_relay/protocol` suite launches a deterministic scripted relay through an internal development seam.
+That relay is the server's direct sandbox child and process-group leader, and it communicates only through the same fd 0/1/2 boundary as the production relay.
+The suite records complete parsed JSONL frames under `server` and `relay` direction labels.
+The truncated-frame case instead records the exact incomplete bytes as base64 under `relay_raw`.
+The fixture uses explicit checkpoints so terminal commits and failure captures do not depend on sleeps, and tests keep capture descriptors open across sandbox cleanup when necessary.
 The `relay_worker/protocol` suite drives the public MCP server through a transparent worker proxy.
 The proxy starts the built-in worker inside the server's sandbox, forwards sideband messages and standard streams, and writes parsed events to its private temporary directory for the test to read before shutdown.
 The restart case keeps the old generation's capture descriptor open across sandbox cleanup and records the sideband shutdown frame, worker-stdin EOF, and worker-sideband EOF.

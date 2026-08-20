@@ -14,11 +14,19 @@ impl WorkerRuntime {
         let super::WorkerSpec {
             executable,
             arguments,
+            relay,
             managed_python,
             managed_r,
             callbacks,
         } = spec;
-        let _ = (executable, arguments, managed_python, managed_r, callbacks);
+        let _ = (
+            executable,
+            arguments,
+            relay,
+            managed_python,
+            managed_r,
+            callbacks,
+        );
         Err("workers are supported only on macOS".to_string())
     }
 }

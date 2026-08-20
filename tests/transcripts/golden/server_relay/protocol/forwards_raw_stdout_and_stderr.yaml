@@ -1,0 +1,29 @@
+---
+relay:
+  kind: worker_message
+  message:
+    kind: ready
+---
+server:
+  kind: worker_message
+  message:
+    kind: evaluate
+    language: r
+    source: "42"
+---
+relay:
+  kind: stdout
+  data: c3Rkb3V0Cg==
+---
+relay:
+  kind: stderr
+  data: c3RkZXJyCg==
+---
+relay:
+  kind: worker_message
+  message:
+    kind: completed
+---
+server:
+  kind: terminal_committed
+...

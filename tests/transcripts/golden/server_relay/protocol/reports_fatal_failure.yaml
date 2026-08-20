@@ -1,0 +1,19 @@
+---
+relay:
+  kind: fatal
+  message: scripted relay failure
+---
+relay:
+  kind: stream_closed
+  stream: stdout
+---
+relay:
+  kind: stream_closed
+  stream: stderr
+---
+relay:
+  kind: worker_sideband_closed
+---
+relay:
+  kind: worker_exited
+...

@@ -1,0 +1,6 @@
+---
+relay:
+  kind: worker_message
+  message:
+    kind: ready
+...

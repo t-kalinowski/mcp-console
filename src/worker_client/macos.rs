@@ -127,13 +127,19 @@ impl WorkerRuntime {
         let super::WorkerSpec {
             executable,
             arguments,
+            relay,
             managed_python,
             managed_r,
             callbacks,
         } = spec;
 
-        let relay_executable = std::env::current_exe()
-            .map_err(|error| format!("failed to locate the worker relay executable: {error}"))?;
+        let use_builtin_relay = relay.is_none();
+        let relay_executable = match relay {
+            Some(relay) => relay.to_path_buf(),
+            None => std::env::current_exe().map_err(|error| {
+                format!("failed to locate the worker relay executable: {error}")
+            })?,
+        };
         let mut command = crate::sandbox::SandboxedCommand::new(relay_executable.as_os_str())
             .map_err(|error| format!("failed to prepare worker sandbox: {error}"))?;
         if let Some(managed_python) = managed_python {
@@ -142,8 +148,10 @@ impl WorkerRuntime {
         if let Some(managed_r) = managed_r {
             managed_r.configure_worker(&mut command)?;
         }
+        if use_builtin_relay {
+            command.arg("worker-relay");
+        }
         command
-            .arg("worker-relay")
             .arg(executable.as_os_str())
             .args(arguments)
             .stdin(Stdio::piped())
