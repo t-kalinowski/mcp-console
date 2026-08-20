@@ -247,7 +247,8 @@ if [ ! -e "$MCP_CONSOLE_PREFLIGHT_COMPLETE" ]; then
   printf '%s\n' "$MCP_CONSOLE_REAL_R_HOME"
   exit 0
 fi
-printf '%s\n' "$$" > "$MCP_CONSOLE_RESOLVER_STARTED"
+printf '%s\n' "$$" > "${MCP_CONSOLE_RESOLVER_STARTED}.tmp"
+/bin/mv "${MCP_CONSOLE_RESOLVER_STARTED}.tmp" "$MCP_CONSOLE_RESOLVER_STARTED"
 exec /bin/sleep 4
 "#,
     )

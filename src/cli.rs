@@ -38,6 +38,20 @@ pub enum Command {
     #[command(hide = true)]
     Worker,
 
+    /// Run the internal worker relay
+    #[command(hide = true)]
+    WorkerRelay {
+        /// Worker command to launch inside the relay sandbox
+        #[arg(
+            value_name = "COMMAND",
+            required = true,
+            num_args = 1..,
+            allow_hyphen_values = true,
+            trailing_var_arg = true
+        )]
+        command: Vec<OsString>,
+    },
+
     /// Run a command with the MCP Console sandbox policy
     #[command(after_help = SANDBOX_EXAMPLES)]
     Sandbox {

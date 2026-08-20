@@ -13,8 +13,8 @@ from _support import (
     r_test_environment,
     release_worker_callback_gate,
     run_this_suite,
+    wait_for_idle_output,
 )
-
 
 PLATFORMS = {"darwin"}
 REQUIRED_COMMANDS = {"ir"}
@@ -214,6 +214,8 @@ def test_stops_live_preparation_for_idle_callback_input(binary: Path) -> Transcr
 
     # fmt: r
     r = code(r"""
+        reticulate::py_require("py-yaml12")
+        invisible(reticulate::py_config())
         callback_gate <- tempfile("mcp-console-callback-gate-")
         callback_checkpoint <- tempfile("mcp-console-callback-checkpoint-")
         run_callback <- function() {
@@ -221,13 +223,11 @@ def test_stops_live_preparation_for_idle_callback_input(binary: Path) -> Transcr
             later::later(run_callback, delay = 0.01)
             return(invisible(NULL))
           }
-          stopifnot(file.create(callback_checkpoint))
-          reticulate::py_require("py-yaml12")
-          reticulate::py_config()
           # later caps one top-level handler turn at 20 callback passes.
           # Leave the input callback ready for the next handler turn.
           request_input <- function(turns) {
             if (turns == 0L) {
+              stopifnot(file.create(callback_checkpoint))
               readline("later> ")
             } else {
               later::later(function() request_input(turns - 1L), delay = 0)
@@ -240,19 +240,24 @@ def test_stops_live_preparation_for_idle_callback_input(binary: Path) -> Transcr
         """)
     client.send(r=r)
     release_worker_callback_gate(client, "idle input callback")
+    checkpoint_id = wait_for_idle_output(
+        client,
+        '[input requested: "later> "]\n[stdin needed]',
+        "idle callback input request",
+    )
     # Keep this distinct from the callback's retained requirement so activation
     # cannot turn the preparation into an idempotent server-side no-op.
     result = client.session(
         action="prepare",
         requirements={"python": ["py-yaml12>=0"]},
     )
+    client.transcript[-1]["id"] = checkpoint_id + 1
     assert result["isError"] is True, result
     assert result["content"][0]["text"] == (
-        '[input requested: "later> "]\n'
         '[idle R callback requested input "later> " during requirement '
         "preparation; collect callback input with send before preparing "
         "requirements]\n[worker stopped: in-memory state lost]"
-    )
+    ), result
     return client._finish()
 
 

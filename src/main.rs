@@ -11,6 +11,7 @@ mod r_bridge;
 mod r_environment;
 #[cfg(target_os = "macos")]
 mod r_graphics;
+mod relay_protocol;
 mod resolver;
 mod sandbox;
 mod server;
@@ -23,6 +24,7 @@ mod transcript;
 mod worker;
 mod worker_client;
 mod worker_protocol;
+mod worker_relay;
 
 fn main() -> ExitCode {
     match cli::Cli::parse().command {
@@ -31,6 +33,10 @@ fn main() -> ExitCode {
             Err(error) => exit_with_error(error),
         },
         cli::Command::Worker => match worker::run() {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => exit_with_error(error),
+        },
+        cli::Command::WorkerRelay { command } => match worker_relay::run(&command) {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => exit_with_error(error),
         },

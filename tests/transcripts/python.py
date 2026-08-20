@@ -21,6 +21,7 @@ from _support import (
     release_worker_callback_gate,
     run_this_suite,
     stop_client,
+    wait_for_idle_output,
     wait_for_worker_file,
 )
 
@@ -570,15 +571,19 @@ def test_retains_idle_python_activation_during_continuous_collection(
         if time.monotonic() >= deadline:
             raise AssertionError("idle Python activation did not complete")
         time.sleep(0.01)
-    client.send()
-    output = last_tool_text(client)
-    assert output == "idle Python activated\n\n[idle]", repr(output)
+    checkpoint_id = wait_for_idle_output(
+        client,
+        "idle Python activated\n\n[idle]",
+        "idle Python activation output",
+    )
 
     client.session(action="restart")
+    client.transcript[-1]["id"] = checkpoint_id + 1
     assert last_tool_text(client) == (
         "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
     )
     client.send(python="import yaml12; yaml12.__name__")
+    client.transcript[-1]["id"] = checkpoint_id + 2
     assert last_tool_text(client) == "'yaml12'\n"
     return client._finish()
 

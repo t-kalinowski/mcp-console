@@ -3,6 +3,7 @@
 # requires-python = ">=3.11"
 # ///
 
+import fcntl
 import json
 import os
 import signal
@@ -69,36 +70,41 @@ def emit_large_output(descriptor: int, prefix: bytes) -> None:
     write_all(descriptor, b"y" * LARGE_OUTPUT_SIZE)
 
 
-def emit_background_stderr(root: Path) -> None:
+def fill_nonblocking(descriptor: int, data: bytes) -> int:
+    flags = fcntl.fcntl(descriptor, fcntl.F_GETFL)
+    fcntl.fcntl(descriptor, fcntl.F_SETFL, flags | os.O_NONBLOCK)
+    written = 0
+    try:
+        while written < len(data):
+            try:
+                written += os.write(descriptor, data[written:])
+            except BlockingIOError:
+                break
+    finally:
+        fcntl.fcntl(descriptor, fcntl.F_SETFL, flags)
+    assert written > 0
+    return written
+
+
+def emit_background_stderr(root: Path, reader: TextIO, writer: TextIO) -> None:
     while not (root / "zod-release-background-stderr").exists():
         time.sleep(0.01)
     emit_large_output(2, b"zod background stderr\n")
+    wait_for_server_to_process_sideband(reader, writer)
     (root / "zod-background-stderr-emitted").touch()
 
 
-def wait_for_server_to_process_sideband(stream: TextIO) -> None:
-    """Block until the server has processed the preceding sideband frames."""
-    frame = json.dumps(
-        {"kind": ConsoleKind.OUTPUT, "data": ""},
-        separators=(",", ":"),
+def wait_for_server_to_process_sideband(reader: TextIO, writer: TextIO) -> None:
+    """Round-trip through the server after preceding sideband frames."""
+    send(
+        writer,
+        {
+            "kind": "resolve_python_version",
+            "request": {"constraints": [">=3.11"], "environment": {}},
+        },
     )
-    # Flushing a frame only proves that it entered the kernel pipe.
-    # The appended spaces are valid trailing JSON whitespace, so this remains
-    # a no-output frame. Its size exceeds Darwin's pipe capacity, and FIFO
-    # backpressure forces the server to process prior frames before flush returns.
-    stream.write(frame + (" " * (2 * 1024 * 1024)) + "\n")
-    stream.flush()
-
-
-def send_padded_output(stream: TextIO, data: str) -> None:
-    frame = json.dumps(
-        {"kind": ConsoleKind.OUTPUT, "data": data},
-        separators=(",", ":"),
-    )
-    # The trailing JSON whitespace makes the frame exceed Darwin's pipe
-    # capacity without changing the decoded message.
-    stream.write(frame + (" " * (2 * 1024 * 1024)) + "\n")
-    stream.flush()
+    response = json.loads(reader.readline())
+    assert response["kind"] == "python_version_resolution_failed", response
 
 
 def configure_startup(root: Path, reader: TextIO, writer: TextIO) -> bool:
@@ -183,6 +189,15 @@ def main() -> None:
     emit_output_before_r_preparation_failure = False
     queued_message: dict[str, Any] | None = None
 
+    def receive_resolver_response(expected_kind: str) -> dict[str, Any]:
+        nonlocal queued_message
+        while True:
+            response = json.loads(reader.readline())
+            if response["kind"] == expected_kind:
+                return response
+            assert queued_message is None, response
+            queued_message = response
+
     if os.environ.get("ZOD_BLOCK_SIDEBAND_WRITE") == "1":
         reader.read(1)
         Path(os.environ["TMPDIR"], "zod-sideband-blocked").touch()
@@ -255,6 +270,64 @@ def main() -> None:
             while True:
                 time.sleep(60)
 
+        if source == "stall accepted relay shutdown":
+            relay_pid = os.getpgrp()
+            helper = os.fork()
+            if helper == 0:
+                os.setsid()
+                reader.close()
+                writer.close()
+                for descriptor in (1, 2):
+                    os.close(descriptor)
+                while os.read(0, 1) != b"":
+                    pass
+                os.close(0)
+                os.kill(relay_pid, signal.SIGSTOP)
+                (temporary / "zod-relay-stopped-after-shutdown").touch()
+                time.sleep(1.5)
+                try:
+                    os.kill(relay_pid, signal.SIGCONT)
+                except ProcessLookupError:
+                    pass
+                os._exit(0)
+            (temporary / "zod-relay-resume-helper").write_text(
+                str(helper),
+                encoding="utf-8",
+            )
+            stopped = temporary / "zod-relay-stopped-after-shutdown"
+            while not stopped.exists():
+                time.sleep(0.01)
+            write_all(1, b"zod output during relay retirement\n")
+            while True:
+                time.sleep(60)
+
+        if source == "stall with stopped relay":
+            relay_pid = os.getpgrp()
+            launcher_pid = os.getppid()
+            assert relay_pid != launcher_pid
+            assert os.getpgid(launcher_pid) == relay_pid
+            helper = os.fork()
+            if helper == 0:
+                os.setsid()
+                reader.close()
+                writer.close()
+                for descriptor in (0, 1, 2):
+                    os.close(descriptor)
+                os.kill(relay_pid, signal.SIGSTOP)
+                (temporary / "zod-relay-stopped").touch()
+                while True:
+                    signal.pause()
+            (temporary / "zod-relay-stop-helper").write_text(
+                str(helper),
+                encoding="utf-8",
+            )
+            (temporary / "zod-relay-stop-target").write_text(
+                f"{relay_pid} {launcher_pid}",
+                encoding="utf-8",
+            )
+            while True:
+                signal.pause()
+
         if source == "violate protocol":
             send_output(writer, "zod output before protocol failure")
             send(writer, {"kind": "ready"})
@@ -265,8 +338,69 @@ def main() -> None:
             send(writer, {"kind": "ready"})
             continue
 
+        if source == "unexpected input receipt after stdout":
+            emit_large_output(1, b"zod unexpected input receipt: ")
+            tail_size = fill_nonblocking(1, b"z" * LARGE_OUTPUT_SIZE)
+            write_all(1, f"zod expected semantic tail: {tail_size}\n".encode())
+            send(writer, {"kind": "input_received"})
+            while True:
+                signal.pause()
+
+        if source in {
+            "malformed sideband after stdout",
+            "malformed sideband after stderr",
+        }:
+            stream = source.removeprefix("malformed sideband after ")
+            descriptor = 1 if stream == "stdout" else 2
+            emit_large_output(descriptor, f"zod malformed {stream}: ".encode())
+            tail_size = fill_nonblocking(descriptor, b"z" * LARGE_OUTPUT_SIZE)
+            write_all(
+                descriptor,
+                f"zod expected {stream} malformed tail: {tail_size}\n".encode(),
+            )
+            writer.write('{"kind":"console_output","data":}\n')
+            writer.flush()
+            while True:
+                signal.pause()
+
+        if source in {
+            "force stop after checkpointed stdout",
+            "force stop after checkpointed stderr",
+        }:
+            stream = source.removeprefix("force stop after checkpointed ")
+            descriptor = 1 if stream == "stdout" else 2
+            write_all(
+                descriptor,
+                f"zod checkpointed {stream}: ".encode() + b"\xe2\x82",
+            )
+            # The relay checkpoints raw streams before forwarding this callback.
+            # Its response proves these bytes preceded forced retirement.
+            wait_for_server_to_process_sideband(reader, writer)
+            send(writer, {"kind": "ready"})
+            while True:
+                signal.pause()
+
         if source == "exit unexpectedly":
             os._exit(86)
+
+        if source == "kill relay and remain live":
+            worker_pid = os.getpid()
+            launcher_pid = os.getppid()
+            relay_pid = os.getpgrp()
+            assert len({worker_pid, launcher_pid, relay_pid}) == 3
+            assert os.getpgid(launcher_pid) == relay_pid
+            send_output(
+                writer,
+                (
+                    f"zod worker pid: {worker_pid}; "
+                    f"launcher pid: {launcher_pid}; "
+                    f"relay process group: {relay_pid}\n"
+                ),
+            )
+            wait_for_server_to_process_sideband(reader, writer)
+            os.kill(relay_pid, signal.SIGKILL)
+            while True:
+                signal.pause()
 
         if source == "emit stdout":
             write_all(1, b"zod stdout ")
@@ -276,13 +410,27 @@ def main() -> None:
             send(writer, {"kind": "completed"})
             continue
 
+        if source in {"exit after invalid stdout", "exit after invalid stderr"}:
+            stream = source.removeprefix("exit after invalid ")
+            descriptor = 1 if stream == "stdout" else 2
+            emit_large_output(
+                descriptor,
+                f"zod invalid {stream}: ".encode() + b"\xff trailing: \xe2\x82",
+            )
+            tail_size = fill_nonblocking(descriptor, b"z" * LARGE_OUTPUT_SIZE)
+            write_all(
+                descriptor,
+                f"zod expected {stream} crash tail: {tail_size}\n".encode(),
+            )
+            os._exit(86)
+
         if source == "start background stderr":
             temporary = Path(os.environ["TMPDIR"])
             child = os.fork()
             if child == 0:
-                reader.close()
-                writer.close()
-                emit_background_stderr(temporary)
+                for descriptor in (0, 1):
+                    os.close(descriptor)
+                emit_background_stderr(temporary, reader, writer)
                 os._exit(0)
             (temporary / "zod-background-stderr-pid").write_text(
                 str(child),
@@ -290,22 +438,28 @@ def main() -> None:
             )
             (temporary / "zod-background-stderr-started").touch()
             send(writer, {"kind": "completed"})
+            child_pid, status = os.waitpid(child, 0)
+            assert child_pid == child
+            assert os.waitstatus_to_exitcode(status) == 0
             continue
 
         if source == "start background sideband":
             child = os.fork()
             if child == 0:
-                reader.close()
                 for descriptor in (0, 1, 2):
                     os.close(descriptor)
                 release = temporary / "zod-release-background-sideband"
                 while not release.exists():
                     time.sleep(0.01)
-                send_padded_output(writer, "zod background sideband\n")
+                send_output(writer, "zod background sideband\n")
+                wait_for_server_to_process_sideband(reader, writer)
                 (temporary / "zod-background-sideband-emitted").touch()
                 os._exit(0)
             (temporary / "zod-background-sideband-started").touch()
             send(writer, {"kind": "completed"})
+            child_pid, status = os.waitpid(child, 0)
+            assert child_pid == child
+            assert os.waitstatus_to_exitcode(status) == 0
             continue
 
         if source == "start partial sideband descendant":
@@ -391,7 +545,7 @@ def main() -> None:
             send_output(writer, f"zod stdin: {stdin}\n")
             # Prove that the receipt has cleared the provisional request before
             # the client polls, so the fixed grace cannot add another boundary.
-            wait_for_server_to_process_sideband(writer)
+            wait_for_server_to_process_sideband(reader, writer)
             (temporary / "zod-input-received").touch()
             send(writer, {"kind": "completed"})
             continue
@@ -464,11 +618,7 @@ def main() -> None:
                     },
                 ],
             )
-            response = json.loads(reader.readline())
-            if response["kind"] != "python_version_resolution_failed":
-                queued_message = response
-                response = json.loads(reader.readline())
-            assert response["kind"] == "python_version_resolution_failed", response
+            receive_resolver_response("python_version_resolution_failed")
             requirements = {"packages": ["numpy", "pandas", "idle-package"]}
             send(
                 writer,
@@ -481,8 +631,7 @@ def main() -> None:
                     },
                 },
             )
-            response = json.loads(reader.readline())
-            assert response["kind"] == "python_resolution_failed", response
+            receive_resolver_response("python_resolution_failed")
             continue
 
         if source == "report process group":
@@ -563,7 +712,7 @@ def main() -> None:
             )
             if source == "emit output and image before completion":
                 send_output(writer, "after pending image\n")
-            wait_for_server_to_process_sideband(writer)
+            wait_for_server_to_process_sideband(reader, writer)
             (temporary / "zod-image-processed").touch()
             while not (temporary / "zod-release-image-completion").exists():
                 time.sleep(0.01)

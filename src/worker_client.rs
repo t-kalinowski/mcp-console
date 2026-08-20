@@ -23,8 +23,6 @@ use environment::Environment;
 pub(crate) use environment::{PrepareResult, Requirements};
 use evaluation::{Evaluation, EvaluationWait};
 use lifecycle::{LifecycleControl, WorkerGeneration};
-#[cfg(target_os = "macos")]
-use output::DirectOutput;
 pub(crate) use output::{Content, Response, ResponseDelivery};
 use output::{OutputTape, SendFailure, SendResponse};
 

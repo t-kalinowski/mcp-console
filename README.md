@@ -39,7 +39,11 @@ Supplying exactly one of `r`, `python`, or `sql` evaluates one complete code cel
 When that wait expires during evaluation, the call drains output produced so far, appends the newline-prefixed banner `\n[running]`, and leaves the computation running; call `send` without a code field to poll again.
 If an established worker fails, the same call uses its remaining wait for one automatic replacement attempt.
 When that wait expires during replacement startup, the response ends with `[worker starting]`; later polls report the same state until the worker reports ready, then return startup output followed by `[idle]`.
-After a worker reports ready, the server continuously consumes its sideband, standard output, and standard error.
+On macOS, the server remains outside the sandbox and starts one worker relay inside it for each worker generation.
+The relay starts the worker inside the same sandbox, creates its unchanged sideband and standard streams there, and forwards ordered JSONL events to the server over its own standard output.
+Only the relay's fd 0/1/2 cross the server/sandbox boundary; relay standard error passes through outside the protocol and is normally empty.
+Worker standard output and standard error are base64-encoded in that private stream, so arbitrary bytes cannot corrupt its JSONL framing.
+After a worker reports ready, the server continuously consumes the relay event stream containing its sideband, standard output, and standard error activity.
 With no evaluation active, an empty `send` immediately drains the output collected so far and returns it followed by `\n[idle]`, or `\n[stdin needed]` when an idle callback has an outstanding console read.
 It sends no worker command, does not wait for idle callbacks to finish, and is not delayed by `timeout_ms`.
 Output that reaches the server after that snapshot remains pending for a later response.
@@ -50,7 +54,7 @@ A call may also supply exact standard-input text with a code cell, during an eva
 { "r": "readline('name> ')", "stdin": "Ada\n" }
 ```
 
-The server sends the cell first, then queues the string's UTF-8 bytes to worker fd 0 without inspecting or echoing them, adding a newline, imposing a size limit, or waiting for an input request.
+The server sends the cell first, then asks the relay to queue the string's UTF-8 bytes to worker fd 0 without inspecting or echoing them, adding a newline, imposing a size limit, or waiting for an input request.
 A stdin-only call while idle lazily starts the worker when needed, queues the bytes, and immediately returns the current output snapshot.
 Queuing bytes does not acknowledge that a callback consumed them, so that response may still end with `\n[stdin needed]`; a later empty call observes an `input_received` frame and returns `\n[idle]`.
 Every `input_requested` event adds a server-owned record such as `[input requested: "name> "]`; the prompt is encoded as a JSON string so spaces and escaped characters remain explicit.
@@ -134,7 +138,7 @@ An active host resolver or live worker can be sent an interrupt:
 { "action": "interrupt" }
 ```
 
-The call requests `SIGINT` for an active host resolver process group, or otherwise sends it to the live worker, and returns `[interrupt sent]` after the resolver accepts the request or the worker signal succeeds, without waiting for the resolver or evaluation to finish.
+The call requests `SIGINT` for an active host resolver process group, or otherwise asks the relay to send it to the live worker, and returns `[interrupt sent]` after the resolver accepts the request or the relay reports that the worker signal succeeded, without waiting for the resolver or evaluation to finish.
 It does not start a process; when neither target exists, it returns `worker is not running`.
 A resolver signal error is returned by both the interrupt and resolution calls; an interrupted resolver otherwise reports its ordinary resolution failure.
 A worker signal is not assigned to a cell: an idle signal is consumed at the next managed boundary, and a signal during R, reticulate Python, or DuckDB is handled by that runtime.
@@ -165,9 +169,11 @@ A resolution failure leaves the current worker, its in-memory state, and its ret
 Restart returns `[idle]` after the replacement reports ready.
 It loses all in-memory R, Python, SQL, debugger, and unread-stdin state.
 The implicit session exists for the server lifetime, so restart starts its first worker if none exists yet.
-The server closes worker stdin and sends the sideband shutdown message, then force-stops the worker process group and reaps the direct sandbox process if that process has not exited after one second.
-Once the direct process has stopped, it cancels the sideband reader so an incomplete frame cannot hold an active operation open.
-It then waits for any active evaluation or preparation owner, cancels the stdin writer and output readers, and joins them before reporting that the worker stopped or launching a replacement.
+Internally, the server gives the relay the time remaining in the existing one-second worker-shutdown period.
+The relay closes worker stdin, sends the unchanged sideband shutdown message, and, if needed at the deadline, kills the direct worker, stops the other members still in its process group, reaps the worker, and flushes the generation's final events.
+When the server observes the relay's acceptance before the original deadline, it permits up to two additional seconds for that retirement work without extending the worker deadline.
+It then closes the complete sandbox process-group lifetime and reaps the relay even when it already exited; the same outer path is the fail-safe if the relay does not accept shutdown or stalls.
+It then waits for any active evaluation or preparation owner and joins the relay transport tasks before reporting that the worker stopped or launching a replacement.
 The replacement generation is marked ready after its `ready` frame and before callback dispatch starts.
 Code and idle stdin remain associated with the worker that admitted them and cannot run in the replacement.
 Without a waiting `send`, the restart response includes retained output from the old worker, `[active evaluation stopped by session restart request]` when restart interrupts an unfinished cell, `[worker stopped: in-memory state lost]` when restart retires a ready worker, `[starting new worker]`, startup output, and finally `[idle]`, in that order.
@@ -175,7 +181,7 @@ If a `send` is waiting on the interrupted cell, that call receives the old worke
 The server writes that `send` reply before starting the replacement or returning the restart response.
 The restart response contains `[active evaluation stopped by session restart request]`, its own stopped notice when it retires a ready worker, `[starting new worker]`, replacement startup output, and `[idle]` without repeating the old worker's output.
 Idle callbacks do not create a waiting `send`; continuous collection leaves their output pending for the restart response before the worker is retired.
-On macOS, the default R and DuckDB extension preflights and, when required, the managed-Python preflight happen during `serve` startup; a successful `prepare` extends those initial selections before the first nonempty stdin submission or evaluation lazily starts the sandboxed embedded R worker.
+On macOS, the default R and DuckDB extension preflights and, when required, the managed-Python preflight happen during `serve` startup; a successful `prepare` extends those initial selections before the first nonempty stdin submission or evaluation lazily starts the sandboxed relay and embedded R worker.
 Later calls reuse the same global R state, reticulate Python interpreter, and in-memory DuckDB catalog.
 An infrastructure or protocol failure stops that worker and discards its in-memory R, Python, and SQL state.
 The failed `send` includes retained worker output, the specific bracketed error, and `[worker stopped: in-memory state lost]`, then emits `[starting new worker]` and makes one replacement attempt within the same deadline.
@@ -262,9 +268,9 @@ Immediately before every R, Python, or SQL cell, the worker gives R's registered
 It gives them a second turn after a normal language outcome only if worker shutdown has not begun and the cell recorded no infrastructure failure.
 Shutdown or an infrastructure failure during the initial turn aborts the submitted cell; an infrastructure failure recorded by the cell skips the final turn.
 After either turn, a worker-stdin hangup marks shutdown before the worker can dispatch or complete the cell, including when a callback reads fd 0 directly.
-Between cells, the worker uses `R_checkActivity()` to wait for either a registered R handler or the server sideband, without busy polling or a worker-owned fixed interval.
+Between cells, the worker uses `R_checkActivity()` to wait for either a registered R handler or its relay sideband, without busy polling or a worker-owned fixed interval.
 Callbacks registered by packages such as `later` can therefore run after a cell has returned.
-A generation-long server reader continuously publishes their console output and images, services nested managed-Python requests, and tracks console input state.
+A generation-long server reader consumes the relay stream, publishes forwarded console output and images, services nested managed-Python requests, and tracks console input state.
 It assembles newline-delimited frames incrementally so retirement can cancel a partially received frame and idle output is not bounded by sideband pipe capacity.
 An empty `send` snapshots the output already collected without signaling the worker or waiting for the callback.
 Before applying a live requirement preparation, the built-in worker gives registered R handlers one nonblocking turn, so a callback already ready when the command arrives is collected first.
@@ -332,7 +338,7 @@ For example, `dplyr::tbl(sql_connection(), "answers")` creates a lazy relation t
 These paths avoid an eager snapshot transfer, but do not promise end-to-end zero-copy behavior: DuckDB converts R values during execution, and collecting a lazy relation materializes its result in R.
 Automatic Python relation sharing and affected-row summaries do not exist yet.
 
-The server appends sideband text and images, worker standard-output and standard-error bytes, failures, and lifecycle notices to one pending output tape.
+The server appends relay-forwarded sideband text and images, worker standard-output and standard-error bytes, failures, and lifecycle notices to one pending output tape.
 Each successful `send` boundary drains the events available then; output produced while the worker is idle can therefore appear on a later idle poll before the server-owned `\n[idle]` banner.
 Standard-stream bytes remain undecoded until a response drains them, so incomplete UTF-8 can remain pending for a later response.
 Ordering among standard output, standard error, and sideband console or image output is best effort.
@@ -425,6 +431,7 @@ The `worker` suite drives `serve` through a transparent proxy, asserts the publi
 The `zod` suite uses the hidden `serve --worker PATH` development option to exercise the same protocol with an executable Python fixture.
 These built-in-worker and protocol suites run on macOS, where the sandbox policy is implemented.
 See [`docs/WORKER_PROTOCOL.md`](docs/WORKER_PROTOCOL.md) for the exact implemented launch and message contract.
+See [`docs/RELAY_PROTOCOL.md`](docs/RELAY_PROTOCOL.md) for the private server-to-relay transport and sandbox process boundary.
 See [`docs/TOOL_DESCRIPTIONS.md`](docs/TOOL_DESCRIPTIONS.md) for the exact descriptions registered for the MCP tools.
 
 ## License
