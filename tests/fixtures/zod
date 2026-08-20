@@ -189,6 +189,15 @@ def main() -> None:
     emit_output_before_r_preparation_failure = False
     queued_message: dict[str, Any] | None = None
 
+    def receive_resolver_response(expected_kind: str) -> dict[str, Any]:
+        nonlocal queued_message
+        while True:
+            response = json.loads(reader.readline())
+            if response["kind"] == expected_kind:
+                return response
+            assert queued_message is None, response
+            queued_message = response
+
     if os.environ.get("ZOD_BLOCK_SIDEBAND_WRITE") == "1":
         reader.read(1)
         Path(os.environ["TMPDIR"], "zod-sideband-blocked").touch()
@@ -609,11 +618,7 @@ def main() -> None:
                     },
                 ],
             )
-            response = json.loads(reader.readline())
-            if response["kind"] != "python_version_resolution_failed":
-                queued_message = response
-                response = json.loads(reader.readline())
-            assert response["kind"] == "python_version_resolution_failed", response
+            receive_resolver_response("python_version_resolution_failed")
             requirements = {"packages": ["numpy", "pandas", "idle-package"]}
             send(
                 writer,
@@ -626,8 +631,7 @@ def main() -> None:
                     },
                 },
             )
-            response = json.loads(reader.readline())
-            assert response["kind"] == "python_resolution_failed", response
+            receive_resolver_response("python_resolution_failed")
             continue
 
         if source == "report process group":

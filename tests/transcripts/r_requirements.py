@@ -13,8 +13,8 @@ from _support import (
     r_test_environment,
     release_worker_callback_gate,
     run_this_suite,
+    wait_for_idle_output,
 )
-
 
 PLATFORMS = {"darwin"}
 REQUIRED_COMMANDS = {"ir"}
@@ -240,19 +240,24 @@ def test_stops_live_preparation_for_idle_callback_input(binary: Path) -> Transcr
         """)
     client.send(r=r)
     release_worker_callback_gate(client, "idle input callback")
+    checkpoint_id = wait_for_idle_output(
+        client,
+        '[input requested: "later> "]\n[stdin needed]',
+        "idle callback input request",
+    )
     # Keep this distinct from the callback's retained requirement so activation
     # cannot turn the preparation into an idempotent server-side no-op.
     result = client.session(
         action="prepare",
         requirements={"python": ["py-yaml12>=0"]},
     )
+    client.transcript[-1]["id"] = checkpoint_id + 1
     assert result["isError"] is True, result
     assert result["content"][0]["text"] == (
-        '[input requested: "later> "]\n'
         '[idle R callback requested input "later> " during requirement '
         "preparation; collect callback input with send before preparing "
         "requirements]\n[worker stopped: in-memory state lost]"
-    )
+    ), result
     return client._finish()
 
 

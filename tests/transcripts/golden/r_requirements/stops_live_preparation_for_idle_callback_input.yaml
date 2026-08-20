@@ -48,6 +48,16 @@ result:
   isError: false
 ---
 id: 5
+send: {}
+result:
+  content:
+    - type: text
+      text: |-
+        [input requested: "later> "]
+        [stdin needed]
+  isError: false
+---
+id: 6
 session:
   action: prepare
   requirements:
@@ -57,7 +67,6 @@ result:
   content:
     - type: text
       text: |-
-        [input requested: "later> "]
         [idle R callback requested input "later> " during requirement preparation; collect callback input with send before preparing requirements]
         [worker stopped: in-memory state lost]
   isError: true

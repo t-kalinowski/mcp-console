@@ -209,6 +209,36 @@ def release_worker_callback_gate(
     return tuple(extra_paths)
 
 
+def wait_for_idle_output(
+    client: "McpClient",
+    expected: str,
+    description: str,
+    **send_arguments: Any,
+) -> int:
+    """Poll the public idle snapshot until a worker event reaches the server."""
+    deadline = time.monotonic() + 3
+    poll_start = len(client.transcript)
+    while True:
+        result = client.send(**send_arguments)
+        assert result.get("isError") is not True, result
+        content = result["content"]
+        assert len(content) == 1 and content[0]["type"] == "text", content
+        output = content[0]["text"]
+        if output == expected:
+            break
+        assert output == "\n[idle]", output
+        if time.monotonic() >= deadline:
+            raise AssertionError(f"{description} did not reach the server")
+        time.sleep(0.01)
+
+    polls = client.transcript[poll_start:]
+    first_id = polls[0]["id"]
+    final_poll = polls[-1]
+    final_poll["id"] = first_id
+    client.transcript[poll_start:] = [final_poll]
+    return first_id
+
+
 def run_this_suite(suite_path: str) -> None:
     suite = Path(suite_path).resolve()
     root = suite.parents[2]
