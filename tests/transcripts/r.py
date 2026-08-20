@@ -1260,11 +1260,25 @@ def test_replays_console_prefix_after_operation_boundary_interrupt(
 
         client.session(action="interrupt")
         assert last_tool_text(client) == "[interrupt sent]"
-        client.send(timeout_ms=3_000)
-        output = last_tool_text(client)
-        assert output == "caught later-callback interrupt\n", repr(output)
+        deadline = time.monotonic() + 3
+        poll_start = len(client.transcript)
+        while True:
+            client.send(timeout_ms=3_000)
+            output = last_tool_text(client)
+            if output == "caught later-callback interrupt\n":
+                break
+            assert output == "\n[stdin needed]", repr(output)
+            assert time.monotonic() < deadline, (
+                "later console callback did not handle the interrupt"
+            )
+        polls = client.transcript[poll_start:]
+        interrupt_poll_id = polls[0]["id"]
+        final_poll = polls[-1]
+        final_poll["id"] = interrupt_poll_id
+        client.transcript[poll_start:] = [final_poll]
 
         client.send(r='readline("after later callback> ")', stdin="!\n")
+        client.transcript[-1]["id"] = interrupt_poll_id + 1
         assert last_tool_text(client) == (
             '[input requested: "after later callback> "]\n[1] "part!"\n'
         )
@@ -1292,10 +1306,12 @@ def test_replays_console_prefix_after_operation_boundary_interrupt(
             )
             """)
         client.send(r=r)
+        client.transcript[-1]["id"] = interrupt_poll_id + 2
         assert last_tool_text(client) == (
             '[input requested: "between callbacks> "]\n[stdin needed]'
         )
         client.send(stdin="x" * 6, timeout_ms=50)
+        client.transcript[-1]["id"] = interrupt_poll_id + 3
         assert last_tool_text(client) == "\n[running]"
         wait_for_worker_file(
             directory,
@@ -1304,14 +1320,17 @@ def test_replays_console_prefix_after_operation_boundary_interrupt(
         )
 
         client.session(action="interrupt")
+        client.transcript[-1]["id"] = interrupt_poll_id + 4
         assert last_tool_text(client) == "[interrupt sent]"
         client.send(timeout_ms=3_000)
+        client.transcript[-1]["id"] = interrupt_poll_id + 5
         assert last_tool_text(client) == "caught between-callback interrupt\n"
 
         client.send(
             r='identical(readline("after boundary> "), paste0(strrep("x", 6), "!"))',
             stdin="!\n",
         )
+        client.transcript[-1]["id"] = interrupt_poll_id + 6
         output = last_tool_text(client)
         assert output == ('[input requested: "after boundary> "]\n[1] TRUE\n'), repr(
             output

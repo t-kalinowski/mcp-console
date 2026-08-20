@@ -1079,7 +1079,9 @@ def test_preserves_raw_output_before_malformed_sideband_failure(
 
     transcript, standard_error = client._finish_with_standard_error()
     diagnostics = standard_error.splitlines()
-    assert len(diagnostics) == 2, standard_error
+    # Relay stderr is diagnostic-only and can be cut off when the server's
+    # fail-safe stops a failed generation. The framed failure above is authoritative.
+    assert len(diagnostics) <= 2, standard_error
     assert all(
         diagnostic.startswith("worker sideband read failed: ")
         for diagnostic in diagnostics
