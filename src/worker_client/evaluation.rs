@@ -28,7 +28,7 @@ struct EvaluationState {
     restart_handoff: Option<Response>,
     #[cfg(target_os = "macos")]
     stdin: Option<super::platform::StdinSender>,
-    pending_stdin: Vec<u8>,
+    pending_stdin: String,
 }
 
 #[derive(Clone, Copy)]
@@ -95,7 +95,7 @@ impl Evaluation {
                 restart_handoff: None,
                 #[cfg(target_os = "macos")]
                 stdin: None,
-                pending_stdin: Vec::new(),
+                pending_stdin: String::new(),
             }),
             changed: tokio::sync::Notify::new(),
             transcript,
@@ -146,7 +146,7 @@ impl Evaluation {
         })
     }
 
-    /// Queues bytes and briefly defers any outstanding input report for its receipt.
+    /// Queues text and briefly defers any outstanding input report for its receipt.
     pub(super) fn submit_stdin(&self, stdin: String) -> Result<(), String> {
         let mut state = self
             .state
@@ -159,13 +159,12 @@ impl Evaluation {
         if let Some(report_at) = state.input_report_at.as_mut() {
             *report_at = Instant::now() + INPUT_REQUEST_GRACE;
         }
-        let bytes = stdin.into_bytes();
         #[cfg(target_os = "macos")]
         if let Some(writer) = &state.stdin {
-            writer.send(bytes)?;
+            writer.send(stdin)?;
             return Ok(());
         }
-        state.pending_stdin.extend(bytes);
+        state.pending_stdin.push_str(&stdin);
         Ok(())
     }
 

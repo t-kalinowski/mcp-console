@@ -20,6 +20,7 @@ Only the relay's standard input, standard output, and standard error cross the s
 Standard input and output carry the framed relay protocol described below.
 Relay standard error is inherited from the server and is not part of the protocol; it is normally empty and is reserved for fatal or infrastructure diagnostics.
 Runtime failures are also represented by a `fatal` event when relay stdout remains usable.
+The framed event is authoritative; stderr diagnostics are best effort because the server's outer fail-safe can terminate a failed relay before its final diagnostic is written.
 
 The relay creates the worker's two private sideband pipes and its standard-input, standard-output, and standard-error pipes after entering the sandbox.
 It passes the same sideband environment variables and fd-0/1/2 contract that the worker used before the relay was introduced.
@@ -35,11 +36,16 @@ Each direction is an ordered UTF-8 JSONL stream.
 One frame is one JSON object followed by `\n`, and each frame is flushed after serialization.
 A stream that closes midway through a frame is a transport error.
 
+The worker sideband is also assembled incrementally with cancellable reads.
+A dedicated thread cannot safely use a blocking `read_line()`: a worker descendant can retain the pipe after writing a partial frame, which would prevent the relay from joining that thread and flushing its final output and retirement events.
+Killing the relay to release the read would discard events already buffered inside it.
+
 Raw worker standard-output and standard-error chunks are read in chunks of at most 8 KiB and encoded with padded standard base64 in relay events.
 The relay forwards each available chunk immediately; it does not interpret those bytes, impose line buffering, or use a coalescing timer.
 The server decodes them back to bytes before applying its existing per-stream UTF-8 completion and MCP projection rules.
+Base64 is limited to these raw streams because they can contain invalid UTF-8 or split a UTF-8 code point across reads.
+Worker messages and stdin remain readable JSON strings.
 
-Every relay event carries a generation-local `sequence` number, beginning at zero and increasing by one.
 The relay uses one serializer for sideband, standard-output, standard-error, exit, and infrastructure events, so the server observes one ordered stream.
 This preserves order within each worker source but does not claim an operating-system chronology between independently read sources.
 
@@ -50,10 +56,10 @@ The server can send these frames:
 | Frame | Meaning |
 | --- | --- |
 | `{"kind":"worker_message","message":{...}}` | Forward one unchanged server-to-worker sideband message. |
-| `{"kind":"stdin","data":"..."}` | Decode base64 and append the exact bytes to worker fd 0. |
-| `{"kind":"interrupt","request_id":1}` | Send `SIGINT` to the live worker and return the result with the same request ID. |
+| `{"kind":"stdin","data":"..."}` | Encode the JSON string as UTF-8 and append the exact bytes to worker fd 0. |
+| `{"kind":"interrupt","request_id":1}` | Attempt `SIGINT` delivery to the live worker and report the system-call result with the same request ID. |
 | `{"kind":"shutdown","grace_millis":1000}` | Close worker stdin, send the unchanged worker `shutdown` message, and stop the worker within the supplied grace period. |
-| `{"kind":"acknowledge","sequence":7}` | Release a relay ordering barrier for the named event. |
+| `{"kind":"terminal_committed"}` | Tell the relay that the server committed the one pending operation terminal. |
 
 Worker messages retain their existing nested JSON shape.
 For example, an evaluation is forwarded as:
@@ -70,30 +76,22 @@ The relay writes accepted payloads in command order without adding bytes.
 
 ## Relay events
 
-The relay can emit these frames:
+The relay can emit these frames directly:
 
-| `payload` object | Meaning |
+| Frame | Meaning |
 | --- | --- |
 | `{"kind":"worker_message","message":{...}}` | Forward one unchanged worker-to-server sideband message. |
-| `{"kind":"stdout","data":"..."}` | One base64-encoded raw fd-1 chunk. |
+| `{"kind":"stdout","data":"aGVsbG8K"}` | One base64-encoded raw fd-1 chunk. |
 | `{"kind":"stderr","data":"..."}` | One base64-encoded raw fd-2 chunk. |
 | `{"kind":"stream_closed","stream":"stdout"}` | The worker stdout reader reached EOF. |
 | `{"kind":"stream_closed","stream":"stderr"}` | The worker stderr reader reached EOF. |
 | `{"kind":"worker_sideband_closed"}` | The worker-to-relay sideband reached EOF. |
-| `{"kind":"interrupt_result","request_id":1}` | The requested worker signal succeeded. |
-| `{"kind":"interrupt_result","request_id":1,"error":"..."}` | The requested worker signal failed. |
+| `{"kind":"interrupt_result","request_id":1}` | The `kill(SIGINT)` system call succeeded. |
+| `{"kind":"interrupt_result","request_id":1,"error":"..."}` | The `kill(SIGINT)` system call failed. |
 | `{"kind":"shutdown_started"}` | The relay accepted the server's registered shutdown request. |
-| `{"kind":"worker_exited","status":{"code":0}}` | The direct worker exited normally with the given code. |
-| `{"kind":"worker_exited","status":{"signal":9}}` | The direct worker exited because of the given signal. |
+| `{"kind":"worker_exited"}` | The direct worker was reaped and relay-owned cleanup completed. |
 | `{"kind":"fatal","message":"..."}` | Relay infrastructure or protocol failure while relay stdout is still usable. |
 
-The full event wraps that object under `payload`, for example:
-
-```json
-{ "sequence": 3, "payload": { "kind": "stdout", "data": "aGVsbG8K" } }
-```
-
-The server requires the sequence to be exactly `0, 1, 2, ...` for the generation.
 Each output stream closes exactly once and cannot carry data afterward, and the worker sideband closes exactly once.
 `worker_exited` is the final event.
 Relay stdout EOF is a clean retirement only after both output streams, the worker sideband, and the worker process have closed in that form.
@@ -103,26 +101,28 @@ Relay stdout EOF is a clean retirement only after both output streams, the worke
 The server must commit operation-terminal state before the relay can publish sideband activity that logically follows an operation-terminal worker message.
 Before the relay publishes any `worker_message`, it checkpoints both raw-output readers and publishes bytes already available from fd 1 and fd 2.
 This prevents a worker message that the server rejects from causing retirement before preceding raw output reaches the server.
-For each `completed`, `r_prepared`, `r_preparation_failed`, `python_prepared`, or `python_preparation_failed` message, the relay publishes the event and waits for an `acknowledge` command naming its sequence before it reads another worker sideband frame.
+For each `completed`, `r_prepared`, `r_preparation_failed`, `python_prepared`, or `python_preparation_failed` message, the relay publishes the event and waits for `terminal_committed` before it reads another worker sideband frame.
 The standard-output and standard-error readers continue draining while that sideband barrier is held.
 
-The initial `ready` message is not acknowledgment-gated; the server registers the generation as ready before starting its continuous relay dispatcher.
-`ready`, `resolve_python`, and `resolve_python_version` use the common raw-output checkpoint but are not acknowledgment-gated.
+The initial `ready` message is not terminal-commit-gated; the server registers the generation as ready before starting its continuous relay dispatcher.
+`ready`, `resolve_python`, and `resolve_python_version` use the common raw-output checkpoint but are not terminal-commit-gated.
 Before publishing `worker_sideband_closed`, the relay also checkpoints both raw-output readers, so worker bytes accepted before sideband EOF cannot be overtaken by the failure that EOF causes on the server.
-The server acknowledges an evaluation or preparation terminal only after the operation owner has committed its terminal state and output checkpoint.
-While the relay is waiting at that barrier, an acknowledgment for any sequence other than the expected one is a protocol error.
+The server sends `terminal_committed` only after the operation owner has committed its terminal state and output checkpoint.
+This preserves the old direct-reader behavior: a malformed frame, sideband closure, or idle activity following a valid terminal cannot retire or advance the generation before the terminal owner retains its result.
+Only one terminal can be pending because the relay stops reading worker frames at this barrier.
+A `terminal_committed` command when no terminal is pending, including a duplicate command, is a protocol error.
 
 ## Interruption and shutdown
 
 Host resolvers remain server processes with their existing independent process groups.
 A session interrupt targets an active host resolver first.
-Otherwise the server sends an `interrupt` command to the relay, which signals the live worker and returns `interrupt_result`; the request ID binds the response to that worker generation.
+Otherwise the server sends an `interrupt` command to the relay, which calls `kill(worker_pid, SIGINT)` and returns `interrupt_result`; the request ID matches that result to the caller.
+Success means that the operating system accepted signal delivery, not that the worker has already handled the signal or stopped its current operation.
 
 For restart or server shutdown, the server registers one relay-shutdown request and queues one `shutdown` command against the existing absolute one-second worker deadline.
 The sole relay-command writer computes `grace_millis` from the time remaining when it serializes that command, so earlier queued writes cannot extend the worker deadline.
 
-After parsing the command, the relay assigns and flushes a normal sequence number for `shutdown_started` before it begins worker shutdown.
-The event is not acknowledgment-gated.
+After parsing the command, the relay flushes `shutdown_started` before it begins worker shutdown.
 It has no request ID because each generation permits only the one shutdown request that the server registers before enqueueing the command.
 The server rejects it when no shutdown request is registered or when the relay sends it twice.
 If the server observes it by the original worker deadline, the event records timely relay acceptance and permits up to two additional seconds after that deadline for relay retirement.
@@ -141,9 +141,8 @@ That outer cleanup is also the fail-safe when the relay does not accept shutdown
 The sandbox owner records that retirement before releasing the process-group identity; concurrent or repeated retirement calls return the stored result and never signal the retired relay PID or process group again.
 Descendants that leave the group remain unsupported.
 
-Malformed relay JSON, invalid base64, an unexpected command or acknowledgment, a sequence discontinuity, a fatal event, or unexpected relay EOF fails the worker transport.
+Malformed relay JSON, invalid raw-output base64, an unexpected command or terminal commit, a fatal event, or unexpected relay EOF fails the worker transport.
 Worker-sideband EOF has its own relay event; other worker-sideband read failures become fatal relay events.
 For a relay-owned protocol or I/O failure, the relay requests worker termination immediately but defers the `fatal` event until its worker transports have stopped and both raw-output readers have drained and joined.
 Raw output accepted before the failure therefore precedes `fatal` in the outer stream regardless of which relay task detected the failure.
-The server preserves a fatal message as the worker failure, stops publishing later sideband messages, and continues draining the relay stream through its output-close and worker-exit events before retiring the generation.
-It likewise keeps draining and validating relay events if the local worker-sideband publisher has already closed during server-side retirement.
+The server preserves a fatal message as the worker failure, stops dispatching later worker messages, and continues draining the relay stream through its output-close and worker-exit events before retiring the generation.

@@ -112,7 +112,7 @@ An idle worker that implements R preparation can prepare DuckDB extensions on th
 The DuckDB resolver uses the existing cancellable resolver process-group lifecycle and adds no DuckDB-specific worker sideband messages; an accompanying R candidate still uses `prepare_r`.
 A successful Python activation or explicit materialization is retained immediately.
 Before forwarding any worker message or worker-sideband closure, the relay checkpoints both raw-output readers and first publishes bytes already available from fd 1 and fd 2, so a message that the server rejects cannot cause retirement before preceding raw output arrives.
-After any operation terminal, the relay's worker-sideband reader waits for the server operation owner to commit terminal state and acknowledge that terminal before reading the next worker frame, so later idle activity cannot overtake that retention; raw stream readers continue draining during the barrier.
+After any operation terminal, the relay's worker-sideband reader waits for the server operation owner to commit terminal state and send `terminal_committed` before reading the next worker frame, so later idle activity cannot overtake that retention; raw stream readers continue draining during the barrier.
 In a mixed live R, Python, and DuckDB preparation, that activation can remain retained even if a later R update fails.
 The R and DuckDB configurations are retained only after the complete operation succeeds.
 An earlier DuckDB install from a failed multi-extension request may remain in the host cache without entering the retained extension set.
@@ -130,7 +130,7 @@ The implicit session exists for the server lifetime, so restart starts its first
 The replacement generation becomes lifecycle ready after its `ready` frame and before its continuous dispatcher starts, so immediate resolver and activation callbacks observe the new generation as ready.
 Restart completion is scoped to that generation, so a completed restart cannot mark a later overlapping restart ready.
 Restart registers one relay-shutdown request and sends the relay a shutdown command with the time remaining in the existing one-second worker deadline.
-The relay flushes a sequenced `shutdown_started` event before it begins worker shutdown; if the server observes that single acceptance event by the original deadline, it allows up to two additional seconds after the deadline for relay retirement without extending the worker grace.
+The relay flushes a `shutdown_started` event before it begins worker shutdown; if the server observes that single acceptance event by the original deadline, it allows up to two additional seconds after the deadline for relay retirement without extending the worker grace.
 The relay queues worker-stdin closure and the unchanged sideband shutdown message without waiting behind an active cell.
 At the worker deadline it first kills the direct worker if needed, then stops every other live process whose current process group is exactly the relay's group while remaining alive as group leader, reaps the direct worker, finishes the worker stream boundaries, and flushes its final events before exiting.
 Clean relay-stdin EOF performs the same worker shutdown with a new one-second grace and no `shutdown_started` event; EOF midway through a frame is a transport failure.

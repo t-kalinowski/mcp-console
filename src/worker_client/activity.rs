@@ -8,7 +8,19 @@ use super::output::OutputCheckpoint;
 use super::{Evaluation, OutputTape, TerminalCommit, WorkerCallbacks};
 
 #[derive(Clone)]
+/// Server-side operation state and dispatcher for one worker generation.
 pub(super) struct Activity(Arc<Mutex<ActivityState>>);
+
+pub(super) enum ActivityEvent {
+    WorkerMessage(WorkerMessage),
+    Stdout(Vec<u8>),
+    Stderr(Vec<u8>),
+    StdoutClosed,
+    StderrClosed,
+    WorkerSidebandClosed,
+    Failure(String),
+    RelayClosed,
+}
 
 struct ActivityState {
     operation: Option<Operation>,
@@ -35,7 +47,7 @@ enum Route {
 
 struct TerminalControl<'a> {
     cancelled: &'a std::io::PipeReader,
-    acknowledge: &'a dyn Fn() -> Result<(), String>,
+    commands: &'a super::platform::WorkerCommandSender,
 }
 
 pub(super) enum OperationResult {
@@ -57,80 +69,125 @@ impl Activity {
 
     pub(super) fn start(
         &self,
-        mut reader: crate::sideband::Reader,
-        writer: crate::sideband::Writer,
+        events: mpsc::Receiver<ActivityEvent>,
+        commands: super::platform::WorkerCommandSender,
         output: OutputTape,
         callbacks: WorkerCallbacks,
         cancelled: std::io::PipeReader,
-        acknowledge_terminal: impl Fn() -> Result<(), String> + Send + 'static,
     ) -> thread::JoinHandle<()> {
         let activity = self.clone();
         thread::spawn(move || {
             let mut python_candidates = Vec::new();
+            let stdout = output.direct_stdout();
+            let stderr = output.direct_stderr();
+            let mut stdout_closed = false;
+            let mut stderr_closed = false;
+            let mut dispatch_worker_messages = true;
+            let mut relay_closed = false;
             let terminal = TerminalControl {
                 cancelled: &cancelled,
-                acknowledge: &acknowledge_terminal,
+                commands: &commands,
             };
-            loop {
-                while let Some(message) = match reader.receive_buffered() {
-                    Ok(message) => message,
-                    Err(error) => {
-                        activity.fail(format!("worker sideband read failed: {error}"));
-                        return;
-                    }
-                } {
-                    let keep_reading = match handle_message(
-                        message,
-                        &activity,
-                        &writer,
-                        &output,
-                        &callbacks,
-                        &mut python_candidates,
-                        &terminal,
-                    ) {
-                        Ok(keep_reading) => keep_reading,
-                        Err(error) => {
-                            activity.fail(error);
-                            return;
+            while let Ok(event) = events.recv() {
+                let keep_reading = match event {
+                    ActivityEvent::WorkerMessage(message) => {
+                        if !dispatch_worker_messages {
+                            continue;
                         }
-                    };
-                    if !keep_reading {
-                        return;
+                        match handle_message(
+                            message,
+                            &activity,
+                            &commands,
+                            &output,
+                            &callbacks,
+                            &mut python_candidates,
+                            &terminal,
+                        ) {
+                            Ok(keep_reading) => keep_reading,
+                            Err(error) => {
+                                activity.fail(error);
+                                false
+                            }
+                        }
                     }
-                }
-
-                let events = match super::platform::wait_for_worker_io(
-                    reader.as_raw_fd(),
-                    libc::POLLIN,
-                    &cancelled,
-                ) {
-                    Ok(events) => events,
-                    Err(error) => {
-                        activity.fail(format!("worker sideband read failed: {error}"));
-                        return;
+                    ActivityEvent::Stdout(data) => {
+                        stdout.push(&data);
+                        true
+                    }
+                    ActivityEvent::Stderr(data) => {
+                        stderr.push(&data);
+                        true
+                    }
+                    ActivityEvent::StdoutClosed => {
+                        stdout.close();
+                        stdout_closed = true;
+                        true
+                    }
+                    ActivityEvent::StderrClosed => {
+                        stderr.close();
+                        stderr_closed = true;
+                        true
+                    }
+                    ActivityEvent::WorkerSidebandClosed => {
+                        activity.fail(
+                            "worker sideband read failed: worker sideband closed".to_string(),
+                        );
+                        false
+                    }
+                    ActivityEvent::Failure(error) => {
+                        activity.fail(error);
+                        false
+                    }
+                    ActivityEvent::RelayClosed => {
+                        relay_closed = true;
+                        break;
                     }
                 };
-                if events.cancelled {
-                    activity.fail("worker sideband reader cancelled".to_string());
-                    return;
-                }
-                if !events.ready {
-                    continue;
-                }
-                match reader.read_chunk() {
-                    Ok(()) => {}
-                    Err(error)
-                        if matches!(
-                            error.kind(),
-                            std::io::ErrorKind::Interrupted | std::io::ErrorKind::WouldBlock
-                        ) => {}
-                    Err(error) => {
-                        activity.fail(format!("worker sideband read failed: {error}"));
-                        return;
-                    }
+                if !keep_reading {
+                    dispatch_worker_messages = false;
                 }
             }
+            if !stdout_closed {
+                stdout.close();
+            }
+            if !stderr_closed {
+                stderr.close();
+            }
+            if !relay_closed {
+                activity.fail("worker activity channel closed".to_string());
+            }
         })
+    }
+
+    pub(super) fn drain_output(events: mpsc::Receiver<ActivityEvent>, output: OutputTape) {
+        let stdout = output.direct_stdout();
+        let stderr = output.direct_stderr();
+        let mut stdout_closed = false;
+        let mut stderr_closed = false;
+        for event in events {
+            match event {
+                ActivityEvent::Stdout(data) => stdout.push(&data),
+                ActivityEvent::Stderr(data) => stderr.push(&data),
+                ActivityEvent::StdoutClosed => {
+                    stdout.close();
+                    stdout_closed = true;
+                }
+                ActivityEvent::StderrClosed => {
+                    stderr.close();
+                    stderr_closed = true;
+                }
+                ActivityEvent::RelayClosed => break,
+                ActivityEvent::WorkerMessage(_)
+                | ActivityEvent::WorkerSidebandClosed
+                | ActivityEvent::Failure(_) => {}
+            }
+        }
+        if !stdout_closed {
+            stdout.close();
+        }
+        if !stderr_closed {
+            stderr.close();
+        }
     }
 
     pub(super) fn begin_cell(
@@ -369,7 +426,7 @@ impl ActivityState {
 fn handle_message(
     message: WorkerMessage,
     activity: &Activity,
-    writer: &crate::sideband::Writer,
+    commands: &super::platform::WorkerCommandSender,
     output: &OutputTape,
     callbacks: &WorkerCallbacks,
     python_candidates: &mut Vec<crate::resolver::ManagedPython>,
@@ -419,20 +476,14 @@ fn handle_message(
                 }
                 Err(message) => ServerMessage::PythonResolutionFailed { message },
             };
-            writer
-                .send(&response)
-                .map_err(|error| format!("worker sideband write failed: {error}"))
-                .map(|()| true)
+            commands.send(response).map(|()| true)
         }
         WorkerMessage::ResolvePythonVersion { request } => {
             let response = match callbacks.resolve_python_version(request) {
                 Ok(version) => ServerMessage::PythonVersionResolved { version },
                 Err(message) => ServerMessage::PythonVersionResolutionFailed { message },
             };
-            writer
-                .send(&response)
-                .map_err(|error| format!("worker sideband write failed: {error}"))
-                .map(|()| true)
+            commands.send(response).map(|()| true)
         }
         WorkerMessage::PythonActivated { requirements } => callbacks
             .activate_python(requirements, python_candidates)
@@ -445,7 +496,7 @@ fn handle_message(
             let keep_reading =
                 activity.complete(message, python_candidates, output, terminal.cancelled)?;
             if keep_reading {
-                (terminal.acknowledge)()?;
+                terminal.commands.terminal_committed()?;
             }
             Ok(keep_reading)
         }

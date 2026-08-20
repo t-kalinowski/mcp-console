@@ -19,24 +19,16 @@ pub(crate) struct EncodedBytes(String);
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum RelayCommand {
     WorkerMessage { message: ServerMessage },
-    Stdin { data: EncodedBytes },
+    Stdin { data: String },
     Interrupt { request_id: u64 },
     Shutdown { grace_millis: u64 },
-    Acknowledge { sequence: u64 },
-}
-
-#[cfg(target_os = "macos")]
-#[derive(Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct RelayEvent {
-    pub(crate) sequence: u64,
-    pub(crate) payload: RelayEventPayload,
+    TerminalCommitted,
 }
 
 #[cfg(target_os = "macos")]
 #[derive(Deserialize, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-pub(crate) enum RelayEventPayload {
+pub(crate) enum RelayEvent {
     WorkerMessage {
         message: WorkerMessage,
     },
@@ -56,9 +48,7 @@ pub(crate) enum RelayEventPayload {
         error: Option<String>,
     },
     ShutdownStarted,
-    WorkerExited {
-        status: RelayExitStatus,
-    },
+    WorkerExited,
     Fatal {
         message: String,
     },
@@ -70,16 +60,6 @@ pub(crate) enum RelayEventPayload {
 pub(crate) enum RelayStream {
     Stdout,
     Stderr,
-}
-
-#[cfg(target_os = "macos")]
-#[derive(Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct RelayExitStatus {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) code: Option<i32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) signal: Option<i32>,
 }
 
 #[cfg(target_os = "macos")]

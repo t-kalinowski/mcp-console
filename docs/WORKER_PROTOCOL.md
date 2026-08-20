@@ -294,7 +294,7 @@ worker -> server  {"kind":"completed"}
 ```
 
 No sideband interrupt command, poll, synchronization, or acknowledgment frame exists.
-The outer relay protocol acknowledges operation-terminal events only to preserve server commit ordering; that acknowledgment is not exposed to the worker.
+The outer relay protocol uses `terminal_committed` only to preserve server commit ordering; that command is not exposed to the worker.
 A `SIGINT` that reaches the process while it is idle remains pending until the next managed boundary; the entry check consumes it and the next cell proceeds.
 A signal that arrives after a cell's final check is handled at the same later boundary.
 
@@ -488,7 +488,7 @@ Between-cell callbacks do not create a separate server-side operation state.
 The generation-long relay and server readers publish their frames immediately.
 An evaluation's `completed` frame records a tape checkpoint; callback frames accepted after that checkpoint remain pending for the next response.
 Before forwarding any worker message, the relay checkpoints both raw-output readers and first publishes bytes already available from fd 1 and fd 2, so even a message that the server rejects cannot overtake preceding raw output.
-After any operation terminal, the relay's worker-sideband reader waits for the server operation owner to commit its terminal state and acknowledge that event before reading the next worker-sideband frame.
+After any operation terminal, the relay's worker-sideband reader waits for the server operation owner to commit its terminal state and send `terminal_committed` before reading the next worker-sideband frame.
 The raw-output readers continue draining during that barrier.
 Later idle frames therefore cannot overtake environment retention or evaluation completion.
 
@@ -535,7 +535,7 @@ An empty `send` that discovers an idle failure stops the worker and reports the 
 Sideband content received before that failure is retained and precedes the tool error.
 Before publishing worker-sideband closure, the relay checkpoints both standard-stream readers, so bytes accepted before sideband EOF precede the failure it causes.
 For a relay-owned protocol or I/O failure, it stops the worker and joins the worker transports before publishing `fatal`, so the same ordering applies regardless of which relay task detected the failure.
-Worker retirement waits for the relay's standard-stream readers and final events, and the server keeps draining relay events if its local worker-sideband publisher has already closed, so all accepted standard-stream text precedes the tool error and stopped notice.
+Worker retirement waits for the relay's standard-stream readers and final events, and the server keeps draining relay events after its activity dispatcher closes, so all accepted standard-stream text precedes the tool error and stopped notice.
 If either output path contributed text, the server starts the bracketed error on a new line.
 R parse and evaluation errors, Python exceptions, and DuckDB errors are not sideband failures: the built-in worker sends them as output followed by `completed` and remains reusable.
 Any earlier `python_activated` event has already updated retained state.
@@ -545,7 +545,7 @@ Any earlier `python_activated` event has already updated retained state.
 The server begins shutdown when MCP input closes or RMCP releases its transport.
 At that moment it fixes a deadline one second in the future and closes the client lifecycle.
 It registers one shutdown request and sends the relay a `shutdown` command containing the milliseconds remaining before that deadline.
-The relay emits and flushes the sequenced outer `shutdown_started` event after it accepts that command and before it begins worker shutdown.
+The relay emits and flushes the outer `shutdown_started` event after it accepts that command and before it begins worker shutdown.
 If the server observes the event by the original deadline, it allows the relay up to two additional seconds after that deadline to finish retirement; this allowance does not extend the worker's grace period.
 The relay then attempts to send the unchanged worker-sideband frame:
 
@@ -563,7 +563,7 @@ While waiting, the server observes relay exit without reaping it, so the relay P
 After the original deadline, and after the additional two-second allowance only when shutdown was accepted in time, the outer sandbox owner always closes the complete sandbox process-group lifetime and reaps the relay.
 The same path runs when the relay already exited and is the fail-safe when it does not accept shutdown or stalls.
 The sandbox owner records the retirement result before the relay PID can be reused; concurrent or repeated cleanup returns that result without signaling the retired PID or process group again.
-Stopping the relay interrupts partial worker-sideband assembly and terminal acknowledgment waits.
+Stopping the relay interrupts partial worker-sideband assembly and terminal-commit waits.
 Server-side Activity cancellation releases an operation owner that must return the worker lock, while relay EOF releases any partial outer-frame read.
 Shutdown then force-stops any resolver process group that was active for explicit preparation or worker-triggered Python resolution and reaps its direct process.
 After both stop paths complete, shutdown joins the relay command and event tasks.

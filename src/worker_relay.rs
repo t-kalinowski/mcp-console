@@ -12,10 +12,8 @@ pub(crate) fn run(command_line: &[OsString]) -> Result<(), String> {
 
 #[cfg(target_os = "macos")]
 mod platform {
-    use std::collections::VecDeque;
     use std::io::{Read, Write};
     use std::os::fd::{AsRawFd, RawFd};
-    use std::os::unix::process::ExitStatusExt as _;
     use std::process::{Child, Command, ExitStatus, Stdio};
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Condvar, Mutex, mpsc};
@@ -24,10 +22,7 @@ mod platform {
 
     use wait_timeout::ChildExt as _;
 
-    use crate::relay_protocol::{
-        EncodedBytes, JsonlWriter, RelayCommand, RelayEvent, RelayEventPayload, RelayExitStatus,
-        RelayStream,
-    };
+    use crate::relay_protocol::{EncodedBytes, JsonlWriter, RelayCommand, RelayEvent, RelayStream};
     use crate::worker_protocol::{ServerMessage, WorkerMessage};
 
     const READ_CHUNK_SIZE: usize = 8 * 1024;
@@ -109,11 +104,11 @@ mod platform {
             events.clone(),
             failures.clone(),
         )?;
-        let acknowledgments = Acknowledgments::default();
+        let terminal_commits = TerminalCommitGate::default();
         let sideband_reader = SidebandReader::start(
             sideband_reader,
             events.clone(),
-            acknowledgments.clone(),
+            terminal_commits.clone(),
             stdout.checkpoint_handle(),
             stderr.checkpoint_handle(),
             failures.clone(),
@@ -122,7 +117,7 @@ mod platform {
         let command_reader = CommandReader::start(
             sideband_writer.sender(),
             stdin.sender(),
-            acknowledgments.clone(),
+            terminal_commits.clone(),
             events.clone(),
             controls.clone(),
             failures.clone(),
@@ -139,7 +134,7 @@ mod platform {
         stopping.store(true, Ordering::SeqCst);
         let mut finish_error = None;
         collect_error(&mut finish_error, command_reader.cancel_and_join());
-        acknowledgments.cancel();
+        terminal_commits.cancel();
         collect_error(&mut finish_error, stdin.cancel_and_join());
         collect_error(&mut finish_error, sideband_writer.cancel_and_join());
         collect_error(&mut finish_error, sideband_reader.cancel_and_join());
@@ -149,23 +144,15 @@ mod platform {
         if let Some(message) = failures.take() {
             collect_error(
                 &mut finish_error,
-                events.send(RelayEventPayload::Fatal { message }),
+                events.send(RelayEvent::Fatal { message }),
             );
         }
         collect_error(
             &mut finish_error,
-            events.send(RelayEventPayload::WorkerSidebandClosed),
+            events.send(RelayEvent::WorkerSidebandClosed),
         );
-        if let Some(status) = status {
-            collect_error(
-                &mut finish_error,
-                events.send(RelayEventPayload::WorkerExited {
-                    status: RelayExitStatus {
-                        code: status.code(),
-                        signal: status.signal(),
-                    },
-                }),
-            );
+        if status.is_some() {
+            collect_error(&mut finish_error, events.send(RelayEvent::WorkerExited));
         }
         collect_error(&mut finish_error, events.finish());
         match event_writer.join() {
@@ -195,7 +182,7 @@ mod platform {
         event_writer: thread::JoinHandle<Result<(), String>>,
         error: String,
     ) -> Result<(), String> {
-        let _ = events.send_confirmed(RelayEventPayload::Fatal {
+        let _ = events.send_confirmed(RelayEvent::Fatal {
             message: error.clone(),
         });
         let _ = events.finish();
@@ -215,7 +202,7 @@ mod platform {
                 Ok(Control::Interrupt { request_id }) => {
                     let error = interrupt_worker(child).err();
                     if events
-                        .send(RelayEventPayload::InterruptResult { request_id, error })
+                        .send(RelayEvent::InterruptResult { request_id, error })
                         .is_err()
                     {
                         return force_stop_worker(child, "relay event writer stopped".to_string());
@@ -352,8 +339,8 @@ mod platform {
 
     enum EventRequest {
         Send {
-            payload: RelayEventPayload,
-            confirmation: Option<mpsc::SyncSender<Result<u64, String>>>,
+            event: RelayEvent,
+            confirmation: Option<mpsc::SyncSender<Result<(), String>>>,
         },
         Finish,
     }
@@ -365,23 +352,20 @@ mod platform {
         let thread = thread::spawn(move || {
             let stdout = std::io::stdout();
             let mut writer = JsonlWriter::new(stdout.lock());
-            let mut sequence = 0_u64;
             for request in receiver {
                 match request {
                     EventRequest::Send {
-                        payload,
+                        event,
                         confirmation,
                     } => {
-                        let event = RelayEvent { sequence, payload };
                         let result = writer
                             .send(&event)
-                            .map(|()| sequence)
                             .map_err(|error| format!("relay stdout write failed: {error}"));
                         if let Some(confirmation) = confirmation {
                             let _ = confirmation.send(result.clone());
                         }
                         match result {
-                            Ok(_) => sequence = sequence.wrapping_add(1),
+                            Ok(()) => {}
                             Err(error) => {
                                 let _ = controls.send(Control::Stop {
                                     message: error.clone(),
@@ -399,20 +383,20 @@ mod platform {
     }
 
     impl EventSender {
-        fn send(&self, payload: RelayEventPayload) -> Result<(), String> {
+        fn send(&self, event: RelayEvent) -> Result<(), String> {
             self.0
                 .send(EventRequest::Send {
-                    payload,
+                    event,
                     confirmation: None,
                 })
                 .map_err(|_| "relay event writer stopped".to_string())
         }
 
-        fn send_confirmed(&self, payload: RelayEventPayload) -> Result<u64, String> {
+        fn send_confirmed(&self, event: RelayEvent) -> Result<(), String> {
             let (confirmation, receiver) = mpsc::sync_channel(0);
             self.0
                 .send(EventRequest::Send {
-                    payload,
+                    event,
                     confirmation: Some(confirmation),
                 })
                 .map_err(|_| "relay event writer stopped".to_string())?;
@@ -477,46 +461,69 @@ mod platform {
     }
 
     #[derive(Clone, Default)]
-    struct Acknowledgments(Arc<(Mutex<AcknowledgmentState>, Condvar)>);
+    struct TerminalCommitGate(Arc<(Mutex<TerminalCommitState>, Condvar)>);
 
     #[derive(Default)]
-    struct AcknowledgmentState {
-        sequences: VecDeque<u64>,
+    struct TerminalCommitState {
+        expected: bool,
+        committed: bool,
         cancelled: bool,
     }
 
-    impl Acknowledgments {
-        fn acknowledge(&self, sequence: u64) {
-            let (state, changed) = &*self.0;
+    impl TerminalCommitGate {
+        fn expect(&self) -> Result<bool, String> {
+            let (state, _) = &*self.0;
             let mut state = state
                 .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
-            state.sequences.push_back(sequence);
-            changed.notify_one();
+                .map_err(|_| "relay terminal commit lock poisoned".to_string())?;
+            if state.cancelled {
+                return Ok(false);
+            }
+            if state.expected {
+                return Err(
+                    "relay tried to publish a second uncommitted terminal message".to_string(),
+                );
+            }
+            state.expected = true;
+            state.committed = false;
+            Ok(true)
         }
 
-        fn wait(&self, expected: u64) -> Result<bool, String> {
+        fn commit(&self) -> Result<(), String> {
             let (state, changed) = &*self.0;
             let mut state = state
                 .lock()
-                .map_err(|_| "relay acknowledgment lock poisoned".to_string())?;
-            loop {
-                if state.cancelled {
-                    return Ok(false);
-                }
-                if let Some(sequence) = state.sequences.pop_front() {
-                    return if sequence == expected {
-                        Ok(true)
-                    } else {
-                        Err(format!(
-                            "relay received acknowledgment {sequence} while waiting for {expected}"
-                        ))
-                    };
-                }
+                .map_err(|_| "relay terminal commit lock poisoned".to_string())?;
+            if !state.expected {
+                return Err(
+                    "relay received a terminal commit without a pending terminal message"
+                        .to_string(),
+                );
+            }
+            if state.committed {
+                return Err("relay received a duplicate terminal commit".to_string());
+            }
+            state.committed = true;
+            changed.notify_one();
+            Ok(())
+        }
+
+        fn wait(&self) -> Result<bool, String> {
+            let (state, changed) = &*self.0;
+            let mut state = state
+                .lock()
+                .map_err(|_| "relay terminal commit lock poisoned".to_string())?;
+            while !state.committed && !state.cancelled {
                 state = changed
                     .wait(state)
-                    .map_err(|_| "relay acknowledgment lock poisoned".to_string())?;
+                    .map_err(|_| "relay terminal commit lock poisoned".to_string())?;
             }
+            if state.cancelled {
+                return Ok(false);
+            }
+            state.expected = false;
+            state.committed = false;
+            Ok(true)
         }
 
         fn cancel(&self) {
@@ -539,7 +546,7 @@ mod platform {
         fn start(
             sideband: mpsc::Sender<SidebandWrite>,
             stdin: mpsc::Sender<StdinWrite>,
-            acknowledgments: Acknowledgments,
+            terminal_commits: TerminalCommitGate,
             events: EventSender,
             controls: mpsc::Sender<Control>,
             failures: FailureReporter,
@@ -606,21 +613,15 @@ mod platform {
                                     return;
                                 }
                             }
-                            RelayCommand::Stdin { data } => match data.decode() {
-                                Ok(data) => {
-                                    if stdin.send(StdinWrite::Write(data)).is_err() {
-                                        failures.report("worker stdin writer stopped".to_string());
-                                        return;
-                                    }
-                                }
-                                Err(error) => {
-                                    failures.report(error);
+                            RelayCommand::Stdin { data } => {
+                                if stdin.send(StdinWrite::Write(data.into_bytes())).is_err() {
+                                    failures.report("worker stdin writer stopped".to_string());
                                     return;
                                 }
-                            },
+                            }
                             RelayCommand::Interrupt { request_id } => {
                                 if controls.send(Control::Interrupt { request_id }).is_err() {
-                                    let _ = events.send(RelayEventPayload::InterruptResult {
+                                    let _ = events.send(RelayEvent::InterruptResult {
                                         request_id,
                                         error: Some("relay supervisor stopped".to_string()),
                                     });
@@ -629,10 +630,7 @@ mod platform {
                             }
                             RelayCommand::Shutdown { grace_millis } => {
                                 let deadline = Instant::now() + Duration::from_millis(grace_millis);
-                                if events
-                                    .send_confirmed(RelayEventPayload::ShutdownStarted)
-                                    .is_err()
-                                {
+                                if events.send_confirmed(RelayEvent::ShutdownStarted).is_err() {
                                     failures.report("relay event writer stopped".to_string());
                                     return;
                                 }
@@ -643,8 +641,11 @@ mod platform {
                                 let _ = controls.send(Control::Shutdown { deadline });
                                 return;
                             }
-                            RelayCommand::Acknowledge { sequence } => {
-                                acknowledgments.acknowledge(sequence);
+                            RelayCommand::TerminalCommitted => {
+                                if let Err(error) = terminal_commits.commit() {
+                                    failures.report(error);
+                                    return;
+                                }
                             }
                         }
                     }
@@ -719,7 +720,7 @@ mod platform {
         fn start(
             mut reader: crate::sideband::Reader,
             events: EventSender,
-            acknowledgments: Acknowledgments,
+            terminal_commits: TerminalCommitGate,
             stdout: OutputCheckpoint,
             stderr: OutputCheckpoint,
             failures: FailureReporter,
@@ -739,31 +740,36 @@ mod platform {
                             break 'read;
                         }
                     } {
-                        let terminal = worker_message_requires_acknowledgment(&message);
+                        let terminal = worker_message_requires_terminal_commit(&message);
                         if let Err(error) = stdout.checkpoint().and_then(|()| stderr.checkpoint()) {
                             failures.report(error);
                             break 'read;
                         }
-                        let sequence = if terminal {
-                            match events
-                                .send_confirmed(RelayEventPayload::WorkerMessage { message })
-                            {
-                                Ok(sequence) => sequence,
+                        if terminal {
+                            // Register the barrier before publication so a commit
+                            // arriving as soon as the event is flushed is valid.
+                            match terminal_commits.expect() {
+                                Ok(true) => {}
+                                Ok(false) => break 'read,
                                 Err(error) => {
                                     failures.report(error);
                                     break 'read;
                                 }
                             }
-                        } else {
                             if let Err(error) =
-                                events.send(RelayEventPayload::WorkerMessage { message })
+                                events.send_confirmed(RelayEvent::WorkerMessage { message })
                             {
                                 failures.report(error);
                                 break 'read;
                             }
+                        } else {
+                            if let Err(error) = events.send(RelayEvent::WorkerMessage { message }) {
+                                failures.report(error);
+                                break 'read;
+                            }
                             continue;
-                        };
-                        match acknowledgments.wait(sequence) {
+                        }
+                        match terminal_commits.wait() {
                             Ok(true) => {}
                             Ok(false) => break 'read,
                             Err(error) => {
@@ -831,7 +837,7 @@ mod platform {
         }
     }
 
-    fn worker_message_requires_acknowledgment(message: &WorkerMessage) -> bool {
+    fn worker_message_requires_terminal_commit(message: &WorkerMessage) -> bool {
         matches!(
             message,
             WorkerMessage::Completed
@@ -1005,7 +1011,7 @@ mod platform {
                         }
                     }
                 }
-                let _ = events.send(RelayEventPayload::StreamClosed { stream: kind });
+                let _ = events.send(RelayEvent::StreamClosed { stream: kind });
             });
             Ok(Self { checkpoint, thread })
         }
@@ -1038,11 +1044,11 @@ mod platform {
         }
     }
 
-    fn output_event(stream: RelayStream, bytes: &[u8]) -> RelayEventPayload {
+    fn output_event(stream: RelayStream, bytes: &[u8]) -> RelayEvent {
         let data = EncodedBytes::from_bytes(bytes);
         match stream {
-            RelayStream::Stdout => RelayEventPayload::Stdout { data },
-            RelayStream::Stderr => RelayEventPayload::Stderr { data },
+            RelayStream::Stdout => RelayEvent::Stdout { data },
+            RelayStream::Stderr => RelayEvent::Stderr { data },
         }
     }
 
