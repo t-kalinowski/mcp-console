@@ -1235,6 +1235,68 @@ def test_interrupts_managed_console_input(binary: Path) -> Transcript:
             stop_client(client)
 
 
+def test_replays_console_prefix_after_operation_boundary_interrupt(
+    binary: Path,
+) -> Transcript:
+    with r_input_handler_client(binary) as (client, directory):
+        client._initialize_and_list_tools()
+
+        # Return one full console buffer, then interrupt before another
+        # callback can complete the logical line.
+        # fmt: r
+        r = code(r"""
+            dyn.load("./mcp_test_input_handler.so")
+            tryCatch(
+              {
+                partial <- .Call(
+                  "mcp_test_read_console_once",
+                  "between callbacks> "
+                )
+                stopifnot(nchar(partial, type = "bytes") == 4095L)
+                invisible(file.create(file.path(
+                  tempdir(),
+                  "between-console-callbacks-started"
+                )))
+                repeat {}
+              },
+              interrupt = function(condition) {
+                cat("caught between-callback interrupt\n")
+              }
+            )
+            """)
+        client.send(r=r)
+        assert last_tool_text(client) == (
+            '[input requested: "between callbacks> "]\n[stdin needed]'
+        )
+        client.send(stdin="x" * 5_000, timeout_ms=50)
+        assert last_tool_text(client) == "\n[running]"
+        client.transcript[-1]["send"]["stdin"] = "<5000 x bytes>"
+        client.transcript[-1]["result"]["content"][0]["text"] = "[running]"
+        wait_for_worker_file(
+            directory,
+            "between-console-callbacks-started",
+            client,
+        )
+
+        client.session(action="interrupt")
+        assert last_tool_text(client) == "[interrupt sent]"
+        client.send(timeout_ms=3_000)
+        assert last_tool_text(client) == "caught between-callback interrupt\n"
+
+        client.send(
+            r='identical(readline("after boundary> "), strrep("x", 5000))',
+            stdin="\n",
+        )
+        client.transcript[-1]["send"]["stdin"] = "<newline>"
+        output = last_tool_text(client)
+        assert output == (
+            '[input requested: "after boundary> "]\n'
+            '[input requested: "after boundary> "]\n'
+            "[1] TRUE\n"
+        ), repr(output)
+        return client._finish()
+
+
 def test_routes_idle_and_timed_out_stdin(binary: Path) -> Transcript:
     client = McpClient(binary, ("serve",))
     client._initialize_and_list_tools()

@@ -77,7 +77,8 @@ User code can catch or delay the signal.
 A resolver signal error is returned by both the interrupt and resolution calls; an interrupted host resolver otherwise reports its ordinary resolution failure.
 Managed R and Python console input waits poll R's pending-interrupt flag and cancel when `SIGINT` arrives while runtime interrupts are active.
 A wait inside R's `suspendInterrupts()` remains active until input arrives, after which the worker handles the deferred interrupt at a managed boundary.
-All bytes already consumed for the interrupted logical line, including prior full callback buffers, are pushed back ahead of fd 0 for the next managed console read.
+Full callback buffers without a newline remain provisional for the current evaluation or ready-handler turn.
+A newline commits that logical line; if the operation ends first, including after an interrupt between callbacks, the worker pushes every provisional chunk back ahead of fd 0 for the next managed console read.
 Direct fd-0 readers do not consume that pushback, and restart discards it with the worker.
 Requirements are exact, additive, and idempotent.
 On macOS, plain built-in `serve` resolves the retained default R requirements `tidyverse`, `github::rstudio/reticulate`, `DBI`, `duckdb`, `arrow`, and `nanoarrow` through IR before accepting MCP input.

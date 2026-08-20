@@ -21,7 +21,7 @@ mod platform {
     static R_CHECK_USER_INTERRUPT: OnceLock<CheckUserInterrupt> = OnceLock::new();
     static CELL_SOURCE: Mutex<Option<CellSource>> = Mutex::new(None);
     static CONSOLE_STDIN: Mutex<ConsoleStdin> = Mutex::new(ConsoleStdin {
-        pushback: Vec::new(),
+        pushback: VecDeque::new(),
         line_prefix: Vec::new(),
     });
     static PENDING_SERVER_MESSAGES: Mutex<VecDeque<ServerMessage>> = Mutex::new(VecDeque::new());
@@ -57,8 +57,74 @@ mod platform {
     }
 
     struct ConsoleStdin {
-        pushback: Vec<u8>,
+        pushback: VecDeque<ConsoleStdinChunk>,
         line_prefix: Vec<u8>,
+    }
+
+    struct ConsoleStdinChunk {
+        bytes: Vec<u8>,
+        offset: usize,
+    }
+
+    impl ConsoleStdin {
+        unsafe fn copy_pushback(&mut self, destination: *mut u8, capacity: usize) -> usize {
+            let mut copied = 0;
+            while copied < capacity {
+                let Some(chunk) = self.pushback.front_mut() else {
+                    break;
+                };
+                debug_assert!(chunk.offset <= chunk.bytes.len());
+                let remaining = &chunk.bytes[chunk.offset..];
+                let length = remaining.len().min(capacity - copied);
+                unsafe {
+                    std::ptr::copy_nonoverlapping(
+                        remaining.as_ptr(),
+                        destination.add(copied),
+                        length,
+                    );
+                }
+                copied += length;
+                chunk.offset += length;
+                if chunk.offset == chunk.bytes.len() {
+                    self.pushback.pop_front();
+                }
+            }
+            if self.pushback.is_empty() {
+                self.pushback = VecDeque::new();
+            }
+            copied
+        }
+
+        fn record_chunk(&mut self, chunk: &[u8]) {
+            if chunk.last() == Some(&b'\n') {
+                self.line_prefix = Vec::new();
+            } else {
+                self.line_prefix.extend_from_slice(chunk);
+            }
+        }
+
+        fn preserve_line(&mut self, chunk: &[u8]) {
+            if self.line_prefix.is_empty() && chunk.is_empty() {
+                return;
+            }
+            if !chunk.is_empty() {
+                self.pushback.push_front(ConsoleStdinChunk {
+                    bytes: chunk.to_vec(),
+                    offset: 0,
+                });
+            }
+            if !self.line_prefix.is_empty() {
+                self.pushback.push_front(ConsoleStdinChunk {
+                    bytes: std::mem::take(&mut self.line_prefix),
+                    offset: 0,
+                });
+            }
+        }
+
+        fn finish_operation(&mut self) {
+            // A later callback cannot be assumed to continue this operation.
+            self.preserve_line(&[]);
+        }
     }
 
     struct REvents {
@@ -490,6 +556,7 @@ mod platform {
             Language::Python => evaluate_python_cell(cell.source, graphics, python),
             Language::Sql => evaluate_sql_cell(cell.source, sql),
         };
+        finish_console_stdin_operation()?;
         if result.is_ok() && !WORKER_SHUTDOWN.load(Ordering::SeqCst) {
             if let Some(message) = take_worker_failure() {
                 return Err(message);
@@ -658,6 +725,7 @@ mod platform {
             );
         }
         EVALUATION_STARTED.store(false, Ordering::SeqCst);
+        finish_console_stdin_operation()?;
         defer_interrupts(|| graphics.finish(), check_interrupts)?;
         observe_stdin_shutdown()
     }
@@ -962,13 +1030,8 @@ mod platform {
         let mut stdin = CONSOLE_STDIN
             .lock()
             .map_err(|_| "R worker console stdin lock poisoned".to_string())?;
-        let mut length = stdin.pushback.len().min(capacity);
-        if length > 0 {
-            unsafe {
-                std::ptr::copy_nonoverlapping(stdin.pushback.as_ptr(), buf, length);
-            }
-            stdin.pushback.drain(..length);
-        }
+        // SAFETY: r_read_console validated buf and reserved one byte for NUL.
+        let mut length = unsafe { stdin.copy_pushback(buf, capacity) };
         drop(stdin);
 
         while length < capacity {
@@ -1035,11 +1098,7 @@ mod platform {
         let mut stdin = CONSOLE_STDIN
             .lock()
             .map_err(|_| "R worker console stdin lock poisoned".to_string())?;
-        if chunk.last() == Some(&b'\n') {
-            stdin.line_prefix.clear();
-        } else {
-            stdin.line_prefix.extend_from_slice(chunk);
-        }
+        stdin.record_chunk(chunk);
         Ok(())
     }
 
@@ -1048,11 +1107,89 @@ mod platform {
         let mut stdin = CONSOLE_STDIN
             .lock()
             .map_err(|_| "R worker console stdin lock poisoned".to_string())?;
-        let mut preserved = std::mem::take(&mut stdin.line_prefix);
-        preserved.extend_from_slice(chunk);
-        preserved.append(&mut stdin.pushback);
-        stdin.pushback = preserved;
+        stdin.preserve_line(chunk);
         Ok(-1)
+    }
+
+    fn finish_console_stdin_operation() -> Result<(), String> {
+        let mut stdin = CONSOLE_STDIN
+            .lock()
+            .map_err(|_| "R worker console stdin lock poisoned".to_string())?;
+        stdin.finish_operation();
+        Ok(())
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use std::collections::VecDeque;
+
+        use super::{ConsoleStdin, ConsoleStdinChunk};
+
+        #[test]
+        fn console_stdin_uses_chunk_cursors_and_releases_drained_pushback() {
+            let mut stdin = ConsoleStdin {
+                pushback: VecDeque::from([ConsoleStdinChunk {
+                    bytes: vec![b'x'; 10_000],
+                    offset: 0,
+                }]),
+                line_prefix: Vec::new(),
+            };
+            let pointer = stdin.pushback.front().unwrap().bytes.as_ptr();
+            let mut first = [0; 4_095];
+            assert_eq!(
+                unsafe { stdin.copy_pushback(first.as_mut_ptr(), first.len()) },
+                first.len()
+            );
+            let chunk = stdin.pushback.front().unwrap();
+            assert_eq!(chunk.bytes.as_ptr(), pointer);
+            assert_eq!(chunk.bytes.len(), 10_000);
+            assert_eq!(chunk.offset, first.len());
+
+            let mut remainder = vec![0; 5_905];
+            assert_eq!(
+                unsafe { stdin.copy_pushback(remainder.as_mut_ptr(), remainder.len()) },
+                remainder.len()
+            );
+            assert!(stdin.pushback.is_empty());
+            assert_eq!(stdin.pushback.capacity(), 0);
+        }
+
+        #[test]
+        fn console_stdin_releases_a_completed_line() {
+            let mut stdin = ConsoleStdin {
+                pushback: VecDeque::new(),
+                line_prefix: Vec::new(),
+            };
+            stdin.record_chunk(&vec![b'x'; 10_000]);
+            assert!(stdin.line_prefix.capacity() >= 10_000);
+
+            stdin.record_chunk(b"\n");
+            assert!(stdin.line_prefix.is_empty());
+            assert_eq!(stdin.line_prefix.capacity(), 0);
+        }
+
+        #[test]
+        fn console_stdin_preserves_a_line_at_an_operation_boundary() {
+            let mut stdin = ConsoleStdin {
+                pushback: VecDeque::from([ConsoleStdinChunk {
+                    bytes: b"discardtail".to_vec(),
+                    offset: 7,
+                }]),
+                line_prefix: b"prefix".to_vec(),
+            };
+            stdin.finish_operation();
+
+            let mut replayed = [0; 10];
+            assert_eq!(
+                unsafe { stdin.copy_pushback(replayed.as_mut_ptr(), replayed.len()) },
+                replayed.len()
+            );
+            assert_eq!(&replayed, b"prefixtail");
+            assert!(stdin.pushback.is_empty());
+            assert_eq!(stdin.pushback.capacity(), 0);
+            assert!(stdin.line_prefix.is_empty());
+            assert_eq!(stdin.line_prefix.capacity(), 0);
+        }
     }
 }
 

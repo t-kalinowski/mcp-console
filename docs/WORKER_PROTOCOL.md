@@ -609,10 +609,12 @@ For every evaluation-time `ReadConsole` call, the callback sends `input_requeste
 The built-in worker sends R's prompt field verbatim, including trailing spaces or an empty prompt.
 The server preserves that value but JSON-quotes it in the MCP input-request record instead of appending it as bare prompt text.
 After a nonempty read succeeds, it sends `input_received` before returning the bytes to R.
-Each full callback buffer without a newline remains part of the current logical line until a later callback returns its newline.
+Each full callback buffer without a newline remains a provisional part of the current logical line until a later callback returns its newline.
 On an unsuspended interrupt, the callback sends `input_cancelled`, moves every consumed chunk of that logical line into worker-local managed-input pushback, and checks the pending interrupt from a C-owned frame so R's jump cannot cross a live Rust frame.
 When R has suspended interrupt handling, the callback remains blocked until input completes the line; the pending interrupt is handled at a later managed boundary after the suspension ends.
+At the end of each evaluation or ready-handler turn, the worker also moves any unterminated provisional chunks into pushback, preserving a line when an interrupt lands between callbacks.
 The next managed `ReadConsole` call drains that pushback before fd 0; bytes not yet consumed remain in the fd-0 pipe.
+Replay advances a cursor instead of shifting the remaining bytes, releases its allocation after the last byte is copied, and releases the accumulated line allocation when a newline commits it.
 A newline-free fragment shorter than the buffer keeps the callback blocked until more input or an active interrupt arrives, while bytes not yet read remain in the pipe for a later `ReadConsole` call or a direct fd-0 reader.
 It uses R's busy callback rather than prompt text to distinguish cell source from evaluated-code input.
 Unread fd-0 input remains available across evaluation boundaries.

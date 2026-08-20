@@ -1,0 +1,74 @@
+---
+!same-as tests/transcripts/golden/server/initializes_and_lists_tools.yaml
+---
+id: 3
+send:
+  r: |
+    dyn.load("./mcp_test_input_handler.so")
+    tryCatch(
+      {
+        partial <- .Call(
+          "mcp_test_read_console_once",
+          "between callbacks> "
+        )
+        stopifnot(nchar(partial, type = "bytes") == 4095L)
+        invisible(file.create(file.path(
+          tempdir(),
+          "between-console-callbacks-started"
+        )))
+        repeat {}
+      },
+      interrupt = function(condition) {
+        cat("caught between-callback interrupt\n")
+      }
+    )
+result:
+  content:
+    - type: text
+      text: |-
+        [input requested: "between callbacks> "]
+        [stdin needed]
+  isError: false
+---
+id: 4
+send:
+  stdin: "<5000 x bytes>"
+  timeout_ms: 50
+result:
+  content:
+    - type: text
+      text: "[running]"
+  isError: false
+---
+id: 5
+session:
+  action: interrupt
+result:
+  content:
+    - type: text
+      text: "[interrupt sent]"
+  isError: false
+---
+id: 6
+send:
+  timeout_ms: 3000
+result:
+  content:
+    - type: text
+      text: |
+        caught between-callback interrupt
+  isError: false
+---
+id: 7
+send:
+  r: "identical(readline(\"after boundary> \"), strrep(\"x\", 5000))"
+  stdin: "<newline>"
+result:
+  content:
+    - type: text
+      text: |
+        [input requested: "after boundary> "]
+        [input requested: "after boundary> "]
+        [1] TRUE
+  isError: false
+...
