@@ -265,7 +265,7 @@ Temporary Arrow relations use collision-checked names and are unregistered after
 DDL and DML results without columns are silent; affected-row summaries do not exist yet.
 DuckDB errors are normal language outcomes with `isError: false`, and the connection remains reusable.
 Automatic Python relation sharing and a separate relation-registration API do not exist.
-Relay-forwarded sideband text and images, decoded worker standard-output and standard-error bytes, failures, and lifecycle notices share one pending output tape in publication order.
+Relay-forwarded sideband text and images, worker standard-output and standard-error bytes, failures, and lifecycle notices share one pending output tape in publication order.
 The relay immediately publishes available raw bytes in chunks of at most 8 KiB as base64 JSONL events, without line buffering or a coalescing timer, so the private transport is binary safe; each successful `send` response drains all tape events available at its response boundary, decoding complete UTF-8 prefixes and retaining incomplete suffixes for a later response.
 Idle, running, and outstanding-input responses append the literal `\n[idle]`, `\n[running]`, or `\n[stdin needed]` banner; its leading newline is present even when no output precedes it.
 After an infrastructure failure, the server finishes worker shutdown and its I/O readers before appending `[worker stopped: in-memory state lost]` after the specific error.
