@@ -161,7 +161,7 @@ def check_golden(golden: Path, actual: YamlStream, case: str, *, update: bool) -
 
     expected = read_yaml(golden, multi=True)
     if not identical(actual, expected):
-        expected_text = format_yaml(expected, multi=True)
+        expected_text = format_transcript(expected)
         sys.stderr.writelines(
             difflib.unified_diff(
                 expected_text.splitlines(keepends=True),
