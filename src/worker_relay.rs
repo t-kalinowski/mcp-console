@@ -43,8 +43,16 @@ mod platform {
         let failures = FailureReporter::new(controls.clone());
         let stopping = Arc::new(AtomicBool::new(false));
 
-        let (sideband_reader, sideband_writer, child_fds) = crate::sideband::bind()
-            .map_err(|error| format!("failed to create worker sideband: {error}"))?;
+        let (sideband_reader, sideband_writer, child_fds) = match crate::sideband::bind() {
+            Ok(sideband) => sideband,
+            Err(error) => {
+                return report_startup_failure(
+                    &events,
+                    event_writer,
+                    format!("failed to create worker sideband: {error}"),
+                );
+            }
+        };
         let mut command = Command::new(program);
         command
             .args(arguments)
@@ -52,12 +60,23 @@ mod platform {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         child_fds.configure_process(&mut command);
-        let child = command
-            .spawn()
-            .map_err(|error| format!("failed to launch worker: {error}"))?;
+        let child = match command.spawn() {
+            Ok(child) => child,
+            Err(error) => {
+                return report_startup_failure(
+                    &events,
+                    event_writer,
+                    format!("failed to launch worker: {error}"),
+                );
+            }
+        };
         drop(child_fds);
 
         let mut child = ChildGuard::new(child);
+
+        // Startup failures below can race worker output from partially started
+        // I/O tasks. They must not use the pre-I/O reporter without the normal
+        // joined output drain.
 
         let stdin = child
             .child_mut()
@@ -133,6 +152,10 @@ mod platform {
                 events.send(RelayEventPayload::Fatal { message }),
             );
         }
+        collect_error(
+            &mut finish_error,
+            events.send(RelayEventPayload::WorkerSidebandClosed),
+        );
         if let Some(status) = status {
             collect_error(
                 &mut finish_error,
@@ -165,6 +188,19 @@ mod platform {
             Some(current) => current.push_str(&format!("; additionally {error}")),
             None => *current = Some(error),
         }
+    }
+
+    fn report_startup_failure(
+        events: &EventSender,
+        event_writer: thread::JoinHandle<Result<(), String>>,
+        error: String,
+    ) -> Result<(), String> {
+        let _ = events.send_confirmed(RelayEventPayload::Fatal {
+            message: error.clone(),
+        });
+        let _ = events.finish();
+        let _ = event_writer.join();
+        Err(error)
     }
 
     fn supervise_worker(
@@ -780,7 +816,6 @@ mod platform {
                 if let Some(error) = sideband_failure {
                     failures.report(error);
                 }
-                let _ = events.send(RelayEventPayload::WorkerSidebandClosed);
                 if ordinary_close {
                     let _ = controls.send(Control::SidebandClosed);
                 }

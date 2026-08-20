@@ -1645,6 +1645,27 @@ def test_preserves_checkpointed_raw_output_during_forced_stop(
     return client._finish()
 
 
+def test_reports_missing_worker_launch_failure(binary: Path) -> Transcript:
+    client = McpClient(
+        binary,
+        ("serve", "--worker", "/definitely/missing/mcp-console-worker"),
+    )
+    client._initialize_and_list_tools()
+
+    client.send(r="complete silently")
+    result = client.transcript[-1]["result"]
+    assert result["isError"] is True, result
+    failure = result["content"][0]["text"]
+    assert failure.startswith("[failed to launch worker: "), failure
+    assert failure.endswith("]"), failure
+    result["content"][0]["text"] = "[failed to launch worker: <missing executable>]"
+
+    transcript, standard_error = client._finish_with_standard_error()
+    if standard_error:
+        assert standard_error.strip() == failure.removeprefix("[").removesuffix("]")
+    return transcript
+
+
 def test_reports_replacement_startup_failure_and_retry(
     binary: Path,
 ) -> Transcript:
