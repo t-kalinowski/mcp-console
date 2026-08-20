@@ -76,29 +76,17 @@ def emit_background_stderr(root: Path) -> None:
     (root / "zod-background-stderr-emitted").touch()
 
 
-def wait_for_server_to_process_sideband(stream: TextIO) -> None:
-    """Block until the server has processed the preceding sideband frames."""
-    frame = json.dumps(
-        {"kind": ConsoleKind.OUTPUT, "data": ""},
-        separators=(",", ":"),
+def wait_for_server_to_process_sideband(reader: TextIO, writer: TextIO) -> None:
+    """Round-trip through the server after preceding sideband frames."""
+    send(
+        writer,
+        {
+            "kind": "resolve_python_version",
+            "request": {"constraints": [">=3.11"], "environment": {}},
+        },
     )
-    # Flushing a frame only proves that it entered the kernel pipe.
-    # The appended spaces are valid trailing JSON whitespace, so this remains
-    # a no-output frame. Its size exceeds Darwin's pipe capacity, and FIFO
-    # backpressure forces the server to process prior frames before flush returns.
-    stream.write(frame + (" " * (2 * 1024 * 1024)) + "\n")
-    stream.flush()
-
-
-def send_padded_output(stream: TextIO, data: str) -> None:
-    frame = json.dumps(
-        {"kind": ConsoleKind.OUTPUT, "data": data},
-        separators=(",", ":"),
-    )
-    # The trailing JSON whitespace makes the frame exceed Darwin's pipe
-    # capacity without changing the decoded message.
-    stream.write(frame + (" " * (2 * 1024 * 1024)) + "\n")
-    stream.flush()
+    response = json.loads(reader.readline())
+    assert response["kind"] == "python_version_resolution_failed", response
 
 
 def configure_startup(root: Path, reader: TextIO, writer: TextIO) -> bool:
@@ -276,6 +264,16 @@ def main() -> None:
             send(writer, {"kind": "completed"})
             continue
 
+        if source in {"exit after invalid stdout", "exit after invalid stderr"}:
+            stream = source.removeprefix("exit after invalid ")
+            descriptor = 1 if stream == "stdout" else 2
+            write_all(
+                descriptor,
+                f"zod invalid {stream}: ".encode() + b"\xff trailing: \xe2\x82",
+            )
+            os.close(descriptor)
+            os._exit(86)
+
         if source == "start background stderr":
             temporary = Path(os.environ["TMPDIR"])
             child = os.fork()
@@ -295,17 +293,20 @@ def main() -> None:
         if source == "start background sideband":
             child = os.fork()
             if child == 0:
-                reader.close()
                 for descriptor in (0, 1, 2):
                     os.close(descriptor)
                 release = temporary / "zod-release-background-sideband"
                 while not release.exists():
                     time.sleep(0.01)
-                send_padded_output(writer, "zod background sideband\n")
+                send_output(writer, "zod background sideband\n")
+                wait_for_server_to_process_sideband(reader, writer)
                 (temporary / "zod-background-sideband-emitted").touch()
                 os._exit(0)
             (temporary / "zod-background-sideband-started").touch()
             send(writer, {"kind": "completed"})
+            child_pid, status = os.waitpid(child, 0)
+            assert child_pid == child
+            assert os.waitstatus_to_exitcode(status) == 0
             continue
 
         if source == "start partial sideband descendant":
@@ -391,7 +392,7 @@ def main() -> None:
             send_output(writer, f"zod stdin: {stdin}\n")
             # Prove that the receipt has cleared the provisional request before
             # the client polls, so the fixed grace cannot add another boundary.
-            wait_for_server_to_process_sideband(writer)
+            wait_for_server_to_process_sideband(reader, writer)
             (temporary / "zod-input-received").touch()
             send(writer, {"kind": "completed"})
             continue
@@ -563,7 +564,7 @@ def main() -> None:
             )
             if source == "emit output and image before completion":
                 send_output(writer, "after pending image\n")
-            wait_for_server_to_process_sideband(writer)
+            wait_for_server_to_process_sideband(reader, writer)
             (temporary / "zod-image-processed").touch()
             while not (temporary / "zod-release-image-completion").exists():
                 time.sleep(0.01)

@@ -997,6 +997,35 @@ def test_captures_worker_stdout(binary: Path) -> Transcript:
     return client._finish()
 
 
+def test_preserves_invalid_raw_output_when_worker_exits(binary: Path) -> Transcript:
+    zod = Path(__file__).resolve().parents[1] / "fixtures" / "zod"
+    client = McpClient(
+        binary,
+        ("serve", "--worker", str(zod)),
+    )
+    client._initialize_and_list_tools()
+
+    for stream in ("stdout", "stderr"):
+        client.send(r=f"exit after invalid {stream}")
+        assert client.transcript[-1]["result"] == {
+            "content": [
+                {
+                    "type": "text",
+                    "text": (
+                        f"zod invalid {stream}: � trailing: �\n"
+                        "[worker sideband read failed: worker sideband closed]\n"
+                        "[worker stopped: in-memory state lost]\n"
+                        "[starting new worker]\n"
+                        "[idle]"
+                    ),
+                }
+            ],
+            "isError": True,
+        }
+
+    return client._finish()
+
+
 def test_drains_background_stderr_while_idle(binary: Path) -> Transcript:
     zod = Path(__file__).resolve().parents[1] / "fixtures" / "zod"
     with tempfile.TemporaryDirectory() as temporary_directory:
