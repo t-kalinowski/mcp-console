@@ -53,15 +53,16 @@ Relay stdin and stdout carry ordered framed JSONL, while relay stderr passes thr
 The relay creates the unchanged worker sideband and standard streams after it enters the sandbox.
 The outer relay protocol uses flat semantic commands and events; the relay translates those forms to and from the unchanged worker-sideband messages.
 After a worker reports ready, the server continuously parses and enqueues relay events for one ordered semantic dispatcher.
-With no evaluation active, an empty `send` immediately drains the output collected so far and returns `\n[idle]`, or `\n[stdin needed]` when an idle callback has an outstanding console read.
+With no evaluation active, an empty `send` immediately establishes an ephemeral idle-response boundary, drains the output collected through it, and returns `\n[idle]`, or `\n[stdin needed]` when an idle callback has an outstanding console read.
 It sends no worker frame, does not wait for idle callbacks, and is not delayed by `timeout_ms`.
-Output accepted after the snapshot remains pending for a later response.
+Output accepted after that boundary remains pending for a later response.
 An empty call does not start an initial or stopped worker.
 If it discovers an idle worker failure, it stops that worker and reports the failure without starting a replacement; a later nonempty `send` or explicit restart starts the next worker.
-Supplying `stdin` with a code cell, during an evaluation, or while idle queues exact UTF-8 bytes to worker fd 0 without adding a newline, inspecting, echoing, or limiting the text, or waiting for an input request.
-A nonempty idle stdin call lazily starts the worker when needed, queues the bytes, and immediately returns the current output snapshot; `timeout_ms` does not bound that startup or delay the snapshot.
+Worker fd 0 is one unbuffered byte stream for the lifetime of its generation; `stdin` payloads contribute exact UTF-8 bytes rather than records, without adding a newline, inspecting, echoing, or limiting the text, or waiting for an input request.
+A nonempty idle stdin call lazily starts the worker when needed, queues the bytes, and immediately returns at the resulting idle-response boundary; `timeout_ms` does not bound that startup or delay the boundary.
 Queuing bytes does not acknowledge their consumption, so the response may still report `\n[stdin needed]` until the continuous reader receives `input_received` or `input_cancelled`.
-Payload end is not EOF; the R console callback reads through one newline or its supplied buffer, and unread bytes may satisfy later console or direct reads, including in a later evaluation.
+Line-oriented reads generally require an explicit newline, and payload end is not EOF; the R console callback reads through one newline or its supplied buffer, and unread bytes may satisfy later console or direct reads, including in a later evaluation.
+Worker fd 0 stays open across calls and evaluations; closing it retires that worker generation.
 Every `input_requested` frame immediately appends `[input requested: <JSON-quoted prompt>]` to pending response output.
 During an evaluation its outstanding state is provisional for up to 10 milliseconds; a matching `input_received` after a successful console read or `input_cancelled` after an interrupt retains the request record but suppresses the `\n[stdin needed]` banner, while an unmatched request returns that marker after the grace or at the MCP deadline, whichever comes first.
 The terminal frame describes that runtime read, not a submitted payload or byte count, and direct fd-0 reads emit neither frame.
@@ -111,7 +112,8 @@ Closing MCP input cancels an in-flight explicit or runtime resolution by force-s
 An idle worker that implements R preparation can apply new R requirements without replacement.
 The server resolves the complete R requirement set outside the sandbox, prepends the new library to the live `.libPaths()`, removes the previous managed IR entry, preserves the other live library paths and in-memory state, and retains the confirmed library for later worker generations.
 Each IR candidate contains the complete retained R requirement set, so replacing the previous managed entry keeps the live search path aligned with restart and crash replacement instead of accumulating stale managed libraries.
-An idle server-managed worker can also materialize an uninitialized Python manifest or activate a same-`libpython` environment while preserving live state.
+For live Python preparation, the server resolves candidate environments while the worker owns reticulate's manifest update, materialization, and activation.
+An idle server-managed worker can materialize an uninitialized Python manifest or activate a same-`libpython` environment while preserving live state.
 An idle worker that implements R preparation can prepare DuckDB extensions on the host without replacement or loss of live state.
 The DuckDB resolver uses the existing cancellable resolver process-group lifecycle and adds no DuckDB-specific worker sideband messages; an accompanying R candidate still uses `prepare_r`.
 A successful Python activation or explicit materialization is retained immediately.
@@ -176,7 +178,7 @@ A generation-long server reader continuously parses and enqueues relay events.
 `WorkerEventDispatcher` publishes forwarded idle console output and images and services nested managed-Python requests, while `WorkerOperationState` retains idle console-input state.
 The relay assembles newline-delimited worker-sideband frames incrementally while the server does the same for relay JSONL, so a partial frame cannot block worker retirement and pipe backpressure cannot pause ordinary idle output.
 Before applying a live requirement preparation, the built-in worker gives registered R handlers one nonblocking turn, so a callback already ready when the command arrives is collected first.
-An empty `send` immediately snapshots an idle callback's pending output and surfaces an outstanding input request as `[stdin needed]`; a later stdin-only `send` continues it, and a call that already includes stdin can prequeue the input.
+An empty `send` immediately establishes an idle-response boundary for pending callback output and surfaces an outstanding input request as `[stdin needed]`; a later stdin-only `send` continues it, and a call that already includes stdin can prequeue the input.
 A code-bearing `send` can also continue an idle input request.
 A noninteractive requirement preparation that encounters the request stops the worker instead of blocking indefinitely.
 Each worker generation starts with `options(width = 200L)`; evaluated code can change that persistent option.
@@ -252,7 +254,7 @@ After reticulate accepts a managed environment, the worker sends a standalone `p
 The server immediately retains the matching resolved candidate or its unchanged current environment.
 Acceptance and the restart-generation check are atomic; a receipt that remains pending when restart claims the generation is discarded with that worker.
 `completed` and `python_prepared` carry no Python manifest.
-When no live activation was required, a successful `python_prepared` retains the last materialized candidate.
+`python_prepared` is the explicit worker-side operation result, including the pre-initialization case; when no live activation was required, it retains the last materialized candidate.
 A lazy pre-initialization `py_require()` declaration remains worker-owned until Python initializes or explicit preparation materializes it.
 The live Python interpreter and its state are retained during successful activation.
 Evaluated R code or an R package load can therefore trigger host resolution, which may use the network, write host caches, and execute package build backends outside the worker sandbox; the structured requirements and forwarded settings are data, and the submitted cell is not evaluated by the resolver.

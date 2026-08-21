@@ -8,7 +8,7 @@ The separate private server-to-relay transport is documented in [`RELAY_PROTOCOL
 ## Scope
 
 The current implementation provides one worker for one server process.
-It evaluates one complete R, Python, or SQL cell at a time and accepts exact `stdin` text whether the worker is evaluating or idle.
+It evaluates one complete R, Python, or SQL cell at a time and accepts exact `stdin` text on one unbuffered fd-0 byte stream that lasts for the worker generation.
 One generation-long relay reader continuously consumes worker-sideband frames and translates them to flat outer relay events.
 The server's relay reader only parses and enqueues those events.
 `WorkerOperationState` owns the active evaluation or preparation, retained transport failure, and outstanding idle input.
@@ -98,6 +98,7 @@ After successful resolution, the server terminates the current worker generation
 All worker-owned R, Python, SQL, debugger, and unread-stdin state is lost.
 The implicit session exists for the server lifetime, so restart starts its first worker if none exists yet.
 After any requirement resolution succeeds, restart starts the same one-second stdin-close, sideband-shutdown, and process-group escalation path described below.
+Closing fd 0 is a generation-retirement action, not an end marker for an individual `stdin` payload.
 It reopens the lifecycle for the new worker instead of ending the MCP server.
 
 `session` with `action = "interrupt"` accepts no requirements and requires an active registered resolver or live worker; it does not start a process.
@@ -212,7 +213,9 @@ relay reader  <──  worker writer
 ```
 
 The relay also owns an independent FIFO writer connected to the worker's standard input (fd 0) and independent readers for standard output and standard error.
-The server UTF-8 encodes each accepted `stdin` string in a binary-safe relay command, and the relay queues the decoded bytes to that writer without inspection or worker-side framing.
+The server UTF-8 encodes each accepted `stdin` string in a binary-safe relay command, and the relay queues the decoded bytes to that writer without inspection, line buffering, or worker-side framing.
+Each payload contributes bytes to the same generation-long stream rather than forming a record.
+Line-oriented reads generally require an explicit newline; payload end is not EOF, and fd-0 closure retires the generation.
 There is no sideband input frame.
 
 Each frame is one UTF-8 JSON object followed by `\n`.
@@ -280,6 +283,7 @@ Receipt acceptance and the restart-generation check are atomic.
 A receipt still pending when restart claims the generation is discarded with that worker.
 Custom workers and caller-configured Python workers do not send `python_activated`; a custom worker that sends it fails the active operation with a managed-Python-activation protocol error.
 `completed` and `python_prepared` carry no Python manifest.
+`python_prepared` is the explicit worker-side result of `prepare_python`, including successful preparation before Python initialization.
 
 ## Handshake and explicit operations
 
@@ -357,10 +361,11 @@ worker -> server  {"kind":"python_activated","requirements":{"packages":["numpy"
 worker -> server  {"kind":"python_prepared"}
 ```
 
-`prepare_python` is idle-only and calls additive `reticulate::py_require()`.
-Before initialization it materializes the manifest; afterward reticulate validates the live `libpython` and activates the candidate.
+`prepare_python` is idle-only and calls additive `reticulate::py_require()` in the worker.
+The server resolves candidate Python environments on the host; the worker owns reticulate's manifest materialization, live-`libpython` validation, and activation.
+Before initialization the worker materializes the manifest; afterward reticulate validates the live `libpython` and activates the candidate.
 A matching `python_activated` immediately retains the resolved environment.
-Before initialization, payload-free `python_prepared` accepts the last successfully materialized candidate.
+In both cases, payload-free `python_prepared` is the explicit worker operation result; before initialization it accepts the last successfully materialized candidate.
 For a mixed public preparation, an accepted Python environment remains retained if a later R update fails.
 `python_preparation_failed` restores the live manifest, discards unmatched candidates, and leaves the worker usable.
 
@@ -407,7 +412,7 @@ Supplying nonempty stdin for an outstanding request starts a fresh 10-millisecon
 A pending input request wins over the `\n[running]` banner at the deadline.
 A later `send` call without a code field polls that operation with its own `timeout_ms`; it may include `stdin` to queue bytes before waiting.
 Every successful `send` response drains pending tape events available at its response boundary, including sideband text and images and complete UTF-8 prefixes from standard-stream bytes.
-For evaluation completion, that boundary is the checkpoint recorded with `completed`; for an idle call, it is the immediate server-side snapshot.
+For evaluation completion, that boundary is the checkpoint recorded with `completed`; for an idle call, the server establishes an ephemeral idle-response boundary.
 Events accepted after the boundary and incomplete trailing byte sequences remain for the next response; new output does not itself wake a waiting call.
 Evaluation completion returns the pending content in tape order, including input-request records not already delivered at an earlier boundary, or `[done]` when the tape is empty.
 If the operation instead ends in an infrastructure or protocol failure, all pending operation output received before the failure precedes the bracketed tool error.
@@ -419,11 +424,11 @@ If the deadline expires first, the response ends with `[worker starting]`; a lat
 If startup fails, that error ends the automatic attempt and the worker remains stopped.
 Server-owned timeline, state, and admission facts are bracketed; request-validation and standalone resolver diagnostics remain ordinary MCP tool-error text.
 If the poll wait expires first, the literal `\n[running]` banner is appended to any collected output.
-With no evaluation active, an empty `send` immediately drains the server's pending output tape and returns `\n[idle]`, or `\n[stdin needed]` when `WorkerOperationState` is tracking a forwarded idle console read.
+With no evaluation active, an empty `send` immediately establishes an idle-response boundary, drains the server's pending output tape through it, and returns `\n[idle]`, or `\n[stdin needed]` when `WorkerOperationState` is tracking a forwarded idle console read.
 It sends no worker frame, does not wait for a callback to finish, and ignores `timeout_ms` because no worker operation is being polled.
-Output accepted after that snapshot remains pending for the next response.
+Output accepted after that boundary remains pending for the next response.
 An initial or stopped worker is not started by an empty call.
-A stdin-only idle call queues the bytes first, lazily starting a worker when needed, and immediately returns the same server-side snapshot.
+A stdin-only idle call queues the bytes first, lazily starting a worker when needed, and immediately returns at the resulting idle-response boundary.
 
 The server adds `[starting new worker]\n` before each announced replacement attempt, in the `send` or `session` response that waits for it.
 The notice is recorded before launch, so startup output and startup errors follow it.
@@ -468,13 +473,13 @@ An MCP call may contain one code field and `stdin`.
 The server flushes `evaluate` first, then attaches the evaluation to the worker's stdin writer and drains any queued input in submission order.
 A later stdin-only call uses the same route without acquiring the evaluation's worker lock, including after an earlier call returned `\n[running]`.
 When no operation is tracked, nonempty stdin lazily starts the worker if necessary and enters the same worker-owned FIFO.
-The call then returns the current server-side output snapshot immediately.
+The call then establishes and returns at the current idle-response boundary immediately.
 Because queuing bytes does not acknowledge consumption, an outstanding idle input request can remain visible as `[stdin needed]` until the reader accepts `input_received`.
 
-The server writes each string blindly and does not echo it into MCP output.
+The server writes each string blindly into the generation-long, unbuffered byte stream and does not echo it into MCP output.
 It adds no newline, does not split or validate lines, and imposes no stdin size limit.
 The end of a payload does not close fd 0 and is not an EOF marker.
-A newline-free fragment remains pending until later stdin completes it or worker shutdown closes the stream.
+A line-oriented read generally remains pending until later stdin supplies an explicit newline or worker retirement closes fd 0.
 The R console callback consumes only through one newline or its supplied buffer; it does not prefetch later lines from fd 0.
 `input_requested` is an observation of worker state, not permission to write.
 After a nonempty callback read, `input_received` closes that provisional request before the runtime resumes.
@@ -633,7 +638,7 @@ The generation-long relay reader forwards idle callback output and images as the
 `WorkerEventDispatcher` publishes that output and services managed-Python requests, while `WorkerOperationState` retains idle input state.
 Both readers assemble their newline-delimited frames incrementally so a partial frame can be abandoned when retirement cancels the reader.
 Because the relay keeps draining complete worker frames while the worker is idle, ordinary callback output is not bounded by sideband pipe capacity.
-An empty `send` only snapshots that server state; it sends no frame and does not wait for the callback to finish.
+An empty `send` only establishes an idle-response boundary for that server state; it sends no frame and does not wait for the callback to finish.
 A later stdin-only `send` can continue an outstanding idle input request, and a later code-bearing `send` adopts that request into the evaluation's ordinary input state.
 Requirement preparation is noninteractive, so an idle input request stops the worker instead of blocking indefinitely.
 
@@ -792,7 +797,7 @@ The 12 KiB cap applies only to a recognized SQL query preview; arbitrary R and P
 `timeout_ms` limits one MCP wait through evaluation and one automatic replacement attempt without terminating either operation.
 If replacement startup outlives that wait, later polls continue waiting on it.
 Server shutdown and explicit restart use a process deadline.
-For an idle stdin-only call, `timeout_ms` does not bound lazy worker startup and does not delay the immediate output snapshot after startup.
+For an idle stdin-only call, `timeout_ms` does not bound lazy worker startup and does not delay the immediate idle-response boundary after startup.
 The 10-millisecond input grace controls when provisional state becomes visible as `[stdin needed]`; it does not control request-record retention or limit evaluation or stdin reads.
 It is a latency heuristic: scheduling can delay a receipt past the grace and expose an extra `[stdin needed]` boundary even when queued bytes subsequently satisfy the read.
 

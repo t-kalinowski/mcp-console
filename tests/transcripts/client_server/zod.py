@@ -1046,7 +1046,7 @@ def test_preserves_invalid_raw_output_when_worker_exits(binary: Path) -> Transcr
     return client._finish()
 
 
-def test_preserves_raw_output_before_malformed_sideband_failure(
+def test_preserves_raw_output_during_malformed_sideband_failure(
     binary: Path,
 ) -> Transcript:
     zod = Path(__file__).resolve().parents[2] / "fixtures" / "zod"
@@ -1088,12 +1088,19 @@ def test_preserves_raw_output_before_malformed_sideband_failure(
         assert not remainder.replace("\n", ""), repr(output)
         result["content"][0]["text"] = (
             f"{prefix}<large output>\n"
-            "<cross-source position follows serialized observation>\n"
             "[worker sideband read failed: <invalid frame>]\n"
             "[worker terminated by signal 9]\n"
             "[worker stopped: in-memory state lost]\n"
             "[starting new worker]\n[idle]"
         )
+        client.transcript[-1]["transcript_normalization"] = {
+            "target": "result.content[0].text",
+            "cross_source_position": "omitted",
+            "replacements": {
+                "large_output": "<large output>",
+                "sideband_failure_detail": "<invalid frame>",
+            },
+        }
 
     transcript, standard_error = client._finish_with_standard_error()
     diagnostics = standard_error.splitlines()
@@ -1141,10 +1148,12 @@ def test_preserves_raw_output_during_semantically_invalid_sideband_message(
     for notice in notices:
         remainder = remainder.replace(notice, "")
     assert not remainder.replace("\n", ""), repr(output)
-    result["content"][0]["text"] = (
-        f"{prefix}<large output>\n"
-        "<cross-source position follows serialized observation>\n" + "\n".join(notices)
-    )
+    result["content"][0]["text"] = f"{prefix}<large output>\n" + "\n".join(notices)
+    client.transcript[-1]["transcript_normalization"] = {
+        "target": "result.content[0].text",
+        "cross_source_position": "omitted",
+        "replacements": {"large_output": "<large output>"},
+    }
     return client._finish()
 
 

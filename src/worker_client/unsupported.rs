@@ -64,10 +64,10 @@ impl Worker {
         unreachable!("unsupported workers cannot start")
     }
 
-    pub(super) fn snapshot(
+    pub(super) fn idle_response_boundary(
         &self,
         _output: &super::OutputTape,
-    ) -> Result<super::WorkerSnapshot, String> {
+    ) -> Result<super::IdleResponseBoundary, String> {
         unreachable!("unsupported workers cannot start")
     }
 

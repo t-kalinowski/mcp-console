@@ -162,9 +162,12 @@ impl WorkerOperationState {
         Ok(self.lock()?.failure.is_some())
     }
 
-    pub(super) fn snapshot(&self, output: &OutputTape) -> Result<super::WorkerSnapshot, String> {
+    pub(super) fn idle_response_boundary(
+        &self,
+        output: &OutputTape,
+    ) -> Result<super::IdleResponseBoundary, String> {
         let state = self.lock()?;
-        Ok(super::WorkerSnapshot {
+        Ok(super::IdleResponseBoundary {
             checkpoint: output.checkpoint(),
             failure: state.failure.clone(),
             input_requested: state.idle_input.is_some(),
