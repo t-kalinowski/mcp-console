@@ -175,20 +175,11 @@ _builtins.__dict__["_mcp_console_dispatch"] = _mcp_console_dispatch
     )
   }
 
-  uv_environment <- function() {
-    environment <- Sys.getenv()
-    as.list(environment[
-      startsWith(names(environment), "UV_") &
-        names(environment) != "UV_OFFLINE"
-    ])
-  }
-
   request_json <- function(requirements, retained_requirements) {
     jsonlite::toJSON(
       list(
         requirements = requirements,
-        retained_requirements = retained_requirements,
-        environment = uv_environment()
+        retained_requirements = retained_requirements
       ),
       auto_unbox = TRUE,
       null = "null",
@@ -199,8 +190,7 @@ _builtins.__dict__["_mcp_console_dispatch"] = _mcp_console_dispatch
   version_request_json <- function(constraints) {
     jsonlite::toJSON(
       list(
-        constraints = I(as.character(constraints %||% character())),
-        environment = uv_environment()
+        constraints = I(as.character(constraints %||% character()))
       ),
       auto_unbox = TRUE,
       null = "null",
@@ -249,8 +239,8 @@ _builtins.__dict__["_mcp_console_dispatch"] = _mcp_console_dispatch
       )
     }
     resolve_version <- function(constraints = NULL, uv = NULL) {
-      # The host resolver owns the executable; worker code supplies only
-      # version constraints and supported UV settings.
+      # The host resolver owns its executable and environment; worker code
+      # supplies only version constraints.
       .Call(
         "mcp_console_resolve_python_version",
         version_request_json(constraints)
@@ -533,8 +523,27 @@ _builtins.__dict__["_mcp_console_dispatch"] = _mcp_console_dispatch
     #[derive(serde::Deserialize)]
     #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
     pub(crate) enum PreparationOutcome {
+        #[serde(deserialize_with = "crate::worker_protocol::deserialize_payload_free")]
         Prepared,
-        Failed { message: String },
+        Failed {
+            message: String,
+        },
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::PreparationOutcome;
+
+        #[test]
+        fn python_preparation_outcome_rejects_unknown_fields() {
+            assert!(serde_json::from_str::<PreparationOutcome>(r#"{"kind":"prepared"}"#).is_ok());
+            assert!(
+                serde_json::from_str::<PreparationOutcome>(
+                    r#"{"kind":"prepared","checkpoint":{"packages":[]}}"#
+                )
+                .is_err()
+            );
+        }
     }
 
     pub(crate) struct Bridge(crate::r_bridge::Bridge);

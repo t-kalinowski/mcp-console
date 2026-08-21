@@ -16,7 +16,7 @@ result:
 id: 4
 send:
   r: |
-    stopifnot(Sys.getenv("RETICULATE_PYTHON") != "/mcp-console-prepare-must-replace-python")
+    stopifnot(Sys.getenv("RETICULATE_PYTHON") == "managed")
 result:
   content:
     - type: text

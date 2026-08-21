@@ -3,9 +3,7 @@
 ---
 id: 3
 send:
-  r: |
-    restart_marker <- 42L
-    Sys.setenv(UV_DEFAULT_INDEX = "http://127.0.0.1:<PORT>/simple")
+  r: restart_marker <- 42L
 result:
   content:
     - type: text

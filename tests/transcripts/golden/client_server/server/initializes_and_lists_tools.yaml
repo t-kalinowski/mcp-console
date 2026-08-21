@@ -56,7 +56,11 @@ result:
         temporary directory. Managed Python requirement resolution triggered by
         R code such as `reticulate::py_require()` or by an R package load is a
         host-side exception: it may access the network and execute installation
-        or build code, so use only trusted requirements.
+        or build code, so use only trusted requirements. Only named registry
+        requirements are accepted. This resolution uses the server's startup
+        configuration; changes to `UV_*` made by evaluated code do not configure
+        it. Starting the server with a nonempty user-selected
+        `RETICULATE_PYTHON` disables managed Python requirement additions.
       inputSchema:
         $schema: https://json-schema.org/draft/2020-12/schema
         additionalProperties: false
@@ -135,13 +139,18 @@ result:
         recoverable live preparation failure, evaluation remains available so
         state can be saved, but new requirement additions require restart.
         Requirements are additive, idempotent, and persist across restart.
-        `interrupt` returns after sending the request or signal; user code may
-        catch or delay it. `restart` may optionally add R, Python, and DuckDB
-        requirements, then replaces the worker and loses all in-memory R,
-        Python, and SQL state, debugger state, and unread stdin. Requirement
-        resolution runs outside the execution sandbox and may download packages
-        or extensions or execute package installation or build code on the host;
-        use only trusted requirements.
+        Managed Python accepts named PEP 508 registry requirements only; paths,
+        file URLs, editable requirements, direct references, local archives, and
+        local projects are rejected. Managed Python resolution uses the server's
+        startup `UV_*` configuration, which evaluated code cannot change. A
+        nonempty user-selected `RETICULATE_PYTHON` disables managed Python
+        requirements. `interrupt` returns after sending the request or signal;
+        user code may catch or delay it. `restart` may optionally add R, Python,
+        and DuckDB requirements, then replaces the worker and loses all
+        in-memory R, Python, and SQL state, debugger state, and unread stdin.
+        Requirement resolution runs outside the execution sandbox and may
+        download packages or extensions or execute package installation or build
+        code on the host; use only trusted requirements.
       inputSchema:
         $schema: https://json-schema.org/draft/2020-12/schema
         required:
@@ -169,9 +178,10 @@ result:
               failure, evaluation remains available so state can be saved, but new requirement additions
               return `[restart required]` until restart. The same marker follows a failed automatic
               replacement. Resolution runs outside the worker sandbox and may download packages or
-              extensions or execute package installation or build code on the host. Managed Python startup
-              and Matplotlib cache warming also run on the host and may execute selected code; use only
-              trusted requirements.
+              extensions or execute package installation or build code on the host. Managed Python uses
+              the server's startup resolver configuration; evaluated code cannot configure that host
+              resolver. Managed Python startup and Matplotlib cache warming also run on the host and may
+              execute selected code; use only trusted requirements.
             type:
               - object
               - "null"
@@ -205,9 +215,12 @@ result:
                 default: []
               python:
                 description: |-
-                  Additive, single-line PEP 508 requirements for `prepare` or `restart`, for example `polars>=1`,
-                  `scikit-learn`, or `matplotlib`. An idle server-managed worker may activate compatible
-                  additions without losing state.
+                  Additive, named PEP 508 registry requirements for `prepare` or `restart`, for example
+                  `polars>=1`, `scikit-learn`, or `matplotlib; python_version >= '3.10'`. Extras, version
+                  specifiers, and environment markers are accepted. Paths, file URLs, editable requirements,
+                  direct references, local archives, and local projects are rejected. An idle server-managed
+                  worker may activate compatible additions without losing state. A nonempty user-selected
+                  `RETICULATE_PYTHON` disables managed Python requirements.
                 type: array
                 items:
                   type: string

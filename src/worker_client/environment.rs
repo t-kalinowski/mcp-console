@@ -1,4 +1,5 @@
 use std::collections::BTreeSet;
+use std::ffi::OsString;
 
 use super::lifecycle::{
     FailedWorkerStop, GenerationStatus, LifecycleState, OldGenerationCommitDisposition,
@@ -11,8 +12,99 @@ pub(super) struct Environment {
     pub(super) duckdb_extensions: BTreeSet<String>,
     /// R libraries that may have supplied DuckDB in the current worker generation.
     pub(super) duckdb_r_targets: Vec<crate::resolver::ManagedR>,
-    pub(super) python: Option<crate::resolver::ManagedPython>,
+    pub(super) python: Option<PythonEnvironment>,
     pub(super) r: Option<crate::resolver::ManagedR>,
+}
+
+const USER_SELECTED_PYTHON_ERROR: &str = "managed Python requirements are disabled because the session uses a user-selected Python environment";
+
+#[derive(Clone)]
+pub(super) enum PythonEnvironment {
+    Managed {
+        selected: crate::resolver::ManagedPython,
+        resolver: crate::resolver::ManagedPythonResolverConfiguration,
+    },
+    UserSelected(OsString),
+}
+
+impl PythonEnvironment {
+    pub(super) fn builtin(
+        configured: Option<OsString>,
+        resolver: crate::resolver::ManagedPythonResolverConfiguration,
+    ) -> Result<Self, String> {
+        if let Some(configured) = configured
+            && !configured.is_empty()
+            && configured != "managed"
+        {
+            return Ok(Self::UserSelected(configured));
+        }
+        let selected = crate::resolver::resolve_python(&[], &resolver, |_| Ok(()))?;
+        Ok(Self::Managed { selected, resolver })
+    }
+
+    pub(super) fn managed(&self) -> Option<&crate::resolver::ManagedPython> {
+        match self {
+            Self::Managed { selected, .. } => Some(selected),
+            Self::UserSelected(_) => None,
+        }
+    }
+
+    pub(super) fn managed_parts(
+        &self,
+    ) -> Result<
+        (
+            &crate::resolver::ManagedPython,
+            &crate::resolver::ManagedPythonResolverConfiguration,
+        ),
+        String,
+    > {
+        match self {
+            Self::Managed { selected, resolver } => Ok((selected, resolver)),
+            Self::UserSelected(_) => Err(USER_SELECTED_PYTHON_ERROR.to_string()),
+        }
+    }
+
+    pub(super) fn replace_managed(
+        &mut self,
+        managed: crate::resolver::ManagedPython,
+    ) -> Result<(), String> {
+        match self {
+            Self::Managed { selected, .. } => {
+                *selected = managed;
+                Ok(())
+            }
+            Self::UserSelected(_) => Err(USER_SELECTED_PYTHON_ERROR.to_string()),
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    pub(super) fn configure_worker(&self, command: &mut crate::sandbox::SandboxedCommand) {
+        match self {
+            Self::Managed { selected, .. } => selected.configure_worker(command),
+            Self::UserSelected(python) => {
+                command
+                    .env("RETICULATE_PYTHON", python)
+                    .env_remove("MCP_CONSOLE_MANAGED_PYTHON");
+            }
+        }
+    }
+}
+
+pub(super) fn ensure_python_additions_available(
+    environment: &Environment,
+    additions: &[String],
+) -> Result<(), String> {
+    if additions.is_empty() {
+        return Ok(());
+    }
+    if environment.custom_worker {
+        return Err("Python requirements are unavailable with a custom worker".to_string());
+    }
+    match environment.python.as_ref() {
+        Some(PythonEnvironment::Managed { .. }) => Ok(()),
+        Some(PythonEnvironment::UserSelected(_)) => Err(USER_SELECTED_PYTHON_ERROR.to_string()),
+        None => Err("managed Python environment is unavailable".to_string()),
+    }
 }
 
 pub(crate) enum PrepareResult {
@@ -105,9 +197,7 @@ impl Client {
             .map_err(|_| "worker environment lock poisoned".to_string())?;
         self.ensure_generation(&generation)?;
         let Requirements { duckdb, python, r } = requirements;
-        if environment.custom_worker && !python.is_empty() {
-            return Err("Python requirements are unavailable with a custom worker".to_string());
-        }
+        ensure_python_additions_available(&environment, &python)?;
         let duckdb_additions = duckdb.into_iter().collect::<BTreeSet<_>>();
         let duckdb_candidate = if duckdb_additions.is_subset(&environment.duckdb_extensions) {
             None
@@ -122,7 +212,10 @@ impl Client {
         };
         let python_additions = python.into_iter().collect::<BTreeSet<_>>();
         let python_candidate = merge_python_requirements(
-            environment.python.as_ref(),
+            environment
+                .python
+                .as_ref()
+                .and_then(PythonEnvironment::managed),
             python_additions.iter().cloned().collect(),
         );
         let mut r_additions = r.into_iter().collect::<BTreeSet<_>>();
@@ -163,9 +256,6 @@ impl Client {
             return Ok(PrepareResult::RestartRequired);
         }
         if matches!(*worker, WorkerState::Running(_)) {
-            if python_candidate.is_some() && environment.python.is_none() {
-                return Ok(PrepareResult::RestartRequired);
-            }
             let managed_r = if r_additions.is_subset(&current_r) {
                 None
             } else {
@@ -241,14 +331,21 @@ impl Client {
             self.resolve_duckdb_extensions(&generation, &targets, &duckdb_extensions)?;
         }
 
-        let mut managed_python = environment.python.clone();
-        if let Some(candidate) = python_candidate {
-            let result = crate::resolver::resolve_python_host(candidate, |handle| {
+        let managed_python = if let Some(candidate) = python_candidate {
+            let (_, resolver) = environment
+                .python
+                .as_ref()
+                .ok_or_else(|| "managed Python environment is unavailable".to_string())?
+                .managed_parts()?;
+            let resolver = resolver.clone();
+            let result = crate::resolver::resolve_python_host(candidate, &resolver, |handle| {
                 self.register_resolver_stop_handle(&generation, handle)
             });
             self.clear_resolver_stop_handle(&generation)?;
-            managed_python = Some(result?);
-        }
+            Some(result?)
+        } else {
+            None
+        };
 
         let mut lifecycle = self
             .0
@@ -258,7 +355,13 @@ impl Client {
         match lifecycle.state {
             LifecycleState::Ready if lifecycle.generation.is(&generation) => {
                 lifecycle.processes.resolver = None;
-                environment.python = managed_python;
+                if let Some(managed_python) = managed_python {
+                    environment
+                        .python
+                        .as_mut()
+                        .ok_or_else(|| "managed Python environment is unavailable".to_string())?
+                        .replace_managed(managed_python)?;
+                }
                 environment.r = managed_r;
                 if let Some(duckdb_candidate) = duckdb_candidate {
                     environment.duckdb_extensions = duckdb_candidate;
@@ -580,9 +683,14 @@ impl Client {
         if environment.custom_worker {
             return Err("Python requirements are unavailable with a custom worker".to_string());
         }
-        let current = environment.python.clone().ok_or_else(|| {
-            "runtime Python requirements require a server-managed interpreter".to_string()
-        })?;
+        let (current, resolver) = environment
+            .python
+            .as_ref()
+            .ok_or_else(|| "managed Python environment is unavailable".to_string())?
+            .managed_parts()?;
+        let current = current.clone();
+        crate::python_requirement::validate_all(&request.requirements.packages)?;
+        crate::python_requirement::validate_all(&request.retained_requirements.packages)?;
         let requirements = request.requirements.normalized();
         let retained_requirements = request.retained_requirements.normalized();
         if requirements.packages != retained_requirements.packages
@@ -604,17 +712,16 @@ impl Client {
             }
         }
 
-        let managed = match crate::resolver::resolve_python_manifest(
-            requirements,
-            request.environment,
-            |handle| self.register_resolver_stop_handle(&generation, handle),
-        ) {
-            Ok(managed) => managed,
-            Err(error) => {
-                self.clear_resolver_stop_handle(&generation)?;
-                return Err(error);
-            }
-        };
+        let managed =
+            match crate::resolver::resolve_python_manifest(requirements, resolver, |handle| {
+                self.register_resolver_stop_handle(&generation, handle)
+            }) {
+                Ok(managed) => managed,
+                Err(error) => {
+                    self.clear_resolver_stop_handle(&generation)?;
+                    return Err(error);
+                }
+            };
         self.clear_resolver_stop_handle(&generation)?;
         self.ensure_generation(&generation)?;
         Ok(managed.with_retained_requirements(retained_requirements))
@@ -635,17 +742,15 @@ impl Client {
         if environment.custom_worker {
             return Err("Python requirements are unavailable with a custom worker".to_string());
         }
-        if environment.python.is_none() {
-            return Err(
-                "runtime Python version resolution requires a server-managed interpreter"
-                    .to_string(),
-            );
-        }
-        let result = crate::resolver::resolve_python_version(
-            request.constraints,
-            request.environment,
-            |handle| self.register_resolver_stop_handle(&generation, handle),
-        );
+        let (_, resolver) = environment
+            .python
+            .as_ref()
+            .ok_or_else(|| "managed Python environment is unavailable".to_string())?
+            .managed_parts()?;
+        let result =
+            crate::resolver::resolve_python_version(request.constraints, resolver, |handle| {
+                self.register_resolver_stop_handle(&generation, handle)
+            });
         self.clear_resolver_stop_handle(&generation)?;
         self.ensure_generation(&generation)?;
         result
@@ -668,8 +773,13 @@ impl Client {
         if environment.custom_worker {
             return Err("custom worker reported a managed Python activation".to_string());
         }
-        let managed =
-            select_python_activation(environment.python.as_ref(), requirements, candidates)?;
+        let current = environment
+            .python
+            .as_ref()
+            .ok_or_else(|| "managed Python environment is unavailable".to_string())?
+            .managed_parts()?
+            .0;
+        let managed = select_python_activation(Some(current), requirements, candidates)?;
         candidates.clear();
         self.commit_locked_runtime_python(&generation, &mut environment, managed)
     }
@@ -704,7 +814,11 @@ impl Client {
         let disposition = lifecycle.old_generation_commit_disposition(generation)?;
         match disposition {
             OldGenerationCommitDisposition::Commit => {
-                environment.python = Some(managed);
+                environment
+                    .python
+                    .as_mut()
+                    .ok_or_else(|| "managed Python environment is unavailable".to_string())?
+                    .replace_managed(managed)?;
                 Ok(disposition)
             }
             OldGenerationCommitDisposition::DiscardForReplacement => Ok(disposition),
@@ -733,4 +847,51 @@ fn preparation_cancelled(includes_r: bool) -> String {
 
 fn requirement_restart_error(error: String) -> String {
     format!("{error}; further requirement changes are unavailable until session restart")
+}
+
+#[cfg(test)]
+mod tests {
+    use std::ffi::OsString;
+
+    use super::{
+        Environment, PythonEnvironment, USER_SELECTED_PYTHON_ERROR,
+        ensure_python_additions_available,
+    };
+
+    fn environment(custom_worker: bool, python: Option<PythonEnvironment>) -> Environment {
+        Environment {
+            custom_worker,
+            duckdb_extensions: Default::default(),
+            duckdb_r_targets: Vec::new(),
+            python,
+            r: None,
+        }
+    }
+
+    #[test]
+    fn user_selected_python_has_a_distinct_managed_requirement_policy() {
+        let environment = environment(
+            false,
+            Some(PythonEnvironment::UserSelected(OsString::from(
+                "/selected/python",
+            ))),
+        );
+        assert_eq!(
+            ensure_python_additions_available(&environment, &["numpy".to_string()]),
+            Err(USER_SELECTED_PYTHON_ERROR.to_string())
+        );
+        assert_eq!(
+            environment.python.as_ref().unwrap().managed_parts().err(),
+            Some(USER_SELECTED_PYTHON_ERROR.to_string())
+        );
+    }
+
+    #[test]
+    fn custom_worker_policy_remains_separate() {
+        let environment = environment(true, None);
+        assert_eq!(
+            ensure_python_additions_available(&environment, &["numpy".to_string()]),
+            Err("Python requirements are unavailable with a custom worker".to_string())
+        );
+    }
 }

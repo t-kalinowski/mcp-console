@@ -35,7 +35,6 @@ RESOLVE_PYTHON = {
     "request": {
         "requirements": {"packages": ["numpy", "pandas"]},
         "retained_requirements": {"packages": ["numpy", "pandas"]},
-        "environment": {},
     },
 }
 PYTHON_RESOLUTION_FAILED = {
@@ -44,7 +43,7 @@ PYTHON_RESOLUTION_FAILED = {
 }
 RESOLVE_PYTHON_VERSION = {
     "kind": "resolve_python_version",
-    "request": {"constraints": [">=3.11"], "environment": {}},
+    "request": {"constraints": [">=3.11"]},
 }
 PYTHON_VERSION_RESOLUTION_FAILED = {
     "kind": "python_version_resolution_failed",

@@ -2,7 +2,9 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use super::environment::merge_python_requirements;
+use super::environment::{
+    PythonEnvironment, ensure_python_additions_available, merge_python_requirements,
+};
 use super::evaluation::{RestartDelivery, RestartReservation};
 use super::output::{Response, ResponseAcknowledgment, SendFailure};
 use super::{Client, WorkerRetirement, WorkerRetirementFailure, WorkerState, platform};
@@ -275,9 +277,7 @@ impl Client {
             .map_err(|_| "worker environment lock poisoned".to_string())?;
         self.ensure_generation(&generation)?;
         let super::Requirements { duckdb, python, r } = requirements;
-        if environment.custom_worker && !python.is_empty() {
-            return Err("Python requirements are unavailable with a custom worker".to_string());
-        }
+        ensure_python_additions_available(&environment, &python)?;
 
         let duckdb_additions = duckdb.into_iter().collect::<BTreeSet<_>>();
         let duckdb_changed = !duckdb_additions.is_subset(&environment.duckdb_extensions);
@@ -286,7 +286,13 @@ impl Client {
             .union(&duckdb_additions)
             .cloned()
             .collect::<BTreeSet<_>>();
-        let python_candidate = merge_python_requirements(environment.python.as_ref(), python);
+        let python_candidate = merge_python_requirements(
+            environment
+                .python
+                .as_ref()
+                .and_then(PythonEnvironment::managed),
+            python,
+        );
         let mut r_additions = r.into_iter().collect::<BTreeSet<_>>();
         if environment.custom_worker {
             r_additions.extend(
@@ -324,14 +330,21 @@ impl Client {
             self.resolve_duckdb_extensions(&generation, std::slice::from_ref(target), &extensions)?;
         }
 
-        let mut managed_python = environment.python.clone();
-        if let Some(candidate) = python_candidate {
-            let result = crate::resolver::resolve_python_host(candidate, |handle| {
+        let managed_python = if let Some(candidate) = python_candidate {
+            let (_, resolver) = environment
+                .python
+                .as_ref()
+                .ok_or_else(|| "managed Python environment is unavailable".to_string())?
+                .managed_parts()?;
+            let resolver = resolver.clone();
+            let result = crate::resolver::resolve_python_host(candidate, &resolver, |handle| {
                 self.register_resolver_stop_handle(&generation, handle)
             });
             self.clear_resolver_stop_handle(&generation)?;
-            managed_python = Some(result?);
-        }
+            Some(result?)
+        } else {
+            None
+        };
 
         self.commit_environment_and_begin_restart(
             &generation,
@@ -375,7 +388,13 @@ impl Client {
             .take()
             .map(|active| active.evaluation.reserve_for_restart())
             .transpose()?;
-        environment.python = managed_python;
+        if let Some(managed_python) = managed_python {
+            environment
+                .python
+                .as_mut()
+                .ok_or_else(|| "managed Python environment is unavailable".to_string())?
+                .replace_managed(managed_python)?;
+        }
         environment.r = managed_r;
         environment.duckdb_extensions = duckdb_extensions;
         let (processes, deadline, generation) =

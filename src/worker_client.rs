@@ -19,7 +19,7 @@ mod platform;
 #[path = "worker_client/unsupported.rs"]
 mod platform;
 
-use environment::Environment;
+use environment::{Environment, PythonEnvironment};
 pub(crate) use environment::{PrepareResult, Requirements};
 use evaluation::{Evaluation, EvaluationWait};
 use lifecycle::{LifecycleControl, OldGenerationCommitDisposition, WorkerGeneration};
@@ -64,7 +64,7 @@ struct WorkerSpec<'a> {
     executable: &'a std::path::Path,
     arguments: &'a [OsString],
     relay: Option<&'a std::path::Path>,
-    managed_python: Option<&'a crate::resolver::ManagedPython>,
+    python: Option<&'a PythonEnvironment>,
     managed_r: Option<&'a crate::resolver::ManagedR>,
     callbacks: WorkerCallbacks,
 }
@@ -207,6 +207,8 @@ impl Client {
     }
 
     pub(crate) fn builtin() -> Result<Self, String> {
+        let python_resolver = crate::resolver::ManagedPythonResolverConfiguration::capture();
+        let configured_python = std::env::var_os("RETICULATE_PYTHON");
         let program = std::env::current_exe()
             .map_err(|error| format!("failed to locate the R worker executable: {error}"))?;
         #[cfg(target_os = "macos")]
@@ -226,8 +228,15 @@ impl Client {
             (Some(r), duckdb_extensions.into_iter().collect())
         };
         #[cfg(not(target_os = "macos"))]
-        let (r, duckdb_extensions) = (None, Default::default());
-        let python = crate::resolver::resolve_python(&[], |_| Ok(()))?;
+        let (r, duckdb_extensions) = (
+            Option::<crate::resolver::ManagedR>::None,
+            Default::default(),
+        );
+        let python_resolver = match r.as_ref() {
+            Some(r) => python_resolver.with_managed_r(r.clone()),
+            None => python_resolver,
+        };
+        let python = PythonEnvironment::builtin(configured_python, python_resolver)?;
         Ok(Self::with_arguments(
             program,
             vec![OsString::from("worker")],
@@ -236,7 +245,7 @@ impl Client {
                 custom_worker: false,
                 duckdb_extensions,
                 duckdb_r_targets: Vec::new(),
-                python,
+                python: Some(python),
                 r,
             }),
         ))
@@ -651,7 +660,7 @@ impl Client {
                 ),
                 None => None,
             };
-            let managed_python = environment
+            let python = environment
                 .as_ref()
                 .and_then(|environment| environment.python.as_ref());
             let managed_r = environment
@@ -661,7 +670,7 @@ impl Client {
                 executable: &self.0.program,
                 arguments: &self.0.arguments,
                 relay: self.0.relay.as_deref(),
-                managed_python,
+                python,
                 managed_r,
                 callbacks: WorkerCallbacks {
                     client: self.clone(),

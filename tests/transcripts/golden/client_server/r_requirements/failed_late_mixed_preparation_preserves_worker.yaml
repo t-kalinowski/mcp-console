@@ -38,26 +38,16 @@ session:
     r:
       - zeallot
     python:
-      - not a valid requirement !!!
+      - example @ https://example.invalid/example.whl
+    duckdb:
+      - not_a_real_duckdb_extension
 result:
   content:
     - type: text
-      text: |-
-        managed Python resolution failed:
-        resolver input:
-        {
-          "python": "3.12.x (reticulate default)",
-          "packages": [
-            "numpy",
-            "pandas",
-            "not a valid requirement !!!"
-          ]
-        }
-        uv output:
-        error: Failed to parse: `not a valid requirement !!!`
-          Caused by: Expected one of `@`, `(`, `<`, `=`, `>`, `~`, `!`, `;`, found `a`
-            not a valid requirement !!!
-                ^
+      text: >-
+        Python requirement `example @ https://example.invalid/example.whl` is
+        not accepted: host-side managed resolution accepts named package
+        requirements only
   isError: true
 ---
 id: 6
@@ -72,7 +62,7 @@ send:
         lib.loc = initial_library,
         quietly = TRUE
       )),
-      !"not a valid requirement !!!" %in%
+      !"example @ https://example.invalid/example.whl" %in%
         reticulate::py_require()$packages
     )
     42L

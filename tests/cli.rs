@@ -190,7 +190,9 @@ exit 99
     command
         .arg("serve")
         .env_remove("R_HOME")
-        .env("RETICULATE_PYTHON", "")
+        // This test isolates R selection from managed-Python startup, whose
+        // resolver intentionally uses the configured PATH.
+        .env("RETICULATE_PYTHON", "/usr/bin/python3")
         .env("PATH", path)
         .env("MCP_CONSOLE_REAL_R", &real_r)
         .env("MCP_CONSOLE_REAL_R_HOME", &real_r_home)
@@ -380,6 +382,7 @@ fn stdio_console_stops_resolver_descendants_when_leader_exits() {
     let fake_ir = fake_bin.join("ir");
     let fake_rscript = fake_bin.join("Rscript");
     let fake_python = test_directory.path().join("python");
+    let python_preflight_complete = test_directory.path().join("python-preflight-complete");
     let resolver_started = test_directory.path().join("resolver-started");
     fs::create_dir(&fake_bin).expect("fake bin directory should be created");
     fs::write(
@@ -397,7 +400,22 @@ fi
     fs::write(
         &fake_rscript,
         r#"#!/bin/sh
-/bin/cat >/dev/null
+input=$(/bin/cat)
+case "$input" in
+  *'"extensions"'*)
+    exit 0
+    ;;
+  *'"packages"'*)
+    ;;
+  *)
+    exit 99
+    ;;
+esac
+if [ ! -e "$MCP_CONSOLE_PYTHON_PREFLIGHT_COMPLETE" ]; then
+  : > "$MCP_CONSOLE_PYTHON_PREFLIGHT_COMPLETE"
+  printf '%s\n' "$MCP_CONSOLE_TEST_PYTHON"
+  exit 0
+fi
 /bin/sleep 30 &
 printf '%s\n' "$$" > "${MCP_CONSOLE_RESOLVER_STARTED}.tmp"
 /bin/mv "${MCP_CONSOLE_RESOLVER_STARTED}.tmp" "$MCP_CONSOLE_RESOLVER_STARTED"
@@ -420,8 +438,12 @@ exit 0
         .arg("serve")
         .env("R_HOME", test_directory.path())
         .env("PATH", path)
-        .env("RETICULATE_PYTHON", "configured-by-user")
+        .env("RETICULATE_PYTHON", "")
         .env("MCP_CONSOLE_FAKE_R_LIBRARY", test_directory.path())
+        .env(
+            "MCP_CONSOLE_PYTHON_PREFLIGHT_COMPLETE",
+            &python_preflight_complete,
+        )
         .env("MCP_CONSOLE_RESOLVER_STARTED", &resolver_started)
         .env("MCP_CONSOLE_TEST_PYTHON", &fake_python);
     let mut client = McpClient::spawn(command);
@@ -481,6 +503,8 @@ fn stdio_console_shutdown_is_bounded_during_python_preparation() {
     let fake_bin = test_directory.path().join("bin");
     let fake_ir = fake_bin.join("ir");
     let fake_rscript = fake_bin.join("Rscript");
+    let fake_python = test_directory.path().join("python");
+    let python_preflight_complete = test_directory.path().join("python-preflight-complete");
     let resolver_started = test_directory.path().join("resolver-started");
     fs::create_dir(&fake_bin).expect("fake bin directory should be created");
     fs::write(
@@ -494,9 +518,26 @@ fi
 "#,
     )
     .expect("fake IR should be written");
+    fs::write(&fake_python, "").expect("fake Python should be written");
     fs::write(
         &fake_rscript,
         r#"#!/bin/sh
+input=$(/bin/cat)
+case "$input" in
+  *'"extensions"'*)
+    exit 0
+    ;;
+  *'"packages"'*)
+    ;;
+  *)
+    exit 99
+    ;;
+esac
+if [ ! -e "$MCP_CONSOLE_PYTHON_PREFLIGHT_COMPLETE" ]; then
+  : > "$MCP_CONSOLE_PYTHON_PREFLIGHT_COMPLETE"
+  printf '%s\n' "$MCP_CONSOLE_TEST_PYTHON"
+  exit 0
+fi
 printf '%s\n' "$$" >> "$MCP_CONSOLE_RESOLVER_STARTED"
 exec /bin/sleep 3
 "#,
@@ -516,9 +557,14 @@ exec /bin/sleep 3
         .arg("serve")
         .env("R_HOME", test_directory.path())
         .env("PATH", path)
-        .env("RETICULATE_PYTHON", "configured-by-user")
+        .env_remove("RETICULATE_PYTHON")
         .env("MCP_CONSOLE_FAKE_R_LIBRARY", test_directory.path())
-        .env("MCP_CONSOLE_RESOLVER_STARTED", &resolver_started);
+        .env(
+            "MCP_CONSOLE_PYTHON_PREFLIGHT_COMPLETE",
+            &python_preflight_complete,
+        )
+        .env("MCP_CONSOLE_RESOLVER_STARTED", &resolver_started)
+        .env("MCP_CONSOLE_TEST_PYTHON", &fake_python);
     let mut client = McpClient::spawn(command);
     client.send_tool(
         2,
@@ -547,7 +593,7 @@ exec /bin/sleep 3
         "session",
         json!({
             "action": "prepare",
-            "requirements": {"python": ["pandas"]}
+            "requirements": {"python": ["scipy"]}
         }),
     );
     let tools = client.request(4, "tools/list", None);

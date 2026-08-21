@@ -12,7 +12,6 @@ from _support import (
     McpClient,
     Transcript,
     code,
-    normalize_python_resolution_error,
     r_test_environment,
     release_worker_callback_gate,
     run_this_suite,
@@ -21,6 +20,13 @@ from _support import (
 
 PLATFORMS = {"darwin"}
 REQUIRED_COMMANDS = {"ir"}
+
+
+def named_requirement_error(requirement: str) -> str:
+    return (
+        f"Python requirement `{requirement}` is not accepted: host-side managed "
+        "resolution accepts named package requirements only"
+    )
 
 
 def test_rejects_unsupported_ir_version(binary: Path) -> Transcript:
@@ -444,19 +450,18 @@ def test_failed_late_mixed_preparation_preserves_worker(binary: Path) -> Transcr
     client.send(r=r)
     assert last_tool_text(client) == "[done]", client.transcript[-1]
 
-    invalid_python = "not a valid requirement !!!"
+    invalid_python = "example @ https://example.invalid/example.whl"
     client.session(
         action="prepare",
         requirements={
             "r": ["zeallot"],
             "python": [invalid_python],
+            "duckdb": ["not_a_real_duckdb_extension"],
         },
     )
     result = client.transcript[-1]["result"]
     assert result["isError"] is True, result
-    result["content"][0]["text"] = normalize_python_resolution_error(
-        result["content"][0]["text"], invalid_python
-    )
+    assert result["content"][0]["text"] == named_requirement_error(invalid_python)
 
     # fmt: r
     r = code(r"""
@@ -469,7 +474,7 @@ def test_failed_late_mixed_preparation_preserves_worker(binary: Path) -> Transcr
             lib.loc = initial_library,
             quietly = TRUE
           )),
-          !"not a valid requirement !!!" %in%
+          !"example @ https://example.invalid/example.whl" %in%
             reticulate::py_require()$packages
         )
         42L
@@ -572,7 +577,7 @@ def test_prepares_initial_r_requirements(binary: Path) -> Transcript:
             error
         )
 
-        invalid_python = "not a valid requirement !!!"
+        invalid_python = "example @ https://example.invalid/example.whl"
         client.session(
             action="prepare",
             requirements={
@@ -582,9 +587,7 @@ def test_prepares_initial_r_requirements(binary: Path) -> Transcript:
         )
         result = client.transcript[-1]["result"]
         assert result["isError"] is True, result
-        result["content"][0]["text"] = normalize_python_resolution_error(
-            result["content"][0]["text"], invalid_python
-        )
+        assert result["content"][0]["text"] == named_requirement_error(invalid_python)
 
         # fmt: r
         r = code(r"""

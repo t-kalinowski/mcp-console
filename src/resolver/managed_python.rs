@@ -1,4 +1,3 @@
-use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
@@ -153,29 +152,26 @@ impl ManagedPython {
 
 pub(crate) fn resolve_python(
     requirements: &[String],
+    configuration: &super::ManagedPythonResolverConfiguration,
     on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
-) -> Result<Option<ManagedPython>, String> {
-    if requirements.is_empty()
-        && std::env::var_os("RETICULATE_PYTHON").is_some_and(|value| value != "managed")
-    {
-        return Ok(None);
-    }
+) -> Result<ManagedPython, String> {
     let requirements = manifest_from_packages(requirements);
-    resolve_python_host(requirements, on_started).map(Some)
+    resolve_python_host(requirements, configuration, on_started)
 }
 
 pub(crate) fn resolve_python_manifest(
     requirements: crate::worker_protocol::PythonRequirementManifest,
-    environment: BTreeMap<String, String>,
+    configuration: &super::ManagedPythonResolverConfiguration,
     on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
 ) -> Result<ManagedPython, String> {
+    crate::python_requirement::validate_all(&requirements.packages)?;
     let requirements = requirements.normalized();
     let input = serde_json::to_vec(&requirements)
         .expect("managed Python requirements should serialize as JSON");
     let output = run_python_resolver(
         PYTHON_RESOLVER,
         input,
-        environment,
+        configuration,
         on_started,
         "managed Python",
     )?;
@@ -229,7 +225,7 @@ pub(crate) fn resolve_python_manifest(
 
 pub(crate) fn resolve_python_version(
     constraints: Vec<String>,
-    environment: BTreeMap<String, String>,
+    configuration: &super::ManagedPythonResolverConfiguration,
     on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
 ) -> Result<String, String> {
     let input = serde_json::to_vec(&constraints)
@@ -237,7 +233,7 @@ pub(crate) fn resolve_python_version(
     let output = run_python_resolver(
         PYTHON_VERSION_RESOLVER,
         input,
-        environment,
+        configuration,
         on_started,
         "managed Python version",
     )?;
@@ -263,33 +259,27 @@ pub(crate) fn resolve_python_version(
 
 pub(crate) fn resolve_python_host(
     requirements: crate::worker_protocol::PythonRequirementManifest,
+    configuration: &super::ManagedPythonResolverConfiguration,
     on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
 ) -> Result<ManagedPython, String> {
-    resolve_python_manifest(requirements, uv_environment(), on_started)
+    resolve_python_manifest(requirements, configuration, on_started)
 }
 
 fn run_python_resolver(
     source: &str,
     input: Vec<u8>,
-    environment: BTreeMap<String, String>,
+    configuration: &super::ManagedPythonResolverConfiguration,
     on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
     kind: &str,
 ) -> Result<ResolverOutput, String> {
-    validate_environment(&environment)?;
-    let rscript = python_resolver_rscript();
-    let mut command = resolver_command(&rscript);
+    let rscript = configuration.rscript()?;
+    let mut command = resolver_command(rscript);
     command
         .args(["--vanilla", "-e", source])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    for name in std::env::vars_os()
-        .filter_map(|(name, _)| name.into_string().ok())
-        .filter(|name| name.starts_with("UV_"))
-    {
-        command.env_remove(name);
-    }
-    command.envs(&environment).env_remove("UV_OFFLINE");
+    configuration.configure(&mut command)?;
     // Managed resolution intentionally runs outside the sandbox because
     // reticulate and uv need normal host network and cache access. Resolver
     // inputs are JSON standard-input data, never R source.
@@ -305,18 +295,12 @@ fn run_python_resolver(
     let resolver = ResolverProcess::new();
     let stop_handle = resolver.stop_handle();
     if let Err(error) = on_started(stop_handle) {
-        let _ = stop_resolver(&mut child, &rscript, kind);
+        let _ = stop_resolver(&mut child, rscript, kind);
         return Err(error);
     }
     resolver.watch_exit(child.id());
     let input = write_input(stdin, input);
-    resolver.wait(&mut child, input, stdout, stderr, &rscript, kind)
-}
-
-fn python_resolver_rscript() -> PathBuf {
-    std::env::var_os("R_HOME")
-        .map(|r_home| PathBuf::from(r_home).join("bin/Rscript"))
-        .unwrap_or_else(|| PathBuf::from("Rscript"))
+    resolver.wait(&mut child, input, stdout, stderr, rscript, kind)
 }
 
 fn manifest_from_packages(
@@ -325,23 +309,4 @@ fn manifest_from_packages(
     let mut manifest = crate::worker_protocol::default_python_requirement_manifest();
     manifest.packages.extend(requirements.iter().cloned());
     manifest.normalized()
-}
-
-fn uv_environment() -> BTreeMap<String, String> {
-    std::env::vars_os()
-        .filter_map(|(name, value)| Some((name.into_string().ok()?, value.into_string().ok()?)))
-        .filter(|(name, _)| name.starts_with("UV_") && name != "UV_OFFLINE")
-        .collect()
-}
-
-fn validate_environment(environment: &BTreeMap<String, String>) -> Result<(), String> {
-    if let Some(name) = environment
-        .keys()
-        .find(|name| !name.starts_with("UV_") || name.as_str() == "UV_OFFLINE")
-    {
-        return Err(format!(
-            "managed Python resolver received unsupported environment variable `{name}`"
-        ));
-    }
-    Ok(())
 }

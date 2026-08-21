@@ -1,0 +1,214 @@
+---
+!same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
+---
+id: 3
+session:
+  action: prepare
+  requirements:
+    r:
+      - praise
+    python:
+      - "<absolute project path>"
+    duckdb:
+      - not_a_real_duckdb_extension
+result:
+  content:
+    - type: text
+      text: "Python requirement `<absolute project path>` is not accepted: host-side managed resolution accepts named package requirements only"
+  isError: true
+---
+id: 4
+session:
+  action: restart
+  requirements:
+    r:
+      - praise
+    python:
+      - "./project"
+    duckdb:
+      - not_a_real_duckdb_extension
+result:
+  content:
+    - type: text
+      text: "Python requirement `./project` is not accepted: host-side managed resolution accepts named package requirements only"
+  isError: true
+---
+id: 5
+session:
+  action: prepare
+  requirements:
+    r:
+      - praise
+    python:
+      - "../project"
+    duckdb:
+      - not_a_real_duckdb_extension
+result:
+  content:
+    - type: text
+      text: "Python requirement `../project` is not accepted: host-side managed resolution accepts named package requirements only"
+  isError: true
+---
+id: 6
+session:
+  action: restart
+  requirements:
+    r:
+      - praise
+    python:
+      - "file://<absolute project path>"
+    duckdb:
+      - not_a_real_duckdb_extension
+result:
+  content:
+    - type: text
+      text: "Python requirement `file://<absolute project path>` is not accepted: host-side managed resolution accepts named package requirements only"
+  isError: true
+---
+id: 7
+session:
+  action: prepare
+  requirements:
+    r:
+      - praise
+    python:
+      - "-e ./project"
+    duckdb:
+      - not_a_real_duckdb_extension
+result:
+  content:
+    - type: text
+      text: "Python requirement `-e ./project` is not accepted: host-side managed resolution accepts named package requirements only"
+  isError: true
+---
+id: 8
+session:
+  action: restart
+  requirements:
+    r:
+      - praise
+    python:
+      - "example @ https://example.invalid/example.whl"
+    duckdb:
+      - not_a_real_duckdb_extension
+result:
+  content:
+    - type: text
+      text: "Python requirement `example @ https://example.invalid/example.whl` is not accepted: host-side managed resolution accepts named package requirements only"
+  isError: true
+---
+id: 9
+session:
+  action: prepare
+  requirements:
+    r:
+      - praise
+    python:
+      - "<absolute archive path>"
+    duckdb:
+      - not_a_real_duckdb_extension
+result:
+  content:
+    - type: text
+      text: "Python requirement `<absolute archive path>` is not accepted: host-side managed resolution accepts named package requirements only"
+  isError: true
+---
+id: 10
+session:
+  action: restart
+  requirements:
+    r:
+      - praise
+    python:
+      - package.whl
+    duckdb:
+      - not_a_real_duckdb_extension
+result:
+  content:
+    - type: text
+      text: "Python requirement `package.whl` is not accepted: host-side managed resolution accepts named package requirements only"
+  isError: true
+---
+id: 11
+session:
+  action: prepare
+  requirements:
+    r:
+      - praise
+    python:
+      - package.tar.gz
+    duckdb:
+      - not_a_real_duckdb_extension
+result:
+  content:
+    - type: text
+      text: "Python requirement `package.tar.gz` is not accepted: host-side managed resolution accepts named package requirements only"
+  isError: true
+---
+id: 12
+session:
+  action: prepare
+  requirements:
+    duckdb:
+      - not_a_real_duckdb_extension
+result:
+  content:
+    - type: text
+      text: "Invalid Error: HTTP Error: Failed to download extension \"not_a_real_duckdb_extension\""
+  isError: true
+---
+id: 13
+session:
+  action: prepare
+  requirements:
+    python:
+      - "requests[socks]>=2; python_version < '0'"
+result:
+  content:
+    - type: text
+      text: "[prepared]"
+  isError: false
+---
+id: 14
+session:
+  action: restart
+  requirements:
+    python:
+      - "urllib3!=2.0.0; python_version < '0'"
+result:
+  content:
+    - type: text
+      text: |-
+        [starting new worker]
+        [idle]
+  isError: false
+---
+id: 15
+send:
+  r: |
+    requirements <- reticulate::py_require()$packages
+    stopifnot(
+      "requests[socks]>=2; python_version < '0'" %in% requirements,
+      "urllib3!=2.0.0; python_version < '0'" %in% requirements,
+      !any(c(
+        "<absolute project path>", "./project", "../project", "file://<absolute project path>", "-e ./project", "example @ https://example.invalid/example.whl", "<absolute archive path>", "package.whl", "package.tar.gz"
+      ) %in% requirements),
+      !file.exists(file.path(.libPaths()[[1L]], "praise", "DESCRIPTION"))
+    )
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+id: 16
+send:
+  r: |
+    reticulate::py_require("./runtime-project")
+    invisible(reticulate::py_config())
+result:
+  content:
+    - type: text
+      text: "Python requirement `./runtime-project` is not accepted: host-side managed resolution accepts named package requirements only"
+  isError: false
+...

@@ -51,7 +51,6 @@ relay:
       packages:
         - numpy
         - pandas
-    environment: {}
 ---
 server:
   kind: python_resolution_failed
@@ -62,7 +61,6 @@ relay:
   request:
     constraints:
       - ">=3.11"
-    environment: {}
 ---
 server:
   kind: python_version_resolution_failed

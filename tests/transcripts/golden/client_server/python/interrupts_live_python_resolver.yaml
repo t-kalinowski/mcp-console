@@ -3,9 +3,7 @@
 ---
 id: 3
 send:
-  r: |
-    resolver_interrupt_state <- 41L
-    Sys.setenv(UV_DEFAULT_INDEX = "http://127.0.0.1:<PORT>/simple")
+  r: resolver_interrupt_state <- 41L
 result:
   content:
     - type: text
@@ -21,18 +19,7 @@ session:
 result:
   content:
     - type: text
-      text: |
-        managed Python resolution failed:
-        resolver input:
-        {
-          "python": "3.12.x (reticulate default)",
-          "packages": [
-            "numpy",
-            "pandas",
-            "mcp-console-blocked-live-preparation"
-          ]
-        }
-        uv output:
+      text: managed Python resolution cancelled by interrupt
   isError: true
 ---
 id: 5
