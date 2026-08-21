@@ -165,6 +165,7 @@ pub(crate) fn resolve_python_manifest(
     on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
 ) -> Result<ManagedPython, String> {
     crate::python_requirement::validate_all(&requirements.packages)?;
+    crate::python_requirement::validate_version_constraints(&requirements.python_version)?;
     let requirements = requirements.normalized();
     let input = serde_json::to_vec(&requirements)
         .expect("managed Python requirements should serialize as JSON");
@@ -228,6 +229,7 @@ pub(crate) fn resolve_python_version(
     configuration: &super::ManagedPythonResolverConfiguration,
     on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
 ) -> Result<String, String> {
+    crate::python_requirement::validate_version_constraints(&constraints)?;
     let input = serde_json::to_vec(&constraints)
         .expect("managed Python version constraints should serialize as JSON");
     let output = run_python_resolver(

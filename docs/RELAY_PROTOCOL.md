@@ -31,6 +31,7 @@ R, Python, and DuckDB requirement resolution remains outside the sandbox.
 For live Python preparation, the server resolves candidate environments, while the worker owns reticulate manifest materialization and activation.
 Python resolver events carry only requirement manifests or version constraints, not environment settings.
 The server validates managed packages as named PEP 508 registry requirements and applies the trusted resolver configuration captured at server startup, so evaluated code cannot configure host resolution through the relay.
+It accepts managed Python version numbers and supported PEP 440 comparison specifiers, rejecting interpreter selectors before starting a host resolver.
 A nonempty user-selected `RETICULATE_PYTHON` value disables managed Python requirements for the built-in worker; the existing custom-worker policy is separate and also rejects managed Python requirements.
 The relay owns the worker process and its local transports, translation between this protocol and the worker sideband, signal delivery, bounded termination, and reaping.
 

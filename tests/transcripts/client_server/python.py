@@ -56,6 +56,13 @@ def named_requirement_error(requirement: str) -> str:
     )
 
 
+def python_version_constraint_error(constraint: str) -> str:
+    return (
+        f"Python version constraint `{constraint}` is not accepted: host-side managed "
+        "resolution accepts version numbers and supported PEP 440 version specifiers only"
+    )
+
+
 def normalize_duckdb_resolution_error(error: str, extension: str) -> str:
     detail = next(
         line.strip().removeprefix("! ")
@@ -473,11 +480,95 @@ def test_validates_registry_only_python_requirements(binary: Path) -> Transcript
         client.send(r=r)
         assert last_tool_text(client) == "[done]", client.transcript[-1]
 
+        worker_executable = temporary / "worker-python"
+        worker_retained_selector = temporary / "worker-retained-python"
+        worker_installation = temporary / "worker-python-installation"
+        for selector in (worker_executable, worker_retained_selector):
+            selector.write_text(
+                '#!/bin/sh\ntouch "$0.executed"\nexit 97\n',
+                encoding="utf-8",
+            )
+            selector.chmod(0o755)
+        worker_installation.mkdir()
+        uv_record.write_text("", encoding="utf-8")
+        # Reach both worker-originated resolver requests directly. Interpreter
+        # selectors must be rejected before either host resolver invokes uv.
+        # fmt: r
+        r = code(rf"""
+            selector_worker_pid <- Sys.getpid()
+            selector_sentinel <- 42L
+            packages <- reticulate::py_require()$packages
+            environment_request <- jsonlite::toJSON(list(
+              requirements = list(
+                packages = I(packages),
+                python_version = I({json.dumps(str(worker_executable))})
+              ),
+              retained_requirements = list(
+                packages = I(packages),
+                python_version = I(">=3.10")
+              )
+            ), auto_unbox = TRUE)
+            environment_error <- tryCatch(
+              .Call("mcp_console_resolve_python", environment_request),
+              error = conditionMessage
+            )
+            retained_environment_request <- jsonlite::toJSON(list(
+              requirements = list(
+                packages = I(packages),
+                python_version = I(">=3.10")
+              ),
+              retained_requirements = list(
+                packages = I(packages),
+                python_version = I({json.dumps(str(worker_retained_selector))})
+              )
+            ), auto_unbox = TRUE)
+            retained_environment_error <- tryCatch(
+              .Call("mcp_console_resolve_python", retained_environment_request),
+              error = conditionMessage
+            )
+            version_request <- jsonlite::toJSON(list(
+              constraints = I({json.dumps(str(worker_installation))})
+            ), auto_unbox = TRUE)
+            version_error <- tryCatch(
+              .Call("mcp_console_resolve_python_version", version_request),
+              error = conditionMessage
+            )
+            cat(
+              environment_error,
+              retained_environment_error,
+              version_error,
+              sep = "\n"
+            )
+            """)
+        client.send(r=r)
+        output = last_tool_text(client)
+        assert output == (
+            python_version_constraint_error(str(worker_executable))
+            + "\n"
+            + python_version_constraint_error(str(worker_retained_selector))
+            + "\n"
+            + python_version_constraint_error(str(worker_installation))
+            + "\n"
+        ), repr(output)
+        assert uv_record.read_text(encoding="utf-8") == ""
+        assert not Path(f"{worker_executable}.executed").exists()
+        assert not Path(f"{worker_retained_selector}.executed").exists()
+        # fmt: r
+        r = code(r"""
+            identical(Sys.getpid(), selector_worker_pid) &&
+              identical(selector_sentinel, 42L) &&
+              is.null(reticulate::py_require()$python_version)
+            """)
+        client.send(r=r)
+        assert last_tool_text(client) == "[1] TRUE\n"
+
         runtime_rejected = "./runtime-project"
         uv_record.write_text("", encoding="utf-8")
         # fmt: r
         r = code(rf"""
-            reticulate::py_require({json.dumps(runtime_rejected)})
+            reticulate::py_require({
+              json.dumps(runtime_rejected)
+            })
             invisible(reticulate::py_config())
             """)
         client.send(r=r)
@@ -492,6 +583,12 @@ def test_validates_registry_only_python_requirements(binary: Path) -> Transcript
         transcript_json = transcript_json.replace(
             str(project), "<absolute project path>"
         ).replace(str(archive), "<absolute archive path>")
+        transcript_json = transcript_json.replace(
+            str(worker_installation), "<worker installation path>"
+        ).replace(str(worker_retained_selector), "<worker retained selector>")
+        transcript_json = transcript_json.replace(
+            str(worker_executable), "<worker executable path>"
+        )
         return json.loads(transcript_json)
 
 

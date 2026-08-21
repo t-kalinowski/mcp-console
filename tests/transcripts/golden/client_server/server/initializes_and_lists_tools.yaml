@@ -57,7 +57,9 @@ result:
         R code such as `reticulate::py_require()` or by an R package load is a
         host-side exception: it may access the network and execute installation
         or build code, so use only trusted requirements. Only named registry
-        requirements are accepted. This resolution uses the server's startup
+        requirements are accepted. Managed Python version requests accept
+        version numbers and supported PEP 440 comparison specifiers, not
+        interpreter selectors. This resolution uses the server's startup
         configuration; changes to `UV_*` made by evaluated code do not configure
         it. Starting the server with a nonempty user-selected
         `RETICULATE_PYTHON` disables managed Python requirement additions.

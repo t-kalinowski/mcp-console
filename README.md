@@ -395,6 +395,8 @@ Its payload-free `python_prepared` event is the explicit worker-side operation r
 A lazy pre-initialization `py_require()` declaration remains worker-owned until Python initializes or explicit preparation materializes it, so a worker failure before either boundary loses that declaration.
 Each runtime environment resolution sends the physical resolver manifest and the logical manifest to retain if accepted; it sends no worker environment settings.
 Runtime Python-version selection sends only version constraints and creates no environment candidate.
+Worker-originated managed-Python requests accept version numbers or `==`, `!=`, `<`, `<=`, `>`, and `>=` PEP 440 specifiers.
+Interpreter paths, executable names, and installation directories are rejected before a host resolver starts.
 After Python initializes, reticulate resolves late additions against the exact active Python patch version while leaving the logical `py_require()` Python constraints unchanged.
 The same named-registry validation applies to explicit preparation, restart additions, and runtime requirements declared by evaluated R code or package loads.
 The requirement strings are structured data rather than R code, and the resolver does not evaluate the submitted cell.

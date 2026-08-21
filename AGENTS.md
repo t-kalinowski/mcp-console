@@ -254,6 +254,7 @@ For a server-managed worker, MCP Console seeds reticulate's requirement manifest
 Environment resolution and Python-version selection become separate typed sideband requests, and the host resolver runs reticulate and uv with the captured server-startup configuration outside the sandbox.
 Version selection returns only the selected version and does not create a candidate environment or alter retained state.
 Each environment-resolution request sends the physical resolver manifest and the logical manifest to retain if accepted; version-resolution requests send only constraints.
+Before any host resolver starts, the server validates both manifests and standalone version requests as version numbers or supported PEP 440 comparison specifiers, rejecting interpreter selectors.
 After Python initializes, reticulate resolves late additions against the exact active Python patch version while leaving the logical `py_require()` Python constraints unchanged.
 Explicit preparation sends structured additions and reports a payload-free completion or failure without evaluating a cell.
 It materializes an uninitialized manifest.

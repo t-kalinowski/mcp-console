@@ -36,6 +36,8 @@ def test_initializes_and_lists_tools(binary: Path) -> Transcript:
         "cannot directly access the network",
         "Managed Python requirement resolution triggered by R code",
         "Only named registry requirements are accepted",
+        "Managed Python version requests accept version numbers",
+        "not interpreter selectors",
         "changes to `UV_*` made by evaluated code do not configure it",
         "nonempty user-selected `RETICULATE_PYTHON` disables managed Python",
     ):

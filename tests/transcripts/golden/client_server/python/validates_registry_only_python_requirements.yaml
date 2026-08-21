@@ -204,6 +204,75 @@ result:
 id: 16
 send:
   r: |
+    selector_worker_pid <- Sys.getpid()
+    selector_sentinel <- 42L
+    packages <- reticulate::py_require()$packages
+    environment_request <- jsonlite::toJSON(list(
+      requirements = list(
+        packages = I(packages),
+        python_version = I("<worker executable path>")
+      ),
+      retained_requirements = list(
+        packages = I(packages),
+        python_version = I(">=3.10")
+      )
+    ), auto_unbox = TRUE)
+    environment_error <- tryCatch(
+      .Call("mcp_console_resolve_python", environment_request),
+      error = conditionMessage
+    )
+    retained_environment_request <- jsonlite::toJSON(list(
+      requirements = list(
+        packages = I(packages),
+        python_version = I(">=3.10")
+      ),
+      retained_requirements = list(
+        packages = I(packages),
+        python_version = I("<worker retained selector>")
+      )
+    ), auto_unbox = TRUE)
+    retained_environment_error <- tryCatch(
+      .Call("mcp_console_resolve_python", retained_environment_request),
+      error = conditionMessage
+    )
+    version_request <- jsonlite::toJSON(list(
+      constraints = I("<worker installation path>")
+    ), auto_unbox = TRUE)
+    version_error <- tryCatch(
+      .Call("mcp_console_resolve_python_version", version_request),
+      error = conditionMessage
+    )
+    cat(
+      environment_error,
+      retained_environment_error,
+      version_error,
+      sep = "\n"
+    )
+result:
+  content:
+    - type: text
+      text: |
+        Python version constraint `<worker executable path>` is not accepted: host-side managed resolution accepts version numbers and supported PEP 440 version specifiers only
+        Python version constraint `<worker retained selector>` is not accepted: host-side managed resolution accepts version numbers and supported PEP 440 version specifiers only
+        Python version constraint `<worker installation path>` is not accepted: host-side managed resolution accepts version numbers and supported PEP 440 version specifiers only
+  isError: false
+---
+id: 17
+send:
+  r: |
+    identical(Sys.getpid(), selector_worker_pid) &&
+      identical(selector_sentinel, 42L) &&
+      is.null(reticulate::py_require()$python_version)
+result:
+  content:
+    - type: text
+      text: |
+        [1] TRUE
+  isError: false
+---
+id: 18
+send:
+  r: |
     reticulate::py_require("./runtime-project")
     invisible(reticulate::py_config())
 result:

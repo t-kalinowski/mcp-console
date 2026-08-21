@@ -78,6 +78,7 @@ pub(crate) fn resolve_python_manifest(
     _on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
 ) -> Result<ManagedPython, String> {
     crate::python_requirement::validate_all(&requirements.packages)?;
+    crate::python_requirement::validate_version_constraints(&requirements.python_version)?;
     Err("managed Python environments are supported only on macOS".to_string())
 }
 
@@ -90,9 +91,10 @@ pub(crate) fn resolve_python_host(
 }
 
 pub(crate) fn resolve_python_version(
-    _constraints: Vec<String>,
+    constraints: Vec<String>,
     _configuration: &super::ManagedPythonResolverConfiguration,
     _on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
 ) -> Result<String, String> {
+    crate::python_requirement::validate_version_constraints(&constraints)?;
     Err("managed Python versions are supported only on macOS".to_string())
 }

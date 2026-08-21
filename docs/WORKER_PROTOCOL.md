@@ -145,6 +145,7 @@ Before each Python resolver child starts, the server removes the child's current
 Worker requests carry no environment map, so evaluated R or Python code cannot configure a host resolver through `Sys.setenv()`, `os.environ`, or a resolver request.
 Requirements and version constraints remain data rather than evaluated cell source; the IR invocation uses a constant R expression that does not contain requirement text.
 Evaluated R code and R package load hooks can request managed resolution through `py_require()`, but the resolver validates the resulting named requirements and does not evaluate their submitted source.
+Managed Python versions must be version numbers or `==`, `!=`, `<`, `<=`, `>`, and `>=` PEP 440 specifiers; paths, executable names, and installation directories are rejected before a Python resolver starts.
 A default R or Python preflight failure prevents server initialization.
 A preparation failure is an MCP tool error and leaves the prior configuration unchanged.
 For a uv tool failure, `Rscript` captures reticulate's message stream and sends its selected Python version on stdout; uv's inherited stderr remains separate.
@@ -285,6 +286,7 @@ The `language` value is `r`, `python`, or `sql`.
 Python manifests contain `packages` and may contain `python_version` and `exclude_newer`; empty optional fields are omitted.
 For `resolve_python`, `requirements` is the physical manifest submitted to the host resolver and `retained_requirements` is the logical manifest that a successful activation will retain.
 Their packages and `exclude_newer` must match; only `python_version` may differ when reticulate resolves a late addition against the exact active Python patch version while preserving the user's logical constraint.
+The server validates both manifests' Python-version constraints before comparing them with retained state or starting a host resolver.
 Resolver requests contain no environment object; host resolver configuration comes from the trusted server-startup snapshot described above.
 `python_activated.requirements` is the complete normalized logical manifest, not reticulate's request history.
 The receipt is reserved for server-managed workers.
@@ -397,6 +399,7 @@ It is not durable across worker loss until Python initialization resolves and re
 
 A server-managed worker may send `resolve_python_version` during an evaluation, live preparation, or preceding idle callback when reticulate invokes its internal `resolve_python_version` binding.
 The request contains only version constraints.
+The server validates every constraint before starting the version resolver.
 The server runs reticulate's version selection while the worker waits and replies with exactly one `python_version_resolved` or `python_version_resolution_failed` frame.
 This request returns no interpreter, creates no environment candidate, and does not affect retained Python state.
 The selected version can support managed-Python operations such as displaying or writing the current requirements; an eventual tool command from `uv_run_tool()` still executes inside the worker sandbox.

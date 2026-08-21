@@ -691,6 +691,12 @@ impl Client {
         let current = current.clone();
         crate::python_requirement::validate_all(&request.requirements.packages)?;
         crate::python_requirement::validate_all(&request.retained_requirements.packages)?;
+        crate::python_requirement::validate_version_constraints(
+            &request.requirements.python_version,
+        )?;
+        crate::python_requirement::validate_version_constraints(
+            &request.retained_requirements.python_version,
+        )?;
         let requirements = request.requirements.normalized();
         let retained_requirements = request.retained_requirements.normalized();
         if requirements.packages != retained_requirements.packages
