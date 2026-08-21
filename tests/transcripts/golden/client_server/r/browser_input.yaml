@@ -12,11 +12,21 @@ send:
       value
     }
     step()
+  stdin: |
+    n
+    n
+    n
 result:
   content:
     - type: text
       text: |-
         Called from: step()
+        [input requested: "Browse[1]> "]
+        debug at #4: value <- value + 1
+        [input requested: "Browse[1]> "]
+        debug at #5: value <- value + 1
+        [input requested: "Browse[1]> "]
+        debug at #6: value
         [input requested: "Browse[1]> "]
         [stdin needed]
   isError: false
@@ -31,25 +41,6 @@ result:
   isError: true
 ---
 id: 5
-send:
-  stdin: |
-    n
-    n
-    n
-result:
-  content:
-    - type: text
-      text: |-
-        debug at #4: value <- value + 1
-        [input requested: "Browse[1]> "]
-        debug at #5: value <- value + 1
-        [input requested: "Browse[1]> "]
-        debug at #6: value
-        [input requested: "Browse[1]> "]
-        [stdin needed]
-  isError: false
----
-id: 6
 send:
   stdin: |
     c

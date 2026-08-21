@@ -1020,17 +1020,13 @@ def test_browser_input(binary: Path) -> Transcript:
         }
         step()
         """)
-    client.send(r=r)
+    client.send(r=r, stdin="n\nn\nn\n")
     output = last_tool_text(client)
-    assert output.count('[input requested: "Browse[1]> "]') == 1, output
-    assert output.endswith("\n[stdin needed]"), output
-    client.send(r="1")
-    assert client.transcript[-1]["result"]["isError"] is True
-    client.send(stdin="n\nn\nn\n")
-    output = last_tool_text(client)
-    assert output.count('[input requested: "Browse[1]> "]') == 3, output
+    assert output.count('[input requested: "Browse[1]> "]') == 4, output
     assert output.endswith("\n[stdin needed]"), output
     assert "n" not in output.splitlines(), output
+    client.send(r="1")
+    assert client.transcript[-1]["result"]["isError"] is True
     client.send(stdin="c\n")
     output = last_tool_text(client)
     assert output == "[1] 3\n", output
