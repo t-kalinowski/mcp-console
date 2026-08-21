@@ -35,7 +35,8 @@ The suite records complete parsed JSONL frames under `server` and `relay` direct
 The truncated-frame case instead records the exact incomplete bytes as base64 under `relay_raw`.
 Its snapshots show flat commands and semantic events, operation results without acknowledgments, readable UTF-8 raw chunks and base64 byte fallbacks, interrupt results, structured worker outcomes, and complete stream drainage.
 The cross-source case records serialized observation order without claiming chronology between the worker sideband, stdout, and stderr pipes.
-The fixture uses explicit filesystem release gates so failure captures do not depend on sleeps, and tests keep capture descriptors open across sandbox cleanup when necessary.
+Server-side response-cut, pending-output-budget, and truncation cases assert the public MCP result while their wire snapshots verify that no cut, budget, or acknowledgment field enters the relay protocol.
+The fixture uses explicit filesystem and FIFO release gates so completion, cancellation, retirement, and failure captures do not depend on sleeps, and tests keep capture descriptors open across sandbox cleanup when necessary.
 The `relay_worker/protocol` suite drives the public MCP server through a transparent worker proxy.
 The proxy starts the built-in worker inside the server's sandbox, forwards sideband messages and standard streams, and writes parsed events to its private temporary directory for the test to read before shutdown.
 The restart case keeps the old generation's capture descriptor open across sandbox cleanup and records the sideband shutdown frame, worker-stdin EOF, and worker-sideband EOF.

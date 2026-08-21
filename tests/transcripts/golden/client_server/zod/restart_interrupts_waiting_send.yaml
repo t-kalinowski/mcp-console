@@ -3,12 +3,23 @@
 ---
 id: 3
 send:
+  r: start background sideband
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+id: 4
+send:
   r: emit output and image before completion
   timeout_ms: 30000
 result:
   content:
     - type: text
       text: |
+        zod background sideband
+        [output produced while idle]
         before pending image
     - type: image
       data: iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=
@@ -20,7 +31,7 @@ result:
         [worker stopped: in-memory state lost]
   isError: true
 ---
-id: 4
+id: 5
 session:
   action: restart
 result:

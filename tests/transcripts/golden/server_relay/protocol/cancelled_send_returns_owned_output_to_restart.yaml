@@ -1,0 +1,65 @@
+---
+!same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
+---
+id: 3
+session:
+  action: restart
+result:
+  content:
+    - type: text
+      text: |-
+        [starting new worker]
+        [idle]
+  isError: false
+---
+id: 4
+send:
+  r: "42"
+  timeout_ms: 30000
+---
+id: 5
+session:
+  action: restart
+result:
+  content:
+    - type: text
+      text: |
+        idle before image
+    - type: image
+      data: iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=
+      mimeType: image/png
+    - type: text
+      text: |
+        idle after image
+        [output produced while idle]
+        cell before image
+    - type: image
+      data: iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=
+      mimeType: image/png
+    - type: text
+      text: |-
+        <retained 8388590 text bytes>
+        [output truncated: omitted 25 text bytes and 0 encoded image bytes across 1 event]
+        [stopped by session restart request before evaluation finished]
+        [worker stopped: in-memory state lost]
+        [active evaluation stopped by session restart request]
+        [starting new worker]
+        [idle]
+  isError: true
+---
+input:
+  method: notifications/cancelled
+  params:
+    requestId: 4
+    reason: acceptance test cancelled the waiting send
+---
+id: 6
+send: {}
+result:
+  content:
+    - type: text
+      text: |-
+
+        [idle]
+  isError: false
+...

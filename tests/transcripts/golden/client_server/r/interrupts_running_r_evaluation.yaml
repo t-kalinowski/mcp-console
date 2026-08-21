@@ -99,7 +99,7 @@ result:
 ---
 id: 10
 send:
-  r: c(boundary_interrupt_state, boundary_interrupt_cleanup)
+  r: "c(boundary_interrupt_state, boundary_interrupt_cleanup)"
 result:
   content:
     - type: text
@@ -124,6 +124,7 @@ result:
     - type: text
       text: |
 
+        [output produced while idle]
         [1] 42
   isError: false
 ---
@@ -141,7 +142,7 @@ result:
 ---
 id: 14
 send:
-  r: '"idle time does not consume a cell limit"'
+  r: "\"idle time does not consume a cell limit\""
 result:
   content:
     - type: text

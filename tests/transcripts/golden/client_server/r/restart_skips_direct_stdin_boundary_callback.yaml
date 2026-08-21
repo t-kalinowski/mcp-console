@@ -28,13 +28,15 @@ result:
 ---
 id: 4
 send:
-  r: cat("direct stdin cell ran\n")
+  r: "cat(\"direct stdin cell ran\\n\")"
   timeout_ms: 30000
 result:
   content:
     - type: text
       text: |-
-        direct callback waitingdirect callback released
+        direct callback waiting
+        [output produced while idle]
+        direct callback released
         [stopped by session restart request before evaluation finished]
         [worker stopped: in-memory state lost]
   isError: true

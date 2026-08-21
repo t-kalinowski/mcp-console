@@ -69,8 +69,8 @@ struct WorkerSpec<'a> {
     callbacks: WorkerCallbacks,
 }
 
-struct IdleResponseBoundary {
-    checkpoint: output::OutputCheckpoint,
+struct IdleResponseSnapshot {
+    cut: output::OutputCut,
     failure: Option<String>,
     input_requested: bool,
 }
@@ -337,14 +337,9 @@ impl Client {
             EvaluationWait::ReplacementStarting(output) => {
                 Ok(SendResponse::ReplacementStarting(output))
             }
-            EvaluationWait::ReplacementReady(output) => {
-                self.clear_evaluation(&evaluation)?;
-                Ok(SendResponse::ReplacementReady(output))
-            }
-            EvaluationWait::Completed(output) => {
-                self.clear_evaluation(&evaluation)?;
-                Ok(SendResponse::Completed(output))
-            }
+            EvaluationWait::ReplacementReady(output) => Ok(SendResponse::ReplacementReady(output)),
+            EvaluationWait::Completed(output) => Ok(SendResponse::Completed(output)),
+            EvaluationWait::Reclaimed(output) => Ok(SendResponse::Restarted(output)),
             EvaluationWait::Restarted(output) => Ok(SendResponse::Restarted(output)),
         }
     }
@@ -359,17 +354,22 @@ impl Client {
     ) -> Result<(Arc<Evaluation>, evaluation::WaitClaim), String> {
         self.ensure_generation(&generation)?;
 
-        let evaluation = Arc::new(Evaluation::new(transcript, call_id, self.0.output.clone()));
-        let wait_claim = evaluation.claim()?;
-        if let Some(stdin) = stdin {
-            evaluation.submit_stdin(stdin)?;
-        }
-
         let mut active = self.evaluation()?;
         if let Some(active) = active.as_ref() {
             return Err(active.evaluation.reject_new_cell_message().to_string());
         }
         self.ensure_generation(&generation)?;
+        let prelude = self.0.output.take_prelude();
+        let evaluation = Arc::new(Evaluation::new(
+            transcript,
+            call_id,
+            self.0.output.clone(),
+            prelude,
+        ));
+        let wait_claim = evaluation.claim()?;
+        if let Some(stdin) = stdin {
+            evaluation.submit_stdin(stdin)?;
+        }
         *active = Some(ActiveEvaluation {
             generation: generation.clone(),
             evaluation: evaluation.clone(),
@@ -397,10 +397,20 @@ impl Client {
     }
 
     fn evaluation(&self) -> Result<MutexGuard<'_, Option<ActiveEvaluation>>, String> {
-        self.0
+        let mut active = self
+            .0
             .evaluation
             .lock()
-            .map_err(|_| "worker evaluation lock poisoned".to_string())
+            .map_err(|_| "worker evaluation lock poisoned".to_string())?;
+        let reap = active
+            .as_ref()
+            .map(|active| active.evaluation.reap_delivered_completion())
+            .transpose()?
+            .unwrap_or(false);
+        if reap {
+            *active = None;
+        }
+        Ok(active)
     }
 
     fn admit_send(&self) -> Result<tokio::sync::RwLockReadGuard<'_, ()>, String> {
@@ -444,22 +454,7 @@ impl Client {
         })
     }
 
-    fn clear_evaluation(&self, completed: &Arc<Evaluation>) -> Result<(), String> {
-        let mut active = self
-            .0
-            .evaluation
-            .lock()
-            .map_err(|_| "worker evaluation lock poisoned".to_string())?;
-        if active
-            .as_ref()
-            .is_some_and(|active| Arc::ptr_eq(&active.evaluation, completed))
-        {
-            *active = None;
-        }
-        Ok(())
-    }
-
-    /// Drains through an idle-response boundary while this call owns the generation.
+    /// Drains through an idle-response cut while this call owns the generation.
     fn take_idle_response(
         &self,
         generation: &WorkerGeneration,
@@ -479,15 +474,15 @@ impl Client {
             .lock()
             .map_err(|_| "worker lock poisoned".to_string())?;
         self.ensure_generation(generation)?;
-        let boundary = match &mut *worker {
-            WorkerState::Running(running) => running.idle_response_boundary(&self.0.output)?,
-            WorkerState::Initial | WorkerState::Stopped => IdleResponseBoundary {
-                checkpoint: self.0.output.checkpoint(),
+        let snapshot = match &mut *worker {
+            WorkerState::Running(running) => running.idle_response_snapshot(&self.0.output)?,
+            WorkerState::Initial | WorkerState::Stopped => IdleResponseSnapshot {
+                cut: self.0.output.cut(),
                 failure: None,
                 input_requested: false,
             },
         };
-        if let Some(message) = boundary.failure {
+        if let Some(message) = snapshot.failure {
             let mut failure = SendFailure::from(message);
             match self.stop_failed_worker(&mut worker, generation) {
                 Ok(lifecycle::FailedWorkerStop::Stopped(outcome)) => {
@@ -502,8 +497,8 @@ impl Client {
             return Ok(SendResponse::Failed(self.0.output.take()));
         }
         drop(worker);
-        let output = self.0.output.take_until(boundary.checkpoint);
-        Ok(if boundary.input_requested {
+        let output = self.0.output.drain_through(snapshot.cut);
+        Ok(if snapshot.input_requested {
             SendResponse::InputRequested(output)
         } else {
             SendResponse::Idle(output)
@@ -537,6 +532,9 @@ impl Client {
             .map_err(|_| SendFailure::from("worker lock poisoned".to_string()))?;
         self.ensure_generation(&generation)
             .map_err(SendFailure::from)?;
+        // Only an established worker can publish idle output in the admission
+        // gap. A new worker's startup output remains part of this call.
+        let capture_idle_prelude = matches!(&*worker, WorkerState::Running(_));
         if let Err(mut failure) = self.start_worker(
             &mut worker,
             generation.clone(),
@@ -555,7 +553,7 @@ impl Client {
             return Err(SendFailure::from("worker is not running".to_string()));
         };
         let result = running
-            .evaluate(cell, evaluation.clone())
+            .evaluate(cell, evaluation.clone(), capture_idle_prelude)
             .map_err(|message| evaluation.classify_failure(message));
         let mut failure = match result {
             Ok(()) => return Ok(()),

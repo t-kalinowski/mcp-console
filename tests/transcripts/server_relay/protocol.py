@@ -30,11 +30,19 @@ CHECKPOINT_NAME = "mcp-console-scripted-relay-checkpoint"
 RELEASE_NAME = "mcp-console-scripted-relay-release"
 SHUTDOWN_RECEIVED_NAME = "mcp-console-scripted-relay-shutdown-received"
 RETIREMENT_RELEASE_NAME = "mcp-console-scripted-relay-retirement-release"
+PRELUDE_RELEASE_NAME = "mcp-console-scripted-relay-prelude-release"
+PRELUDE_PROCESSED_NAME = "mcp-console-scripted-relay-prelude-processed"
+EVALUATION_OUTPUT_READY_NAME = "mcp-console-scripted-relay-evaluation-output-ready"
 PREPARATION_RECEIVED_NAME = "mcp-console-scripted-relay-preparation-received"
 PREPARATION_RESULT_RELEASE_NAME = (
     "mcp-console-scripted-relay-preparation-result-release"
 )
 PREPARATION_RESULT_SENT_NAME = "mcp-console-scripted-relay-preparation-result-sent"
+PENDING_TEXT_BUDGET = 8 * 1024 * 1024
+PNG_1X1 = (
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42Y"
+    "AAAAASUVORK5CYII="
+)
 
 
 def _tool_text(result: ToolResult) -> str:
@@ -404,6 +412,105 @@ def test_shutdown_precedes_blocked_resolver_cancellation(binary: Path) -> Transc
     ]
     assert server_commands == shutdown, server_commands
     return transcript
+
+
+def test_cancelled_send_returns_owned_output_to_restart(binary: Path) -> Transcript:
+    client = ServerRelayClient(binary, "cancelled_waiting_send")
+    client.start_worker()
+    relay_root = client.relay_root()
+    prelude_release = FifoCheckpoint(relay_root / PRELUDE_RELEASE_NAME)
+    prelude_processed = FifoCheckpoint(relay_root / PRELUDE_PROCESSED_NAME)
+    output_ready = FifoCheckpoint(relay_root / EVALUATION_OUTPUT_READY_NAME)
+    shutdown_received = FifoCheckpoint(relay_root / SHUTDOWN_RECEIVED_NAME)
+    retirement_release = FifoCheckpoint(relay_root / RETIREMENT_RELEASE_NAME)
+    finished = False
+    retirement_released = False
+    try:
+        prelude_release.release()
+        prelude_processed.wait()
+
+        waiting = client.client._start_send(r="42", timeout_ms=30_000)
+        output_ready.wait()
+        restart = client.client._start_session(action="restart")
+        shutdown_received.wait()
+        client.client._notify(
+            "notifications/cancelled",
+            requestId=waiting["id"],
+            reason="acceptance test cancelled the waiting send",
+        )
+        retirement_release.release()
+        retirement_released = True
+        client.client._receive(restart)
+
+        assert "result" not in waiting, waiting
+        result = restart["result"]
+        assert result["isError"] is True, result
+        assert [content["type"] for content in result["content"]] == [
+            "text",
+            "image",
+            "text",
+            "image",
+            "text",
+        ], result
+        assert result["content"][0]["text"] == "idle before image\n", result
+        assert result["content"][1] == {
+            "type": "image",
+            "data": PNG_1X1,
+            "mimeType": "image/png",
+        }, result
+        assert result["content"][2]["text"] == (
+            "idle after image\n"
+            "[output produced while idle]\n"
+            "cell before image\n"
+        ), result
+        assert result["content"][3] == {
+            "type": "image",
+            "data": PNG_1X1,
+            "mimeType": "image/png",
+        }, result
+
+        cell_prefix = "cell before image\n"
+        retained = "x" * (PENDING_TEXT_BUDGET - len(cell_prefix))
+        omitted = len(cell_prefix) + 7
+        truncation = (
+            f"[output truncated: omitted {omitted} text bytes and "
+            "0 encoded image bytes across 1 event]"
+        )
+        tail = result["content"][4]["text"]
+        assert tail.startswith(retained + "\n" + truncation), (
+            f"unexpected reclaimed tail: length={len(tail)}, tail={tail[-500:]!r}"
+        )
+        for notice in (
+            truncation,
+            "[stopped by session restart request before evaluation finished]",
+            "[worker stopped: in-memory state lost]",
+            "[active evaluation stopped by session restart request]",
+            "[starting new worker]",
+            "[idle]",
+        ):
+            assert tail.count(notice) == 1, (notice, tail[-1_000:])
+        result["content"][4]["text"] = tail.replace(
+            retained,
+            f"<retained {len(retained)} text bytes>",
+            1,
+        )
+
+        client.send()
+        assert _tool_text(client.client.transcript[-1]["result"]) == "\n[idle]"
+        transcript = client.client._finish()
+        finished = True
+        return transcript
+    finally:
+        if not retirement_released:
+            retirement_release.release()
+        if not finished:
+            stop_client(client.client)
+        prelude_release.close()
+        prelude_processed.close()
+        output_ready.close()
+        shutdown_received.close()
+        retirement_release.close()
+        client._temporary.cleanup()
 
 
 def test_restart_consumes_late_r_preparation_retirement_events(

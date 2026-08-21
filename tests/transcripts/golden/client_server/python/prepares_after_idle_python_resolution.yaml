@@ -52,12 +52,13 @@ result:
 ---
 id: 6
 send:
-  r: reticulate::py_require()$packages
+  r: "reticulate::py_require()$packages"
 result:
   content:
     - type: text
       text: |
         idle Python ready
+        [output produced while idle]
         [1] "numpy"     "pandas"    "py-yaml12"
   isError: false
 ...

@@ -270,8 +270,11 @@ impl Worker {
         &mut self,
         cell: crate::cell::Cell,
         evaluation: Arc<super::Evaluation>,
+        capture_idle_prelude: bool,
     ) -> Result<(), String> {
-        let result = self.operation.begin_cell(evaluation.clone())?;
+        let result = self
+            .operation
+            .begin_cell(evaluation.clone(), capture_idle_prelude)?;
         let crate::cell::Cell { language, source } = cell;
         self.relay
             .commands
@@ -286,11 +289,11 @@ impl Worker {
         }
     }
 
-    pub(super) fn idle_response_boundary(
+    pub(super) fn idle_response_snapshot(
         &self,
         output: &super::OutputTape,
-    ) -> Result<super::IdleResponseBoundary, String> {
-        self.operation.idle_response_boundary(output)
+    ) -> Result<super::IdleResponseSnapshot, String> {
+        self.operation.idle_response_snapshot(output)
     }
 
     pub(super) fn has_failure(&self) -> Result<bool, String> {

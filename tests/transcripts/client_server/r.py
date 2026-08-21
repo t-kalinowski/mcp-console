@@ -119,7 +119,11 @@ def test_services_r_input_handlers_at_cell_boundaries(binary: Path) -> Transcrip
         )
         fifo.write_bytes(b"x")
         client.send(r='cat("cell body\\n")')
-        assert last_tool_text(client) == "cell start callback\ncell body\n"
+        assert last_tool_text(client) == (
+            "cell start callback\n"
+            "[output produced while idle]\n"
+            "cell body\n"
+        )
         return client._finish()
 
 
@@ -147,7 +151,11 @@ def test_services_later_callbacks_while_idle(binary: Path) -> Transcript:
     client.send(r=r)
     release_worker_callback_gate(client, "idle callback")
     client.send(r="idle_value")
-    assert last_tool_text(client) == "idle callback\n[1] 42\n"
+    assert last_tool_text(client) == (
+        "idle callback\n"
+        "[output produced while idle]\n"
+        "[1] 42\n"
+    )
     return client._finish()
 
 
@@ -434,9 +442,11 @@ def test_routes_input_to_idle_later_callbacks_before_a_cell(binary: Path) -> Tra
         r='cat("cell: ", idle_answer, "\\n", sep = "")',
         stdin="yes\n",
     )
-    assert last_tool_text(client) == ('[input requested: "later> "]\ncell: yes\n'), (
-        repr(last_tool_text(client))
-    )
+    assert last_tool_text(client) == (
+        '[input requested: "later> "]\n'
+        "[output produced while idle]\n"
+        "cell: yes\n"
+    ), repr(last_tool_text(client))
     return client._finish()
 
 
@@ -1150,7 +1160,9 @@ def test_interrupts_running_r_evaluation(binary: Path) -> Transcript:
             client.session(action="interrupt")
             assert last_tool_text(client) == "[interrupt sent]"
             client.send(r="6 * 7")
-            assert last_tool_text(client) == "\n[1] 42\n"
+            assert last_tool_text(client) == (
+                "\n[output produced while idle]\n[1] 42\n"
+            )
 
             # Boundary checks must not process elapsed-time limits when no
             # interrupt is pending; R resets the limit when the cell begins.
