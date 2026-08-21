@@ -17,18 +17,31 @@ RELEASE_NAME = "mcp-console-scripted-relay-release"
 WAIT_SECONDS = 10
 
 EVALUATION = {
-    "kind": "worker_message",
-    "message": {
-        "kind": "evaluate",
-        "language": "r",
-        "source": "42",
+    "kind": "evaluate",
+    "language": "r",
+    "source": "42",
+}
+COMPLETED = {"kind": "completed"}
+RESOLVE_PYTHON = {
+    "kind": "resolve_python",
+    "request": {
+        "requirements": {"packages": ["numpy", "pandas"]},
+        "retained_requirements": {"packages": ["numpy", "pandas"]},
+        "environment": {},
     },
 }
-COMPLETED = {
-    "kind": "worker_message",
-    "message": {"kind": "completed"},
+PYTHON_RESOLUTION_FAILED = {
+    "kind": "python_resolution_failed",
+    "message": "Python requirements are unavailable with a custom worker",
 }
-TERMINAL_COMMITTED = {"kind": "terminal_committed"}
+RESOLVE_PYTHON_VERSION = {
+    "kind": "resolve_python_version",
+    "request": {"constraints": [">=3.11"], "environment": {}},
+}
+PYTHON_VERSION_RESOLUTION_FAILED = {
+    "kind": "python_version_resolution_failed",
+    "message": "Python requirements are unavailable with a custom worker",
+}
 
 
 class ScriptedRelay:
@@ -88,28 +101,46 @@ class ScriptedRelay:
             time.sleep(0.01)
 
     def ready(self) -> None:
-        self.send(
-            {
-                "kind": "worker_message",
-                "message": {"kind": "ready"},
-            }
-        )
+        self.send({"kind": "ready"})
 
     def complete(self) -> None:
         self.send(COMPLETED)
-        self.expect(TERMINAL_COMMITTED)
         self.mark_done()
 
-    def retire(self) -> None:
-        command = self.receive()
+    def retire(self, command: dict[str, Any] | None = None) -> None:
+        if command is None:
+            command = self.receive()
         assert command.get("kind") == "shutdown", command
         grace_millis = command.get("grace_millis")
         assert isinstance(grace_millis, int) and 0 <= grace_millis <= 1_000, command
         self.send({"kind": "shutdown_started"})
-        self.send({"kind": "stream_closed", "stream": "stdout"})
-        self.send({"kind": "stream_closed", "stream": "stderr"})
+        self.send({"kind": "stdout_closed"})
+        self.send({"kind": "stderr_closed"})
         self.send({"kind": "worker_sideband_closed"})
-        self.send({"kind": "worker_exited"})
+        self.send({"kind": "worker_exited", "code": 0})
+
+    def unexpected_outcome(
+        self,
+        outcome: dict[str, Any],
+        output: list[dict[str, Any]] | None = None,
+    ) -> None:
+        self.ready()
+        command = self.receive()
+        if command.get("kind") == "shutdown":
+            self.retire(command)
+            return
+
+        assert command == EVALUATION, command
+        self.wait_for_release()
+        self.send_batch(
+            [
+                *(output or []),
+                {"kind": "stdout_closed"},
+                {"kind": "stderr_closed"},
+                {"kind": "worker_sideband_closed"},
+                outcome,
+            ]
+        )
 
 
 def write_all(descriptor: int, data: bytes) -> None:
@@ -137,13 +168,25 @@ def run_raw_output(relay: ScriptedRelay) -> None:
     relay.send(
         {
             "kind": "stdout",
-            "data": base64.b64encode(b"stdout\n").decode("ascii"),
+            "data": "stdout text 👩🏽‍💻\n",
         }
     )
     relay.send(
         {
             "kind": "stderr",
-            "data": base64.b64encode(b"stderr\n").decode("ascii"),
+            "data": "stderr text\n",
+        }
+    )
+    relay.send(
+        {
+            "kind": "stdout_bytes",
+            "data": base64.b64encode(b"\xffstdout bytes\n").decode("ascii"),
+        }
+    )
+    relay.send(
+        {
+            "kind": "stderr_bytes",
+            "data": base64.b64encode(b"\xfestderr bytes\n").decode("ascii"),
         }
     )
     relay.complete()
@@ -168,6 +211,23 @@ def run_interrupt(relay: ScriptedRelay) -> None:
     relay.retire()
 
 
+def run_serialized_cross_source_order(relay: ScriptedRelay) -> None:
+    relay.ready()
+    relay.expect(EVALUATION)
+    relay.send_batch(
+        [
+            COMPLETED,
+            {"kind": "stdout", "data": "observed after operation result"},
+            RESOLVE_PYTHON,
+        ]
+    )
+    relay.expect(PYTHON_RESOLUTION_FAILED)
+    relay.send(RESOLVE_PYTHON_VERSION)
+    relay.expect(PYTHON_VERSION_RESOLUTION_FAILED)
+    relay.mark_done()
+    relay.retire()
+
+
 def run_shutdown(relay: ScriptedRelay) -> None:
     relay.ready()
     relay.mark_done()
@@ -176,22 +236,47 @@ def run_shutdown(relay: ScriptedRelay) -> None:
 
 def run_fatal(relay: ScriptedRelay) -> None:
     relay.wait_for_release()
+    relay.send({"kind": "fatal", "message": "scripted relay failure"})
+    command = relay.receive()
+    assert command.get("kind") == "shutdown", command
+    relay.send({"kind": "shutdown_started"})
     relay.send_batch(
         [
-            {"kind": "fatal", "message": "scripted relay failure"},
-            {"kind": "stream_closed", "stream": "stdout"},
-            {"kind": "stream_closed", "stream": "stderr"},
+            {"kind": "stdout", "data": "drained after fatal failure\n"},
+            {"kind": "stdout_closed"},
+            {"kind": "stderr_closed"},
             {"kind": "worker_sideband_closed"},
-            {"kind": "worker_exited"},
+            {"kind": "worker_exited", "code": 86},
         ]
     )
 
 
 def run_truncated(relay: ScriptedRelay) -> None:
     relay.wait_for_release()
-    raw = b'{"kind":"worker_message"'
+    raw = b'{"kind":"console_output"'
     relay.record({"relay_raw": base64.b64encode(raw).decode("ascii")})
     write_all(1, raw)
+
+
+def run_exit_zero(relay: ScriptedRelay) -> None:
+    relay.unexpected_outcome({"kind": "worker_exited", "code": 0})
+
+
+def run_exit_nonzero(relay: ScriptedRelay) -> None:
+    relay.unexpected_outcome(
+        {"kind": "worker_exited", "code": 33},
+        [
+            {"kind": "stdout", "data": "drained stdout\n"},
+            {
+                "kind": "stderr_bytes",
+                "data": base64.b64encode(b"\xffdrained stderr\n").decode("ascii"),
+            },
+        ],
+    )
+
+
+def run_signaled(relay: ScriptedRelay) -> None:
+    relay.unexpected_outcome({"kind": "worker_signaled", "signal": 15})
 
 
 def main() -> None:
@@ -201,9 +286,13 @@ def main() -> None:
         "raw_output": run_raw_output,
         "stdin": run_stdin,
         "interrupt": run_interrupt,
+        "serialized_cross_source_order": run_serialized_cross_source_order,
         "shutdown": run_shutdown,
         "fatal": run_fatal,
         "truncated": run_truncated,
+        "exit_zero": run_exit_zero,
+        "exit_nonzero": run_exit_nonzero,
+        "signaled": run_signaled,
     }
     scenario = os.environ[SCENARIO_ENV]
     assert scenario in scenarios, f"unknown scripted relay scenario: {scenario}"

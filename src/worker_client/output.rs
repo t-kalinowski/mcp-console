@@ -115,6 +115,7 @@ pub(super) struct SendFailure {
     pub(super) message: String,
     pub(super) worker_stopped: bool,
     preceded_restart: bool,
+    worker_outcome: Option<super::WorkerProcessOutcome>,
 }
 
 impl From<String> for SendFailure {
@@ -123,6 +124,7 @@ impl From<String> for SendFailure {
             message,
             worker_stopped: false,
             preceded_restart: false,
+            worker_outcome: None,
         }
     }
 }
@@ -130,6 +132,11 @@ impl From<String> for SendFailure {
 impl SendFailure {
     pub(super) fn worker_stopped(mut self) -> Self {
         self.worker_stopped = true;
+        self
+    }
+
+    pub(super) fn worker_outcome(mut self, outcome: Option<super::WorkerProcessOutcome>) -> Self {
+        self.worker_outcome = outcome;
         self
     }
 
@@ -408,9 +415,13 @@ impl OutputTape {
                 OutputEvent::ServerFailure(SendFailure {
                     message,
                     worker_stopped,
+                    worker_outcome,
                     ..
                 }) => {
                     output.push_server_failure(message);
+                    if let Some(outcome) = worker_outcome {
+                        output.push_notice(outcome.diagnostic());
+                    }
                     if worker_stopped {
                         output.push_notice(WORKER_STOPPED_NOTICE);
                     }

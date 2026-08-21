@@ -9,7 +9,9 @@ result:
     - type: text
       text: |-
         zod malformed stdout: <large output>
+        <cross-source position follows serialized observation>
         [worker sideband read failed: <invalid frame>]
+        [worker terminated by signal 9]
         [worker stopped: in-memory state lost]
         [starting new worker]
         [idle]
@@ -23,7 +25,9 @@ result:
     - type: text
       text: |-
         zod malformed stderr: <large output>
+        <cross-source position follows serialized observation>
         [worker sideband read failed: <invalid frame>]
+        [worker terminated by signal 9]
         [worker stopped: in-memory state lost]
         [starting new worker]
         [idle]

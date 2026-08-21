@@ -42,7 +42,8 @@ When that wait expires during replacement startup, the response ends with `[work
 On macOS, the server remains outside the sandbox and starts one worker relay inside it for each worker generation.
 The relay starts the worker inside the same sandbox, creates its unchanged sideband and standard streams there, and forwards ordered JSONL events to the server over its own standard output.
 Only the relay's fd 0/1/2 cross the server/sandbox boundary; relay standard error passes through outside the protocol and is normally empty.
-Worker standard output and standard error are base64-encoded in that private stream, so arbitrary bytes cannot corrupt its JSONL framing.
+The relay validates each worker standard-output and standard-error read independently.
+Valid UTF-8 chunks use readable string events, while invalid chunks use base64 byte events so arbitrary bytes cannot corrupt the private JSONL framing.
 After a worker reports ready, the server continuously consumes the relay event stream containing its sideband, standard output, and standard error activity.
 With no evaluation active, an empty `send` immediately drains the output collected so far and returns it followed by `\n[idle]`, or `\n[stdin needed]` when an idle callback has an outstanding console read.
 It sends no worker command, does not wait for idle callbacks to finish, and is not delayed by `timeout_ms`.
@@ -170,10 +171,12 @@ Restart returns `[idle]` after the replacement reports ready.
 It loses all in-memory R, Python, SQL, debugger, and unread-stdin state.
 The implicit session exists for the server lifetime, so restart starts its first worker if none exists yet.
 Internally, the server gives the relay the time remaining in the existing one-second worker-shutdown period.
+It queues relay shutdown before cancelling a nested host resolver, then lets the ordered event dispatcher retire the active operation within that original deadline.
 The relay closes worker stdin, sends the unchanged sideband shutdown message, and, if needed at the deadline, kills the direct worker, stops the other members still in its process group, reaps the worker, and flushes the generation's final events.
 When the server observes the relay's acceptance before the original deadline, it permits up to two additional seconds for that retirement work without extending the worker deadline.
+For non-intentional startup or runtime failure, it sends zero worker grace and shares the same absolute bounded relay-retirement allowance between ordered dispatcher catch-up and the relay drain, so output, stream closures, and the process outcome can arrive before the outer fail-safe runs.
 It then closes the complete sandbox process-group lifetime and reaps the relay even when it already exited; the same outer path is the fail-safe if the relay does not accept shutdown or stalls.
-It then waits for any active evaluation or preparation owner and joins the relay transport tasks before reporting that the worker stopped or launching a replacement.
+It joins the relay transport tasks after ordered operation retirement before reporting that the worker stopped or launching a replacement.
 The replacement generation is marked ready after its `ready` frame and before callback dispatch starts.
 Code and idle stdin remain associated with the worker that admitted them and cannot run in the replacement.
 Without a waiting `send`, the restart response includes retained output from the old worker, `[active evaluation stopped by session restart request]` when restart interrupts an unfinished cell, `[worker stopped: in-memory state lost]` when restart retires a ready worker, `[starting new worker]`, startup output, and finally `[idle]`, in that order.
@@ -270,8 +273,8 @@ Shutdown or an infrastructure failure during the initial turn aborts the submitt
 After either turn, a worker-stdin hangup marks shutdown before the worker can dispatch or complete the cell, including when a callback reads fd 0 directly.
 Between cells, the worker uses `R_checkActivity()` to wait for either a registered R handler or its relay sideband, without busy polling or a worker-owned fixed interval.
 Callbacks registered by packages such as `later` can therefore run after a cell has returned.
-A generation-long server reader consumes the relay stream, publishes forwarded console output and images, services nested managed-Python requests, and tracks console input state.
-It assembles newline-delimited frames incrementally so retirement can cancel a partially received frame and idle output is not bounded by sideband pipe capacity.
+A generation-long server reader incrementally parses and enqueues flat relay events so retirement can cancel a partially received frame and idle output is not bounded by sideband pipe capacity.
+One ordered dispatcher publishes forwarded console output and images, services nested managed-Python requests, commits operation results, and updates console input state.
 An empty `send` snapshots the output already collected without signaling the worker or waiting for the callback.
 Before applying a live requirement preparation, the built-in worker gives registered R handlers one nonblocking turn, so a callback already ready when the command arrives is collected first.
 An empty `send` surfaces an idle callback's input request as `[stdin needed]`; a later stdin-only `send` continues it, and a call that already includes stdin can prequeue the input.
@@ -341,7 +344,10 @@ Automatic Python relation sharing and affected-row summaries do not exist yet.
 The server appends relay-forwarded sideband text and images, worker standard-output and standard-error bytes, failures, and lifecycle notices to one pending output tape.
 Each successful `send` boundary drains the events available then; output produced while the worker is idle can therefore appear on a later idle poll before the server-owned `\n[idle]` banner.
 Standard-stream bytes remain undecoded until a response drains them, so incomplete UTF-8 can remain pending for a later response.
-Ordering among standard output, standard error, and sideband console or image output is best effort.
+Each worker source preserves its own order, and complete relay frames follow the order in which their reader threads enqueue them.
+Independent standard-output, standard-error, and sideband pipes provide no chronological cross-source ordering: raw output written before an operation result may be observed after it and remain pending for a later response.
+For an established worker, unexpected exit codes and termination signals are reported before stopped and replacement notices.
+An unexpected pre-ready exit reports the same diagnostic with its startup failure; intentional restart and shutdown suppress crash diagnostics.
 R language failures, uncaught Python exceptions, and DuckDB errors remain ordinary console results rather than MCP tool errors.
 Server-owned timeline, state, and admission facts are bracketed; worker console text remains unchanged.
 A silent successful R, Python, or SQL cell sends no sideband console-text frame, still sends `completed`, and projects to `[done]` when no other response text is pending.

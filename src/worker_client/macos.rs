@@ -5,25 +5,32 @@ use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use super::TerminalCommit;
-use super::activity::{Activity, ActivityEvent, OperationResult};
-use crate::relay_protocol::{JsonlReader, JsonlWriter, RelayCommand, RelayEvent, RelayStream};
-use crate::worker_protocol::{ServerMessage, WorkerMessage};
+use super::events::{
+    OperationResult, ReadyCommitOutcome, WorkerEvent, WorkerEventDispatcher, WorkerOperationState,
+};
+use super::output::SendFailure;
+use super::{PythonPreparationCommit, RPreparationCommit, WorkerProcessOutcome};
+use crate::relay_protocol::{JsonlReader, JsonlWriter, RelayCommand, RelayEvent};
 
 /// Lets the relay finish its bounded group cleanup, stream drain, and protocol flush
 /// after the worker's own shutdown deadline before the outer fail-safe stops it.
 const RELAY_RETIREMENT_GRACE: Duration = Duration::from_secs(2);
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum RelayRetirementAllowance {
+    TimelyAcceptance,
+    Always,
+}
+
 /// Spawns workers through the platform's runtime boundary.
 pub(super) struct WorkerRuntime;
 
 pub(super) struct Worker {
-    worker_commands: WorkerCommandSender,
     stdin: StdinSender,
-    activity: Activity,
-    activity_control: ActivityControl,
+    operation: WorkerOperationState,
     interrupts: InterruptRequests,
     shutdown_started: ShutdownAcceptance,
+    ready_commit: ReadyCommit,
     relay: RelayConnection,
 }
 
@@ -31,9 +38,10 @@ pub(super) struct Worker {
 #[derive(Clone)]
 pub(super) struct WorkerShutdownHandle {
     commands: RelayCommandSender,
-    activity_control: ActivityControl,
+    operation: WorkerOperationState,
     interrupts: InterruptRequests,
     shutdown_started: ShutdownAcceptance,
+    ready_commit: ReadyCommit,
     child: Arc<Mutex<crate::sandbox::SandboxedChild>>,
 }
 
@@ -44,14 +52,9 @@ struct RelayConnection {
 }
 
 struct RelayTasks {
-    activity: Option<ActivityThread>,
+    dispatcher: WorkerEventDispatcher,
     command_writer: RelayCommandThread,
     event_reader: thread::JoinHandle<()>,
-}
-
-struct ActivityThread {
-    control: ActivityControl,
-    thread: thread::JoinHandle<()>,
 }
 
 struct RelayCommandThread {
@@ -60,16 +63,22 @@ struct RelayCommandThread {
 }
 
 #[derive(Clone)]
-struct RelayCommandSender(mpsc::Sender<RelayWriterMessage>);
+pub(super) struct RelayCommandSender {
+    writer: mpsc::Sender<RelayWriterMessage>,
+    events: mpsc::Sender<WorkerEvent>,
+}
 
 enum RelayWriterMessage {
     Command(RelayCommand),
-    Shutdown { deadline: Instant },
+    Shutdown {
+        deadline: Instant,
+        completed: mpsc::SyncSender<Result<(), String>>,
+    },
     Stop,
 }
 
 #[derive(Clone, Default)]
-struct ShutdownAcceptance(Arc<Mutex<Option<ShutdownRequest>>>);
+pub(super) struct ShutdownAcceptance(Arc<Mutex<Option<ShutdownRequest>>>);
 
 struct ShutdownRequest {
     deadline: Instant,
@@ -77,27 +86,11 @@ struct ShutdownRequest {
 }
 
 #[derive(Clone)]
-struct WorkerCancellation(Arc<Mutex<Option<std::io::PipeWriter>>>);
-
-#[derive(Clone)]
-struct ActivityControl {
-    cancellation: WorkerCancellation,
-}
-
-pub(super) struct WorkerIoEvents {
-    pub(super) ready: bool,
-    pub(super) cancelled: bool,
-}
-
-#[derive(Clone)]
 pub(super) struct StdinSender(RelayCommandSender);
 
 #[derive(Clone)]
-pub(super) struct WorkerCommandSender(RelayCommandSender);
-
-#[derive(Clone)]
 /// Correlates concurrent relay interrupt commands with their completion events.
-struct InterruptRequests(Arc<Mutex<InterruptRequestState>>);
+pub(super) struct InterruptRequests(Arc<Mutex<InterruptRequestState>>);
 
 struct InterruptRequestState {
     next_request_id: u64,
@@ -105,15 +98,10 @@ struct InterruptRequestState {
     failure: Option<String>,
 }
 
-#[derive(Clone)]
-struct TransportFailure {
-    activity: Activity,
-    activity_events: mpsc::Sender<ActivityEvent>,
-    startup: Arc<Mutex<Option<StartupResultSender>>>,
-    interrupts: InterruptRequests,
-}
+#[derive(Clone, Default)]
+struct ReadyCommit(Arc<Mutex<Option<ReadyCommitSender>>>);
 
-type StartupResultSender = mpsc::SyncSender<Result<(), String>>;
+type ReadyCommitSender = mpsc::Sender<ReadyCommitOutcome>;
 
 impl WorkerRuntime {
     /// Starts a relay in the sandbox and waits for its worker's ready message.
@@ -123,7 +111,7 @@ impl WorkerRuntime {
         output: super::OutputTape,
         on_started: impl FnOnce(WorkerShutdownHandle) -> Result<(), String>,
         on_ready: impl FnOnce() -> Result<(), String>,
-    ) -> Result<Worker, String> {
+    ) -> Result<Worker, SendFailure> {
         let super::WorkerSpec {
             executable,
             arguments,
@@ -159,11 +147,7 @@ impl WorkerRuntime {
             .stderr(Stdio::inherit())
             .new_process_group();
 
-        let (activity_cancelled, activity_cancel) = cancellation_pipe("sideband")?;
-        let (activity_events, activity_receiver) = mpsc::channel();
-        let activity_control = ActivityControl {
-            cancellation: activity_cancel.clone(),
-        };
+        let (worker_events, worker_event_receiver) = mpsc::channel();
 
         let mut child = command
             .spawn()
@@ -176,26 +160,24 @@ impl WorkerRuntime {
             .expect("piped worker relay stdout should be available");
         let child = Arc::new(Mutex::new(child));
 
-        let activity = Activity::new();
+        let operation = WorkerOperationState::new();
         let interrupts = InterruptRequests::new();
         let (startup_sender, startup_receiver) = mpsc::sync_channel(1);
-        let startup = Arc::new(Mutex::new(Some(startup_sender)));
-        let failure = TransportFailure {
-            activity: activity.clone(),
-            activity_events: activity_events.clone(),
-            startup,
-            interrupts: interrupts.clone(),
-        };
+        let (ready_commit_sender, ready_commit_receiver) = mpsc::channel();
+        let ready_commit = ReadyCommit(Arc::new(Mutex::new(Some(ready_commit_sender))));
         let shutdown_started = ShutdownAcceptance::default();
 
         let (commands, command_writer) =
-            start_relay_command_writer(relay_stdin, child.clone(), failure.clone());
-        let worker_commands = WorkerCommandSender(commands.clone());
-        let event_reader = start_relay_event_reader(
-            relay_stdout,
-            activity_events,
+            start_relay_command_writer(relay_stdin, worker_events.clone());
+        let event_reader = start_relay_event_reader(relay_stdout, worker_events);
+        let dispatcher = WorkerEventDispatcher::start(
+            worker_event_receiver,
+            operation.clone(),
+            commands.clone(),
             output.clone(),
-            failure,
+            callbacks,
+            startup_sender,
+            ready_commit_receiver,
             interrupts.clone(),
             shutdown_started.clone(),
         );
@@ -204,52 +186,43 @@ impl WorkerRuntime {
             child,
             commands: commands.clone(),
             tasks: Some(Box::new(RelayTasks {
-                activity: None,
+                dispatcher,
                 command_writer,
                 event_reader,
             })),
         };
         let mut worker = Worker {
-            worker_commands: worker_commands.clone(),
             stdin: StdinSender(commands.clone()),
-            activity,
-            activity_control: activity_control.clone(),
+            operation,
             interrupts,
             shutdown_started,
+            ready_commit,
             relay,
         };
 
         if let Err(error) = on_started(worker.shutdown_handle()) {
             let error = worker.startup_failure(error);
-            Activity::drain_output(activity_receiver, output);
             return Err(error);
         }
         match startup_receiver.recv() {
             Ok(Ok(())) => {}
-            Ok(Err(error)) => return Err(worker.startup_failure(error)),
+            Ok(Err(error)) => {
+                return Err(worker.startup_failure(error));
+            }
             Err(_) => {
-                return Err(worker.startup_failure(
-                    "worker relay event reader stopped before readiness".to_string(),
-                ));
+                let error = "worker event dispatcher stopped before readiness".to_string();
+                return Err(worker.startup_failure(error));
             }
         }
         if let Err(error) = on_ready() {
             let error = worker.startup_failure(error);
-            Activity::drain_output(activity_receiver, output);
             return Err(error);
         }
-
-        let activity_thread = worker.activity.start(
-            activity_receiver,
-            worker_commands,
-            output,
-            callbacks,
-            activity_cancelled,
-        );
-        worker.relay.attach_activity(ActivityThread {
-            control: activity_control,
-            thread: activity_thread,
-        });
+        if !worker.ready_commit.finish(ReadyCommitOutcome::Committed) {
+            return Err(
+                worker.startup_failure("worker stopped before readiness was committed".to_string())
+            );
+        }
         Ok(worker)
     }
 }
@@ -258,152 +231,173 @@ impl Worker {
     pub(super) fn prepare_r(
         &mut self,
         library: &std::path::Path,
-    ) -> Result<TerminalCommit<Result<(), String>>, String> {
+        commit: RPreparationCommit,
+    ) -> Result<Result<(), String>, String> {
         let library = library
             .to_str()
             .ok_or_else(|| "resolved R library path is not UTF-8".to_string())?
             .to_string();
-        let result = self.activity.begin_r_preparation()?;
-        if let Err(error) = self.worker_commands.send(ServerMessage::PrepareR {
-            library: library.clone(),
-        }) {
-            self.activity.fail(error.clone());
-            return Err(error);
-        }
-        receive_operation(result)?.try_map(|outcome| match outcome {
-            OperationResult::RPrepared(prepared) if prepared == library => Ok(Ok(())),
-            OperationResult::RPrepared(_) => {
-                Err("worker prepared an unexpected R library".to_string())
-            }
-            OperationResult::RPreparationFailed(message) => Ok(Err(message)),
+        let result = self
+            .operation
+            .begin_r_preparation(library.clone(), commit)?;
+        self.relay
+            .commands
+            .send(RelayCommand::PrepareR { library })?;
+        match receive_operation(result)? {
+            OperationResult::RPrepared(result) => Ok(result),
             _ => Err("worker sent an unexpected R preparation message".to_string()),
-        })
+        }
     }
 
     pub(super) fn prepare_python(
         &mut self,
         packages: Vec<String>,
-    ) -> Result<TerminalCommit<Result<Option<crate::resolver::ManagedPython>, String>>, String>
-    {
-        let result = self.activity.begin_python_preparation()?;
-        if let Err(error) = self
-            .worker_commands
-            .send(ServerMessage::PreparePython { packages })
-        {
-            self.activity.fail(error.clone());
-            return Err(error);
-        }
-        receive_operation(result)?.try_map(|outcome| match outcome {
-            OperationResult::PythonPrepared(candidate) => Ok(Ok(candidate)),
-            OperationResult::PythonPreparationFailed(message) => Ok(Err(message)),
+        commit: PythonPreparationCommit,
+    ) -> Result<Result<(), String>, String> {
+        let result = self.operation.begin_python_preparation(commit)?;
+        self.relay
+            .commands
+            .send(RelayCommand::PreparePython { packages })?;
+        match receive_operation(result)? {
+            OperationResult::PythonPrepared(result) => Ok(result),
             _ => Err("worker sent an unexpected Python preparation message".to_string()),
-        })
+        }
     }
 
     pub(super) fn evaluate(
         &mut self,
         cell: crate::cell::Cell,
         evaluation: Arc<super::Evaluation>,
-    ) -> Result<TerminalCommit<super::output::OutputCheckpoint>, String> {
-        let result = self.activity.begin_cell(evaluation.clone())?;
+    ) -> Result<(), String> {
+        let result = self.operation.begin_cell(evaluation.clone())?;
         let crate::cell::Cell { language, source } = cell;
-        if let Err(error) = self
-            .worker_commands
-            .send(ServerMessage::Evaluate { language, source })
-        {
-            self.activity.fail(error.clone());
-            return Err(error);
-        }
+        self.relay
+            .commands
+            .send(RelayCommand::Evaluate { language, source })?;
         if let Err(error) = evaluation.attach_writer(self.stdin.clone()) {
-            self.activity.fail(error.clone());
+            self.operation.fail(error.clone());
             return Err(error);
         }
-        receive_operation(result)?.try_map(|outcome| match outcome {
-            OperationResult::Completed(checkpoint) => Ok(checkpoint),
+        match receive_operation(result)? {
+            OperationResult::Completed => Ok(()),
             _ => Err("worker sent an unexpected evaluation result".to_string()),
-        })
+        }
     }
 
     pub(super) fn snapshot(
         &self,
         output: &super::OutputTape,
     ) -> Result<super::WorkerSnapshot, String> {
-        self.activity.snapshot(output)
+        self.operation.snapshot(output)
+    }
+
+    pub(super) fn has_failure(&self) -> Result<bool, String> {
+        self.operation.has_failure()
     }
 
     pub(super) fn write_stdin(&self, stdin: String) -> Result<(), String> {
         self.stdin.send(stdin)
     }
 
-    pub(super) fn shutdown(&mut self, deadline: Instant) -> Result<(), String> {
-        let process = self
-            .shutdown_handle()
-            .shutdown(deadline)
-            .and_then(|shutdown| join_worker_thread(shutdown, "shutdown sender"));
+    pub(super) fn shutdown_after_failure(
+        &mut self,
+    ) -> Result<Option<WorkerProcessOutcome>, super::WorkerRetirementFailure> {
+        let deadline = Instant::now();
+        let retirement_deadline = relay_retirement_deadline(deadline);
+        let shutdown = self.shutdown_handle();
+        let (_, requested) = shutdown.request_shutdown(deadline, retirement_deadline);
+        let process = combine_shutdown_results(
+            requested,
+            shutdown.finish_shutdown(deadline, RelayRetirementAllowance::Always),
+        );
         let retirement = self.finish_retirement();
         match (process, retirement) {
-            (Ok(()), Ok(())) => Ok(()),
-            (Err(error), Ok(())) => Err(error),
-            (Ok(()), Err(error)) => Err(error),
-            (Err(error), Err(retirement_error)) => Err(format!(
-                "{error}; additionally failed to retire worker I/O: {retirement_error}"
+            (Ok(()), Ok(outcome)) => Ok(outcome),
+            (Err(error), Ok(outcome)) => Err(super::WorkerRetirementFailure::new(error, outcome)),
+            (Ok(()), Err(error)) => Err(super::WorkerRetirementFailure::new(error, None)),
+            (Err(error), Err(retirement_error)) => Err(super::WorkerRetirementFailure::new(
+                format!("{error}; additionally failed to retire worker I/O: {retirement_error}"),
+                None,
             )),
         }
     }
 
-    pub(super) fn finish_retirement(&mut self) -> Result<(), String> {
+    pub(super) fn finish_retirement(&mut self) -> Result<Option<WorkerProcessOutcome>, String> {
         self.relay.finish_tasks()
     }
 
     pub(super) fn shutdown_handle(&self) -> WorkerShutdownHandle {
         WorkerShutdownHandle {
             commands: self.relay.commands(),
-            activity_control: self.activity_control.clone(),
+            operation: self.operation.clone(),
             interrupts: self.interrupts.clone(),
             shutdown_started: self.shutdown_started.clone(),
+            ready_commit: self.ready_commit.clone(),
             child: self.relay.child.clone(),
         }
     }
 
-    fn startup_failure(&mut self, message: String) -> String {
-        match self.shutdown(Instant::now()) {
-            Ok(()) => message,
-            Err(error) => format!("{message}; additionally failed to stop the worker: {error}"),
+    fn startup_failure(&mut self, message: String) -> SendFailure {
+        let retirement = if self
+            .ready_commit
+            .finish(ReadyCommitOutcome::Failed(message.clone()))
+        {
+            self.shutdown_after_failure()
+        } else {
+            self.finish_retirement().map_err(Into::into)
+        };
+        match retirement {
+            Ok(outcome) => SendFailure::from(message).worker_outcome(outcome),
+            Err(error) => error.attach_to(SendFailure::from(message)),
         }
     }
 }
 
 fn receive_operation(
-    receiver: mpsc::Receiver<Result<TerminalCommit<OperationResult>, String>>,
-) -> Result<TerminalCommit<OperationResult>, String> {
+    receiver: mpsc::Receiver<Result<OperationResult, String>>,
+) -> Result<OperationResult, String> {
     receiver
         .recv()
-        .map_err(|_| "worker sideband dispatcher stopped".to_string())?
+        .map_err(|_| "worker event dispatcher stopped".to_string())?
 }
 
 fn start_relay_command_writer(
     relay_stdin: std::process::ChildStdin,
-    child: Arc<Mutex<crate::sandbox::SandboxedChild>>,
-    failure: TransportFailure,
+    events: mpsc::Sender<WorkerEvent>,
 ) -> (RelayCommandSender, RelayCommandThread) {
-    let (sender, receiver) = mpsc::channel();
-    let sender = RelayCommandSender(sender);
+    let (writer, receiver) = mpsc::channel();
+    let sender = RelayCommandSender {
+        writer,
+        events: events.clone(),
+    };
     let thread = thread::spawn(move || {
         let mut writer = JsonlWriter::new(relay_stdin);
         for message in receiver {
-            let command = match message {
-                RelayWriterMessage::Command(command) => command,
-                RelayWriterMessage::Shutdown { deadline } => RelayCommand::Shutdown {
-                    grace_millis: duration_millis_ceil(
-                        deadline.saturating_duration_since(Instant::now()),
-                    ),
-                },
+            let (command, completed) = match message {
+                RelayWriterMessage::Command(command) => (command, None),
+                RelayWriterMessage::Shutdown {
+                    deadline,
+                    completed,
+                } => (
+                    RelayCommand::Shutdown {
+                        grace_millis: duration_millis_ceil(
+                            deadline.saturating_duration_since(Instant::now()),
+                        ),
+                    },
+                    Some(completed),
+                ),
                 RelayWriterMessage::Stop => return,
             };
             if let Err(error) = writer.send(&command) {
-                failure.fail(format!("worker relay stdin write failed: {error}"));
-                stop_worker_after_transport_failure(&child);
+                let error = format!("worker relay stdin write failed: {error}");
+                let _ = events.send(WorkerEvent::TransportFailure(error.clone()));
+                if let Some(completed) = completed {
+                    let _ = completed.send(Err(error));
+                }
                 return;
+            }
+            if let Some(completed) = completed {
+                let _ = completed.send(Ok(()));
             }
         }
     });
@@ -412,253 +406,99 @@ fn start_relay_command_writer(
 
 fn start_relay_event_reader(
     relay_stdout: std::process::ChildStdout,
-    activity_events: mpsc::Sender<ActivityEvent>,
-    output: super::OutputTape,
-    failure: TransportFailure,
-    interrupts: InterruptRequests,
-    shutdown_started: ShutdownAcceptance,
+    events: mpsc::Sender<WorkerEvent>,
 ) -> thread::JoinHandle<()> {
     thread::spawn(move || {
-        let stdout = output.direct_stdout();
-        let stderr = output.direct_stderr();
-        let mut stdout_closed = false;
-        let mut stderr_closed = false;
-        let mut worker_sideband_closed = false;
-        let mut worker_exited = false;
-        let mut relay_fatal = false;
-        let mut semantically_failed = false;
-        let mut runtime_started = false;
         let mut reader = JsonlReader::new(BufReader::new(relay_stdout));
-
         let result = (|| -> Result<(), String> {
             while let Some(event) = reader
                 .receive::<RelayEvent>()
                 .map_err(|error| format!("worker relay stdout read failed: {error}"))?
             {
-                if worker_exited {
-                    return if matches!(&event, RelayEvent::WorkerExited) {
-                        Err("worker relay reported worker exit twice".to_string())
-                    } else {
-                        Err("worker relay sent an event after worker exit".to_string())
-                    };
-                }
-                match event {
-                    RelayEvent::WorkerMessage { message } => {
-                        if worker_sideband_closed {
-                            return Err(
-                                "worker relay sent a message after closing the worker sideband"
-                                    .to_string(),
-                            );
-                        }
-                        if semantically_failed {
-                            continue;
-                        }
-                        let ready = matches!(&message, WorkerMessage::Ready);
-                        if failure.report_startup_message(&message)? {
-                            runtime_started = ready;
-                            continue;
-                        }
-                        if activity_events
-                            .send(ActivityEvent::WorkerMessage(message))
-                            .is_err()
-                        {
-                            semantically_failed = true;
-                            failure.fail("worker activity dispatcher stopped".to_string());
-                        }
-                    }
-                    RelayEvent::Stdout { data } => {
-                        if stdout_closed {
-                            return Err(
-                                "worker relay sent stdout after closing the stream".to_string()
-                            );
-                        }
-                        let data = data.decode()?;
-                        if runtime_started {
-                            activity_events
-                                .send(ActivityEvent::Stdout(data))
-                                .map_err(|_| "worker activity dispatcher stopped".to_string())?;
-                        } else {
-                            stdout.push(&data);
-                        }
-                    }
-                    RelayEvent::Stderr { data } => {
-                        if stderr_closed {
-                            return Err(
-                                "worker relay sent stderr after closing the stream".to_string()
-                            );
-                        }
-                        let data = data.decode()?;
-                        if runtime_started {
-                            activity_events
-                                .send(ActivityEvent::Stderr(data))
-                                .map_err(|_| "worker activity dispatcher stopped".to_string())?;
-                        } else {
-                            stderr.push(&data);
-                        }
-                    }
-                    RelayEvent::StreamClosed { stream } => match stream {
-                        RelayStream::Stdout if !stdout_closed => {
-                            if runtime_started {
-                                activity_events.send(ActivityEvent::StdoutClosed).map_err(
-                                    |_| "worker activity dispatcher stopped".to_string(),
-                                )?;
-                            } else {
-                                stdout.close();
-                            }
-                            stdout_closed = true;
-                        }
-                        RelayStream::Stderr if !stderr_closed => {
-                            if runtime_started {
-                                activity_events.send(ActivityEvent::StderrClosed).map_err(
-                                    |_| "worker activity dispatcher stopped".to_string(),
-                                )?;
-                            } else {
-                                stderr.close();
-                            }
-                            stderr_closed = true;
-                        }
-                        _ => return Err("worker relay closed one output stream twice".to_string()),
-                    },
-                    RelayEvent::WorkerSidebandClosed => {
-                        if worker_sideband_closed {
-                            return Err("worker relay closed the worker sideband twice".to_string());
-                        }
-                        worker_sideband_closed = true;
-                        let _ = activity_events.send(ActivityEvent::WorkerSidebandClosed);
-                        failure.report_startup_error(
-                            "worker sideband read failed: worker sideband closed".to_string(),
-                        );
-                    }
-                    RelayEvent::InterruptResult { request_id, error } => {
-                        if !semantically_failed {
-                            interrupts.complete(request_id, error)?;
-                        }
-                    }
-                    RelayEvent::ShutdownStarted => shutdown_started.observe()?,
-                    RelayEvent::WorkerExited => worker_exited = true,
-                    RelayEvent::Fatal { message } => {
-                        if relay_fatal {
-                            return Err("worker relay reported two fatal failures".to_string());
-                        }
-                        relay_fatal = true;
-                        semantically_failed = true;
-                        failure.fail(message);
-                    }
-                }
+                events
+                    .send(WorkerEvent::Relay(event))
+                    .map_err(|_| "worker event dispatcher stopped".to_string())?;
             }
-
-            if worker_exited && worker_sideband_closed && stdout_closed && stderr_closed {
-                Ok(())
-            } else {
-                Err("worker relay stdout closed before retirement completed".to_string())
-            }
+            Ok(())
         })();
-
-        if !stdout_closed {
-            if runtime_started {
-                let _ = activity_events.send(ActivityEvent::StdoutClosed);
-            } else {
-                stdout.close();
-            }
-        }
-        if !stderr_closed {
-            if runtime_started {
-                let _ = activity_events.send(ActivityEvent::StderrClosed);
-            } else {
-                stderr.close();
-            }
-        }
         if let Err(error) = result {
-            failure.fail(error);
+            let _ = events.send(WorkerEvent::TransportFailure(error));
         }
-        interrupts.fail("worker stopped before interrupt completed".to_string());
-        let _ = activity_events.send(ActivityEvent::RelayClosed);
+        let _ = events.send(WorkerEvent::RelayClosed);
     })
 }
 
-pub(super) fn wait_for_worker_io(
-    descriptor: std::os::fd::RawFd,
-    events: libc::c_short,
-    cancelled: &std::io::PipeReader,
-) -> std::io::Result<WorkerIoEvents> {
-    use std::os::fd::AsRawFd as _;
-
-    loop {
-        let mut descriptors = [
-            libc::pollfd {
-                fd: descriptor,
-                events,
-                revents: 0,
-            },
-            libc::pollfd {
-                fd: cancelled.as_raw_fd(),
-                events: libc::POLLIN,
-                revents: 0,
-            },
-        ];
-        // SAFETY: both descriptors remain open for the call, and the pointer and
-        // count describe the initialized array exactly.
-        if unsafe { libc::poll(descriptors.as_mut_ptr(), descriptors.len() as _, -1) } >= 0 {
-            return Ok(WorkerIoEvents {
-                ready: descriptors[0].revents != 0,
-                cancelled: descriptors[1].revents != 0,
-            });
-        }
-        let error = std::io::Error::last_os_error();
-        if error.kind() != std::io::ErrorKind::Interrupted {
-            return Err(error);
-        }
-    }
-}
-
-fn stop_worker_after_transport_failure(child: &Arc<Mutex<crate::sandbox::SandboxedChild>>) {
-    if let Ok(mut child) = child.lock() {
-        let _ = child.force_stop();
-    }
-}
-
-fn cancellation_pipe(stream: &str) -> Result<(std::io::PipeReader, WorkerCancellation), String> {
-    let (cancelled, cancel) = std::io::pipe()
-        .map_err(|error| format!("failed to create worker {stream} cancellation pipe: {error}"))?;
-    Ok((
-        cancelled,
-        WorkerCancellation(Arc::new(Mutex::new(Some(cancel)))),
-    ))
-}
-
 impl RelayCommandSender {
-    fn send(&self, command: RelayCommand) -> Result<(), String> {
-        self.0
+    pub(super) fn send(&self, command: RelayCommand) -> Result<(), String> {
+        self.writer
             .send(RelayWriterMessage::Command(command))
-            .map_err(|_| "worker relay command writer stopped".to_string())
+            .map_err(|_| self.command_writer_stopped())
     }
 
     fn stop(&self) {
-        let _ = self.0.send(RelayWriterMessage::Stop);
+        let _ = self.writer.send(RelayWriterMessage::Stop);
     }
 
-    fn shutdown(&self, deadline: Instant) -> Result<(), String> {
-        self.0
-            .send(RelayWriterMessage::Shutdown { deadline })
-            .map_err(|_| "worker relay command writer stopped".to_string())
+    fn shutdown(
+        &self,
+        worker_deadline: Instant,
+        completion_deadline: Instant,
+    ) -> Result<(), String> {
+        let (completed, wait) = mpsc::sync_channel(1);
+        self.writer
+            .send(RelayWriterMessage::Shutdown {
+                deadline: worker_deadline,
+                completed,
+            })
+            .map_err(|_| self.command_writer_stopped())?;
+        match wait.recv_timeout(completion_deadline.saturating_duration_since(Instant::now())) {
+            Ok(result) => result,
+            Err(mpsc::RecvTimeoutError::Timeout) => Err(self.report_command_transport_failure(
+                "worker relay shutdown command writer did not finish before the worker deadline"
+                    .to_string(),
+            )),
+            Err(mpsc::RecvTimeoutError::Disconnected) => Err(self
+                .report_command_transport_failure(
+                    "worker relay shutdown command writer stopped before reporting completion"
+                        .to_string(),
+                )),
+        }
+    }
+
+    fn retire_operation(&self, deadline: Instant, error: String) -> Result<(), String> {
+        let (reached, wait) = mpsc::sync_channel(1);
+        self.events
+            .send(WorkerEvent::RetireOperation { error, reached })
+            .map_err(|_| {
+                "worker event dispatcher stopped before ordered operation retirement".to_string()
+            })?;
+        match wait.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
+            Ok(()) => Ok(()),
+            Err(mpsc::RecvTimeoutError::Timeout) => Err(
+                "worker event dispatcher did not retire the operation before the relay retirement deadline"
+                    .to_string(),
+            ),
+            Err(mpsc::RecvTimeoutError::Disconnected) => Err(
+                "worker event dispatcher stopped before retiring the operation".to_string(),
+            ),
+        }
+    }
+
+    fn command_writer_stopped(&self) -> String {
+        self.report_command_transport_failure("worker relay command writer stopped".to_string())
+    }
+
+    fn report_command_transport_failure(&self, error: String) -> String {
+        let _ = self
+            .events
+            .send(WorkerEvent::TransportFailure(error.clone()));
+        error
     }
 }
 
 impl StdinSender {
     pub(super) fn send(&self, data: String) -> Result<(), String> {
         self.0.send(RelayCommand::Stdin { data })
-    }
-}
-
-impl WorkerCommandSender {
-    pub(super) fn send(&self, message: ServerMessage) -> Result<(), String> {
-        self.0
-            .send(RelayCommand::WorkerMessage { message })
-            .map_err(|error| format!("worker sideband write failed: {error}"))
-    }
-
-    pub(super) fn terminal_committed(&self) -> Result<(), String> {
-        self.0.send(RelayCommand::TerminalCommitted)
     }
 }
 
@@ -695,7 +535,7 @@ impl InterruptRequests {
             .map_err(|_| "worker interrupt response was not received".to_string())?
     }
 
-    fn complete(&self, request_id: u64, error: Option<String>) -> Result<(), String> {
+    pub(super) fn complete(&self, request_id: u64, error: Option<String>) -> Result<(), String> {
         let result = self
             .0
             .lock()
@@ -707,7 +547,7 @@ impl InterruptRequests {
         Ok(())
     }
 
-    fn fail(&self, error: String) {
+    pub(super) fn fail(&self, error: String) {
         let (pending, error) = match self.0.lock() {
             Ok(mut state) => {
                 let error = state.failure.get_or_insert(error).clone();
@@ -733,47 +573,6 @@ impl InterruptRequests {
     }
 }
 
-impl TransportFailure {
-    fn fail(&self, error: String) {
-        self.report_startup_error(error.clone());
-        self.interrupts.fail(error.clone());
-        self.activity.fail(error.clone());
-        let _ = self.activity_events.send(ActivityEvent::Failure(error));
-    }
-
-    fn report_startup_message(&self, message: &WorkerMessage) -> Result<bool, String> {
-        let mut startup = self
-            .startup
-            .lock()
-            .map_err(|_| "worker startup state lock poisoned".to_string())?;
-        let Some(sender) = startup.take() else {
-            return Ok(false);
-        };
-        let result = match message {
-            WorkerMessage::Ready => Ok(()),
-            WorkerMessage::ConsoleOutput { data } | WorkerMessage::ConsoleDiagnostic { data } => {
-                Err(format!("worker emitted output before readiness: {data}"))
-            }
-            WorkerMessage::Image { .. } => {
-                Err("worker emitted an image before readiness".to_string())
-            }
-            _ => Err("worker did not report readiness".to_string()),
-        };
-        let _ = sender.send(result);
-        Ok(true)
-    }
-
-    fn report_startup_error(&self, error: String) {
-        let sender = match self.startup.lock() {
-            Ok(mut startup) => startup.take(),
-            Err(poisoned) => poisoned.into_inner().take(),
-        };
-        if let Some(sender) = sender {
-            let _ = sender.send(Err(error));
-        }
-    }
-}
-
 impl ShutdownAcceptance {
     fn request(&self, deadline: Instant) -> Result<(), String> {
         let mut request = self
@@ -790,7 +589,7 @@ impl ShutdownAcceptance {
         Ok(())
     }
 
-    fn observe(&self) -> Result<(), String> {
+    pub(super) fn observe(&self) -> Result<(), String> {
         let mut request = self
             .0
             .lock()
@@ -826,42 +625,112 @@ impl WorkerShutdownHandle {
     /// Requests relay-owned worker shutdown and enforces bounded relay retirement.
     ///
     /// The owning `Worker` separately joins all relay transport tasks.
-    pub(super) fn shutdown(&self, deadline: Instant) -> Result<thread::JoinHandle<()>, String> {
-        self.shutdown_started.request(deadline)?;
-        let commands = self.commands.clone();
-        let shutdown = thread::spawn(move || {
-            let _ = commands.shutdown(deadline);
-        });
+    pub(super) fn shutdown(&self, deadline: Instant) -> Result<(), String> {
+        let (allowance, requested) = self.request_shutdown(deadline, deadline);
+        combine_shutdown_results(requested, self.finish_shutdown(deadline, allowance))
+    }
 
-        let stopped = {
-            let mut child = self
-                .child
-                .lock()
-                .map_err(|_| "worker child lock poisoned".to_string())?;
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            let wait = match child.wait_timeout_without_reaping(remaining) {
-                Ok(true) => Ok(()),
-                Ok(false) => match self.shutdown_started.observed_by_deadline() {
-                    Ok(true) => child
-                        .wait_timeout_without_reaping(RELAY_RETIREMENT_GRACE)
-                        .map(|_| ()),
-                    Ok(false) => Ok(()),
-                    Err(error) => Err(error),
-                },
-                Err(error) => Err(error),
-            };
-            let stop = child.force_stop();
-            match (wait, stop) {
-                (Ok(()), Ok(())) => Ok(()),
-                (Err(error), Ok(())) => Err(error),
-                (Ok(()), Err(error)) => Err(error),
-                (Err(error), Err(stop_error)) => Err(format!(
-                    "{error}; additionally failed to stop the worker relay: {stop_error}"
-                )),
-            }
+    pub(super) fn request_shutdown(
+        &self,
+        worker_deadline: Instant,
+        completion_deadline: Instant,
+    ) -> (RelayRetirementAllowance, Result<(), String>) {
+        self.ready_commit.finish(ReadyCommitOutcome::Retiring);
+        let requested = self.shutdown_started.request(worker_deadline);
+        let allowance = if self
+            .commands
+            .shutdown(worker_deadline, completion_deadline)
+            .is_ok()
+        {
+            RelayRetirementAllowance::TimelyAcceptance
+        } else {
+            RelayRetirementAllowance::Always
         };
-        self.activity_control.cancel();
-        stopped.map(|()| shutdown)
+        (allowance, requested)
+    }
+
+    pub(super) fn finish_shutdown(
+        &self,
+        deadline: Instant,
+        allowance: RelayRetirementAllowance,
+    ) -> Result<(), String> {
+        let retirement_deadline = relay_retirement_deadline(deadline);
+        let barrier_deadline = if allowance == RelayRetirementAllowance::Always {
+            retirement_deadline
+        } else {
+            deadline
+        };
+        let _ = self.retire_operation(
+            barrier_deadline,
+            "worker stopped before operation completed".to_string(),
+        );
+        self.stop_relay(deadline, retirement_deadline, allowance)
+    }
+
+    fn retire_operation(&self, deadline: Instant, error: String) -> Result<(), String> {
+        self.commands.retire_operation(deadline, error)
+    }
+
+    fn stop_relay(
+        &self,
+        deadline: Instant,
+        retirement_deadline: Instant,
+        allowance: RelayRetirementAllowance,
+    ) -> Result<(), String> {
+        let mut child = self
+            .child
+            .lock()
+            .map_err(|_| "worker child lock poisoned".to_string())?;
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        let wait = match child.wait_timeout_without_reaping(remaining) {
+            Ok(true) => Ok(()),
+            Ok(false) => match self.should_wait_for_relay_retirement(allowance) {
+                Ok(true) => child
+                    .wait_timeout_without_reaping(
+                        retirement_deadline.saturating_duration_since(Instant::now()),
+                    )
+                    .map(|_| ()),
+                Ok(false) => Ok(()),
+                Err(error) => Err(error),
+            },
+            Err(error) => Err(error),
+        };
+        let stop = child.force_stop();
+        match (wait, stop) {
+            (Ok(()), Ok(())) => Ok(()),
+            (Err(error), Ok(())) => Err(error),
+            (Ok(()), Err(error)) => Err(error),
+            (Err(error), Err(stop_error)) => Err(format!(
+                "{error}; additionally failed to stop the worker relay: {stop_error}"
+            )),
+        }
+    }
+
+    fn should_wait_for_relay_retirement(
+        &self,
+        allowance: RelayRetirementAllowance,
+    ) -> Result<bool, String> {
+        if allowance == RelayRetirementAllowance::Always || self.operation.has_failure()? {
+            return Ok(true);
+        }
+        self.shutdown_started.observed_by_deadline()
+    }
+}
+
+fn relay_retirement_deadline(deadline: Instant) -> Instant {
+    deadline
+        .checked_add(RELAY_RETIREMENT_GRACE)
+        .unwrap_or(deadline)
+}
+
+fn combine_shutdown_results(
+    first: Result<(), String>,
+    second: Result<(), String>,
+) -> Result<(), String> {
+    match (first, second) {
+        (Ok(()), Ok(())) => Ok(()),
+        (Err(error), Ok(())) | (Ok(()), Err(error)) => Err(error),
+        (Err(error), Err(additional)) => Err(format!("{error}; additionally {additional}")),
     }
 }
 
@@ -876,26 +745,15 @@ impl RelayConnection {
         self.commands.clone()
     }
 
-    fn attach_activity(&mut self, activity: ActivityThread) {
-        let tasks = self
-            .tasks
-            .as_mut()
-            .expect("relay tasks should still be active");
-        tasks.activity = Some(activity);
-    }
-
-    fn finish_tasks(&mut self) -> Result<(), String> {
+    fn finish_tasks(&mut self) -> Result<Option<WorkerProcessOutcome>, String> {
         let Some(tasks) = self.tasks.take() else {
-            return Ok(());
+            return Ok(None);
         };
-        let activity = tasks.activity.map(ActivityThread::cancel);
-        let activity = activity.map_or(Ok(()), |thread| {
-            join_worker_thread(thread, "activity dispatcher")
-        });
         let command_writer =
             join_worker_thread(tasks.command_writer.stop(), "relay command writer");
         let event_reader = join_worker_thread(tasks.event_reader, "relay event reader");
-        activity.and(command_writer).and(event_reader)
+        let outcome = tasks.dispatcher.join();
+        command_writer.and(event_reader).and(outcome)
     }
 }
 
@@ -906,26 +764,18 @@ impl RelayCommandThread {
     }
 }
 
-impl ActivityThread {
-    fn cancel(self) -> thread::JoinHandle<()> {
-        self.control.cancel();
-        self.thread
-    }
-}
-
-impl ActivityControl {
-    fn cancel(&self) {
-        self.cancellation.cancel();
-    }
-}
-
-impl WorkerCancellation {
-    fn cancel(&self) {
-        let mut cancel = match self.0.lock() {
-            Ok(cancel) => cancel,
-            Err(poisoned) => poisoned.into_inner(),
+impl ReadyCommit {
+    fn finish(&self, outcome: ReadyCommitOutcome) -> bool {
+        let sender = match self.0.lock() {
+            Ok(mut sender) => sender.take(),
+            Err(poisoned) => poisoned.into_inner().take(),
         };
-        drop(cancel.take());
+        if let Some(sender) = sender {
+            let _ = sender.send(outcome);
+            true
+        } else {
+            false
+        }
     }
 }
 

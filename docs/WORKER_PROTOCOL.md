@@ -9,7 +9,10 @@ The separate private server-to-relay transport is documented in [`RELAY_PROTOCOL
 
 The current implementation provides one worker for one server process.
 It evaluates one complete R, Python, or SQL cell at a time and accepts exact `stdin` text whether the worker is evaluating or idle.
-One generation-long relay reader continuously consumes worker sideband frames and forwards them to the server's generation-long relay-event reader; evaluations and live preparations register only their expected terminal messages.
+One generation-long relay reader continuously consumes worker-sideband frames and translates them to flat outer relay events.
+The server's relay reader only parses and enqueues those events.
+`WorkerOperationState` owns the active evaluation or preparation, retained transport failure, and outstanding idle input.
+A separate ordered semantic dispatcher commits evaluation and preparation results and applies every other event.
 
 The worker sideband protocol does not include an interrupt command, request IDs, general structured errors, sessions, capabilities, or protocol version negotiation.
 MCP `session` interrupt is out of band: the server requests `SIGINT` for an active host resolver process group, or otherwise asks the relay to signal the live worker process.
@@ -179,7 +182,8 @@ Caller-selected non-managed Python environments skip resolver-owned prewarming b
 The relay launches the worker with piped standard input, standard output, and standard error.
 Sideband frames carry control and managed output; interactive input bytes travel through the worker's fd 0.
 After the `ready` handshake, one relay reader owns the sideband for the worker generation while independent relay readers drain fd 1 and fd 2.
-The relay serializes their events through one ordered JSONL stream to the server.
+Worker sideband, stdout, stderr, and lifecycle or supervision each have one producer.
+They enqueue complete flat events into one multi-producer queue, and one serializer owns relay stdout and writes flushed JSONL frames to the server.
 
 This launch contract currently works only on macOS because the sandbox is unsupported elsewhere.
 The executable receives two inherited file descriptor numbers:
@@ -216,14 +220,17 @@ The sender flushes every frame.
 Console text is carried directly in a JSON string, with `console_output` and `console_diagnostic` kinds distinguishing ordinary and diagnostic text.
 JSON escaping represents newlines, quotes, and other control characters on the wire.
 
-Worker standard output and standard error are not protocol frames.
-Each relay pipe reader publishes raw byte chunks without decoding or line buffering, using base64 in the outer relay frame.
-The relay transport therefore preserves arbitrary bytes from the worker and its descendants even though its own stdout is a UTF-8 JSONL protocol stream.
-The server decodes those chunks to bytes and appends them, forwarded sideband console text, images, failures, and lifecycle notices to one pending output tape as it accepts them.
+Worker standard output and standard error are not worker-sideband frames.
+Each relay pipe reader reads raw byte chunks without line buffering and validates each chunk independently as UTF-8.
+A completely valid chunk uses a readable `stdout` or `stderr` JSON string in the outer relay frame; an invalid chunk uses padded standard base64 in `stdout_bytes` or `stderr_bytes`.
+The relay keeps no incremental UTF-8 state across chunks, so a scalar split across reads can use the byte form.
+Both forms preserve arbitrary bytes from the worker and its descendants even though relay stdout is a UTF-8 JSONL protocol stream.
+The server converts either form to bytes and appends them, forwarded sideband console text, images, failures, and lifecycle notices to one pending output tape as it accepts them.
 When a response drains the tape, the server decodes queued chunks for each pipe as UTF-8, retains an incomplete trailing sequence for a later response, and replaces invalid sequences.
 Direct standard output, direct standard error, console output, and console diagnostics remain distinct until this projection step.
 The current MCP projection renders both console channels as ordinary text and coalesces adjacent text exactly as it did before channels were retained.
-It preserves order within each stream, but makes no relative ordering guarantee between standard output, standard error, and sideband output.
+Frames never interleave, and each source preserves its own order.
+Ordering between sources is their enqueue order at the relay serializer; there is no relative chronological guarantee between standard output, standard error, and sideband output.
 Descendants that inherit fd 1 or fd 2 write into the same pipes even when the interpreter is idle, until retirement closes that worker generation's capture boundary.
 
 ## Messages
@@ -278,8 +285,8 @@ Custom workers and caller-configured Python workers do not send `python_activate
 
 The first worker message must be `ready`.
 The server does not send an evaluation before receiving it.
-Before forwarding any worker message, including `ready`, the relay checkpoints both raw-output readers so bytes already available from worker fd 1 and fd 2 precede the sideband event in the outer stream.
-For a restart replacement, the server commits the new lifecycle generation as ready after this frame and before starting the continuous dispatcher, so an immediate resolver or activation callback observes the replacement generation.
+The relay translates `ready` directly to the flat outer event of the same name.
+For a restart replacement, the ordered semantic dispatcher waits while the server commits the new lifecycle generation as ready before it applies a following resolver or activation event.
 That completion is scoped to the owning generation, so a later overlapping restart cannot be marked ready by the earlier call.
 
 One evaluation has this shape:
@@ -294,7 +301,7 @@ worker -> server  {"kind":"completed"}
 ```
 
 No sideband interrupt command, poll, synchronization, or acknowledgment frame exists.
-The outer relay protocol uses `terminal_committed` only to preserve server commit ordering; that command is not exposed to the worker.
+The outer relay protocol also has no operation-result acknowledgment: the relay keeps reading worker-sideband frames after a result.
 A `SIGINT` that reaches the process while it is idle remains pending until the next managed boundary; the entry check consumes it and the next cell proceeds.
 A signal that arrives after a cell's final check is handled at the same later boundary.
 
@@ -310,12 +317,13 @@ Only one request may be outstanding: a second request, a terminal input frame wi
 `completed` ends the sideband evaluation.
 It carries no managed-Python state.
 
-After `ready`, the generation-long relay reader accepts console, image, input, Python-resolution, Python-version-resolution, Python-activation, and operation-terminal frames continuously and forwards them to the server's relay-event reader.
+After `ready`, the generation-long relay reader accepts console, image, input, Python-resolution, Python-version-resolution, Python-activation, and operation-result frames continuously and translates them to flat outer events.
 Console output and images are published to the shared output tape immediately.
 Nested Python requests are serviced even while no explicit operation is active, so an idle callback does not wait for a later client command.
 Idle input state is retained until fd 0 satisfies the read or a later evaluation adopts it.
 The relay reader assembles newline-delimited worker JSON incrementally, and the server reader does the same for the outer relay JSONL, so an incomplete frame cannot block retirement.
-Evaluations and live preparations register only the terminal they expect.
+The server reader only parses and enqueues events.
+One semantic dispatcher consumes them in order, including idle output, resolver requests, EOF, and transport failures; evaluations and live preparations register only the operation result they expect.
 A worker that is waiting for a nested resolver reply queues an unrelated command, finishes that callback after the reply arrives, and then processes the command.
 Before applying a live preparation command, the built-in worker gives registered R handlers one nonblocking turn, so a ready callback is handled first.
 An input request from that callback fails the noninteractive preparation instead of leaving it blocked.
@@ -377,7 +385,7 @@ The server runs reticulate's version selection while the worker waits and replie
 This request returns no interpreter, creates no environment candidate, and does not affect retained Python state.
 The selected version can support managed-Python operations such as displaying or writing the current requirements; an eventual tool command from `uv_run_tool()` still executes inside the worker sandbox.
 
-When the reader accepts evaluation `completed`, it records the current output-tape position and returns that checkpoint to the evaluation.
+When the ordered dispatcher applies evaluation `completed`, it records the current output-tape position and returns that checkpoint to the evaluation.
 Output accepted after the checkpoint belongs to later background activity and remains pending for the next response.
 If no content or input-request record exists through the checkpoint and no standard-stream text is pending, the MCP projection returns `[done]`.
 That marker is produced by the server; it is not a sideband message.
@@ -411,7 +419,7 @@ If the deadline expires first, the response ends with `[worker starting]`; a lat
 If startup fails, that error ends the automatic attempt and the worker remains stopped.
 Server-owned timeline, state, and admission facts are bracketed; request-validation and standalone resolver diagnostics remain ordinary MCP tool-error text.
 If the poll wait expires first, the literal `\n[running]` banner is appended to any collected output.
-With no evaluation active, an empty `send` immediately drains the server's pending output tape and returns `\n[idle]`, or `\n[stdin needed]` when the continuous relay reader is tracking a forwarded idle console read.
+With no evaluation active, an empty `send` immediately drains the server's pending output tape and returns `\n[idle]`, or `\n[stdin needed]` when `WorkerOperationState` is tracking a forwarded idle console read.
 It sends no worker frame, does not wait for a callback to finish, and ignores `timeout_ms` because no worker operation is being polled.
 Output accepted after that snapshot remains pending for the next response.
 An initial or stopped worker is not started by an empty call.
@@ -485,12 +493,12 @@ New code is rejected while an evaluation and its uncollected result are active.
 ## State transitions
 
 Between-cell callbacks do not create a separate server-side operation state.
-The generation-long relay and server readers publish their frames immediately.
-An evaluation's `completed` frame records a tape checkpoint; callback frames accepted after that checkpoint remain pending for the next response.
-Before forwarding any worker message, the relay checkpoints both raw-output readers and first publishes bytes already available from fd 1 and fd 2, so even a message that the server rejects cannot overtake preceding raw output.
-After any operation terminal, the relay's worker-sideband reader waits for the server operation owner to commit its terminal state and send `terminal_committed` before reading the next worker-sideband frame.
-The raw-output readers continue draining during that barrier.
-Later idle frames therefore cannot overtake environment retention or evaluation completion.
+The relay's independent sideband, stdout, stderr, and supervision producers publish complete outer events through one multi-producer queue.
+The one relay serializer preserves each source's order and writes noninterleaved frames, but cannot reconstruct chronology between independent pipes.
+Raw output written before an operation result may therefore be serialized after that result and remain pending for a later response.
+An evaluation's `completed` event records a tape checkpoint when the server's ordered semantic dispatcher applies it; callback events accepted after that checkpoint remain pending for the next response.
+The dispatcher commits each evaluation or preparation result before applying the next queued event, so later idle events cannot overtake environment retention or evaluation completion.
+The relay does not classify operation results or wait for a server acknowledgment before reading another worker-sideband frame.
 
 | From | Frame | To |
 | --- | --- | --- |
@@ -528,14 +536,19 @@ Later idle frames therefore cannot overtake environment retention or evaluation 
 Malformed worker JSON, invalid worker-sideband UTF-8, an unexpected worker message, or worker-sideband EOF fails the active operation or records an idle worker failure after the relay reports it.
 `python_resolution_failed` and `python_version_resolution_failed` reply to valid resolver requests; they are not general protocol error messages.
 There is no structured message for other protocol or infrastructure failures.
-Initial startup failure leaves no cached worker, so a later evaluation retries startup silently.
+Initial startup failure leaves no cached worker, so a later evaluation retries startup without replacement notices.
 After `ready`, a sideband failure retires the worker before its tool error reports `[worker stopped: in-memory state lost]`.
 A nonempty `send` that fails during an active operation then makes one announced replacement attempt before its deadline; a later call starts a new announced attempt only if that replacement failed.
 An empty `send` that discovers an idle failure stops the worker and reports the failure without starting a replacement; a later nonempty `send` or explicit restart starts the next worker.
 Sideband content received before that failure is retained and precedes the tool error.
-Before publishing worker-sideband closure, the relay checkpoints both standard-stream readers, so bytes accepted before sideband EOF precede the failure it causes.
-For a relay-owned protocol or I/O failure, it stops the worker and joins the worker transports before publishing `fatal`, so the same ordering applies regardless of which relay task detected the failure.
-Worker retirement waits for the relay's standard-stream readers and final events, and the server keeps draining relay events after its activity dispatcher closes, so all accepted standard-stream text precedes the tool error and stopped notice.
+The server's relay reader enqueues worker-sideband closure, transport failure, and relay EOF for the same semantic dispatcher instead of mutating operation state through a separate path.
+For a relay-owned protocol or I/O failure, the relay stops the worker and drains and joins its standard-stream readers before publishing stream closures and the final worker outcome.
+Worker retirement waits for the ordered dispatcher to consume those final events, so all accepted standard-stream bytes precede the tool error and stopped notice.
+Unexpected ordinary exit adds `[worker exited with status N]`, including for status zero, and signal termination adds `[worker terminated by signal N]` before those existing lifecycle notices.
+An unexpected pre-ready exit adds the same diagnostic to its startup failure.
+Intentional restart and shutdown still consume the structured relay outcome but suppress the public crash diagnostic.
+For non-intentional startup or runtime failure, the server sends zero worker grace and grants the relay the bounded two-second retirement allowance without requiring timely `shutdown_started` acceptance.
+The ordered dispatcher can therefore consume drained raw output, stream closures, and the process outcome before the outer fail-safe stops the relay.
 If either output path contributed text, the server starts the bracketed error on a new line.
 R parse and evaluation errors, Python exceptions, and DuckDB errors are not sideband failures: the built-in worker sends them as output followed by `completed` and remains reusable.
 Any earlier `python_activated` event has already updated retained state.
@@ -557,22 +570,30 @@ The worker sends no acknowledgment; it exits.
 The relay queues worker-stdin closure and attempts the sideband write concurrently, so a blocked stdin writer or full worker-sideband pipe cannot postpone forced termination.
 It waits only through the grace carried by the server command.
 If the worker remains live at that deadline, the relay first kills its direct worker, then force-stops every other live process whose current process group is exactly the relay's group while remaining alive as group leader, and finally reaps the direct worker.
-It cancels the worker-sideband and standard-stream readers, drains their finite buffered bytes, emits the stream-close events followed by `worker_exited`, flushes relay stdout, and exits.
+It cancels and joins the worker-sideband reader after draining every complete buffered or immediately readable frame, while abandoning an incomplete frame that a detached descendant could hold open.
+It drains and joins both standard-stream readers before emitting `stdout_closed`, `stderr_closed`, and `worker_sideband_closed`.
+It then emits the direct worker's structured outcome as `worker_exited { code }` for ordinary exit or `worker_signaled { signal }` for signal termination, flushes relay stdout, and exits.
+Intentional shutdown and restart consume that outcome without reporting it as a public crash diagnostic.
 Clean relay-stdin EOF follows the same worker shutdown path with a one-second grace measured from EOF, but emits no `shutdown_started` event because there is no registered server request; EOF midway through a relay frame is a transport failure.
 While waiting, the server observes relay exit without reaping it, so the relay PID continues to pin the process-group identity.
-After the original deadline, and after the additional two-second allowance only when shutdown was accepted in time, the outer sandbox owner always closes the complete sandbox process-group lifetime and reaps the relay.
+After the original deadline, and after the additional two-second allowance only when shutdown was accepted in time or the dispatcher retained a pre-marker failure, the outer sandbox owner always closes the complete sandbox process-group lifetime and reaps the relay.
+Non-intentional failure retirement uses an already-expired worker deadline and always grants that bounded allowance.
+Intentional shutdown and restart require timely acceptance unless the ordered dispatcher retained a pre-marker failure.
 The same path runs when the relay already exited and is the fail-safe when it does not accept shutdown or stalls.
 The sandbox owner records the retirement result before the relay PID can be reused; concurrent or repeated cleanup returns that result without signaling the retired PID or process group again.
-Stopping the relay interrupts partial worker-sideband assembly and terminal-commit waits.
-Server-side Activity cancellation releases an operation owner that must return the worker lock, while relay EOF releases any partial outer-frame read.
-Shutdown then force-stops any resolver process group that was active for explicit preparation or worker-triggered Python resolution and reaps its direct process.
-After both stop paths complete, shutdown joins the relay command and event tasks.
+Stopping an already-started relay sideband reader preserves complete worker-sideband frames already buffered or immediately readable and interrupts only incomplete assembly.
+If transport setup fails before that reader starts, pending sideband frames are discarded so the outer `fatal` is the first semantic event; raw stdout and stderr still drain.
+Server-side `WorkerOperationState` failure releases an active operation waiter, while relay EOF releases any partial outer-frame read.
+Before force-stopping an active resolver process group, shutdown queues the relay command against the original worker deadline.
+After resolver cancellation releases its callback, shutdown queues an ordered operation-retirement marker and waits for the dispatcher to reach it only through that original deadline.
+Matching late operation results consume the cancelled operation tombstone without committing it, while expected callback and transport fallout after the marker is ignored for crash classification.
+Shutdown then enforces relay retirement and joins the relay command and event tasks.
 This closes the old generation's server-side relay boundary before shutdown returns, even when a session-detached descendant retains a worker pipe descriptor or a relay command write is blocked.
 An in-group descendant is stopped by either forced relay-side cleanup or the server's final outer-group cleanup; a descendant that leaves the group remains unsupported, and any later write to the closed pipe is not captured.
 
 Shutdown owns stop handles independently of the active-operation lock, including simultaneous handles for the worker and its nested host resolver.
-This lets the server terminate both processes while another thread is blocked waiting for resolver or worker output, while ensuring the worker stop path completes before resolver cancellation can release queued work.
-A resolver that finishes independently while restart begins remains ordered against the shutdown write by ordinary sideband publication; restart adds no stronger preemption boundary before the worker observes shutdown.
+This lets the server queue worker shutdown before terminating the resolver while another thread is blocked waiting for resolver or worker output.
+A resolver that finishes independently while restart begins remains ordered against the shutdown write by the relay command queue; the ordered retirement marker then separates pre-retirement failures from expected shutdown fallout.
 If the worker cannot observe the shutdown frame while running a cell or R callback, the bounded kill is the completion path.
 
 Shutdown closes a one-way gate that the client checks before and after acquiring the worker lock.
@@ -603,8 +624,9 @@ The temporary handler is removed before any R handler runs, including after an R
 The minimum positive `R_wait_usec` or `Rg_wait_usec` value bounds the wait so `R_PolledEvents` can run; otherwise the worker blocks until a descriptor is ready.
 This uses R's descriptor wait without a separate event loop or worker-owned fixed polling interval.
 
-After an idle handler turn, the worker returns to the same wait without sending an activity-specific terminal frame.
-The generation-long relay reader forwards idle callback output and images as they arrive, and the server's relay reader publishes them, services managed-Python requests, and retains idle input state.
+After an idle handler turn, the worker returns to the same wait without sending an operation-result frame.
+The generation-long relay reader forwards idle callback output and images as they arrive, and the server's relay reader parses and enqueues them.
+`WorkerEventDispatcher` publishes that output and services managed-Python requests, while `WorkerOperationState` retains idle input state.
 Both readers assemble their newline-delimited frames incrementally so a partial frame can be abandoned when retirement cancels the reader.
 Because the relay keeps draining complete worker frames while the worker is idle, ordinary callback output is not bounded by sideband pipe capacity.
 An empty `send` only snapshots that server state; it sends no frame and does not wait for the callback to finish.
@@ -811,6 +833,7 @@ When an R `source` is exactly `stall`, Zod creates a checkpoint in its private t
 When the source is `complete after timeout`, it pauses briefly before returning `zod: complete after timeout\n`.
 When the source is `violate protocol`, it sends an unexpected second `ready` message.
 When the source is `exit unexpectedly`, it exits with status 86 without replying.
+When the source is `exit zero`, it exits with status zero without replying.
 The `emit stdout` and `start background stderr` modes exercise continuous standard-stream capture during evaluation and after completion.
 The `start background sideband` mode writes a pipe-filling console frame after its initiating evaluation completes to verify continuous idle draining.
 The `start partial sideband descendant` mode leaves an incomplete JSON frame open in a detached descendant so restart and shutdown coverage can verify cancellable framing.

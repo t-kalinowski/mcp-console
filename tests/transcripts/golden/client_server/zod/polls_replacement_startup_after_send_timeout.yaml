@@ -19,6 +19,7 @@ result:
     - type: text
       text: |-
         [worker sideband read failed: worker sideband closed]
+        [worker exited with status 86]
         [worker stopped: in-memory state lost]
         [starting new worker]
         [worker starting]

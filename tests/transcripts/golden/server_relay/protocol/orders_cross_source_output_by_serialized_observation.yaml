@@ -1,0 +1,44 @@
+---
+relay:
+  kind: ready
+---
+server:
+  kind: evaluate
+  language: r
+  source: "42"
+---
+relay:
+  kind: completed
+---
+relay:
+  kind: stdout
+  data: observed after operation result
+---
+relay:
+  kind: resolve_python
+  request:
+    requirements:
+      packages:
+        - numpy
+        - pandas
+    retained_requirements:
+      packages:
+        - numpy
+        - pandas
+    environment: {}
+---
+server:
+  kind: python_resolution_failed
+  message: Python requirements are unavailable with a custom worker
+---
+relay:
+  kind: resolve_python_version
+  request:
+    constraints:
+      - ">=3.11"
+    environment: {}
+---
+server:
+  kind: python_version_resolution_failed
+  message: Python requirements are unavailable with a custom worker
+...

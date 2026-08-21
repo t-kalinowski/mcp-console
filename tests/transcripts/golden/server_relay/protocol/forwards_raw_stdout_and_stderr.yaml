@@ -1,29 +1,30 @@
 ---
 relay:
-  kind: worker_message
-  message:
-    kind: ready
+  kind: ready
 ---
 server:
-  kind: worker_message
-  message:
-    kind: evaluate
-    language: r
-    source: "42"
+  kind: evaluate
+  language: r
+  source: "42"
 ---
 relay:
   kind: stdout
-  data: c3Rkb3V0Cg==
+  data: |
+    stdout text 👩🏽‍💻
 ---
 relay:
   kind: stderr
-  data: c3RkZXJyCg==
+  data: |
+    stderr text
 ---
 relay:
-  kind: worker_message
-  message:
-    kind: completed
+  kind: stdout_bytes
+  data: /3N0ZG91dCBieXRlcwo=
 ---
-server:
-  kind: terminal_committed
+relay:
+  kind: stderr_bytes
+  data: /nN0ZGVyciBieXRlcwo=
+---
+relay:
+  kind: completed
 ...

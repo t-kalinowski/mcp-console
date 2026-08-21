@@ -331,26 +331,43 @@ impl Client {
             return Err("worker state changed during requirement preparation".to_string());
         };
         let includes_r = managed_r.is_some();
-        if !python_packages.is_empty() {
-            let result = running.prepare_python(python_packages);
+        let includes_python = !python_packages.is_empty();
+        if includes_python {
+            let client = self.clone();
+            let commit_generation = generation.clone();
+            let python_duckdb = if includes_r {
+                None
+            } else {
+                duckdb_extensions.clone()
+            };
+            let commit = Box::new(move |result| {
+                let managed = match result {
+                    Ok(managed) => managed,
+                    Err(error) => return Ok(Err(error)),
+                };
+                if let Some(managed) = managed {
+                    client.commit_runtime_python(commit_generation.clone(), managed)?;
+                }
+                if let Some(duckdb_extensions) = python_duckdb {
+                    client.commit_running_environment(
+                        &commit_generation,
+                        None,
+                        Some(duckdb_extensions),
+                    )?;
+                }
+                Ok(Ok(()))
+            });
+            let result = running.prepare_python(python_packages, commit);
             match result {
-                Ok(completion) => {
-                    let committed = completion.commit_with(|result| match result {
-                        Ok(Some(managed)) => self
-                            .commit_runtime_python(generation.clone(), managed)
-                            .map_err(|error| (true, error)),
-                        Ok(None) => Ok(()),
-                        Err(error) => Err((false, error)),
-                    });
-                    if let Err((stop_worker, error)) = committed {
-                        return self.fail_running_preparation(
-                            &mut worker,
-                            generation,
-                            stop_worker,
-                            error,
-                            includes_r,
-                        );
-                    }
+                Ok(Ok(())) => {}
+                Ok(Err(error)) => {
+                    return self.fail_running_preparation(
+                        &mut worker,
+                        generation,
+                        false,
+                        error,
+                        includes_r,
+                    );
                 }
                 Err(error) => {
                     return self.fail_running_preparation(
@@ -364,8 +381,23 @@ impl Client {
             }
         }
         if let Some(managed_r) = managed_r {
-            let completion = match running.prepare_r(managed_r.library()) {
-                Ok(completion) => completion,
+            let library = managed_r.library().to_path_buf();
+            let client = self.clone();
+            let commit_generation = generation.clone();
+            let commit = Box::new(move |result| match result {
+                Ok(()) => client
+                    .commit_running_environment(
+                        &commit_generation,
+                        Some(managed_r),
+                        duckdb_extensions,
+                    )
+                    .map(|()| Ok(())),
+                Err(error) => client
+                    .require_restart_for_requirement_changes(&commit_generation)
+                    .map(|()| Err(error)),
+            });
+            let result = match running.prepare_r(&library, commit) {
+                Ok(result) => result,
                 Err(error) => {
                     return self.fail_running_preparation(
                         &mut worker,
@@ -376,25 +408,16 @@ impl Client {
                     );
                 }
             };
-            let committed = completion.commit_with(|result| match result {
-                Ok(()) => self
-                    .commit_running_environment(generation, Some(managed_r), duckdb_extensions)
-                    .map(|()| None),
-                Err(error) => self
-                    .require_restart_for_requirement_changes(generation)
-                    .map(|()| Some(error)),
-            });
-            return match committed {
-                Ok(None) => Ok(PrepareResult::Prepared),
-                Ok(Some(error)) => {
-                    Ok(self.failed_preparation_response(requirement_restart_error(error)))
-                }
+            return match result {
+                Ok(()) => Ok(PrepareResult::Prepared),
                 Err(error) => {
-                    self.fail_running_preparation(&mut worker, generation, true, error, true)
+                    Ok(self.failed_preparation_response(requirement_restart_error(error)))
                 }
             };
         }
-        if let Err(error) = self.commit_running_environment(generation, None, duckdb_extensions) {
+        if !includes_python
+            && let Err(error) = self.commit_running_environment(generation, None, duckdb_extensions)
+        {
             return self.fail_running_preparation(&mut worker, generation, true, error, includes_r);
         }
         Ok(PrepareResult::Prepared)
@@ -416,14 +439,24 @@ impl Client {
             }),
             GenerationStatus::CurrentReady => {
                 if stop_worker {
-                    return match self.stop_failed_worker(worker, generation)? {
-                        FailedWorkerStop::Stopped => {
+                    return match self.stop_failed_worker(worker, generation) {
+                        Ok(FailedWorkerStop::Stopped(outcome)) => {
                             self.0.output.push_failure(
-                                super::output::SendFailure::from(error).worker_stopped(),
+                                super::output::SendFailure::from(error)
+                                    .worker_outcome(outcome)
+                                    .worker_stopped(),
                             );
                             Ok(PrepareResult::WorkerStopped(self.0.output.take()))
                         }
-                        FailedWorkerStop::RestartOwnsWorker => Err(error),
+                        Ok(FailedWorkerStop::RestartOwnsWorker) => Err(error),
+                        Err(stop_error) => {
+                            self.0.output.push_failure(
+                                stop_error
+                                    .attach_to(super::output::SendFailure::from(error))
+                                    .worker_stopped(),
+                            );
+                            Ok(PrepareResult::WorkerStopped(self.0.output.take()))
+                        }
                     };
                 }
                 Ok(self.failed_preparation_response(error))

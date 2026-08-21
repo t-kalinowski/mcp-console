@@ -35,6 +35,7 @@ result:
         [input requested: "Selection: "]
         R is aborting now ...
         [worker sideband read failed: worker sideband closed]
+        [worker terminated by signal 11]
         [worker stopped: in-memory state lost]
         [starting new worker]
         [idle]

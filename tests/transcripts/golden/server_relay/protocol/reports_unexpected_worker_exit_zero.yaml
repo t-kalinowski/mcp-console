@@ -3,11 +3,9 @@ relay:
   kind: ready
 ---
 server:
-  kind: shutdown
-  grace_millis: <remaining shutdown grace>
----
-relay:
-  kind: shutdown_started
+  kind: evaluate
+  language: r
+  source: "42"
 ---
 relay:
   kind: stdout_closed

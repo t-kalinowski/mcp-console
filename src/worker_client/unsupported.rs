@@ -10,7 +10,7 @@ impl WorkerRuntime {
         _output: super::OutputTape,
         _on_started: impl FnOnce(WorkerShutdownHandle) -> Result<(), String>,
         _on_ready: impl FnOnce() -> Result<(), String>,
-    ) -> Result<Worker, String> {
+    ) -> Result<Worker, super::output::SendFailure> {
         let super::WorkerSpec {
             executable,
             arguments,
@@ -27,7 +27,9 @@ impl WorkerRuntime {
             managed_r,
             callbacks,
         );
-        Err("workers are supported only on macOS".to_string())
+        Err(super::output::SendFailure::from(
+            "workers are supported only on macOS".to_string(),
+        ))
     }
 }
 
@@ -35,15 +37,16 @@ impl Worker {
     pub(super) fn prepare_r(
         &mut self,
         _library: &std::path::Path,
-    ) -> Result<super::TerminalCommit<Result<(), String>>, String> {
+        _commit: super::RPreparationCommit,
+    ) -> Result<Result<(), String>, String> {
         unreachable!("unsupported workers cannot start")
     }
 
     pub(super) fn prepare_python(
         &mut self,
         packages: Vec<String>,
-    ) -> Result<super::TerminalCommit<Result<Option<crate::resolver::ManagedPython>, String>>, String>
-    {
+        _commit: super::PythonPreparationCommit,
+    ) -> Result<Result<(), String>, String> {
         let _ = packages;
         unreachable!("unsupported workers cannot start")
     }
@@ -52,7 +55,7 @@ impl Worker {
         &mut self,
         cell: crate::cell::Cell,
         _evaluation: std::sync::Arc<super::Evaluation>,
-    ) -> Result<super::TerminalCommit<super::output::OutputCheckpoint>, String> {
+    ) -> Result<(), String> {
         let _ = cell;
         unreachable!("unsupported workers cannot start")
     }
@@ -68,12 +71,20 @@ impl Worker {
         unreachable!("unsupported workers cannot start")
     }
 
-    pub(super) fn shutdown(&mut self, _deadline: std::time::Instant) -> Result<(), String> {
-        Ok(())
+    pub(super) fn has_failure(&self) -> Result<bool, String> {
+        Ok(false)
     }
 
-    pub(super) fn finish_retirement(&mut self) -> Result<(), String> {
-        Ok(())
+    pub(super) fn shutdown_after_failure(
+        &mut self,
+    ) -> Result<Option<super::WorkerProcessOutcome>, super::WorkerRetirementFailure> {
+        Ok(None)
+    }
+
+    pub(super) fn finish_retirement(
+        &mut self,
+    ) -> Result<Option<super::WorkerProcessOutcome>, String> {
+        Ok(None)
     }
 
     pub(super) fn shutdown_handle(&self) -> WorkerShutdownHandle {
@@ -89,10 +100,26 @@ impl WorkerShutdownHandle {
         Err("worker interrupts are supported only on macOS".to_string())
     }
 
-    pub(super) fn shutdown(
+    pub(super) fn shutdown(&self, _deadline: std::time::Instant) -> Result<(), String> {
+        Ok(())
+    }
+
+    pub(super) fn request_shutdown(
+        &self,
+        _worker_deadline: std::time::Instant,
+        _completion_deadline: std::time::Instant,
+    ) -> (RelayRetirementAllowance, Result<(), String>) {
+        (RelayRetirementAllowance, Ok(()))
+    }
+
+    pub(super) fn finish_shutdown(
         &self,
         _deadline: std::time::Instant,
-    ) -> Result<std::thread::JoinHandle<()>, String> {
-        Ok(std::thread::spawn(|| {}))
+        _allowance: RelayRetirementAllowance,
+    ) -> Result<(), String> {
+        Ok(())
     }
 }
+
+#[derive(Clone, Copy)]
+pub(super) struct RelayRetirementAllowance;
