@@ -301,10 +301,36 @@ def test_orders_cross_source_output_by_serialized_observation(
     binary: Path,
 ) -> Transcript:
     client = ServerRelayClient(binary, "serialized_cross_source_order")
-    assert _tool_text(client.send(r="42")) == "[done]"
+    evaluation = client.client._start_send(r="42")
+    checkpoint = client._wait_for(CHECKPOINT_NAME)
+    try:
+        client.client._receive(evaluation)
+        assert _tool_text(evaluation["result"]) == (
+            "stdout before completion\n"
+            "stderr before completion\n"
+            "stdout after completion\n"
+            "stderr after completion\n"
+            "idle callback after completion\n"
+        )
+    finally:
+        checkpoint.with_name(RELEASE_NAME).touch()
     client._wait_for(DONE_NAME)
-    assert _tool_text(client.send()) == "observed after operation result\n[idle]"
-    return client.finish_active()
+    idle_output = _tool_text(client.send())
+    assert idle_output == "stdout after grace\n\n[idle]", repr(idle_output)
+    transcript = client.finish_active()
+
+    completed = next(
+        index
+        for index, entry in enumerate(transcript)
+        if entry == {"relay": {"kind": "completed"}}
+    )
+    resolved = next(
+        index
+        for index, entry in enumerate(transcript)
+        if entry.keys() == {"relay"} and entry["relay"].get("kind") == "resolve_python"
+    )
+    assert all(entry.keys() == {"relay"} for entry in transcript[completed:resolved])
+    return transcript
 
 
 def test_gracefully_shuts_down(binary: Path) -> Transcript:

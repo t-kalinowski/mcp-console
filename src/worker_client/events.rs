@@ -235,14 +235,12 @@ impl WorkerOperationState {
         &self,
         event: RelayEvent,
         python_candidates: &mut Vec<crate::resolver::ManagedPython>,
-        output: &OutputTape,
     ) -> Result<(), String> {
-        let (Operation { kind, result }, checkpoint) = {
+        let Operation { kind, result } = {
             let mut state = self.lock()?;
-            let operation = state.operation.take().ok_or_else(|| {
+            state.operation.take().ok_or_else(|| {
                 "worker sent an operation result without an active operation".to_string()
-            })?;
-            (operation, output.checkpoint())
+            })?
         };
 
         if result.is_none() && kind.matches_result(&event) {
@@ -255,7 +253,7 @@ impl WorkerOperationState {
                 match evaluation.input_complete() {
                     Ok(()) => {
                         python_candidates.clear();
-                        evaluation.complete_cell_at(checkpoint);
+                        evaluation.complete_cell_after_grace();
                         Ok(OperationResult::Completed)
                     }
                     Err(error) => Err(error),
@@ -739,7 +737,7 @@ fn handle_semantic_event(
         | RelayEvent::RPreparationFailed { .. }
         | RelayEvent::PythonPrepared
         | RelayEvent::PythonPreparationFailed { .. }) => {
-            operation.complete(event, python_candidates, output)
+            operation.complete(event, python_candidates)
         }
         RelayEvent::Ready
         | RelayEvent::Stdout { .. }

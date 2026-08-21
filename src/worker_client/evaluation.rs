@@ -7,6 +7,7 @@ use super::output::{
 };
 
 const INPUT_REQUEST_GRACE: Duration = Duration::from_millis(10);
+const CELL_COMPLETION_GRACE: Duration = Duration::from_millis(1);
 
 pub(super) struct Evaluation {
     state: Mutex<EvaluationState>,
@@ -14,6 +15,7 @@ pub(super) struct Evaluation {
     transcript: crate::transcript::Transcript,
     call_id: Option<u64>,
     output: OutputTape,
+    runtime: tokio::runtime::Handle,
 }
 
 struct EvaluationState {
@@ -34,6 +36,7 @@ struct EvaluationState {
 #[derive(Clone, Copy)]
 enum EvaluationPhase {
     Evaluating,
+    CellCompletionGrace,
     ReplacementStarting,
     Complete(CompletionKind),
 }
@@ -101,6 +104,7 @@ impl Evaluation {
             transcript,
             call_id,
             output,
+            runtime: tokio::runtime::Handle::current(),
         }
     }
 
@@ -129,11 +133,15 @@ impl Evaluation {
             .map_err(|_| "worker evaluation state lock poisoned".to_string())?;
         state.restart_reserved = true;
         let waiting = state.waiting;
-        let unfinished = !matches!(state.phase, EvaluationPhase::Complete(_));
+        let unfinished = matches!(
+            state.phase,
+            EvaluationPhase::Evaluating | EvaluationPhase::ReplacementStarting
+        );
         let completion = match state.phase {
             EvaluationPhase::Complete(completion) if !state.completion_collected => {
                 Some(completion)
             }
+            EvaluationPhase::CellCompletionGrace => Some(CompletionKind::Cell),
             EvaluationPhase::Complete(_) => None,
             EvaluationPhase::Evaluating | EvaluationPhase::ReplacementStarting => None,
         };
@@ -270,8 +278,23 @@ impl Evaluation {
         self.complete(result, CompletionKind::Cell, None);
     }
 
-    pub(super) fn complete_cell_at(&self, checkpoint: OutputCheckpoint) {
-        self.complete(Ok(()), CompletionKind::Cell, Some(checkpoint));
+    pub(super) fn complete_cell_after_grace(self: &Arc<Self>) {
+        let Ok(mut state) = self.state.lock() else {
+            return;
+        };
+        state.input_report_at = None;
+        state.phase = EvaluationPhase::CellCompletionGrace;
+        state.completion_checkpoint = None;
+        state.completion_collected = false;
+        self.changed.notify_one();
+        drop(state);
+
+        let evaluation = self.clone();
+        self.runtime.spawn(async move {
+            tokio::time::sleep(CELL_COMPLETION_GRACE).await;
+            let checkpoint = evaluation.output.checkpoint();
+            evaluation.complete(Ok(()), CompletionKind::Cell, Some(checkpoint));
+        });
     }
 
     pub(super) fn reject_new_cell_message(&self) -> &'static str {
@@ -406,6 +429,7 @@ impl Evaluation {
                     self.output.take(),
                 )));
             }
+            EvaluationPhase::CellCompletionGrace => return Ok(EvaluationStatus::Waiting),
             EvaluationPhase::ReplacementStarting if at_deadline => {
                 return Ok(EvaluationStatus::Report(
                     EvaluationWait::ReplacementStarting(self.output.take()),

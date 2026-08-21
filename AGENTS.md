@@ -77,7 +77,7 @@ The relay continuously assembles worker-sideband frames and drains raw worker st
 That reader continues draining relay stdout while the ordered dispatcher blocks on a host resolver.
 A worker whose background callback is waiting for a nested resolver reply queues an unrelated command, finishes the callback after the reply arrives, and then processes that command.
 An explicit operation registers only its expected operation result.
-At evaluation `completed`, the ordered dispatcher records an output-tape checkpoint so later background activity remains pending for the next response.
+At evaluation `completed`, the server waits one millisecond before recording an output-tape checkpoint, so stdout, stderr, and idle activity published during that grace period belong to the cell response while later background activity remains pending for the next response.
 An idle input request can join a later evaluation's ordinary stdin flow, but fails a noninteractive requirement-preparation operation instead of leaving it blocked.
 The implemented `session` surface accepts `action = "prepare"` with one or more R or Python requirement strings or DuckDB extension names, `action = "interrupt"` without requirements, or `action = "restart"` with optional R, Python, and DuckDB requirements for the implicit session.
 Interrupt requests `SIGINT` for an active host resolver process group, or otherwise asks the relay to send it to the live worker, and returns `[interrupt sent]` after the resolver accepts the request or the relay reports that the worker signal succeeded, without waiting for the resolver or evaluation to finish.
