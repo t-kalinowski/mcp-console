@@ -31,6 +31,10 @@ RELEASE_NAME = "mcp-console-scripted-relay-release"
 SHUTDOWN_RECEIVED_NAME = "mcp-console-scripted-relay-shutdown-received"
 RETIREMENT_RELEASE_NAME = "mcp-console-scripted-relay-retirement-release"
 PREPARATION_RECEIVED_NAME = "mcp-console-scripted-relay-preparation-received"
+PREPARATION_RESULT_RELEASE_NAME = (
+    "mcp-console-scripted-relay-preparation-result-release"
+)
+PREPARATION_RESULT_SENT_NAME = "mcp-console-scripted-relay-preparation-result-sent"
 
 
 def _tool_text(result: ToolResult) -> str:
@@ -482,6 +486,145 @@ def test_restart_consumes_late_r_preparation_retirement_events(
         if entry.keys() == {"relay"} and entry["relay"].get("kind") == "r_prepared"
     ]
     assert [event["library"] for event in prepared_events] == list(map(str, libraries))
+    for event in prepared_events:
+        event["library"] = f"<{Path(event['library']).name}>"
+    return transcript
+
+
+def test_restart_discards_pre_marker_r_preparation_result(
+    binary: Path,
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        libraries = [
+            root / "candidate-one",
+            root / "candidate-two",
+            root / "candidate-three",
+        ]
+        for library in libraries:
+            library.mkdir()
+        environment = _fake_ir_environment(root, libraries)
+        resolver_started = FifoCheckpoint(root / "resolver-started", create=True)
+        resolver_release = FifoCheckpoint(root / "resolver-release", create=True)
+        environment["MCP_CONSOLE_TEST_IR_GATE_INDEX"] = "1"
+        environment["MCP_CONSOLE_TEST_IR_STARTED"] = str(resolver_started.path)
+        environment["MCP_CONSOLE_TEST_IR_RELEASE"] = str(resolver_release.path)
+
+        client = ServerRelayClient(
+            binary,
+            "pre_marker_r_prepared_replacement",
+            environment,
+        )
+        client.start_worker()
+        old_root = client.relay_root()
+        old_capture = (old_root / CAPTURE_NAME).open(encoding="utf-8")
+        preparation_received = FifoCheckpoint(old_root / PREPARATION_RECEIVED_NAME)
+        result_release = FifoCheckpoint(old_root / PREPARATION_RESULT_RELEASE_NAME)
+        result_sent = FifoCheckpoint(old_root / PREPARATION_RESULT_SENT_NAME)
+        shutdown_received = FifoCheckpoint(old_root / SHUTDOWN_RECEIVED_NAME)
+        finished = False
+        try:
+            preparation = client.client._start_session(
+                action="prepare",
+                requirements={"r": ["old-generation"]},
+            )
+            preparation_received.wait()
+            restart = client.client._start_session(
+                action="restart",
+                requirements={"r": ["replacement-generation"]},
+            )
+            resolver_started.wait()
+            result_release.release()
+            result_sent.wait()
+            resolver_release.release()
+            client.client._receive_many([preparation, restart])
+
+            assert preparation["result"] == {
+                "content": [
+                    {"type": "text", "text": "R preparation cancelled by restart"}
+                ],
+                "isError": True,
+            }, preparation
+            restart_result = restart["result"]
+            assert restart_result.get("isError") is not True, restart_result
+            assert restart_result["content"] == [
+                {
+                    "type": "text",
+                    "text": (
+                        "[worker stopped: in-memory state lost]\n"
+                        "[starting new worker]\n"
+                        "[idle]"
+                    ),
+                }
+            ], restart_result
+            shutdown_received.wait()
+
+            old_transcript = client._read_open_capture(old_capture)
+            replacement_root = client.relay_root()
+            assert replacement_root != old_root
+            replacement_capture = (replacement_root / CAPTURE_NAME).open(
+                encoding="utf-8"
+            )
+            try:
+                assert (
+                    _tool_text(
+                        client.session(
+                            action="prepare",
+                            requirements={"r": ["replacement-generation"]},
+                        )
+                    )
+                    == "[prepared]"
+                )
+                # The old result did not enter the replacement requirement set.
+                assert (
+                    _tool_text(
+                        client.session(
+                            action="prepare",
+                            requirements={"r": ["old-generation"]},
+                        )
+                    )
+                    == "[prepared]"
+                )
+                client.client._finish()
+                finished = True
+                replacement_transcript = client._read_open_capture(replacement_capture)
+            finally:
+                replacement_capture.close()
+        finally:
+            if not finished:
+                stop_client(client.client)
+            old_capture.close()
+            preparation_received.close()
+            result_release.close()
+            result_sent.close()
+            shutdown_received.close()
+            resolver_started.close()
+            resolver_release.close()
+            client._temporary.cleanup()
+
+    transcript = old_transcript + replacement_transcript
+    shutdown = _normalize_shutdown_grace(transcript)
+    assert len(shutdown) == 2, transcript
+    prepare_commands = [
+        entry["server"]
+        for entry in transcript
+        if entry.keys() == {"server"} and entry["server"].get("kind") == "prepare_r"
+    ]
+    assert [command["library"] for command in prepare_commands] == [
+        str(libraries[0]),
+        str(libraries[2]),
+    ], prepare_commands
+    for command in prepare_commands:
+        command["library"] = f"<{Path(command['library']).name}>"
+    prepared_events = [
+        entry["relay"]
+        for entry in transcript
+        if entry.keys() == {"relay"} and entry["relay"].get("kind") == "r_prepared"
+    ]
+    assert [event["library"] for event in prepared_events] == [
+        str(libraries[0]),
+        str(libraries[2]),
+    ], prepared_events
     for event in prepared_events:
         event["library"] = f"<{Path(event['library']).name}>"
     return transcript

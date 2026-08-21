@@ -135,6 +135,10 @@ When the ordered dispatcher receives `ready`, it waits for the replacement gener
 Restart completion is scoped to that generation, so a completed restart cannot mark a later overlapping restart ready.
 Restart registers one relay-shutdown request and sends the relay a shutdown command with the time remaining in the existing one-second worker deadline.
 It queues that command before cancelling a nested host resolver, then places an ordered retirement marker behind the resolver callback in the relay-event queue.
+Semantic events ahead of that marker remain validated and ordered.
+A restart that reuses the retained environment commits successful old-generation R and Python preparation results and managed-Python activations before replacement.
+A restart that has already committed a newly resolved environment instead discards those successful old-generation environment commits, so they cannot overwrite the replacement; the preparation caller receives its typed restart-cancellation result.
+Worker-reported preparation failures and protocol, resolver, or environment-commit failures remain failures.
 The dispatcher reaches that marker by the original worker deadline, releases the operation caller, and retains the operation kind long enough to consume a matching late result without committing it or reporting an intentional restart as a crash.
 The relay flushes a `shutdown_started` event before it begins worker shutdown; if the server observes that single acceptance event by the original deadline, it allows up to two additional seconds after the deadline for relay retirement without extending the worker grace.
 Failure retirement instead sends zero worker grace and always grants that bounded relay-retirement allowance, even though `shutdown_started` cannot be observed before the already-expired worker deadline.
