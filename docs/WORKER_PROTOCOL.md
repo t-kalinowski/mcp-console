@@ -728,8 +728,10 @@ Before initializing R, it forces `UV_OFFLINE=1`, overwriting any inherited value
 For a server-managed worker, MCP Console seeds reticulate's manifest and replaces the namespace bindings for its internal `uv_get_or_create_env` and `resolve_python_version` functions.
 It does not replace `py_require()`, so reticulate retains its package attribution, manifest history, compatibility checks, activation, and configuration behavior within the live R process.
 When Python is already initialized, only additive package requirements are supported.
-The worker sends the complete physical resolver manifest and the logical manifest to retain after successful activation, then waits for the server's resolver reply before returning to reticulate.
-The two manifests must agree on packages and `exclude_newer`; only the physical manifest may substitute the exact active Python patch version.
+The physical manifest tells the host resolver which environment to materialize for this request.
+The logical manifest is reticulate's current `py_require()` constraint state, which the server retains for later worker generations after a successful activation.
+The two manifests must agree on packages and `exclude_newer`, but their Python versions may differ: for example, the physical manifest may select the active `3.12.11` interpreter while the logical manifest preserves the `>=3.11` constraint.
+The worker sends both complete manifests, then waits for the server's resolver reply before returning to reticulate.
 Reticulate checks that each candidate uses the exact live `libpython`, runs `activate_this.py`, swaps its configuration, and updates its manifest.
 The worker then sends `python_activated`, and the server immediately retains the matching candidate.
 The interpreter is not restarted, so its `__main__` namespace and existing Python objects remain available.
