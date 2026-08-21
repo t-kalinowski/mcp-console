@@ -8,13 +8,15 @@ session:
     r:
       - praise
     python:
-      - "<absolute project path>"
+      - <absolute project path>
     duckdb:
       - not_a_real_duckdb_extension
 result:
   content:
     - type: text
-      text: "Python requirement `<absolute project path>` is not accepted: host-side managed resolution accepts named package requirements only"
+      text: >-
+        Python requirement `<absolute project path>` is not accepted: host-side
+        managed resolution accepts named package requirements only
   isError: true
 ---
 id: 4
@@ -24,13 +26,15 @@ session:
     r:
       - praise
     python:
-      - "./project"
+      - ./project
     duckdb:
       - not_a_real_duckdb_extension
 result:
   content:
     - type: text
-      text: "Python requirement `./project` is not accepted: host-side managed resolution accepts named package requirements only"
+      text: >-
+        Python requirement `./project` is not accepted: host-side managed
+        resolution accepts named package requirements only
   isError: true
 ---
 id: 5
@@ -40,13 +44,15 @@ session:
     r:
       - praise
     python:
-      - "../project"
+      - ../project
     duckdb:
       - not_a_real_duckdb_extension
 result:
   content:
     - type: text
-      text: "Python requirement `../project` is not accepted: host-side managed resolution accepts named package requirements only"
+      text: >-
+        Python requirement `../project` is not accepted: host-side managed
+        resolution accepts named package requirements only
   isError: true
 ---
 id: 6
@@ -56,13 +62,15 @@ session:
     r:
       - praise
     python:
-      - "file://<absolute project path>"
+      - file://<absolute project path>
     duckdb:
       - not_a_real_duckdb_extension
 result:
   content:
     - type: text
-      text: "Python requirement `file://<absolute project path>` is not accepted: host-side managed resolution accepts named package requirements only"
+      text: >-
+        Python requirement `file://<absolute project path>` is not accepted:
+        host-side managed resolution accepts named package requirements only
   isError: true
 ---
 id: 7
@@ -72,13 +80,15 @@ session:
     r:
       - praise
     python:
-      - "-e ./project"
+      - -e ./project
     duckdb:
       - not_a_real_duckdb_extension
 result:
   content:
     - type: text
-      text: "Python requirement `-e ./project` is not accepted: host-side managed resolution accepts named package requirements only"
+      text: >-
+        Python requirement `-e ./project` is not accepted: host-side managed
+        resolution accepts named package requirements only
   isError: true
 ---
 id: 8
@@ -88,13 +98,16 @@ session:
     r:
       - praise
     python:
-      - "example @ https://example.invalid/example.whl"
+      - example @ https://example.invalid/example.whl
     duckdb:
       - not_a_real_duckdb_extension
 result:
   content:
     - type: text
-      text: "Python requirement `example @ https://example.invalid/example.whl` is not accepted: host-side managed resolution accepts named package requirements only"
+      text: >-
+        Python requirement `example @ https://example.invalid/example.whl` is
+        not accepted: host-side managed resolution accepts named package
+        requirements only
   isError: true
 ---
 id: 9
@@ -104,13 +117,15 @@ session:
     r:
       - praise
     python:
-      - "<absolute archive path>"
+      - <absolute archive path>
     duckdb:
       - not_a_real_duckdb_extension
 result:
   content:
     - type: text
-      text: "Python requirement `<absolute archive path>` is not accepted: host-side managed resolution accepts named package requirements only"
+      text: >-
+        Python requirement `<absolute archive path>` is not accepted: host-side
+        managed resolution accepts named package requirements only
   isError: true
 ---
 id: 10
@@ -120,13 +135,15 @@ session:
     r:
       - praise
     python:
-      - "./package.whl"
+      - ./package.whl
     duckdb:
       - not_a_real_duckdb_extension
 result:
   content:
     - type: text
-      text: "Python requirement `./package.whl` is not accepted: host-side managed resolution accepts named package requirements only"
+      text: >-
+        Python requirement `./package.whl` is not accepted: host-side managed
+        resolution accepts named package requirements only
   isError: true
 ---
 id: 11
@@ -142,7 +159,9 @@ session:
 result:
   content:
     - type: text
-      text: "Python requirement `package.whl` is not accepted: host-side managed resolution accepts named package requirements only"
+      text: >-
+        Python requirement `package.whl` is not accepted: host-side managed
+        resolution accepts named package requirements only
   isError: true
 ---
 id: 12
@@ -158,7 +177,9 @@ session:
 result:
   content:
     - type: text
-      text: "Python requirement `package.tar.gz` is not accepted: host-side managed resolution accepts named package requirements only"
+      text: >-
+        Python requirement `package.tar.gz` is not accepted: host-side managed
+        resolution accepts named package requirements only
   isError: true
 ---
 id: 13
@@ -170,7 +191,9 @@ session:
 result:
   content:
     - type: text
-      text: "Invalid Error: HTTP Error: Failed to download extension \"not_a_real_duckdb_extension\""
+      text: >-
+        Invalid Error: HTTP Error: Failed to download extension
+        "not_a_real_duckdb_extension"
   isError: true
 ---
 id: 14
@@ -178,7 +201,7 @@ session:
   action: prepare
   requirements:
     python:
-      - "requests[socks]>=2,<3; python_version < '0'"
+      - requests[socks]>=2,<3; python_version < '0'
 result:
   content:
     - type: text
@@ -190,7 +213,7 @@ session:
   action: restart
   requirements:
     python:
-      - "urllib3!=2.0.0; python_version < '0'"
+      - urllib3!=2.0.0; python_version < '0'
 result:
   content:
     - type: text
@@ -338,6 +361,8 @@ send:
 result:
   content:
     - type: text
-      text: "Python requirement `./runtime-project` is not accepted: host-side managed resolution accepts named package requirements only"
+      text: >-
+        Python requirement `./runtime-project` is not accepted: host-side
+        managed resolution accepts named package requirements only
   isError: false
 ...

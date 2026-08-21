@@ -29,7 +29,9 @@ session:
 result:
   content:
     - type: text
-      text: managed Python requirements are disabled because the session uses a user-selected Python environment
+      text: >-
+        managed Python requirements are disabled because the session uses a
+        user-selected Python environment
   isError: true
 ---
 id: 5
@@ -41,7 +43,9 @@ session:
 result:
   content:
     - type: text
-      text: managed Python requirements are disabled because the session uses a user-selected Python environment
+      text: >-
+        managed Python requirements are disabled because the session uses a
+        user-selected Python environment
   isError: true
 ---
 id: 6

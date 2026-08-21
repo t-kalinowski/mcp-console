@@ -3,7 +3,7 @@
 ---
 id: 3
 send:
-  r: "initial_r_library <- .libPaths()[[1L]]"
+  r: initial_r_library <- .libPaths()[[1L]]
 result:
   content:
     - type: text
@@ -29,7 +29,7 @@ send:
 result:
   content:
     - type: text
-      text: "\"<current managed R library>\""
+      text: '"<current managed R library>"'
   isError: false
 ---
 id: 6
@@ -67,6 +67,6 @@ send:
 result:
   content:
     - type: text
-      text: "\"<current managed R library>\""
+      text: '"<current managed R library>"'
   isError: false
 ...

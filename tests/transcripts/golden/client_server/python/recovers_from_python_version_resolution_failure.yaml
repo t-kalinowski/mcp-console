@@ -22,7 +22,7 @@ result:
 ---
 id: 4
 send:
-  r: "identical(Sys.getpid(), worker_pid)"
+  r: identical(Sys.getpid(), worker_pid)
 result:
   content:
     - type: text
