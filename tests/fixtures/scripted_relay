@@ -3,6 +3,7 @@
 import base64
 import json
 import os
+import select
 import sys
 import time
 from pathlib import Path
@@ -14,6 +15,9 @@ DONE_NAME = "mcp-console-scripted-relay-done"
 EVALUATING_NAME = "mcp-console-scripted-relay-evaluating"
 CHECKPOINT_NAME = "mcp-console-scripted-relay-checkpoint"
 RELEASE_NAME = "mcp-console-scripted-relay-release"
+SHUTDOWN_RECEIVED_NAME = "mcp-console-scripted-relay-shutdown-received"
+RETIREMENT_RELEASE_NAME = "mcp-console-scripted-relay-retirement-release"
+PREPARATION_RECEIVED_NAME = "mcp-console-scripted-relay-preparation-received"
 WAIT_SECONDS = 10
 
 EVALUATION = {
@@ -54,8 +58,11 @@ class ScriptedRelay:
 
         self.root = Path(os.environ["TMPDIR"])
         self.capture = (self.root / CAPTURE_NAME).open("w", encoding="utf-8")
+        self.checkpoints: dict[str, int] = {}
 
     def close(self) -> None:
+        for checkpoint in self.checkpoints.values():
+            os.close(checkpoint)
         self.capture.close()
 
     def record(self, entry: dict[str, Any]) -> None:
@@ -75,6 +82,12 @@ class ScriptedRelay:
         actual = self.receive()
         assert actual == expected, f"expected {expected!r}, received {actual!r}"
 
+    def expect_no_command(self) -> None:
+        readable, _, _ = select.select([sys.stdin.buffer], [], [], 0)
+        if readable:
+            unexpected = self.receive()
+            raise AssertionError(f"received unexpected server command: {unexpected!r}")
+
     def send(self, message: dict[str, Any]) -> None:
         self.record({"relay": message})
         frame = json.dumps(message, separators=(",", ":")).encode("utf-8") + b"\n"
@@ -91,6 +104,17 @@ class ScriptedRelay:
 
     def mark_done(self) -> None:
         (self.root / DONE_NAME).touch()
+
+    def make_checkpoint(self, name: str) -> None:
+        path = self.root / name
+        os.mkfifo(path)
+        self.checkpoints[name] = os.open(path, os.O_RDWR)
+
+    def notify_checkpoint(self, name: str) -> None:
+        write_all(self.checkpoints[name], b"1")
+
+    def wait_for_checkpoint(self, name: str) -> None:
+        assert os.read(self.checkpoints[name], 1) == b"1"
 
     def wait_for_release(self) -> None:
         (self.root / CHECKPOINT_NAME).touch()
@@ -234,6 +258,56 @@ def run_shutdown(relay: ScriptedRelay) -> None:
     relay.retire()
 
 
+def run_blocked_live_r_resolver_shutdown(relay: ScriptedRelay) -> None:
+    relay.make_checkpoint(SHUTDOWN_RECEIVED_NAME)
+    relay.make_checkpoint(RETIREMENT_RELEASE_NAME)
+    relay.ready()
+    command = relay.receive()
+    assert command.get("kind") == "shutdown", command
+    relay.notify_checkpoint(SHUTDOWN_RECEIVED_NAME)
+    relay.wait_for_checkpoint(RETIREMENT_RELEASE_NAME)
+    relay.expect_no_command()
+    relay.retire(command)
+    relay.expect_no_command()
+
+
+def run_late_r_prepared_retirement(relay: ScriptedRelay) -> None:
+    relay.make_checkpoint(SHUTDOWN_RECEIVED_NAME)
+    relay.make_checkpoint(RETIREMENT_RELEASE_NAME)
+    relay.make_checkpoint(PREPARATION_RECEIVED_NAME)
+    relay.ready()
+    command = relay.receive()
+    if command.get("kind") == "shutdown":
+        relay.retire(command)
+        return
+
+    assert command.get("kind") == "prepare_r", command
+    library = command["library"]
+    relay.notify_checkpoint(PREPARATION_RECEIVED_NAME)
+    if library.endswith("candidate-two"):
+        relay.send({"kind": "r_prepared", "library": library})
+        relay.retire()
+        return
+
+    assert library.endswith("candidate-one"), library
+    command = relay.receive()
+    assert command.get("kind") == "shutdown", command
+    relay.send({"kind": "shutdown_started"})
+    relay.notify_checkpoint(SHUTDOWN_RECEIVED_NAME)
+    relay.wait_for_checkpoint(RETIREMENT_RELEASE_NAME)
+    relay.send_batch(
+        [
+            {"kind": "r_prepared", "library": library},
+            {"kind": "stdout", "data": "drained old stdout\n"},
+            {"kind": "stderr", "data": "drained old stderr\n"},
+            {"kind": "stdout_closed"},
+            {"kind": "stderr_closed"},
+            {"kind": "worker_sideband_closed"},
+            {"kind": "worker_exited", "code": 33},
+        ]
+    )
+
+
 def run_fatal(relay: ScriptedRelay) -> None:
     relay.wait_for_release()
     relay.send({"kind": "fatal", "message": "scripted relay failure"})
@@ -288,6 +362,8 @@ def main() -> None:
         "interrupt": run_interrupt,
         "serialized_cross_source_order": run_serialized_cross_source_order,
         "shutdown": run_shutdown,
+        "blocked_live_r_resolver_shutdown": run_blocked_live_r_resolver_shutdown,
+        "late_r_prepared_retirement": run_late_r_prepared_retirement,
         "fatal": run_fatal,
         "truncated": run_truncated,
         "exit_zero": run_exit_zero,
