@@ -459,9 +459,7 @@ def test_cancelled_send_returns_owned_output_to_restart(binary: Path) -> Transcr
             "mimeType": "image/png",
         }, result
         assert result["content"][2]["text"] == (
-            "idle after image\n"
-            "[output produced while idle]\n"
-            "cell before image\n"
+            "idle after image\n[output produced while idle]\ncell before image\n"
         ), result
         assert result["content"][3] == {
             "type": "image",

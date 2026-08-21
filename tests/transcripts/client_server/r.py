@@ -150,9 +150,7 @@ def test_services_later_callbacks_while_idle(binary: Path) -> Transcript:
     release_worker_callback_gate(client, "idle callback")
     client.send(r="idle_value")
     assert last_tool_text(client) == (
-        "idle callback\n"
-        "[output produced while idle]\n"
-        "[1] 42\n"
+        "idle callback\n[output produced while idle]\n[1] 42\n"
     )
     return client._finish()
 
@@ -441,9 +439,7 @@ def test_routes_input_to_idle_later_callbacks_before_a_cell(binary: Path) -> Tra
         stdin="yes\n",
     )
     assert last_tool_text(client) == (
-        '[input requested: "later> "]\n'
-        "[output produced while idle]\n"
-        "cell: yes\n"
+        '[input requested: "later> "]\n[output produced while idle]\ncell: yes\n'
     ), repr(last_tool_text(client))
     return client._finish()
 

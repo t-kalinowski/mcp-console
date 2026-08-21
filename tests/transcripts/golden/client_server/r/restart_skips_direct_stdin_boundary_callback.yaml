@@ -28,7 +28,7 @@ result:
 ---
 id: 4
 send:
-  r: "cat(\"direct stdin cell ran\\n\")"
+  r: cat("direct stdin cell ran\n")
   timeout_ms: 30000
 result:
   content:

@@ -39,7 +39,7 @@ result:
 ---
 id: 5
 send:
-  r: "cat(cell_start_callback_ran, \"\\ncell body\\n\", sep = \"\")"
+  r: cat(cell_start_callback_ran, "\ncell body\n", sep = "")
 result:
   content:
     - type: text
