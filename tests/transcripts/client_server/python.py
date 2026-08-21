@@ -500,6 +500,7 @@ def test_validates_registry_only_python_requirements(binary: Path) -> Transcript
             "-e ./project",
             "example @ https://example.invalid/example.whl",
             str(archive),
+            "./package.whl",
             "package.whl",
             "package.tar.gz",
         ]
@@ -528,7 +529,7 @@ def test_validates_registry_only_python_requirements(binary: Path) -> Transcript
             result["content"][0]["text"], duckdb_extension
         )
 
-        prepared = "requests[socks]>=2; python_version < '0'"
+        prepared = "requests[socks]>=2,<3; python_version < '0'"
         client.session(
             action="prepare",
             requirements={"python": [prepared]},
@@ -567,6 +568,28 @@ def test_validates_registry_only_python_requirements(binary: Path) -> Transcript
             )
             selector.chmod(0o755)
         worker_installation.mkdir()
+        accepted_packages = [
+            "requests",
+            "requests[socks]",
+            "requests>=2,<3",
+            "requests[socks]>=2; python_version >= '3.10'",
+        ]
+        accepted_version_constraints = [
+            "3.11",
+            "3.14.0a3",
+            ">=3.9",
+            ">=3.9,<3.13",
+            "==3.12.*",
+        ]
+        rejected_version_constraints = [
+            "",
+            "./python",
+            "../python",
+            "file:///tmp/python",
+            "python3",
+            "~=3.11",
+            "===3.11",
+        ]
         uv_record.write_text("", encoding="utf-8")
         # Reach both worker-originated resolver requests directly. Interpreter
         # selectors must be rejected before either host resolver invokes uv.
@@ -575,6 +598,20 @@ def test_validates_registry_only_python_requirements(binary: Path) -> Transcript
             selector_worker_pid <- Sys.getpid()
             selector_sentinel <- 42L
             packages <- reticulate::py_require()$packages
+            accepted_package_request <- jsonlite::toJSON(list(
+              requirements = list(
+                packages = I(c({", ".join(json.dumps(package) for package in accepted_packages)})),
+                python_version = I("python3")
+              ),
+              retained_requirements = list(
+                packages = I(c({", ".join(json.dumps(package) for package in accepted_packages)})),
+                python_version = I(">=3.10")
+              )
+            ), auto_unbox = TRUE)
+            accepted_package_error <- tryCatch(
+              .Call("mcp_console_resolve_python", accepted_package_request),
+              error = conditionMessage
+            )
             environment_request <- jsonlite::toJSON(list(
               requirements = list(
                 packages = I(packages),
@@ -603,28 +640,57 @@ def test_validates_registry_only_python_requirements(binary: Path) -> Transcript
               .Call("mcp_console_resolve_python", retained_environment_request),
               error = conditionMessage
             )
-            version_request <- jsonlite::toJSON(list(
-              constraints = I({json.dumps(str(worker_installation))})
+            accepted_version_request <- jsonlite::toJSON(list(
+              constraints = I(c(
+                {", ".join(json.dumps(constraint) for constraint in accepted_version_constraints)},
+                {json.dumps(str(worker_installation))}
+              ))
             ), auto_unbox = TRUE)
-            version_error <- tryCatch(
-              .Call("mcp_console_resolve_python_version", version_request),
+            accepted_version_error <- tryCatch(
+              .Call(
+                "mcp_console_resolve_python_version",
+                accepted_version_request
+              ),
               error = conditionMessage
             )
+            rejected_version_errors <- vapply(
+              c({", ".join(json.dumps(constraint) for constraint in rejected_version_constraints)}),
+              function(constraint) {{
+                request <- jsonlite::toJSON(list(
+                  constraints = I(constraint)
+                ), auto_unbox = TRUE)
+                tryCatch(
+                  .Call("mcp_console_resolve_python_version", request),
+                  error = conditionMessage
+                )
+              }},
+              character(1L),
+              USE.NAMES = FALSE
+            )
             cat(
+              accepted_package_error,
               environment_error,
               retained_environment_error,
-              version_error,
+              accepted_version_error,
+              rejected_version_errors,
               sep = "\n"
             )
             """)
         client.send(r=r)
         output = last_tool_text(client)
         assert output == (
-            python_version_constraint_error(str(worker_executable))
+            python_version_constraint_error("python3")
+            + "\n"
+            + python_version_constraint_error(str(worker_executable))
             + "\n"
             + python_version_constraint_error(str(worker_retained_selector))
             + "\n"
             + python_version_constraint_error(str(worker_installation))
+            + "\n"
+            + "\n".join(
+                python_version_constraint_error(constraint)
+                for constraint in rejected_version_constraints
+            )
             + "\n"
         ), repr(output)
         assert uv_record.read_text(encoding="utf-8") == ""

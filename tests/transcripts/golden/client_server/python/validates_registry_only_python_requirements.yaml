@@ -120,6 +120,22 @@ session:
     r:
       - praise
     python:
+      - "./package.whl"
+    duckdb:
+      - not_a_real_duckdb_extension
+result:
+  content:
+    - type: text
+      text: "Python requirement `./package.whl` is not accepted: host-side managed resolution accepts named package requirements only"
+  isError: true
+---
+id: 11
+session:
+  action: prepare
+  requirements:
+    r:
+      - praise
+    python:
       - package.whl
     duckdb:
       - not_a_real_duckdb_extension
@@ -129,9 +145,9 @@ result:
       text: "Python requirement `package.whl` is not accepted: host-side managed resolution accepts named package requirements only"
   isError: true
 ---
-id: 11
+id: 12
 session:
-  action: prepare
+  action: restart
   requirements:
     r:
       - praise
@@ -145,7 +161,7 @@ result:
       text: "Python requirement `package.tar.gz` is not accepted: host-side managed resolution accepts named package requirements only"
   isError: true
 ---
-id: 12
+id: 13
 session:
   action: prepare
   requirements:
@@ -157,19 +173,19 @@ result:
       text: "Invalid Error: HTTP Error: Failed to download extension \"not_a_real_duckdb_extension\""
   isError: true
 ---
-id: 13
+id: 14
 session:
   action: prepare
   requirements:
     python:
-      - "requests[socks]>=2; python_version < '0'"
+      - "requests[socks]>=2,<3; python_version < '0'"
 result:
   content:
     - type: text
       text: "[prepared]"
   isError: false
 ---
-id: 14
+id: 15
 session:
   action: restart
   requirements:
@@ -183,15 +199,15 @@ result:
         [idle]
   isError: false
 ---
-id: 15
+id: 16
 send:
   r: |
     requirements <- reticulate::py_require()$packages
     stopifnot(
-      "requests[socks]>=2; python_version < '0'" %in% requirements,
+      "requests[socks]>=2,<3; python_version < '0'" %in% requirements,
       "urllib3!=2.0.0; python_version < '0'" %in% requirements,
       !any(c(
-        "<absolute project path>", "./project", "../project", "file://<absolute project path>", "-e ./project", "example @ https://example.invalid/example.whl", "<absolute archive path>", "package.whl", "package.tar.gz"
+        "<absolute project path>", "./project", "../project", "file://<absolute project path>", "-e ./project", "example @ https://example.invalid/example.whl", "<absolute archive path>", "./package.whl", "package.whl", "package.tar.gz"
       ) %in% requirements),
       !file.exists(file.path(.libPaths()[[1L]], "praise", "DESCRIPTION"))
     )
@@ -201,12 +217,26 @@ result:
       text: "[done]"
   isError: false
 ---
-id: 16
+id: 17
 send:
   r: |
     selector_worker_pid <- Sys.getpid()
     selector_sentinel <- 42L
     packages <- reticulate::py_require()$packages
+    accepted_package_request <- jsonlite::toJSON(list(
+      requirements = list(
+        packages = I(c("requests", "requests[socks]", "requests>=2,<3", "requests[socks]>=2; python_version >= '3.10'")),
+        python_version = I("python3")
+      ),
+      retained_requirements = list(
+        packages = I(c("requests", "requests[socks]", "requests>=2,<3", "requests[socks]>=2; python_version >= '3.10'")),
+        python_version = I(">=3.10")
+      )
+    ), auto_unbox = TRUE)
+    accepted_package_error <- tryCatch(
+      .Call("mcp_console_resolve_python", accepted_package_request),
+      error = conditionMessage
+    )
     environment_request <- jsonlite::toJSON(list(
       requirements = list(
         packages = I(packages),
@@ -235,29 +265,59 @@ send:
       .Call("mcp_console_resolve_python", retained_environment_request),
       error = conditionMessage
     )
-    version_request <- jsonlite::toJSON(list(
-      constraints = I("<worker installation path>")
+    accepted_version_request <- jsonlite::toJSON(list(
+      constraints = I(c(
+        "3.11", "3.14.0a3", ">=3.9", ">=3.9,<3.13", "==3.12.*",
+        "<worker installation path>"
+      ))
     ), auto_unbox = TRUE)
-    version_error <- tryCatch(
-      .Call("mcp_console_resolve_python_version", version_request),
+    accepted_version_error <- tryCatch(
+      .Call(
+        "mcp_console_resolve_python_version",
+        accepted_version_request
+      ),
       error = conditionMessage
     )
+    rejected_version_errors <- vapply(
+      c("", "./python", "../python", "file:///tmp/python", "python3", "~=3.11", "===3.11"),
+      function(constraint) {
+        request <- jsonlite::toJSON(list(
+          constraints = I(constraint)
+        ), auto_unbox = TRUE)
+        tryCatch(
+          .Call("mcp_console_resolve_python_version", request),
+          error = conditionMessage
+        )
+      },
+      character(1L),
+      USE.NAMES = FALSE
+    )
     cat(
+      accepted_package_error,
       environment_error,
       retained_environment_error,
-      version_error,
+      accepted_version_error,
+      rejected_version_errors,
       sep = "\n"
     )
 result:
   content:
     - type: text
       text: |
+        Python version constraint `python3` is not accepted: host-side managed resolution accepts version numbers and supported PEP 440 version specifiers only
         Python version constraint `<worker executable path>` is not accepted: host-side managed resolution accepts version numbers and supported PEP 440 version specifiers only
         Python version constraint `<worker retained selector>` is not accepted: host-side managed resolution accepts version numbers and supported PEP 440 version specifiers only
         Python version constraint `<worker installation path>` is not accepted: host-side managed resolution accepts version numbers and supported PEP 440 version specifiers only
+        Python version constraint `` is not accepted: host-side managed resolution accepts version numbers and supported PEP 440 version specifiers only
+        Python version constraint `./python` is not accepted: host-side managed resolution accepts version numbers and supported PEP 440 version specifiers only
+        Python version constraint `../python` is not accepted: host-side managed resolution accepts version numbers and supported PEP 440 version specifiers only
+        Python version constraint `file:///tmp/python` is not accepted: host-side managed resolution accepts version numbers and supported PEP 440 version specifiers only
+        Python version constraint `python3` is not accepted: host-side managed resolution accepts version numbers and supported PEP 440 version specifiers only
+        Python version constraint `~=3.11` is not accepted: host-side managed resolution accepts version numbers and supported PEP 440 version specifiers only
+        Python version constraint `===3.11` is not accepted: host-side managed resolution accepts version numbers and supported PEP 440 version specifiers only
   isError: false
 ---
-id: 17
+id: 18
 send:
   r: |
     identical(Sys.getpid(), selector_worker_pid) &&
@@ -270,7 +330,7 @@ result:
         [1] TRUE
   isError: false
 ---
-id: 18
+id: 19
 send:
   r: |
     reticulate::py_require("./runtime-project")
