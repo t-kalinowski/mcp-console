@@ -246,6 +246,9 @@ R, Python, and DuckDB resolution may access the network and write normal host ca
 Requirement strings remain process-argument or JSON data rather than R source, and no submitted cell is evaluated by the resolver.
 At built-in server startup, MCP Console captures every inherited `UV_*` value except `UV_OFFLINE` as trusted managed-Python resolver configuration.
 Before each managed Python environment or version resolver starts, it removes the process's current `UV_*` values, restores the captured configuration, and removes `UV_OFFLINE` again.
+Each Python resolver uses the current retained R library.
+Before a worker starts or during restart, a combined R and Python resolution uses the R candidate that will configure the new worker.
+A live mixed preparation resolves Python before asking the worker to apply the R candidate, so an immediately retained Python activation still corresponds to the retained R configuration if the later R update fails.
 Before initializing R, the worker forces `UV_OFFLINE=1`, overwriting any inherited value to match the sandbox's network denial.
 Evaluated changes through R's `Sys.setenv()` or Python's `os.environ` remain worker-local and are not sent with resolver requests.
 Reticulate reuses the server-resolved or caller-selected interpreter.

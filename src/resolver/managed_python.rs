@@ -153,15 +153,17 @@ impl ManagedPython {
 pub(crate) fn resolve_python(
     requirements: &[String],
     configuration: &super::ManagedPythonResolverConfiguration,
+    managed_r: Option<&super::ManagedR>,
     on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
 ) -> Result<ManagedPython, String> {
     let requirements = manifest_from_packages(requirements);
-    resolve_python_host(requirements, configuration, on_started)
+    resolve_python_host(requirements, configuration, managed_r, on_started)
 }
 
 pub(crate) fn resolve_python_manifest(
     requirements: crate::worker_protocol::PythonRequirementManifest,
     configuration: &super::ManagedPythonResolverConfiguration,
+    managed_r: Option<&super::ManagedR>,
     on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
 ) -> Result<ManagedPython, String> {
     crate::python_requirement::validate_all(&requirements.packages)?;
@@ -173,6 +175,7 @@ pub(crate) fn resolve_python_manifest(
         PYTHON_RESOLVER,
         input,
         configuration,
+        managed_r,
         on_started,
         "managed Python",
     )?;
@@ -227,6 +230,7 @@ pub(crate) fn resolve_python_manifest(
 pub(crate) fn resolve_python_version(
     constraints: Vec<String>,
     configuration: &super::ManagedPythonResolverConfiguration,
+    managed_r: Option<&super::ManagedR>,
     on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
 ) -> Result<String, String> {
     crate::python_requirement::validate_version_constraints(&constraints)?;
@@ -236,6 +240,7 @@ pub(crate) fn resolve_python_version(
         PYTHON_VERSION_RESOLVER,
         input,
         configuration,
+        managed_r,
         on_started,
         "managed Python version",
     )?;
@@ -262,26 +267,30 @@ pub(crate) fn resolve_python_version(
 pub(crate) fn resolve_python_host(
     requirements: crate::worker_protocol::PythonRequirementManifest,
     configuration: &super::ManagedPythonResolverConfiguration,
+    managed_r: Option<&super::ManagedR>,
     on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
 ) -> Result<ManagedPython, String> {
-    resolve_python_manifest(requirements, configuration, on_started)
+    resolve_python_manifest(requirements, configuration, managed_r, on_started)
 }
 
 fn run_python_resolver(
     source: &str,
     input: Vec<u8>,
     configuration: &super::ManagedPythonResolverConfiguration,
+    managed_r: Option<&super::ManagedR>,
     on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
     kind: &str,
 ) -> Result<ResolverOutput, String> {
-    let rscript = configuration.rscript()?;
+    let managed_r = managed_r
+        .ok_or_else(|| "managed Python resolver requires a managed R environment".to_string())?;
+    let rscript = managed_r.rscript();
     let mut command = resolver_command(rscript);
     command
         .args(["--vanilla", "-e", source])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    configuration.configure(&mut command)?;
+    configuration.configure(managed_r, &mut command)?;
     // Managed resolution intentionally runs outside the sandbox because
     // reticulate and uv need normal host network and cache access. Resolver
     // inputs are JSON standard-input data, never R source.

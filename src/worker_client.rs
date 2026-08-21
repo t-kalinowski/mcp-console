@@ -232,11 +232,7 @@ impl Client {
             Option::<crate::resolver::ManagedR>::None,
             Default::default(),
         );
-        let python_resolver = match r.as_ref() {
-            Some(r) => python_resolver.with_managed_r(r.clone()),
-            None => python_resolver,
-        };
-        let python = PythonEnvironment::builtin(configured_python, python_resolver)?;
+        let python = PythonEnvironment::builtin(configured_python, python_resolver, r.as_ref())?;
         Ok(Self::with_arguments(
             program,
             vec![OsString::from("worker")],

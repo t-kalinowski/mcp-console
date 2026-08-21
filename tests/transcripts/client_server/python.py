@@ -391,6 +391,83 @@ def test_prints_requirements_with_host_uv_cache(binary: Path) -> Transcript:
         return client._finish()
 
 
+def test_uses_current_r_library_for_managed_python_resolution(
+    binary: Path,
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        temporary = Path(temporary_directory)
+        real_uv = shutil.which("uv")
+        assert real_uv is not None, "real uv is required"
+        uv_record = temporary / "uv-environment.jsonl"
+        r_libs_record = temporary / "uv-r-libs.jsonl"
+        environment, _ = r_test_environment()
+        environment["RETICULATE_UV"] = str(
+            Path(__file__).parents[2] / "fixtures" / "record_uv_environment"
+        )
+        environment["MCP_CONSOLE_TEST_REAL_UV"] = real_uv
+        environment["MCP_CONSOLE_TEST_UV_RECORD"] = str(uv_record)
+        environment["MCP_CONSOLE_TEST_R_LIBS_RECORD"] = str(r_libs_record)
+        client = McpClient(
+            binary,
+            ("serve",),
+            environment,
+            current_directory=temporary,
+        )
+        client._initialize_and_list_tools()
+        client.send(r="initial_r_library <- .libPaths()[[1L]]")
+        assert last_tool_text(client) == "[done]"
+
+        def current_r_library() -> str:
+            # fmt: r
+            r = code(r"""
+                cat(jsonlite::toJSON(.libPaths()[[1L]], auto_unbox = TRUE))
+                """)
+            client.send(r=r)
+            output = last_tool_text(client)
+            library = json.loads(output)
+            client.transcript[-1]["result"]["content"][0]["text"] = (
+                '"<current managed R library>"'
+            )
+            return library
+
+        def assert_resolver_used(library: str) -> None:
+            records = [
+                json.loads(line)
+                for line in r_libs_record.read_text(encoding="utf-8").splitlines()
+            ]
+            assert records, "managed Python resolution did not invoke uv"
+            assert all(record is not None for record in records), records
+            first_libraries = [record.split(os.pathsep, 1)[0] for record in records]
+            assert first_libraries == [library] * len(records), first_libraries
+
+        client.session(action="prepare", requirements={"r": ["zeallot"]})
+        assert last_tool_text(client) == "[prepared]"
+        prepared_r_library = current_r_library()
+        uv_record.write_text("", encoding="utf-8")
+        r_libs_record.write_text("", encoding="utf-8")
+        # fmt: r
+        r = code(r"""
+            reticulate::py_require("py-yaml12")
+            invisible(reticulate::py_config())
+            """)
+        client.send(r=r)
+        assert last_tool_text(client) == "[done]", client.transcript[-1]
+        assert_resolver_used(prepared_r_library)
+
+        uv_record.write_text("", encoding="utf-8")
+        r_libs_record.write_text("", encoding="utf-8")
+        client.session(
+            action="restart",
+            requirements={"r": ["praise"], "python": ["six"]},
+        )
+        assert last_tool_text(client) == (
+            "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
+        )
+        restarted_r_library = current_r_library()
+        assert_resolver_used(restarted_r_library)
+        return client._finish()
+
+
 def test_validates_registry_only_python_requirements(binary: Path) -> Transcript:
     with tempfile.TemporaryDirectory() as temporary_directory:
         temporary = Path(temporary_directory)

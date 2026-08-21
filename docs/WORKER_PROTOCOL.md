@@ -142,6 +142,9 @@ DuckDB extension preparation performs installation but not loading outside the s
 `IR_NO_LOCAL_SOURCES` prevents IR from running package installation code for local sources; it may reuse a library that was already materialized.
 At server startup, MCP Console captures inherited `UV_*` settings other than `UV_OFFLINE` as the trusted managed-Python resolver configuration.
 Before each Python resolver child starts, the server removes the child's current `UV_*` settings, applies that startup snapshot, and removes `UV_OFFLINE`.
+The child uses the current retained R library.
+Before a worker starts or during restart, a combined R and Python resolution uses the R candidate that will configure the new worker.
+A live mixed preparation resolves Python before asking the worker to apply the R candidate, so an immediately retained Python activation still corresponds to the retained R configuration if the later R update fails.
 Worker requests carry no environment map, so evaluated R or Python code cannot configure a host resolver through `Sys.setenv()`, `os.environ`, or a resolver request.
 Requirements and version constraints remain data rather than evaluated cell source; the IR invocation uses a constant R expression that does not contain requirement text.
 Evaluated R code and R package load hooks can request managed resolution through `py_require()`, but the resolver validates the resulting named requirements and does not evaluate their submitted source.
@@ -728,9 +731,9 @@ Before initializing R, it forces `UV_OFFLINE=1`, overwriting any inherited value
 For a server-managed worker, MCP Console seeds reticulate's manifest and replaces the namespace bindings for its internal `uv_get_or_create_env` and `resolve_python_version` functions.
 It does not replace `py_require()`, so reticulate retains its package attribution, manifest history, compatibility checks, activation, and configuration behavior within the live R process.
 When Python is already initialized, only additive package requirements are supported.
-The physical manifest tells the host resolver which environment to materialize for this request.
-The logical manifest is reticulate's current `py_require()` constraint state, which the server retains for later worker generations after a successful activation.
-The two manifests must agree on packages and `exclude_newer`, but their Python versions may differ: for example, the physical manifest may select the active `3.12.11` interpreter while the logical manifest preserves the `>=3.11` constraint.
+The `requirements` manifest tells the host resolver which environment to materialize for this request.
+The `retained_requirements` manifest is reticulate's current `py_require()` constraint state, which the server retains for later worker generations after a successful activation.
+The two manifests must agree on packages and `exclude_newer`, but their Python versions may differ: for example, `requirements` may select the active `3.12.11` interpreter while `retained_requirements` preserves the `>=3.11` constraint.
 The worker sends both complete manifests, then waits for the server's resolver reply before returning to reticulate.
 Reticulate checks that each candidate uses the exact live `libpython`, runs `activate_this.py`, swaps its configuration, and updates its manifest.
 The worker then sends `python_activated`, and the server immediately retains the matching candidate.

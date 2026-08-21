@@ -61,6 +61,7 @@ pub(crate) fn resolve_duckdb_extensions(
 pub(crate) fn resolve_python(
     requirements: &[String],
     _configuration: &super::ManagedPythonResolverConfiguration,
+    _managed_r: Option<&ManagedR>,
     _on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
 ) -> Result<ManagedPython, String> {
     if requirements.is_empty() {
@@ -75,6 +76,7 @@ pub(crate) fn resolve_python(
 pub(crate) fn resolve_python_manifest(
     requirements: crate::worker_protocol::PythonRequirementManifest,
     _configuration: &super::ManagedPythonResolverConfiguration,
+    _managed_r: Option<&ManagedR>,
     _on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
 ) -> Result<ManagedPython, String> {
     crate::python_requirement::validate_all(&requirements.packages)?;
@@ -85,14 +87,16 @@ pub(crate) fn resolve_python_manifest(
 pub(crate) fn resolve_python_host(
     requirements: crate::worker_protocol::PythonRequirementManifest,
     configuration: &super::ManagedPythonResolverConfiguration,
+    managed_r: Option<&ManagedR>,
     on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
 ) -> Result<ManagedPython, String> {
-    resolve_python_manifest(requirements, configuration, on_started)
+    resolve_python_manifest(requirements, configuration, managed_r, on_started)
 }
 
 pub(crate) fn resolve_python_version(
     constraints: Vec<String>,
     _configuration: &super::ManagedPythonResolverConfiguration,
+    _managed_r: Option<&ManagedR>,
     _on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
 ) -> Result<String, String> {
     crate::python_requirement::validate_version_constraints(&constraints)?;

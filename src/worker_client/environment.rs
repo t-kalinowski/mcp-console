@@ -31,6 +31,7 @@ impl PythonEnvironment {
     pub(super) fn builtin(
         configured: Option<OsString>,
         resolver: crate::resolver::ManagedPythonResolverConfiguration,
+        managed_r: Option<&crate::resolver::ManagedR>,
     ) -> Result<Self, String> {
         if let Some(configured) = configured
             && !configured.is_empty()
@@ -38,7 +39,7 @@ impl PythonEnvironment {
         {
             return Ok(Self::UserSelected(configured));
         }
-        let selected = crate::resolver::resolve_python(&[], &resolver, |_| Ok(()))?;
+        let selected = crate::resolver::resolve_python(&[], &resolver, managed_r, |_| Ok(()))?;
         Ok(Self::Managed { selected, resolver })
     }
 
@@ -338,9 +339,12 @@ impl Client {
                 .ok_or_else(|| "managed Python environment is unavailable".to_string())?
                 .managed_parts()?;
             let resolver = resolver.clone();
-            let result = crate::resolver::resolve_python_host(candidate, &resolver, |handle| {
-                self.register_resolver_stop_handle(&generation, handle)
-            });
+            let result = crate::resolver::resolve_python_host(
+                candidate,
+                &resolver,
+                managed_r.as_ref(),
+                |handle| self.register_resolver_stop_handle(&generation, handle),
+            );
             self.clear_resolver_stop_handle(&generation)?;
             Some(result?)
         } else {
@@ -437,6 +441,9 @@ impl Client {
         let includes_r = managed_r.is_some();
         let includes_python = !python_packages.is_empty();
         if includes_python {
+            // The live worker has not accepted `managed_r` yet. Its Python
+            // activation commits independently if that later R update fails,
+            // so nested resolution uses the retained R environment.
             let client = self.clone();
             let commit_generation = generation.clone();
             let python_duckdb = if includes_r {
@@ -718,16 +725,18 @@ impl Client {
             }
         }
 
-        let managed =
-            match crate::resolver::resolve_python_manifest(requirements, resolver, |handle| {
-                self.register_resolver_stop_handle(&generation, handle)
-            }) {
-                Ok(managed) => managed,
-                Err(error) => {
-                    self.clear_resolver_stop_handle(&generation)?;
-                    return Err(error);
-                }
-            };
+        let managed = match crate::resolver::resolve_python_manifest(
+            requirements,
+            resolver,
+            environment.r.as_ref(),
+            |handle| self.register_resolver_stop_handle(&generation, handle),
+        ) {
+            Ok(managed) => managed,
+            Err(error) => {
+                self.clear_resolver_stop_handle(&generation)?;
+                return Err(error);
+            }
+        };
         self.clear_resolver_stop_handle(&generation)?;
         self.ensure_generation(&generation)?;
         Ok(managed.with_retained_requirements(retained_requirements))
@@ -753,10 +762,12 @@ impl Client {
             .as_ref()
             .ok_or_else(|| "managed Python environment is unavailable".to_string())?
             .managed_parts()?;
-        let result =
-            crate::resolver::resolve_python_version(request.constraints, resolver, |handle| {
-                self.register_resolver_stop_handle(&generation, handle)
-            });
+        let result = crate::resolver::resolve_python_version(
+            request.constraints,
+            resolver,
+            environment.r.as_ref(),
+            |handle| self.register_resolver_stop_handle(&generation, handle),
+        );
         self.clear_resolver_stop_handle(&generation)?;
         self.ensure_generation(&generation)?;
         result

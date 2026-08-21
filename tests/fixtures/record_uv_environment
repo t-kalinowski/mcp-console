@@ -13,6 +13,11 @@ with open(os.environ["MCP_CONSOLE_TEST_UV_RECORD"], "a", encoding="utf-8") as st
     json.dump(record, stream, sort_keys=True)
     stream.write("\n")
 
+if r_libs_record := os.environ.get("MCP_CONSOLE_TEST_R_LIBS_RECORD"):
+    with open(r_libs_record, "a", encoding="utf-8") as stream:
+        json.dump(os.environ.get("R_LIBS"), stream)
+        stream.write("\n")
+
 failure_marker = os.environ.get("MCP_CONSOLE_TEST_UV_FAILURE_MARKER")
 failure_argument = os.environ.get("MCP_CONSOLE_TEST_UV_FAILURE_ARGUMENT")
 if (

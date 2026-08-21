@@ -16,7 +16,6 @@ mod unsupported;
 #[derive(Clone)]
 pub(crate) struct ManagedPythonResolverConfiguration {
     environment: Arc<BTreeMap<OsString, OsString>>,
-    managed_r: Option<ManagedR>,
 }
 
 impl ManagedPythonResolverConfiguration {
@@ -26,29 +25,16 @@ impl ManagedPythonResolverConfiguration {
             .collect();
         Self {
             environment: Arc::new(environment),
-            managed_r: None,
         }
     }
 
-    pub(crate) fn with_managed_r(mut self, managed_r: ManagedR) -> Self {
-        self.managed_r = Some(managed_r);
-        self
-    }
-
     #[cfg(target_os = "macos")]
-    fn rscript(&self) -> Result<&std::path::Path, String> {
-        self.managed_r
-            .as_ref()
-            .map(ManagedR::rscript)
-            .ok_or_else(|| "managed Python resolver requires a managed R environment".to_string())
-    }
-
-    #[cfg(target_os = "macos")]
-    fn configure(&self, command: &mut std::process::Command) -> Result<(), String> {
-        self.managed_r
-            .as_ref()
-            .ok_or_else(|| "managed Python resolver requires a managed R environment".to_string())?
-            .configure_resolver(command)?;
+    fn configure(
+        &self,
+        managed_r: &ManagedR,
+        command: &mut std::process::Command,
+    ) -> Result<(), String> {
+        managed_r.configure_resolver(command)?;
         for (name, _) in std::env::vars_os().filter(|(name, _)| is_uv_environment_variable(name)) {
             command.env_remove(name);
         }

@@ -337,9 +337,12 @@ impl Client {
                 .ok_or_else(|| "managed Python environment is unavailable".to_string())?
                 .managed_parts()?;
             let resolver = resolver.clone();
-            let result = crate::resolver::resolve_python_host(candidate, &resolver, |handle| {
-                self.register_resolver_stop_handle(&generation, handle)
-            });
+            let result = crate::resolver::resolve_python_host(
+                candidate,
+                &resolver,
+                managed_r.as_ref(),
+                |handle| self.register_resolver_stop_handle(&generation, handle),
+            );
             self.clear_resolver_stop_handle(&generation)?;
             Some(result?)
         } else {
