@@ -131,11 +131,14 @@ A mutex or queue cannot reconstruct the order in which the worker wrote to separ
 In particular, raw output written before an operation-result sideband frame can be serialized after that result and remain pending for a later MCP response.
 
 The relay does not classify operation results and never waits for the server before reading the next worker-sideband frame.
+It does not carry response cuts, output acknowledgments, or pending-output budgets.
 The server's relay stdout reader only parses and enqueues events, including EOF and transport failures.
 It continues draining relay stdout while semantic dispatch blocks on a host resolver.
 `WorkerOperationState` separately owns the active evaluation or preparation, retained transport failure, and outstanding idle input.
 One ordered semantic dispatcher consumes the event queue.
-When it sees `completed`, `r_prepared`, `r_preparation_failed`, `python_prepared`, or `python_preparation_failed`, it commits the operation result and its output boundary before applying the next queued event.
+When it sees `completed`, `r_prepared`, `r_preparation_failed`, `python_prepared`, or `python_preparation_failed`, it commits the operation result before applying the next queued event.
+For `completed`, the server also records an opaque output-tape cut meaning that every event published before that position belongs to the completed response.
+That cut is server state only: it is not a worker or relay checkpoint, frame, or acknowledgment.
 Idle output, later resolver requests, EOF, and transport failures pass through the same ordered dispatcher instead of changing operation state from the reader.
 `python_prepared` always terminates an explicit worker-side `prepare_python` operation.
 Before Python initializes, it reports successful reticulate manifest materialization; after initialization, it follows any required worker-owned activation.

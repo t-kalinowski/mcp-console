@@ -240,13 +240,53 @@ Each relay pipe reader reads raw byte chunks without line buffering and validate
 A completely valid chunk uses a readable `stdout` or `stderr` JSON string in the outer relay frame; an invalid chunk uses padded standard base64 in `stdout_bytes` or `stderr_bytes`.
 The relay keeps no incremental UTF-8 state across chunks, so a scalar split across reads can use the byte form.
 Both forms preserve arbitrary bytes from the worker and its descendants even though relay stdout is a UTF-8 JSONL protocol stream.
-The server converts either form to bytes and appends them, forwarded sideband console text, images, failures, and lifecycle notices to one pending output tape as it accepts them.
+The server converts either form to bytes and publishes them, forwarded sideband console text, images, failures, and lifecycle notices to one long-lived pending output tape as it accepts them.
 When a response drains the tape, the server decodes queued chunks for each pipe as UTF-8, retains an incomplete trailing sequence for a later response, and replaces invalid sequences.
+Capturing an idle prelude closes any incomplete sequence with that same replacement behavior, so bytes from the new cell cannot complete idle output across the ownership boundary.
 Direct standard output, direct standard error, console output, and console diagnostics remain distinct until this projection step.
-The current MCP projection renders both console channels as ordinary text and coalesces adjacent text exactly as it did before channels were retained.
+The current MCP projection merges those channels as ordinary text and coalesces adjacent text blocks.
 Frames never interleave, and each source preserves its own order.
 Ordering between sources is their enqueue order at the relay serializer; there is no relative chronological guarantee between standard output, standard error, and sideband output.
 Descendants that inherit fd 1 or fd 2 write into the same pipes even when the interpreter is idle, until retirement closes that worker generation's capture boundary.
+
+### Server output tape and response cuts
+
+The output tape belongs to the server and remains the same ordered tape across worker generations.
+Every published event has one position in that tape.
+An opaque server-side cut means only that all events published before that position belong to the response that owns the cut.
+It is not worker state, a relay event, or an acknowledgment.
+An evaluation records its completion cut when the ordered dispatcher applies `completed`; that cell drains only through the cut, and later output remains pending.
+An empty poll records a cut at the output available at that moment and drains through it.
+Restart drains retained old-generation output from the same tape before replacement without transferring it to a generation-specific buffer.
+
+When a code-bearing `send` begins while idle output is already pending, the evaluation owns that output as a prelude before the server dispatches the cell.
+If both the prelude and the cell's own response region are nonempty, response assembly inserts exactly one `[output produced while idle]` notice between them.
+It inserts no separator when either region is empty and preserves images and their order in both regions.
+Timeout, input, language-error, worker-failure, automatic-replacement, and explicit-restart paths retain the same owned prelude exactly once.
+
+Pending ordinary output in one undrained segment has four server-side limits:
+
+- 8 MiB of combined console-text and direct-output bytes;
+- 8 MiB of encoded image payload bytes;
+- 64 KiB of image MIME-type bytes; and
+- 4096 ordinary text, direct-output, and image events.
+
+The server checks these limits before copying an incoming payload into the tape.
+On the first overflow, it retains the prefix of a text or direct-output chunk that fits, omits an image as a whole, and inserts one typed truncation event at that tape position.
+Retained direct-output prefixes are counted as raw bytes.
+When truncation leaves an incomplete UTF-8 sequence, projection flushes both direct-stream decoder carries with the existing replacement behavior before the notice and clears them, so later output cannot complete a scalar across the truncation boundary.
+The event accumulates omitted text bytes, encoded image bytes, image metadata bytes, and ordinary event counts while the server discards further ordinary text and image payloads from that segment.
+Server failures, worker process outcomes, input notices, restart notices, and final state notices remain admissible after overflow.
+When projected, the truncation event becomes `[output truncated: omitted T text bytes and I encoded image bytes across N events]`, using `event` when `N` is one; when an omitted image carries metadata, the notice also reports those omitted bytes.
+That notice does not make an otherwise successful language evaluation an MCP tool error.
+After a drain, the server recomputes the budget from events that remain after the cut and any incomplete direct-stream UTF-8 carry.
+If neither remains, later output receives a fresh budget; a post-cut segment that already contains truncation continues discarding ordinary output until that segment drains.
+Omitted payloads are not spilled to artifact files.
+
+One canonical response assembler projects every drained region.
+It coalesces adjacent text blocks, preserves image order, separates adjacent logical text regions, renders bracketed server notices and terminal states, and marks infrastructure failures as MCP tool errors.
+It owns every server-added line boundary; the exact terminal-state rules appear under MCP waiting and polling below.
+It does not trim or normalize worker output: carriage returns, ANSI sequences, whitespace-only output, and invalid-byte replacement retain their existing behavior.
 
 ## Messages
 
@@ -327,7 +367,8 @@ A signal that arrives after a cell's final check is handled at the same later bo
 The worker may send zero or more `console_output`, `console_diagnostic`, or `image` messages.
 The server retains the console distinction, preserves frame arrival order as MCP content blocks, and concatenates adjacent text chunks without exposing the distinction in MCP content.
 An image frame's `data` must be valid base64.
-The recorder decodes it byte-for-byte into an artifact, while the MCP image retains the original string.
+After the server admits the complete image to the pending-output budget, the recorder decodes it byte-for-byte into an artifact, while the MCP image retains the original string.
+An image omitted by that budget is not persisted.
 The frame's `mime_type` becomes the MCP image `mimeType` unchanged; only `image/png` receives a format-specific `.png` artifact suffix, and other MIME types use `.bin`.
 `input_requested` appends one server-owned MCP request record and starts one provisional input state.
 The matching `input_received` clears that state after the runtime read succeeds; `input_cancelled` clears it after `SIGINT` cancels the read.
@@ -337,7 +378,7 @@ Only one request may be outstanding: a second request, a terminal input frame wi
 It carries no managed-Python state.
 
 After `ready`, the generation-long relay reader accepts console, image, input, Python-resolution, Python-version-resolution, Python-activation, and operation-result frames continuously and translates them to flat outer events.
-Console output and images are published to the shared output tape immediately.
+Console output and images are offered to the shared output tape immediately; its central admission budget decides how much ordinary payload is retained.
 Nested Python requests are serviced even while no explicit operation is active, so an idle callback does not wait for a later client command.
 Idle input state is retained until fd 0 satisfies the read or a later evaluation adopts it.
 The relay reader assembles newline-delimited worker JSON incrementally, and the server reader does the same for the outer relay JSONL, so an incomplete frame cannot block retirement.
@@ -407,9 +448,9 @@ The server runs reticulate's version selection while the worker waits and replie
 This request returns no interpreter, creates no environment candidate, and does not affect retained Python state.
 The selected version can support managed-Python operations such as displaying or writing the current requirements; an eventual tool command from `uv_run_tool()` still executes inside the worker sandbox.
 
-When the ordered dispatcher applies evaluation `completed`, it records the current output-tape position and returns that checkpoint to the evaluation.
-Output accepted after the checkpoint belongs to later background activity and remains pending for the next response.
-If no content or input-request record exists through the checkpoint and no standard-stream text is pending, the MCP projection returns `[done]`.
+When the ordered dispatcher applies evaluation `completed`, it records the current output-tape position and returns that opaque cut to the evaluation.
+Output accepted after the cut belongs to later background activity and remains pending for the next response.
+If no content or input-request record exists through the cut and no standard-stream text is pending, the MCP projection returns `[done]`.
 That marker is produced by the server; it is not a sideband message.
 
 The protocol has no request IDs because only one evaluation or explicit requirement preparation can be in flight over this sideband, with at most one synchronous nested Python resolver request.
@@ -428,10 +469,10 @@ If the grace expires first, the call returns output collected so far, the reques
 Supplying nonempty stdin for an outstanding request starts a fresh 10-millisecond grace window; the MCP deadline reports a still-outstanding request immediately, even inside that window.
 A pending input request wins over the `\n[running]` banner at the deadline.
 A later `send` call without a code field polls that operation with its own `timeout_ms`; it may include `stdin` to queue bytes before waiting.
-Every successful `send` response drains pending tape events available at its response boundary, including sideband text and images and complete UTF-8 prefixes from standard-stream bytes.
-For evaluation completion, that boundary is the checkpoint recorded with `completed`; for an idle call, the server establishes an ephemeral idle-response boundary.
-Events accepted after the boundary and incomplete trailing byte sequences remain for the next response; new output does not itself wake a waiting call.
-Evaluation completion returns the pending content in tape order, including input-request records not already delivered at an earlier boundary, or `[done]` when the tape is empty.
+Every successful `send` response drains pending tape events through its server-side cut, including sideband text and images and complete UTF-8 prefixes from standard-stream bytes.
+For evaluation completion, this is the cut recorded with `completed`; an idle call records a new cut at the output available at that moment.
+Events accepted after the cut and incomplete trailing byte sequences remain for the next response; new output does not itself wake a waiting call.
+Evaluation completion returns its owned content in tape order, including input-request records not already delivered through an earlier cut, or `[done]` when that response region is empty.
 If the operation instead ends in an infrastructure or protocol failure, all pending operation output received before the failure precedes the bracketed tool error.
 The server inserts a newline before that error only when the preceding output does not already end with one.
 A worker failure adds `[worker stopped: in-memory state lost]` after that error once shutdown has finished and no standard-stream reader can append more output.
@@ -441,11 +482,11 @@ If the deadline expires first, the response ends with `[worker starting]`; a lat
 If startup fails, that error ends the automatic attempt and the worker remains stopped.
 Server-owned timeline, state, and admission facts are bracketed; request-validation and standalone resolver diagnostics remain ordinary MCP tool-error text.
 If the poll wait expires first, the literal `\n[running]` banner is appended to any collected output.
-With no evaluation active, an empty `send` immediately establishes an idle-response boundary, drains the server's pending output tape through it, and returns `\n[idle]`, or `\n[stdin needed]` when `WorkerOperationState` is tracking a forwarded idle console read.
+With no evaluation active, an empty `send` immediately records a cut, drains the server's pending output tape through it, and returns `\n[idle]`, or `\n[stdin needed]` when `WorkerOperationState` is tracking a forwarded idle console read.
 It sends no worker frame, does not wait for a callback to finish, and ignores `timeout_ms` because no worker operation is being polled.
-Output accepted after that boundary remains pending for the next response.
+Output accepted after that cut remains pending for the next response.
 An initial or stopped worker is not started by an empty call.
-A stdin-only idle call queues the bytes first, lazily starting a worker when needed, and immediately returns at the resulting idle-response boundary.
+A stdin-only idle call queues the bytes first, lazily starting a worker when needed, and immediately returns at the resulting cut.
 
 The server adds `[starting new worker]\n` before each announced replacement attempt, in the `send` or `session` response that waits for it.
 The notice is recorded before launch, so startup output and startup errors follow it.
@@ -454,13 +495,16 @@ Initial lazy startup and its retries before any worker has reached `ready` remai
 Without a waiting `send`, an explicit restart reports retained old-worker output, an active-operation notice when it interrupts an unfinished cell, the stopped notice when it retires a ready worker, the starting notice, replacement startup output, and `[idle]` in its `session` response.
 If an unfinished operation has a waiting `send`, restart gives that response the old-worker tape content, its operation-specific restart-cancellation notice, and a worker-stopped notice when restart retired a ready worker.
 The restart call waits for that response to be written, then reports its operation-specific active-stop notice, its own worker-stopped notice when it retired a ready worker, the starting notice, replacement startup output, and `[idle]`.
+A server-side delivery acknowledgment owns this handoff; it is not part of either worker protocol.
+If the waiting MCP response is cancelled or dropped before delivery, its owned prelude, cell, truncation, and lifecycle regions move to the restart response exactly once instead of being lost or repeated by a later poll.
 
-An ordinary `[running]`, `[stdin needed]`, or `[idle]` response drains all pending tape content before appending its state banner.
-Each ordinary state banner has a newline before it, including when no worker or operation output precedes it.
-An existing trailing newline supplies that boundary for `[stdin needed]`; `[running]` and `[idle]` always add one, so their preceding output may leave a blank line.
-Replacement readiness appends `[idle]` with one line boundary after startup output.
-Brackets distinguish server timeline facts and operational failures from worker text, and the server inserts a newline before them only when needed.
-Output cursors and general incremental polling remain unimplemented.
+The canonical response assembler renders `[done]`, `[running]`, `[stdin needed]`, `[worker starting]`, and `[idle]` along with every other server notice.
+Ordinary running and idle state banners append a literal newline before `[running]` or `[idle]`, including when there is no preceding output and when preceding text already ends in a newline.
+`[stdin needed]` uses an existing trailing newline or inserts one, including a leading newline when there is no preceding text.
+`[done]`, `[worker starting]`, replacement-ready `[idle]`, and other bracketed notices insert a newline only when preceding text exists and does not already end with one.
+A notice that separates later logical output also ends its own line.
+It does not insert arbitrary delimiter text into worker output or normalize carriage returns, ANSI sequences, or whitespace-only regions.
+No client-visible output cursor or general incremental-polling token exists; response cuts are private server state.
 
 ### Interactive input
 
@@ -490,7 +534,7 @@ An MCP call may contain one code field and `stdin`.
 The server flushes `evaluate` first, then attaches the evaluation to the worker's stdin writer and drains any queued input in submission order.
 A later stdin-only call uses the same route without acquiring the evaluation's worker lock, including after an earlier call returned `\n[running]`.
 When no operation is tracked, nonempty stdin lazily starts the worker if necessary and enters the same worker-owned FIFO.
-The call then establishes and returns at the current idle-response boundary immediately.
+The call then records and returns at the current server-side output cut immediately.
 Because queuing bytes does not acknowledge consumption, an outstanding idle input request can remain visible as `[stdin needed]` until the reader accepts `input_received`.
 
 The server writes each string blindly into the generation-long, unbuffered byte stream and does not echo it into MCP output.
@@ -518,7 +562,7 @@ Between-cell callbacks do not create a separate server-side operation state.
 The relay's independent sideband, stdout, stderr, and supervision producers publish complete outer events through one multi-producer queue.
 The one relay serializer preserves each source's order and writes noninterleaved frames, but cannot reconstruct chronology between independent pipes.
 Raw output written before an operation result may therefore be serialized after that result and remain pending for a later response.
-An evaluation's `completed` event records a tape checkpoint when the server's ordered semantic dispatcher applies it; callback events accepted after that checkpoint remain pending for the next response.
+An evaluation's `completed` event records an opaque tape cut when the server's ordered semantic dispatcher applies it; callback events accepted after that cut remain pending for the next response.
 The dispatcher commits each evaluation or preparation result before applying the next queued event, so later idle events cannot overtake environment retention or evaluation completion.
 The relay does not classify operation results or wait for a server acknowledgment before reading another worker-sideband frame.
 
@@ -654,8 +698,8 @@ After an idle handler turn, the worker returns to the same wait without sending 
 The generation-long relay reader forwards idle callback output and images as they arrive, and the server's relay reader parses and enqueues them.
 `WorkerEventDispatcher` publishes that output and services managed-Python requests, while `WorkerOperationState` retains idle input state.
 Both readers assemble their newline-delimited frames incrementally so a partial frame can be abandoned when retirement cancels the reader.
-Because the relay keeps draining complete worker frames while the worker is idle, ordinary callback output is not bounded by sideband pipe capacity.
-An empty `send` only establishes an idle-response boundary for that server state; it sends no frame and does not wait for the callback to finish.
+Because the relay keeps draining complete worker frames while the worker is idle, sideband pipe capacity does not define response boundaries; the server's pending-output budget bounds what it retains between drains.
+An empty `send` only records and drains through a server-side cut for that state; it sends no frame and does not wait for the callback to finish.
 A later stdin-only `send` can continue an outstanding idle input request, and a later code-bearing `send` adopts that request into the evaluation's ordinary input state.
 Requirement preparation is noninteractive, so an idle input request stops the worker instead of blocking indefinitely.
 
@@ -811,12 +855,18 @@ SQL source containing NUL is rejected as a normal language error before it reach
 
 No `timeout_ms` deadline terminates default R or managed-Python startup preflight, worker startup, host resolution, or execution.
 R, Python, and DuckDB requirement resolution have no per-call timeout; MCP shutdown cancels an in-flight explicit or runtime resolution.
-The current implementation has no general frame-size limit, stdin queue limit, or accumulated-output limit.
-The 12 KiB cap applies only to a recognized SQL query preview; arbitrary R and Python console text, worker standard streams, and text accompanying that preview remain uncapped.
+The current implementation has no general frame-size limit or stdin queue limit.
+Pending ordinary output in each undrained server segment is bounded to 8 MiB of combined console-text and direct-output bytes, 8 MiB of encoded image-string bytes, 64 KiB of image MIME-type bytes, and 4096 ordinary output events.
+The first event that exceeds any limit inserts one typed truncation record; text and direct output retain the fitting prefix, while an image is omitted as a whole.
+A partially retained event and each later discarded ordinary publication count once toward the omitted-event total.
+Control and lifecycle events remain retained and do not enter that count.
+Projection renders `[output truncated: omitted T text bytes and I encoded image bytes across N events]`, using `event` when `N` is one and adding omitted image-metadata bytes when nonzero, and leaves an otherwise successful language evaluation successful.
+After a drain, the server recomputes the limits and omitted counts from events that remain after the cut and any incomplete direct-stream UTF-8 carry; a tape with neither starts fresh.
+The 12 KiB cap applies separately to a recognized SQL query preview before its text enters this budget.
 `timeout_ms` limits one MCP wait through evaluation and one automatic replacement attempt without terminating either operation.
 If replacement startup outlives that wait, later polls continue waiting on it.
 Server shutdown and explicit restart use a process deadline.
-For an idle stdin-only call, `timeout_ms` does not bound lazy worker startup and does not delay the immediate idle-response boundary after startup.
+For an idle stdin-only call, `timeout_ms` does not bound lazy worker startup and does not delay the immediate server-side cut after startup.
 The 10-millisecond input grace controls when provisional state becomes visible as `[stdin needed]`; it does not control request-record retention or limit evaluation or stdin reads.
 It is a latency heuristic: scheduling can delay a receipt past the grace and expose an extra `[stdin needed]` boundary even when queued bytes subsequently satisfy the read.
 
