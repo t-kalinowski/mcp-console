@@ -100,9 +100,12 @@ struct Requirements {
     #[serde(default)]
     #[schemars(length(max = 64), inner(length(min = 1)))]
     r: Vec<String>,
-    /// Additive, single-line PEP 508 requirements for `prepare` or `restart`, for example `polars>=1`,
-    /// `scikit-learn`, or `matplotlib`. An idle server-managed worker may activate compatible
-    /// additions without losing state.
+    /// Additive, named PEP 508 registry requirements for `prepare` or `restart`, for example
+    /// `polars>=1`, `scikit-learn`, or `matplotlib; python_version >= '3.10'`. Extras, version
+    /// specifiers, and environment markers are accepted. Paths, file URLs, editable requirements,
+    /// direct references, local archives, and local projects are rejected. An idle server-managed
+    /// worker may activate compatible additions without losing state. A nonempty user-selected
+    /// `RETICULATE_PYTHON` disables managed Python requirements.
     #[serde(default)]
     #[schemars(length(max = 64), inner(length(min = 1)))]
     python: Vec<String>,
@@ -124,9 +127,10 @@ struct SessionArguments {
     /// failure, evaluation remains available so state can be saved, but new requirement additions
     /// return `[restart required]` until restart. The same marker follows a failed automatic
     /// replacement. Resolution runs outside the worker sandbox and may download packages or
-    /// extensions or execute package installation or build code on the host. Managed Python startup
-    /// and Matplotlib cache warming also run on the host and may execute selected code; use only
-    /// trusted requirements.
+    /// extensions or execute package installation or build code on the host. Managed Python uses
+    /// the server's startup resolver configuration; evaluated code cannot configure that host
+    /// resolver. Managed Python startup and Matplotlib cache warming also run on the host and may
+    /// execute selected code; use only trusted requirements.
     requirements: Option<Requirements>,
 }
 
@@ -153,7 +157,7 @@ impl ConsoleServer {
 #[tool_router]
 impl ConsoleServer {
     #[tool(
-        description = "Persistent mixed-language computational workbench. Use it whenever exact computation or direct inspection would improve accuracy—from arithmetic, string counting, parsing, and file or binary-data inspection to data wrangling, exploratory analysis, visualization, statistics, simulation, and model training or tuning. Choose the clearest language for each step and switch freely between calls. The default R environment includes tidyverse, reticulate, DBI, and duckdb, together with their full dependency sets, such as ggplot2, dplyr, readr, and jsonlite. The built-in managed Python environment includes NumPy and pandas. DuckDB SQL is also available. State persists across calls. Python reads R globals through `r.name`; R reads Python globals through `py$name`; SQL queries R data frames by name; R accesses the DuckDB catalog through `sql_connection()`. Language-native help and introspection are available. Do not probe package availability in cells. Use `session` to prepare other packages or DuckDB extensions before loading or importing them. If you use a custom Python installation, import packages already installed there directly. R default-device plots and open `matplotlib.pyplot` figures return as PNG images. Send exactly one complete `r`, `python`, or `sql` cell. Call `send` sequentially; concurrent calls are unsupported. Use `stdin` for interactive reads or debugger commands; omit code and stdin to poll an active evaluation or immediately collect output produced while the worker is idle. A wait timeout does not stop computation, and running work must be collected before new code is sent. R errors, Python exceptions, and DuckDB errors are ordinary console output, so inspect result text and continue or correct the cell. Evaluated code can read host files but cannot directly access the network and can write only within the worker's private temporary directory. Managed Python requirement resolution triggered by R code such as `reticulate::py_require()` or by an R package load is a host-side exception: it may access the network and execute installation or build code, so use only trusted requirements."
+        description = "Persistent mixed-language computational workbench. Use it whenever exact computation or direct inspection would improve accuracy—from arithmetic, string counting, parsing, and file or binary-data inspection to data wrangling, exploratory analysis, visualization, statistics, simulation, and model training or tuning. Choose the clearest language for each step and switch freely between calls. The default R environment includes tidyverse, reticulate, DBI, and duckdb, together with their full dependency sets, such as ggplot2, dplyr, readr, and jsonlite. The built-in managed Python environment includes NumPy and pandas. DuckDB SQL is also available. State persists across calls. Python reads R globals through `r.name`; R reads Python globals through `py$name`; SQL queries R data frames by name; R accesses the DuckDB catalog through `sql_connection()`. Language-native help and introspection are available. Do not probe package availability in cells. Use `session` to prepare other packages or DuckDB extensions before loading or importing them. If you use a custom Python installation, import packages already installed there directly. R default-device plots and open `matplotlib.pyplot` figures return as PNG images. Send exactly one complete `r`, `python`, or `sql` cell. Call `send` sequentially; concurrent calls are unsupported. Use `stdin` for interactive reads or debugger commands; omit code and stdin to poll an active evaluation or immediately collect output produced while the worker is idle. A wait timeout does not stop computation, and running work must be collected before new code is sent. R errors, Python exceptions, and DuckDB errors are ordinary console output, so inspect result text and continue or correct the cell. Evaluated code can read host files but cannot directly access the network and can write only within the worker's private temporary directory. Managed Python requirement resolution triggered by R code such as `reticulate::py_require()` or by an R package load is a host-side exception: it may access the network and execute installation or build code, so use only trusted requirements. Only named registry requirements are accepted. Managed Python version requests accept version numbers and supported PEP 440 comparison specifiers, not interpreter selectors. This resolution uses the server's startup configuration; changes to `UV_*` made by evaluated code do not configure it. Starting the server with a nonempty user-selected `RETICULATE_PYTHON` disables managed Python requirement additions."
     )]
     async fn send(
         &self,
@@ -204,7 +208,7 @@ impl ConsoleServer {
     }
 
     #[tool(
-        description = "Make additional R or Python packages and DuckDB extensions available, request SIGINT for an active host resolver or otherwise send it to the live worker, or restart the persistent console session. The built-in worker prepares DuckDB's JSON and ICU extensions by default. Use `prepare` for packages not included in the built-in environments or for other DuckDB extensions. Packages and extensions are not imported, attached, or loaded automatically by preparation. An idle worker can add R requirements or DuckDB extensions without losing live state; compatible Python additions require a server-managed worker. After a recoverable live preparation failure, evaluation remains available so state can be saved, but new requirement additions require restart. Requirements are additive, idempotent, and persist across restart. `interrupt` returns after sending the request or signal; user code may catch or delay it. `restart` may optionally add R, Python, and DuckDB requirements, then replaces the worker and loses all in-memory R, Python, and SQL state, debugger state, and unread stdin. Requirement resolution runs outside the execution sandbox and may download packages or extensions or execute package installation or build code on the host; use only trusted requirements."
+        description = "Make additional R or Python packages and DuckDB extensions available, request SIGINT for an active host resolver or otherwise send it to the live worker, or restart the persistent console session. The built-in worker prepares DuckDB's JSON and ICU extensions by default. Use `prepare` for packages not included in the built-in environments or for other DuckDB extensions. Packages and extensions are not imported, attached, or loaded automatically by preparation. An idle worker can add R requirements or DuckDB extensions without losing live state; compatible Python additions require a server-managed worker. After a recoverable live preparation failure, evaluation remains available so state can be saved, but new requirement additions require restart. Requirements are additive, idempotent, and persist across restart. Managed Python accepts named PEP 508 registry requirements only; paths, file URLs, editable requirements, direct references, local archives, and local projects are rejected. Managed Python resolution uses the server's startup `UV_*` configuration, which evaluated code cannot change. A nonempty user-selected `RETICULATE_PYTHON` disables managed Python requirements. `interrupt` returns after sending the request or signal; user code may catch or delay it. `restart` may optionally add R, Python, and DuckDB requirements, then replaces the worker and loses all in-memory R, Python, and SQL state, debugger state, and unread stdin. Requirement resolution runs outside the execution sandbox and may download packages or extensions or execute package installation or build code on the host; use only trusted requirements."
     )]
     async fn session(
         &self,
@@ -323,7 +327,10 @@ fn validate_r_requirements(r: &[String]) -> Result<(), String> {
 }
 
 fn validate_python_requirements(python: &[String]) -> Result<(), String> {
-    validate_requirements(python, "python", "Python")
+    if python.len() > 64 {
+        return Err("`requirements.python` accepts at most 64 requirements".to_string());
+    }
+    crate::python_requirement::validate_all(python)
 }
 
 fn validate_session_requirements(requirements: &Requirements) -> Result<(), String> {

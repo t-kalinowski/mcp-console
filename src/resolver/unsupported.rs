@@ -1,5 +1,3 @@
-use std::collections::BTreeMap;
-
 #[derive(Clone)]
 pub(crate) struct ManagedPython {
     requirements: crate::worker_protocol::PythonRequirementManifest,
@@ -62,34 +60,45 @@ pub(crate) fn resolve_duckdb_extensions(
 
 pub(crate) fn resolve_python(
     requirements: &[String],
+    _configuration: &super::ManagedPythonResolverConfiguration,
+    _managed_r: Option<&ManagedR>,
     _on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
-) -> Result<Option<ManagedPython>, String> {
+) -> Result<ManagedPython, String> {
     if requirements.is_empty() {
-        Ok(None)
+        Ok(ManagedPython {
+            requirements: crate::worker_protocol::default_python_requirement_manifest(),
+        })
     } else {
         Err("managed Python environments are supported only on macOS".to_string())
     }
 }
 
 pub(crate) fn resolve_python_manifest(
-    _requirements: crate::worker_protocol::PythonRequirementManifest,
-    _environment: BTreeMap<String, String>,
+    requirements: crate::worker_protocol::PythonRequirementManifest,
+    _configuration: &super::ManagedPythonResolverConfiguration,
+    _managed_r: Option<&ManagedR>,
     _on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
 ) -> Result<ManagedPython, String> {
+    crate::python_requirement::validate_all(&requirements.packages)?;
+    crate::python_requirement::validate_version_constraints(&requirements.python_version)?;
     Err("managed Python environments are supported only on macOS".to_string())
 }
 
 pub(crate) fn resolve_python_host(
     requirements: crate::worker_protocol::PythonRequirementManifest,
+    configuration: &super::ManagedPythonResolverConfiguration,
+    managed_r: Option<&ManagedR>,
     on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
 ) -> Result<ManagedPython, String> {
-    resolve_python_manifest(requirements, BTreeMap::new(), on_started)
+    resolve_python_manifest(requirements, configuration, managed_r, on_started)
 }
 
 pub(crate) fn resolve_python_version(
-    _constraints: Vec<String>,
-    _environment: BTreeMap<String, String>,
+    constraints: Vec<String>,
+    _configuration: &super::ManagedPythonResolverConfiguration,
+    _managed_r: Option<&ManagedR>,
     _on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
 ) -> Result<String, String> {
+    crate::python_requirement::validate_version_constraints(&constraints)?;
     Err("managed Python versions are supported only on macOS".to_string())
 }

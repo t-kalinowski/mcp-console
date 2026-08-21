@@ -4,18 +4,18 @@ relay:
 ---
 server:
   kind: prepare_r
-  library: "<candidate-one>"
+  library: <candidate-one>
 ---
 server:
   kind: shutdown
-  grace_millis: "<remaining shutdown grace>"
+  grace_millis: <remaining shutdown grace>
 ---
 relay:
   kind: shutdown_started
 ---
 relay:
   kind: r_prepared
-  library: "<candidate-one>"
+  library: <candidate-one>
 ---
 relay:
   kind: stdout
@@ -45,15 +45,15 @@ relay:
 ---
 server:
   kind: prepare_r
-  library: "<candidate-two>"
+  library: <candidate-two>
 ---
 relay:
   kind: r_prepared
-  library: "<candidate-two>"
+  library: <candidate-two>
 ---
 server:
   kind: shutdown
-  grace_millis: "<remaining shutdown grace>"
+  grace_millis: <remaining shutdown grace>
 ---
 relay:
   kind: shutdown_started

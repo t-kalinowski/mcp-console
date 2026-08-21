@@ -105,7 +105,7 @@ def wait_for_server_to_process_sideband(reader: TextIO, writer: TextIO) -> None:
         writer,
         {
             "kind": "resolve_python_version",
-            "request": {"constraints": [">=3.11"], "environment": {}},
+            "request": {"constraints": [">=3.11"]},
         },
     )
     response = json.loads(reader.readline())
@@ -181,7 +181,7 @@ def main() -> None:
             writer,
             {
                 "kind": "resolve_python_version",
-                "request": {"constraints": [">=3.11"], "environment": {}},
+                "request": {"constraints": [">=3.11"]},
             },
         )
         response = json.loads(reader.readline())
@@ -624,7 +624,7 @@ def main() -> None:
                     {"kind": "completed"},
                     {
                         "kind": "resolve_python_version",
-                        "request": {"constraints": [">=3.11"], "environment": {}},
+                        "request": {"constraints": [">=3.11"]},
                     },
                 ],
             )
@@ -637,7 +637,6 @@ def main() -> None:
                     "request": {
                         "requirements": requirements,
                         "retained_requirements": requirements,
-                        "environment": {},
                     },
                 },
             )

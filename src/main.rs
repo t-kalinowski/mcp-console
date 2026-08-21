@@ -5,6 +5,7 @@ use clap::Parser;
 mod cell;
 mod cli;
 mod python;
+mod python_requirement;
 #[cfg(target_os = "macos")]
 mod r_bridge;
 #[cfg(target_os = "macos")]

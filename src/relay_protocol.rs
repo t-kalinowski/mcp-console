@@ -11,6 +11,7 @@ use crate::cell::Language;
 #[cfg(target_os = "macos")]
 use crate::worker_protocol::{
     PythonRequirementManifest, PythonResolveRequest, PythonVersionResolveRequest, WorkerMessage,
+    deserialize_payload_free,
 };
 
 #[cfg(target_os = "macos")]
@@ -38,6 +39,7 @@ pub(crate) enum RelayCommand {
 #[derive(Deserialize, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum RelayEvent {
+    #[serde(deserialize_with = "deserialize_payload_free")]
     Ready,
     ConsoleOutput {
         data: String,
@@ -52,7 +54,9 @@ pub(crate) enum RelayEvent {
     InputRequested {
         prompt: String,
     },
+    #[serde(deserialize_with = "deserialize_payload_free")]
     InputReceived,
+    #[serde(deserialize_with = "deserialize_payload_free")]
     InputCancelled,
     RPrepared {
         library: String,
@@ -69,10 +73,12 @@ pub(crate) enum RelayEvent {
     PythonActivated {
         requirements: PythonRequirementManifest,
     },
+    #[serde(deserialize_with = "deserialize_payload_free")]
     PythonPrepared,
     PythonPreparationFailed {
         message: String,
     },
+    #[serde(deserialize_with = "deserialize_payload_free")]
     Completed,
     Stdout {
         data: String,
@@ -86,14 +92,18 @@ pub(crate) enum RelayEvent {
     StderrBytes {
         data: EncodedBytes,
     },
+    #[serde(deserialize_with = "deserialize_payload_free")]
     StdoutClosed,
+    #[serde(deserialize_with = "deserialize_payload_free")]
     StderrClosed,
+    #[serde(deserialize_with = "deserialize_payload_free")]
     WorkerSidebandClosed,
     InterruptResult {
         request_id: u64,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         error: Option<String>,
     },
+    #[serde(deserialize_with = "deserialize_payload_free")]
     ShutdownStarted,
     WorkerExited {
         code: i32,
@@ -200,5 +210,59 @@ impl<W: Write> JsonlWriter<W> {
         serde_json::to_writer(&mut self.writer, message)?;
         self.writer.write_all(b"\n")?;
         self.writer.flush()
+    }
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod tests {
+    use super::RelayEvent;
+
+    fn assert_encoding(message: &impl serde::Serialize, expected: &str) {
+        assert_eq!(serde_json::to_string(message).unwrap(), expected);
+    }
+
+    #[test]
+    fn payload_free_relay_events_reject_unknown_fields() {
+        let messages = [
+            r#"{"kind":"ready","obsolete":true}"#,
+            r#"{"kind":"input_received","obsolete":true}"#,
+            r#"{"kind":"input_cancelled","obsolete":true}"#,
+            r#"{"kind":"python_prepared","obsolete":true}"#,
+            r#"{"kind":"completed","obsolete":true}"#,
+            r#"{"kind":"stdout_closed","obsolete":true}"#,
+            r#"{"kind":"stderr_closed","obsolete":true}"#,
+            r#"{"kind":"worker_sideband_closed","obsolete":true}"#,
+            r#"{"kind":"shutdown_started","obsolete":true}"#,
+            r#"{"kind":"python_prepared","python_checkpoint":{"packages":[]}}"#,
+            r#"{"kind":"completed","python_checkpoint":{"packages":[]}}"#,
+        ];
+        let accepted = messages
+            .into_iter()
+            .filter(|message| serde_json::from_str::<RelayEvent>(message).is_ok())
+            .collect::<Vec<_>>();
+        assert!(accepted.is_empty(), "accepted unknown fields: {accepted:?}");
+    }
+
+    #[test]
+    fn payload_free_relay_events_retain_their_encoding() {
+        for (message, expected) in [
+            (RelayEvent::Ready, r#"{"kind":"ready"}"#),
+            (RelayEvent::InputReceived, r#"{"kind":"input_received"}"#),
+            (RelayEvent::InputCancelled, r#"{"kind":"input_cancelled"}"#),
+            (RelayEvent::PythonPrepared, r#"{"kind":"python_prepared"}"#),
+            (RelayEvent::Completed, r#"{"kind":"completed"}"#),
+            (RelayEvent::StdoutClosed, r#"{"kind":"stdout_closed"}"#),
+            (RelayEvent::StderrClosed, r#"{"kind":"stderr_closed"}"#),
+            (
+                RelayEvent::WorkerSidebandClosed,
+                r#"{"kind":"worker_sideband_closed"}"#,
+            ),
+            (
+                RelayEvent::ShutdownStarted,
+                r#"{"kind":"shutdown_started"}"#,
+            ),
+        ] {
+            assert_encoding(&message, expected);
+        }
     }
 }

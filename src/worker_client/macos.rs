@@ -118,7 +118,7 @@ impl WorkerRuntime {
             executable,
             arguments,
             relay,
-            managed_python,
+            python,
             managed_r,
             callbacks,
         } = spec;
@@ -132,8 +132,8 @@ impl WorkerRuntime {
         };
         let mut command = crate::sandbox::SandboxedCommand::new(relay_executable.as_os_str())
             .map_err(|error| format!("failed to prepare worker sandbox: {error}"))?;
-        if let Some(managed_python) = managed_python {
-            managed_python.configure_worker(&mut command);
+        if let Some(python) = python {
+            python.configure_worker(&mut command);
         }
         if let Some(managed_r) = managed_r {
             managed_r.configure_worker(&mut command)?;

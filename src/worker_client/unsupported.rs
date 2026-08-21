@@ -15,18 +15,11 @@ impl WorkerRuntime {
             executable,
             arguments,
             relay,
-            managed_python,
+            python,
             managed_r,
             callbacks,
         } = spec;
-        let _ = (
-            executable,
-            arguments,
-            relay,
-            managed_python,
-            managed_r,
-            callbacks,
-        );
+        let _ = (executable, arguments, relay, python, managed_r, callbacks);
         Err(super::output::SendFailure::from(
             "workers are supported only on macOS".to_string(),
         ))
@@ -38,7 +31,7 @@ impl Worker {
         &mut self,
         _library: &std::path::Path,
         _commit: super::RPreparationCommit,
-    ) -> Result<Result<(), String>, String> {
+    ) -> Result<super::PreparationOutcome, String> {
         unreachable!("unsupported workers cannot start")
     }
 
@@ -46,7 +39,7 @@ impl Worker {
         &mut self,
         packages: Vec<String>,
         _commit: super::PythonPreparationCommit,
-    ) -> Result<Result<(), String>, String> {
+    ) -> Result<super::PreparationOutcome, String> {
         let _ = packages;
         unreachable!("unsupported workers cannot start")
     }

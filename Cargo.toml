@@ -18,6 +18,7 @@ harp = { git = "https://github.com/t-kalinowski/ark", rev = "37d3db0074e01a184d6
 libc = "0.2"
 libloading = "0.9"
 libr = { git = "https://github.com/t-kalinowski/ark", rev = "37d3db0074e01a184d67b7a85faf9a3492836422" }
+pep508_rs = "0.9.2"
 rmcp = { version = "2.2.0", default-features = false, features = ["macros", "server", "transport-io"] }
 rust-embed = { version = "8.11", features = ["debug-embed"] }
 semver = "1"

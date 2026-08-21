@@ -35,6 +35,11 @@ def test_initializes_and_lists_tools(binary: Path) -> Transcript:
         "ordinary console output",
         "cannot directly access the network",
         "Managed Python requirement resolution triggered by R code",
+        "Only named registry requirements are accepted",
+        "Managed Python version requests accept version numbers",
+        "not interpreter selectors",
+        "changes to `UV_*` made by evaluated code do not configure it",
+        "nonempty user-selected `RETICULATE_PYTHON` disables managed Python",
     ):
         assert guidance in send["description"], guidance
     assert (
@@ -82,6 +87,10 @@ def test_initializes_and_lists_tools(binary: Path) -> Transcript:
         "new requirement additions require restart",
         "Packages and extensions are not imported, attached, or loaded automatically by preparation",
         "loses all in-memory R, Python, and SQL state",
+        "named PEP 508 registry requirements only",
+        "paths, file URLs, editable requirements, direct references, local archives, and local projects are rejected",
+        "server's startup `UV_*` configuration",
+        "nonempty user-selected `RETICULATE_PYTHON` disables managed Python requirements",
     ):
         assert guidance in session["description"], guidance
     session_schema = json.dumps(session["inputSchema"])
@@ -98,12 +107,27 @@ def test_initializes_and_lists_tools(binary: Path) -> Transcript:
     assert "`restart` can add any of the same requirements" in action_description, (
         action_description
     )
-    requirements_description = session["inputSchema"]["properties"]["requirements"][
-        "description"
-    ]
+    requirements_description = " ".join(
+        session["inputSchema"]["properties"]["requirements"]["description"].split()
+    )
     assert "return `[restart required]` until restart" in requirements_description, (
         requirements_description
     )
+    assert "evaluated code cannot configure that host resolver" in (
+        requirements_description
+    )
+    python_requirements_description = " ".join(
+        session["inputSchema"]["properties"]["requirements"]["properties"]["python"][
+            "description"
+        ].split()
+    )
+    for guidance in (
+        "named PEP 508 registry requirements",
+        "Extras, version specifiers, and environment markers are accepted",
+        "Paths, file URLs, editable requirements, direct references, local archives, and local projects are rejected",
+        "nonempty user-selected `RETICULATE_PYTHON` disables managed Python requirements",
+    ):
+        assert guidance in python_requirements_description, guidance
     duckdb_description = session["inputSchema"]["properties"]["requirements"][
         "properties"
     ]["duckdb"]["description"]

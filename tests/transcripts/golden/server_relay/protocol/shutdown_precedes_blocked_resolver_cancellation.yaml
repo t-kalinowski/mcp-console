@@ -4,7 +4,7 @@ relay:
 ---
 server:
   kind: shutdown
-  grace_millis: "<remaining shutdown grace>"
+  grace_millis: <remaining shutdown grace>
 ---
 relay:
   kind: shutdown_started

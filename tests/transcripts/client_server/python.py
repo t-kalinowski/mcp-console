@@ -1,10 +1,10 @@
 #!/usr/bin/env -S uv run --script
 
+import json
 import os
 import select
 import shutil
 import signal
-import socket
 import subprocess
 import sys
 import tempfile
@@ -19,7 +19,6 @@ from _support import (
     Transcript,
     assert_result_content,
     code,
-    normalize_python_resolution_error,
     r_test_environment,
     reference_plots,
     release_worker_callback_gate,
@@ -50,6 +49,48 @@ class FifoCheckpoint:
         assert os.write(self.descriptor, b"1") == 1
 
 
+def named_requirement_error(requirement: str) -> str:
+    return (
+        f"Python requirement `{requirement}` is not accepted: host-side managed "
+        "resolution accepts named package requirements only"
+    )
+
+
+def python_version_constraint_error(constraint: str) -> str:
+    return (
+        f"Python version constraint `{constraint}` is not accepted: host-side managed "
+        "resolution accepts version numbers and supported PEP 440 version specifiers only"
+    )
+
+
+def normalize_duckdb_resolution_error(error: str, extension: str) -> str:
+    detail = next(
+        line.strip().removeprefix("! ")
+        for line in error.splitlines()
+        if f'Failed to download extension "{extension}"' in line
+    )
+    return detail.partition(' at URL "')[0]
+
+
+def checkpoint_uv_environment(
+    temporary: Path, argument: str
+) -> tuple[dict[str, str], FifoCheckpoint, FifoCheckpoint]:
+    real_uv = shutil.which("uv")
+    assert real_uv is not None, "real uv is required"
+    started = FifoCheckpoint(temporary / "uv-started")
+    release = FifoCheckpoint(temporary / "uv-release")
+    environment = os.environ.copy()
+    environment["RETICULATE_UV"] = str(
+        Path(__file__).parents[2] / "fixtures" / "checkpoint_uv"
+    )
+    environment["MCP_CONSOLE_TEST_REAL_UV"] = real_uv
+    environment["MCP_CONSOLE_TEST_UV_CHECKPOINT_ARGUMENT"] = argument
+    environment["MCP_CONSOLE_TEST_UV_CHECKPOINT_CLAIM"] = str(temporary / "uv-claimed")
+    environment["MCP_CONSOLE_TEST_UV_STARTED"] = str(started.path)
+    environment["MCP_CONSOLE_TEST_UV_RELEASE"] = str(release.path)
+    return environment, started, release
+
+
 def test_preserves_configured_python_environment(binary: Path) -> Transcript:
     environment = os.environ.copy()
     environment["RETICULATE_PYTHON"] = "configured-by-user"
@@ -57,10 +98,69 @@ def test_preserves_configured_python_environment(binary: Path) -> Transcript:
     client._initialize_and_list_tools()
     # fmt: r
     r = code(r"""
-        Sys.getenv("RETICULATE_PYTHON", unset = NA_character_)
+        external_python_worker <- Sys.getpid()
+        external_python_state <- 42L
+        stopifnot(
+          identical(
+            Sys.getenv("RETICULATE_PYTHON", unset = NA_character_),
+            "configured-by-user"
+          )
+        )
+        "configured-by-user"
         """)
     client.send(r=r)
     assert last_tool_text(client) == '[1] "configured-by-user"\n'
+    disabled = (
+        "managed Python requirements are disabled because the session uses a "
+        "user-selected Python environment"
+    )
+    for action in ("prepare", "restart"):
+        client.session(
+            action=action,
+            requirements={"python": ["numpy"]},
+        )
+        result = client.transcript[-1]["result"]
+        assert result["isError"] is True, result
+        assert last_tool_text(client) == disabled
+    # Reach the same worker-originated resolver request used by reticulate's
+    # managed hooks. The server must enforce the external-selection policy
+    # even though those hooks are not installed for this worker.
+    # fmt: r
+    r = code(r"""
+        environment_request <- jsonlite::toJSON(list(
+          requirements = list(packages = I("numpy")),
+          retained_requirements = list(packages = I("numpy"))
+        ), auto_unbox = TRUE)
+        environment_error <- tryCatch(
+          .Call("mcp_console_resolve_python", environment_request),
+          error = conditionMessage
+        )
+        version_request <- jsonlite::toJSON(list(
+          constraints = I(">=3.11")
+        ), auto_unbox = TRUE)
+        version_error <- tryCatch(
+          .Call("mcp_console_resolve_python_version", version_request),
+          error = conditionMessage
+        )
+        cat(environment_error, version_error, sep = "\n")
+        """)
+    client.send(r=r)
+    output = last_tool_text(client)
+    assert output == f"{disabled}\n{disabled}\n", repr(output)
+    # fmt: r
+    r = code(r"""
+        stopifnot(
+          identical(Sys.getpid(), external_python_worker),
+          identical(external_python_state, 42L),
+          identical(
+            Sys.getenv("RETICULATE_PYTHON", unset = NA_character_),
+            "configured-by-user"
+          )
+        )
+        42L
+        """)
+    client.send(r=r)
+    assert last_tool_text(client) == "[1] 42\n"
     return client._finish()
 
 
@@ -74,7 +174,7 @@ def test_preserves_empty_python_environment(binary: Path) -> Transcript:
         Sys.getenv("RETICULATE_PYTHON", unset = NA_character_)
         """)
     client.send(r=r)
-    assert last_tool_text(client) == '[1] ""\n'
+    assert last_tool_text(client) == '[1] "managed"\n'
     return client._finish()
 
 
@@ -234,9 +334,20 @@ def test_prints_requirements_with_host_uv_cache(binary: Path) -> Transcript:
     with tempfile.TemporaryDirectory() as temporary_directory:
         temporary = Path(temporary_directory)
         environment = os.environ.copy()
-        uv_cache = str(temporary / "uv-cache")
-        environment["UV_CACHE_DIR"] = str(temporary / "startup-uv-cache")
-        environment["MCP_CONSOLE_TEST_UV_CACHE_DIR"] = uv_cache
+        trusted_cache = temporary / "trusted-uv-cache"
+        worker_cache = temporary / "worker-uv-cache"
+        uv_record = temporary / "uv-environment.jsonl"
+        real_uv = shutil.which("uv")
+        assert real_uv is not None, "real uv is required"
+        environment["RETICULATE_UV"] = str(
+            Path(__file__).parents[2] / "fixtures" / "record_uv_environment"
+        )
+        environment["MCP_CONSOLE_TEST_REAL_UV"] = real_uv
+        environment["MCP_CONSOLE_TEST_UV_RECORD"] = str(uv_record)
+        environment["MCP_CONSOLE_TEST_WORKER_UV_CACHE"] = str(worker_cache)
+        environment["UV_CACHE_DIR"] = str(trusted_cache)
+        environment["UV_DEFAULT_INDEX"] = "https://pypi.org/simple"
+        environment["UV_OFFLINE"] = "1"
         client = McpClient(
             binary,
             ("serve",),
@@ -244,59 +355,427 @@ def test_prints_requirements_with_host_uv_cache(binary: Path) -> Transcript:
             current_directory=temporary,
         )
         client._initialize_and_list_tools()
+        uv_record.write_text("", encoding="utf-8")
         # fmt: r
         r = code(r"""
-            cache <- Sys.getenv("MCP_CONSOLE_TEST_UV_CACHE_DIR")
-            stopifnot(!file.exists(cache))
-            Sys.setenv(UV_CACHE_DIR = cache)
-            printed <- capture.output(print(reticulate::py_require()))
+            worker_cache <- Sys.getenv("MCP_CONSOLE_TEST_WORKER_UV_CACHE")
+            Sys.setenv(
+              UV_CACHE_DIR = worker_cache,
+              UV_DEFAULT_INDEX = "file:///worker-selected-index"
+            )
+            reticulate::py_require("py-yaml12")
+            invisible(reticulate::py_config())
             stopifnot(
-              length(printed) > 0L,
-              dir.exists(cache),
-              identical(Sys.getenv("UV_CACHE_DIR"), cache)
+              reticulate::py_module_available("yaml12"),
+              identical(Sys.getenv("UV_CACHE_DIR"), worker_cache),
+              identical(
+                Sys.getenv("UV_DEFAULT_INDEX"),
+                "file:///worker-selected-index"
+              )
             )
             """)
         client.send(r=r)
         assert last_tool_text(client) == "[done]", client.transcript[-1]
+        records = [
+            json.loads(line)
+            for line in uv_record.read_text(encoding="utf-8").splitlines()
+        ]
+        assert records, "runtime managed resolution did not invoke uv"
+        expected = {
+            "UV_CACHE_DIR": str(trusted_cache),
+            "UV_DEFAULT_INDEX": "https://pypi.org/simple",
+            "UV_OFFLINE": None,
+        }
+        assert all(record == expected for record in records), records
+        assert not worker_cache.exists(), worker_cache
         return client._finish()
 
 
-def test_recovers_from_python_version_resolution_failure(binary: Path) -> Transcript:
-    client = McpClient(binary, ("serve",))
-    client._initialize_and_list_tools()
-    # fmt: r
-    r = code(r"""
-        worker_pid <- Sys.getpid()
-        base::local({
-          old_cache <- Sys.getenv("UV_CACHE_DIR", unset = NA_character_)
-          on.exit(
-            if (is.na(old_cache)) {
-              Sys.unsetenv("UV_CACHE_DIR")
-            } else {
-              Sys.setenv(UV_CACHE_DIR = old_cache)
-            }
-          )
-          Sys.setenv(UV_CACHE_DIR = "/dev/null")
-          print(reticulate::py_require())
-        })
-        """)
-    client.send(r=r)
-    result = client.transcript[-1]["result"]
-    assert result["isError"] is False, result
-    output = result["content"][0]["text"]
-    assert "managed Python version resolution failed" in output
-    uv = shutil.which("uv")
-    assert uv is not None and output.count(uv) == 1, output
-    result["content"][0]["text"] = output.replace(uv, "<uv executable>")
+def test_uses_current_r_library_for_managed_python_resolution(
+    binary: Path,
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        temporary = Path(temporary_directory)
+        real_uv = shutil.which("uv")
+        assert real_uv is not None, "real uv is required"
+        uv_record = temporary / "uv-environment.jsonl"
+        r_libs_record = temporary / "uv-r-libs.jsonl"
+        environment, _ = r_test_environment()
+        environment["RETICULATE_UV"] = str(
+            Path(__file__).parents[2] / "fixtures" / "record_uv_environment"
+        )
+        environment["MCP_CONSOLE_TEST_REAL_UV"] = real_uv
+        environment["MCP_CONSOLE_TEST_UV_RECORD"] = str(uv_record)
+        environment["MCP_CONSOLE_TEST_R_LIBS_RECORD"] = str(r_libs_record)
+        client = McpClient(
+            binary,
+            ("serve",),
+            environment,
+            current_directory=temporary,
+        )
+        client._initialize_and_list_tools()
+        client.send(r="initial_r_library <- .libPaths()[[1L]]")
+        assert last_tool_text(client) == "[done]"
 
-    client.send(r="identical(Sys.getpid(), worker_pid)")
-    assert last_tool_text(client) == "[1] TRUE\n"
-    return client._finish()
+        def current_r_library() -> str:
+            # fmt: r
+            r = code(r"""
+                cat(jsonlite::toJSON(.libPaths()[[1L]], auto_unbox = TRUE))
+                """)
+            client.send(r=r)
+            output = last_tool_text(client)
+            library = json.loads(output)
+            client.transcript[-1]["result"]["content"][0]["text"] = (
+                '"<current managed R library>"'
+            )
+            return library
+
+        def assert_resolver_used(library: str) -> None:
+            records = [
+                json.loads(line)
+                for line in r_libs_record.read_text(encoding="utf-8").splitlines()
+            ]
+            assert records, "managed Python resolution did not invoke uv"
+            assert all(record is not None for record in records), records
+            first_libraries = [record.split(os.pathsep, 1)[0] for record in records]
+            assert first_libraries == [library] * len(records), first_libraries
+
+        client.session(action="prepare", requirements={"r": ["zeallot"]})
+        assert last_tool_text(client) == "[prepared]"
+        prepared_r_library = current_r_library()
+        uv_record.write_text("", encoding="utf-8")
+        r_libs_record.write_text("", encoding="utf-8")
+        # fmt: r
+        r = code(r"""
+            reticulate::py_require("py-yaml12")
+            invisible(reticulate::py_config())
+            """)
+        client.send(r=r)
+        assert last_tool_text(client) == "[done]", client.transcript[-1]
+        assert_resolver_used(prepared_r_library)
+
+        uv_record.write_text("", encoding="utf-8")
+        r_libs_record.write_text("", encoding="utf-8")
+        client.session(
+            action="restart",
+            requirements={"r": ["praise"], "python": ["six"]},
+        )
+        assert last_tool_text(client) == (
+            "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
+        )
+        restarted_r_library = current_r_library()
+        assert_resolver_used(restarted_r_library)
+        return client._finish()
+
+
+def test_validates_registry_only_python_requirements(binary: Path) -> Transcript:
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        temporary = Path(temporary_directory)
+        uv_record = temporary / "uv-environment.jsonl"
+        real_uv = shutil.which("uv")
+        assert real_uv is not None, "real uv is required"
+        environment = os.environ.copy()
+        environment["RETICULATE_UV"] = str(
+            Path(__file__).parents[2] / "fixtures" / "record_uv_environment"
+        )
+        environment["MCP_CONSOLE_TEST_REAL_UV"] = real_uv
+        environment["MCP_CONSOLE_TEST_UV_RECORD"] = str(uv_record)
+        client = McpClient(
+            binary,
+            ("serve",),
+            environment,
+            current_directory=temporary,
+        )
+        client._initialize_and_list_tools()
+        uv_record.write_text("", encoding="utf-8")
+
+        project = temporary / "project"
+        archive = temporary / "package.whl"
+        duckdb_extension = "not_a_real_duckdb_extension"
+        rejected = [
+            str(project),
+            "./project",
+            "../project",
+            project.as_uri(),
+            "-e ./project",
+            "example @ https://example.invalid/example.whl",
+            str(archive),
+            "./package.whl",
+            "package.whl",
+            "package.tar.gz",
+        ]
+        for index, requirement in enumerate(rejected):
+            action = "prepare" if index % 2 == 0 else "restart"
+            client.session(
+                action=action,
+                requirements={
+                    "r": ["praise"],
+                    "python": [requirement],
+                    "duckdb": [duckdb_extension],
+                },
+            )
+            result = client.transcript[-1]["result"]
+            assert result["isError"] is True, result
+            assert last_tool_text(client) == named_requirement_error(requirement)
+        assert uv_record.read_text(encoding="utf-8") == ""
+
+        client.session(
+            action="prepare",
+            requirements={"duckdb": [duckdb_extension]},
+        )
+        result = client.transcript[-1]["result"]
+        assert result["isError"] is True, result
+        result["content"][0]["text"] = normalize_duckdb_resolution_error(
+            result["content"][0]["text"], duckdb_extension
+        )
+
+        prepared = "requests[socks]>=2,<3; python_version < '0'"
+        client.session(
+            action="prepare",
+            requirements={"python": [prepared]},
+        )
+        assert last_tool_text(client) == "[prepared]"
+        assert uv_record.read_text(encoding="utf-8") != ""
+        restarted = "urllib3!=2.0.0; python_version < '0'"
+        client.session(
+            action="restart",
+            requirements={"python": [restarted]},
+        )
+        assert last_tool_text(client) == "[starting new worker]\n[idle]"
+
+        # fmt: r
+        r = code(rf"""
+            requirements <- reticulate::py_require()$packages
+            stopifnot(
+              "{prepared}" %in% requirements,
+              "{restarted}" %in% requirements,
+              !any(c(
+                {", ".join(json.dumps(requirement) for requirement in rejected)}
+              ) %in% requirements),
+              !file.exists(file.path(.libPaths()[[1L]], "praise", "DESCRIPTION"))
+            )
+            """)
+        client.send(r=r)
+        assert last_tool_text(client) == "[done]", client.transcript[-1]
+
+        worker_executable = temporary / "worker-python"
+        worker_retained_selector = temporary / "worker-retained-python"
+        worker_installation = temporary / "worker-python-installation"
+        for selector in (worker_executable, worker_retained_selector):
+            selector.write_text(
+                '#!/bin/sh\ntouch "$0.executed"\nexit 97\n',
+                encoding="utf-8",
+            )
+            selector.chmod(0o755)
+        worker_installation.mkdir()
+        accepted_packages = [
+            "requests",
+            "requests[socks]",
+            "requests>=2,<3",
+            "requests[socks]>=2; python_version >= '3.10'",
+        ]
+        accepted_version_constraints = [
+            "3.11",
+            "3.14.0a3",
+            ">=3.9",
+            ">=3.9,<3.13",
+            "==3.12.*",
+        ]
+        rejected_version_constraints = [
+            "",
+            "./python",
+            "../python",
+            "file:///tmp/python",
+            "python3",
+            "~=3.11",
+            "===3.11",
+        ]
+        uv_record.write_text("", encoding="utf-8")
+        # Reach both worker-originated resolver requests directly. Interpreter
+        # selectors must be rejected before either host resolver invokes uv.
+        # fmt: r
+        r = code(rf"""
+            selector_worker_pid <- Sys.getpid()
+            selector_sentinel <- 42L
+            packages <- reticulate::py_require()$packages
+            accepted_package_request <- jsonlite::toJSON(list(
+              requirements = list(
+                packages = I(c({", ".join(json.dumps(package) for package in accepted_packages)})),
+                python_version = I("python3")
+              ),
+              retained_requirements = list(
+                packages = I(c({", ".join(json.dumps(package) for package in accepted_packages)})),
+                python_version = I(">=3.10")
+              )
+            ), auto_unbox = TRUE)
+            accepted_package_error <- tryCatch(
+              .Call("mcp_console_resolve_python", accepted_package_request),
+              error = conditionMessage
+            )
+            environment_request <- jsonlite::toJSON(list(
+              requirements = list(
+                packages = I(packages),
+                python_version = I({json.dumps(str(worker_executable))})
+              ),
+              retained_requirements = list(
+                packages = I(packages),
+                python_version = I(">=3.10")
+              )
+            ), auto_unbox = TRUE)
+            environment_error <- tryCatch(
+              .Call("mcp_console_resolve_python", environment_request),
+              error = conditionMessage
+            )
+            retained_environment_request <- jsonlite::toJSON(list(
+              requirements = list(
+                packages = I(packages),
+                python_version = I(">=3.10")
+              ),
+              retained_requirements = list(
+                packages = I(packages),
+                python_version = I({json.dumps(str(worker_retained_selector))})
+              )
+            ), auto_unbox = TRUE)
+            retained_environment_error <- tryCatch(
+              .Call("mcp_console_resolve_python", retained_environment_request),
+              error = conditionMessage
+            )
+            accepted_version_request <- jsonlite::toJSON(list(
+              constraints = I(c(
+                {", ".join(json.dumps(constraint) for constraint in accepted_version_constraints)},
+                {json.dumps(str(worker_installation))}
+              ))
+            ), auto_unbox = TRUE)
+            accepted_version_error <- tryCatch(
+              .Call(
+                "mcp_console_resolve_python_version",
+                accepted_version_request
+              ),
+              error = conditionMessage
+            )
+            rejected_version_errors <- vapply(
+              c({", ".join(json.dumps(constraint) for constraint in rejected_version_constraints)}),
+              function(constraint) {{
+                request <- jsonlite::toJSON(list(
+                  constraints = I(constraint)
+                ), auto_unbox = TRUE)
+                tryCatch(
+                  .Call("mcp_console_resolve_python_version", request),
+                  error = conditionMessage
+                )
+              }},
+              character(1L),
+              USE.NAMES = FALSE
+            )
+            cat(
+              accepted_package_error,
+              environment_error,
+              retained_environment_error,
+              accepted_version_error,
+              rejected_version_errors,
+              sep = "\n"
+            )
+            """)
+        client.send(r=r)
+        output = last_tool_text(client)
+        assert output == (
+            python_version_constraint_error("python3")
+            + "\n"
+            + python_version_constraint_error(str(worker_executable))
+            + "\n"
+            + python_version_constraint_error(str(worker_retained_selector))
+            + "\n"
+            + python_version_constraint_error(str(worker_installation))
+            + "\n"
+            + "\n".join(
+                python_version_constraint_error(constraint)
+                for constraint in rejected_version_constraints
+            )
+            + "\n"
+        ), repr(output)
+        assert uv_record.read_text(encoding="utf-8") == ""
+        assert not Path(f"{worker_executable}.executed").exists()
+        assert not Path(f"{worker_retained_selector}.executed").exists()
+        # fmt: r
+        r = code(r"""
+            identical(Sys.getpid(), selector_worker_pid) &&
+              identical(selector_sentinel, 42L) &&
+              is.null(reticulate::py_require()$python_version)
+            """)
+        client.send(r=r)
+        assert last_tool_text(client) == "[1] TRUE\n"
+
+        runtime_rejected = "./runtime-project"
+        uv_record.write_text("", encoding="utf-8")
+        # fmt: r
+        r = code(rf"""
+            reticulate::py_require({
+              json.dumps(runtime_rejected)
+            })
+            invisible(reticulate::py_config())
+            """)
+        client.send(r=r)
+        result = client.transcript[-1]["result"]
+        assert result["isError"] is False, result
+        error = named_requirement_error(runtime_rejected)
+        assert error in result["content"][0]["text"], result
+        result["content"][0]["text"] = error
+        assert uv_record.read_text(encoding="utf-8") == ""
+        transcript = client._finish()
+        transcript_json = json.dumps(transcript)
+        transcript_json = transcript_json.replace(
+            str(project), "<absolute project path>"
+        ).replace(str(archive), "<absolute archive path>")
+        transcript_json = transcript_json.replace(
+            str(worker_installation), "<worker installation path>"
+        ).replace(str(worker_retained_selector), "<worker retained selector>")
+        transcript_json = transcript_json.replace(
+            str(worker_executable), "<worker executable path>"
+        )
+        return json.loads(transcript_json)
+
+
+def test_recovers_from_python_version_resolution_failure(binary: Path) -> Transcript:
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        temporary = Path(temporary_directory)
+        uv = Path(__file__).parents[2] / "fixtures" / "record_uv_environment"
+        real_uv = shutil.which("uv")
+        assert real_uv is not None, "real uv is required"
+        failure_marker = temporary / "fail-version-resolution"
+        environment = os.environ.copy()
+        environment["RETICULATE_UV"] = str(uv)
+        environment["MCP_CONSOLE_TEST_REAL_UV"] = real_uv
+        environment["MCP_CONSOLE_TEST_UV_RECORD"] = str(temporary / "uv.jsonl")
+        environment["MCP_CONSOLE_TEST_UV_FAILURE_MARKER"] = str(failure_marker)
+        environment["MCP_CONSOLE_TEST_UV_FAILURE_ARGUMENT"] = "list"
+
+        client = McpClient(binary, ("serve",), environment)
+        client._initialize_and_list_tools()
+        failure_marker.touch()
+        # fmt: r
+        r = code(r"""
+            worker_pid <- Sys.getpid()
+            print(reticulate::py_require())
+            """)
+        client.send(r=r)
+        result = client.transcript[-1]["result"]
+        assert result["isError"] is False, result
+        output = result["content"][0]["text"]
+        assert "managed Python version resolution failed" in output
+        assert "synthetic uv failure" in output
+        normalized = output.replace(str(uv), "<uv executable>")
+        result["content"][0]["text"] = (
+            "\n".join(line.rstrip() for line in normalized.splitlines()) + "\n"
+        )
+
+        client.send(r="identical(Sys.getpid(), worker_pid)")
+        assert last_tool_text(client) == "[1] TRUE\n"
+        return client._finish()
 
 
 def test_prepares_initial_python_requirements(binary: Path) -> Transcript:
     environment = os.environ.copy()
-    environment["RETICULATE_PYTHON"] = "/mcp-console-prepare-must-replace-python"
+    environment.pop("RETICULATE_PYTHON", None)
     client = McpClient(binary, ("serve",), environment)
     client._initialize_and_list_tools()
     client.session(
@@ -312,18 +791,14 @@ def test_prepares_initial_python_requirements(binary: Path) -> Transcript:
     )
     result = client.transcript[-1]["result"]
     assert result["isError"] is True, result
-    resolution_error = result["content"][0]["text"]
-    recorded_error = normalize_python_resolution_error(resolution_error, invalid)
-    result["content"][0]["text"] = recorded_error
+    recorded_error = named_requirement_error(invalid)
+    assert result["content"][0]["text"] == recorded_error
     client.session(
         action="prepare",
         requirements={"python": [invalid]},
     )
     result = client.transcript[-1]["result"]
     assert result["isError"] is True, result
-    result["content"][0]["text"] = normalize_python_resolution_error(
-        result["content"][0]["text"], invalid
-    )
     assert result["content"][0]["text"] == recorded_error
     client.session(
         action="prepare",
@@ -331,9 +806,7 @@ def test_prepares_initial_python_requirements(binary: Path) -> Transcript:
     )
     result = client.transcript[-1]["result"]
     assert result["isError"] is True, result
-    assert result["content"][0]["text"] == (
-        "Python requirement strings must not contain NUL or line breaks"
-    )
+    assert result["content"][0]["text"] == named_requirement_error("numpy\npandas")
     # fmt: r
     r = code(r"""
         seed <- tail(reticulate::py_require()$history, 1L)[[1L]]
@@ -365,9 +838,8 @@ def test_prepares_initial_python_requirements(binary: Path) -> Transcript:
 
 
 def test_prepares_explicit_numpy_requirement(binary: Path) -> Transcript:
-    configured = "/mcp-console-prepare-must-replace-python"
     environment = os.environ.copy()
-    environment["RETICULATE_PYTHON"] = configured
+    environment.pop("RETICULATE_PYTHON", None)
     client = McpClient(binary, ("serve",), environment)
     client._initialize_and_list_tools()
     client.session(
@@ -376,8 +848,8 @@ def test_prepares_explicit_numpy_requirement(binary: Path) -> Transcript:
     )
     assert last_tool_text(client) == "[prepared]"
     # fmt: r
-    r = code(rf"""
-        stopifnot(Sys.getenv("RETICULATE_PYTHON") != "{configured}")
+    r = code(r"""
+        stopifnot(Sys.getenv("RETICULATE_PYTHON") == "managed")
         """)
     client.send(r=r)
     assert last_tool_text(client) == "[done]"
@@ -604,10 +1076,7 @@ def test_prepares_python_requirements_after_worker_startup(binary: Path) -> Tran
     )
     result = client.transcript[-1]["result"]
     assert result["isError"] is True, result
-    assert "managed Python resolution failed" in result["content"][0]["text"]
-    result["content"][0]["text"] = normalize_python_resolution_error(
-        result["content"][0]["text"], invalid
-    )
+    assert result["content"][0]["text"] == named_requirement_error(invalid)
 
     python = code("""
         sentinel, os.getpid() == worker_pid, importlib.util.find_spec("yaml12") is None
@@ -798,9 +1267,7 @@ def test_failed_restart_requirements_preserve_worker(binary: Path) -> Transcript
     )
     result = client.transcript[-1]["result"]
     assert result["isError"] is True, result
-    result["content"][0]["text"] = normalize_python_resolution_error(
-        result["content"][0]["text"], invalid
-    )
+    assert result["content"][0]["text"] == named_requirement_error(invalid)
 
     client.send(python="restart_marker")
     assert last_tool_text(client) == "42\n"
@@ -1314,213 +1781,167 @@ def test_dispatch_does_not_mutate_python_globals(binary: Path) -> Transcript:
 
 
 def test_interrupts_live_python_resolver(binary: Path) -> Transcript:
-    listener = socket.socket()
-    listener.bind(("127.0.0.1", 0))
-    listener.listen()
-    port = listener.getsockname()[1]
-    connected = threading.Event()
-    resolver_stopped = threading.Event()
-    release = threading.Event()
-
-    def hold_index_connection() -> None:
-        connection, _ = listener.accept()
-        listener.close()
-        connected.set()
-        connection.settimeout(0.05)
-        with connection:
-            while not release.is_set():
-                try:
-                    if not connection.recv(4096):
-                        resolver_stopped.set()
-                        return
-                except TimeoutError:
-                    pass
-
-    index = threading.Thread(target=hold_index_connection, daemon=True)
-    index.start()
-
-    environment = os.environ.copy()
-    environment["RUST_LOG"] = "error"
-    previous_handler = signal.signal(signal.SIGINT, signal.SIG_IGN)
-    previous_mask = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT})
-    try:
-        client = McpClient(binary, ("serve",), environment)
-    finally:
-        signal.signal(signal.SIGINT, previous_handler)
-        signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
-    passed = False
-    try:
-        client._initialize_and_list_tools()
-        # fmt: r
-        r = code(rf"""
-            resolver_interrupt_state <- 41L
-            Sys.setenv(UV_DEFAULT_INDEX = "http://127.0.0.1:{port}/simple")
-            """)
-        client.send(r=r)
-        assert last_tool_text(client) == "[done]"
-
-        preparation = client._start_session(
-            action="prepare",
-            requirements={"python": ["mcp-console-blocked-live-preparation"]},
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        temporary = Path(temporary_directory)
+        environment, uv_started, uv_release = checkpoint_uv_environment(
+            temporary, "mcp-console-blocked-live-preparation"
         )
-        assert connected.wait(10), "live preparation did not contact the blocking index"
+        environment["RUST_LOG"] = "error"
+        previous_handler = signal.signal(signal.SIGINT, signal.SIG_IGN)
+        previous_mask = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT})
+        try:
+            client = McpClient(binary, ("serve",), environment)
+        finally:
+            signal.signal(signal.SIGINT, previous_handler)
+            signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
+        passed = False
+        try:
+            client._initialize_and_list_tools()
+            client.send(r="resolver_interrupt_state <- 41L")
+            assert last_tool_text(client) == "[done]"
 
-        interrupt = client._start_session(action="interrupt")
-        preparation_returned = threading.Event()
-        forced_release = threading.Event()
+            preparation = client._start_session(
+                action="prepare",
+                requirements={"python": ["mcp-console-blocked-live-preparation"]},
+            )
+            uv_started.wait("live Python preparation")
 
-        def release_if_preparation_blocks() -> None:
-            if not preparation_returned.wait(2):
-                forced_release.set()
-                release.set()
+            interrupt = client._start_session(action="interrupt")
+            preparation_returned = threading.Event()
+            forced_release = threading.Event()
 
-        watchdog = threading.Thread(target=release_if_preparation_blocks)
-        watchdog.start()
-        client._receive_many([preparation, interrupt])
-        preparation_returned.set()
-        watchdog.join()
-        assert not forced_release.is_set(), "interrupt did not stop the Python resolver"
-        assert interrupt["result"] == {
-            "content": [{"type": "text", "text": "[interrupt sent]"}],
-            "isError": False,
-        }, interrupt
-        assert resolver_stopped.wait(2), "interrupted resolver kept its connection open"
-        assert preparation["result"]["isError"] is True, preparation
-        error = preparation["result"]["content"][0]["text"]
-        assert "managed Python resolution" in error, error
-        error = normalize_python_resolution_error(error)
-        assert "uv output:" in error, error
-        preparation["result"]["content"][0]["text"] = error.replace(
-            f"127.0.0.1:{port}", "127.0.0.1:<PORT>"
-        )
+            def release_if_preparation_blocks() -> None:
+                if not preparation_returned.wait(2):
+                    forced_release.set()
+                    uv_release.release()
 
-        client.send(r="resolver_interrupt_state + 1L")
-        assert last_tool_text(client) == "[1] 42\n"
-        transcript = client._finish()
-        address = f"127.0.0.1:{port}"
-        for entry in transcript:
-            if source := entry.get("send", {}).get("r"):
-                entry["send"]["r"] = source.replace(address, "127.0.0.1:<PORT>")
-        passed = True
-        return transcript
-    finally:
-        release.set()
-        index.join(2)
-        if not passed:
-            stop_client(client)
+            watchdog = threading.Thread(target=release_if_preparation_blocks)
+            watchdog.start()
+            client._receive_many([preparation, interrupt])
+            preparation_returned.set()
+            watchdog.join()
+            assert not forced_release.is_set(), (
+                "interrupt did not stop the Python resolver"
+            )
+            assert interrupt["result"] == {
+                "content": [{"type": "text", "text": "[interrupt sent]"}],
+                "isError": False,
+            }, interrupt
+            assert preparation["result"]["isError"] is True, preparation
+            error = preparation["result"]["content"][0]["text"]
+            assert "managed Python resolution" in error, error
+            preparation["result"]["content"][0]["text"] = (
+                "managed Python resolution cancelled by interrupt"
+            )
+
+            client.send(r="resolver_interrupt_state + 1L")
+            assert last_tool_text(client) == "[1] 42\n"
+            transcript = client._finish()
+            passed = True
+            return transcript
+        finally:
+            uv_release.release()
+            uv_started.close()
+            uv_release.close()
+            if not passed:
+                stop_client(client)
 
 
 def test_restart_cancels_live_python_preparation(binary: Path) -> Transcript:
-    listener = socket.socket()
-    listener.bind(("127.0.0.1", 0))
-    listener.listen()
-    port = listener.getsockname()[1]
-    connected = threading.Event()
-    resolver_stopped = threading.Event()
-    release = threading.Event()
-
-    def hold_index_connection() -> None:
-        connection, _ = listener.accept()
-        listener.close()
-        connected.set()
-        connection.settimeout(0.05)
-        with connection:
-            while not release.is_set():
-                try:
-                    if not connection.recv(4096):
-                        resolver_stopped.set()
-                        return
-                except TimeoutError:
-                    pass
-
-    index = threading.Thread(target=hold_index_connection, daemon=True)
-    index.start()
-
-    client = McpClient(binary, ("serve",))
-    client._initialize_and_list_tools()
-    # fmt: r
-    r = code(rf"""
-        restart_marker <- 42L
-        Sys.setenv(UV_DEFAULT_INDEX = "http://127.0.0.1:{port}/simple")
-        """)
-    client.send(r=r)
-    assert last_tool_text(client) == "[done]"
-
-    preparation = client._start_session(
-        action="prepare",
-        requirements={"python": ["mcp-console-blocked-live-preparation"]},
-    )
-    assert connected.wait(10), "live preparation did not contact the blocking index"
-
-    calls_returned = threading.Event()
-    forced_release = threading.Event()
-
-    def release_if_calls_block() -> None:
-        if not calls_returned.wait(2):
-            forced_release.set()
-            release.set()
-
-    watchdog = threading.Thread(target=release_if_calls_block)
-    watchdog.start()
-    poll = client._start_send()
-    second_prepare = client._start_session(
-        action="prepare",
-        requirements={"python": ["py-yaml12"]},
-    )
-    client._receive_many([poll, second_prepare])
-    calls_returned.set()
-    watchdog.join()
-    assert not forced_release.is_set(), "another tool call waited for live preparation"
-    assert poll["result"] == {
-        "content": [{"type": "text", "text": "[session is preparing requirements]"}],
-        "isError": True,
-    }, poll
-    assert second_prepare["result"] == {
-        "content": [{"type": "text", "text": "session is preparing requirements"}],
-        "isError": True,
-    }, second_prepare
-
-    restart = client._start_session(action="restart")
-    client._receive_many([preparation, restart])
-
-    preparation_result = preparation["result"]
-    assert preparation_result == {
-        "content": [
-            {
-                "type": "text",
-                "text": "Python preparation cancelled by restart",
-            }
-        ],
-        "isError": True,
-    }, preparation_result
-    assert restart["result"]["content"] == [
-        {
-            "type": "text",
-            "text": (
-                "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
-            ),
-        }
-    ], restart
-    assert resolver_stopped.wait(2), "restart did not stop the Python resolver"
-    release.set()
-    index.join(2)
-
-    # fmt: r
-    r = code(r"""
-        requirements <- reticulate::py_require()
-        stopifnot(
-          !exists("restart_marker", inherits = FALSE),
-          !"mcp-console-blocked-live-preparation" %in% requirements$packages
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        temporary = Path(temporary_directory)
+        environment, uv_started, uv_release = checkpoint_uv_environment(
+            temporary, "mcp-console-blocked-live-preparation"
         )
-        """)
-    client.send(r=r)
-    assert last_tool_text(client) == "[done]"
-    transcript = client._finish()
-    address = f"127.0.0.1:{port}"
-    for entry in transcript:
-        if source := entry.get("send", {}).get("r"):
-            entry["send"]["r"] = source.replace(address, "127.0.0.1:<PORT>")
-    return transcript
+        client = McpClient(binary, ("serve",), environment)
+        passed = False
+        try:
+            client._initialize_and_list_tools()
+            client.send(r="restart_marker <- 42L")
+            assert last_tool_text(client) == "[done]"
+
+            preparation = client._start_session(
+                action="prepare",
+                requirements={"python": ["mcp-console-blocked-live-preparation"]},
+            )
+            uv_started.wait("live Python preparation")
+
+            calls_returned = threading.Event()
+            forced_release = threading.Event()
+
+            def release_if_calls_block() -> None:
+                if not calls_returned.wait(2):
+                    forced_release.set()
+                    uv_release.release()
+
+            watchdog = threading.Thread(target=release_if_calls_block)
+            watchdog.start()
+            poll = client._start_send()
+            second_prepare = client._start_session(
+                action="prepare",
+                requirements={"python": ["py-yaml12"]},
+            )
+            client._receive_many([poll, second_prepare])
+            calls_returned.set()
+            watchdog.join()
+            assert not forced_release.is_set(), (
+                "another tool call waited for live preparation"
+            )
+            assert poll["result"] == {
+                "content": [
+                    {"type": "text", "text": "[session is preparing requirements]"}
+                ],
+                "isError": True,
+            }, poll
+            assert second_prepare["result"] == {
+                "content": [
+                    {"type": "text", "text": "session is preparing requirements"}
+                ],
+                "isError": True,
+            }, second_prepare
+
+            restart = client._start_session(action="restart")
+            client._receive_many([preparation, restart])
+
+            preparation_result = preparation["result"]
+            assert preparation_result == {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "Python preparation cancelled by restart",
+                    }
+                ],
+                "isError": True,
+            }, preparation_result
+            assert restart["result"]["content"] == [
+                {
+                    "type": "text",
+                    "text": (
+                        "[worker stopped: in-memory state lost]\n"
+                        "[starting new worker]\n[idle]"
+                    ),
+                }
+            ], restart
+
+            # fmt: r
+            r = code(r"""
+                requirements <- reticulate::py_require()
+                stopifnot(
+                  !exists("restart_marker", inherits = FALSE),
+                  !"mcp-console-blocked-live-preparation" %in% requirements$packages
+                )
+                """)
+            client.send(r=r)
+            assert last_tool_text(client) == "[done]"
+            transcript = client._finish()
+            passed = True
+            return transcript
+        finally:
+            uv_release.release()
+            uv_started.close()
+            uv_release.close()
+            if not passed:
+                stop_client(client)
 
 
 def test_does_not_parse_requirements_as_rscript_options(binary: Path) -> Transcript:
@@ -1530,7 +1951,7 @@ def test_does_not_parse_requirements_as_rscript_options(binary: Path) -> Transcr
             "base::writeLines('executed', base::Sys.getenv('MCP_CONSOLE_HOST_MARKER'))"
         )
         environment = os.environ.copy()
-        environment["RETICULATE_PYTHON"] = "/mcp-console-prepare-must-replace-python"
+        environment.pop("RETICULATE_PYTHON", None)
         environment["MCP_CONSOLE_HOST_MARKER"] = str(marker)
         client = McpClient(binary, ("serve",), environment)
         client._initialize_and_list_tools()
@@ -1541,10 +1962,7 @@ def test_does_not_parse_requirements_as_rscript_options(binary: Path) -> Transcr
         result = client.transcript[-1]["result"]
         assert result["isError"] is True, result
         assert not marker.exists(), "requirement executed as unsandboxed R code"
-        assert "managed Python resolution failed" in result["content"][0]["text"]
-        result["content"][0]["text"] = normalize_python_resolution_error(
-            result["content"][0]["text"]
-        )
+        assert result["content"][0]["text"] == named_requirement_error("-e")
         return client._finish()
 
 

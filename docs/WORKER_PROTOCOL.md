@@ -23,7 +23,7 @@ The hidden `serve --worker PATH` option replaces it with a development worker.
 ## Launch contract
 
 For the built-in worker on macOS, server initialization first asks IR to resolve the retained default R requirements `tidyverse`, `github::rstudio/reticulate`, `DBI`, `duckdb`, `arrow`, and `nanoarrow` outside the sandbox.
-The GitHub requirement supplies the fork-aware output-stream restoration required by the worker; the host R installation must also provide reticulate for the managed-Python resolver, which runs before the worker `R_LIBS` is applied.
+The GitHub requirement supplies the fork-aware output-stream restoration required by the worker and the reticulate installation used by the host-side managed-Python resolver.
 It requires `ir` 0.4.0 or later and uses the same Rscript selection and `IR_NO_LOCAL_SOURCES` policy described below.
 The returned library becomes the first worker `R_LIBS` entry for every generation.
 Server initialization then uses that library's DuckDB package to install the `json` and `icu` extensions in DuckDB's native cache outside the sandbox.
@@ -31,7 +31,7 @@ These extensions form the built-in retained default set.
 The resolver does not load their native code.
 Extensions outside that set, including `fts`, remain explicit requirements.
 
-When inherited `RETICULATE_PYTHON` is absent or exactly `managed`, server initialization also asks reticulate to resolve its baseline NumPy and pandas environment outside the sandbox.
+When inherited `RETICULATE_PYTHON` is absent, empty, or exactly `managed`, server initialization also asks reticulate to resolve its baseline NumPy and pandas environment outside the sandbox.
 The resolver is equivalent to this R call and receives the manifest as JSON on `Rscript` standard input:
 
 ```text
@@ -42,22 +42,27 @@ reticulate:::uv_get_or_create_env(
 )
 ```
 
-The server uses `$R_HOME/bin/Rscript` when `R_HOME` is set and otherwise selects `Rscript` from `PATH`.
+The server uses the resolved R configuration's Rscript and applies the resolved default library through `R_LIBS`.
+That Rscript is `$R_HOME/bin/Rscript` when `R_HOME` is set; otherwise, it comes from the R installation discovered through `R` on `PATH`.
 It removes inherited `UV_OFFLINE`, allows reticulate and uv to use their normal global caches, and requires the command to return a valid interpreter path.
 The server retains the result and normalized manifest and applies them to each server-managed worker.
-Other inherited values, including an empty value, bypass the Python startup preflight unchanged.
-They do not bypass default R or DuckDB extension resolution.
-Custom workers skip the default R, Python, and DuckDB extension preflights.
+Any other nonempty inherited value selects a user-managed Python interpreter.
+The server preserves that value, skips the Python startup preflight, and rejects server-managed Python requirements instead of replacing the selection.
+This does not bypass default R or DuckDB extension resolution.
+The user-selected Python policy is separate from custom-worker selection: custom workers skip the default R, Python, and DuckDB extension preflights and reject managed Python requirements regardless of `RETICULATE_PYTHON`.
 
 `session` with `action = "prepare"` can add R or Python requirements or DuckDB extensions to the implicit session.
-R and Python requirements remain exact strings.
+R requirements remain exact strings whose parsing belongs to IR.
+Managed Python requirements must be named PEP 508 registry requirements.
+Package extras, version specifiers, and environment markers are accepted; paths, `file:` URLs, editable requirements, direct references such as `name @ URL`, and local archive or project references are rejected before a resolver process starts.
 DuckDB requirements are names that start with a lowercase ASCII letter and otherwise contain only lowercase ASCII letters, digits, and underscores; paths, URLs, repositories, versions, and SQL fragments are rejected.
-Before built-in worker startup, the server merges exact strings with the retained tidyverse, GitHub reticulate, DBI, DuckDB, arrow, and nanoarrow requirements and managed Python baseline, merges DuckDB names with the retained `json` and `icu` extension set, then resolves the complete candidates outside the sandbox.
+Before built-in worker startup, the server merges R requirements with the retained tidyverse, GitHub reticulate, DBI, DuckDB, arrow, and nanoarrow requirements, merges managed Python requirements with the retained baseline, merges DuckDB names with the retained `json` and `icu` extension set, then resolves the complete candidates outside the sandbox.
 Custom workers skip the built-in package set, but every explicitly prepared R candidate includes DBI, DuckDB, and jsonlite so that the same library can service later DuckDB extension requests.
 Before R resolution, the server requires `ir --version` from `PATH` to report 0.4.0 or later.
 It then runs `ir run` with the same Rscript selection as the worker, one `--with` argument per requirement, and a constant expression that prints the resolved library path.
 The server sets `IR_NO_LOCAL_SOURCES` for every invocation, so IR refuses package installation from direct or transitive local sources while retaining ownership of package-reference parsing.
-Python requirements use the host resolver described above and take precedence over an inherited Python selection.
+Python requirements use the host resolver described above only for a server-managed Python environment.
+A nonempty user-selected `RETICULATE_PYTHON` value causes Python additions to be rejected without changing the retained state.
 DuckDB requirements use the resolved managed R library and DuckDB's own `INSTALL` statement outside the sandbox.
 DuckDB selects its default repository and native extension cache, whose layout separates versions and platforms; the resolver never loads the installed native code.
 Every newly resolved R candidate repeats the complete retained extension installation with that candidate's DuckDB version.
@@ -86,6 +91,7 @@ Custom workers must use the same native cache to load them.
 The hidden worker option replaces the executable, but R still starts from the user-selected installation and layers resolved libraries onto it.
 A custom worker must apply its first resolved R library before loading DuckDB; a DuckDB namespace loaded earlier from inherited libraries is outside the extension-preparation contract.
 Managed Python additions remain unavailable with a custom worker.
+That custom-worker rule is independent of the built-in worker's user-selected `RETICULATE_PYTHON` rule.
 If preparation overlaps worker startup, the server returns `[requirements not prepared: worker is starting]` without resolving the additions or changing the retained requirements, R library, Python manifest, or DuckDB extension set.
 
 `session` with `action = "restart"` may include additive R, Python, and DuckDB requirements or omit them to retain the current configuration.
@@ -94,6 +100,7 @@ A new R candidate repeats installation of the complete retained DuckDB extension
 The server commits the R library, DuckDB extension set, and Python environment together only after every required resolution succeeds.
 A resolution failure leaves the current worker and retained environment unchanged.
 Custom workers accept R and DuckDB additions but reject Python additions.
+A built-in worker with a nonempty user-selected `RETICULATE_PYTHON` value also rejects Python additions while continuing to accept supported R and DuckDB additions.
 After successful resolution, the server terminates the current worker generation, eagerly starts its replacement, and returns `[idle]` after `ready`.
 All worker-owned R, Python, SQL, debugger, and unread-stdin state is lost.
 The implicit session exists for the server lifetime, so restart starts its first worker if none exists yet.
@@ -133,10 +140,15 @@ The DuckDB extension resolver receives validated extension names as data and run
 These resolvers may use the network and write their normal host caches outside the sandbox; R and Python package resolution may execute package installation or build code, and managed Python environment startup and the Matplotlib font-manager import also run there.
 DuckDB extension preparation performs installation but not loading outside the sandbox.
 `IR_NO_LOCAL_SOURCES` prevents IR from running package installation code for local sources; it may reuse a library that was already materialized.
-Runtime requests also supply the worker's current `UV_*` settings except `UV_OFFLINE`; the server removes its own `UV_*` settings before applying that exact set to the resolver.
-Those settings are inputs to that resolution only; the server does not retain or replay them.
-Requirements and settings remain data rather than evaluated cell source; the IR invocation uses a constant R expression that does not contain requirement text.
-Evaluated R code and R package load hooks can request resolution through `py_require()`, but the resolver does not evaluate their submitted source.
+At server startup, MCP Console captures inherited `UV_*` settings other than `UV_OFFLINE` as the trusted managed-Python resolver configuration.
+Before each Python resolver child starts, the server removes the child's current `UV_*` settings, applies that startup snapshot, and removes `UV_OFFLINE`.
+The child uses the current retained R library.
+Before a worker starts or during restart, a combined R and Python resolution uses the R candidate that will configure the new worker.
+A live mixed preparation resolves Python before asking the worker to apply the R candidate, so an immediately retained Python activation still corresponds to the retained R configuration if the later R update fails.
+Worker requests carry no environment map, so evaluated R or Python code cannot configure a host resolver through `Sys.setenv()`, `os.environ`, or a resolver request.
+Requirements and version constraints remain data rather than evaluated cell source; the IR invocation uses a constant R expression that does not contain requirement text.
+Evaluated R code and R package load hooks can request managed resolution through `py_require()`, but the resolver validates the resulting named requirements and does not evaluate their submitted source.
+Managed Python versions must be version numbers or `==`, `!=`, `<`, `<=`, `>`, and `>=` PEP 440 specifiers; paths, executable names, and installation directories are rejected before a Python resolver starts.
 A default R or Python preflight failure prevents server initialization.
 A preparation failure is an MCP tool error and leaves the prior configuration unchanged.
 For a uv tool failure, `Rscript` captures reticulate's message stream and sends its selected Python version on stdout; uv's inherited stderr remains separate.
@@ -261,8 +273,8 @@ The direction labels name the logical server and worker endpoints; the relay for
 | worker → server | `{"kind":"input_cancelled"}` | Report that `SIGINT` cancelled the current managed read. |
 | worker → server | `{"kind":"r_prepared","library":"..."}` | Confirm the normalized live R library path. |
 | worker → server | `{"kind":"r_preparation_failed","message":"..."}` | Report a live R update failure without discarding the worker. |
-| worker → server | `{"kind":"resolve_python","request":{"requirements":{"packages":["numpy","pandas"]},"retained_requirements":{"packages":["numpy","pandas"]},"environment":{}}}` | Resolve the complete proposed reticulate manifest outside the sandbox. |
-| worker → server | `{"kind":"resolve_python_version","request":{"constraints":[],"environment":{}}}` | Select a Python version with reticulate and uv outside the sandbox. |
+| worker → server | `{"kind":"resolve_python","request":{"requirements":{"packages":["numpy","pandas"]},"retained_requirements":{"packages":["numpy","pandas"]}}}` | Resolve the complete proposed reticulate manifest outside the sandbox. |
+| worker → server | `{"kind":"resolve_python_version","request":{"constraints":[]}}` | Select a Python version with reticulate and uv outside the sandbox. |
 | worker → server | `{"kind":"python_activated","requirements":{"packages":["numpy","pandas","py-yaml12"]}}` | Report that reticulate accepted this normalized managed-Python manifest. |
 | worker → server | `{"kind":"python_prepared"}` | Finish explicit Python preparation. |
 | worker → server | `{"kind":"python_preparation_failed","message":"..."}` | Report an ordinary explicit-preparation failure without discarding the worker. |
@@ -270,12 +282,15 @@ The direction labels name the logical server and worker endpoints; the relay for
 
 Every frame uses `kind` to select its message variant.
 Unknown kinds and fields are rejected in either direction.
+Payload-free messages contain exactly the shown `kind` field: `shutdown`, `ready`, `input_received`, `input_cancelled`, `python_prepared`, and `completed` reject every additional field.
+Their serialized JSON remains unchanged.
 The server maps `console_output` and `console_diagnostic` to distinct internal console channels.
 The `language` value is `r`, `python`, or `sql`.
 Python manifests contain `packages` and may contain `python_version` and `exclude_newer`; empty optional fields are omitted.
 For `resolve_python`, `requirements` is the physical manifest submitted to the host resolver and `retained_requirements` is the logical manifest that a successful activation will retain.
 Their packages and `exclude_newer` must match; only `python_version` may differ when reticulate resolves a late addition against the exact active Python patch version while preserving the user's logical constraint.
-The `environment` object may contain only `UV_*` settings other than `UV_OFFLINE`.
+The server validates both manifests' Python-version constraints before comparing them with retained state or starting a host resolver.
+Resolver requests contain no environment object; host resolver configuration comes from the trusted server-startup snapshot described above.
 `python_activated.requirements` is the complete normalized logical manifest, not reticulate's request history.
 The receipt is reserved for server-managed workers.
 The built-in worker sends it after reticulate accepts a managed environment; the server immediately retains the matching resolved candidate or its unchanged current environment.
@@ -354,7 +369,7 @@ An explicit live Python preparation has this shape:
 
 ```text
 server -> worker  {"kind":"prepare_python","packages":["py-yaml12"]}
-worker -> server  {"kind":"resolve_python","request":{"requirements":{"packages":["numpy","pandas","py-yaml12"]},"retained_requirements":{"packages":["numpy","pandas","py-yaml12"]},"environment":{}}}
+worker -> server  {"kind":"resolve_python","request":{"requirements":{"packages":["numpy","pandas","py-yaml12"]},"retained_requirements":{"packages":["numpy","pandas","py-yaml12"]}}}
 server -> worker  {"kind":"python_resolved","python":"..."}
 # after live activation
 worker -> server  {"kind":"python_activated","requirements":{"packages":["numpy","pandas","py-yaml12"]}}
@@ -372,6 +387,7 @@ For a mixed public preparation, an accepted Python environment remains retained 
 A server-managed worker may send `resolve_python` during an evaluation, live preparation, or preceding idle callback when reticulate invokes its internal `uv_get_or_create_env` binding.
 The request contains both the complete physical resolver manifest and the complete logical retained manifest, not a history delta.
 Their packages and `exclude_newer` must match, while the physical manifest may select the exact active Python patch version without replacing the logical constraint that will be retained.
+Every package entry must be a named PEP 508 registry requirement; local sources, paths, file and direct URLs, editable requirements, and local archives or projects are rejected before host resolution starts.
 The server performs the resolution while the worker waits and replies with exactly one `python_resolved` or `python_resolution_failed` frame on the same sideband.
 No request ID is needed because the worker can have only one such synchronous request in flight.
 Every successful reply remains a candidate until a matching `python_activated` event arrives.
@@ -385,7 +401,8 @@ A pre-initialization `py_require()` call updates only the worker's lazy reticula
 It is not durable across worker loss until Python initialization resolves and reports the manifest through `python_activated`, or explicit preparation materializes it and returns `python_prepared`.
 
 A server-managed worker may send `resolve_python_version` during an evaluation, live preparation, or preceding idle callback when reticulate invokes its internal `resolve_python_version` binding.
-The request contains only version constraints and the current `UV_*` settings other than `UV_OFFLINE`.
+The request contains only version constraints.
+The server validates every constraint before starting the version resolver.
 The server runs reticulate's version selection while the worker waits and replies with exactly one `python_version_resolved` or `python_version_resolution_failed` frame.
 This request returns no interpreter, creates no environment candidate, and does not affect retained Python state.
 The selected version can support managed-Python operations such as displaying or writing the current requirements; an eventual tool command from `uv_run_tool()` still executes inside the worker sandbox.
@@ -709,13 +726,15 @@ There is no relative ordering guarantee between those pipes and sideband output,
 The built-in worker receives either a server-managed requirement manifest selected by startup or explicit preparation, or the caller's existing `RETICULATE_PYTHON` value when no managed resolution occurred.
 Both sources must select Python 3.10 or later.
 The Python bridge checks the initialized interpreter before its first cell and rejects an older version before dispatch.
+For a nonempty user-selected value other than `managed`, the server does not install its managed resolver hooks and rejects managed requirement additions.
 Before initializing R, it forces `UV_OFFLINE=1`, overwriting any inherited value before user code runs.
 For a server-managed worker, MCP Console seeds reticulate's manifest and replaces the namespace bindings for its internal `uv_get_or_create_env` and `resolve_python_version` functions.
 It does not replace `py_require()`, so reticulate retains its package attribution, manifest history, compatibility checks, activation, and configuration behavior within the live R process.
 When Python is already initialized, only additive package requirements are supported.
-The worker sends the complete physical resolver manifest, the logical manifest to retain after successful activation, and its current `UV_*` settings except `UV_OFFLINE`, then waits for the server's resolver reply before returning to reticulate.
-The two manifests must agree on packages and `exclude_newer`; only the physical manifest may substitute the exact active Python patch version.
-Those settings are not retained after the resolution.
+The `requirements` manifest tells the host resolver which environment to materialize for this request.
+The `retained_requirements` manifest is reticulate's current `py_require()` constraint state, which the server retains for later worker generations after a successful activation.
+The two manifests must agree on packages and `exclude_newer`, but their Python versions may differ: for example, `requirements` may select the active `3.12.11` interpreter while `retained_requirements` preserves the `>=3.11` constraint.
+The worker sends both complete manifests, then waits for the server's resolver reply before returning to reticulate.
 Reticulate checks that each candidate uses the exact live `libpython`, runs `activate_this.py`, swaps its configuration, and updates its manifest.
 The worker then sends `python_activated`, and the server immediately retains the matching candidate.
 The interpreter is not restarted, so its `__main__` namespace and existing Python objects remain available.
@@ -805,11 +824,11 @@ The private relay transport preserves worker standard-output and standard-error 
 Worker failures are reported as plain-text MCP tool errors even though the private relay transport has structured process and infrastructure events.
 Concurrent MCP `send` calls are outside the current contract.
 The default IR library supplies tidyverse, including dplyr, pillar, and tibble, plus the worker's GitHub reticulate build, DBI, DuckDB, arrow, nanoarrow, and their dependency sets, without attaching packages automatically.
-Managed-Python preflight also requires an installed reticulate R package in the host R library.
+Managed-Python preflight uses the reticulate installation in that default library.
 Tidyverse supplies dbplyr for lazy dplyr relations created from `sql_connection()`.
-MCP Console does not automatically install that host-bootstrap package.
 The default preflights must be able to resolve or provision the R library, interpreter, and initial requirements outside the sandbox.
 An explicitly configured interpreter must be initializable under the offline worker policy.
+Managed Python requirements are unavailable when a nonempty inherited `RETICULATE_PYTHON` value other than `managed` selects that interpreter.
 R requirements, the selected IR library, and Python requirements are retained only in server memory.
 Server-managed workers can activate additive package requirements and report each accepted manifest after startup through evaluated `py_require()` calls or idle explicit preparation.
 Runtime Python version changes, `exclude_newer` changes, and non-additive package changes after initialization are not supported by the layering path.

@@ -29,6 +29,10 @@ The worker protocol is unchanged and is documented in [`WORKER_PROTOCOL.md`](WOR
 The server owns worker-generation state, evaluation and preparation admission, output projection, retained requirements, and host resolvers.
 R, Python, and DuckDB requirement resolution remains outside the sandbox.
 For live Python preparation, the server resolves candidate environments, while the worker owns reticulate manifest materialization and activation.
+Python resolver events carry only requirement manifests or version constraints, not environment settings.
+The server validates managed packages as named PEP 508 registry requirements and applies the trusted resolver configuration captured at server startup, so evaluated code cannot configure host resolution through the relay.
+It accepts managed Python version numbers and supported PEP 440 comparison specifiers, rejecting interpreter selectors before starting a host resolver.
+A nonempty user-selected `RETICULATE_PYTHON` value disables managed Python requirements for the built-in worker; the existing custom-worker policy is separate and also rejects managed Python requirements.
 The relay owns the worker process and its local transports, translation between this protocol and the worker sideband, signal delivery, bounded termination, and reaping.
 
 ## Framing and raw bytes
@@ -88,8 +92,8 @@ The relay can emit these flat frames:
 | `{"kind":"input_cancelled"}` | Forward managed input cancellation. |
 | `{"kind":"r_prepared","library":"..."}` | Complete live R preparation successfully. |
 | `{"kind":"r_preparation_failed","message":"..."}` | Complete live R preparation with an ordinary failure. |
-| `{"kind":"resolve_python","request":{...}}` | Request host Python-environment resolution. |
-| `{"kind":"resolve_python_version","request":{...}}` | Request host Python-version selection. |
+| `{"kind":"resolve_python","request":{"requirements":{"packages":["numpy","pandas"]},"retained_requirements":{"packages":["numpy","pandas"]}}}` | Request host Python-environment resolution. |
+| `{"kind":"resolve_python_version","request":{"constraints":[]}}` | Request host Python-version selection. |
 | `{"kind":"python_activated","requirements":{...}}` | Report a retained managed-Python activation. |
 | `{"kind":"python_prepared"}` | Return the worker's explicit Python-preparation success result, including before Python initialization. |
 | `{"kind":"python_preparation_failed","message":"..."}` | Complete live Python preparation with an ordinary failure. |
@@ -110,6 +114,9 @@ The relay can emit these flat frames:
 
 Worker semantic events are the worker-sideband message variants flattened into the relay event namespace.
 The relay translates them without changing the worker-sideband framing or message shapes.
+Unknown event kinds and fields are rejected.
+Payload-free events contain exactly the shown `kind` field: `ready`, `input_received`, `input_cancelled`, `python_prepared`, `completed`, `stdout_closed`, `stderr_closed`, `worker_sideband_closed`, and `shutdown_started` reject every additional field.
+Their serialized JSON remains unchanged.
 
 ## Event production and ordering
 

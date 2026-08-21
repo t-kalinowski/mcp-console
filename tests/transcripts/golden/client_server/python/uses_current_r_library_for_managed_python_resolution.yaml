@@ -3,7 +3,7 @@
 ---
 id: 3
 send:
-  r: restart_marker <- 42L
+  r: initial_r_library <- .libPaths()[[1L]]
 result:
   content:
     - type: text
@@ -14,37 +14,43 @@ id: 4
 session:
   action: prepare
   requirements:
-    python:
-      - mcp-console-blocked-live-preparation
+    r:
+      - zeallot
 result:
   content:
     - type: text
-      text: Python preparation cancelled by restart
-  isError: true
+      text: "[prepared]"
+  isError: false
 ---
 id: 5
-send: {}
+send:
+  r: |
+    cat(jsonlite::toJSON(.libPaths()[[1L]], auto_unbox = TRUE))
 result:
   content:
     - type: text
-      text: "[session is preparing requirements]"
-  isError: true
+      text: '"<current managed R library>"'
+  isError: false
 ---
 id: 6
-session:
-  action: prepare
-  requirements:
-    python:
-      - py-yaml12
+send:
+  r: |
+    reticulate::py_require("py-yaml12")
+    invisible(reticulate::py_config())
 result:
   content:
     - type: text
-      text: session is preparing requirements
-  isError: true
+      text: "[done]"
+  isError: false
 ---
 id: 7
 session:
   action: restart
+  requirements:
+    r:
+      - praise
+    python:
+      - six
 result:
   content:
     - type: text
@@ -57,14 +63,10 @@ result:
 id: 8
 send:
   r: |
-    requirements <- reticulate::py_require()
-    stopifnot(
-      !exists("restart_marker", inherits = FALSE),
-      !"mcp-console-blocked-live-preparation" %in% requirements$packages
-    )
+    cat(jsonlite::toJSON(.libPaths()[[1L]], auto_unbox = TRUE))
 result:
   content:
     - type: text
-      text: "[done]"
+      text: '"<current managed R library>"'
   isError: false
 ...

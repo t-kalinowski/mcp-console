@@ -62,26 +62,14 @@ session:
     r:
       - zeallot
     python:
-      - not a valid requirement !!!
+      - example @ https://example.invalid/example.whl
 result:
   content:
     - type: text
-      text: |-
-        managed Python resolution failed:
-        resolver input:
-        {
-          "python": "3.12.x (reticulate default)",
-          "packages": [
-            "numpy",
-            "pandas",
-            "not a valid requirement !!!"
-          ]
-        }
-        uv output:
-        error: Failed to parse: `not a valid requirement !!!`
-          Caused by: Expected one of `@`, `(`, `<`, `=`, `>`, `~`, `!`, `;`, found `a`
-            not a valid requirement !!!
-                ^
+      text: >-
+        Python requirement `example @ https://example.invalid/example.whl` is
+        not accepted: host-side managed resolution accepts named package
+        requirements only
   isError: true
 ---
 id: 6

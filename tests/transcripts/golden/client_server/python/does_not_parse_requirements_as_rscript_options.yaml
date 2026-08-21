@@ -13,23 +13,8 @@ session:
 result:
   content:
     - type: text
-      text: |-
-        managed Python resolution failed:
-        resolver input:
-        {
-          "python": "3.12.x (reticulate default)",
-          "packages": [
-            "numpy",
-            "pandas",
-            "-e",
-            "base::writeLines('executed', base::Sys.getenv('MCP_CONSOLE_HOST_MARKER'))"
-          ]
-        }
-        uv output:
-        error: unexpected argument '-e' found
-
-        Usage: uv tool run [OPTIONS] [COMMAND]
-
-        For more information, try '--help'.
+      text: >-
+        Python requirement `-e` is not accepted: host-side managed resolution
+        accepts named package requirements only
   isError: true
 ...
