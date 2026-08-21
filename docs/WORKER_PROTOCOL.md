@@ -224,7 +224,7 @@ Console text is carried directly in a JSON string, with `console_output` and `co
 JSON escaping represents newlines, quotes, and other control characters on the wire.
 
 Worker standard output and standard error are not worker-sideband frames.
-Each relay pipe reader reads raw byte chunks without line buffering and validates each chunk independently as UTF-8.
+After a worker standard-output or standard-error fd becomes readable, its relay pipe reader accumulates only bytes that are immediately available, up to 8 KiB, without line buffering, and validates the resulting chunk independently as UTF-8.
 A completely valid chunk uses a readable `stdout` or `stderr` JSON string in the outer relay frame; an invalid chunk uses padded standard base64 in `stdout_bytes` or `stderr_bytes`.
 The relay keeps no incremental UTF-8 state across chunks, so a scalar split across reads can use the byte form.
 Both forms preserve arbitrary bytes from the worker and its descendants even though relay stdout is a UTF-8 JSONL protocol stream.

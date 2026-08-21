@@ -1260,6 +1260,13 @@ mod platform {
         Stderr,
     }
 
+    enum OutputRead {
+        MoreMayBeAvailable,
+        Drained,
+        Closed,
+        EventWriterStopped,
+    }
+
     impl OutputReader {
         fn start<Stream>(
             mut stream: Stream,
@@ -1288,21 +1295,11 @@ mod platform {
                         }
                     };
                     if ready.stream {
-                        match stream.read(&mut buffer) {
-                            Ok(0) => break,
-                            Ok(length) => {
-                                if events.send(output_event(kind, &buffer[..length])).is_err() {
-                                    break;
-                                }
-                            }
-                            Err(error)
-                                if matches!(
-                                    error.kind(),
-                                    std::io::ErrorKind::Interrupted
-                                        | std::io::ErrorKind::WouldBlock
-                                ) => {}
+                        match read_output_burst(&mut stream, kind, &events, &mut buffer) {
+                            Ok(OutputRead::MoreMayBeAvailable | OutputRead::Drained) => {}
+                            Ok(OutputRead::Closed | OutputRead::EventWriterStopped) => break,
                             Err(error) => {
-                                failures.report(format!("worker output read failed: {error}"));
+                                failures.report(error);
                                 break;
                             }
                         }
@@ -1337,6 +1334,35 @@ mod platform {
         drain_buffered_output(&mut stream, kind, events, &mut buffer)
     }
 
+    fn read_output_burst(
+        stream: &mut impl Read,
+        kind: OutputStream,
+        events: &EventSender,
+        buffer: &mut [u8],
+    ) -> Result<OutputRead, String> {
+        let mut length = 0;
+        let state = loop {
+            match stream.read(&mut buffer[length..]) {
+                Ok(0) => break OutputRead::Closed,
+                Ok(read) => {
+                    length += read;
+                    if length == buffer.len() {
+                        break OutputRead::MoreMayBeAvailable;
+                    }
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    break OutputRead::Drained;
+                }
+                Err(error) => return Err(format!("worker output read failed: {error}")),
+            }
+        };
+        if length > 0 && events.send(output_event(kind, &buffer[..length])).is_err() {
+            return Ok(OutputRead::EventWriterStopped);
+        }
+        Ok(state)
+    }
+
     fn output_event(stream: OutputStream, bytes: &[u8]) -> RelayEvent {
         match (stream, std::str::from_utf8(bytes)) {
             (OutputStream::Stdout, Ok(data)) => RelayEvent::Stdout {
@@ -1360,18 +1386,8 @@ mod platform {
         events: &EventSender,
         buffer: &mut [u8],
     ) -> Result<(), String> {
-        loop {
-            match stream.read(buffer) {
-                Ok(0) => break,
-                Ok(length) => {
-                    if events.send(output_event(kind, &buffer[..length])).is_err() {
-                        break;
-                    }
-                }
-                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
-                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
-                Err(error) => return Err(format!("worker output read failed: {error}")),
-            }
+        while let OutputRead::MoreMayBeAvailable = read_output_burst(stream, kind, events, buffer)?
+        {
         }
         Ok(())
     }

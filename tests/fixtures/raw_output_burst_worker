@@ -1,0 +1,59 @@
+import json
+import os
+
+
+def send(descriptor: int, message: dict[str, object]) -> None:
+    frame = json.dumps(message, separators=(",", ":")).encode("utf-8") + b"\n"
+    while frame:
+        frame = frame[os.write(descriptor, frame) :]
+
+
+reader = int(os.environ.pop("MCP_CONSOLE_SIDEBAND_READ_FD"))
+writer = int(os.environ.pop("MCP_CONSOLE_SIDEBAND_WRITE_FD"))
+send(writer, {"kind": "ready"})
+command = b""
+while not command.endswith(b"\n"):
+    chunk = os.read(reader, 4096)
+    assert chunk
+    command += chunk
+assert json.loads(command) == {
+    "kind": "evaluate",
+    "language": "r",
+    "source": "burst",
+}
+
+stdout_parts = (
+    b"o",
+    b"no-newline",
+    b"\r",
+    "caf\u00e9".encode(),
+    b"\xf0",
+    b"\x9f",
+    b"\x91",
+    b"\xa9",
+    b"\xff",
+    b"\n",
+)
+stderr_parts = (
+    b"e",
+    b"no-newline",
+    b"\r",
+    "na\u00efve".encode(),
+    b"\xf0",
+    b"\x9f",
+    b"\x92",
+    b"\xa5",
+    b"\xfe",
+    b"\n",
+)
+iterations = int(os.environ["MCP_CONSOLE_BURST_ITERATIONS"])
+for _ in range(iterations):
+    for _ in range(4):
+        for stdout in stdout_parts:
+            assert os.write(1, stdout) == len(stdout)
+    for _ in range(4):
+        for stderr in stderr_parts:
+            assert os.write(2, stderr) == len(stderr)
+send(writer, {"kind": "completed"})
+os.close(reader)
+os.close(writer)

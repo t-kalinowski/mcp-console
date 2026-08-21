@@ -41,13 +41,13 @@ The worker sideband is also assembled incrementally with cancellable reads.
 A dedicated thread cannot safely use a blocking `read_line()`: a worker descendant can retain the pipe after writing a partial frame, which would prevent the relay from joining that thread and flushing its final output and retirement events.
 Killing the relay to release the read would discard events already buffered inside it.
 
-Raw worker standard-output and standard-error data is read in chunks of at most 8 KiB.
+After a worker standard-output or standard-error fd becomes readable, its reader accumulates only bytes that are immediately available, up to 8 KiB, and emits them as one chunk.
 Each chunk is validated independently.
 An entirely valid UTF-8 chunk is emitted as a readable JSON string in `stdout` or `stderr`.
 An invalid UTF-8 chunk is encoded with padded standard base64 in `stdout_bytes` or `stderr_bytes`.
 The relay does not carry incremental UTF-8 state across chunks, so a scalar split across reads can cause each affected chunk to use the byte form.
 The server decodes byte-form chunks before applying its existing per-stream UTF-8 completion and MCP projection rules.
-The relay does not impose line buffering or use a coalescing timer.
+The relay does not impose line buffering, wait for later bytes, or use a coalescing timer.
 Worker-sideband text and stdin remain UTF-8 JSON strings.
 
 ## Server commands
