@@ -25,10 +25,11 @@ id: 4
 send:
   r: |
     dyn.load("./mcp_test_input_handler.so")
+    cell_start_callback_ran <- FALSE
     invisible(.Call(
       "mcp_test_register_input_handler",
       file.path(tempdir(), "cell-start-handler-fifo"),
-      function() cat("cell start callback\n")
+      function() cell_start_callback_ran <<- TRUE
     ))
 result:
   content:
@@ -38,13 +39,12 @@ result:
 ---
 id: 5
 send:
-  r: "cat(\"cell body\\n\")"
+  r: "cat(cell_start_callback_ran, \"\\ncell body\\n\", sep = \"\")"
 result:
   content:
     - type: text
       text: |
-        cell start callback
-        [output produced while idle]
+        TRUE
         cell body
   isError: false
 ...

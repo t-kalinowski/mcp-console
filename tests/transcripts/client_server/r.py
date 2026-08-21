@@ -98,15 +98,17 @@ def test_services_r_input_handlers_at_cell_boundaries(binary: Path) -> Transcrip
         assert last_tool_text(client) == "cell end callback\n"
 
         # Register an input handler while its FIFO is empty, then make the
-        # descriptor readable before submitting the next cell. The completed
-        # write is the readiness barrier for the initial boundary turn.
+        # descriptor readable before submitting the next cell. Whether the
+        # handler runs while idle or during the initial boundary turn, the
+        # submitted source must observe its state change.
         # fmt: r
         r = code(r"""
             dyn.load("./mcp_test_input_handler.so")
+            cell_start_callback_ran <- FALSE
             invisible(.Call(
               "mcp_test_register_input_handler",
               file.path(tempdir(), "cell-start-handler-fifo"),
-              function() cat("cell start callback\n")
+              function() cell_start_callback_ran <<- TRUE
             ))
             """)
         client.send(r=r)
@@ -118,12 +120,8 @@ def test_services_r_input_handlers_at_cell_boundaries(binary: Path) -> Transcrip
             client,
         )
         fifo.write_bytes(b"x")
-        client.send(r='cat("cell body\\n")')
-        assert last_tool_text(client) == (
-            "cell start callback\n"
-            "[output produced while idle]\n"
-            "cell body\n"
-        )
+        client.send(r='cat(cell_start_callback_ran, "\\ncell body\\n", sep = "")')
+        assert last_tool_text(client) == "TRUE\ncell body\n"
         return client._finish()
 
 

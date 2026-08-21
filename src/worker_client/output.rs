@@ -938,6 +938,20 @@ fn drain_through(state: &mut OutputTapeState, cut: OutputCut) -> Response {
     let mut output = ResponseBuilder::new();
 
     for (sequence, event) in events {
+        match &event {
+            OutputEvent::DirectStdout(DirectOutputEvent::Bytes(_)) => {
+                flush_direct_decoder_before(&mut output, &mut state.direct_stderr, sequence);
+            }
+            OutputEvent::DirectStderr(DirectOutputEvent::Bytes(_)) => {
+                flush_direct_decoder_before(&mut output, &mut state.direct_stdout, sequence);
+            }
+            _ => flush_direct_decoders_before(
+                &mut output,
+                &mut state.direct_stdout,
+                &mut state.direct_stderr,
+                sequence,
+            ),
+        }
         match event {
             OutputEvent::DirectStdout(event) => {
                 append_direct_output(&mut output, &mut state.direct_stdout, sequence, event);
@@ -971,14 +985,7 @@ fn drain_through(state: &mut OutputTapeState, cut: OutputCut) -> Response {
                     output.notice(WORKER_STOPPED_NOTICE);
                 }
             }
-            OutputEvent::Truncated(truncated) => {
-                flush_direct_decoders(
-                    &mut output,
-                    &mut state.direct_stdout,
-                    &mut state.direct_stderr,
-                );
-                output.truncation(truncated);
-            }
+            OutputEvent::Truncated(truncated) => output.truncation(truncated),
         }
     }
 
@@ -1018,6 +1025,33 @@ fn flush_direct_decoder(output: &mut ResponseBuilder, pending: &mut DirectDecode
     output.text(String::from_utf8_lossy(&pending.bytes));
     pending.bytes.clear();
     pending.origin = None;
+}
+
+fn flush_direct_decoder_before(
+    output: &mut ResponseBuilder,
+    pending: &mut DirectDecoder,
+    sequence: u64,
+) {
+    if pending.origin.is_some_and(|origin| origin < sequence) {
+        flush_direct_decoder(output, pending);
+    }
+}
+
+fn flush_direct_decoders_before(
+    output: &mut ResponseBuilder,
+    stdout: &mut DirectDecoder,
+    stderr: &mut DirectDecoder,
+    sequence: u64,
+) {
+    let stdout_origin = stdout.origin.filter(|origin| *origin < sequence);
+    let stderr_origin = stderr.origin.filter(|origin| *origin < sequence);
+    if stdout_origin <= stderr_origin {
+        flush_direct_decoder_before(output, stdout, sequence);
+        flush_direct_decoder_before(output, stderr, sequence);
+    } else {
+        flush_direct_decoder_before(output, stderr, sequence);
+        flush_direct_decoder_before(output, stdout, sequence);
+    }
 }
 
 fn flush_direct_decoders(
@@ -1361,7 +1395,14 @@ mod tests {
         let mut prelude = output.take_prelude();
         stdout.push(&[0xac]);
         prelude.extend_cell_after_idle_prelude(output.take());
-        assert_text(prelude, "idle text�\n[output produced while idle]\n�");
+        assert_text(prelude, "�idle text\n[output produced while idle]\n�");
+
+        let output = OutputTape::with_limits(limits(100, 100, 100));
+        output.direct_stdout().push(&[0xe2]);
+        output.push_image("image".to_string(), "image/test".to_string(), None);
+        let content = response_content(output.take_prelude());
+        assert!(matches!(&content[0], Content::Text(text) if text == "�"));
+        assert!(matches!(&content[1], Content::Image { data, .. } if data == "image"));
     }
 
     #[cfg(target_os = "macos")]
