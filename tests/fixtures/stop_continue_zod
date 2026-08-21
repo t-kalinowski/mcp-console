@@ -1,0 +1,29 @@
+#!/usr/bin/env python3
+
+import os
+import signal
+from pathlib import Path
+
+
+def main() -> None:
+    temporary = Path(os.environ["TMPDIR"])
+    marker = temporary / "zod-stop-continue-worker"
+    pending_marker = marker.with_suffix(".pending")
+    pending_marker.write_text(
+        f"{os.getpid()} {os.getppid()} {os.getpgrp()}",
+        encoding="utf-8",
+    )
+    pending_marker.replace(marker)
+
+    # Keep the relay's supervision interrupt observable without terminating
+    # this pre-exec wrapper when the stopped process is continued.
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
+    os.kill(os.getpid(), signal.SIGSTOP)
+
+    (temporary / "zod-stop-continue-resumed").touch()
+    zod = Path(__file__).with_name("zod")
+    os.execv(zod, [str(zod)])
+
+
+if __name__ == "__main__":
+    main()
