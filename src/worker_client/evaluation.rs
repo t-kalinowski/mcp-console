@@ -36,7 +36,7 @@ struct EvaluationState {
 #[derive(Clone, Copy)]
 enum EvaluationPhase {
     Evaluating,
-    CellCompletionGrace,
+    CellCompletionGrace(Instant),
     ReplacementStarting,
     Complete(CompletionKind),
 }
@@ -132,18 +132,26 @@ impl Evaluation {
             .lock()
             .map_err(|_| "worker evaluation state lock poisoned".to_string())?;
         state.restart_reserved = true;
+        if let EvaluationPhase::CellCompletionGrace(deadline) = state.phase {
+            drop(state);
+            std::thread::sleep(deadline.saturating_duration_since(Instant::now()));
+            self.finish_cell_completion_grace();
+            state = self
+                .state
+                .lock()
+                .map_err(|_| "worker evaluation state lock poisoned".to_string())?;
+        }
         let waiting = state.waiting;
-        let unfinished = matches!(
-            state.phase,
-            EvaluationPhase::Evaluating | EvaluationPhase::ReplacementStarting
-        );
+        let unfinished = !matches!(state.phase, EvaluationPhase::Complete(_));
         let completion = match state.phase {
             EvaluationPhase::Complete(completion) if !state.completion_collected => {
                 Some(completion)
             }
-            EvaluationPhase::CellCompletionGrace => Some(CompletionKind::Cell),
             EvaluationPhase::Complete(_) => None,
             EvaluationPhase::Evaluating | EvaluationPhase::ReplacementStarting => None,
+            EvaluationPhase::CellCompletionGrace(_) => {
+                unreachable!("completion grace is handled before restart reservation")
+            }
         };
         Ok(RestartReservation {
             evaluation: self.clone(),
@@ -279,11 +287,12 @@ impl Evaluation {
     }
 
     pub(super) fn complete_cell_after_grace(self: &Arc<Self>) {
+        let deadline = Instant::now() + CELL_COMPLETION_GRACE;
         let Ok(mut state) = self.state.lock() else {
             return;
         };
         state.input_report_at = None;
-        state.phase = EvaluationPhase::CellCompletionGrace;
+        state.phase = EvaluationPhase::CellCompletionGrace(deadline);
         state.completion_checkpoint = None;
         state.completion_collected = false;
         self.changed.notify_one();
@@ -291,10 +300,25 @@ impl Evaluation {
 
         let evaluation = self.clone();
         self.runtime.spawn(async move {
-            tokio::time::sleep(CELL_COMPLETION_GRACE).await;
-            let checkpoint = evaluation.output.checkpoint();
-            evaluation.complete(Ok(()), CompletionKind::Cell, Some(checkpoint));
+            tokio::time::sleep_until(tokio::time::Instant::from_std(deadline)).await;
+            evaluation.finish_cell_completion_grace();
         });
+    }
+
+    fn finish_cell_completion_grace(&self) {
+        let Ok(mut state) = self.state.lock() else {
+            return;
+        };
+        let EvaluationPhase::CellCompletionGrace(deadline) = state.phase else {
+            return;
+        };
+        if Instant::now() < deadline {
+            return;
+        }
+        state.phase = EvaluationPhase::Complete(CompletionKind::Cell);
+        state.completion_checkpoint = Some(self.output.checkpoint());
+        state.completion_collected = false;
+        self.changed.notify_one();
     }
 
     pub(super) fn reject_new_cell_message(&self) -> &'static str {
@@ -381,8 +405,9 @@ impl Evaluation {
                         changed.await;
                         continue;
                     }
-                    EvaluationStatus::Grace(_) => {
-                        unreachable!("the deadline makes input state reportable")
+                    EvaluationStatus::Grace(grace) => {
+                        let _ = tokio::time::timeout(grace, changed).await;
+                        continue;
                     }
                 }
             }
@@ -394,8 +419,9 @@ impl Evaluation {
                 match self.reported_state(true)? {
                     EvaluationStatus::Report(state) => break Ok(state),
                     EvaluationStatus::Waiting => continue,
-                    EvaluationStatus::Grace(_) => {
-                        unreachable!("the deadline makes input state reportable")
+                    EvaluationStatus::Grace(grace) => {
+                        let _ = tokio::time::timeout(grace, self.changed.notified()).await;
+                        continue;
                     }
                 }
             }
@@ -403,6 +429,7 @@ impl Evaluation {
     }
 
     fn reported_state(&self, at_deadline: bool) -> Result<EvaluationStatus, String> {
+        self.finish_cell_completion_grace();
         let mut state = self
             .state
             .lock()
@@ -429,7 +456,11 @@ impl Evaluation {
                     self.output.take(),
                 )));
             }
-            EvaluationPhase::CellCompletionGrace => return Ok(EvaluationStatus::Waiting),
+            EvaluationPhase::CellCompletionGrace(deadline) => {
+                return Ok(EvaluationStatus::Grace(
+                    deadline.saturating_duration_since(Instant::now()),
+                ));
+            }
             EvaluationPhase::ReplacementStarting if at_deadline => {
                 return Ok(EvaluationStatus::Report(
                     EvaluationWait::ReplacementStarting(self.output.take()),
