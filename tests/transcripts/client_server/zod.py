@@ -902,8 +902,9 @@ def test_custom_worker_reports_idle_input_before_preparation_failure(
             '[input requested: "idle> "]\n'
             '[idle R callback requested input "idle> " during requirement '
             "preparation; collect callback input with send before preparing requirements]\n"
+            "[worker terminated by signal 9]\n"
             "[worker stopped: in-memory state lost]"
-        )
+        ), result
         return client._finish()
 
 
@@ -1025,6 +1026,7 @@ def test_preserves_invalid_raw_output_when_worker_exits(binary: Path) -> Transcr
         assert result["isError"] is True, result
         failure = (
             "\n[worker sideband read failed: worker sideband closed]\n"
+            "[worker exited with status 86]\n"
             "[worker stopped: in-memory state lost]\n"
             "[starting new worker]\n"
             "[idle]"
@@ -1058,26 +1060,38 @@ def test_preserves_raw_output_before_malformed_sideband_failure(
         result = client.transcript[-1]["result"]
         assert result["isError"] is True, result
         output = result["content"][0]["text"]
-        failure_start = output.find("\n[worker sideband read failed: ")
-        assert failure_start >= 0, output[-200:]
-        failure = output[failure_start:]
-        assert failure.endswith(
-            "]\n[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
-        ), failure
-
-        prefix = f"zod malformed {stream}: "
-        raw_output = output[:failure_start]
         marker_prefix = f"zod expected {stream} malformed tail: "
-        raw_output, tail_size = remove_length_marker(raw_output, marker_prefix)
-        assert raw_output == large_output(prefix) + ("z" * tail_size), (
-            f"malformed frame lost {stream} bytes"
-        )
+        output, tail_size = remove_length_marker(output, marker_prefix)
+        prefix = f"zod malformed {stream}: "
+        raw = large_output(prefix) + ("z" * tail_size)
+        failure_start = output.find("[worker sideband read failed: ")
+        assert failure_start >= 0, output[-200:]
+        failure_end = output.find("\n", failure_start)
+        assert failure_end >= 0, output[-200:]
+        failure = output[failure_start:failure_end]
+        notices = [
+            failure,
+            "[worker terminated by signal 9]",
+            "[worker stopped: in-memory state lost]",
+            "[starting new worker]",
+            "[idle]",
+        ]
+        assert output.count(raw) == 1, f"malformed frame lost {stream} bytes"
+        assert all(output.count(notice) == 1 for notice in notices), repr(output)
+        assert [output.index(notice) for notice in notices] == sorted(
+            output.index(notice) for notice in notices
+        ), repr(output)
+        remainder = output.replace(raw, "")
+        for notice in notices:
+            remainder = remainder.replace(notice, "")
+        assert not remainder.replace("\n", ""), repr(output)
         result["content"][0]["text"] = (
-            prefix
-            + "<large output>\n"
-            + "[worker sideband read failed: <invalid frame>]\n"
-            + "[worker stopped: in-memory state lost]\n"
-            + "[starting new worker]\n[idle]"
+            f"{prefix}<large output>\n"
+            "<cross-source position follows serialized observation>\n"
+            "[worker sideband read failed: <invalid frame>]\n"
+            "[worker terminated by signal 9]\n"
+            "[worker stopped: in-memory state lost]\n"
+            "[starting new worker]\n[idle]"
         )
 
     transcript, standard_error = client._finish_with_standard_error()
@@ -1092,7 +1106,7 @@ def test_preserves_raw_output_before_malformed_sideband_failure(
     return transcript
 
 
-def test_preserves_raw_output_before_semantically_invalid_sideband_message(
+def test_preserves_raw_output_during_semantically_invalid_sideband_message(
     binary: Path,
 ) -> Transcript:
     zod = Path(__file__).resolve().parents[2] / "fixtures" / "zod"
@@ -1105,21 +1119,31 @@ def test_preserves_raw_output_before_semantically_invalid_sideband_message(
     client.send(r="unexpected input receipt after stdout")
     result = client.transcript[-1]["result"]
     assert result["isError"] is True, result
-    failure = (
-        "\n[worker reported received input without requesting it]\n"
-        "[worker stopped: in-memory state lost]\n"
-        "[starting new worker]\n[idle]"
-    )
     output = result["content"][0]["text"]
-    assert output.endswith(failure), output[-200:]
-    raw_output = output.removesuffix(failure)
     marker_prefix = "zod expected semantic tail: "
-    raw_output, tail_size = remove_length_marker(raw_output, marker_prefix)
+    output, tail_size = remove_length_marker(output, marker_prefix)
     prefix = "zod unexpected input receipt: "
-    assert raw_output == large_output(prefix) + ("z" * tail_size), (
-        "semantic failure lost raw stdout bytes"
+    raw = large_output(prefix) + ("z" * tail_size)
+    notices = [
+        "[worker reported received input without requesting it]",
+        "[worker terminated by signal 9]",
+        "[worker stopped: in-memory state lost]",
+        "[starting new worker]",
+        "[idle]",
+    ]
+    assert output.count(raw) == 1, "semantic failure lost raw stdout bytes"
+    assert all(output.count(notice) == 1 for notice in notices), repr(output)
+    assert [output.index(notice) for notice in notices] == sorted(
+        output.index(notice) for notice in notices
+    ), repr(output)
+    remainder = output.replace(raw, "")
+    for notice in notices:
+        remainder = remainder.replace(notice, "")
+    assert not remainder.replace("\n", ""), repr(output)
+    result["content"][0]["text"] = (
+        f"{prefix}<large output>\n"
+        "<cross-source position follows serialized observation>\n" + "\n".join(notices)
     )
-    result["content"][0]["text"] = prefix + "<large output>" + failure
     return client._finish()
 
 
@@ -1563,7 +1587,9 @@ def large_output(prefix: str) -> str:
 
 def remove_length_marker(output: str, marker_prefix: str) -> tuple[str, int]:
     marker_start = output.find(marker_prefix)
-    assert marker_start >= 0, f"raw output lost length marker {marker_prefix!r}"
+    assert marker_start >= 0, (
+        f"raw output lost length marker {marker_prefix!r}: {output[-500:]!r}"
+    )
     marker_end = output.find("\n", marker_start)
     if marker_end < 0:
         marker_end = len(output)
@@ -1595,17 +1621,31 @@ def test_orders_failure_and_replacement_output(binary: Path) -> Transcript:
         client.send(r="violate protocol after stdout")
         result = client.transcript[-1]["result"]
         assert result["isError"] is True, result
-        expected_failure = large_output("zod old stdout\n") + (
-            "\n[worker sent an unexpected ready message]"
-            "\n[worker stopped: in-memory state lost]"
-            "\n[starting new worker]"
-            "\nzod replacement startup ready"
-            "\n[idle]"
-        )
-        assert result["content"] == [{"type": "text", "text": expected_failure}], result
+        assert len(result["content"]) == 1, result
+        output = result["content"][0]["text"]
+        raw = large_output("zod old stdout\n")
+        notices = [
+            "[worker sent an unexpected ready message]",
+            "[worker terminated by signal 9]",
+            "[worker stopped: in-memory state lost]",
+            "[starting new worker]",
+            "zod replacement startup ready",
+            "[idle]",
+        ]
+        assert output.count(raw) == 1, "protocol failure lost raw stdout bytes"
+        assert all(output.count(notice) == 1 for notice in notices), repr(output)
+        assert [output.index(notice) for notice in notices] == sorted(
+            output.index(notice) for notice in notices
+        ), repr(output)
+        remainder = output.replace(raw, "")
+        for notice in notices:
+            remainder = remainder.replace(notice, "")
+        assert not remainder.replace("\n", ""), repr(output)
         result["content"][0]["text"] = (
             "zod old stdout\n<large output>\n"
+            "<cross-source position follows serialized observation>\n"
             "[worker sent an unexpected ready message]\n"
+            "[worker terminated by signal 9]\n"
             "[worker stopped: in-memory state lost]\n"
             "[starting new worker]\n"
             "zod replacement startup ready\n"
@@ -1617,7 +1657,7 @@ def test_orders_failure_and_replacement_output(binary: Path) -> Transcript:
         return client._finish()
 
 
-def test_preserves_checkpointed_raw_output_during_forced_stop(
+def test_preserves_raw_output_during_forced_stop(
     binary: Path,
 ) -> Transcript:
     zod = Path(__file__).resolve().parents[2] / "fixtures" / "zod"
@@ -1628,22 +1668,32 @@ def test_preserves_checkpointed_raw_output_during_forced_stop(
     client._initialize_and_list_tools()
 
     for stream in ("stdout", "stderr"):
-        client.send(r=f"force stop after checkpointed {stream}")
-        assert client.transcript[-1]["result"] == {
-            "content": [
-                {
-                    "type": "text",
-                    "text": (
-                        f"zod checkpointed {stream}: �\n"
-                        "[worker sent an unexpected ready message]\n"
-                        "[worker stopped: in-memory state lost]\n"
-                        "[starting new worker]\n"
-                        "[idle]"
-                    ),
-                }
-            ],
-            "isError": True,
-        }
+        client.send(r=f"force stop after raw {stream}")
+        result = client.transcript[-1]["result"]
+        assert result["isError"] is True, result
+        assert len(result["content"]) == 1, result
+        output = result["content"][0]["text"]
+        raw = f"zod retiring {stream}: �"
+        notices = [
+            "[worker sent an unexpected ready message]",
+            "[worker terminated by signal 9]",
+            "[worker stopped: in-memory state lost]",
+            "[starting new worker]",
+            "[idle]",
+        ]
+        assert output.count(raw) == 1, repr(output)
+        assert all(output.count(notice) == 1 for notice in notices), repr(output)
+        assert [output.index(notice) for notice in notices] == sorted(
+            output.index(notice) for notice in notices
+        ), repr(output)
+        remainder = output.replace(raw, "")
+        for notice in notices:
+            remainder = remainder.replace(notice, "")
+        assert not remainder.replace("\n", ""), repr(output)
+        result["content"][0]["text"] = (
+            f"{raw}\n<cross-source position follows serialized observation>\n"
+            + "\n".join(notices)
+        )
 
     client.send(r="echo")
     assert last_tool_text(client) == "zod: echo\n"
@@ -1715,10 +1765,12 @@ def test_reports_replacement_startup_failure_and_retry(
                     "type": "text",
                     "text": (
                         "[worker sideband read failed: worker sideband closed]\n"
+                        "[worker exited with status 86]\n"
                         "[worker stopped: in-memory state lost]\n"
                         "[starting new worker]\n"
                         "zod replacement startup failed\n"
-                        "[worker sideband read failed: worker sideband closed]"
+                        "[worker sideband read failed: worker sideband closed]\n"
+                        "[worker exited with status 86]"
                     ),
                 }
             ],
@@ -1790,6 +1842,7 @@ def test_polls_replacement_startup_after_send_timeout(binary: Path) -> Transcrip
                         "type": "text",
                         "text": (
                             "[worker sideband read failed: worker sideband closed]\n"
+                            "[worker exited with status 86]\n"
                             "[worker stopped: in-memory state lost]\n"
                             "[starting new worker]\n"
                             "[worker starting]"
@@ -2041,15 +2094,9 @@ def test_restarts_after_unexpected_sideband_message(binary: Path) -> Transcript:
     with tempfile.TemporaryDirectory() as temporary_directory:
         temporary_path = Path(temporary_directory)
         killpg_marker = temporary_path / "killpg-denied"
-        late_member_marker = temporary_path / "late-process-group-member"
-        late_member_reap_marker = temporary_path / "late-process-group-member-reaped"
         environment = os.environ.copy()
         environment["TMPDIR"] = temporary_directory
         environment["MCP_CONSOLE_TEST_KILLPG_MARKER"] = str(killpg_marker)
-        environment["MCP_CONSOLE_TEST_LATE_MEMBER_MARKER"] = str(late_member_marker)
-        environment["MCP_CONSOLE_TEST_LATE_MEMBER_REAP_MARKER"] = str(
-            late_member_reap_marker
-        )
         # The interposer removes its loader variable after reaching the server,
         # so sandbox-exec and Zod do not inherit it.
         environment["DYLD_INSERT_LIBRARIES"] = str(
@@ -2088,29 +2135,13 @@ def test_restarts_after_unexpected_sideband_message(binary: Path) -> Transcript:
             assert int(killpg_marker.read_text(encoding="utf-8")) == worker_group, (
                 "killpg denial targeted a different process group"
             )
-            assert late_member_marker.is_file(), (
-                "process-group snapshot interposer did not add a late member"
-            )
-            late_member, late_member_group = map(
-                int,
-                late_member_marker.read_text(encoding="utf-8").split(),
-            )
-            assert late_member > 0, "invalid late process-group member PID"
-            assert late_member_group == worker_group, (
-                "late member joined a different process group"
-            )
-            assert late_member_reap_marker.is_file(), (
-                "late process-group member was not reaped"
-            )
-            assert int(late_member_reap_marker.read_text(encoding="utf-8")) == (
-                late_member
-            ), "a different late process-group member was reaped"
             result = failed_call["result"]
             assert result["isError"] is True
             actual = result["content"][0]["text"]
             assert actual == (
                 "zod output before protocol failure\n"
                 "[worker sent an unexpected ready message]\n"
+                "[worker terminated by signal 9]\n"
                 "[worker stopped: in-memory state lost]\n"
                 "[starting new worker]\n"
                 "[idle]"
@@ -2141,6 +2172,7 @@ def test_restarts_after_worker_exit(binary: Path) -> Transcript:
                 "type": "text",
                 "text": (
                     "[worker sideband read failed: worker sideband closed]\n"
+                    "[worker exited with status 86]\n"
                     "[worker stopped: in-memory state lost]\n"
                     "[starting new worker]\n"
                     "[idle]"
@@ -2153,6 +2185,36 @@ def test_restarts_after_worker_exit(binary: Path) -> Transcript:
     assert last_tool_text(client) == "\n[idle]"
     client.send(r="input without request")
     assert last_tool_text(client) == "zod stdin: replacement\n"
+    return client._finish()
+
+
+def test_reports_unexpected_worker_exit_zero(binary: Path) -> Transcript:
+    zod = Path(__file__).resolve().parents[2] / "fixtures" / "zod"
+    client = McpClient(
+        binary,
+        ("serve", "--worker", str(zod)),
+    )
+    client._initialize_and_list_tools()
+
+    client.send(r="exit zero")
+    assert client.transcript[-1]["result"] == {
+        "content": [
+            {
+                "type": "text",
+                "text": (
+                    "[worker sideband read failed: worker sideband closed]\n"
+                    "[worker exited with status 0]\n"
+                    "[worker stopped: in-memory state lost]\n"
+                    "[starting new worker]\n"
+                    "[idle]"
+                ),
+            }
+        ],
+        "isError": True,
+    }
+
+    client.send(r="echo")
+    assert last_tool_text(client) == "zod: echo\n"
     return client._finish()
 
 
@@ -2369,9 +2431,20 @@ def test_restart_outer_force_stops_unresponsive_relay(binary: Path) -> Transcrip
     zod = Path(__file__).resolve().parents[2] / "fixtures" / "zod"
     with tempfile.TemporaryDirectory() as temporary_directory:
         temporary_path = Path(temporary_directory)
+        killpg_marker = temporary_path / "killpg-denied"
+        late_member_marker = temporary_path / "late-process-group-member"
+        late_member_reap_marker = temporary_path / "late-process-group-member-reaped"
         environment = os.environ.copy()
         environment["TMPDIR"] = temporary_directory
         environment["ZOD_REPORT_PROCESS_GROUP"] = "1"
+        environment["MCP_CONSOLE_TEST_KILLPG_MARKER"] = str(killpg_marker)
+        environment["MCP_CONSOLE_TEST_LATE_MEMBER_MARKER"] = str(late_member_marker)
+        environment["MCP_CONSOLE_TEST_LATE_MEMBER_REAP_MARKER"] = str(
+            late_member_reap_marker
+        )
+        environment["DYLD_INSERT_LIBRARIES"] = str(
+            build_killpg_denial_interposer(temporary_path)
+        )
         client = McpClient(
             binary,
             ("serve", "--worker", str(zod)),
@@ -2436,6 +2509,18 @@ def test_restart_outer_force_stops_unresponsive_relay(binary: Path) -> Transcrip
                 raise errors[0]
 
             assert restart_elapsed < 2, f"restart took {restart_elapsed:.3f} seconds"
+            assert int(killpg_marker.read_text(encoding="utf-8")) == worker_group
+            late_member, late_member_group = map(
+                int,
+                late_member_marker.read_text(encoding="utf-8").split(),
+            )
+            assert late_member > 0, "invalid late process-group member PID"
+            assert late_member_group == worker_group, (
+                "late member joined a different process group"
+            )
+            assert int(late_member_reap_marker.read_text(encoding="utf-8")) == (
+                late_member
+            ), "a different late process-group member was reaped"
             assert not process_group_exists(worker_group), (
                 "stopped relay process group outlived restart"
             )
@@ -2703,7 +2788,8 @@ def test_retries_initial_startup_silently(binary: Path) -> Transcript:
         result = client.transcript[-1]["result"]
         assert result["isError"] is True
         assert result["content"][0]["text"] == (
-            "[worker sideband read failed: worker sideband closed]"
+            "[worker sideband read failed: worker sideband closed]\n"
+            "[worker exited with status 86]"
         )
         startup_control.write_text("ready", encoding="utf-8")
         client.send(r="echo")
@@ -2838,6 +2924,7 @@ def test_restart_cancels_partial_sideband_frame(binary: Path) -> Transcript:
                 client,
             )
             descendant_group = int(marker.read_text(encoding="utf-8"))
+            release_partial_sideband(marker)
 
             restarted = client._start_session(action="restart")
             received = threading.Event()
@@ -2877,7 +2964,7 @@ def test_restart_cancels_partial_sideband_frame(binary: Path) -> Transcript:
                 stop_process(client.process)
 
 
-def test_restart_cancels_reader_after_committed_terminal(
+def test_restart_cancels_reader_after_operation_result(
     binary: Path,
 ) -> Transcript:
     zod = Path(__file__).resolve().parents[2] / "fixtures" / "zod"
@@ -2961,6 +3048,7 @@ def test_shutdown_cancels_partial_sideband_frame(binary: Path) -> Transcript:
                 client,
             )
             descendant_group = int(marker.read_text(encoding="utf-8"))
+            release_partial_sideband(marker)
 
             shutdown_started = time.monotonic()
             client.stdin.close()
@@ -3061,6 +3149,12 @@ def read_worker_group(marker: Path) -> int:
     worker_group = int(marker.read_text(encoding="utf-8"))
     assert worker_group != os.getpgrp(), "Zod did not enter a dedicated process group"
     return worker_group
+
+
+def release_partial_sideband(marker: Path) -> None:
+    release = marker.with_name("zod-release-partial-sideband")
+    with release.open("wb", buffering=0) as stream:
+        assert stream.write(b"x") == 1
 
 
 def process_group_exists(process_group: int) -> bool:

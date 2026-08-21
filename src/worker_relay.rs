@@ -14,19 +14,23 @@ pub(crate) fn run(command_line: &[OsString]) -> Result<(), String> {
 mod platform {
     use std::io::{Read, Write};
     use std::os::fd::{AsRawFd, RawFd};
-    use std::process::{Child, Command, ExitStatus, Stdio};
+    use std::os::unix::process::ExitStatusExt as _;
+    use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, ExitStatus, Stdio};
     use std::sync::atomic::{AtomicBool, Ordering};
-    use std::sync::{Arc, Condvar, Mutex, mpsc};
+    use std::sync::{Arc, Mutex, mpsc};
     use std::thread;
     use std::time::{Duration, Instant};
 
-    use wait_timeout::ChildExt as _;
-
-    use crate::relay_protocol::{EncodedBytes, JsonlWriter, RelayCommand, RelayEvent, RelayStream};
+    use crate::relay_protocol::{EncodedBytes, JsonlWriter, RelayCommand, RelayEvent};
     use crate::worker_protocol::{ServerMessage, WorkerMessage};
 
     const READ_CHUNK_SIZE: usize = 8 * 1024;
     const WORKER_SHUTDOWN_GRACE: Duration = Duration::from_secs(1);
+    const CHILD_EXITED: libc::c_int = 1;
+    const CHILD_KILLED: libc::c_int = 2;
+    const CHILD_DUMPED: libc::c_int = 3;
+    const CHILD_STOPPED: libc::c_int = 5;
+    const CHILD_CONTINUED: libc::c_int = 6;
 
     pub(super) fn run(command_line: &[std::ffi::OsString]) -> Result<(), String> {
         let (program, arguments) = command_line
@@ -67,80 +71,56 @@ mod platform {
         };
         drop(child_fds);
 
-        let mut child = ChildGuard::new(child);
-
-        // Startup failures below can race worker output from partially started
-        // I/O tasks. They must not use the pre-I/O reporter without the normal
-        // joined output drain.
-
-        let stdin = child
-            .child_mut()
-            .stdin
-            .take()
-            .expect("piped worker stdin should be available");
-        let stdout = child
-            .child_mut()
-            .stdout
-            .take()
-            .expect("piped worker stdout should be available");
-        let stderr = child
-            .child_mut()
-            .stderr
-            .take()
-            .expect("piped worker stderr should be available");
-
-        let stdin = StdinWriter::start(stdin, failures.clone())?;
-        let sideband_writer =
-            SidebandWriter::start(sideband_writer, failures.clone(), stopping.clone());
-        let stdout = OutputReader::start(
-            stdout,
-            RelayStream::Stdout,
-            events.clone(),
-            failures.clone(),
-        )?;
-        let stderr = OutputReader::start(
-            stderr,
-            RelayStream::Stderr,
-            events.clone(),
-            failures.clone(),
-        )?;
-        let terminal_commits = TerminalCommitGate::default();
-        let sideband_reader = SidebandReader::start(
+        let mut worker = WorkerLifecycle::new(child);
+        let setup = worker.start_io(
             sideband_reader,
-            events.clone(),
-            terminal_commits.clone(),
-            stdout.checkpoint_handle(),
-            stderr.checkpoint_handle(),
-            failures.clone(),
-            controls.clone(),
-        )?;
-        let command_reader = CommandReader::start(
-            sideband_writer.sender(),
-            stdin.sender(),
-            terminal_commits.clone(),
-            events.clone(),
-            controls.clone(),
-            failures.clone(),
-            stopping.clone(),
-        )?;
-
-        let mut child = child.take();
-        let (status, retirement_error) =
-            supervise_worker(&mut child, &control_receiver, &events, &failures, &stopping);
+            sideband_writer,
+            &events,
+            &failures,
+            &controls,
+            &stopping,
+        );
+        let (status, retirement_error) = match setup {
+            Ok(()) => {
+                worker.start_exit_watcher(controls.clone());
+                let worker_sideband = worker
+                    .sideband_writer
+                    .as_ref()
+                    .expect("worker sideband writer should be running")
+                    .sender();
+                let worker_stdin = worker
+                    .stdin
+                    .as_ref()
+                    .expect("worker stdin writer should be running")
+                    .sender();
+                let result = supervise_worker(
+                    &mut worker.child,
+                    &control_receiver,
+                    &events,
+                    &stopping,
+                    &worker_sideband,
+                    &worker_stdin,
+                );
+                worker.retired = true;
+                result
+            }
+            Err(error) => {
+                failures.report(error.clone());
+                stopping.store(true, Ordering::SeqCst);
+                let result = force_stop_worker(&mut worker.child, error);
+                worker.retired = true;
+                result
+            }
+        };
         if let Some(error) = retirement_error.as_ref() {
             failures.report(error.clone());
         }
 
         stopping.store(true, Ordering::SeqCst);
-        let mut finish_error = None;
-        collect_error(&mut finish_error, command_reader.cancel_and_join());
-        terminal_commits.cancel();
-        collect_error(&mut finish_error, stdin.cancel_and_join());
-        collect_error(&mut finish_error, sideband_writer.cancel_and_join());
-        collect_error(&mut finish_error, sideband_reader.cancel_and_join());
-        collect_error(&mut finish_error, stdout.cancel_and_join());
-        collect_error(&mut finish_error, stderr.cancel_and_join());
+        let mut finish_error = worker.cancel_and_join(&events);
 
+        collect_error(&mut finish_error, events.send(RelayEvent::StdoutClosed));
+        collect_error(&mut finish_error, events.send(RelayEvent::StderrClosed));
         if let Some(message) = failures.take() {
             collect_error(
                 &mut finish_error,
@@ -151,8 +131,15 @@ mod platform {
             &mut finish_error,
             events.send(RelayEvent::WorkerSidebandClosed),
         );
-        if status.is_some() {
-            collect_error(&mut finish_error, events.send(RelayEvent::WorkerExited));
+        if let Some(status) = status {
+            let outcome = match (status.code(), status.signal()) {
+                (Some(code), _) => RelayEvent::WorkerExited { code },
+                (None, Some(signal)) => RelayEvent::WorkerSignaled { signal },
+                (None, None) => RelayEvent::Fatal {
+                    message: "worker exited without an exit code or signal".to_string(),
+                },
+            };
+            collect_error(&mut finish_error, events.send(outcome));
         }
         collect_error(&mut finish_error, events.finish());
         match event_writer.join() {
@@ -194,12 +181,40 @@ mod platform {
         child: &mut Child,
         controls: &mpsc::Receiver<Control>,
         events: &EventSender,
-        failures: &FailureReporter,
         stopping: &AtomicBool,
+        sideband: &mpsc::Sender<SidebandWrite>,
+        stdin: &mpsc::Sender<StdinWrite>,
     ) -> (Option<ExitStatus>, Option<String>) {
+        let mut exit_deadline: Option<Instant> = None;
         loop {
-            match controls.recv() {
-                Ok(Control::Interrupt { request_id }) => {
+            let control = match exit_deadline {
+                Some(deadline) => {
+                    match controls.recv_timeout(deadline.saturating_duration_since(Instant::now()))
+                    {
+                        Ok(control) => control,
+                        Err(mpsc::RecvTimeoutError::Timeout) => {
+                            return force_stop_worker(child, String::new());
+                        }
+                        Err(mpsc::RecvTimeoutError::Disconnected) => {
+                            return force_stop_worker(
+                                child,
+                                "relay control channel stopped".to_string(),
+                            );
+                        }
+                    }
+                }
+                None => match controls.recv() {
+                    Ok(control) => control,
+                    Err(_) => {
+                        return force_stop_worker(
+                            child,
+                            "relay control channel stopped".to_string(),
+                        );
+                    }
+                },
+            };
+            match control {
+                Control::Interrupt { request_id } => {
                     let error = interrupt_worker(child).err();
                     if events
                         .send(RelayEvent::InterruptResult { request_id, error })
@@ -208,40 +223,168 @@ mod platform {
                         return force_stop_worker(child, "relay event writer stopped".to_string());
                     }
                 }
-                Ok(Control::Shutdown { deadline }) => {
+                Control::Shutdown {
+                    deadline,
+                    report_acceptance,
+                } => {
+                    if report_acceptance
+                        && events.send_confirmed(RelayEvent::ShutdownStarted).is_err()
+                    {
+                        return force_stop_worker(child, "relay event writer stopped".to_string());
+                    }
                     stopping.store(true, Ordering::SeqCst);
-                    return stop_worker(child, deadline, failures);
+                    let _ = stdin.send(StdinWrite::Close);
+                    let _ = sideband.send(SidebandWrite::Message(ServerMessage::Shutdown));
+                    exit_deadline = Some(deadline);
                 }
-                Ok(Control::Stop { message }) => {
+                Control::Stop { message } => {
                     stopping.store(true, Ordering::SeqCst);
                     return force_stop_worker(child, message);
                 }
-                Ok(Control::SidebandClosed) => {
+                Control::SidebandClosed => {
                     stopping.store(true, Ordering::SeqCst);
-                    return match child.try_wait() {
-                        Ok(Some(status)) => (Some(status), None),
-                        Ok(None) => force_stop_worker(child, String::new()),
-                        Err(error) => force_stop_worker(
-                            child,
-                            format!("failed to read worker status: {error}"),
-                        ),
-                    };
+                    exit_deadline.get_or_insert_with(|| Instant::now() + WORKER_SHUTDOWN_GRACE);
                 }
-                Err(_) => {
-                    return force_stop_worker(child, "relay control channel stopped".to_string());
+                Control::WorkerExited(result) => {
+                    stopping.store(true, Ordering::SeqCst);
+                    return match result {
+                        Ok(()) => finish_exited_worker(child),
+                        Err(error) => force_stop_worker(child, error),
+                    };
                 }
             }
         }
     }
 
-    fn interrupt_worker(child: &mut Child) -> Result<(), String> {
-        if child
-            .try_wait()
-            .map_err(|error| format!("failed to read worker status: {error}"))?
-            .is_some()
-        {
-            return Err("worker is not running".to_string());
+    fn start_worker_exit_watcher(
+        process_id: u32,
+        controls: mpsc::Sender<Control>,
+    ) -> thread::JoinHandle<()> {
+        thread::spawn(move || {
+            let process_id = process_id as libc::pid_t;
+            let wait_id = process_id as libc::id_t;
+            let result = loop {
+                let mut information = std::mem::MaybeUninit::<libc::siginfo_t>::zeroed();
+                // SAFETY: `information` points to writable storage and
+                // `process_id` names the direct child. WNOWAIT preserves its
+                // exit status for the relay supervisor, which remains the sole
+                // reaper.
+                let result = unsafe {
+                    libc::waitid(
+                        libc::P_PID,
+                        wait_id,
+                        information.as_mut_ptr(),
+                        libc::WEXITED | libc::WNOWAIT,
+                    )
+                };
+                if result == 0 {
+                    // SAFETY: successful `waitid` initialized the supplied
+                    // `siginfo_t`.
+                    let information = unsafe { information.assume_init() };
+                    if information.si_pid != process_id {
+                        break Err(format!(
+                            "waitid returned process {} while waiting for worker {process_id}",
+                            information.si_pid
+                        ));
+                    }
+                    match information.si_code {
+                        CHILD_EXITED | CHILD_KILLED | CHILD_DUMPED => break Ok(()),
+                        CHILD_STOPPED | CHILD_CONTINUED => {
+                            // Darwin may return a pending stop or continue
+                            // notification even though the call requested only
+                            // `WEXITED`. Consume just that notification, leaving
+                            // the eventual exit status waitable for supervision.
+                            if let Err(error) =
+                                consume_worker_non_exit_notification(wait_id, process_id)
+                            {
+                                if error.kind() == std::io::ErrorKind::Interrupted {
+                                    continue;
+                                }
+                                break Err(format!(
+                                    "failed to consume worker status notification: {error}"
+                                ));
+                            }
+                        }
+                        code => {
+                            break Err(format!(
+                                "waitid returned unexpected worker status code {code}"
+                            ));
+                        }
+                    }
+                    continue;
+                }
+                let error = std::io::Error::last_os_error();
+                if error.kind() != std::io::ErrorKind::Interrupted {
+                    break Err(format!("failed to observe worker exit: {error}"));
+                }
+            };
+            let _ = controls.send(Control::WorkerExited(result));
+        })
+    }
+
+    fn consume_worker_non_exit_notification(
+        wait_id: libc::id_t,
+        process_id: libc::pid_t,
+    ) -> std::io::Result<()> {
+        let mut information = std::mem::MaybeUninit::<libc::siginfo_t>::zeroed();
+        // SAFETY: `information` points to writable storage and `process_id`
+        // names the direct child. Omitting `WEXITED` and `WNOWAIT` consumes only
+        // a pending stop or continue notification, never the exit status.
+        let result = unsafe {
+            libc::waitid(
+                libc::P_PID,
+                wait_id,
+                information.as_mut_ptr(),
+                libc::WSTOPPED | libc::WCONTINUED | libc::WNOHANG,
+            )
+        };
+        if result < 0 {
+            return Err(std::io::Error::last_os_error());
         }
+
+        // SAFETY: successful `waitid` initialized the supplied `siginfo_t`.
+        let information = unsafe { information.assume_init() };
+        if information.si_pid == 0 {
+            return Ok(());
+        }
+        if information.si_pid != process_id {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!(
+                    "waitid returned process {} while consuming a notification for worker {process_id}",
+                    information.si_pid
+                ),
+            ));
+        }
+        if !matches!(information.si_code, CHILD_STOPPED | CHILD_CONTINUED) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!(
+                    "waitid consumed unexpected worker status code {}",
+                    information.si_code
+                ),
+            ));
+        }
+        Ok(())
+    }
+
+    fn finish_exited_worker(child: &mut Child) -> (Option<ExitStatus>, Option<String>) {
+        let mut errors = Vec::new();
+        let status = match child.wait() {
+            Ok(status) => Some(status),
+            Err(error) => {
+                errors.push(format!("failed to reap the direct worker: {error}"));
+                None
+            }
+        };
+        if let Err(error) = crate::sandbox::force_stop_process_group_members_except_self() {
+            errors.push(format!("failed to stop the worker process group: {error}"));
+        }
+        let error = (!errors.is_empty()).then(|| errors.join("; "));
+        (status, error)
+    }
+
+    fn interrupt_worker(child: &mut Child) -> Result<(), String> {
         // SAFETY: the direct child remains unreaped here, so its PID cannot be
         // reused before `kill` returns.
         if unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGINT) } == 0 {
@@ -251,23 +394,6 @@ mod platform {
                 "failed to interrupt worker: {}",
                 std::io::Error::last_os_error()
             ))
-        }
-    }
-
-    fn stop_worker(
-        child: &mut Child,
-        deadline: Instant,
-        failures: &FailureReporter,
-    ) -> (Option<ExitStatus>, Option<String>) {
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        match child.wait_timeout(remaining) {
-            Ok(Some(status)) => (Some(status), None),
-            Ok(None) => force_stop_worker(child, String::new()),
-            Err(error) => {
-                let error = format!("failed to wait for worker to exit: {error}");
-                failures.report(error.clone());
-                force_stop_worker(child, error)
-            }
         }
     }
 
@@ -309,27 +435,208 @@ mod platform {
         (status, error)
     }
 
-    struct ChildGuard(Option<Child>);
+    struct WorkerLifecycle {
+        child: Child,
+        retired: bool,
+        raw_stdin: Option<ChildStdin>,
+        raw_stdout: Option<ChildStdout>,
+        raw_stderr: Option<ChildStderr>,
+        raw_sideband_reader: Option<crate::sideband::Reader>,
+        stdin: Option<StdinWriter>,
+        sideband_writer: Option<SidebandWriter>,
+        stdout: Option<OutputReader>,
+        stderr: Option<OutputReader>,
+        sideband_reader: Option<SidebandReader>,
+        command_reader: Option<CommandReader>,
+        exit_watcher: Option<thread::JoinHandle<()>>,
+    }
 
-    impl ChildGuard {
-        fn new(child: Child) -> Self {
-            Self(Some(child))
+    impl WorkerLifecycle {
+        fn new(mut child: Child) -> Self {
+            let raw_stdin = child
+                .stdin
+                .take()
+                .expect("piped worker stdin should be available");
+            let raw_stdout = child
+                .stdout
+                .take()
+                .expect("piped worker stdout should be available");
+            let raw_stderr = child
+                .stderr
+                .take()
+                .expect("piped worker stderr should be available");
+            Self {
+                child,
+                retired: false,
+                raw_stdin: Some(raw_stdin),
+                raw_stdout: Some(raw_stdout),
+                raw_stderr: Some(raw_stderr),
+                raw_sideband_reader: None,
+                stdin: None,
+                sideband_writer: None,
+                stdout: None,
+                stderr: None,
+                sideband_reader: None,
+                command_reader: None,
+                exit_watcher: None,
+            }
         }
 
-        fn child_mut(&mut self) -> &mut Child {
-            self.0.as_mut().expect("worker child should be present")
+        #[allow(clippy::too_many_arguments)]
+        fn start_io(
+            &mut self,
+            sideband_reader: crate::sideband::Reader,
+            sideband_writer: crate::sideband::Writer,
+            events: &EventSender,
+            failures: &FailureReporter,
+            controls: &mpsc::Sender<Control>,
+            stopping: &Arc<AtomicBool>,
+        ) -> Result<(), String> {
+            self.raw_sideband_reader = Some(sideband_reader);
+            let stdin = self
+                .raw_stdin
+                .take()
+                .expect("raw worker stdin should be available");
+            self.stdin = Some(StdinWriter::start(
+                stdin,
+                failures.clone(),
+                stopping.clone(),
+            )?);
+            self.sideband_writer = Some(SidebandWriter::start(
+                sideband_writer,
+                failures.clone(),
+                stopping.clone(),
+            ));
+
+            let stdout = self
+                .raw_stdout
+                .take()
+                .expect("raw worker stdout should be available");
+            match OutputReader::start(
+                stdout,
+                OutputStream::Stdout,
+                events.clone(),
+                failures.clone(),
+            ) {
+                Ok(stdout) => self.stdout = Some(stdout),
+                Err((stdout, error)) => {
+                    self.raw_stdout = Some(stdout);
+                    return Err(error);
+                }
+            }
+
+            let stderr = self
+                .raw_stderr
+                .take()
+                .expect("raw worker stderr should be available");
+            match OutputReader::start(
+                stderr,
+                OutputStream::Stderr,
+                events.clone(),
+                failures.clone(),
+            ) {
+                Ok(stderr) => self.stderr = Some(stderr),
+                Err((stderr, error)) => {
+                    self.raw_stderr = Some(stderr);
+                    return Err(error);
+                }
+            }
+
+            self.command_reader = Some(CommandReader::start(
+                self.sideband_writer
+                    .as_ref()
+                    .expect("worker sideband writer should be running")
+                    .sender(),
+                self.stdin
+                    .as_ref()
+                    .expect("worker stdin writer should be running")
+                    .sender(),
+                controls.clone(),
+                failures.clone(),
+            )?);
+
+            let sideband_reader = self
+                .raw_sideband_reader
+                .take()
+                .expect("raw worker sideband reader should be available");
+            match SidebandReader::start(
+                sideband_reader,
+                events.clone(),
+                failures.clone(),
+                controls.clone(),
+            ) {
+                Ok(sideband_reader) => self.sideband_reader = Some(sideband_reader),
+                Err((sideband_reader, error)) => {
+                    self.raw_sideband_reader = Some(sideband_reader);
+                    return Err(error);
+                }
+            }
+            Ok(())
         }
 
-        fn take(mut self) -> Child {
-            self.0.take().expect("worker child should be present")
+        fn start_exit_watcher(&mut self, controls: mpsc::Sender<Control>) {
+            self.exit_watcher = Some(start_worker_exit_watcher(self.child.id(), controls));
+        }
+
+        fn cancel_and_join(&mut self, events: &EventSender) -> Option<String> {
+            let mut error = None;
+            drop(self.raw_stdin.take());
+            if let Some(command_reader) = self.command_reader.take() {
+                collect_error(&mut error, command_reader.cancel_and_join());
+            }
+            if let Some(stdin) = self.stdin.take() {
+                collect_error(&mut error, stdin.cancel_and_join());
+            }
+            if let Some(sideband_writer) = self.sideband_writer.take() {
+                collect_error(&mut error, sideband_writer.cancel_and_join());
+            }
+            match (self.sideband_reader.take(), self.raw_sideband_reader.take()) {
+                (Some(sideband_reader), None) => {
+                    collect_error(&mut error, sideband_reader.cancel_and_join())
+                }
+                (None, Some(mut sideband_reader)) => {
+                    collect_error(&mut error, set_nonblocking(&sideband_reader));
+                    collect_error(&mut error, discard_retiring_sideband(&mut sideband_reader));
+                }
+                _ => unreachable!("worker sideband reader must have exactly one owner"),
+            }
+            match (self.stdout.take(), self.raw_stdout.take()) {
+                (Some(stdout), None) => collect_error(&mut error, stdout.cancel_and_join()),
+                (None, Some(stdout)) => collect_error(
+                    &mut error,
+                    drain_unstarted_output(stdout, OutputStream::Stdout, events),
+                ),
+                _ => unreachable!("worker stdout must have exactly one owner"),
+            }
+            match (self.stderr.take(), self.raw_stderr.take()) {
+                (Some(stderr), None) => collect_error(&mut error, stderr.cancel_and_join()),
+                (None, Some(stderr)) => collect_error(
+                    &mut error,
+                    drain_unstarted_output(stderr, OutputStream::Stderr, events),
+                ),
+                _ => unreachable!("worker stderr must have exactly one owner"),
+            }
+            if self
+                .exit_watcher
+                .take()
+                .is_some_and(|watcher| watcher.join().is_err())
+            {
+                collect_error(
+                    &mut error,
+                    Err("worker exit watcher task failed".to_string()),
+                );
+            }
+            error
         }
     }
 
-    impl Drop for ChildGuard {
+    impl Drop for WorkerLifecycle {
         fn drop(&mut self) {
-            if let Some(child) = self.0.as_mut() {
-                let _ =
-                    force_stop_worker(child, "relay failed while starting worker I/O".to_string());
+            if !self.retired {
+                let _ = force_stop_worker(
+                    &mut self.child,
+                    "relay failed while starting worker I/O".to_string(),
+                );
             }
         }
     }
@@ -454,86 +761,18 @@ mod platform {
     }
 
     enum Control {
-        Interrupt { request_id: u64 },
-        Shutdown { deadline: Instant },
+        Interrupt {
+            request_id: u64,
+        },
+        Shutdown {
+            deadline: Instant,
+            report_acceptance: bool,
+        },
         SidebandClosed,
-        Stop { message: String },
-    }
-
-    #[derive(Clone, Default)]
-    struct TerminalCommitGate(Arc<(Mutex<TerminalCommitState>, Condvar)>);
-
-    #[derive(Default)]
-    struct TerminalCommitState {
-        expected: bool,
-        committed: bool,
-        cancelled: bool,
-    }
-
-    impl TerminalCommitGate {
-        fn expect(&self) -> Result<bool, String> {
-            let (state, _) = &*self.0;
-            let mut state = state
-                .lock()
-                .map_err(|_| "relay terminal commit lock poisoned".to_string())?;
-            if state.cancelled {
-                return Ok(false);
-            }
-            if state.expected {
-                return Err(
-                    "relay tried to publish a second uncommitted terminal message".to_string(),
-                );
-            }
-            state.expected = true;
-            state.committed = false;
-            Ok(true)
-        }
-
-        fn commit(&self) -> Result<(), String> {
-            let (state, changed) = &*self.0;
-            let mut state = state
-                .lock()
-                .map_err(|_| "relay terminal commit lock poisoned".to_string())?;
-            if !state.expected {
-                return Err(
-                    "relay received a terminal commit without a pending terminal message"
-                        .to_string(),
-                );
-            }
-            if state.committed {
-                return Err("relay received a duplicate terminal commit".to_string());
-            }
-            state.committed = true;
-            changed.notify_one();
-            Ok(())
-        }
-
-        fn wait(&self) -> Result<bool, String> {
-            let (state, changed) = &*self.0;
-            let mut state = state
-                .lock()
-                .map_err(|_| "relay terminal commit lock poisoned".to_string())?;
-            while !state.committed && !state.cancelled {
-                state = changed
-                    .wait(state)
-                    .map_err(|_| "relay terminal commit lock poisoned".to_string())?;
-            }
-            if state.cancelled {
-                return Ok(false);
-            }
-            state.expected = false;
-            state.committed = false;
-            Ok(true)
-        }
-
-        fn cancel(&self) {
-            let (state, changed) = &*self.0;
-            let mut state = state
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
-            state.cancelled = true;
-            changed.notify_all();
-        }
+        Stop {
+            message: String,
+        },
+        WorkerExited(Result<(), String>),
     }
 
     struct CommandReader {
@@ -542,15 +781,11 @@ mod platform {
     }
 
     impl CommandReader {
-        #[allow(clippy::too_many_arguments)]
         fn start(
             sideband: mpsc::Sender<SidebandWrite>,
             stdin: mpsc::Sender<StdinWrite>,
-            terminal_commits: TerminalCommitGate,
-            events: EventSender,
             controls: mpsc::Sender<Control>,
             failures: FailureReporter,
-            stopping: Arc<AtomicBool>,
         ) -> Result<Self, String> {
             let (cancelled, cancel) = cancellation_pipe("relay stdin")?;
             let thread = thread::spawn(move || {
@@ -573,11 +808,9 @@ mod platform {
                     let mut chunk = [0_u8; READ_CHUNK_SIZE];
                     match input.read(&mut chunk) {
                         Ok(0) if buffer.is_empty() => {
-                            stopping.store(true, Ordering::SeqCst);
-                            let _ = stdin.send(StdinWrite::Close);
-                            let _ = sideband.send(SidebandWrite::Message(ServerMessage::Shutdown));
                             let _ = controls.send(Control::Shutdown {
                                 deadline: Instant::now() + WORKER_SHUTDOWN_GRACE,
+                                report_acceptance: false,
                             });
                             return;
                         }
@@ -607,8 +840,80 @@ mod platform {
                             }
                         };
                         match command {
-                            RelayCommand::WorkerMessage { message } => {
-                                if sideband.send(SidebandWrite::Message(message)).is_err() {
+                            RelayCommand::Evaluate { language, source } => {
+                                if sideband
+                                    .send(SidebandWrite::Message(ServerMessage::Evaluate {
+                                        language,
+                                        source,
+                                    }))
+                                    .is_err()
+                                {
+                                    failures.report("worker sideband writer stopped".to_string());
+                                    return;
+                                }
+                            }
+                            RelayCommand::PrepareR { library } => {
+                                if sideband
+                                    .send(SidebandWrite::Message(ServerMessage::PrepareR {
+                                        library,
+                                    }))
+                                    .is_err()
+                                {
+                                    failures.report("worker sideband writer stopped".to_string());
+                                    return;
+                                }
+                            }
+                            RelayCommand::PreparePython { packages } => {
+                                if sideband
+                                    .send(SidebandWrite::Message(ServerMessage::PreparePython {
+                                        packages,
+                                    }))
+                                    .is_err()
+                                {
+                                    failures.report("worker sideband writer stopped".to_string());
+                                    return;
+                                }
+                            }
+                            RelayCommand::PythonResolved { python } => {
+                                if sideband
+                                    .send(SidebandWrite::Message(ServerMessage::PythonResolved {
+                                        python,
+                                    }))
+                                    .is_err()
+                                {
+                                    failures.report("worker sideband writer stopped".to_string());
+                                    return;
+                                }
+                            }
+                            RelayCommand::PythonResolutionFailed { message } => {
+                                if sideband
+                                    .send(SidebandWrite::Message(
+                                        ServerMessage::PythonResolutionFailed { message },
+                                    ))
+                                    .is_err()
+                                {
+                                    failures.report("worker sideband writer stopped".to_string());
+                                    return;
+                                }
+                            }
+                            RelayCommand::PythonVersionResolved { version } => {
+                                if sideband
+                                    .send(SidebandWrite::Message(
+                                        ServerMessage::PythonVersionResolved { version },
+                                    ))
+                                    .is_err()
+                                {
+                                    failures.report("worker sideband writer stopped".to_string());
+                                    return;
+                                }
+                            }
+                            RelayCommand::PythonVersionResolutionFailed { message } => {
+                                if sideband
+                                    .send(SidebandWrite::Message(
+                                        ServerMessage::PythonVersionResolutionFailed { message },
+                                    ))
+                                    .is_err()
+                                {
                                     failures.report("worker sideband writer stopped".to_string());
                                     return;
                                 }
@@ -621,31 +926,23 @@ mod platform {
                             }
                             RelayCommand::Interrupt { request_id } => {
                                 if controls.send(Control::Interrupt { request_id }).is_err() {
-                                    let _ = events.send(RelayEvent::InterruptResult {
-                                        request_id,
-                                        error: Some("relay supervisor stopped".to_string()),
-                                    });
+                                    failures.report("relay supervisor stopped".to_string());
                                     return;
                                 }
                             }
                             RelayCommand::Shutdown { grace_millis } => {
                                 let deadline = Instant::now() + Duration::from_millis(grace_millis);
-                                if events.send_confirmed(RelayEvent::ShutdownStarted).is_err() {
-                                    failures.report("relay event writer stopped".to_string());
+                                if controls
+                                    .send(Control::Shutdown {
+                                        deadline,
+                                        report_acceptance: true,
+                                    })
+                                    .is_err()
+                                {
+                                    failures.report("relay supervisor stopped".to_string());
                                     return;
                                 }
-                                stopping.store(true, Ordering::SeqCst);
-                                let _ = stdin.send(StdinWrite::Close);
-                                let _ =
-                                    sideband.send(SidebandWrite::Message(ServerMessage::Shutdown));
-                                let _ = controls.send(Control::Shutdown { deadline });
                                 return;
-                            }
-                            RelayCommand::TerminalCommitted => {
-                                if let Err(error) = terminal_commits.commit() {
-                                    failures.report(error);
-                                    return;
-                                }
                             }
                         }
                     }
@@ -720,63 +1017,23 @@ mod platform {
         fn start(
             mut reader: crate::sideband::Reader,
             events: EventSender,
-            terminal_commits: TerminalCommitGate,
-            stdout: OutputCheckpoint,
-            stderr: OutputCheckpoint,
             failures: FailureReporter,
             controls: mpsc::Sender<Control>,
-        ) -> Result<Self, String> {
-            set_nonblocking(&reader)?;
-            let (cancelled, cancel) = cancellation_pipe("worker sideband")?;
+        ) -> Result<Self, (crate::sideband::Reader, String)> {
+            if let Err(error) = set_nonblocking(&reader) {
+                return Err((reader, error));
+            }
+            let (cancelled, cancel) = match cancellation_pipe("worker sideband") {
+                Ok(pipe) => pipe,
+                Err(error) => return Err((reader, error)),
+            };
             let thread = thread::spawn(move || {
                 let mut ordinary_close = false;
                 let mut sideband_failure = None;
-                'read: loop {
-                    while let Some(message) = match reader.receive_buffered() {
-                        Ok(message) => message,
-                        Err(error) => {
-                            sideband_failure =
-                                Some(format!("worker sideband read failed: {error}"));
-                            break 'read;
-                        }
-                    } {
-                        let terminal = worker_message_requires_terminal_commit(&message);
-                        if let Err(error) = stdout.checkpoint().and_then(|()| stderr.checkpoint()) {
-                            failures.report(error);
-                            break 'read;
-                        }
-                        if terminal {
-                            // Register the barrier before publication so a commit
-                            // arriving as soon as the event is flushed is valid.
-                            match terminal_commits.expect() {
-                                Ok(true) => {}
-                                Ok(false) => break 'read,
-                                Err(error) => {
-                                    failures.report(error);
-                                    break 'read;
-                                }
-                            }
-                            if let Err(error) =
-                                events.send_confirmed(RelayEvent::WorkerMessage { message })
-                            {
-                                failures.report(error);
-                                break 'read;
-                            }
-                        } else {
-                            if let Err(error) = events.send(RelayEvent::WorkerMessage { message }) {
-                                failures.report(error);
-                                break 'read;
-                            }
-                            continue;
-                        }
-                        match terminal_commits.wait() {
-                            Ok(true) => {}
-                            Ok(false) => break 'read,
-                            Err(error) => {
-                                failures.report(error);
-                                break 'read;
-                            }
-                        }
+                loop {
+                    if let Err(error) = forward_buffered_sideband(&mut reader, &events) {
+                        sideband_failure = Some(error);
+                        break;
                     }
 
                     let ready = match wait_for_io(reader.as_raw_fd(), libc::POLLIN, &cancelled) {
@@ -788,6 +1045,9 @@ mod platform {
                         }
                     };
                     if ready.cancelled {
+                        if let Err(error) = drain_retiring_sideband(&mut reader, &events) {
+                            sideband_failure = Some(error);
+                        }
                         break;
                     }
                     if !ready.stream {
@@ -815,10 +1075,6 @@ mod platform {
                         }
                     }
                 }
-                if let Err(error) = stdout.checkpoint().and_then(|()| stderr.checkpoint()) {
-                    failures.report(error);
-                    return;
-                }
                 if let Some(error) = sideband_failure {
                     failures.report(error);
                 }
@@ -837,15 +1093,61 @@ mod platform {
         }
     }
 
-    fn worker_message_requires_terminal_commit(message: &WorkerMessage) -> bool {
-        matches!(
-            message,
-            WorkerMessage::Completed
-                | WorkerMessage::RPrepared { .. }
-                | WorkerMessage::RPreparationFailed { .. }
-                | WorkerMessage::PythonPrepared
-                | WorkerMessage::PythonPreparationFailed { .. }
-        )
+    fn forward_buffered_sideband(
+        reader: &mut crate::sideband::Reader,
+        events: &EventSender,
+    ) -> Result<(), String> {
+        while let Some(message) = reader
+            .receive_buffered::<WorkerMessage>()
+            .map_err(|error| format!("worker sideband read failed: {error}"))?
+        {
+            events.send(message.into())?;
+        }
+        Ok(())
+    }
+
+    fn drain_retiring_sideband(
+        reader: &mut crate::sideband::Reader,
+        events: &EventSender,
+    ) -> Result<(), String> {
+        loop {
+            forward_buffered_sideband(reader, events)?;
+            match reader.read_chunk() {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::UnexpectedEof
+                    ) =>
+                {
+                    return Ok(());
+                }
+                Err(error) => {
+                    return Err(format!("worker sideband read failed: {error}"));
+                }
+            }
+        }
+    }
+
+    fn discard_retiring_sideband(reader: &mut crate::sideband::Reader) -> Result<(), String> {
+        loop {
+            match reader.read_chunk() {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::UnexpectedEof
+                    ) =>
+                {
+                    return Ok(());
+                }
+                Err(error) => {
+                    return Err(format!("worker sideband read failed: {error}"));
+                }
+            }
+        }
     }
 
     struct StdinWriter {
@@ -863,6 +1165,7 @@ mod platform {
         fn start(
             mut stream: std::process::ChildStdin,
             failures: FailureReporter,
+            stopping: Arc<AtomicBool>,
         ) -> Result<Self, String> {
             set_nonblocking(&stream)?;
             let (cancelled, cancel) = cancellation_pipe("worker stdin")?;
@@ -880,8 +1183,11 @@ mod platform {
                                 ) {
                                     Ok(ready) => ready,
                                     Err(error) => {
-                                        failures
-                                            .report(format!("worker stdin write failed: {error}"));
+                                        if !stopping.load(Ordering::SeqCst) {
+                                            failures.report(format!(
+                                                "worker stdin write failed: {error}"
+                                            ));
+                                        }
                                         return;
                                     }
                                 };
@@ -893,10 +1199,12 @@ mod platform {
                                 }
                                 match stream.write(remaining) {
                                     Ok(0) => {
-                                        failures.report(
-                                            "worker stdin write failed: write returned zero bytes"
-                                                .to_string(),
-                                        );
+                                        if !stopping.load(Ordering::SeqCst) {
+                                            failures.report(
+                                                "worker stdin write failed: write returned zero bytes"
+                                                    .to_string(),
+                                            );
+                                        }
                                         return;
                                     }
                                     Ok(length) => remaining = &remaining[length..],
@@ -907,8 +1215,11 @@ mod platform {
                                                 | std::io::ErrorKind::WouldBlock
                                         ) => {}
                                     Err(error) => {
-                                        failures
-                                            .report(format!("worker stdin write failed: {error}"));
+                                        if !stopping.load(Ordering::SeqCst) {
+                                            failures.report(format!(
+                                                "worker stdin write failed: {error}"
+                                            ));
+                                        }
                                         return;
                                     }
                                 }
@@ -939,36 +1250,37 @@ mod platform {
     }
 
     struct OutputReader {
-        checkpoint: OutputCheckpoint,
+        cancel: Cancellation,
         thread: thread::JoinHandle<()>,
     }
 
-    #[derive(Clone)]
-    struct OutputCheckpoint {
-        commands: mpsc::Sender<OutputCommand>,
-        wake: Cancellation,
-    }
-
-    enum OutputCommand {
-        Checkpoint(mpsc::SyncSender<()>),
-        Stop,
+    #[derive(Clone, Copy)]
+    enum OutputStream {
+        Stdout,
+        Stderr,
     }
 
     impl OutputReader {
-        fn start(
-            mut stream: impl Read + AsRawFd + Send + 'static,
-            kind: RelayStream,
+        fn start<Stream>(
+            mut stream: Stream,
+            kind: OutputStream,
             events: EventSender,
             failures: FailureReporter,
-        ) -> Result<Self, String> {
-            set_nonblocking(&stream)?;
-            let (woken, wake) = cancellation_pipe("worker output")?;
-            let (commands, receiver) = mpsc::channel();
-            let checkpoint = OutputCheckpoint { commands, wake };
+        ) -> Result<Self, (Stream, String)>
+        where
+            Stream: Read + AsRawFd + Send + 'static,
+        {
+            if let Err(error) = set_nonblocking(&stream) {
+                return Err((stream, error));
+            }
+            let (cancelled, cancel) = match cancellation_pipe("worker output") {
+                Ok(pipe) => pipe,
+                Err(error) => return Err((stream, error)),
+            };
             let thread = thread::spawn(move || {
                 let mut buffer = [0_u8; READ_CHUNK_SIZE];
-                'read: loop {
-                    let ready = match wait_for_io(stream.as_raw_fd(), libc::POLLIN, &woken) {
+                loop {
+                    let ready = match wait_for_io(stream.as_raw_fd(), libc::POLLIN, &cancelled) {
                         Ok(ready) => ready,
                         Err(error) => {
                             failures.report(format!("worker output read failed: {error}"));
@@ -996,122 +1308,78 @@ mod platform {
                         }
                     }
                     if ready.cancelled {
-                        drain_wakeup(&woken);
-                        while let Ok(command) = receiver.try_recv() {
-                            match command {
-                                OutputCommand::Checkpoint(done) => {
-                                    drain_buffered_output(&mut stream, kind, &events, &mut buffer);
-                                    let _ = done.send(());
-                                }
-                                OutputCommand::Stop => {
-                                    drain_buffered_output(&mut stream, kind, &events, &mut buffer);
-                                    break 'read;
-                                }
-                            }
+                        if let Err(error) =
+                            drain_buffered_output(&mut stream, kind, &events, &mut buffer)
+                        {
+                            failures.report(error);
                         }
+                        break;
                     }
                 }
-                let _ = events.send(RelayEvent::StreamClosed { stream: kind });
             });
-            Ok(Self { checkpoint, thread })
-        }
-
-        fn checkpoint_handle(&self) -> OutputCheckpoint {
-            self.checkpoint.clone()
+            Ok(Self { cancel, thread })
         }
 
         fn cancel_and_join(self) -> Result<(), String> {
-            if self.checkpoint.commands.send(OutputCommand::Stop).is_ok() {
-                self.checkpoint.wake.wake();
-            }
+            self.cancel.cancel();
             self.thread
                 .join()
                 .map_err(|_| "worker output reader task failed".to_string())
         }
     }
 
-    impl OutputCheckpoint {
-        fn checkpoint(&self) -> Result<(), String> {
-            let (done, receiver) = mpsc::sync_channel(0);
-            if self.commands.send(OutputCommand::Checkpoint(done)).is_err() {
-                return Ok(());
-            }
-            self.wake.wake();
-            // A concurrent EOF closes the reader only after all stream bytes
-            // have been sent, which also satisfies this checkpoint.
-            let _ = receiver.recv();
-            Ok(())
-        }
+    fn drain_unstarted_output(
+        mut stream: impl Read + AsRawFd,
+        kind: OutputStream,
+        events: &EventSender,
+    ) -> Result<(), String> {
+        let mut buffer = [0_u8; READ_CHUNK_SIZE];
+        drain_buffered_output(&mut stream, kind, events, &mut buffer)
     }
 
-    fn output_event(stream: RelayStream, bytes: &[u8]) -> RelayEvent {
-        let data = EncodedBytes::from_bytes(bytes);
-        match stream {
-            RelayStream::Stdout => RelayEvent::Stdout { data },
-            RelayStream::Stderr => RelayEvent::Stderr { data },
+    fn output_event(stream: OutputStream, bytes: &[u8]) -> RelayEvent {
+        match (stream, std::str::from_utf8(bytes)) {
+            (OutputStream::Stdout, Ok(data)) => RelayEvent::Stdout {
+                data: data.to_string(),
+            },
+            (OutputStream::Stderr, Ok(data)) => RelayEvent::Stderr {
+                data: data.to_string(),
+            },
+            (OutputStream::Stdout, Err(_)) => RelayEvent::StdoutBytes {
+                data: EncodedBytes::from_bytes(bytes),
+            },
+            (OutputStream::Stderr, Err(_)) => RelayEvent::StderrBytes {
+                data: EncodedBytes::from_bytes(bytes),
+            },
         }
     }
 
     fn drain_buffered_output(
         stream: &mut (impl Read + AsRawFd),
-        kind: RelayStream,
+        kind: OutputStream,
         events: &EventSender,
         buffer: &mut [u8],
-    ) {
-        let mut remaining: libc::c_int = 0;
-        // SAFETY: the stream remains open and `remaining` points to writable
-        // storage of the type expected by FIONREAD.
-        if unsafe { libc::ioctl(stream.as_raw_fd(), libc::FIONREAD, &mut remaining) } < 0 {
-            return;
-        }
-        let mut remaining = remaining.max(0) as usize;
-        while remaining > 0 {
-            let length = remaining.min(buffer.len());
-            match stream.read(&mut buffer[..length]) {
+    ) -> Result<(), String> {
+        loop {
+            match stream.read(buffer) {
                 Ok(0) => break,
                 Ok(length) => {
                     if events.send(output_event(kind, &buffer[..length])).is_err() {
                         break;
                     }
-                    remaining -= length;
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
-                Err(_) => break,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
+                Err(error) => return Err(format!("worker output read failed: {error}")),
             }
         }
-    }
-
-    fn drain_wakeup(reader: &std::io::PipeReader) {
-        let mut available: libc::c_int = 0;
-        // SAFETY: the wake pipe is open and `available` has the expected type.
-        if unsafe { libc::ioctl(reader.as_raw_fd(), libc::FIONREAD, &mut available) } < 0 {
-            return;
-        }
-        let mut remaining = available.max(0) as usize;
-        let mut buffer = [0_u8; 64];
-        while remaining > 0 {
-            let length = remaining.min(buffer.len());
-            match (&*reader).read(&mut buffer[..length]) {
-                Ok(0) | Err(_) => return,
-                Ok(length) => remaining -= length,
-            }
-        }
+        Ok(())
     }
 
     #[derive(Clone)]
     struct Cancellation(Arc<Mutex<Option<std::io::PipeWriter>>>);
 
     impl Cancellation {
-        fn wake(&self) {
-            let mut writer = match self.0.lock() {
-                Ok(writer) => writer,
-                Err(poisoned) => poisoned.into_inner(),
-            };
-            if let Some(writer) = writer.as_mut() {
-                let _ = writer.write_all(&[1]);
-            }
-        }
-
         fn cancel(&self) {
             let mut writer = match self.0.lock() {
                 Ok(writer) => writer,

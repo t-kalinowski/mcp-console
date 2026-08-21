@@ -68,6 +68,7 @@ result:
     - type: text
       text: |-
         [idle R callback requested input "later> " during requirement preparation; collect callback input with send before preparing requirements]
+        [worker terminated by signal 9]
         [worker stopped: in-memory state lost]
   isError: true
 ...

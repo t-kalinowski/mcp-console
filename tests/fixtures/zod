@@ -38,8 +38,9 @@ def send(stream: TextIO, message: dict[str, Any]) -> None:
 
 
 def send_batch(stream: TextIO, messages: list[dict[str, Any]]) -> None:
-    for message in messages:
-        stream.write(json.dumps(message, separators=(",", ":")) + "\n")
+    stream.writelines(
+        json.dumps(message, separators=(",", ":")) + "\n" for message in messages
+    )
     stream.flush()
 
 
@@ -107,10 +108,10 @@ def wait_for_server_to_process_sideband(reader: TextIO, writer: TextIO) -> None:
     assert response["kind"] == "python_version_resolution_failed", response
 
 
-def configure_startup(root: Path, reader: TextIO, writer: TextIO) -> bool:
+def configure_startup(root: Path, reader: TextIO, writer: TextIO) -> tuple[bool, bool]:
     control_path = os.environ.get("ZOD_STARTUP_CONTROL")
     if control_path is None:
-        return False
+        return False, False
     control = Path(control_path)
     mode = control.read_text(encoding="utf-8")
     if mode == "fail":
@@ -145,9 +146,9 @@ def configure_startup(root: Path, reader: TextIO, writer: TextIO) -> bool:
         write_all(1, b"zod replacement startup ready\n")
         mode = "ready"
     if mode == "ready with callback":
-        return True
+        return True, False
     assert mode == "ready", f"unsupported Zod startup mode: {mode}"
-    return False
+    return False, False
 
 
 def main() -> None:
@@ -168,8 +169,9 @@ def main() -> None:
             str(os.getpgrp()),
             encoding="utf-8",
         )
-    startup_callback = configure_startup(temporary, reader, writer)
-    send(writer, {"kind": "ready"})
+    startup_callback, startup_ready_sent = configure_startup(temporary, reader, writer)
+    if not startup_ready_sent:
+        send(writer, {"kind": "ready"})
     if startup_callback:
         send(
             writer,
@@ -364,24 +366,24 @@ def main() -> None:
                 signal.pause()
 
         if source in {
-            "force stop after checkpointed stdout",
-            "force stop after checkpointed stderr",
+            "force stop after raw stdout",
+            "force stop after raw stderr",
         }:
-            stream = source.removeprefix("force stop after checkpointed ")
+            stream = source.removeprefix("force stop after raw ")
             descriptor = 1 if stream == "stdout" else 2
             write_all(
                 descriptor,
-                f"zod checkpointed {stream}: ".encode() + b"\xe2\x82",
+                f"zod retiring {stream}: ".encode() + b"\xe2\x82",
             )
-            # The relay checkpoints raw streams before forwarding this callback.
-            # Its response proves these bytes preceded forced retirement.
-            wait_for_server_to_process_sideband(reader, writer)
             send(writer, {"kind": "ready"})
             while True:
                 signal.pause()
 
         if source == "exit unexpectedly":
             os._exit(86)
+
+        if source == "exit zero":
+            os._exit(0)
 
         if source == "kill relay and remain live":
             worker_pid = os.getpid()
@@ -471,10 +473,14 @@ def main() -> None:
                     os.close(descriptor)
                 while True:
                     signal.pause()
+            release = temporary / "zod-release-partial-sideband"
+            os.mkfifo(release)
             (temporary / "zod-sideband-descendant-pid").write_text(
                 str(child),
                 encoding="utf-8",
             )
+            with release.open("rb", buffering=0) as stream:
+                assert stream.read(1) == b"x"
             writer.write('{"kind":"console_output"')
             writer.flush()
             os._exit(86)

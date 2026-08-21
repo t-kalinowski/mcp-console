@@ -83,6 +83,7 @@ def test_rejects_python_older_than_3_10(binary: Path) -> Transcript:
     )
     worker_failure = (
         "[worker sideband read failed: worker sideband closed]\n"
+        "[worker exited with status 1]\n"
         "[worker stopped: in-memory state lost]\n"
         "[starting new worker]\n"
         "[idle]"
@@ -792,6 +793,7 @@ def test_does_not_retain_package_requirements_before_python_initializes(
         actual = result["content"][0]["text"]
         assert actual == (
             "[worker sideband read failed: worker sideband closed]\n"
+            "[worker terminated by signal 9]\n"
             "[worker stopped: in-memory state lost]\n"
             "[starting new worker]\n"
             "[idle]"
@@ -824,6 +826,7 @@ def test_retains_python_activation_before_later_cell_failure(
     assert result["isError"] is True
     assert result["content"][0]["text"] == (
         "[worker sideband read failed: worker sideband closed]\n"
+        "[worker terminated by signal 9]\n"
         "[worker stopped: in-memory state lost]\n"
         "[starting new worker]\n"
         "[idle]"
@@ -2217,6 +2220,7 @@ def test_restarts_after_python_bridge_failure(binary: Path) -> Transcript:
     )
     worker_failure = (
         "[worker sideband read failed: worker sideband closed]\n"
+        "[worker exited with status 1]\n"
         "[worker stopped: in-memory state lost]\n"
         "[starting new worker]\n"
         "[idle]"

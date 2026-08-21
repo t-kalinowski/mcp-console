@@ -19,7 +19,7 @@ pub(super) struct Evaluation {
 struct EvaluationState {
     phase: EvaluationPhase,
     completion_checkpoint: Option<OutputCheckpoint>,
-    /// Whether a waiter already drained the response for a terminal phase.
+    /// Whether a waiter already drained the response for a completion phase.
     completion_collected: bool,
     input_report_at: Option<Instant>,
     /// Whether one `send` currently owns the right to drain this evaluation's response.

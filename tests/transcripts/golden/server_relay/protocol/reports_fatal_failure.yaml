@@ -3,17 +3,28 @@ relay:
   kind: fatal
   message: scripted relay failure
 ---
-relay:
-  kind: stream_closed
-  stream: stdout
+server:
+  kind: shutdown
+  grace_millis: 0
 ---
 relay:
-  kind: stream_closed
-  stream: stderr
+  kind: shutdown_started
+---
+relay:
+  kind: stdout
+  data: |
+    drained after fatal failure
+---
+relay:
+  kind: stdout_closed
+---
+relay:
+  kind: stderr_closed
 ---
 relay:
   kind: worker_sideband_closed
 ---
 relay:
   kind: worker_exited
+  code: 86
 ...

@@ -803,13 +803,38 @@ def test_restarts_after_r_worker_segfault(binary: Path) -> Transcript:
     assert fatal_output.endswith(
         '[input requested: "Selection: "]\nR is aborting now ...\n'
         "[worker sideband read failed: worker sideband closed]\n"
+        "[worker terminated by signal 11]\n"
+        "[worker stopped: in-memory state lost]\n"
+        "[starting new worker]\n"
+        "[idle]"
+    ), repr(fatal_output)
+
+    client.send(r='exists("r_worker_marker", inherits = FALSE)')
+    assert last_tool_text(client) == "[1] FALSE\n"
+    client.send(r="1 + 1")
+    assert last_tool_text(client) == "[1] 2\n"
+    return client._finish()
+
+
+def test_reports_r_worker_exit_status(binary: Path) -> Transcript:
+    client = McpClient(binary, ("serve",))
+    client._initialize_and_list_tools()
+
+    # fmt: r
+    r = code(r"""
+        quit(save = "no", status = 33L, runLast = FALSE)
+        """)
+    client.send(r=r)
+    result = client.transcript[-1]["result"]
+    assert result["isError"] is True
+    assert result["content"][0]["text"] == (
+        "[worker sideband read failed: worker sideband closed]\n"
+        "[worker exited with status 33]\n"
         "[worker stopped: in-memory state lost]\n"
         "[starting new worker]\n"
         "[idle]"
     )
 
-    client.send(r='exists("r_worker_marker", inherits = FALSE)')
-    assert last_tool_text(client) == "[1] FALSE\n"
     client.send(r="1 + 1")
     assert last_tool_text(client) == "[1] 2\n"
     return client._finish()
@@ -829,6 +854,7 @@ def test_reports_r_worker_restart_with_idle_stdin(binary: Path) -> Transcript:
     assert result["isError"] is True
     assert result["content"][0]["text"] == (
         "[worker sideband read failed: worker sideband closed]\n"
+        "[worker terminated by signal 9]\n"
         "[worker stopped: in-memory state lost]\n"
         "[starting new worker]\n"
         "[idle]"

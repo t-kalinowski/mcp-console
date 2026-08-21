@@ -151,26 +151,39 @@ def test_starts_and_reports_ready(binary: Path) -> Transcript:
     return client.finish_active()
 
 
-def test_evaluates_and_commits_terminal(binary: Path) -> Transcript:
+def test_evaluates_and_commits_operation_result(binary: Path) -> Transcript:
     client = ServerRelayClient(binary, "evaluate")
     assert _tool_text(client.send(r="42")) == "[done]"
-    return client.finish_active()
+    transcript = client.finish_active()
+    assert not any(
+        entry.keys() == {"server"}
+        and entry["server"].get("kind") == "terminal_committed"
+        for entry in transcript
+    ), transcript
+    return transcript
 
 
 def test_forwards_raw_stdout_and_stderr(binary: Path) -> Transcript:
     client = ServerRelayClient(binary, "raw_output")
-    assert _tool_text(client.send(r="42")) == "stdout\nstderr\n"
+    assert _tool_text(client.send(r="42")) == (
+        "stdout text 👩🏽‍💻\nstderr text\n�stdout bytes\n�stderr bytes\n"
+    )
     transcript = client.finish_active()
 
     output = [
         entry["relay"]
         for entry in transcript
         if entry.keys() == {"relay"}
-        and entry["relay"].get("kind") in {"stdout", "stderr"}
+        and entry["relay"].get("kind")
+        in {"stdout", "stderr", "stdout_bytes", "stderr_bytes"}
     ]
-    assert [base64.b64decode(event["data"], validate=True) for event in output] == [
-        b"stdout\n",
-        b"stderr\n",
+    assert output[:2] == [
+        {"kind": "stdout", "data": "stdout text 👩🏽‍💻\n"},
+        {"kind": "stderr", "data": "stderr text\n"},
+    ]
+    assert [base64.b64decode(event["data"], validate=True) for event in output[2:]] == [
+        b"\xffstdout bytes\n",
+        b"\xfestderr bytes\n",
     ]
     return transcript
 
@@ -192,6 +205,16 @@ def test_interrupts_and_reports_result(binary: Path) -> Transcript:
     return client.finish_active()
 
 
+def test_orders_cross_source_output_by_serialized_observation(
+    binary: Path,
+) -> Transcript:
+    client = ServerRelayClient(binary, "serialized_cross_source_order")
+    assert _tool_text(client.send(r="42")) == "[done]"
+    client._wait_for(DONE_NAME)
+    assert _tool_text(client.send()) == "observed after operation result\n[idle]"
+    return client.finish_active()
+
+
 def test_gracefully_shuts_down(binary: Path) -> Transcript:
     client = ServerRelayClient(binary, "shutdown")
     assert _tool_text(client.session(action="restart")) == (
@@ -204,7 +227,12 @@ def test_reports_fatal_failure(binary: Path) -> Transcript:
     client = ServerRelayClient(binary, "fatal")
     failed = client.client._start_send(r="42")
     transcript = client.release_failure(failed, "scripted relay failure")
-    assert transcript[-1] == {"relay": {"kind": "worker_exited"}}, transcript
+    output = failed["result"]["content"][0]["text"]
+    assert output.startswith("drained after fatal failure\n"), output
+    assert "[worker exited with status 86]" in output, output
+    assert transcript[-1] == {"relay": {"kind": "worker_exited", "code": 86}}, (
+        transcript
+    )
     return transcript
 
 
@@ -217,7 +245,74 @@ def test_rejects_truncated_output(binary: Path) -> Transcript:
     )
     assert len(transcript) == 1, transcript
     raw = base64.b64decode(transcript[0]["relay_raw"], validate=True)
-    assert raw == b'{"kind":"worker_message"', raw
+    assert raw == b'{"kind":"console_output"', raw
+    return transcript
+
+
+def _reports_worker_outcome(
+    binary: Path,
+    scenario: str,
+    diagnostic: str,
+) -> tuple[Transcript, str]:
+    client = ServerRelayClient(binary, scenario)
+    failed = client.client._start_send(r="42")
+    transcript = client.release_failure(failed, diagnostic)
+    result = failed["result"]
+    assert result.get("isError") is True, result
+    content = result["content"]
+    assert len(content) == 1 and content[0]["type"] == "text", content
+    output = content[0]["text"]
+    stopped = "[worker stopped: in-memory state lost]"
+    replacement = "[starting new worker]"
+    assert (
+        output.index(diagnostic) < output.index(stopped) < output.index(replacement)
+    ), output
+    return transcript, output
+
+
+def test_reports_unexpected_worker_exit_zero(binary: Path) -> Transcript:
+    transcript, _ = _reports_worker_outcome(
+        binary,
+        "exit_zero",
+        "[worker exited with status 0]",
+    )
+    assert transcript[-1] == {"relay": {"kind": "worker_exited", "code": 0}}, transcript
+    return transcript
+
+
+def test_reports_unexpected_worker_exit_nonzero_and_drains_output(
+    binary: Path,
+) -> Transcript:
+    transcript, output = _reports_worker_outcome(
+        binary,
+        "exit_nonzero",
+        "[worker exited with status 33]",
+    )
+    assert output.startswith("drained stdout\n�drained stderr\n"), output
+    events = [entry["relay"] for entry in transcript if entry.keys() == {"relay"}]
+    assert events[-6:] == [
+        {"kind": "stdout", "data": "drained stdout\n"},
+        {
+            "kind": "stderr_bytes",
+            "data": base64.b64encode(b"\xffdrained stderr\n").decode("ascii"),
+        },
+        {"kind": "stdout_closed"},
+        {"kind": "stderr_closed"},
+        {"kind": "worker_sideband_closed"},
+        {"kind": "worker_exited", "code": 33},
+    ], events
+    return transcript
+
+
+def test_reports_unexpected_worker_signal(binary: Path) -> Transcript:
+    transcript, _ = _reports_worker_outcome(
+        binary,
+        "signaled",
+        "[worker terminated by signal 15]",
+    )
+    assert transcript[-1] == {"relay": {"kind": "worker_signaled", "signal": 15}}, (
+        transcript
+    )
     return transcript
 
 

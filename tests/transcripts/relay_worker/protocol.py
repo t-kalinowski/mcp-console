@@ -169,10 +169,11 @@ def test_recovers_after_worker_segfault(binary: Path) -> Transcript:
     assert result["isError"] is True, result
     assert result["content"][0]["text"] == (
         "[worker sideband read failed: worker sideband closed]\n"
+        "[worker exited with status 245]\n"
         "[worker stopped: in-memory state lost]\n"
         "[starting new worker]\n"
         "[idle]"
-    )
+    ), repr(result["content"][0]["text"])
 
     # fmt: r
     after_crash = code(r"""

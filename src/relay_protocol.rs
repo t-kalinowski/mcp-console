@@ -7,7 +7,11 @@ use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 
 #[cfg(target_os = "macos")]
-use crate::worker_protocol::{ServerMessage, WorkerMessage};
+use crate::cell::Language;
+#[cfg(target_os = "macos")]
+use crate::worker_protocol::{
+    PythonRequirementManifest, PythonResolveRequest, PythonVersionResolveRequest, WorkerMessage,
+};
 
 #[cfg(target_os = "macos")]
 #[derive(Clone, Deserialize, Serialize)]
@@ -18,29 +22,72 @@ pub(crate) struct EncodedBytes(String);
 #[derive(Deserialize, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum RelayCommand {
-    WorkerMessage { message: ServerMessage },
+    Evaluate { language: Language, source: String },
+    PrepareR { library: String },
+    PreparePython { packages: Vec<String> },
+    PythonResolved { python: String },
+    PythonResolutionFailed { message: String },
+    PythonVersionResolved { version: String },
+    PythonVersionResolutionFailed { message: String },
     Stdin { data: String },
     Interrupt { request_id: u64 },
     Shutdown { grace_millis: u64 },
-    TerminalCommitted,
 }
 
 #[cfg(target_os = "macos")]
 #[derive(Deserialize, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum RelayEvent {
-    WorkerMessage {
-        message: WorkerMessage,
+    Ready,
+    ConsoleOutput {
+        data: String,
     },
+    ConsoleDiagnostic {
+        data: String,
+    },
+    Image {
+        data: String,
+        mime_type: String,
+    },
+    InputRequested {
+        prompt: String,
+    },
+    InputReceived,
+    InputCancelled,
+    RPrepared {
+        library: String,
+    },
+    RPreparationFailed {
+        message: String,
+    },
+    ResolvePython {
+        request: PythonResolveRequest,
+    },
+    ResolvePythonVersion {
+        request: PythonVersionResolveRequest,
+    },
+    PythonActivated {
+        requirements: PythonRequirementManifest,
+    },
+    PythonPrepared,
+    PythonPreparationFailed {
+        message: String,
+    },
+    Completed,
     Stdout {
-        data: EncodedBytes,
+        data: String,
     },
     Stderr {
+        data: String,
+    },
+    StdoutBytes {
         data: EncodedBytes,
     },
-    StreamClosed {
-        stream: RelayStream,
+    StderrBytes {
+        data: EncodedBytes,
     },
+    StdoutClosed,
+    StderrClosed,
     WorkerSidebandClosed,
     InterruptResult {
         request_id: u64,
@@ -48,18 +95,44 @@ pub(crate) enum RelayEvent {
         error: Option<String>,
     },
     ShutdownStarted,
-    WorkerExited,
+    WorkerExited {
+        code: i32,
+    },
+    WorkerSignaled {
+        signal: i32,
+    },
     Fatal {
         message: String,
     },
 }
 
 #[cfg(target_os = "macos")]
-#[derive(Clone, Copy, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub(crate) enum RelayStream {
-    Stdout,
-    Stderr,
+impl From<WorkerMessage> for RelayEvent {
+    fn from(message: WorkerMessage) -> Self {
+        match message {
+            WorkerMessage::Ready => Self::Ready,
+            WorkerMessage::ConsoleOutput { data } => Self::ConsoleOutput { data },
+            WorkerMessage::ConsoleDiagnostic { data } => Self::ConsoleDiagnostic { data },
+            WorkerMessage::Image { data, mime_type } => Self::Image { data, mime_type },
+            WorkerMessage::InputRequested { prompt } => Self::InputRequested { prompt },
+            WorkerMessage::InputReceived => Self::InputReceived,
+            WorkerMessage::InputCancelled => Self::InputCancelled,
+            WorkerMessage::RPrepared { library } => Self::RPrepared { library },
+            WorkerMessage::RPreparationFailed { message } => Self::RPreparationFailed { message },
+            WorkerMessage::ResolvePython { request } => Self::ResolvePython { request },
+            WorkerMessage::ResolvePythonVersion { request } => {
+                Self::ResolvePythonVersion { request }
+            }
+            WorkerMessage::PythonActivated { requirements } => {
+                Self::PythonActivated { requirements }
+            }
+            WorkerMessage::PythonPrepared => Self::PythonPrepared,
+            WorkerMessage::PythonPreparationFailed { message } => {
+                Self::PythonPreparationFailed { message }
+            }
+            WorkerMessage::Completed => Self::Completed,
+        }
+    }
 }
 
 #[cfg(target_os = "macos")]

@@ -9,7 +9,7 @@ mod lifecycle;
 mod output;
 
 #[cfg(target_os = "macos")]
-mod activity;
+mod events;
 
 #[cfg(target_os = "macos")]
 #[path = "worker_client/macos.rs"]
@@ -75,53 +75,54 @@ struct WorkerSnapshot {
     input_requested: bool,
 }
 
-/// Keeps the sideband reader behind a terminal frame until its owner commits.
-struct TerminalCommit<T> {
-    value: Option<T>,
-    acknowledgment: Option<std::io::PipeWriter>,
+type RPreparationCommit =
+    Box<dyn FnOnce(Result<(), String>) -> Result<Result<(), String>, String> + Send + 'static>;
+
+type PythonPreparationCommit = Box<
+    dyn FnOnce(
+            Result<Option<crate::resolver::ManagedPython>, String>,
+        ) -> Result<Result<(), String>, String>
+        + Send
+        + 'static,
+>;
+
+#[derive(Clone, Copy)]
+enum WorkerProcessOutcome {
+    Exited(i32),
+    Signaled(i32),
 }
 
-impl<T> TerminalCommit<T> {
-    fn new(value: T, acknowledgment: std::io::PipeWriter) -> Self {
-        Self {
-            value: Some(value),
-            acknowledgment: Some(acknowledgment),
+impl WorkerProcessOutcome {
+    fn diagnostic(self) -> String {
+        match self {
+            Self::Exited(code) => format!("worker exited with status {code}"),
+            Self::Signaled(signal) => format!("worker terminated by signal {signal}"),
         }
     }
+}
 
-    fn try_map<U, E>(
-        mut self,
-        map: impl FnOnce(T) -> Result<U, E>,
-    ) -> Result<TerminalCommit<U>, E> {
-        let value = self
-            .value
-            .take()
-            .expect("terminal result should be available until commit");
-        let value = map(value)?;
-        Ok(TerminalCommit {
-            value: Some(value),
-            acknowledgment: self.acknowledgment.take(),
-        })
+struct WorkerRetirementFailure {
+    message: String,
+    outcome: Option<WorkerProcessOutcome>,
+}
+
+impl WorkerRetirementFailure {
+    fn new(message: String, outcome: Option<WorkerProcessOutcome>) -> Self {
+        Self { message, outcome }
     }
 
-    fn commit_with<U>(mut self, commit: impl FnOnce(T) -> U) -> U {
-        let value = self
-            .value
-            .take()
-            .expect("terminal result should be available until commit");
-        let result = commit(value);
-        self.acknowledge();
-        result
-    }
-
-    fn acknowledge(&mut self) {
-        drop(self.acknowledgment.take());
+    fn attach_to(self, mut failure: SendFailure) -> SendFailure {
+        failure.message.push_str(&format!(
+            "; additionally failed to stop the worker: {}",
+            self.message
+        ));
+        failure.worker_outcome(self.outcome)
     }
 }
 
-impl<T> Drop for TerminalCommit<T> {
-    fn drop(&mut self) {
-        self.acknowledge();
+impl From<String> for WorkerRetirementFailure {
+    fn from(message: String) -> Self {
+        Self::new(message, None)
     }
 }
 
@@ -141,16 +142,23 @@ enum WorkerState {
 enum WorkerRetirement {
     NeverStarted,
     AlreadyStopped,
-    Stopped,
+    Stopped {
+        outcome: Option<WorkerProcessOutcome>,
+        failed: bool,
+    },
 }
 
 impl WorkerState {
-    fn stop(&mut self, deadline: std::time::Instant) -> Result<WorkerRetirement, String> {
+    fn stop_failed(&mut self) -> Result<WorkerRetirement, WorkerRetirementFailure> {
         match self {
             Self::Running(worker) => {
-                worker.shutdown(deadline)?;
+                let retirement = worker.shutdown_after_failure();
+                let failed = worker.has_failure();
                 *self = Self::Stopped;
-                Ok(WorkerRetirement::Stopped)
+                let outcome = retirement?;
+                let failed =
+                    failed.map_err(|message| WorkerRetirementFailure::new(message, outcome))?;
+                Ok(WorkerRetirement::Stopped { outcome, failed })
             }
             Self::Initial => Ok(WorkerRetirement::NeverStarted),
             Self::Stopped => Ok(WorkerRetirement::AlreadyStopped),
@@ -160,9 +168,10 @@ impl WorkerState {
     fn finish_retirement(&mut self) -> Result<WorkerRetirement, String> {
         match self {
             Self::Running(worker) => {
-                worker.finish_retirement()?;
+                let outcome = worker.finish_retirement()?;
+                let failed = worker.has_failure()?;
                 *self = Self::Stopped;
-                Ok(WorkerRetirement::Stopped)
+                Ok(WorkerRetirement::Stopped { outcome, failed })
             }
             Self::Initial => Ok(WorkerRetirement::NeverStarted),
             Self::Stopped => Ok(WorkerRetirement::AlreadyStopped),
@@ -471,14 +480,12 @@ impl Client {
         if let Some(message) = snapshot.failure {
             let mut failure = SendFailure::from(message);
             match self.stop_failed_worker(&mut worker, generation) {
-                Ok(lifecycle::FailedWorkerStop::Stopped) => {
-                    failure = failure.worker_stopped();
+                Ok(lifecycle::FailedWorkerStop::Stopped(outcome)) => {
+                    failure = failure.worker_outcome(outcome).worker_stopped();
                 }
                 Ok(lifecycle::FailedWorkerStop::RestartOwnsWorker) => {}
                 Err(stop_error) => {
-                    failure.message.push_str(&format!(
-                        "; additionally failed to stop the worker: {stop_error}"
-                    ));
+                    failure = stop_error.attach_to(failure);
                 }
             }
             self.0.output.push_failure(failure);
@@ -520,20 +527,19 @@ impl Client {
             .map_err(|_| SendFailure::from("worker lock poisoned".to_string()))?;
         self.ensure_generation(&generation)
             .map_err(SendFailure::from)?;
-        if let Err(error) = self.start_worker(
+        if let Err(mut failure) = self.start_worker(
             &mut worker,
             generation.clone(),
             true,
             |stop_handle| self.register_stop_handle(&generation, stop_handle),
             || Ok(()),
         ) {
-            let error = match self.clear_worker_stop_handle(&generation) {
-                Ok(()) => error,
-                Err(clear_error) => format!(
-                    "{error}; additionally failed to clear the worker shutdown handle: {clear_error}"
-                ),
-            };
-            return Err(SendFailure::from(error));
+            if let Err(clear_error) = self.clear_worker_stop_handle(&generation) {
+                failure.message.push_str(&format!(
+                    "; additionally failed to clear the worker shutdown handle: {clear_error}"
+                ));
+            }
+            return Err(failure);
         }
         let WorkerState::Running(running) = &mut *worker else {
             return Err(SendFailure::from("worker is not running".to_string()));
@@ -541,22 +547,17 @@ impl Client {
         let result = running
             .evaluate(cell, evaluation.clone())
             .map_err(|message| evaluation.classify_failure(message));
-        let failure = match result {
-            Ok(completion) => {
-                completion.commit_with(|checkpoint| evaluation.complete_cell_at(checkpoint));
-                return Ok(());
-            }
+        let mut failure = match result {
+            Ok(()) => return Ok(()),
             Err(failure) => failure,
         };
         match self.stop_failed_worker(&mut worker, &generation) {
-            Ok(lifecycle::FailedWorkerStop::Stopped) => {}
+            Ok(lifecycle::FailedWorkerStop::Stopped(outcome)) => {
+                failure = failure.worker_outcome(outcome);
+            }
             Ok(lifecycle::FailedWorkerStop::RestartOwnsWorker) => return Err(failure),
             Err(stop_error) => {
-                let mut failure = failure;
-                failure.message.push_str(&format!(
-                    "; additionally failed to stop the worker: {stop_error}"
-                ));
-                return Err(failure);
+                return Err(stop_error.attach_to(failure));
             }
         }
 
@@ -570,14 +571,13 @@ impl Client {
                 |stop_handle| self.register_stop_handle(&generation, stop_handle),
                 || Ok(()),
             )
-            .map_err(|error| {
-                let error = match self.clear_worker_stop_handle(&generation) {
-                    Ok(()) => error,
-                    Err(clear_error) => format!(
-                        "{error}; additionally failed to clear the worker shutdown handle: {clear_error}"
-                    ),
-                };
-                SendFailure::from(error)
+            .map_err(|mut failure| {
+                if let Err(clear_error) = self.clear_worker_stop_handle(&generation) {
+                    failure.message.push_str(&format!(
+                        "; additionally failed to clear the worker shutdown handle: {clear_error}"
+                    ));
+                }
+                failure
             });
         evaluation.finish_replacement(replacement);
         Ok(())
@@ -599,35 +599,31 @@ impl Client {
         self.ensure_generation(generation)
             .map_err(SendFailure::from)?;
 
-        if let Err(error) = self.start_worker(
+        if let Err(mut failure) = self.start_worker(
             &mut worker,
             generation.clone(),
             true,
             |stop_handle| self.register_stop_handle(generation, stop_handle),
             || Ok(()),
         ) {
-            let error = match self.clear_worker_stop_handle(generation) {
-                Ok(()) => error,
-                Err(clear_error) => format!(
-                    "{error}; additionally failed to clear the worker shutdown handle: {clear_error}"
-                ),
-            };
-            return Err(SendFailure::from(error));
+            if let Err(clear_error) = self.clear_worker_stop_handle(generation) {
+                failure.message.push_str(&format!(
+                    "; additionally failed to clear the worker shutdown handle: {clear_error}"
+                ));
+            }
+            return Err(failure);
         }
         let WorkerState::Running(running) = &mut *worker else {
             unreachable!("worker should be running");
         };
         match operation(running) {
             Ok(result) => Ok(result),
-            Err(mut failure) => match self.stop_failed_worker(&mut worker, generation) {
-                Ok(lifecycle::FailedWorkerStop::Stopped) => Err(failure.worker_stopped()),
-                Ok(lifecycle::FailedWorkerStop::RestartOwnsWorker) => Err(failure),
-                Err(stop_error) => {
-                    failure.message.push_str(&format!(
-                        "; additionally failed to stop the worker: {stop_error}"
-                    ));
-                    Err(failure)
+            Err(failure) => match self.stop_failed_worker(&mut worker, generation) {
+                Ok(lifecycle::FailedWorkerStop::Stopped(outcome)) => {
+                    Err(failure.worker_outcome(outcome).worker_stopped())
                 }
+                Ok(lifecycle::FailedWorkerStop::RestartOwnsWorker) => Err(failure),
+                Err(stop_error) => Err(stop_error.attach_to(failure)),
             },
         }
     }
@@ -639,7 +635,7 @@ impl Client {
         announce_replacement: bool,
         on_started: impl FnOnce(platform::WorkerShutdownHandle) -> Result<(), String>,
         on_ready: impl FnOnce() -> Result<(), String>,
-    ) -> Result<(), String> {
+    ) -> Result<(), SendFailure> {
         let replacing = matches!(&*worker, WorkerState::Stopped);
         if !matches!(&*worker, WorkerState::Running(_)) {
             let mut environment = match &self.0.environment {

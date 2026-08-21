@@ -10,6 +10,7 @@ result:
       text: |-
         zod invalid stdout: � trailing: �<large output>
         [worker sideband read failed: worker sideband closed]
+        [worker exited with status 86]
         [worker stopped: in-memory state lost]
         [starting new worker]
         [idle]
@@ -24,6 +25,7 @@ result:
       text: |-
         zod invalid stderr: � trailing: �<large output>
         [worker sideband read failed: worker sideband closed]
+        [worker exited with status 86]
         [worker stopped: in-memory state lost]
         [starting new worker]
         [idle]

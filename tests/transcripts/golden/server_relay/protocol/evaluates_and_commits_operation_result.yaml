@@ -7,14 +7,6 @@ server:
   language: r
   source: "42"
 ---
-server:
-  kind: interrupt
-  request_id: 0
----
-relay:
-  kind: interrupt_result
-  request_id: 0
----
 relay:
   kind: completed
 ...

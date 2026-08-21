@@ -259,7 +259,8 @@ def test_stops_live_preparation_for_idle_callback_input(binary: Path) -> Transcr
     assert result["content"][0]["text"] == (
         '[idle R callback requested input "later> " during requirement '
         "preparation; collect callback input with send before preparing "
-        "requirements]\n[worker stopped: in-memory state lost]"
+        "requirements]\n[worker terminated by signal 9]\n"
+        "[worker stopped: in-memory state lost]"
     ), result
     return client._finish()
 

@@ -1,15 +1,11 @@
 ---
 relay:
-  kind: worker_message
-  message:
-    kind: ready
+  kind: ready
 ---
 server:
-  kind: worker_message
-  message:
-    kind: evaluate
-    language: r
-    source: "42"
+  kind: evaluate
+  language: r
+  source: "42"
 ---
 server:
   kind: stdin
@@ -17,10 +13,5 @@ server:
     answer
 ---
 relay:
-  kind: worker_message
-  message:
-    kind: completed
----
-server:
-  kind: terminal_committed
+  kind: completed
 ...
