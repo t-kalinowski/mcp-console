@@ -892,7 +892,8 @@ def test_custom_worker_reports_idle_input_before_preparation_failure(
         )
         client._initialize_and_list_tools()
         client.send(r="request input while idle")
-        assert last_tool_text(client) == "[done]"
+        output = last_tool_text(client)
+        assert output == '[input requested: "idle> "]\n', repr(output)
 
         result = client.session(
             action="prepare",
@@ -900,7 +901,6 @@ def test_custom_worker_reports_idle_input_before_preparation_failure(
         )
         assert result["isError"] is True, result
         assert result["content"][0]["text"] == (
-            '[input requested: "idle> "]\n'
             '[idle R callback requested input "idle> " during requirement '
             "preparation; collect callback input with send before preparing requirements]\n"
             "[worker terminated by signal 9]\n"
@@ -959,11 +959,9 @@ def test_custom_worker_resolves_idle_activity_before_evaluation(
     assert last_tool_text(client) == "zod: echo\n"
 
     client.send(r="request input while idle")
-    assert last_tool_text(client) == "[done]"
+    assert last_tool_text(client) == '[input requested: "idle> "]\n'
     client.send(r="echo", stdin="continue\n")
-    assert last_tool_text(client) == ('[input requested: "idle> "]\nzod: echo\n'), repr(
-        last_tool_text(client)
-    )
+    assert last_tool_text(client) == "zod: echo\n"
     return client._finish()
 
 

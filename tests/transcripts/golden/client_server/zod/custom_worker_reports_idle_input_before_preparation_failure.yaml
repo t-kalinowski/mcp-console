@@ -7,7 +7,8 @@ send:
 result:
   content:
     - type: text
-      text: "[done]"
+      text: |
+        [input requested: "idle> "]
   isError: false
 ---
 id: 4
@@ -20,7 +21,6 @@ result:
   content:
     - type: text
       text: |-
-        [input requested: "idle> "]
         [idle R callback requested input "idle> " during requirement preparation; collect callback input with send before preparing requirements]
         [worker terminated by signal 9]
         [worker stopped: in-memory state lost]

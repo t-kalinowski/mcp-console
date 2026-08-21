@@ -26,7 +26,8 @@ send:
 result:
   content:
     - type: text
-      text: "[done]"
+      text: |
+        [input requested: "idle> "]
   isError: false
 ---
 id: 6
@@ -38,7 +39,6 @@ result:
   content:
     - type: text
       text: |
-        [input requested: "idle> "]
         zod: echo
   isError: false
 ...

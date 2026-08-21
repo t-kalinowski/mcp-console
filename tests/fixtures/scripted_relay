@@ -244,11 +244,20 @@ def run_serialized_cross_source_order(relay: ScriptedRelay) -> None:
     relay.expect(EVALUATION)
     relay.send_batch(
         [
+            {"kind": "stdout", "data": "stdout before completion\n"},
+            {"kind": "stderr", "data": "stderr before completion\n"},
             COMPLETED,
-            {"kind": "stdout", "data": "observed after operation result"},
-            RESOLVE_PYTHON,
+            {"kind": "stdout", "data": "stdout after completion\n"},
+            {"kind": "stderr", "data": "stderr after completion\n"},
+            {
+                "kind": "console_output",
+                "data": "idle callback after completion\n",
+            },
         ]
     )
+    relay.wait_for_release()
+    relay.send({"kind": "stdout", "data": "stdout after grace\n"})
+    relay.send(RESOLVE_PYTHON)
     relay.expect(PYTHON_RESOLUTION_FAILED)
     relay.send(RESOLVE_PYTHON_VERSION)
     relay.expect(PYTHON_VERSION_RESOLUTION_FAILED)
