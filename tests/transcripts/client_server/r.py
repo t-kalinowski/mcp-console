@@ -1157,10 +1157,14 @@ def test_interrupts_running_r_evaluation(binary: Path) -> Transcript:
 
             client.session(action="interrupt")
             assert last_tool_text(client) == "[interrupt sent]"
-            client.send(r="6 * 7")
-            assert last_tool_text(client) == (
-                "\n[output produced while idle]\n[1] 42\n"
-            )
+            # Signal delivery does not determine whether R writes its
+            # interrupt newline while idle or at the next cell boundary. A
+            # silent cell renders the same response under either ownership,
+            # and the following call verifies that the source ran.
+            client.send(r="idle_interrupt_state <- 42L")
+            assert last_tool_text(client) == "\n"
+            client.send(r="idle_interrupt_state")
+            assert last_tool_text(client) == "[1] 42\n"
 
             # Boundary checks must not process elapsed-time limits when no
             # interrupt is pending; R resets the limit when the cell begins.

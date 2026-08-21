@@ -2732,6 +2732,27 @@ def test_python_debugger_input(binary: Path) -> Transcript:
     client = McpClient(binary, ("serve",))
     client._initialize_and_list_tools()
 
+    def send_debugger_input(stdin: str, expected: str) -> None:
+        deadline = time.monotonic() + 3
+        poll_start = len(client.transcript)
+        logical_id = client.transcript[-1]["id"] + 1
+        client.send(stdin=stdin, timeout_ms=3_000)
+        while True:
+            output = last_tool_text(client)
+            if output == expected:
+                break
+            assert output == "\n[stdin needed]", output
+            assert time.monotonic() < deadline, (
+                "Python debugger did not consume submitted input"
+            )
+            client.send(timeout_ms=3_000)
+
+        calls = client.transcript[poll_start:]
+        submitted = calls[0]
+        submitted["id"] = logical_id
+        submitted["result"] = calls[-1]["result"]
+        client.transcript[poll_start:] = [submitted]
+
     # fmt: python
     python = code("""
         import pdb
@@ -2745,15 +2766,14 @@ def test_python_debugger_input(binary: Path) -> Transcript:
     assert output.count('[input requested: "(Pdb) "]') == 1, output
     assert output.endswith("\n[stdin needed]"), output
 
-    client.send(stdin="p debug_value\n")
-    output = last_tool_text(client)
-    assert output.count('[input requested: "(Pdb) "]') == 1, output
-    assert "41\n" in output, output
-    assert output.endswith("\n[stdin needed]"), output
+    send_debugger_input(
+        "p debug_value\n",
+        '41\n[input requested: "(Pdb) "]\n[stdin needed]',
+    )
 
-    client.send(stdin="continue\n")
-    assert last_tool_text(client) == "[done]"
+    send_debugger_input("continue\n", "[done]")
     client.send(python="debug_value")
+    client.transcript[-1]["id"] = client.transcript[-2]["id"] + 1
     assert last_tool_text(client) == "42\n"
     return client._finish()
 
