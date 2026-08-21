@@ -1,6 +1,7 @@
 #!/usr/bin/env -S uv run --script
 
 import os
+import select
 import shutil
 import signal
 import socket
@@ -29,6 +30,24 @@ from _support import (
 )
 
 PLATFORMS = {"darwin"}
+
+
+class FifoCheckpoint:
+    def __init__(self, path: Path) -> None:
+        self.path = path
+        os.mkfifo(path)
+        self.descriptor = os.open(path, os.O_RDWR | os.O_NONBLOCK)
+
+    def close(self) -> None:
+        os.close(self.descriptor)
+
+    def wait(self, description: str) -> None:
+        readable, _, _ = select.select([self.descriptor], [], [], 10)
+        assert readable, f"checkpoint was not reached: {description}"
+        assert os.read(self.descriptor, 1) == b"1"
+
+    def release(self) -> None:
+        assert os.write(self.descriptor, b"1") == 1
 
 
 def test_preserves_configured_python_environment(binary: Path) -> Transcript:
@@ -435,6 +454,136 @@ def test_restart_loses_state_and_retains_python_requirements(
     client.send(python=python)
     assert last_tool_text(client) == "(False, 'yaml12')\n"
     return client._finish()
+
+
+def test_restart_discards_pre_marker_python_activation(binary: Path) -> Transcript:
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        temporary = Path(temporary_directory)
+        real_uv = shutil.which("uv")
+        assert real_uv is not None, "real uv is required for managed-Python tests"
+        uv = Path(__file__).parents[2] / "fixtures" / "checkpoint_uv"
+        uv_started = FifoCheckpoint(temporary / "uv-started")
+        uv_release = FifoCheckpoint(temporary / "uv-release")
+
+        environment = os.environ.copy()
+        environment["TMPDIR"] = temporary_directory
+        environment["RETICULATE_UV"] = str(uv)
+        environment["MCP_CONSOLE_TEST_REAL_UV"] = real_uv
+        environment["MCP_CONSOLE_TEST_UV_CHECKPOINT_ARGUMENT"] = "matplotlib"
+        environment["MCP_CONSOLE_TEST_UV_CHECKPOINT_CLAIM"] = str(
+            temporary / "uv-claimed"
+        )
+        environment["MCP_CONSOLE_TEST_UV_STARTED"] = str(uv_started.path)
+        environment["MCP_CONSOLE_TEST_UV_RELEASE"] = str(uv_release.path)
+
+        client = McpClient(binary, ("serve",), environment)
+        passed = False
+        worker_checkpoints: list[FifoCheckpoint] = []
+        try:
+            client._initialize_and_list_tools()
+            # fmt: r
+            r = code(r"""
+                invisible(reticulate::py_config())
+                activation_ready <- tempfile("mcp-console-activation-ready-")
+                activation_release <- tempfile("mcp-console-activation-release-")
+                activation_sent <- tempfile("mcp-console-activation-sent-")
+                cat(activation_ready, activation_release, activation_sent, sep = "\n")
+                """)
+            client.send(r=r)
+            setup = client.transcript[-1]["result"]
+            paths = setup["content"][0]["text"].splitlines()
+            assert len(paths) == 3, setup
+            setup["content"][0]["text"] = (
+                "<activation ready>\n<activation release>\n<activation sent>"
+            )
+            activation_ready, activation_release, activation_sent = [
+                FifoCheckpoint(Path(path)) for path in paths
+            ]
+            worker_checkpoints.extend(
+                (activation_ready, activation_release, activation_sent)
+            )
+
+            # Pause the real managed worker after its new environment resolves,
+            # immediately before its active binding publishes python_activated.
+            # fmt: r
+            r = code(r"""
+                globals <- get(".globals", envir = asNamespace("reticulate"))
+                original <- activeBindingFunction("python_requirements", globals)
+                rm(list = "python_requirements", envir = globals)
+                makeActiveBinding("python_requirements", function(value) {
+                  if (missing(value)) {
+                    return(original())
+                  }
+                  ready <- fifo(activation_ready, open = "wb", blocking = TRUE)
+                  writeBin(charToRaw("1"), ready)
+                  close(ready)
+                  release <- fifo(activation_release, open = "rb", blocking = TRUE)
+                  stopifnot(identical(readBin(release, "raw", n = 1L), charToRaw("1")))
+                  close(release)
+                  original(value)
+                  sent <- fifo(activation_sent, open = "wb", blocking = TRUE)
+                  writeBin(charToRaw("1"), sent)
+                  close(sent)
+                }, globals)
+                reticulate::py_require("py-yaml12")
+                """)
+            evaluation = client._start_send(r=r)
+            activation_ready.wait("managed Python activation")
+
+            restart = client._start_session(
+                action="restart",
+                requirements={"python": ["matplotlib"]},
+            )
+            uv_started.wait("restart Python resolution")
+            activation_release.release()
+            activation_sent.wait("published managed Python activation")
+            uv_release.release()
+            client._receive_many([evaluation, restart])
+
+            evaluation_result = evaluation["result"]
+            assert evaluation_result.get("isError") is True, evaluation_result
+            assert evaluation_result["content"] == [
+                {
+                    "type": "text",
+                    "text": (
+                        "[stopped by session restart request before evaluation finished]\n"
+                        "[worker stopped: in-memory state lost]"
+                    ),
+                }
+            ], evaluation_result
+            restart_result = restart["result"]
+            assert restart_result.get("isError") is not True, restart_result
+            assert restart_result["content"] == [
+                {
+                    "type": "text",
+                    "text": (
+                        "[active evaluation stopped by session restart request]\n"
+                        "[worker stopped: in-memory state lost]\n"
+                        "[starting new worker]\n"
+                        "[idle]"
+                    ),
+                }
+            ], restart_result
+
+            # The replacement environment wins over the old generation's
+            # activation, even though that event preceded ordered retirement.
+            # fmt: r
+            r = code(r"""
+                packages <- reticulate::py_require()$packages
+                c("matplotlib" %in% packages, "py-yaml12" %in% packages)
+                """)
+            client.send(r=r)
+            assert last_tool_text(client) == "[1]  TRUE FALSE\n"
+            transcript = client._finish()
+            passed = True
+            return transcript
+        finally:
+            if not passed:
+                stop_client(client)
+            for checkpoint in worker_checkpoints:
+                checkpoint.close()
+            uv_started.close()
+            uv_release.close()
 
 
 def test_prepares_python_requirements_after_worker_startup(binary: Path) -> Transcript:

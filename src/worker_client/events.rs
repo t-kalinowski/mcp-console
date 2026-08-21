@@ -62,8 +62,8 @@ enum Route {
 
 pub(super) enum OperationResult {
     Completed,
-    RPrepared(Result<(), String>),
-    PythonPrepared(Result<(), String>),
+    RPrepared(super::PreparationOutcome),
+    PythonPrepared(super::PreparationOutcome),
 }
 
 impl WorkerOperationState {
@@ -728,9 +728,9 @@ fn handle_semantic_event(
             };
             commands.send(response)
         }
-        RelayEvent::PythonActivated { requirements } => {
-            callbacks.activate_python(requirements, python_candidates)
-        }
+        RelayEvent::PythonActivated { requirements } => callbacks
+            .activate_python(requirements, python_candidates)
+            .map(|_| ()),
         event @ (RelayEvent::Completed
         | RelayEvent::RPrepared { .. }
         | RelayEvent::RPreparationFailed { .. }

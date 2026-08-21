@@ -853,6 +853,11 @@ An explicit `restart` with requirements is atomic until the worker replacement b
 3. leave the current worker, manifest, and interpreter unchanged if resolution fails;
 4. after resolution succeeds, commit the candidate and replace the worker.
 
+The ordered dispatcher still validates semantic events queued before the old generation's retirement marker.
+If restart reuses the retained environment, successful old-generation preparation results and managed-Python activations commit before replacement.
+If restart has already committed a newly resolved environment, those successful old-generation environment commits are discarded so they cannot overwrite the replacement, and a discarded preparation reports restart cancellation.
+Worker-reported preparation failures and protocol, resolver, or environment-commit failures remain failures.
+
 During a server-managed worker evaluation, runtime layering follows activation events:
 
 1. reticulate updates its live manifest and requests host resolution when it needs an environment;

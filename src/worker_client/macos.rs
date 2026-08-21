@@ -9,7 +9,9 @@ use super::events::{
     OperationResult, ReadyCommitOutcome, WorkerEvent, WorkerEventDispatcher, WorkerOperationState,
 };
 use super::output::SendFailure;
-use super::{PythonPreparationCommit, RPreparationCommit, WorkerProcessOutcome};
+use super::{
+    PreparationOutcome, PythonPreparationCommit, RPreparationCommit, WorkerProcessOutcome,
+};
 use crate::relay_protocol::{JsonlReader, JsonlWriter, RelayCommand, RelayEvent};
 
 /// Lets the relay finish its bounded group cleanup, stream drain, and protocol flush
@@ -232,7 +234,7 @@ impl Worker {
         &mut self,
         library: &std::path::Path,
         commit: RPreparationCommit,
-    ) -> Result<Result<(), String>, String> {
+    ) -> Result<PreparationOutcome, String> {
         let library = library
             .to_str()
             .ok_or_else(|| "resolved R library path is not UTF-8".to_string())?
@@ -253,7 +255,7 @@ impl Worker {
         &mut self,
         packages: Vec<String>,
         commit: PythonPreparationCommit,
-    ) -> Result<Result<(), String>, String> {
+    ) -> Result<PreparationOutcome, String> {
         let result = self.operation.begin_python_preparation(commit)?;
         self.relay
             .commands

@@ -22,7 +22,7 @@ mod platform;
 use environment::Environment;
 pub(crate) use environment::{PrepareResult, Requirements};
 use evaluation::{Evaluation, EvaluationWait};
-use lifecycle::{LifecycleControl, WorkerGeneration};
+use lifecycle::{LifecycleControl, OldGenerationCommitDisposition, WorkerGeneration};
 pub(crate) use output::{Content, Response, ResponseDelivery};
 use output::{OutputTape, SendFailure, SendResponse};
 
@@ -76,15 +76,20 @@ struct WorkerSnapshot {
 }
 
 type RPreparationCommit =
-    Box<dyn FnOnce(Result<(), String>) -> Result<Result<(), String>, String> + Send + 'static>;
+    Box<dyn FnOnce(Result<(), String>) -> Result<PreparationOutcome, String> + Send + 'static>;
 
 type PythonPreparationCommit = Box<
     dyn FnOnce(
             Result<Option<crate::resolver::ManagedPython>, String>,
-        ) -> Result<Result<(), String>, String>
+        ) -> Result<PreparationOutcome, String>
         + Send
         + 'static,
 >;
+
+enum PreparationOutcome {
+    Completed(Result<(), String>),
+    DiscardedByReplacement,
+}
 
 #[derive(Clone, Copy)]
 enum WorkerProcessOutcome {
@@ -704,7 +709,7 @@ impl WorkerCallbacks {
         &self,
         requirements: crate::worker_protocol::PythonRequirementManifest,
         candidates: &mut Vec<crate::resolver::ManagedPython>,
-    ) -> Result<(), String> {
+    ) -> Result<OldGenerationCommitDisposition, String> {
         self.client
             .activate_runtime_python(self.generation.clone(), requirements, candidates)
     }

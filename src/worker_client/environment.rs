@@ -1,9 +1,10 @@
 use std::collections::BTreeSet;
 
 use super::lifecycle::{
-    FailedWorkerStop, GenerationStatus, LifecycleState, RequirementChangeState, WorkerGeneration,
+    FailedWorkerStop, GenerationStatus, LifecycleState, OldGenerationCommitDisposition,
+    RequirementChangeState, WorkerGeneration,
 };
-use super::{Client, WorkerState};
+use super::{Client, PreparationOutcome, WorkerState};
 
 pub(super) struct Environment {
     pub(super) custom_worker: bool,
@@ -343,24 +344,34 @@ impl Client {
             let commit = Box::new(move |result| {
                 let managed = match result {
                     Ok(managed) => managed,
-                    Err(error) => return Ok(Err(error)),
+                    Err(error) => return Ok(PreparationOutcome::Completed(Err(error))),
                 };
-                if let Some(managed) = managed {
-                    client.commit_runtime_python(commit_generation.clone(), managed)?;
+                if client.old_generation_commit_disposition(&commit_generation)?
+                    == OldGenerationCommitDisposition::DiscardForReplacement
+                {
+                    return Ok(PreparationOutcome::DiscardedByReplacement);
                 }
-                if let Some(duckdb_extensions) = python_duckdb {
-                    client.commit_running_environment(
+                if let Some(managed) = managed
+                    && client.commit_runtime_python(commit_generation.clone(), managed)?
+                        == OldGenerationCommitDisposition::DiscardForReplacement
+                {
+                    return Ok(PreparationOutcome::DiscardedByReplacement);
+                }
+                if let Some(duckdb_extensions) = python_duckdb
+                    && client.commit_running_environment(
                         &commit_generation,
                         None,
                         Some(duckdb_extensions),
-                    )?;
+                    )? == OldGenerationCommitDisposition::DiscardForReplacement
+                {
+                    return Ok(PreparationOutcome::DiscardedByReplacement);
                 }
-                Ok(Ok(()))
+                Ok(PreparationOutcome::Completed(Ok(())))
             });
             let result = running.prepare_python(python_packages, commit);
             match result {
-                Ok(Ok(())) => {}
-                Ok(Err(error)) => {
+                Ok(PreparationOutcome::Completed(Ok(()))) => {}
+                Ok(PreparationOutcome::Completed(Err(error))) => {
                     return self.fail_running_preparation(
                         &mut worker,
                         generation,
@@ -368,6 +379,9 @@ impl Client {
                         error,
                         includes_r,
                     );
+                }
+                Ok(PreparationOutcome::DiscardedByReplacement) => {
+                    return Err(preparation_cancelled(includes_r));
                 }
                 Err(error) => {
                     return self.fail_running_preparation(
@@ -391,10 +405,17 @@ impl Client {
                         Some(managed_r),
                         duckdb_extensions,
                     )
-                    .map(|()| Ok(())),
+                    .map(|disposition| match disposition {
+                        OldGenerationCommitDisposition::Commit => {
+                            PreparationOutcome::Completed(Ok(()))
+                        }
+                        OldGenerationCommitDisposition::DiscardForReplacement => {
+                            PreparationOutcome::DiscardedByReplacement
+                        }
+                    }),
                 Err(error) => client
                     .require_restart_for_requirement_changes(&commit_generation)
-                    .map(|()| Err(error)),
+                    .map(|_| PreparationOutcome::Completed(Err(error))),
             });
             let result = match running.prepare_r(&library, commit) {
                 Ok(result) => result,
@@ -409,10 +430,11 @@ impl Client {
                 }
             };
             return match result {
-                Ok(()) => Ok(PrepareResult::Prepared),
-                Err(error) => {
+                PreparationOutcome::Completed(Ok(())) => Ok(PrepareResult::Prepared),
+                PreparationOutcome::Completed(Err(error)) => {
                     Ok(self.failed_preparation_response(requirement_restart_error(error)))
                 }
+                PreparationOutcome::DiscardedByReplacement => Err(preparation_cancelled(true)),
             };
         }
         if !includes_python
@@ -432,11 +454,7 @@ impl Client {
         includes_r: bool,
     ) -> Result<PrepareResult, String> {
         match self.generation_status(generation)? {
-            GenerationStatus::Changed => Err(if includes_r {
-                "R preparation cancelled by restart".to_string()
-            } else {
-                "Python preparation cancelled by restart".to_string()
-            }),
+            GenerationStatus::Changed => Err(preparation_cancelled(includes_r)),
             GenerationStatus::CurrentReady => {
                 if stop_worker {
                     return match self.stop_failed_worker(worker, generation) {
@@ -476,7 +494,7 @@ impl Client {
         generation: &WorkerGeneration,
         managed_r: Option<crate::resolver::ManagedR>,
         duckdb_extensions: Option<BTreeSet<String>>,
-    ) -> Result<(), String> {
+    ) -> Result<OldGenerationCommitDisposition, String> {
         let environment = self
             .0
             .environment
@@ -490,8 +508,9 @@ impl Client {
             .lifecycle
             .lock()
             .map_err(|_| "worker lifecycle lock poisoned".to_string())?;
-        match lifecycle.state {
-            LifecycleState::Ready if lifecycle.generation.is(generation) => {
+        let disposition = lifecycle.old_generation_commit_disposition(generation)?;
+        match disposition {
+            OldGenerationCommitDisposition::Commit => {
                 if let Some(managed_r) = managed_r {
                     push_duckdb_r_target(&mut environment.duckdb_r_targets, managed_r.clone());
                     environment.r = Some(managed_r);
@@ -499,13 +518,9 @@ impl Client {
                 if let Some(duckdb_extensions) = duckdb_extensions {
                     environment.duckdb_extensions = duckdb_extensions;
                 }
-                Ok(())
+                Ok(disposition)
             }
-            LifecycleState::Ready => {
-                Err("session restarted before the operation began".to_string())
-            }
-            LifecycleState::Restarting { .. } => Err("worker is restarting".to_string()),
-            LifecycleState::ShuttingDown { .. } => Err("worker is shutting down".to_string()),
+            OldGenerationCommitDisposition::DiscardForReplacement => Ok(disposition),
         }
     }
 
@@ -533,22 +548,19 @@ impl Client {
     fn require_restart_for_requirement_changes(
         &self,
         generation: &WorkerGeneration,
-    ) -> Result<(), String> {
+    ) -> Result<OldGenerationCommitDisposition, String> {
         let mut lifecycle = self
             .0
             .lifecycle
             .lock()
             .map_err(|_| "worker lifecycle lock poisoned".to_string())?;
-        match lifecycle.state {
-            LifecycleState::Ready if lifecycle.generation.is(generation) => {
+        let disposition = lifecycle.old_generation_commit_disposition(generation)?;
+        match disposition {
+            OldGenerationCommitDisposition::Commit => {
                 lifecycle.requirement_changes = RequirementChangeState::RestartRequired;
-                Ok(())
+                Ok(disposition)
             }
-            LifecycleState::Ready => {
-                Err("session restarted before the operation began".to_string())
-            }
-            LifecycleState::Restarting { .. } => Err("worker is restarting".to_string()),
-            LifecycleState::ShuttingDown { .. } => Err("worker is shutting down".to_string()),
+            OldGenerationCommitDisposition::DiscardForReplacement => Ok(disposition),
         }
     }
 
@@ -644,7 +656,7 @@ impl Client {
         generation: WorkerGeneration,
         requirements: crate::worker_protocol::PythonRequirementManifest,
         candidates: &mut Vec<crate::resolver::ManagedPython>,
-    ) -> Result<(), String> {
+    ) -> Result<OldGenerationCommitDisposition, String> {
         let environment = self
             .0
             .environment
@@ -666,7 +678,7 @@ impl Client {
         &self,
         generation: WorkerGeneration,
         managed: crate::resolver::ManagedPython,
-    ) -> Result<(), String> {
+    ) -> Result<OldGenerationCommitDisposition, String> {
         let environment = self
             .0
             .environment
@@ -683,23 +695,39 @@ impl Client {
         generation: &WorkerGeneration,
         environment: &mut Environment,
         managed: crate::resolver::ManagedPython,
-    ) -> Result<(), String> {
+    ) -> Result<OldGenerationCommitDisposition, String> {
         let lifecycle = self
             .0
             .lifecycle
             .lock()
             .map_err(|_| "worker lifecycle lock poisoned".to_string())?;
-        match lifecycle.state {
-            LifecycleState::Ready if lifecycle.generation.is(generation) => {
+        let disposition = lifecycle.old_generation_commit_disposition(generation)?;
+        match disposition {
+            OldGenerationCommitDisposition::Commit => {
                 environment.python = Some(managed);
-                Ok(())
+                Ok(disposition)
             }
-            LifecycleState::Ready => {
-                Err("session restarted before the operation began".to_string())
-            }
-            LifecycleState::Restarting { .. } => Err("worker is restarting".to_string()),
-            LifecycleState::ShuttingDown { .. } => Err("worker is shutting down".to_string()),
+            OldGenerationCommitDisposition::DiscardForReplacement => Ok(disposition),
         }
+    }
+
+    fn old_generation_commit_disposition(
+        &self,
+        generation: &WorkerGeneration,
+    ) -> Result<OldGenerationCommitDisposition, String> {
+        self.0
+            .lifecycle
+            .lock()
+            .map_err(|_| "worker lifecycle lock poisoned".to_string())?
+            .old_generation_commit_disposition(generation)
+    }
+}
+
+fn preparation_cancelled(includes_r: bool) -> String {
+    if includes_r {
+        "R preparation cancelled by restart".to_string()
+    } else {
+        "Python preparation cancelled by restart".to_string()
     }
 }
 

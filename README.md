@@ -275,6 +275,7 @@ Between cells, the worker uses `R_checkActivity()` to wait for either a register
 Callbacks registered by packages such as `later` can therefore run after a cell has returned.
 A generation-long server reader incrementally parses and enqueues flat relay events so retirement can cancel a partially received frame and idle output is not bounded by sideband pipe capacity.
 One ordered dispatcher publishes forwarded console output and images, services nested managed-Python requests, commits operation results, and updates console input state.
+Before ordered worker retirement, it commits successful old-generation environment events when restart reuses the retained environment, or discards them when restart has already committed a replacement environment.
 An empty `send` snapshots the output already collected without signaling the worker or waiting for the callback.
 Before applying a live requirement preparation, the built-in worker gives registered R handlers one nonblocking turn, so a callback already ready when the command arrives is collected first.
 An empty `send` surfaces an idle callback's input request as `[stdin needed]`; a later stdin-only `send` continues it, and a call that already includes stdin can prequeue the input.

@@ -18,6 +18,10 @@ RELEASE_NAME = "mcp-console-scripted-relay-release"
 SHUTDOWN_RECEIVED_NAME = "mcp-console-scripted-relay-shutdown-received"
 RETIREMENT_RELEASE_NAME = "mcp-console-scripted-relay-retirement-release"
 PREPARATION_RECEIVED_NAME = "mcp-console-scripted-relay-preparation-received"
+PREPARATION_RESULT_RELEASE_NAME = (
+    "mcp-console-scripted-relay-preparation-result-release"
+)
+PREPARATION_RESULT_SENT_NAME = "mcp-console-scripted-relay-preparation-result-sent"
 WAIT_SECONDS = 10
 
 EVALUATION = {
@@ -308,6 +312,39 @@ def run_late_r_prepared_retirement(relay: ScriptedRelay) -> None:
     )
 
 
+def run_pre_marker_r_prepared_replacement(relay: ScriptedRelay) -> None:
+    relay.make_checkpoint(SHUTDOWN_RECEIVED_NAME)
+    relay.make_checkpoint(PREPARATION_RECEIVED_NAME)
+    relay.make_checkpoint(PREPARATION_RESULT_RELEASE_NAME)
+    relay.make_checkpoint(PREPARATION_RESULT_SENT_NAME)
+    relay.ready()
+    command = relay.receive()
+    if command.get("kind") == "shutdown":
+        relay.retire(command)
+        return
+
+    assert command.get("kind") == "prepare_r", command
+    library = command["library"]
+    if library.endswith("candidate-three"):
+        relay.send({"kind": "r_prepared", "library": library})
+        relay.retire()
+        return
+
+    assert library.endswith("candidate-one"), library
+    relay.notify_checkpoint(PREPARATION_RECEIVED_NAME)
+    relay.wait_for_checkpoint(PREPARATION_RESULT_RELEASE_NAME)
+    relay.send({"kind": "r_prepared", "library": library})
+    relay.notify_checkpoint(PREPARATION_RESULT_SENT_NAME)
+    command = relay.receive()
+    assert command.get("kind") == "shutdown", command
+    relay.send({"kind": "shutdown_started"})
+    relay.notify_checkpoint(SHUTDOWN_RECEIVED_NAME)
+    relay.send({"kind": "stdout_closed"})
+    relay.send({"kind": "stderr_closed"})
+    relay.send({"kind": "worker_sideband_closed"})
+    relay.send({"kind": "worker_exited", "code": 0})
+
+
 def run_fatal(relay: ScriptedRelay) -> None:
     relay.wait_for_release()
     relay.send({"kind": "fatal", "message": "scripted relay failure"})
@@ -364,6 +401,7 @@ def main() -> None:
         "shutdown": run_shutdown,
         "blocked_live_r_resolver_shutdown": run_blocked_live_r_resolver_shutdown,
         "late_r_prepared_retirement": run_late_r_prepared_retirement,
+        "pre_marker_r_prepared_replacement": run_pre_marker_r_prepared_replacement,
         "fatal": run_fatal,
         "truncated": run_truncated,
         "exit_zero": run_exit_zero,

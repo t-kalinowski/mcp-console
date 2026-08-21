@@ -586,6 +586,10 @@ If transport setup fails before that reader starts, pending sideband frames are 
 Server-side `WorkerOperationState` failure releases an active operation waiter, while relay EOF releases any partial outer-frame read.
 Before force-stopping an active resolver process group, shutdown queues the relay command against the original worker deadline.
 After resolver cancellation releases its callback, shutdown queues an ordered operation-retirement marker and waits for the dispatcher to reach it only through that original deadline.
+Events already queued before the marker retain semantic ordering.
+For restart without a replacement environment, successful old-generation R and Python preparation results and managed-Python activations still commit for the next worker.
+If restart has already committed a newly resolved environment, a typed old-generation disposition discards those successful environment commits and reports restart cancellation for a discarded preparation.
+Preparation failures and protocol, resolver, or environment-commit failures are not converted into cancellation.
 Matching late operation results consume the cancelled operation tombstone without committing it, while expected callback and transport fallout after the marker is ignored for crash classification.
 Shutdown then enforces relay retirement and joins the relay command and event tasks.
 This closes the old generation's server-side relay boundary before shutdown returns, even when a session-detached descendant retains a worker pipe descriptor or a relay command write is blocked.

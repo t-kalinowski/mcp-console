@@ -16,15 +16,16 @@ def wait(path: str) -> None:
 
 
 def resolve() -> None:
-    if started := os.environ.get("MCP_CONSOLE_TEST_IR_STARTED"):
-        notify(started)
-    if release := os.environ.get("MCP_CONSOLE_TEST_IR_RELEASE"):
-        wait(release)
-
     libraries = os.environ["MCP_CONSOLE_TEST_IR_LIBRARIES"].split(os.pathsep)
     counter = Path(os.environ["MCP_CONSOLE_TEST_IR_COUNTER"])
     index = int(counter.read_text(encoding="utf-8")) if counter.exists() else 0
     assert index < len(libraries), (index, libraries)
+    gate_index = os.environ.get("MCP_CONSOLE_TEST_IR_GATE_INDEX")
+    if gate_index is None or index == int(gate_index):
+        if started := os.environ.get("MCP_CONSOLE_TEST_IR_STARTED"):
+            notify(started)
+        if release := os.environ.get("MCP_CONSOLE_TEST_IR_RELEASE"):
+            wait(release)
     counter.write_text(str(index + 1), encoding="utf-8")
     print(libraries[index], end="")
 

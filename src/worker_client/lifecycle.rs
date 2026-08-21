@@ -25,8 +25,20 @@ impl WorkerGeneration {
 pub(super) struct LifecycleControl {
     pub(super) state: LifecycleState,
     pub(super) generation: WorkerGeneration,
+    retiring_generation: Option<RetiringGeneration>,
     pub(super) requirement_changes: RequirementChangeState,
     pub(super) processes: ProcessStopHandles,
+}
+
+struct RetiringGeneration {
+    generation: WorkerGeneration,
+    disposition: OldGenerationCommitDisposition,
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub(super) enum OldGenerationCommitDisposition {
+    Commit,
+    DiscardForReplacement,
 }
 
 impl LifecycleControl {
@@ -34,6 +46,7 @@ impl LifecycleControl {
         Self {
             state: LifecycleState::Ready,
             generation: WorkerGeneration::new(),
+            retiring_generation: None,
             requirement_changes: RequirementChangeState::Available,
             processes: ProcessStopHandles::default(),
         }
@@ -42,13 +55,39 @@ impl LifecycleControl {
     fn start_restart(
         &mut self,
         grace: Duration,
+        disposition: OldGenerationCommitDisposition,
     ) -> (ProcessStopHandles, Instant, WorkerGeneration) {
         let deadline = Instant::now() + grace;
         let stop_handles = self.processes.clone();
+        self.retiring_generation = Some(RetiringGeneration {
+            generation: self.generation.clone(),
+            disposition,
+        });
         self.state = LifecycleState::Restarting { deadline };
         self.generation = WorkerGeneration::new();
         self.processes.resolver = None;
         (stop_handles, deadline, self.generation.clone())
+    }
+
+    pub(super) fn old_generation_commit_disposition(
+        &self,
+        expected: &WorkerGeneration,
+    ) -> Result<OldGenerationCommitDisposition, String> {
+        match self.state {
+            LifecycleState::Ready if self.generation.is(expected) => {
+                Ok(OldGenerationCommitDisposition::Commit)
+            }
+            LifecycleState::Ready => {
+                Err("session restarted before the operation began".to_string())
+            }
+            LifecycleState::Restarting { .. } => self
+                .retiring_generation
+                .as_ref()
+                .filter(|retiring| retiring.generation.is(expected))
+                .map(|retiring| retiring.disposition)
+                .ok_or_else(|| "worker is restarting".to_string()),
+            LifecycleState::ShuttingDown { .. } => Err("worker is shutting down".to_string()),
+        }
     }
 }
 
@@ -339,7 +378,8 @@ impl Client {
         environment.python = managed_python;
         environment.r = managed_r;
         environment.duckdb_extensions = duckdb_extensions;
-        let (processes, deadline, generation) = lifecycle.start_restart(grace);
+        let (processes, deadline, generation) =
+            lifecycle.start_restart(grace, OldGenerationCommitDisposition::DiscardForReplacement);
         Ok(RestartContext {
             processes,
             deadline,
@@ -541,7 +581,8 @@ impl Client {
             .take()
             .map(|active| active.evaluation.reserve_for_restart())
             .transpose()?;
-        let (processes, deadline, generation) = lifecycle.start_restart(grace);
+        let (processes, deadline, generation) =
+            lifecycle.start_restart(grace, OldGenerationCommitDisposition::Commit);
         Ok(RestartContext {
             processes,
             deadline,
@@ -562,6 +603,7 @@ impl Client {
         match lifecycle.state {
             LifecycleState::Restarting { .. } => {
                 lifecycle.state = LifecycleState::Ready;
+                lifecycle.retiring_generation = None;
                 lifecycle.requirement_changes = RequirementChangeState::Available;
                 Ok(())
             }
@@ -579,6 +621,7 @@ impl Client {
         match lifecycle.state {
             LifecycleState::Restarting { .. } => {
                 lifecycle.state = LifecycleState::ShuttingDown { deadline };
+                lifecycle.retiring_generation = None;
                 Ok(())
             }
             LifecycleState::ShuttingDown { .. } => Ok(()),

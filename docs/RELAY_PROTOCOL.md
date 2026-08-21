@@ -139,6 +139,10 @@ For restart or server shutdown, the server registers one relay-shutdown request 
 The sole relay-command writer computes `grace_millis` from the time remaining when it serializes that command, so earlier queued writes cannot extend the worker deadline.
 The server queues this shutdown command before cancelling a nested host resolver.
 After cancellation releases the resolver callback, the server enqueues an ordered retirement marker and waits for the dispatcher to reach it only until the original worker deadline.
+Semantic events queued ahead of the marker are still validated and dispatched in order.
+When restart reuses the retained environment, successful old-generation R and Python preparation results and managed-Python activations commit before replacement.
+When restart has already committed a newly resolved environment, a typed lifecycle disposition discards those successful old-generation environment commits instead, and a discarded preparation reports restart cancellation to its caller.
+Worker-reported preparation failures and protocol, resolver, or environment-commit failures remain failures.
 That marker releases the operation caller and leaves a typed tombstone that consumes a matching late operation result without committing it.
 Expected resolver responses, activation events, and transport fallout after the marker do not turn an intentional retirement into a worker failure.
 
