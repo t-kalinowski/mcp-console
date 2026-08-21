@@ -3,6 +3,7 @@
 import base64
 import json
 import os
+import select
 import signal
 import subprocess
 import sys
@@ -1283,6 +1284,97 @@ def test_interrupts_running_worker_with_sigint(binary: Path) -> Transcript:
         finally:
             if not passed:
                 stop_client(client)
+
+
+def test_supervises_stopped_and_continued_workers(binary: Path) -> Transcript:
+    wrapper = Path(__file__).resolve().parents[2] / "fixtures" / "stop_continue_zod"
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        temporary_path = Path(temporary_directory)
+        environment = os.environ.copy()
+        environment["TMPDIR"] = temporary_directory
+        client = McpClient(
+            binary,
+            ("serve", "--worker", str(wrapper)),
+            environment,
+        )
+        workers: list[tuple[int, int]] = []
+        passed = False
+        try:
+            client._initialize_and_list_tools()
+            evaluation = client._start_send(r="echo", timeout_ms=30_000)
+            marker, worker_pid, worker_group = wait_for_stopped_worker(
+                temporary_path,
+                set(),
+                workers,
+                client,
+            )
+
+            interrupt = client._start_session(action="interrupt")
+            readable, _, _ = select.select([client.stdout], [], [], 3)
+            assert readable, "relay supervision did not answer the interrupt request"
+            client._receive(interrupt)
+            assert interrupt["result"] == {
+                "content": [{"type": "text", "text": "[interrupt sent]"}],
+                "isError": False,
+            }, interrupt
+
+            continue_stopped_worker(worker_pid, worker_group)
+            wait_for_path(
+                marker.with_name("zod-stop-continue-resumed"),
+                "stopped worker to resume",
+                client,
+            )
+            client._receive(evaluation)
+            assert evaluation["result"] == {
+                "content": [{"type": "text", "text": "zod: echo\n"}],
+                "isError": False,
+            }, evaluation
+
+            restarted = client._start_session(action="restart")
+            replacement_marker, replacement_pid, replacement_group = (
+                wait_for_stopped_worker(
+                    temporary_path,
+                    {worker_pid},
+                    workers,
+                    client,
+                )
+            )
+            assert replacement_group != worker_group, (
+                "replacement reused the retiring process group"
+            )
+            wait_for_worker_retirement(worker_pid, worker_group, client)
+
+            continue_stopped_worker(replacement_pid, replacement_group)
+            wait_for_path(
+                replacement_marker.with_name("zod-stop-continue-resumed"),
+                "replacement worker to resume",
+                client,
+            )
+            client._receive(restarted)
+            assert restarted["result"] == {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": (
+                            "[worker stopped: in-memory state lost]\n"
+                            "[starting new worker]\n"
+                            "[idle]"
+                        ),
+                    }
+                ],
+                "isError": False,
+            }, restarted
+
+            client.send(r="echo")
+            assert last_tool_text(client) == "zod: echo\n"
+            transcript = client._finish()
+            passed = True
+            return transcript
+        finally:
+            if not passed:
+                for recorded_pid, recorded_group in reversed(workers):
+                    stop_recorded_worker(recorded_pid, recorded_group)
+                stop_process(client.process)
 
 
 def test_reports_resolver_interrupt_permission_error(binary: Path) -> Transcript:
@@ -3143,6 +3235,117 @@ def wait_for_marker(root: Path, name: str, client: McpClient) -> Path:
         assert client.process.poll() is None, "mcp-console stopped before Zod stalled"
         assert time.monotonic() < deadline, "Zod did not report its stall checkpoint"
         time.sleep(0.01)
+
+
+def wait_for_stopped_worker(
+    root: Path,
+    previous_process_ids: set[int],
+    recorded_workers: list[tuple[int, int]],
+    client: McpClient,
+) -> tuple[Path, int, int]:
+    deadline = time.monotonic() + 3
+    while True:
+        for marker in root.glob("**/zod-stop-continue-worker"):
+            process_id, parent_id, process_group = map(
+                int,
+                marker.read_text(encoding="utf-8").split(),
+            )
+            if process_id in previous_process_ids:
+                continue
+            worker = (process_id, process_group)
+            if worker not in recorded_workers:
+                recorded_workers.append(worker)
+            assert parent_id == process_group, (
+                "stopped worker is not the relay's direct child"
+            )
+            assert process_id != process_group, (
+                "stopped worker unexpectedly leads the relay process group"
+            )
+            assert process_group != os.getpgrp(), (
+                "stopped worker shares the test process group"
+            )
+            status = read_process_status(process_id)
+            if status is not None and status[2].startswith("T"):
+                assert status[:2] == (parent_id, process_group), (
+                    "stopped worker changed its process boundary"
+                )
+                return marker, process_id, process_group
+        assert client.process.poll() is None, (
+            "mcp-console stopped before its direct worker reached SIGSTOP"
+        )
+        assert time.monotonic() < deadline, (
+            "direct worker did not enter the stopped process state"
+        )
+        time.sleep(0.01)
+
+
+def wait_for_path(path: Path, description: str, client: McpClient) -> None:
+    deadline = time.monotonic() + 3
+    while not path.exists():
+        assert client.process.poll() is None, (
+            f"mcp-console stopped before {description}"
+        )
+        assert time.monotonic() < deadline, f"timed out waiting for {description}"
+        time.sleep(0.01)
+
+
+def read_process_status(process_id: int) -> tuple[int, int, str] | None:
+    status = subprocess.run(
+        [
+            "ps",
+            "-o",
+            "ppid=",
+            "-o",
+            "pgid=",
+            "-o",
+            "state=",
+            "-p",
+            str(process_id),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if status.returncode == 1 and not status.stdout.strip():
+        return None
+    assert status.returncode == 0, status.stderr
+    fields = status.stdout.split()
+    assert len(fields) == 3, status.stdout
+    return int(fields[0]), int(fields[1]), fields[2]
+
+
+def continue_stopped_worker(process_id: int, process_group: int) -> None:
+    status = read_process_status(process_id)
+    assert status is not None, "stopped worker exited before SIGCONT"
+    assert status[1] == process_group, "stopped worker changed process groups"
+    assert status[2].startswith("T"), "worker was not stopped before SIGCONT"
+    os.kill(process_id, signal.SIGCONT)
+
+
+def wait_for_worker_retirement(
+    process_id: int,
+    process_group: int,
+    client: McpClient,
+) -> None:
+    deadline = time.monotonic() + 3
+    while read_process_status(process_id) is not None or process_group_exists(
+        process_group
+    ):
+        assert client.process.poll() is None, (
+            "mcp-console stopped while retiring the old worker generation"
+        )
+        assert time.monotonic() < deadline, (
+            "restart did not retire the old worker and relay process group"
+        )
+        time.sleep(0.01)
+
+
+def stop_recorded_worker(process_id: int, process_group: int) -> None:
+    assert process_group != os.getpgrp(), "refusing to stop the test process group"
+    stop_process_group(process_group)
+    status = read_process_status(process_id)
+    if status is not None and status[1] == process_group:
+        stop_process_id(process_id)
 
 
 def read_worker_group(marker: Path) -> int:
