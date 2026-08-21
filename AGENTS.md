@@ -40,7 +40,8 @@ If the run record cannot be created or a later recording write fails, the server
 An existing journal may therefore end with the last successfully flushed event.
 Submitted source, stdin, and tool-result output are recorded without redaction.
 Generated Quarto transcripts and complete output spools do not exist yet.
-Supplying exactly one of `r`, `python`, or `sql` starts one complete cell and waits for up to `timeout_ms`, which defaults to 60 seconds; when completion arrives before that deadline, the response may wait through the additional one-millisecond completion grace.
+Supplying exactly one of `r`, `python`, or `sql` starts one complete cell and waits for up to `timeout_ms`, which defaults to 60 seconds.
+At the timeout boundary, `send` reports the worker state observed while finalizing the response; if cell completion is already observable, it waits through the remaining one-millisecond completion grace and returns the completed result.
 If an established worker fails during that cell, the same `send` makes one automatic replacement attempt within that deadline.
 If the wait expires while the cell is still evaluating, `send` drains output produced so far, appends the newline-prefixed banner `\n[running]`, and leaves the computation running.
 If it expires while the replacement is starting, the response instead ends with `[worker starting]`; later polls report the same state until the worker reports ready, then return startup output followed by `[idle]`.
