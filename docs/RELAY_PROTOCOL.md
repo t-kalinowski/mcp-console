@@ -28,6 +28,7 @@ The worker protocol is unchanged and is documented in [`WORKER_PROTOCOL.md`](WOR
 
 The server owns worker-generation state, evaluation and preparation admission, output projection, retained requirements, and host resolvers.
 R, Python, and DuckDB requirement resolution remains outside the sandbox.
+For live Python preparation, the server resolves candidate environments, while the worker owns reticulate manifest materialization and activation.
 The relay owns the worker process and its local transports, translation between this protocol and the worker sideband, signal delivery, bounded termination, and reaping.
 
 ## Framing and raw bytes
@@ -57,7 +58,7 @@ The server can send these flat frames:
 | --- | --- |
 | `{"kind":"evaluate","language":"r","source":"1 + 1"}` | Send the unchanged worker-sideband evaluation command. |
 | `{"kind":"prepare_r","library":"..."}` | Send the unchanged live R-preparation command. |
-| `{"kind":"prepare_python","packages":["py-yaml12"]}` | Send the unchanged live Python-preparation command. |
+| `{"kind":"prepare_python","packages":["py-yaml12"]}` | Ask the worker to perform explicit live reticulate preparation. |
 | `{"kind":"python_resolved","python":"..."}` | Return one host Python-resolution result. |
 | `{"kind":"python_resolution_failed","message":"..."}` | Return one host Python-resolution failure. |
 | `{"kind":"python_version_resolved","version":"3.12.11"}` | Return one host Python-version result. |
@@ -68,7 +69,9 @@ The server can send these flat frames:
 
 The relay translates semantic commands to the unchanged worker-sideband messages where applicable.
 There is no nested `worker_message` envelope and no operation-result acknowledgment command.
-`stdin` payload end is not EOF; the relay writes accepted payloads in command order without adding bytes.
+Accepted `stdin` payloads contribute bytes to one unbuffered, generation-long worker fd-0 stream; they are not records.
+The relay writes them in command order without adding bytes or applying line buffering.
+Line-oriented reads generally require an explicit newline, payload end is not EOF, and fd 0 remains open until its closure retires the worker generation.
 
 ## Relay events
 
@@ -88,7 +91,7 @@ The relay can emit these flat frames:
 | `{"kind":"resolve_python","request":{...}}` | Request host Python-environment resolution. |
 | `{"kind":"resolve_python_version","request":{...}}` | Request host Python-version selection. |
 | `{"kind":"python_activated","requirements":{...}}` | Report a retained managed-Python activation. |
-| `{"kind":"python_prepared"}` | Complete live Python preparation successfully. |
+| `{"kind":"python_prepared"}` | Return the worker's explicit Python-preparation success result, including before Python initialization. |
 | `{"kind":"python_preparation_failed","message":"..."}` | Complete live Python preparation with an ordinary failure. |
 | `{"kind":"completed"}` | Complete an evaluation. |
 | `{"kind":"stdout","data":"hello\n"}` | One raw fd-1 chunk that is entirely valid UTF-8. |
@@ -127,6 +130,8 @@ It continues draining relay stdout while semantic dispatch blocks on a host reso
 One ordered semantic dispatcher consumes the event queue.
 When it sees `completed`, `r_prepared`, `r_preparation_failed`, `python_prepared`, or `python_preparation_failed`, it commits the operation result and its output boundary before applying the next queued event.
 Idle output, later resolver requests, EOF, and transport failures pass through the same ordered dispatcher instead of changing operation state from the reader.
+`python_prepared` always terminates an explicit worker-side `prepare_python` operation.
+Before Python initializes, it reports successful reticulate manifest materialization; after initialization, it follows any required worker-owned activation.
 
 ## Interruption and shutdown
 

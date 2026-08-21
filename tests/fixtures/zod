@@ -72,9 +72,13 @@ def emit_large_output(descriptor: int, prefix: bytes) -> None:
 
 
 def fill_nonblocking(descriptor: int, data: bytes) -> int:
+    assert data
+    # Guarantee a nonempty tail even when the preceding blocking write refills
+    # the pipe before this process can switch the descriptor to nonblocking.
+    write_all(descriptor, data[:1])
     flags = fcntl.fcntl(descriptor, fcntl.F_GETFL)
     fcntl.fcntl(descriptor, fcntl.F_SETFL, flags | os.O_NONBLOCK)
-    written = 0
+    written = 1
     try:
         while written < len(data):
             try:

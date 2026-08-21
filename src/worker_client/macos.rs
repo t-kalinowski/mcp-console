@@ -286,11 +286,11 @@ impl Worker {
         }
     }
 
-    pub(super) fn snapshot(
+    pub(super) fn idle_response_boundary(
         &self,
         output: &super::OutputTape,
-    ) -> Result<super::WorkerSnapshot, String> {
-        self.operation.snapshot(output)
+    ) -> Result<super::IdleResponseBoundary, String> {
+        self.operation.idle_response_boundary(output)
     }
 
     pub(super) fn has_failure(&self) -> Result<bool, String> {

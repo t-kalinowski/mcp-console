@@ -9,11 +9,15 @@ result:
     - type: text
       text: |-
         zod unexpected input receipt: <large output>
-        <cross-source position follows serialized observation>
         [worker reported received input without requesting it]
         [worker terminated by signal 9]
         [worker stopped: in-memory state lost]
         [starting new worker]
         [idle]
   isError: true
+transcript_normalization:
+  target: result.content[0].text
+  cross_source_position: omitted
+  replacements:
+    large_output: <large output>
 ...

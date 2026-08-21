@@ -69,7 +69,7 @@ struct WorkerSpec<'a> {
     callbacks: WorkerCallbacks,
 }
 
-struct WorkerSnapshot {
+struct IdleResponseBoundary {
     checkpoint: output::OutputCheckpoint,
     failure: Option<String>,
     input_requested: bool,
@@ -262,7 +262,7 @@ impl Client {
         }))
     }
 
-    /// Starts one cell, supplies stdin, or snapshots output while idle.
+    /// Starts one cell, supplies stdin, or collects an idle response.
     pub(crate) async fn send(
         &self,
         cell: Option<crate::cell::Cell>,
@@ -454,7 +454,7 @@ impl Client {
         Ok(())
     }
 
-    /// Drains the output snapshot only while this call owns the admitted generation.
+    /// Drains through an idle-response boundary while this call owns the generation.
     fn take_idle_response(
         &self,
         generation: &WorkerGeneration,
@@ -474,15 +474,15 @@ impl Client {
             .lock()
             .map_err(|_| "worker lock poisoned".to_string())?;
         self.ensure_generation(generation)?;
-        let snapshot = match &mut *worker {
-            WorkerState::Running(running) => running.snapshot(&self.0.output)?,
-            WorkerState::Initial | WorkerState::Stopped => WorkerSnapshot {
+        let boundary = match &mut *worker {
+            WorkerState::Running(running) => running.idle_response_boundary(&self.0.output)?,
+            WorkerState::Initial | WorkerState::Stopped => IdleResponseBoundary {
                 checkpoint: self.0.output.checkpoint(),
                 failure: None,
                 input_requested: false,
             },
         };
-        if let Some(message) = snapshot.failure {
+        if let Some(message) = boundary.failure {
             let mut failure = SendFailure::from(message);
             match self.stop_failed_worker(&mut worker, generation) {
                 Ok(lifecycle::FailedWorkerStop::Stopped(outcome)) => {
@@ -497,8 +497,8 @@ impl Client {
             return Ok(SendResponse::Failed(self.0.output.take()));
         }
         drop(worker);
-        let output = self.0.output.take_until(snapshot.checkpoint);
-        Ok(if snapshot.input_requested {
+        let output = self.0.output.take_until(boundary.checkpoint);
+        Ok(if boundary.input_requested {
             SendResponse::InputRequested(output)
         } else {
             SendResponse::Idle(output)

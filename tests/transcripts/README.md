@@ -18,6 +18,9 @@ They omit the invariant `jsonrpc: "2.0"` field and show a request-response `id` 
 The client validates the omitted JSON-RPC version and response ID before recording each exchange.
 Tool calls show the tool name and arguments directly, so a `tools/call` request for `send` is recorded as `send: ARGUMENTS`.
 The response's `result` or `error`, when present, appears directly at the document root after the request.
+Some cases add `transcript_normalization` after the response.
+This is structured harness metadata, never a field or text observed at the captured boundary.
+Its `target` identifies the normalized value, and its remaining fields describe information omitted or replaced in the golden.
 The initialization, initialized notification, and tool-list exchange appear in full only in `client_server/server::initializes_and_lists_tools`.
 When selected, that case runs to completion before the remaining transcript cases start.
 Before compacting another transcript, the runner verifies that its prefix equals every document in the full snapshot.

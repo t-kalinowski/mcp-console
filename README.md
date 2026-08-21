@@ -45,9 +45,9 @@ Only the relay's fd 0/1/2 cross the server/sandbox boundary; relay standard erro
 The relay validates each worker standard-output and standard-error read independently.
 Valid UTF-8 chunks use readable string events, while invalid chunks use base64 byte events so arbitrary bytes cannot corrupt the private JSONL framing.
 After a worker reports ready, the server continuously consumes the relay event stream containing its sideband, standard output, and standard error activity.
-With no evaluation active, an empty `send` immediately drains the output collected so far and returns it followed by `\n[idle]`, or `\n[stdin needed]` when an idle callback has an outstanding console read.
+With no evaluation active, an empty `send` immediately establishes an ephemeral idle-response boundary, drains the output collected through it, and returns `\n[idle]`, or `\n[stdin needed]` when an idle callback has an outstanding console read.
 It sends no worker command, does not wait for idle callbacks to finish, and is not delayed by `timeout_ms`.
-Output that reaches the server after that snapshot remains pending for a later response.
+Output that reaches the server after that boundary remains pending for a later response.
 An empty call does not start an initial or stopped worker.
 A call may also supply exact standard-input text with a code cell, during an evaluation, or while the worker is idle:
 
@@ -55,15 +55,17 @@ A call may also supply exact standard-input text with a code cell, during an eva
 { "r": "readline('name> ')", "stdin": "Ada\n" }
 ```
 
-The server sends the cell first, then asks the relay to queue the string's UTF-8 bytes to worker fd 0 without inspecting or echoing them, adding a newline, imposing a size limit, or waiting for an input request.
-A stdin-only call while idle lazily starts the worker when needed, queues the bytes, and immediately returns the current output snapshot.
+The worker sees fd 0 as one unbuffered byte stream for the lifetime of its generation; `stdin` payloads contribute bytes to that stream rather than forming records.
+The server sends the cell first, then asks the relay to queue the string's UTF-8 bytes without inspecting or echoing them, adding a newline, imposing a size limit, or waiting for an input request.
+A stdin-only call while idle lazily starts the worker when needed, queues the bytes, and immediately returns at the resulting idle-response boundary.
 Queuing bytes does not acknowledge that a callback consumed them, so that response may still end with `\n[stdin needed]`; a later empty call observes an `input_received` frame and returns `\n[idle]`.
 Every `input_requested` event adds a server-owned record such as `[input requested: "name> "]`; the prompt is encoded as a JSON string so spaces and escaped characters remain explicit.
 During an evaluation, when that request remains outstanding for up to 10 milliseconds, bounded by the call deadline, `send` follows the record with the newline-prefixed banner `\n[stdin needed]`; a later call can supply more bytes with `{ "stdin": "Ada\n" }`.
 An immediate `input_received` or `input_cancelled` receipt retains the request record but suppresses `[stdin needed]`, so prequeued input can satisfy a console read without forcing another tool call and an interrupt can cancel it.
 That receipt describes the runtime read, not a particular stdin payload; direct fd-0 reads emit no request or receipt.
-Payload end is not EOF, and queued input is not an acknowledgment of consumption.
+Line-oriented reads generally require an explicit newline; payload end is not EOF, and queued input is not an acknowledgment of consumption.
 Unread bytes may be completed by later stdin or satisfy a later worker read or evaluation.
+Worker fd 0 stays open across calls and evaluations; closing it retires that worker generation.
 On macOS, the built-in server resolves a default R library containing tidyverse, `github::rstudio/reticulate`, DBI, DuckDB, arrow, and nanoarrow before it accepts MCP input.
 The GitHub reticulate requirement supplies the fork-aware output handling required by the worker; the host R installation must also provide reticulate to bootstrap managed Python before the worker library is applied.
 When Python is managed, its default environment contains NumPy and pandas.
@@ -83,6 +85,7 @@ The MCP client can prepare additive R and Python requirements and other DuckDB e
 ```
 
 Default and explicit requirement resolution happens on the host: package installation or build hooks, managed Python environment startup, Matplotlib cache warming, and DuckDB extension installation run outside the worker sandbox.
+For live Python preparation, the server resolves candidate environments while the worker owns reticulate's manifest update, materialization, and activation.
 Use only trusted requirements and host environment settings.
 MCP Console sets `IR_NO_LOCAL_SOURCES` for every R resolution, so IR refuses package installation from direct or transitive local sources while retaining its accepted package syntax.
 The policy prevents local package installation code from running; IR may still reuse an already materialized library.
@@ -276,7 +279,7 @@ Callbacks registered by packages such as `later` can therefore run after a cell 
 A generation-long server reader incrementally parses and enqueues flat relay events so retirement can cancel a partially received frame and idle output is not bounded by sideband pipe capacity.
 One ordered dispatcher publishes forwarded console output and images, services nested managed-Python requests, commits operation results, and updates console input state.
 Before ordered worker retirement, it commits successful old-generation environment events when restart reuses the retained environment, or discards them when restart has already committed a replacement environment.
-An empty `send` snapshots the output already collected without signaling the worker or waiting for the callback.
+An empty `send` establishes an idle-response boundary for the output already collected without signaling the worker or waiting for the callback.
 Before applying a live requirement preparation, the built-in worker gives registered R handlers one nonblocking turn, so a callback already ready when the command arrives is collected first.
 An empty `send` surfaces an idle callback's input request as `[stdin needed]`; a later stdin-only `send` continues it, and a call that already includes stdin can prequeue the input.
 A code-bearing `send` can also supply input requested by an idle callback.
@@ -377,8 +380,9 @@ It does not wrap `py_require()`, so reticulate retains its package attribution a
 After reticulate accepts a managed environment, the worker sends a standalone `python_activated` event and the server immediately retains the matching resolved environment.
 Acceptance and the restart-generation check are atomic; a receipt that remains pending when restart claims the generation is discarded with that worker.
 `completed` and `python_prepared` carry no manifest.
-Idle explicit preparation passes structured additions through the same bridge and materializes an uninitialized manifest or activates a same-`libpython` environment while preserving live state.
-Its payload-free `python_prepared` receipt accepts a successfully materialized candidate that did not require live activation.
+Idle explicit preparation is a worker-side operation that passes structured additions through the same bridge and asks the server to resolve any candidate environment.
+The worker then materializes an uninitialized reticulate manifest or activates a same-`libpython` environment while preserving live state.
+Its payload-free `python_prepared` event is the explicit worker-side operation result in both cases, including successful pre-initialization materialization that required no live activation.
 A lazy pre-initialization `py_require()` declaration remains worker-owned until Python initializes or explicit preparation materializes it, so a worker failure before either boundary loses that declaration.
 Each runtime environment resolution sends the physical resolver manifest and the logical manifest to retain if accepted, together with the worker's current `UV_*` settings except `UV_OFFLINE`; those settings are not retained or replayed across worker generations.
 Runtime Python-version selection sends only version constraints and the same transient settings, and creates no environment candidate.
