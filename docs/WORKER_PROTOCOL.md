@@ -2,7 +2,20 @@
 
 This document describes the worker protocol implemented by `mcp-console serve`, the sandboxed worker relay, the built-in worker, and `tests/fixtures/zod`.
 It describes the current code, not the broader design under `design-sketches/`.
-The message enums in `src/worker_protocol.rs`, the framing in `src/sideband.rs`, the relay in `src/worker_relay.rs`, the language bridges in `src/python.rs`, `src/r_bridge.rs`, `src/r_environment.rs`, `src/r_graphics.rs`, and `src/sql.rs`, and the worker-client orchestration, platform runtime, evaluation state, and output assembly in `src/worker_client.rs` and `src/worker_client/` are the source of truth.
+
+The sources of truth are:
+
+- `src/worker_protocol.rs` and `src/sideband.rs` for worker messages and framing;
+- `src/worker_relay.rs` for relay-worker transport and supervision;
+- `src/python.rs` and `src/r_bridge.rs` for the Rust orchestration and FFI around `src/python/bridge.R` and `src/python/runtime.py`;
+- `src/sql.rs` and `src/r_bridge.rs` for the Rust orchestration and FFI around `src/sql/bridge.R`;
+- `src/r_graphics.rs`, `src/r_graphics.c`, and `src/r_bridge.rs` for the Rust and C ownership around `src/r_graphics/bridge.R`;
+- `src/r_environment.rs` and `src/r_bridge.rs` for the Rust orchestration and FFI around `src/r_environment/bridge.R`;
+- `src/resolver/managed_python.rs` for the host orchestration around `src/resolver/programs/managed_python.R` and `src/resolver/programs/python_version.R`;
+- `src/resolver/managed_duckdb.rs` for the host orchestration around `src/resolver/programs/duckdb_extensions.R`;
+- `src/resolver/managed_r.rs` for the host orchestration around `src/resolver/programs/r_library.R`; and
+- `src/worker_client.rs` and `src/worker_client/` for server-side orchestration, platform runtime, evaluation state, and output assembly.
+
 The separate private server-to-relay transport is documented in [`RELAY_PROTOCOL.md`](RELAY_PROTOCOL.md).
 Transcript-runner progress lines are test user-interface output, not MCP, relay, sideband, or worker-stream data.
 
@@ -759,6 +772,7 @@ Graphics devices opened explicitly by evaluated code, such as with `grDevices::p
 ### Python cells
 
 The worker embeds one persistent Python `__main__` interpreter through reticulate.
+`src/python.rs` includes `src/python/bridge.R` and `src/python/runtime.py` at compile time and supplies the Python source to the R bridge exactly once before any reticulate initialization path can run.
 Before R or Python initializes, it sets `COLUMNS=200`; when NumPy or pandas loads, reticulate hooks set NumPy `linewidth` and pandas `display.width` to 200.
 Evaluated code can change those Python settings after module load.
 At worker startup, it sets `RETICULATE_REMAP_OUTPUT_STREAMS=1` once, before user R can initialize Python.
