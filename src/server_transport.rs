@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 
 use rmcp::RoleServer;
@@ -14,6 +14,7 @@ use crate::worker_client::ResponseDelivery;
 pub(crate) struct ResponseDeliveries {
     state: Arc<Mutex<ResponseDeliveryState>>,
     write_finished: Arc<Notify>,
+    write_aborted: Arc<Notify>,
 }
 
 #[derive(Clone)]
@@ -25,6 +26,7 @@ struct ResponseDeliveryState {
     /// Delivery-tracked response-write futures registered before they run on the service task.
     pending_writes: usize,
     closed: bool,
+    writes_aborted: bool,
 }
 
 struct ResponseDeliveryCallState {
@@ -105,6 +107,11 @@ impl ResponseDeliveries {
         }
     }
 
+    fn abort_writes(&self) {
+        self.lock().writes_aborted = true;
+        self.write_aborted.notify_waiters();
+    }
+
     fn take_write_delivery(
         &self,
         request_id: &RequestId,
@@ -140,6 +147,16 @@ impl ResponseDeliveries {
                 return;
             }
             write_finished.await;
+        }
+    }
+
+    async fn wait_for_write_abort(&self) {
+        loop {
+            let write_aborted = self.write_aborted.notified();
+            if self.lock().writes_aborted {
+                return;
+            }
+            write_aborted.await;
         }
     }
 
@@ -227,7 +244,7 @@ impl Drop for ResponseDeliveryWrite {
 pub(crate) struct ServerTransport<R: AsyncRead, W: AsyncWrite> {
     inner: AsyncRwTransport<RoleServer, R, W>,
     deliveries: ResponseDeliveries,
-    pending_message: Option<RxJsonRpcMessage<RoleServer>>,
+    pending_messages: VecDeque<RxJsonRpcMessage<RoleServer>>,
 }
 
 impl<R, W> ServerTransport<R, W>
@@ -239,7 +256,7 @@ where
         Self {
             inner: AsyncRwTransport::new_server(read, write),
             deliveries,
-            pending_message: None,
+            pending_messages: VecDeque::new(),
         }
     }
 }
@@ -264,8 +281,15 @@ where
             JsonRpcMessage::Request(_) | JsonRpcMessage::Notification(_) => None,
         };
         let send = self.inner.send(item);
+        let deliveries = self.deliveries.clone();
         async move {
-            let result = send.await;
+            let result = tokio::select! {
+                biased;
+                _ = deliveries.wait_for_write_abort() => {
+                    Err(std::io::ErrorKind::BrokenPipe.into())
+                },
+                result = send => result,
+            };
             if let Some(delivery) = delivery {
                 if result.is_ok() {
                     delivery.delivered();
@@ -278,41 +302,66 @@ where
     }
 
     async fn receive(&mut self) -> Option<RxJsonRpcMessage<RoleServer>> {
-        if self.pending_message.is_none() {
-            self.pending_message = self.inner.receive().await;
-        }
-        if matches!(
-            self.pending_message.as_ref(),
-            Some(JsonRpcMessage::Request(_))
-        ) {
-            // Stdout bytes can reach the client before the current-thread
-            // runtime resumes the write future to settle response ownership.
-            // Keep the parsed request here because rmcp may cancel this receive
-            // future while it polls another service event.
-            self.deliveries.wait_for_writes().await;
-        }
-
-        let mut message = self.pending_message.take();
-        match &mut message {
-            Some(JsonRpcMessage::Request(request)) => {
-                let call = self.deliveries.start(request.id.clone());
-                request.request.extensions_mut().insert(call);
+        loop {
+            if self.pending_messages.is_empty() {
+                let Some(message) = self.inner.receive().await else {
+                    self.deliveries.close();
+                    return None;
+                };
+                self.pending_messages.push_back(message);
             }
-            Some(JsonRpcMessage::Notification(notification)) => {
-                if let ClientNotification::CancelledNotification(cancelled) =
-                    &notification.notification
-                    && let Some(request_id) = &cancelled.params.request_id
-                {
-                    self.deliveries.cancel(request_id);
+
+            if matches!(
+                self.pending_messages.front(),
+                Some(JsonRpcMessage::Request(_))
+            ) {
+                // Stdout bytes can reach the client before the current-thread
+                // runtime resumes the write future to settle response ownership.
+                // Retain complete messages here because rmcp may cancel this
+                // receive future, and keep polling stdin so EOF can start shutdown.
+                tokio::select! {
+                    biased;
+                    _ = self.deliveries.wait_for_writes() => {}
+                    message = self.inner.receive() => {
+                        let Some(message) = message else {
+                            self.pending_messages.clear();
+                            // rmcp closes the sink after its response tasks drain.
+                            // Abort the blocked future so close can take the writer lock.
+                            self.deliveries.abort_writes();
+                            self.deliveries.close();
+                            return None;
+                        };
+                        self.pending_messages.push_back(message);
+                        continue;
+                    }
                 }
             }
-            Some(JsonRpcMessage::Response(_) | JsonRpcMessage::Error(_)) => {}
-            None => self.deliveries.close(),
+
+            let mut message = self
+                .pending_messages
+                .pop_front()
+                .expect("a pending message must exist before it is dispatched");
+            match &mut message {
+                JsonRpcMessage::Request(request) => {
+                    let call = self.deliveries.start(request.id.clone());
+                    request.request.extensions_mut().insert(call);
+                }
+                JsonRpcMessage::Notification(notification) => {
+                    if let ClientNotification::CancelledNotification(cancelled) =
+                        &notification.notification
+                        && let Some(request_id) = &cancelled.params.request_id
+                    {
+                        self.deliveries.cancel(request_id);
+                    }
+                }
+                JsonRpcMessage::Response(_) | JsonRpcMessage::Error(_) => {}
+            }
+            return Some(message);
         }
-        message
     }
 
     fn close(&mut self) -> impl Future<Output = Result<(), Self::Error>> + Send {
+        self.deliveries.abort_writes();
         self.deliveries.close();
         self.inner.close()
     }
