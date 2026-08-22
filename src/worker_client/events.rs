@@ -549,6 +549,9 @@ fn dispatch_worker_events(
                             if let Some(startup) = startup.take() {
                                 let _ = startup.send(Ok(()));
                             }
+                            // Commit readiness to generation-owned lifecycle state before
+                            // dispatching callbacks already queued behind Ready. Otherwise a
+                            // callback could mutate state for a worker not yet admitted.
                             match ready_commit.recv() {
                                 Ok(ReadyCommitOutcome::Committed) => {
                                     runtime_started = true;

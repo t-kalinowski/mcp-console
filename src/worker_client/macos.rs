@@ -276,6 +276,9 @@ impl Worker {
             .operation
             .begin_cell(evaluation.clone(), capture_idle_prelude)?;
         let crate::cell::Cell { language, source } = cell;
+        // Attaching drains stdin bundled with this cell through the relay's sole
+        // command sender. Do this before queuing Evaluate to preserve the public
+        // stdin-then-evaluate transport order.
         if let Err(error) = evaluation.attach_writer(self.stdin.clone()) {
             self.operation.fail(error.clone());
             return Err(error);
