@@ -6,11 +6,15 @@ use rmcp::model::{ClientNotification, GetExtensions, JsonRpcMessage, RequestId};
 use rmcp::service::{RxJsonRpcMessage, TxJsonRpcMessage};
 use rmcp::transport::{Transport, async_rw::AsyncRwTransport};
 use tokio::io::{AsyncRead, AsyncWrite};
+use tokio::sync::Notify;
 
 use crate::worker_client::ResponseDelivery;
 
 #[derive(Clone, Default)]
-pub(crate) struct ResponseDeliveries(Arc<Mutex<ResponseDeliveryState>>);
+pub(crate) struct ResponseDeliveries {
+    state: Arc<Mutex<ResponseDeliveryState>>,
+    write_finished: Arc<Notify>,
+}
 
 #[derive(Clone)]
 pub(crate) struct ResponseDeliveryCall(Arc<Mutex<ResponseDeliveryCallState>>);
@@ -18,6 +22,8 @@ pub(crate) struct ResponseDeliveryCall(Arc<Mutex<ResponseDeliveryCallState>>);
 #[derive(Default)]
 struct ResponseDeliveryState {
     active: HashMap<RequestId, ResponseDeliveryCall>,
+    /// Evaluation-response futures registered before they run on the service task.
+    pending_writes: usize,
     closed: bool,
 }
 
@@ -31,6 +37,7 @@ struct ResponseDeliveryWrite {
     deliveries: ResponseDeliveries,
     request_id: RequestId,
     call: ResponseDeliveryCall,
+    tracks_delivery: bool,
     finished: bool,
 }
 
@@ -65,11 +72,20 @@ impl ResponseDeliveries {
     }
 
     fn write(&self, request_id: &RequestId) -> Option<ResponseDeliveryWrite> {
-        let call = self.lock().active.get(request_id).cloned()?;
+        let (call, tracks_delivery) = {
+            let mut state = self.lock();
+            let call = state.active.get(request_id).cloned()?;
+            let tracks_delivery = call.has_delivery();
+            if tracks_delivery {
+                state.pending_writes += 1;
+            }
+            (call, tracks_delivery)
+        };
         Some(ResponseDeliveryWrite {
             deliveries: self.clone(),
             request_id: request_id.clone(),
             call,
+            tracks_delivery,
             finished: false,
         })
     }
@@ -89,7 +105,7 @@ impl ResponseDeliveries {
         }
     }
 
-    fn finish_write(
+    fn take_write_delivery(
         &self,
         request_id: &RequestId,
         expected: &ResponseDeliveryCall,
@@ -105,8 +121,30 @@ impl ResponseDeliveries {
             .and_then(|call| call.finish())
     }
 
+    fn settle_write(&self) {
+        {
+            let mut state = self.lock();
+            assert!(
+                state.pending_writes > 0,
+                "a response write must be pending before it settles"
+            );
+            state.pending_writes -= 1;
+        }
+        self.write_finished.notify_one();
+    }
+
+    async fn wait_for_writes(&self) {
+        loop {
+            let write_finished = self.write_finished.notified();
+            if self.lock().pending_writes == 0 {
+                return;
+            }
+            write_finished.await;
+        }
+    }
+
     fn lock(&self) -> std::sync::MutexGuard<'_, ResponseDeliveryState> {
-        self.0
+        self.state
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
@@ -143,6 +181,10 @@ impl ResponseDeliveryCall {
         Arc::ptr_eq(&self.0, &other.0)
     }
 
+    fn has_delivery(&self) -> bool {
+        self.lock().delivery.is_some()
+    }
+
     fn lock(&self) -> std::sync::MutexGuard<'_, ResponseDeliveryCallState> {
         self.0
             .lock()
@@ -152,31 +194,33 @@ impl ResponseDeliveryCall {
 
 impl ResponseDeliveryWrite {
     fn delivered(mut self) {
-        if let Some(delivery) = self.finish() {
-            delivery.delivered();
-        }
+        self.finish(ResponseDelivery::delivered);
     }
 
     fn unclaimed(mut self) {
-        if let Some(delivery) = self.finish() {
-            delivery.unclaimed();
-        }
+        self.finish(ResponseDelivery::unclaimed);
     }
 
-    fn finish(&mut self) -> Option<ResponseDelivery> {
+    fn finish(&mut self, settle_delivery: impl FnOnce(ResponseDelivery)) {
         if self.finished {
-            return None;
+            return;
         }
         self.finished = true;
-        self.deliveries.finish_write(&self.request_id, &self.call)
+        if let Some(delivery) = self
+            .deliveries
+            .take_write_delivery(&self.request_id, &self.call)
+        {
+            settle_delivery(delivery);
+        }
+        if self.tracks_delivery {
+            self.deliveries.settle_write();
+        }
     }
 }
 
 impl Drop for ResponseDeliveryWrite {
     fn drop(&mut self) {
-        if let Some(delivery) = self.finish() {
-            delivery.unclaimed();
-        }
+        self.finish(ResponseDelivery::unclaimed);
     }
 }
 
@@ -235,6 +279,10 @@ where
         let mut message = self.inner.receive().await;
         match &mut message {
             Some(JsonRpcMessage::Request(request)) => {
+                // Stdout bytes can reach the client before the current-thread
+                // runtime resumes the write future to settle response ownership.
+                // Do not dispatch a causally later request through that interval.
+                self.deliveries.wait_for_writes().await;
                 let call = self.deliveries.start(request.id.clone());
                 request.request.extensions_mut().insert(call);
             }
