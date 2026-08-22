@@ -409,6 +409,27 @@ impl ServerHandler for ConsoleServer {
                 .call(ToolCallContext::new(self, request, context))
                 .await;
         }
+        // A response can be visible before its write future settles. Delay only
+        // console operations so transport receipt remains live for cancellation and EOF.
+        let delivery = tokio::select! {
+            biased;
+            _ = context.ct.cancelled() => {
+                return Err(ErrorData::internal_error(
+                    "request cancelled before execution",
+                    None,
+                ));
+            }
+            delivery = self.deliveries.admit(request_id.clone()) => {
+                let Some(delivery) = delivery else {
+                    return Err(ErrorData::internal_error(
+                        "MCP input closed before request execution",
+                        None,
+                    ));
+                };
+                delivery
+            }
+        };
+        context.extensions.insert(delivery);
         let transcript = self.transcript.clone();
         let request_meta = context.meta.clone();
         let request = Arc::new(request);

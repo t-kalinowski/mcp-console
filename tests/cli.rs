@@ -74,7 +74,7 @@ nchar(long_line_value)
 
 #[cfg(target_os = "macos")]
 #[test]
-fn stdio_console_waits_for_response_writes_before_later_requests() {
+fn stdio_console_orders_requests_and_cancellation_during_response_writes() {
     let zod = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/zod");
     let test_directory = TestDirectory::new("response-write-ordering");
     let mut command = Command::new(env!("CARGO_BIN_EXE_mcp-console"));

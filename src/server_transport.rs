@@ -1,8 +1,8 @@
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use rmcp::RoleServer;
-use rmcp::model::{ClientNotification, GetExtensions, JsonRpcMessage, RequestId};
+use rmcp::model::{ClientNotification, JsonRpcMessage, RequestId};
 use rmcp::service::{RxJsonRpcMessage, TxJsonRpcMessage};
 use rmcp::transport::{Transport, async_rw::AsyncRwTransport};
 use tokio::io::{AsyncRead, AsyncWrite};
@@ -14,7 +14,7 @@ use crate::worker_client::ResponseDelivery;
 pub(crate) struct ResponseDeliveries {
     state: Arc<Mutex<ResponseDeliveryState>>,
     write_finished: Arc<Notify>,
-    write_aborted: Arc<Notify>,
+    transport_closed: Arc<Notify>,
 }
 
 #[derive(Clone)]
@@ -26,7 +26,6 @@ struct ResponseDeliveryState {
     /// Delivery-tracked response-write futures registered before they run on the service task.
     pending_writes: usize,
     closed: bool,
-    writes_aborted: bool,
 }
 
 struct ResponseDeliveryCallState {
@@ -44,20 +43,51 @@ struct ResponseDeliveryWrite {
 }
 
 impl ResponseDeliveries {
+    #[cfg(test)]
     fn start(&self, request_id: RequestId) -> ResponseDeliveryCall {
-        let mut state = self.lock();
+        let (call, replaced) = {
+            let mut state = self.lock();
+            Self::start_call(&mut state, request_id)
+        };
+        if let Some(replaced) = replaced {
+            replaced.unclaimed();
+        }
+        call
+    }
+
+    /// Registers a tool call after every delivery-owned response write settles.
+    pub(crate) async fn admit(&self, request_id: RequestId) -> Option<ResponseDeliveryCall> {
+        loop {
+            let write_finished = self.write_finished.notified();
+            let admission = {
+                let mut state = self.lock();
+                if state.closed {
+                    return None;
+                }
+                (state.pending_writes == 0)
+                    .then(|| Self::start_call(&mut state, request_id.clone()))
+            };
+            if let Some((call, replaced)) = admission {
+                if let Some(replaced) = replaced {
+                    replaced.unclaimed();
+                }
+                return Some(call);
+            }
+            write_finished.await;
+        }
+    }
+
+    fn start_call(
+        state: &mut ResponseDeliveryState,
+        request_id: RequestId,
+    ) -> (ResponseDeliveryCall, Option<ResponseDelivery>) {
         let call = ResponseDeliveryCall::new(!state.closed);
         let replaced = if state.closed {
             None
         } else {
             state.active.insert(request_id, call.clone())
         };
-        let replaced = replaced.and_then(|replaced| replaced.finish());
-        drop(state);
-        if let Some(replaced) = replaced {
-            replaced.unclaimed();
-        }
-        call
+        (call, replaced.and_then(|replaced| replaced.finish()))
     }
 
     pub(crate) fn cancel(&self, request_id: &RequestId) {
@@ -102,14 +132,11 @@ impl ResponseDeliveries {
                 .filter_map(|(_, call)| call.finish())
                 .collect::<Vec<_>>()
         };
+        self.transport_closed.notify_waiters();
+        self.write_finished.notify_waiters();
         for delivery in deliveries {
             delivery.unclaimed();
         }
-    }
-
-    fn abort_writes(&self) {
-        self.lock().writes_aborted = true;
-        self.write_aborted.notify_waiters();
     }
 
     fn take_write_delivery(
@@ -137,26 +164,16 @@ impl ResponseDeliveries {
             );
             state.pending_writes -= 1;
         }
-        self.write_finished.notify_one();
+        self.write_finished.notify_waiters();
     }
 
-    async fn wait_for_writes(&self) {
+    async fn wait_for_close(&self) {
         loop {
-            let write_finished = self.write_finished.notified();
-            if self.lock().pending_writes == 0 {
+            let transport_closed = self.transport_closed.notified();
+            if self.lock().closed {
                 return;
             }
-            write_finished.await;
-        }
-    }
-
-    async fn wait_for_write_abort(&self) {
-        loop {
-            let write_aborted = self.write_aborted.notified();
-            if self.lock().writes_aborted {
-                return;
-            }
-            write_aborted.await;
+            transport_closed.await;
         }
     }
 
@@ -244,7 +261,6 @@ impl Drop for ResponseDeliveryWrite {
 pub(crate) struct ServerTransport<R: AsyncRead, W: AsyncWrite> {
     inner: AsyncRwTransport<RoleServer, R, W>,
     deliveries: ResponseDeliveries,
-    pending_messages: VecDeque<RxJsonRpcMessage<RoleServer>>,
 }
 
 impl<R, W> ServerTransport<R, W>
@@ -256,7 +272,6 @@ where
         Self {
             inner: AsyncRwTransport::new_server(read, write),
             deliveries,
-            pending_messages: VecDeque::new(),
         }
     }
 }
@@ -285,7 +300,7 @@ where
         async move {
             let result = tokio::select! {
                 biased;
-                _ = deliveries.wait_for_write_abort() => {
+                _ = deliveries.wait_for_close() => {
                     Err(std::io::ErrorKind::BrokenPipe.into())
                 },
                 result = send => result,
@@ -302,66 +317,26 @@ where
     }
 
     async fn receive(&mut self) -> Option<RxJsonRpcMessage<RoleServer>> {
-        loop {
-            if self.pending_messages.is_empty() {
-                let Some(message) = self.inner.receive().await else {
-                    self.deliveries.close();
-                    return None;
-                };
-                self.pending_messages.push_back(message);
-            }
-
-            if matches!(
-                self.pending_messages.front(),
-                Some(JsonRpcMessage::Request(_))
-            ) {
-                // Stdout bytes can reach the client before the current-thread
-                // runtime resumes the write future to settle response ownership.
-                // Retain complete messages here because rmcp may cancel this
-                // receive future, and keep polling stdin so EOF can start shutdown.
-                tokio::select! {
-                    biased;
-                    _ = self.deliveries.wait_for_writes() => {}
-                    message = self.inner.receive() => {
-                        let Some(message) = message else {
-                            self.pending_messages.clear();
-                            // rmcp closes the sink after its response tasks drain.
-                            // Abort the blocked future so close can take the writer lock.
-                            self.deliveries.abort_writes();
-                            self.deliveries.close();
-                            return None;
-                        };
-                        self.pending_messages.push_back(message);
-                        continue;
-                    }
+        let mut message = self.inner.receive().await;
+        match &mut message {
+            Some(JsonRpcMessage::Request(_)) => {}
+            Some(JsonRpcMessage::Notification(notification)) => {
+                if let ClientNotification::CancelledNotification(cancelled) =
+                    &notification.notification
+                    && let Some(request_id) = &cancelled.params.request_id
+                {
+                    self.deliveries.cancel(request_id);
                 }
             }
-
-            let mut message = self
-                .pending_messages
-                .pop_front()
-                .expect("a pending message must exist before it is dispatched");
-            match &mut message {
-                JsonRpcMessage::Request(request) => {
-                    let call = self.deliveries.start(request.id.clone());
-                    request.request.extensions_mut().insert(call);
-                }
-                JsonRpcMessage::Notification(notification) => {
-                    if let ClientNotification::CancelledNotification(cancelled) =
-                        &notification.notification
-                        && let Some(request_id) = &cancelled.params.request_id
-                    {
-                        self.deliveries.cancel(request_id);
-                    }
-                }
-                JsonRpcMessage::Response(_) | JsonRpcMessage::Error(_) => {}
+            Some(JsonRpcMessage::Response(_) | JsonRpcMessage::Error(_)) => {}
+            None => {
+                self.deliveries.close();
             }
-            return Some(message);
         }
+        message
     }
 
     fn close(&mut self) -> impl Future<Output = Result<(), Self::Error>> + Send {
-        self.deliveries.abort_writes();
         self.deliveries.close();
         self.inner.close()
     }
@@ -441,44 +416,6 @@ mod tests {
 
         write.delivered();
         assert!(current_call(&deliveries, &request_id).is_none());
-    }
-
-    #[tokio::test]
-    async fn cancelled_receive_retains_request_waiting_for_response_write() {
-        let deliveries = ResponseDeliveries::default();
-        deliveries.lock().pending_writes = 1;
-        let (mut input, read) = tokio::io::duplex(1024);
-        input.write_all(PING_REQUEST).await.unwrap();
-        let mut transport = ServerTransport::new(read, tokio::io::sink(), deliveries.clone());
-
-        let mut receive = Box::pin(transport.receive());
-        let mut context = std::task::Context::from_waker(std::task::Waker::noop());
-        assert!(std::future::Future::poll(receive.as_mut(), &mut context).is_pending());
-        drop(receive);
-
-        deliveries.settle_write();
-        let Some(JsonRpcMessage::Request(request)) = transport.receive().await else {
-            panic!("cancelled receive should retain its parsed request");
-        };
-        assert_eq!(request.id, request_id(1));
-    }
-
-    #[tokio::test]
-    async fn response_gate_observes_eof_after_queued_request() {
-        let deliveries = ResponseDeliveries::default();
-        deliveries.lock().pending_writes = 1;
-        let (mut input, read) = tokio::io::duplex(1024);
-        input.write_all(PING_REQUEST).await.unwrap();
-        input.shutdown().await.unwrap();
-        let mut transport = ServerTransport::new(read, tokio::io::sink(), deliveries.clone());
-
-        let mut receive = Box::pin(transport.receive());
-        let mut context = std::task::Context::from_waker(std::task::Waker::noop());
-        assert!(matches!(
-            std::future::Future::poll(receive.as_mut(), &mut context),
-            std::task::Poll::Ready(None)
-        ));
-        assert!(deliveries.lock().closed);
     }
 
     #[tokio::test]
