@@ -174,6 +174,8 @@ The [relay protocol](RELAY_PROTOCOL.md) owns that ordering guarantee, and the [b
 Recording is a server responsibility and does not add messages to either private protocol.
 On the first ordinary `send` or `session` call, the server creates a private run directory under `.mcp-console/sessions/` in its working directory.
 It appends tool calls and assembled results to `internal/events.jsonl`.
+Each `tool_result` is appended before the MCP transport attempts the corresponding response write.
+It records server assembly, not whether the transport write succeeded or the client received the response.
 
 Images remain ordinary MCP image content for the client.
 For recording, the server decodes retained image data into files under the run's `artifacts/` directory and records artifact identifiers and relative paths in the JSONL result instead of duplicating the encoded payload there.

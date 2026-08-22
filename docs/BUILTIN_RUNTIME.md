@@ -115,6 +115,9 @@ Global bindings and `.Last.value` remain available to later calls.
 R parse, evaluation, and print errors are console output followed by normal completion; the worker stays reusable.
 Because R consumes top-level expressions as a console does, earlier complete expressions may take effect before a later expression in the same cell fails or remains incomplete.
 
+Between cells, the worker continues servicing R event handlers such as `later` callbacks, which can mutate persistent R state and produce output.
+Output produced while idle remains pending until a later response drains it; when that response belongs to a new cell and both regions contain output, `[output produced while idle]` separates them.
+
 Ordinary R console output and diagnostics remain distinct worker channels but both appear as MCP text.
 The built-in startup width is 200 columns; evaluated code may change its options.
 Packages prepared for the session are available but are not attached automatically.
@@ -224,6 +227,9 @@ Bracketed records such as `[running]`, `[stdin needed]`, `[idle]`, and worker-re
 R errors, Python exceptions, and DuckDB errors are ordinary console text and normally leave the worker reusable.
 Host dependency-resolver failures are MCP tool errors, but preserve any current worker and its in-memory state; [requirements and environments](REQUIREMENTS.md) describes their request-specific effects.
 Worker, relay, and protocol failures are MCP tool errors and may stop and replace the worker.
+
+If initial lazy startup for a code-bearing `send` fails before the worker reaches `ready`, the call reports startup failure details without worker-loss or replacement notices, and its cell is not replayed.
+A later code-bearing `send` makes a fresh startup attempt for only its new cell; the server does not add replacement notices.
 
 When an established worker fails during a cell, the server does not run that cell again.
 The failing `send` retains available output and failure details, adds `[worker stopped: in-memory state lost]`, and starts one automatic replacement attempt.

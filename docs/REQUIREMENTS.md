@@ -68,6 +68,10 @@ Preparation during an active cell is rejected.
 If preparation overlaps worker startup, it returns `[requirements not prepared: worker is starting]` without resolving or retaining the additions.
 If the worker is stopped, new additions return `[restart required]`; use restart to prepare them and start a replacement.
 
+An explicit restart can cancel an in-flight live R or Python preparation.
+The `prepare` call then fails with `R preparation cancelled by restart` or `Python preparation cancelled by restart`, and the restart continues.
+The cancelled call does not retain pending candidates; a Python environment already committed by an earlier step remains retained.
+
 ### Live R preparation
 
 The server resolves a new library containing the complete retained R requirement set.
