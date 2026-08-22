@@ -298,12 +298,14 @@ where
         let send = self.inner.send(item);
         let deliveries = self.deliveries.clone();
         async move {
+            // Preserve a ready final response after input EOF, but abandon a
+            // blocked stdout write so transport shutdown remains bounded.
             let result = tokio::select! {
                 biased;
+                result = send => result,
                 _ = deliveries.wait_for_close() => {
                     Err(std::io::ErrorKind::BrokenPipe.into())
                 },
-                result = send => result,
             };
             if let Some(delivery) = delivery {
                 if result.is_ok() {
