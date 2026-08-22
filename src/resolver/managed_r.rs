@@ -6,13 +6,7 @@ use super::process::{
     resolver_command, stop_resolver,
 };
 
-const R_LIBRARY_RESOLVER: &str = r#"
-base::cat(base::normalizePath(
-  base::.libPaths()[[1L]],
-  winslash = "/",
-  mustWork = TRUE
-))
-"#;
+const MANAGED_R_LIBRARY_RESOLVER_SOURCE: &str = include_str!("programs/r_library.R");
 const MINIMUM_IR_VERSION: semver::Version = semver::Version::new(0, 4, 0);
 
 #[derive(Clone)]
@@ -117,7 +111,12 @@ pub(crate) fn resolve_r(
     }
     command
         .env("IR_NO_LOCAL_SOURCES", "1")
-        .args(["--isolated", "--vanilla", "-e", R_LIBRARY_RESOLVER])
+        .args([
+            "--isolated",
+            "--vanilla",
+            "-e",
+            MANAGED_R_LIBRARY_RESOLVER_SOURCE,
+        ])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
