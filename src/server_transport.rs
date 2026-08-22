@@ -373,6 +373,7 @@ mod tests {
     use tokio::io::AsyncWriteExt;
 
     const PING_REQUEST: &[u8] = b"{\"jsonrpc\":\"2.0\",\"method\":\"ping\",\"id\":1}\n";
+    const CANCEL_REQUEST_9: &[u8] = b"{\"jsonrpc\":\"2.0\",\"method\":\"notifications/cancelled\",\"params\":{\"requestId\":9}}\n";
 
     fn request_id(value: i64) -> RequestId {
         RequestId::Number(value)
@@ -478,6 +479,38 @@ mod tests {
             std::task::Poll::Ready(None)
         ));
         assert!(deliveries.lock().closed);
+    }
+
+    #[tokio::test]
+    async fn response_gate_does_not_delay_cancellation_notifications() {
+        let deliveries = ResponseDeliveries::default();
+        deliveries.lock().pending_writes = 1;
+        let cancelled = deliveries.start(request_id(9));
+        let (mut input, read) = tokio::io::duplex(1024);
+        input.write_all(PING_REQUEST).await.unwrap();
+        input.write_all(CANCEL_REQUEST_9).await.unwrap();
+        let mut transport = ServerTransport::new(read, tokio::io::sink(), deliveries);
+
+        let first = {
+            let mut receive = Box::pin(transport.receive());
+            let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+            match std::future::Future::poll(receive.as_mut(), &mut context) {
+                std::task::Poll::Ready(Some(message)) => message,
+                _ => panic!("the gated request should reach rmcp immediately"),
+            }
+        };
+        assert!(matches!(first, JsonRpcMessage::Request(_)));
+
+        let second = {
+            let mut receive = Box::pin(transport.receive());
+            let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+            match std::future::Future::poll(receive.as_mut(), &mut context) {
+                std::task::Poll::Ready(Some(message)) => message,
+                _ => panic!("cancellation should not wait for the response write"),
+            }
+        };
+        assert!(matches!(second, JsonRpcMessage::Notification(_)));
+        assert!(!is_active(&cancelled));
     }
 
     #[test]

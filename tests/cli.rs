@@ -132,6 +132,39 @@ fn stdio_console_waits_for_response_writes_before_later_requests() {
     assert_eq!(second["id"], 3, "{second}");
     assert_eq!(second["result"]["isError"], false, "{second}");
     assert_eq!(response_text(&second), "[interrupt sent]");
+
+    client.send_console(4, json!({"r": "emit stdout"}));
+    wait_for_readable(
+        client.output.get_ref().as_raw_fd(),
+        Duration::from_secs(5),
+        "third response",
+    );
+    client.send_tool(5, "session", json!({"action": "interrupt"}));
+    write_message(
+        client.input.as_mut().expect("stdin should be open"),
+        &json!({
+            "jsonrpc": "2.0",
+            "method": "notifications/cancelled",
+            "params": {"requestId": 5}
+        }),
+    );
+    write_message(
+        client.input.as_mut().expect("stdin should be open"),
+        &json!({
+            "jsonrpc": "2.0",
+            "id": 6,
+            "method": "ping"
+        }),
+    );
+
+    let third = read_message(&mut client.output);
+    assert_eq!(third["id"], 4, "{third}");
+    let fourth = read_message(&mut client.output);
+    assert_eq!(fourth["id"], 6, "{fourth}");
+    assert!(
+        !readable_within(checkpoint.as_raw_fd(), Duration::from_secs(1)),
+        "cancelled interrupt reached the worker"
+    );
 }
 
 #[cfg(target_os = "macos")]
