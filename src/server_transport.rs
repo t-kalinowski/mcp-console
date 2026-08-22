@@ -227,6 +227,7 @@ impl Drop for ResponseDeliveryWrite {
 pub(crate) struct ServerTransport<R: AsyncRead, W: AsyncWrite> {
     inner: AsyncRwTransport<RoleServer, R, W>,
     deliveries: ResponseDeliveries,
+    pending_message: Option<RxJsonRpcMessage<RoleServer>>,
 }
 
 impl<R, W> ServerTransport<R, W>
@@ -238,6 +239,7 @@ where
         Self {
             inner: AsyncRwTransport::new_server(read, write),
             deliveries,
+            pending_message: None,
         }
     }
 }
@@ -276,13 +278,23 @@ where
     }
 
     async fn receive(&mut self) -> Option<RxJsonRpcMessage<RoleServer>> {
-        let mut message = self.inner.receive().await;
+        if self.pending_message.is_none() {
+            self.pending_message = self.inner.receive().await;
+        }
+        if matches!(
+            self.pending_message.as_ref(),
+            Some(JsonRpcMessage::Request(_))
+        ) {
+            // Stdout bytes can reach the client before the current-thread
+            // runtime resumes the write future to settle response ownership.
+            // Keep the parsed request here because rmcp may cancel this receive
+            // future while it polls another service event.
+            self.deliveries.wait_for_writes().await;
+        }
+
+        let mut message = self.pending_message.take();
         match &mut message {
             Some(JsonRpcMessage::Request(request)) => {
-                // Stdout bytes can reach the client before the current-thread
-                // runtime resumes the write future to settle response ownership.
-                // Do not dispatch a causally later request through that interval.
-                self.deliveries.wait_for_writes().await;
                 let call = self.deliveries.start(request.id.clone());
                 request.request.extensions_mut().insert(call);
             }
