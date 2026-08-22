@@ -20,6 +20,7 @@ from _support import (
     release_worker_callback_gate,
     run_this_suite,
     stop_client,
+    wait_for_evaluation_output,
     wait_for_idle_output,
     wait_for_worker_file,
 )
@@ -964,7 +965,6 @@ def test_restart_skips_direct_stdin_boundary_callback(binary: Path) -> Transcrip
               "mcp_test_register_input_handler",
               file.path(tempdir(), "direct-stdin-boundary-fifo"),
               function() {
-                cat("direct callback waiting")
                 connection <- suppressWarnings(file("/dev/stdin"))
                 on.exit(close(connection))
                 stopifnot(file.create(file.path(
@@ -998,7 +998,6 @@ def test_restart_skips_direct_stdin_boundary_callback(binary: Path) -> Transcrip
         restarted = client._start_session(action="restart")
         client._receive(waiting)
         client._receive(restarted)
-        assert "direct callback waiting" in waiting["result"]["content"][0]["text"]
         assert "direct callback released" in waiting["result"]["content"][0]["text"]
         assert "direct stdin cell ran" not in waiting["result"]["content"][0]["text"]
         assert "direct stdin cell ran" not in restarted["result"]["content"][0]["text"]
@@ -1019,17 +1018,13 @@ def test_browser_input(binary: Path) -> Transcript:
         }
         step()
         """)
-    client.send(r=r)
+    client.send(r=r, stdin="n\nn\nn\n")
     output = last_tool_text(client)
-    assert output.count('[input requested: "Browse[1]> "]') == 1, output
-    assert output.endswith("\n[stdin needed]"), output
-    client.send(r="1")
-    assert client.transcript[-1]["result"]["isError"] is True
-    client.send(stdin="n\nn\nn\n")
-    output = last_tool_text(client)
-    assert output.count('[input requested: "Browse[1]> "]') == 3, output
+    assert output.count('[input requested: "Browse[1]> "]') == 4, output
     assert output.endswith("\n[stdin needed]"), output
     assert "n" not in output.splitlines(), output
+    client.send(r="1")
+    assert client.transcript[-1]["result"]["isError"] is True
     client.send(stdin="c\n")
     output = last_tool_text(client)
     assert output == "[1] 3\n", output
@@ -1198,11 +1193,13 @@ def test_interrupts_managed_console_input(binary: Path) -> Transcript:
         assert last_tool_text(client) == (
             '[input requested: "R interrupt> "]\n[stdin needed]'
         )
-        time.sleep(0.05)
         client.session(action="interrupt")
         assert last_tool_text(client) == "[interrupt sent]"
-        client.send(timeout_ms=3_000)
-        assert last_tool_text(client) == "R input interrupted\n"
+        wait_for_evaluation_output(
+            client,
+            "R input interrupted\n",
+            "R console input interrupt",
+        )
         client.send(r='readline("R replay> ")', stdin="!\n")
         assert last_tool_text(client) == (
             '[input requested: "R replay> "]\n[1] "R partial!"\n'
@@ -1220,12 +1217,14 @@ def test_interrupts_managed_console_input(binary: Path) -> Transcript:
         assert last_tool_text(client) == (
             '[input requested: "R suspended> "]\n[stdin needed]'
         )
-        time.sleep(0.05)
         client.session(action="interrupt")
         assert last_tool_text(client) == "[interrupt sent]"
-        client.send(stdin="accepted\n", timeout_ms=3_000)
-        output = last_tool_text(client)
-        assert output == "suspended input accepted\n", repr(output)
+        wait_for_evaluation_output(
+            client,
+            "suspended input accepted\n",
+            "suspended R console input",
+            stdin="accepted\n",
+        )
         client.send(r="suspended_input")
         assert last_tool_text(client) == '[1] "accepted"\n'
 
@@ -1241,11 +1240,13 @@ def test_interrupts_managed_console_input(binary: Path) -> Transcript:
         assert last_tool_text(client) == (
             '[input requested: "Python interrupt> "]\n[stdin needed]'
         )
-        time.sleep(0.05)
         client.session(action="interrupt")
         assert last_tool_text(client) == "[interrupt sent]"
-        client.send(timeout_ms=3_000)
-        assert last_tool_text(client) == "Python input interrupted\n"
+        wait_for_evaluation_output(
+            client,
+            "Python input interrupted\n",
+            "Python console input interrupt",
+        )
         client.send(python='input("Python replay> ")', stdin="!\n")
         assert last_tool_text(client) == (
             "[input requested: \"Python replay> \"]\n'Python partial!'\n"

@@ -25,6 +25,7 @@ from _support import (
     release_worker_callback_gate,
     run_this_suite,
     stop_client,
+    wait_for_evaluation_output,
     wait_for_idle_output,
     wait_for_worker_file,
 )
@@ -2693,25 +2694,6 @@ def test_python_debugger_input(binary: Path) -> Transcript:
     client = McpClient(binary, ("serve",))
     client._initialize_and_list_tools()
 
-    def send_debugger_input(stdin: str, expected: str) -> None:
-        deadline = time.monotonic() + 3
-        poll_start = len(client.transcript)
-        client.send(stdin=stdin, timeout_ms=3_000)
-        while True:
-            output = last_tool_text(client)
-            if output == expected:
-                break
-            assert output == "\n[stdin needed]", output
-            assert time.monotonic() < deadline, (
-                "Python debugger did not consume submitted input"
-            )
-            client.send(timeout_ms=3_000)
-
-        calls = client.transcript[poll_start:]
-        submitted = calls[0]
-        submitted["result"] = calls[-1]["result"]
-        client.transcript[poll_start:] = [submitted]
-
     # fmt: python
     python = code("""
         import pdb
@@ -2725,7 +2707,12 @@ def test_python_debugger_input(binary: Path) -> Transcript:
     assert output.count('[input requested: "(Pdb) "]') == 2, output
     assert output.endswith('41\n[input requested: "(Pdb) "]\n[stdin needed]'), output
 
-    send_debugger_input("continue\n", "[done]")
+    wait_for_evaluation_output(
+        client,
+        "[done]",
+        "Python debugger input",
+        stdin="continue\n",
+    )
     client.send(python="debug_value")
     assert last_tool_text(client) == "42\n"
     return client._finish()

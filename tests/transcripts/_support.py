@@ -275,6 +275,33 @@ def wait_for_idle_output(
     client.transcript[poll_start:] = [final_poll]
 
 
+def wait_for_evaluation_output(
+    client: "McpClient",
+    expected: str,
+    description: str,
+    **send_arguments: Any,
+) -> None:
+    """Poll past a provisional input request and retain the submitted call."""
+    deadline = time.monotonic() + 3
+    poll_start = len(client.transcript)
+    result = client.send(timeout_ms=3_000, **send_arguments)
+    while True:
+        assert result.get("isError") is not True, result
+        content = result["content"]
+        assert len(content) == 1 and content[0]["type"] == "text", content
+        output = content[0]["text"]
+        if output == expected:
+            break
+        assert output == "\n[stdin needed]", repr(output)
+        assert time.monotonic() < deadline, f"{description} did not complete"
+        result = client.send(timeout_ms=3_000)
+
+    calls = client.transcript[poll_start:]
+    submitted = calls[0]
+    submitted["result"] = calls[-1]["result"]
+    client.transcript[poll_start:] = [submitted]
+
+
 def run_this_suite(suite_path: str) -> None:
     suite = Path(suite_path).resolve()
     directory = next(

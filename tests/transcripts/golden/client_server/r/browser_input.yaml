@@ -11,11 +11,21 @@ send:
       value
     }
     step()
+  stdin: |
+    n
+    n
+    n
 result:
   content:
     - type: text
       text: |-
         Called from: step()
+        [input requested: "Browse[1]> "]
+        debug at #4: value <- value + 1
+        [input requested: "Browse[1]> "]
+        debug at #5: value <- value + 1
+        [input requested: "Browse[1]> "]
+        debug at #6: value
         [input requested: "Browse[1]> "]
         [stdin needed]
   isError: false
@@ -27,24 +37,6 @@ result:
     - type: text
       text: "[worker is already evaluating a cell; poll without a code field]"
   isError: true
----
-send:
-  stdin: |
-    n
-    n
-    n
-result:
-  content:
-    - type: text
-      text: |-
-        debug at #4: value <- value + 1
-        [input requested: "Browse[1]> "]
-        debug at #5: value <- value + 1
-        [input requested: "Browse[1]> "]
-        debug at #6: value
-        [input requested: "Browse[1]> "]
-        [stdin needed]
-  isError: false
 ---
 send:
   stdin: |
