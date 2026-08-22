@@ -2,19 +2,25 @@
 
 This file contains repository-wide instructions and a navigation map.
 Keep it synchronized with implemented code.
-Detailed runtime behavior belongs in the protocol documents, source, and public transcript tests.
+Detailed current behavior belongs in the documents indexed by `docs/README.md`, source, and public transcript tests.
 
 The documents under `design-sketches/` describe intended behavior, not the current implementation.
 
 ## Sources of truth
 
-- `docs/WORKER_PROTOCOL.md` describes the implemented worker launch, sideband, language adapters, evaluation, input, output, and lifecycle contract.
-- `docs/RELAY_PROTOCOL.md` describes the private server-to-relay transport and sandbox process boundary.
-- `docs/TOOL_DESCRIPTIONS.md` contains the exact registered MCP tool and property descriptions.
-- `tests/transcripts/README.md` describes transcript boundaries, selectors, normalization, and snapshot updates.
 - `README.md` describes the current user-facing project status.
+- `docs/README.md` maps the implemented documentation by audience.
+- `docs/ARCHITECTURE.md` describes the implemented process structure, ownership, and lifecycle.
+- `docs/BUILTIN_RUNTIME.md` describes user-visible behavior of the built-in mixed-language console.
+- `docs/REQUIREMENTS.md` describes dependency and environment behavior and its trust boundary.
+- `docs/WORKER_PROTOCOL.md` defines the exact relay-worker and custom-worker contract.
+- `docs/RELAY_PROTOCOL.md` defines the exact private server-relay transport.
+- `docs/TOOL_DESCRIPTIONS.md` is a human-readable mirror of registered MCP tool and property prose.
+  The actual `tools/list` result and the registered strings and Rust doc comments in `src/server.rs` are authoritative.
+- `tests/transcripts/README.md` describes transcript boundaries, selectors, normalization, and snapshot updates.
+- `design-sketches/` contains intended or exploratory future design only.
 
-When documentation and code disagree, inspect the implementation and public tests before changing either.
+When documentation and code disagree, source and public acceptance tests are the final authority.
 Do not treat `design-sketches/` as evidence of implemented behavior.
 
 ## Platform and development
