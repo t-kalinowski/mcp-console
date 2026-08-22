@@ -64,6 +64,10 @@ After a worker starts, preparation is available only while it is idle:
 - Compatible Python additions can update an idle server-managed built-in worker.
 - DuckDB extensions are installed on the host without replacing the worker.
 
+Live R and Python preparation is noninteractive.
+Use `send` to satisfy and collect any managed input requested by an idle R callback before preparing R or Python requirements.
+If such a request is outstanding or arises during live preparation, the preparation fails and the server stops the worker, losing its in-memory state.
+
 Preparation during an active cell is rejected.
 If preparation overlaps worker startup, it returns `[requirements not prepared: worker is starting]` without resolving or retaining the additions.
 If the worker is stopped, new additions return `[restart required]`; use restart to prepare them and start a replacement.

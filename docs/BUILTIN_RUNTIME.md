@@ -31,8 +31,9 @@ The source is not an interactive fragment assembled across calls.
 R uses its native top-level evaluation behavior; Python parses the entire submitted source before executing it; SQL passes the complete string to DuckDB.
 
 The optional `timeout_ms` defaults to 60,000 milliseconds.
-It limits only how long that tool call waits.
-It does not stop worker startup, dependency resolution, or evaluation.
+It limits only how long a call waits after starting or attaching to an evaluation, including its worker startup and one automatic replacement attempt.
+A stdin-only call with no active evaluation instead waits without that deadline if it must start an initial or stopped worker.
+The deadline does not stop worker startup, dependency resolution, or evaluation.
 When the deadline expires, the response contains output available so far and ends in a state notice such as `[running]` or `[worker starting]`.
 
 Call `send` again without code or standard input to poll.
@@ -85,6 +86,7 @@ They cannot consume a partial line that the built-in worker has preserved for th
 `session(action = "interrupt")` first targets an active host dependency resolver; otherwise it requests `SIGINT` for the live worker.
 The call returns after the request or signal is sent, not after user code stops.
 If neither a resolver nor a worker is running, the call does not start a worker and returns the tool error `worker is not running`.
+A resolver signal error is returned by both the interrupt and resolution calls, and the server stops that resolver during cleanup; an interrupted resolver otherwise reports its ordinary resolution failure.
 
 R, Python, and DuckDB observe interruption through their normal console/runtime mechanisms.
 Managed console reads are cancelled when the active runtime accepts the interrupt.
@@ -213,6 +215,9 @@ At the end of every Python cell, including after an exception, the worker render
 `show()` is optional and is replaced with a no-op for the noninteractive runtime.
 Calling `savefig()` does not suppress return of an open figure; calling `close()` before cell end does.
 Figures not registered with pyplot are not captured.
+
+The built-in worker preserves an existing host `matplotlibrc` selected through inherited `MATPLOTLIBRC` or `MPLCONFIGDIR` (falling back to `$HOME/.matplotlib`) while redirecting Matplotlib configuration and cache writes to worker-private storage.
+It can reuse matching host font indexes read-only; sandboxed worker code does not modify the host configuration or cache.
 
 R plots created through Python's `r` bridge follow the R graphics rules.
 
