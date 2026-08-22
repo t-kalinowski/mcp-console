@@ -2712,6 +2712,7 @@ def test_python_debugger_input(binary: Path) -> Transcript:
         "[done]",
         "Python debugger input",
         stdin="continue\n",
+        timeout_ms=3_000,
     )
     client.send(python="debug_value")
     assert last_tool_text(client) == "42\n"
