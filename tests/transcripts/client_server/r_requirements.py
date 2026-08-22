@@ -214,16 +214,19 @@ def test_rejects_local_r_installation(binary: Path) -> Transcript:
         assert "IR_NO_LOCAL_SOURCES is set" in error, error
         assert "mcpconsolerinstallescape" in error, error
         assert "Use a remote package source" in error, error
-        prefix, progress_start, progress_and_error = error.partition("\n\n\r")
-        assert progress_start and prefix.endswith(
-            "Loading metadata database ... done"
-        ), error
-        progress, diagnostic_start, diagnostic = progress_and_error.partition(
+        progress, diagnostic_start, diagnostic = error.partition(
             "Error: IR_NO_LOCAL_SOURCES is set"
         )
+        assert progress.startswith(
+            "R package resolution failed with exit status: 1: "
+        ), error
         assert diagnostic_start and "Resolving" in progress, error
+        # IR may load cached metadata or refresh it before the same rejection.
         error = (
-            f"{prefix}\n\n<run-specific IR progress frames>\n"
+            "R package resolution failed with exit status: 1: "
+            "ℹ Loading metadata database\n"
+            "✔ Loading metadata database ... done\n\n"
+            "<run-specific IR progress frames>\n"
             f"{diagnostic_start}{diagnostic}"
         )
         client.transcript[-1]["session"]["requirements"]["r"] = [
