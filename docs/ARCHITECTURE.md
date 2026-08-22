@@ -1,0 +1,188 @@
+# Implemented architecture
+
+**Status:** Current implementation
+
+This document describes the structure and ownership implemented in the current source.
+It explains how the pieces fit together without defining their wire fields or the built-in console's operating rules.
+See the [relay protocol](RELAY_PROTOCOL.md) and [worker protocol](WORKER_PROTOCOL.md) for exact transports, the [built-in runtime guide](BUILTIN_RUNTIME.md) for console behavior, and [requirements and environments](REQUIREMENTS.md) for dependency management and its trust boundary.
+The material under `design-sketches/` is future or exploratory design, not evidence for this document.
+
+## Process layout
+
+MCP Console has three communication boundaries and one host-only resolver path:
+
+```text
+MCP client
+    │ MCP JSON-RPC over stdio
+    ▼
+mcp-console server                         host, outside the sandbox
+    ├── generation and operation owner
+    ├── retained environments and output
+    ├── transcript and image artifacts
+    │
+    ├──── host resolver processes          outside the sandbox
+    │     R, Python, and DuckDB setup
+    │
+    │ private JSONL over relay fd 0 and 1
+    ▼
+worker relay                               macOS sandbox
+    │ worker sideband plus fd 0, 1, and 2
+    ▼
+worker                                     same sandbox and process group
+    └── built-in R, Python, and DuckDB runtime
+```
+
+The server is the MCP stdio process.
+It starts one relay as its direct sandbox child for each worker lifetime.
+The relay is the sandbox process-group leader and starts the configured worker inside the same sandbox and process group.
+Submitted R, Python, and SQL cells run in the worker, not in the server or a host resolver.
+
+R, Python, and DuckDB dependency resolution follows a separate path.
+The server launches resolver subprocesses on the host, outside the worker sandbox, because they need normal installation, cache, and network access.
+Resolver inputs are restricted and may execute trusted installation or build code with server permissions; [requirements and environments](REQUIREMENTS.md) owns the accepted syntax and security policy.
+
+## Communication boundaries
+
+### MCP client and server
+
+The client and server exchange MCP JSON-RPC over the server's standard input and output.
+The server registers the `send` and `session` tools, validates calls, and turns server-owned responses into MCP text and image content.
+[`TOOL_DESCRIPTIONS.md`](TOOL_DESCRIPTIONS.md) is a human-readable mirror of the registered descriptions; `src/server.rs` and the actual `tools/list` result are authoritative.
+
+This is the only public protocol boundary.
+The client does not communicate directly with a relay, worker, or resolver.
+
+### Server and relay
+
+The server sends commands to the relay's standard input and receives JSONL events from the relay's standard output.
+Relay standard error is inherited separately and is not part of that protocol.
+The transport is private and currently exists to keep worker pipes and process supervision inside the sandbox.
+[`RELAY_PROTOCOL.md`](RELAY_PROTOCOL.md) defines its commands, events, framing, and retirement behavior.
+
+### Relay and worker
+
+The relay launches the worker with standard input, standard output, standard error, and a dedicated sideband.
+Complete cells and other worker-protocol messages travel over the sideband, interactive input uses worker fd 0, and direct worker output remains on fd 1 and fd 2.
+Process signals and worker supervision remain relay responsibilities.
+[`WORKER_PROTOCOL.md`](WORKER_PROTOCOL.md) defines the launch descriptors, framing, messages, ordering rules, closure behavior, and custom-worker contract.
+
+## Responsibility boundaries
+
+### Server
+
+The server owns the logical console session and all state that must survive a worker process:
+
+- MCP tool admission and validation;
+- worker lifecycle and generation ownership;
+- retained R, Python, and DuckDB requirements;
+- host resolver launch, interruption, cancellation, and result commits;
+- evaluation, preparation, stdin, restart, and replacement admission;
+- the pending output tape, output budgets, response boundaries, and MCP response assembly;
+- response-delivery ownership; and
+- transcript recording and image artifacts.
+
+These responsibilities remain on the host side of the sandbox boundary.
+The server does not execute submitted cells or ask the relay to interpret MCP calls.
+
+### Relay
+
+The relay is a thin ordered transport and worker supervisor.
+It owns the worker's local descriptors, translates applicable relay commands to worker-sideband messages, forwards worker observations, delivers signals, bounds shutdown, drains streams, and reaps the direct worker.
+Its producers preserve their own order, and one relay writer serializes their observations for the server.
+That serialization does not reconstruct chronology across the independent sideband, stdout, and stderr pipes.
+
+The relay does not own the logical session, retained requirements, evaluation admission, output budgets, response assembly, or MCP delivery.
+It exits with the worker lifetime it supervises.
+
+### Worker
+
+The worker owns language-runtime state and implements the worker protocol.
+It reports readiness, accepts complete cells and supported preparation operations, consumes interactive stdin, publishes console events and images, and reports completion or failure through the sideband.
+
+The built-in worker embeds R on its main thread.
+Its language adapters provide persistent Python and DuckDB SQL within that worker process.
+Their user-visible behavior belongs in the [built-in runtime guide](BUILTIN_RUNTIME.md), while the sideband contract remains independent of the interpreter implementation.
+
+## Worker generations
+
+Generation ownership belongs to the server.
+The server captures the current generation when it admits an evaluation, stdin write, resolver callback, preparation, interrupt target, or retained-environment commit.
+The operation can affect only the lifecycle generation that accepted it.
+
+An explicit restart advances admission to a new generation before the old relay and worker finish retirement.
+Work still completing for the retiring generation is either settled for that generation or discarded according to its existing lifecycle contract; it cannot be forwarded to the replacement or commit state on its behalf.
+The replacement receives new worker pipes and fresh language-runtime state, while the server supplies the retained environment selected for it.
+
+An unexpected worker or transport failure also retires that relay and worker before replacement.
+The server reports the failed operation and does not replay its cell or stdin against the new worker.
+
+## Lifecycle
+
+### Server and worker startup
+
+The built-in server constructs its retained environment before it accepts MCP input, resolving the default R and DuckDB environment and managed Python when selected.
+The worker itself starts lazily when an operation first needs it; preparing retained requirements can happen without launching a worker.
+An explicit restart starts its replacement eagerly, including when the session had not started a worker before.
+
+For each worker start, the server configures a sandboxed relay from the retained environment.
+The relay creates the worker sideband and standard streams, launches the worker, and forwards its startup events.
+The server admits the worker only after the required readiness exchange succeeds.
+
+### Evaluation
+
+The server admits one cell against the current generation, starts a worker if needed, and registers the operation before sending it through the relay.
+Worker sideband output and direct fd output are published to the server-owned output tape as the relay observes them.
+The server waits, polls, or completes the MCP response without moving response ownership into the relay or worker.
+
+### Interruption
+
+An interrupt targets the active host resolver when one is registered; otherwise it targets the live worker through its relay.
+It stays associated with that resolver or worker and is not retried against a replacement.
+The call reports signal delivery rather than waiting for the resolver or evaluated code to stop.
+
+### Explicit restart
+
+When restart includes requirements, the server first resolves the candidate retained environment outside the sandbox.
+A resolution failure leaves the existing worker generation in place.
+After resolution succeeds, or immediately for an unchanged restart, the server closes admission to the old generation, settles any active response ownership, retires and reaps the relay and worker, then starts the replacement from the retained environment.
+Exact requirement commit behavior is documented in [requirements and environments](REQUIREMENTS.md).
+
+### Failure replacement
+
+When an established worker fails during an evaluation, the server retires its relay and worker, retains the observed failure and output, and makes one automatic replacement attempt for that call.
+The failed cell is not run again.
+A successful replacement starts with fresh in-memory state and the retained environment; the [built-in runtime guide](BUILTIN_RUNTIME.md) owns the exact notices and polling behavior.
+
+### Server shutdown
+
+Closing MCP input begins shutdown of the implicit console session.
+The server stops accepting generation work, requests bounded retirement of the active relay and worker, cancels an active host resolver, joins the remaining relay I/O tasks, and reaps owned processes.
+The protocol documents define the exact closure and retirement order.
+
+## Output ownership
+
+The server owns one ordered pending-output tape across worker lifetimes.
+The relay publishes observations to it, but neither the relay nor worker decides which MCP call receives them.
+The server assigns output to an evaluation, poll, restart, or later idle response; applies pending-output limits; preserves image order; adds lifecycle notices; and assembles MCP content.
+
+Each relay producer preserves its own order.
+The serialized event stream gives the server one observation order, but it does not establish chronology between independent worker sideband, stdout, and stderr pipes.
+The [relay protocol](RELAY_PROTOCOL.md) owns that ordering guarantee, and the [built-in runtime guide](BUILTIN_RUNTIME.md) describes the resulting console behavior.
+
+## Recording and image artifacts
+
+Recording is a server responsibility and does not add messages to either private protocol.
+On the first ordinary `send` or `session` call, the server creates a private run directory under `.mcp-console/sessions/` in its working directory.
+It appends tool calls and assembled results to `internal/events.jsonl`.
+Each `tool_result` is appended before the MCP transport attempts the corresponding response write.
+It records server assembly, not whether the transport write succeeded or the client received the response.
+
+Images remain ordinary MCP image content for the client.
+For recording, the server decodes retained image data into files under the run's `artifacts/` directory and records artifact identifiers and relative paths in the JSONL result instead of duplicating the encoded payload there.
+A recording failure disables further recording and reports a server diagnostic without stopping the console or worker.
+
+## Platform support
+
+The implemented sandbox command, relay, built-in worker, and managed resolvers are supported only on macOS.
+The complete CI check runs on macOS.
+Linux and Windows have unsupported-platform paths but no working execution stack yet.

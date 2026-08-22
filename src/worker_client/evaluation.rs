@@ -342,6 +342,9 @@ impl Evaluation {
     }
 
     pub(super) fn complete_cell_after_grace(self: &Arc<Self>) {
+        // Give raw-output readers a brief window to publish cross-pipe output that
+        // arrived with Completed. The cut still leaves later observations for the
+        // next response; it does not claim cross-pipe chronology.
         let deadline = Instant::now() + CELL_COMPLETION_GRACE;
         let Ok(mut state) = self.state.lock() else {
             return;

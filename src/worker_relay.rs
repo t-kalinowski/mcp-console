@@ -1008,6 +1008,11 @@ mod platform {
         }
     }
 
+    // Keep this reader cancellable and nonblocking through retirement. A worker
+    // descendant can retain the pipe after writing only part of a frame, so a
+    // blocking line read could prevent the relay from flushing already complete
+    // events and exiting. Cancellation forwards complete buffered or immediately
+    // readable frames, then abandons any incomplete tail.
     struct SidebandReader {
         cancel: Cancellation,
         thread: thread::JoinHandle<()>,
