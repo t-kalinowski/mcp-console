@@ -87,6 +87,8 @@ They cannot consume a partial line that the built-in worker has preserved for th
 The call returns after the request or signal is sent, not after user code stops.
 If neither a resolver nor a worker is running, the call does not start a worker and returns the tool error `worker is not running`.
 A resolver signal error is returned by both the interrupt and resolution calls, and the server stops that resolver during cleanup; an interrupted resolver otherwise reports its ordinary resolution failure.
+A live but idle built-in worker still receives `SIGINT` and the call returns `[interrupt sent]`.
+R may consume that signal while idle or at the next managed boundary, so the following cell can execute while its response contains a bare interrupt newline attributable to the earlier interrupt.
 
 R, Python, and DuckDB observe interruption through their normal console/runtime mechanisms.
 Managed console reads are cancelled when the active runtime accepts the interrupt.
@@ -180,6 +182,7 @@ The preview:
 
 The renderer reports omitted rows, columns, and truncated cells.
 It does not count the complete query result.
+Queries with result columns but zero rows still return column names, Arrow types, and `[0 rows]`.
 Statements with no result columns, including DDL and DML, return no preview and do not report affected-row counts.
 
 DuckDB and DBI errors are printed as ordinary console errors and leave the connection available for later cells.
@@ -262,6 +265,7 @@ Each undrained output segment is limited to:
 
 The first event that exceeds a limit adds a typed `[output truncated: ...]` notice.
 A fitting text prefix is retained, while an image that does not fit is omitted as a whole.
+After that first overflow, all later console text, raw standard-stream output, and images in the same undrained segment are discarded, even if another budget still has room.
 Lifecycle and control events remain available.
 The separate 12 KiB SQL-preview limit is applied before SQL text enters these budgets.
 

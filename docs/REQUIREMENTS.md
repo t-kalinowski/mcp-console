@@ -32,6 +32,8 @@ The built-in server prepares these defaults before accepting MCP input:
 
 MCP Console applies no deadline to these startup preflights, which run before the MCP transport starts.
 `session(action = "interrupt")` and closing MCP input therefore cannot cancel them; if a resolver does not finish, the server does not begin accepting MCP requests.
+Host resolution for changed requirements started by explicit `prepare` or `restart` also has no deadline.
+The call remains pending until the resolver exits; while MCP input is open, `interrupt` sends `SIGINT` to the active resolver, and closing MCP input cancels it during server shutdown.
 
 Packages supplied by these environments are available but are not attached or imported automatically.
 The default DuckDB extensions are installed in DuckDB's native cache but are loaded only when DuckDB needs them inside the sandbox.
