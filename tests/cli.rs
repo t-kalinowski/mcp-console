@@ -136,6 +136,25 @@ fn stdio_console_waits_for_response_writes_before_later_requests() {
 
 #[cfg(target_os = "macos")]
 #[test]
+fn stdio_console_shutdown_observes_eof_behind_response_gate() {
+    let zod = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/zod");
+    let mut command = Command::new(env!("CARGO_BIN_EXE_mcp-console"));
+    command.arg("serve").arg("--worker").arg(zod);
+    let mut client = McpClient::spawn(command);
+
+    client.send_console(2, json!({"r": "emit stdout"}));
+    wait_for_readable(
+        client.output.get_ref().as_raw_fd(),
+        Duration::from_secs(5),
+        "first response",
+    );
+
+    client.send_tool(3, "session", json!({"action": "interrupt"}));
+    client.close_within(Duration::from_secs(2));
+}
+
+#[cfg(target_os = "macos")]
+#[test]
 fn stdio_console_discovers_r_inside_the_worker_sandbox() {
     let test_directory = TestDirectory::new("native-worker-r-discovery");
     let fake_bin = test_directory.path().join("bin");
