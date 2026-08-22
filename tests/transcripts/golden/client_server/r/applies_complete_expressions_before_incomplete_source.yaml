@@ -1,7 +1,6 @@
 ---
 !same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
 ---
-id: 3
 send:
   r: |
     answer <- 42
@@ -13,7 +12,6 @@ result:
         Error: Incomplete code
   isError: false
 ---
-id: 4
 send:
   r: answer
 result:
@@ -23,7 +21,6 @@ result:
         [1] 42
   isError: false
 ---
-id: 5
 send:
   r: |
     answer <- 43
@@ -35,7 +32,6 @@ result:
         Error: unexpected ')' in ")"
   isError: false
 ---
-id: 6
 send:
   r: answer
 result:

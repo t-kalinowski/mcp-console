@@ -1,33 +1,30 @@
 ---
 !same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
 ---
-id: 3
 send:
-  r: echo
+  r: echo hello
 result:
   content:
     - type: text
       text: |
-        zod: echo
+        zod: hello
   isError: false
 ---
-id: 4
 send:
-  python: echo
+  python: echo precise 👩🏽‍💻
 result:
   content:
     - type: text
       text: |
-        zod python: echo
+        zod python: precise 👩🏽‍💻
   isError: false
 ---
-id: 5
 send:
-  sql: echo
+  sql: echo two  spaces
 result:
   content:
     - type: text
       text: |
-        zod sql: echo
+        zod sql: two  spaces
   isError: false
 ...

@@ -1,7 +1,6 @@
 ---
 !same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
 ---
-id: 3
 session:
   action: prepare
   requirements:
@@ -13,7 +12,6 @@ result:
       text: "[prepared]"
   isError: false
 ---
-id: 4
 send:
   r: |
     callback_gate <- tempfile("mcp-console-callback-gate-")
@@ -37,7 +35,6 @@ result:
         <worker callback checkpoint>
   isError: false
 ---
-id: 5
 send:
   r: idle_value
 result:

@@ -1,7 +1,6 @@
 ---
 !same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
 ---
-id: 3
 session:
   action: restart
   requirements:
@@ -17,7 +16,6 @@ result:
         [idle]
   isError: false
 ---
-id: 4
 send:
   r: report managed R requirement
 result:

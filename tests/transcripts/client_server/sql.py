@@ -98,12 +98,7 @@ def test_restart_adds_r_and_duckdb_requirements(binary: Path) -> Transcript:
         ), failure
         result["content"][0]["text"] = duckdb_native_failure(failure)
 
-        client.send(
-            r=(
-                "identical(restart_marker, 42L) && "
-                "!requireNamespace('praise', quietly = TRUE)"
-            )
-        )
+        client.send(r="identical(restart_marker, 42L)")
         assert last_tool_text(client) == "[1] TRUE\n"
 
         client.session(

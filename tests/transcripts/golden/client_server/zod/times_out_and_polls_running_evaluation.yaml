@@ -1,9 +1,8 @@
 ---
 !same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
 ---
-id: 3
 send:
-  r: echo
+  r: echo echo
 result:
   content:
     - type: text
@@ -11,7 +10,6 @@ result:
         zod: echo
   isError: false
 ---
-id: 4
 send:
   r: complete after timeout
   timeout_ms: 10
@@ -23,7 +21,6 @@ result:
         [running]
   isError: false
 ---
-id: 5
 send:
   timeout_ms: 3000
 result:
@@ -33,9 +30,8 @@ result:
         zod: complete after timeout
   isError: false
 ---
-id: 6
 send:
-  r: echo
+  r: echo echo
 result:
   content:
     - type: text

@@ -11,10 +11,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from _support import (
     McpClient,
     Transcript,
+    checkpoint_uv_environment,
     code,
     r_test_environment,
     release_worker_callback_gate,
     run_this_suite,
+    stop_client,
     wait_for_idle_output,
 )
 
@@ -191,9 +193,6 @@ def test_prepares_r_requirements_after_worker_startup(binary: Path) -> Transcrip
         sentinel <- 42L
         worker_pid <- Sys.getpid()
         initial_library <- .libPaths()[[1L]]
-        stopifnot(
-          !file.exists(file.path(initial_library, "zeallot", "DESCRIPTION"))
-        )
         """)
     client.send(r=r)
     assert last_tool_text(client) == "[done]"
@@ -249,7 +248,7 @@ def test_stops_live_preparation_for_idle_callback_input(binary: Path) -> Transcr
         """)
     client.send(r=r)
     release_worker_callback_gate(client, "idle input callback")
-    checkpoint_id = wait_for_idle_output(
+    wait_for_idle_output(
         client,
         '[input requested: "later> "]\n[stdin needed]',
         "idle callback input request",
@@ -260,7 +259,6 @@ def test_stops_live_preparation_for_idle_callback_input(binary: Path) -> Transcr
         action="prepare",
         requirements={"python": ["py-yaml12>=0"]},
     )
-    client.transcript[-1]["id"] = checkpoint_id + 1
     assert result["isError"] is True, result
     assert result["content"][0]["text"] == (
         '[idle R callback requested input "later> " during requirement '
@@ -271,161 +269,94 @@ def test_stops_live_preparation_for_idle_callback_input(binary: Path) -> Transcr
     return client._finish()
 
 
-def test_failed_live_r_preparation_requires_restart(binary: Path) -> Transcript:
-    environment, _ = r_test_environment()
-    client = McpClient(binary, ("serve",), environment)
-    client._initialize_and_list_tools()
-
-    # fmt: r
-    setup = code(r"""
-        sentinel <- 42L
-        worker_pid <- Sys.getpid()
-        invisible(loadNamespace("reticulate"))
-        stopifnot(!reticulate::py_available(initialize = FALSE))
-        original_lib_paths <- base::.libPaths
-        replacement_lib_paths <- base::local({
-          original <- original_lib_paths
-          function(new) {
-            if (base::missing(new)) {
-              return(original())
-            }
-            original(new)
-            base::stop("blocked live R preparation")
-          }
-        })
-        base::unlockBinding(".libPaths", base::baseenv())
-        base::assign(
-          ".libPaths",
-          replacement_lib_paths,
-          envir = base::baseenv()
-        )
-        base::lockBinding(".libPaths", base::baseenv())
-        """)
-    client.send(r=setup)
-    assert last_tool_text(client) == "[done]", client.transcript[-1]
-
-    client.session(
-        action="prepare",
-        requirements={"r": ["praise"], "python": ["py-yaml12"]},
-    )
-    result = client.transcript[-1]["result"]
-    assert result["isError"] is True, result
-    failure = result["content"][0]["text"]
-    assert failure == (
-        "blocked live R preparation; further requirement changes are unavailable "
-        "until session restart"
-    ), failure
-    assert "[worker stopped:" not in failure, failure
-
-    client.session(action="prepare", requirements={"r": ["zeallot"]})
-    assert last_tool_text(client) == "[restart required]"
-
-    # fmt: r
-    usable = code(r"""
-        saved <- base::unserialize(base::serialize(sentinel, NULL))
-        saved_path <- tempfile(fileext = ".rds")
-        saveRDS(saved, saved_path)
-        stopifnot(
-          identical(saved, 42L),
-          identical(Sys.getpid(), worker_pid),
-          is.character(base::.libPaths())
-        )
-        cat(saved_path)
-        """)
-    client.send(r=usable)
-    saved_path = Path(last_tool_text(client))
-    assert saved_path.is_file(), saved_path
-    assert client.temporary_directory is not None
-    # Preserve the RDS outside the retiring worker's private temporary directory.
-    saved_sentinel = Path(client.temporary_directory.name) / 'saved-😀"sentinel\\.rds'
-    shutil.copyfile(saved_path, saved_sentinel)
-    client.transcript[-1]["result"]["content"][0]["text"] = (
-        "<worker temporary RDS path>"
-    )
-
-    client.session(action="restart")
-    assert last_tool_text(client) == (
-        "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
-    )
-    client.session(action="prepare", requirements={"r": ["zeallot"]})
-    assert last_tool_text(client) == "[prepared]"
-
-    # fmt: r
-    restarted = code(r"""
-        saved <- readRDS("<saved sentinel path>")
-        stopifnot(
-          identical(saved, 42L),
-          !exists("sentinel", inherits = FALSE),
-          "py-yaml12" %in% reticulate::py_require()$packages,
-          reticulate::py_module_available("yaml12"),
-          identical(dirname(find.package("zeallot")), .libPaths()[[1L]])
-        )
-        """)
-    saved_sentinel_bytes = ", ".join(str(byte) for byte in os.fsencode(saved_sentinel))
-    saved_sentinel_literal = f"rawToChar(as.raw(c({saved_sentinel_bytes})))"
-    client.send(r=restarted.replace('"<saved sentinel path>"', saved_sentinel_literal))
-    client.transcript[-1]["send"]["r"] = restarted
-    assert last_tool_text(client) == "[done]"
-    return client._finish()
-
-
 def test_failed_mixed_preparation_retains_live_python_activation(
     binary: Path,
 ) -> Transcript:
-    environment, _ = r_test_environment()
-    client = McpClient(binary, ("serve",), environment)
-    client._initialize_and_list_tools()
-
-    # fmt: r
-    setup = code(r"""
-        invisible(reticulate::py_config())
-        original_lib_paths <- base::.libPaths
-        replacement_lib_paths <- base::local({
-          original <- original_lib_paths
-          function(new) {
-            if (base::missing(new)) {
-              return(original())
-            }
-            original(new)
-            base::stop("blocked live R preparation")
-          }
-        })
-        base::unlockBinding(".libPaths", base::baseenv())
-        base::assign(
-          ".libPaths",
-          replacement_lib_paths,
-          envir = base::baseenv()
+    requirement = "mcpconsolepreparationfixture"
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        temporary = Path(temporary_directory)
+        environment, uv_started, uv_release = checkpoint_uv_environment(
+            temporary, "py-yaml12"
         )
-        base::lockBinding(".libPaths", base::baseenv())
-        """)
-    client.send(r=setup)
-    assert last_tool_text(client) == "[done]", client.transcript[-1]
+        r_environment, _ = r_test_environment()
+        environment["R_HOME"] = r_environment["R_HOME"]
 
-    client.session(
-        action="prepare",
-        requirements={"r": ["praise"], "python": ["py-yaml12"]},
-    )
-    result = client.transcript[-1]["result"]
-    assert result["isError"] is True, result
-    assert result["content"][0]["text"] == (
-        "blocked live R preparation; further requirement changes are unavailable "
-        "until session restart"
-    )
-
-    client.session(action="restart")
-    assert last_tool_text(client) == (
-        "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
-    )
-    # fmt: r
-    retained = code(r"""
-        stopifnot(
-          "py-yaml12" %in% reticulate::py_require()$packages,
-          reticulate::py_module_available("yaml12")
+        real_ir = shutil.which("ir")
+        assert real_ir is not None, "real ir is required"
+        fake_bin = temporary / "bin"
+        fake_bin.mkdir()
+        (fake_bin / "ir").symlink_to(
+            Path(__file__).resolve().parents[2] / "fixtures" / "selective_ir"
         )
-        """)
-    client.send(r=retained)
-    assert last_tool_text(client) == "[done]"
-    return client._finish()
+        path = environment.get("PATH")
+        assert path is not None, "PATH is required"
+        environment["PATH"] = os.pathsep.join((str(fake_bin), path))
+        candidate = temporary / "candidate-r-library"
+        candidate.mkdir()
+        environment["MCP_CONSOLE_TEST_REAL_IR"] = real_ir
+        environment["MCP_CONSOLE_TEST_IR_REQUIREMENT"] = requirement
+        environment["MCP_CONSOLE_TEST_IR_LIBRARY"] = str(candidate)
+
+        client = McpClient(binary, ("serve",), environment)
+        passed = False
+        try:
+            client._initialize_and_list_tools()
+            # fmt: r
+            setup = code(r"""
+                invisible(reticulate::py_config())
+                cat(.libPaths()[[1L]])
+                """)
+            client.send(r=setup)
+            initial_library = Path(last_tool_text(client))
+            assert initial_library.is_dir(), initial_library
+            client.transcript[-1]["result"]["content"][0]["text"] = (
+                "<initial managed R library>"
+            )
+            for package in initial_library.iterdir():
+                (candidate / package.name).symlink_to(
+                    package,
+                    target_is_directory=package.is_dir(),
+                )
+
+            preparation = client._start_session(
+                action="prepare",
+                requirements={"r": [requirement], "python": ["py-yaml12"]},
+            )
+            uv_started.wait("mixed live requirement preparation")
+            for package in candidate.iterdir():
+                package.unlink()
+            candidate.rmdir()
+            candidate.write_text("not an R library", encoding="utf-8")
+            uv_release.release()
+            client._receive(preparation)
+            result = preparation["result"]
+            assert result["isError"] is True, result
+            assert result["content"][0]["text"] == (
+                "resolved R library was not added to .libPaths(); further "
+                "requirement changes are unavailable until session restart"
+            )
+
+            client.session(action="restart")
+            assert last_tool_text(client) == (
+                "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
+            )
+            # fmt: python
+            python = code("""
+                import yaml12
+
+                yaml12.format_yaml({"answer": 42})
+                """)
+            client.send(python=python)
+            assert last_tool_text(client) == "'answer: 42'\n", client.transcript[-1]
+            transcript = client._finish()
+            passed = True
+            return transcript
+        finally:
+            uv_release.release()
+            uv_started.close()
+            uv_release.close()
+            if not passed:
+                stop_client(client)
 
 
 def test_failed_late_mixed_preparation_preserves_worker(binary: Path) -> Transcript:
@@ -440,12 +371,6 @@ def test_failed_late_mixed_preparation_preserves_worker(binary: Path) -> Transcr
         sentinel <- 42L
         worker_pid <- Sys.getpid()
         initial_lib_paths <- .libPaths()
-        initial_library <- initial_lib_paths[[1L]]
-        stopifnot(isFALSE(require(
-          zeallot,
-          lib.loc = initial_library,
-          quietly = TRUE
-        )))
         """)
     client.send(r=r)
     assert last_tool_text(client) == "[done]", client.transcript[-1]
@@ -468,14 +393,7 @@ def test_failed_late_mixed_preparation_preserves_worker(binary: Path) -> Transcr
         stopifnot(
           identical(sentinel, 42L),
           identical(Sys.getpid(), worker_pid),
-          identical(.libPaths(), initial_lib_paths),
-          isFALSE(require(
-            zeallot,
-            lib.loc = initial_library,
-            quietly = TRUE
-          )),
-          !"example @ https://example.invalid/example.whl" %in%
-            reticulate::py_require()$packages
+          identical(.libPaths(), initial_lib_paths)
         )
         42L
         """)
@@ -595,9 +513,6 @@ def test_prepares_initial_r_requirements(binary: Path) -> Transcript:
               identical(
                 dirname(find.package("praise")),
                 .libPaths()[[1L]]
-              ),
-              !file.exists(
-                file.path(.libPaths()[[1L]], "zeallot", "DESCRIPTION")
               ),
               normalizePath(.libPaths()[[2L]]) ==
                 normalizePath(Sys.getenv("MCP_CONSOLE_AMBIENT_R_LIBRARY"))

@@ -1,7 +1,6 @@
 ---
 !same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
 ---
-id: 3
 send:
   r: |
     bridge_plot <- function() {
@@ -14,7 +13,6 @@ result:
       text: "[done]"
   isError: false
 ---
-id: 4
 send:
   python: |
     print("before plot")

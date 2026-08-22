@@ -1,7 +1,6 @@
 ---
 !same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
 ---
-id: 3
 send:
   r: |
     cat("before\n")
@@ -18,7 +17,6 @@ result:
         [stdin needed]
   isError: false
 ---
-id: 4
 send:
   stdin: "\n"
 result:
@@ -28,7 +26,6 @@ result:
         [1] "without newline"
   isError: false
 ---
-id: 5
 send:
   r: |
     readline("next> ")

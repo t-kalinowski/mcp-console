@@ -1,7 +1,6 @@
 ---
 !same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
 ---
-id: 3
 send:
   r: malformed sideband after stdout
 result:
@@ -22,7 +21,6 @@ transcript_normalization:
     large_output: <large output>
     sideband_failure_detail: <invalid frame>
 ---
-id: 4
 send:
   r: malformed sideband after stderr
 result:

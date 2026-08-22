@@ -786,6 +786,11 @@ fn stdio_console_shutdown_is_bounded_with_detached_stdin_descendants() {
         }),
     );
 
+    wait_for_file(
+        &temporary_path,
+        "zod-detached-stdin-started",
+        Duration::from_secs(2),
+    );
     let marker = wait_for_file(
         &temporary_path,
         "zod-detached-stdin-pid",

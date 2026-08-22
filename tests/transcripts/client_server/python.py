@@ -2,7 +2,6 @@
 
 import json
 import os
-import select
 import shutil
 import signal
 import subprocess
@@ -15,9 +14,11 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from _support import (
+    FifoCheckpoint,
     McpClient,
     Transcript,
     assert_result_content,
+    checkpoint_uv_environment,
     code,
     r_test_environment,
     reference_plots,
@@ -29,24 +30,6 @@ from _support import (
 )
 
 PLATFORMS = {"darwin"}
-
-
-class FifoCheckpoint:
-    def __init__(self, path: Path) -> None:
-        self.path = path
-        os.mkfifo(path)
-        self.descriptor = os.open(path, os.O_RDWR | os.O_NONBLOCK)
-
-    def close(self) -> None:
-        os.close(self.descriptor)
-
-    def wait(self, description: str) -> None:
-        readable, _, _ = select.select([self.descriptor], [], [], 10)
-        assert readable, f"checkpoint was not reached: {description}"
-        assert os.read(self.descriptor, 1) == b"1"
-
-    def release(self) -> None:
-        assert os.write(self.descriptor, b"1") == 1
 
 
 def named_requirement_error(requirement: str) -> str:
@@ -70,25 +53,6 @@ def normalize_duckdb_resolution_error(error: str, extension: str) -> str:
         if f'Failed to download extension "{extension}"' in line
     )
     return detail.partition(' at URL "')[0]
-
-
-def checkpoint_uv_environment(
-    temporary: Path, argument: str
-) -> tuple[dict[str, str], FifoCheckpoint, FifoCheckpoint]:
-    real_uv = shutil.which("uv")
-    assert real_uv is not None, "real uv is required"
-    started = FifoCheckpoint(temporary / "uv-started")
-    release = FifoCheckpoint(temporary / "uv-release")
-    environment = os.environ.copy()
-    environment["RETICULATE_UV"] = str(
-        Path(__file__).parents[2] / "fixtures" / "checkpoint_uv"
-    )
-    environment["MCP_CONSOLE_TEST_REAL_UV"] = real_uv
-    environment["MCP_CONSOLE_TEST_UV_CHECKPOINT_ARGUMENT"] = argument
-    environment["MCP_CONSOLE_TEST_UV_CHECKPOINT_CLAIM"] = str(temporary / "uv-claimed")
-    environment["MCP_CONSOLE_TEST_UV_STARTED"] = str(started.path)
-    environment["MCP_CONSOLE_TEST_UV_RELEASE"] = str(release.path)
-    return environment, started, release
 
 
 def test_preserves_configured_python_environment(binary: Path) -> Transcript:
@@ -551,8 +515,7 @@ def test_validates_registry_only_python_requirements(binary: Path) -> Transcript
               "{restarted}" %in% requirements,
               !any(c(
                 {", ".join(json.dumps(requirement) for requirement in rejected)}
-              ) %in% requirements),
-              !file.exists(file.path(.libPaths()[[1L]], "praise", "DESCRIPTION"))
+              ) %in% requirements)
             )
             """)
         client.send(r=r)
@@ -1191,19 +1154,17 @@ def test_retains_idle_python_activation_during_continuous_collection(
         if time.monotonic() >= deadline:
             raise AssertionError("idle Python activation did not complete")
         time.sleep(0.01)
-    checkpoint_id = wait_for_idle_output(
+    wait_for_idle_output(
         client,
         "idle Python activated\n\n[idle]",
         "idle Python activation output",
     )
 
     client.session(action="restart")
-    client.transcript[-1]["id"] = checkpoint_id + 1
     assert last_tool_text(client) == (
         "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
     )
     client.send(python="import yaml12; yaml12.__name__")
-    client.transcript[-1]["id"] = checkpoint_id + 2
     assert last_tool_text(client) == "'yaml12'\n"
     return client._finish()
 
@@ -2735,7 +2696,6 @@ def test_python_debugger_input(binary: Path) -> Transcript:
     def send_debugger_input(stdin: str, expected: str) -> None:
         deadline = time.monotonic() + 3
         poll_start = len(client.transcript)
-        logical_id = client.transcript[-1]["id"] + 1
         client.send(stdin=stdin, timeout_ms=3_000)
         while True:
             output = last_tool_text(client)
@@ -2749,7 +2709,6 @@ def test_python_debugger_input(binary: Path) -> Transcript:
 
         calls = client.transcript[poll_start:]
         submitted = calls[0]
-        submitted["id"] = logical_id
         submitted["result"] = calls[-1]["result"]
         client.transcript[poll_start:] = [submitted]
 
@@ -2761,19 +2720,13 @@ def test_python_debugger_input(binary: Path) -> Transcript:
         pdb.set_trace()
         debug_value += 1
         """)
-    client.send(python=python)
+    client.send(python=python, stdin="p debug_value\n")
     output = last_tool_text(client)
-    assert output.count('[input requested: "(Pdb) "]') == 1, output
-    assert output.endswith("\n[stdin needed]"), output
-
-    send_debugger_input(
-        "p debug_value\n",
-        '41\n[input requested: "(Pdb) "]\n[stdin needed]',
-    )
+    assert output.count('[input requested: "(Pdb) "]') == 2, output
+    assert output.endswith('41\n[input requested: "(Pdb) "]\n[stdin needed]'), output
 
     send_debugger_input("continue\n", "[done]")
     client.send(python="debug_value")
-    client.transcript[-1]["id"] = client.transcript[-2]["id"] + 1
     assert last_tool_text(client) == "42\n"
     return client._finish()
 

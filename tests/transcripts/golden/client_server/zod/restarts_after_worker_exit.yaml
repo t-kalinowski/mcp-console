@@ -1,7 +1,6 @@
 ---
 !same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
 ---
-id: 3
 send:
   r: exit unexpectedly
 result:
@@ -15,7 +14,6 @@ result:
         [idle]
   isError: true
 ---
-id: 4
 send:
   stdin: |
     replacement
@@ -27,7 +25,6 @@ result:
         [idle]
   isError: false
 ---
-id: 5
 send:
   r: input without request
 result:

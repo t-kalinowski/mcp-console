@@ -1,7 +1,6 @@
 ---
 !same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
 ---
-id: 3
 send:
   r: overflow console output
 result:
@@ -12,9 +11,8 @@ result:
         [output truncated: omitted 7 text bytes and 0 encoded image bytes across 1 event]
   isError: false
 ---
-id: 4
 send:
-  r: echo
+  r: echo echo
 result:
   content:
     - type: text

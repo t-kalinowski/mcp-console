@@ -28,6 +28,8 @@ DONE_NAME = "mcp-console-scripted-relay-done"
 EVALUATING_NAME = "mcp-console-scripted-relay-evaluating"
 CHECKPOINT_NAME = "mcp-console-scripted-relay-checkpoint"
 RELEASE_NAME = "mcp-console-scripted-relay-release"
+STDIN_FAILURE_RELEASED_NAME = "mcp-console-stdin-failure-released"
+STDIN_FAILURE_RELEASED_ENV = "MCP_CONSOLE_TEST_STDIN_FAILURE_RELEASED"
 SHUTDOWN_RECEIVED_NAME = "mcp-console-scripted-relay-shutdown-received"
 RETIREMENT_RELEASE_NAME = "mcp-console-scripted-relay-retirement-release"
 PRELUDE_RELEASE_NAME = "mcp-console-scripted-relay-prelude-release"
@@ -72,6 +74,10 @@ class ServerRelayClient:
         environment = os.environ.copy() if environment is None else environment.copy()
         environment["TMPDIR"] = str(self.root)
         environment[SCENARIO_ENV] = scenario
+        if scenario == "stdin_forwarding_failure":
+            environment[STDIN_FAILURE_RELEASED_ENV] = str(
+                self.root / STDIN_FAILURE_RELEASED_NAME
+            )
         relay = Path(__file__).resolve().parents[2] / "fixtures" / "scripted_relay"
         self.client = McpClient(
             binary,
@@ -174,8 +180,8 @@ class ServerRelayClient:
                 message = next(iter(entry.values()))
                 assert isinstance(message, dict), entry
                 continue
-            assert allow_raw and entry.keys() == {"relay_raw"}, entry
-            base64.b64decode(entry["relay_raw"], validate=True)
+            assert allow_raw and entry.keys() in ({"server_raw"}, {"relay_raw"}), entry
+            base64.b64decode(next(iter(entry.values())), validate=True)
         return transcript
 
 
@@ -292,6 +298,66 @@ def test_forwards_stdin(binary: Path) -> Transcript:
     client = ServerRelayClient(binary, "stdin")
     assert _tool_text(client.send(r="42", stdin="answer\n")) == "[done]"
     return client.finish_active()
+
+
+def test_empty_stdin_sends_no_relay_command(binary: Path) -> Transcript:
+    client = ServerRelayClient(binary, "evaluate")
+    assert _tool_text(client.send(r="42", stdin="")) == "[done]"
+    return client.finish_active()
+
+
+def test_stdin_forwarding_failure_does_not_execute_cell(
+    binary: Path,
+) -> Transcript:
+    client = ServerRelayClient(binary, "stdin_forwarding_failure")
+    client.start_worker()
+    relay_root = client.relay_root()
+    capture_path = relay_root / CAPTURE_NAME
+    finished = False
+    with capture_path.open(encoding="utf-8") as capture:
+        try:
+            evaluation = client.client._start_send(
+                r="must not execute",
+                stdin="x" * (4 * 1024 * 1024),
+            )
+            checkpoint = client._wait_for(CHECKPOINT_NAME)
+            (client.root / STDIN_FAILURE_RELEASED_NAME).touch()
+            checkpoint.with_name(RELEASE_NAME).touch()
+            client.client._receive(evaluation)
+            result = evaluation["result"]
+            assert result.get("isError") is True, result
+            output = result["content"][0]["text"]
+            assert "worker relay stdin write failed" in output, output
+            assert output.endswith(
+                "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
+            ), output
+
+            transcript = client._read_open_capture(capture, allow_raw=True)
+            assert transcript[0] == {"relay": {"kind": "ready"}}, transcript
+            assert transcript[1].keys() == {"server_raw"}, transcript
+            raw = base64.b64decode(transcript[1]["server_raw"], validate=True)
+            assert raw.startswith(b'{"kind":"stdin","data":"'), raw
+            transcript[1]["server_raw"] = "<partial stdin frame>"
+            assert not any(entry.keys() == {"server"} for entry in transcript), (
+                transcript
+            )
+
+            assert _tool_text(client.send(r="42")) == "[done]"
+            captures = list(client.root.glob(f"mcp-console-tmp-*/{CAPTURE_NAME}"))
+            assert len(captures) == 1 and captures[0] != capture_path, (
+                capture_path,
+                captures,
+            )
+            replacement_capture_path = captures[0]
+            with replacement_capture_path.open(encoding="utf-8") as replacement:
+                client.client._finish()
+                transcript.extend(client._read_open_capture(replacement))
+            finished = True
+            return transcript
+        finally:
+            if not finished:
+                stop_client(client.client)
+            client._temporary.cleanup()
 
 
 def test_interrupts_and_reports_result(binary: Path) -> Transcript:
@@ -438,6 +504,9 @@ def test_cancelled_send_returns_owned_output_to_restart(binary: Path) -> Transcr
             requestId=waiting["id"],
             reason="acceptance test cancelled the waiting send",
         )
+        cancellation = client.client.transcript[-1]["input"]["params"]
+        assert cancellation["requestId"] == waiting["id"], cancellation
+        cancellation["requestId"] = "<request ID>"
         retirement_release.release()
         retirement_released = True
         client.client._receive(restart)
@@ -758,6 +827,60 @@ def test_restart_discards_pre_marker_r_preparation_result(
     ], prepared_events
     for event in prepared_events:
         event["library"] = f"<{Path(event['library']).name}>"
+    return transcript
+
+
+def test_r_preparation_failure_requires_restart_and_preserves_worker(
+    binary: Path,
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        library = root / "failed-candidate"
+        library.mkdir()
+        environment = _fake_ir_environment(root, [library])
+        client = ServerRelayClient(
+            binary,
+            "r_preparation_failure",
+            environment,
+        )
+        client.start_worker()
+
+        result = client.session(
+            action="prepare",
+            requirements={"r": ["failing-preparation"]},
+        )
+        assert result == {
+            "content": [
+                {
+                    "type": "text",
+                    "text": (
+                        "scripted R preparation failed; further requirement "
+                        "changes are unavailable until session restart"
+                    ),
+                }
+            ],
+            "isError": True,
+        }, result
+
+        assert _tool_text(client.send(r="42")) == "[done]"
+        assert (
+            _tool_text(
+                client.session(
+                    action="prepare",
+                    requirements={"r": ["not-forwarded"]},
+                )
+            )
+            == "[restart required]"
+        )
+        transcript = client.finish_active()
+
+    prepare_commands = [
+        entry["server"]
+        for entry in transcript
+        if entry.keys() == {"server"} and entry["server"].get("kind") == "prepare_r"
+    ]
+    assert prepare_commands == [{"kind": "prepare_r", "library": str(library)}]
+    prepare_commands[0]["library"] = "<failed-candidate>"
     return transcript
 
 

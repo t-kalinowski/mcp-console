@@ -1,7 +1,6 @@
 ---
 !same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
 ---
-id: 3
 send:
   r: complete silently
 result:
@@ -10,7 +9,6 @@ result:
       text: "[done]"
   isError: false
 ---
-id: 4
 send:
   r: exit unexpectedly
   timeout_ms: 1000
@@ -25,7 +23,6 @@ result:
         [worker starting]
   isError: true
 ---
-id: 5
 session:
   action: prepare
   requirements:
@@ -37,7 +34,6 @@ result:
       text: "[requirements not prepared: worker is starting]"
   isError: true
 ---
-id: 6
 send:
   timeout_ms: 3000
 result:

@@ -1,7 +1,6 @@
 ---
 !same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
 ---
-id: 3
 send:
   sql: |
     SELECT
@@ -25,7 +24,6 @@ result:
         1 1234567 1234567
   isError: false
 ---
-id: 4
 send:
   sql: |
     SELECT CASE WHEN count(*) = 2 THEN 1234567 ELSE 0 END AS loaded1

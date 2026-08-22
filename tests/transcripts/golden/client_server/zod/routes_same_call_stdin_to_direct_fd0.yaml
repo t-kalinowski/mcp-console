@@ -2,11 +2,13 @@
 !same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
 ---
 send:
-  r: probe sandbox
+  r: read fd 0 directly
+  stdin: |
+    direct café
 result:
   content:
     - type: text
       text: |
-        sandbox blocked host write
+        zod fd 0: 'direct café\n'
   isError: false
 ...

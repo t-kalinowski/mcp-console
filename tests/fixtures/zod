@@ -256,8 +256,9 @@ def main() -> None:
         language = message["language"]
         source = message["source"]
         if language in {"python", "sql"}:
-            assert source == "echo"
-            for output in (f"zod {language}: ", f"{source}\n"):
+            assert source.startswith("echo "), source
+            payload = source.removeprefix("echo ")
+            for output in (f"zod {language}: ", f"{payload}\n"):
                 send_output(writer, output)
             send(writer, {"kind": "completed"})
             continue
@@ -526,13 +527,13 @@ def main() -> None:
                 writer.close()
                 os.close(1)
                 os.close(2)
+                (temporary / "zod-detached-stdin-started").touch()
                 while True:
                     time.sleep(60)
             (temporary / "zod-detached-stdin-pid").write_text(
                 str(child),
                 encoding="utf-8",
             )
-            (temporary / "zod-detached-stdin-started").touch()
             while True:
                 time.sleep(60)
 
@@ -597,6 +598,17 @@ def main() -> None:
                 else f"zod stdin length: {len(stdin.encode())}\n"
             )
             send_output(writer, output)
+            send(writer, {"kind": "completed"})
+            continue
+
+        if source == "read fd 0 directly":
+            chunks = []
+            while not chunks or not chunks[-1].endswith(b"\n"):
+                chunk = os.read(0, 3)
+                assert chunk, "Zod received stdin EOF before a complete line"
+                chunks.append(chunk)
+            stdin = b"".join(chunks).decode()
+            send_output(writer, f"zod fd 0: {stdin!r}\n")
             send(writer, {"kind": "completed"})
             continue
 
@@ -669,13 +681,17 @@ def main() -> None:
             continue
 
         if source == "report managed R requirement":
+            expected_r_library = Path(
+                os.environ["MCP_CONSOLE_TEST_R_LIBRARY_IDENTITY"]
+            ).read_text(encoding="utf-8")
+            configured_r_libraries = [
+                library
+                for library in os.environ.get("R_LIBS", "").split(os.pathsep)
+                if library
+            ]
             r_prepared = str(
-                prepared_r_library is not None
-                or any(
-                    Path(library, "praise").is_dir()
-                    for library in os.environ.get("R_LIBS", "").split(os.pathsep)
-                    if library
-                )
+                prepared_r_library == expected_r_library
+                or configured_r_libraries[:1] == [expected_r_library]
             ).lower()
             send_output(writer, f"zod R requirement: prepared={r_prepared}\n")
             send(writer, {"kind": "completed"})
@@ -760,10 +776,11 @@ def main() -> None:
             (temporary / "zod-cell-output-processed").touch()
             while not (temporary / "zod-release-evaluation").exists():
                 time.sleep(0.01)
-        elif source != "echo":
+        elif not source.startswith("echo "):
             raise AssertionError(f"unsupported Zod command: {source}")
 
-        for output in ("zod: ", f"{source}\n"):
+        payload = source.removeprefix("echo ")
+        for output in ("zod: ", f"{payload}\n"):
             send_output(writer, output)
         send(writer, {"kind": "completed"})
 

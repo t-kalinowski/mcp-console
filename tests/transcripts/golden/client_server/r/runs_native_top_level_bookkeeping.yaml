@@ -1,7 +1,6 @@
 ---
 !same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
 ---
-id: 3
 send:
   r: |
     invisible(addTaskCallback(
@@ -26,7 +25,6 @@ result:
         mcp_console_callback_probe <- 42
   isError: false
 ---
-id: 4
 send:
   r: |
     warning("careful", call. = FALSE)

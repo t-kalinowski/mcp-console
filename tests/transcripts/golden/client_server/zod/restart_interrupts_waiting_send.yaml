@@ -1,7 +1,6 @@
 ---
 !same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
 ---
-id: 3
 send:
   r: start background sideband
 result:
@@ -10,7 +9,6 @@ result:
       text: "[done]"
   isError: false
 ---
-id: 4
 send:
   r: emit output and image before completion
   timeout_ms: 30000
@@ -31,7 +29,6 @@ result:
         [worker stopped: in-memory state lost]
   isError: true
 ---
-id: 5
 session:
   action: restart
 result:

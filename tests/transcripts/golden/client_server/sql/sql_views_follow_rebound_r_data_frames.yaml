@@ -1,7 +1,6 @@
 ---
 !same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
 ---
-id: 3
 send:
   r: |
     measurements <- data.frame(value = 2L)
@@ -11,7 +10,6 @@ result:
       text: "[done]"
   isError: false
 ---
-id: 4
 send:
   sql: |
     CREATE VIEW live_measurements AS
@@ -22,7 +20,6 @@ result:
       text: "[done]"
   isError: false
 ---
-id: 5
 send:
   r: |
     measurements <- data.frame(value = 7L)
@@ -32,7 +29,6 @@ result:
       text: "[done]"
   isError: false
 ---
-id: 6
 send:
   sql: |
     SELECT value FROM live_measurements

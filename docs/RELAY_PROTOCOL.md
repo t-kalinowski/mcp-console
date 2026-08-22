@@ -3,6 +3,7 @@
 This document describes the private protocol between `mcp-console serve` and the per-generation worker relay on macOS.
 It describes the current code, not a public or versioned interface.
 The message definitions and framing in `src/relay_protocol.rs`, the relay implementation in `src/worker_relay.rs`, and the server-side transport in `src/worker_client/macos.rs` are the source of truth.
+Transcript-runner progress lines are test user-interface output and never enter this protocol.
 
 ## Process boundary
 
@@ -75,6 +76,9 @@ The relay translates semantic commands to the unchanged worker-sideband messages
 There is no nested `worker_message` envelope and no operation-result acknowledgment command.
 Accepted `stdin` payloads contribute bytes to one unbuffered, generation-long worker fd-0 stream; they are not records.
 The relay writes them in command order without adding bytes or applying line buffering.
+For one `send` containing a cell and nonempty stdin, the server first reserves the active evaluation and registers its worker operation, then queues `stdin`, then queues `evaluate` through the same ordered command sender.
+Empty stdin queues no relay command.
+The resulting `stdin`-then-`evaluate` wire order is guaranteed, but consumption timing is runtime-dependent: an already outstanding idle fd-0 read may consume some or all of those bytes before the cell begins.
 Line-oriented reads generally require an explicit newline, payload end is not EOF, and fd 0 remains open until its closure retires the worker generation.
 
 ## Relay events

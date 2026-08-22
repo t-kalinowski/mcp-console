@@ -1,7 +1,6 @@
 ---
 !same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
 ---
-id: 3
 send:
   sql: |
     CREATE TABLE sql_values AS
@@ -13,7 +12,6 @@ result:
       text: "[done]"
   isError: false
 ---
-id: 4
 send:
   r: |
     connection <- sql_connection()
@@ -35,7 +33,6 @@ result:
         lazy view: TRUE
   isError: false
 ---
-id: 5
 send:
   sql: |
     INSERT INTO sql_values VALUES ('c', 11)
@@ -45,7 +42,6 @@ result:
       text: "[done]"
   isError: false
 ---
-id: 6
 send:
   r: |
     values <- lazy_values |>

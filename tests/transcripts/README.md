@@ -14,8 +14,8 @@ The runner serializes each entry as one document in the matching YAML 1.2 stream
 A case may return `TranscriptWithCompanion` to place a separate YAML stream at `golden/BOUNDARY/SUITE/CASE.NAME.yaml`.
 The runner compares YAML 1.2 values, so equivalent scalar spellings and layouts are accepted.
 Server cases record each JSON-RPC client message and any matching response as one YAML document.
-They omit the invariant `jsonrpc: "2.0"` field and show a request-response `id` once at the document root when present.
-The client validates the omitted JSON-RPC version and response ID before recording each exchange.
+They omit the invariant `jsonrpc: "2.0"` field and request-response IDs from the rendered golden.
+The client still requires every issued request ID to be unique and validates the response ID before recording each exchange.
 Tool calls show the tool name and arguments directly, so a `tools/call` request for `send` is recorded as `send: ARGUMENTS`.
 The response's `result` or `error`, when present, appears directly at the document root after the request.
 Some cases add `transcript_normalization` after the response.
@@ -62,8 +62,12 @@ scripts/test --update client_server/server::initializes_and_lists_tools
 
 With no selectors, `scripts/test` runs every suite and case in parallel, using at least two worker processes and otherwise one per available CPU by default.
 Pass `--jobs N` to set the maximum concurrency or `--jobs 1` to run serially.
+For every selected case, the runner prints one complete, flushed line with its fully qualified selector when the case is submitted and another when its execution starts, followed by the existing `...: ok` or `updated ...` result.
+On failure, it prints the fully qualified selector before the error or diff.
+These progress records are test-runner user-interface output only; they are not captured transcript data and are not part of the MCP or relay protocol.
 A `BOUNDARY/SUITE` selector runs every case in that file; a `BOUNDARY/SUITE::CASE` selector runs one named function.
 Use `--update` only to accept an intentional transcript change.
+A full `scripts/test --update` also removes goldens for deleted suites and cases, as well as obsolete companion goldens for cases that ran; selected updates leave other goldens alone.
 A suite may set `PLATFORMS = {"darwin"}` to restrict execution and snapshot updates to those `sys.platform` values.
 Restricted cases remain visible under `scripts/test --list` and are skipped on other platforms.
 A suite may set `REQUIRED_COMMANDS = {"ir"}` to skip when a required executable is not on `PATH`.

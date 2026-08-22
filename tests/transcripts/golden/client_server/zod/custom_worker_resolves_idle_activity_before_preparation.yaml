@@ -1,7 +1,6 @@
 ---
 !same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
 ---
-id: 3
 send:
   r: resolve python while idle
 result:
@@ -10,7 +9,6 @@ result:
       text: "[done]"
   isError: false
 ---
-id: 4
 session:
   action: prepare
   requirements:
@@ -22,7 +20,6 @@ result:
       text: "[prepared]"
   isError: false
 ---
-id: 5
 send:
   r: report managed R requirement
 result:

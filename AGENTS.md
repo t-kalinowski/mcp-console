@@ -8,6 +8,7 @@ The documents under `design-sketches/` describe intended behavior, not implement
 Never hand-edit files under `tests/transcripts/golden/`.
 They may change only through `scripts/test --update ...` or Yamark via `scripts/format`.
 If regeneration produces an incorrect snapshot, fix the code or serializer and regenerate it.
+The transcript runner's submitted, started, and final status lines are test-runner user-interface output only, not MCP or relay protocol records.
 
 ## Current state
 
@@ -63,6 +64,9 @@ Output accepted after that cut remains pending for a later response.
 An empty call does not start an initial or stopped worker.
 If it discovers an idle worker failure, it stops that worker and reports the failure without starting a replacement; a later nonempty `send` or explicit restart starts the next worker.
 Worker fd 0 is one unbuffered byte stream for the lifetime of its generation; `stdin` payloads contribute exact UTF-8 bytes rather than records, without adding a newline, inspecting, echoing, or limiting the text, or waiting for an input request.
+When one `send` supplies both a cell and nonempty `stdin`, the server reserves the active evaluation and registers its operation before forwarding either command, queues the input bytes, and only then queues the cell command through the same ordered relay sender.
+The resulting `stdin`-then-`evaluate` transport order is guaranteed, but consumption timing is runtime-dependent: an already outstanding idle read may consume some or all of those bytes before the cell begins, and the cell adopts any resulting idle output as its prelude.
+Empty `stdin` queues no relay command.
 A nonempty idle stdin call lazily starts the worker when needed, queues the bytes, and immediately returns at the resulting output cut; `timeout_ms` does not bound that startup or delay the cut.
 Queuing bytes does not acknowledge their consumption, so the response may still report `\n[stdin needed]` until the continuous reader receives `input_received` or `input_cancelled`.
 Line-oriented reads generally require an explicit newline, and payload end is not EOF; the R console callback reads through one newline or its supplied buffer, and unread bytes may satisfy later console or direct reads, including in a later evaluation.
@@ -189,8 +193,8 @@ A generation-long server reader continuously parses and enqueues relay events.
 `WorkerEventDispatcher` publishes forwarded idle console output and images and services nested managed-Python requests, while `WorkerOperationState` retains idle console-input state.
 The relay assembles newline-delimited worker-sideband frames incrementally while the server does the same for relay JSONL, so a partial frame cannot block worker retirement and pipe backpressure cannot pause ordinary idle output.
 Before applying a live requirement preparation, the built-in worker gives registered R handlers one nonblocking turn, so a callback already ready when the command arrives is collected first.
-An empty `send` immediately records and drains through a server-side cut for pending callback output and surfaces an outstanding input request as `[stdin needed]`; a later stdin-only `send` continues it, and a call that already includes stdin can prequeue the input.
-A code-bearing `send` can also continue an idle input request.
+An empty `send` immediately records and drains through a server-side cut for pending callback output and surfaces an outstanding input request as `[stdin needed]`; a later stdin-only `send` continues it.
+When a code-bearing `send` also contains nonempty stdin, it queues those bytes before the cell command, but an already outstanding idle callback may consume them before the cell begins.
 A noninteractive requirement preparation that encounters the request stops the worker instead of blocking indefinitely.
 Each worker generation starts with `options(width = 200L)`; evaluated code can change that persistent option.
 Cell EOF while R requires continuation input is an error; earlier complete expressions from that cell remain applied.

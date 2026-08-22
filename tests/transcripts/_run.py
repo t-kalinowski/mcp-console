@@ -11,8 +11,11 @@ import runpy
 import shutil
 import sys
 from collections.abc import Callable, Iterator
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, Future, ProcessPoolExecutor, wait
+from multiprocessing import Manager
 from pathlib import Path
+from queue import Empty
+from typing import Protocol
 
 from _support import Transcript, TranscriptWithCompanion, YamlStream
 from yaml12 import Yaml, format_yaml, parse_yaml, read_yaml
@@ -42,6 +45,12 @@ parser.add_argument("selectors", nargs="*", metavar="BOUNDARY/SUITE[::CASE]")
 
 TranscriptCase = Callable[[Path], Transcript | TranscriptWithCompanion]
 RecordedTranscript = Transcript | TranscriptWithCompanion
+
+
+class ProgressQueue(Protocol):
+    def put(self, item: int) -> None: ...
+
+    def get_nowait(self) -> int: ...
 
 
 def suite_identifier(suite_path: Path) -> str:
@@ -152,9 +161,10 @@ def check_golden(golden: Path, actual: YamlStream, case: str, *, update: bool) -
     if update:
         golden.parent.mkdir(parents=True, exist_ok=True)
         golden.write_text(actual_text, encoding="utf-8")
-        print(f"updated {golden.relative_to(root)}")
+        print(f"updated {golden.relative_to(root)}", flush=True)
         return
     if not golden.exists():
+        print(f"{case}: failed", file=sys.stderr, flush=True)
         raise SystemExit(
             f"{golden.relative_to(root)} is missing; run scripts/test --update {case}"
         )
@@ -162,6 +172,7 @@ def check_golden(golden: Path, actual: YamlStream, case: str, *, update: bool) -
     expected = read_yaml(golden, multi=True)
     if not identical(actual, expected):
         expected_text = format_transcript(expected)
+        print(f"{case}: failed", file=sys.stderr, flush=True)
         sys.stderr.writelines(
             difflib.unified_diff(
                 expected_text.splitlines(keepends=True),
@@ -172,12 +183,30 @@ def check_golden(golden: Path, actual: YamlStream, case: str, *, update: bool) -
         )
         raise SystemExit(f"{case} differs from its golden snapshot")
 
-    print(f"{golden.relative_to(root)}: ok")
+    print(f"{golden.relative_to(root)}: ok", flush=True)
 
 
-def record_case(suite_path: Path, case_name: str) -> RecordedTranscript:
+def record_case(
+    suite_path: Path,
+    case_name: str,
+    progress: ProgressQueue | None = None,
+    progress_id: int | None = None,
+) -> RecordedTranscript:
+    if progress is not None:
+        assert progress_id is not None
+        progress.put(progress_id)
     cases, _, _ = load_suite(suite_path)
     return cases[case_name](binary)
+
+
+def without_request_ids(transcript: Transcript) -> Transcript:
+    rendered = []
+    for entry in transcript:
+        entry = entry.copy()
+        if entry.keys() & {"input", "send", "session"}:
+            entry.pop("id", None)
+        rendered.append(entry)
+    return rendered
 
 
 def check_recording(
@@ -186,20 +215,22 @@ def check_recording(
     recorded: RecordedTranscript,
     *,
     update: bool,
-) -> None:
+) -> set[Path]:
     golden = directory / "golden" / suite_name / f"{case_name}.yaml"
     case = f"{suite_name}::{case_name}"
     if isinstance(recorded, TranscriptWithCompanion):
-        actual = recorded.transcript
+        actual = without_request_ids(recorded.transcript)
         companion = (
             golden.with_suffix(f".{recorded.companion_name}.yaml"),
             recorded.companion,
         )
     else:
-        actual = recorded
+        actual = without_request_ids(recorded)
         companion = None
     if golden != root / initialization_reference:
-        reference = read_yaml(root / initialization_reference, multi=True)
+        reference = without_request_ids(
+            read_yaml(root / initialization_reference, multi=True)
+        )
         assert reference, f"{initialization_reference} contains no documents"
         if identical(actual[: len(reference)], reference):
             actual = [
@@ -207,8 +238,48 @@ def check_recording(
                 *actual[len(reference) :],
             ]
     check_golden(golden, actual, case, update=update)
+    checked = {golden}
     if companion is not None:
         check_golden(*companion, case, update=update)
+        checked.add(companion[0])
+    return checked
+
+
+def announce(selector: str, state: str, *, error: bool = False) -> None:
+    print(
+        f"{selector}: {state}",
+        file=sys.stderr if error else sys.stdout,
+        flush=True,
+    )
+
+
+def record_serial(
+    suite_path: Path, case_name: str, selector: str
+) -> RecordedTranscript:
+    announce(selector, "submitted")
+    announce(selector, "started")
+    try:
+        return record_case(suite_path, case_name)
+    except BaseException:
+        announce(selector, "failed", error=True)
+        raise
+
+
+def drain_started(
+    progress: ProgressQueue,
+    selected: list[tuple[str, str, Path]],
+    started: set[int],
+) -> None:
+    while True:
+        try:
+            index = progress.get_nowait()
+        except Empty:
+            return
+        assert 0 <= index < len(selected), index
+        assert index not in started, index
+        suite_name, case_name, _ = selected[index]
+        announce(f"{suite_name}::{case_name}", "started")
+        started.add(index)
 
 
 def selected_cases(
@@ -263,6 +334,36 @@ def selected_cases(
     return selected
 
 
+def prune_stale_goldens(suites: dict[str, Path], checked_goldens: set[Path]) -> None:
+    golden_root = directory / "golden"
+    checked_suites = {
+        golden.parent.relative_to(golden_root).as_posix() for golden in checked_goldens
+    }
+    cases_by_suite: dict[str, tuple[str, ...]] = {}
+
+    for golden in golden_root.rglob("*.yaml"):
+        suite_name = golden.parent.relative_to(golden_root).as_posix()
+        if suite_name not in suites:
+            stale = True
+        elif suite_name in checked_suites:
+            stale = golden not in checked_goldens
+        else:
+            if suite_name not in cases_by_suite:
+                cases, _, _ = load_suite(suites[suite_name])
+                cases_by_suite[suite_name] = tuple(
+                    f"{case_name}." for case_name in cases
+                )
+            stale = not golden.name.startswith(cases_by_suite[suite_name])
+
+        if stale:
+            golden.unlink()
+            print(f"removed {golden.relative_to(root)}", flush=True)
+
+    for path in sorted(golden_root.rglob("*"), reverse=True):
+        if path.is_dir() and not any(path.iterdir()):
+            path.rmdir()
+
+
 def main() -> None:
     options = parser.parse_args()
     if options.jobs < 1:
@@ -280,44 +381,95 @@ def main() -> None:
         return
 
     selected = selected_cases(suites, options.selectors)
+    checked_goldens: set[Path] = set()
     for index, (suite_name, case_name, suite_path) in enumerate(selected):
         if (suite_name, case_name) != (initialization_suite, initialization_case):
             continue
-        recorded = record_case(suite_path, case_name)
-        check_recording(suite_name, case_name, recorded, update=options.update)
+        selector = f"{suite_name}::{case_name}"
+        recorded = record_serial(suite_path, case_name, selector)
+        checked_goldens.update(
+            check_recording(suite_name, case_name, recorded, update=options.update)
+        )
         selected.pop(index)
         break
 
     arguments = [(suite_path, case_name) for _, case_name, suite_path in selected]
     if options.jobs == 1 or len(arguments) < 2:
-        recordings = (record_case(*pair) for pair in arguments)
-        for (suite_name, case_name, _), recorded in zip(selected, recordings):
-            check_recording(suite_name, case_name, recorded, update=options.update)
+        for suite_name, case_name, suite_path in selected:
+            selector = f"{suite_name}::{case_name}"
+            recorded = record_serial(suite_path, case_name, selector)
+            checked_goldens.update(
+                check_recording(
+                    suite_name,
+                    case_name,
+                    recorded,
+                    update=options.update,
+                )
+            )
+        if options.update and not options.selectors:
+            prune_stale_goldens(suites, checked_goldens)
         return
 
     max_workers = min(options.jobs, len(arguments))
     if sys.platform == "win32":
         max_workers = min(max_workers, 61)
 
-    executor = ProcessPoolExecutor(max_workers=max_workers)
-    try:
-        futures = {
-            executor.submit(record_case, *argument): index
-            for index, argument in enumerate(arguments)
-        }
-        for future in as_completed(futures):
-            suite_name, case_name, _ = selected[futures[future]]
-            check_recording(
-                suite_name,
-                case_name,
-                future.result(),
-                update=options.update,
-            )
-    except BaseException:
-        executor.shutdown(cancel_futures=True)
-        raise
-    else:
-        executor.shutdown()
+    with Manager() as manager:
+        progress = manager.Queue()
+        executor = ProcessPoolExecutor(max_workers=max_workers)
+        futures: dict[Future[RecordedTranscript], int] = {}
+        started: set[int] = set()
+        try:
+            for index, (suite_path, case_name) in enumerate(arguments):
+                suite_name = selected[index][0]
+                selector = f"{suite_name}::{case_name}"
+                future = executor.submit(
+                    record_case,
+                    suite_path,
+                    case_name,
+                    progress,
+                    index,
+                )
+                futures[future] = index
+                announce(selector, "submitted")
+
+            pending = set(futures)
+            while pending:
+                done, pending = wait(
+                    pending,
+                    timeout=0.1,
+                    return_when=FIRST_COMPLETED,
+                )
+                drain_started(progress, selected, started)
+                for future in done:
+                    index = futures[future]
+                    suite_name, case_name, _ = selected[index]
+                    selector = f"{suite_name}::{case_name}"
+                    assert index in started, (
+                        f"{selector} completed before reporting that it started"
+                    )
+                    try:
+                        recorded = future.result()
+                    except BaseException:
+                        announce(selector, "failed", error=True)
+                        raise
+                    checked_goldens.update(
+                        check_recording(
+                            suite_name,
+                            case_name,
+                            recorded,
+                            update=options.update,
+                        )
+                    )
+        except BaseException:
+            executor.shutdown(cancel_futures=True)
+            drain_started(progress, selected, started)
+            raise
+        else:
+            executor.shutdown()
+            drain_started(progress, selected, started)
+    if options.update and not options.selectors:
+        prune_stale_goldens(suites, checked_goldens)
 
 
 if __name__ == "__main__":

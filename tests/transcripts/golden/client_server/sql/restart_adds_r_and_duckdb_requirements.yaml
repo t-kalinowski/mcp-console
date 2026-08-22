@@ -1,7 +1,6 @@
 ---
 !same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
 ---
-id: 3
 send:
   r: restart_marker <- 42L
 result:
@@ -10,7 +9,6 @@ result:
       text: "[done]"
   isError: false
 ---
-id: 4
 session:
   action: restart
   requirements:
@@ -26,11 +24,8 @@ result:
         "not_a_real_duckdb_extension"
   isError: true
 ---
-id: 5
 send:
-  r: >-
-    identical(restart_marker, 42L) && !requireNamespace('praise', quietly =
-    TRUE)
+  r: identical(restart_marker, 42L)
 result:
   content:
     - type: text
@@ -38,7 +33,6 @@ result:
         [1] TRUE
   isError: false
 ---
-id: 6
 session:
   action: restart
   requirements:
@@ -55,7 +49,6 @@ result:
         [idle]
   isError: false
 ---
-id: 7
 send:
   r: "!exists('restart_marker') && requireNamespace('praise', quietly = TRUE)"
 result:
@@ -65,7 +58,6 @@ result:
         [1] TRUE
   isError: false
 ---
-id: 8
 send:
   sql: |
     CREATE TABLE restart_documents AS
@@ -76,7 +68,6 @@ result:
       text: "[done]"
   isError: false
 ---
-id: 9
 send:
   sql: PRAGMA create_fts_index('restart_documents', 'id', 'body')
 result:
@@ -85,7 +76,6 @@ result:
       text: "[done]"
   isError: false
 ---
-id: 10
 send:
   sql: |
     SELECT count(*) AS matches

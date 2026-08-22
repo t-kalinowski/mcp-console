@@ -1,7 +1,6 @@
 ---
 !same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
 ---
-id: 3
 send:
   r: |
     python <- Sys.getenv("RETICULATE_PYTHON", unset = NA_character_)
@@ -24,7 +23,6 @@ result:
       text: "[done]"
   isError: false
 ---
-id: 4
 send:
   python: |
     import io

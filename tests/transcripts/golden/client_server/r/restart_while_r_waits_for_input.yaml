@@ -1,7 +1,6 @@
 ---
 !same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
 ---
-id: 3
 send:
   r: |
     restart_marker <- TRUE
@@ -14,7 +13,6 @@ result:
         [stdin needed]
   isError: false
 ---
-id: 4
 session:
   action: restart
 result:
@@ -28,7 +26,6 @@ result:
         [idle]
   isError: false
 ---
-id: 5
 send:
   r: exists("restart_marker", inherits = FALSE)
 result:

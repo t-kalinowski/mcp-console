@@ -1,7 +1,6 @@
 ---
 !same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
 ---
-id: 3
 send:
   r: |
     external_python_worker <- Sys.getpid()
@@ -20,7 +19,6 @@ result:
         [1] "configured-by-user"
   isError: false
 ---
-id: 4
 session:
   action: prepare
   requirements:
@@ -34,7 +32,6 @@ result:
         user-selected Python environment
   isError: true
 ---
-id: 5
 session:
   action: restart
   requirements:
@@ -48,7 +45,6 @@ result:
         user-selected Python environment
   isError: true
 ---
-id: 6
 send:
   r: |
     environment_request <- jsonlite::toJSON(list(
@@ -75,7 +71,6 @@ result:
         managed Python requirements are disabled because the session uses a user-selected Python environment
   isError: false
 ---
-id: 7
 send:
   r: |
     stopifnot(

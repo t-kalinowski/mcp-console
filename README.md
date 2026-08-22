@@ -57,7 +57,10 @@ A call may also supply exact standard-input text with a code cell, during an eva
 ```
 
 The worker sees fd 0 as one unbuffered byte stream for the lifetime of its generation; `stdin` payloads contribute bytes to that stream rather than forming records.
-The server sends the cell first, then asks the relay to queue the string's UTF-8 bytes without inspecting or echoing them, adding a newline, imposing a size limit, or waiting for an input request.
+When one call supplies both a cell and nonempty `stdin`, the server queues the string's UTF-8 bytes before it queues the cell command.
+That transport order is guaranteed, but consumption timing belongs to the runtime: an already outstanding idle read may consume some or all of the bytes before the cell begins.
+Empty `stdin` queues nothing.
+The server otherwise does not inspect or echo input, add a newline, impose a size limit, or wait for an input request.
 A stdin-only call while idle lazily starts the worker when needed, queues the bytes, and immediately returns at the resulting server-side cut.
 Queuing bytes does not acknowledge that a callback consumed them, so that response may still end with `\n[stdin needed]`; a later empty call observes an `input_received` frame and returns `\n[idle]`.
 Every `input_requested` event adds a server-owned record such as `[input requested: "name> "]`; the prompt is encoded as a JSON string so spaces and escaped characters remain explicit.
@@ -289,8 +292,8 @@ One ordered dispatcher publishes forwarded console output and images, services n
 Before ordered worker retirement, it commits successful old-generation environment events when restart reuses the retained environment, or discards them when restart has already committed a replacement environment.
 An empty `send` records a server-side cut for the output already collected without signaling the worker or waiting for the callback.
 Before applying a live requirement preparation, the built-in worker gives registered R handlers one nonblocking turn, so a callback already ready when the command arrives is collected first.
-An empty `send` surfaces an idle callback's input request as `[stdin needed]`; a later stdin-only `send` continues it, and a call that already includes stdin can prequeue the input.
-A code-bearing `send` can also supply input requested by an idle callback.
+An empty `send` surfaces an idle callback's input request as `[stdin needed]`; a later stdin-only `send` continues it.
+A code-bearing `send` queues its nonempty stdin before the cell command, but an already outstanding idle callback may consume those bytes first; its output is retained as the cell's prelude.
 A noninteractive requirement preparation stops the worker if it encounters such an input request instead of waiting indefinitely.
 If a cell ends while an expression is incomplete, earlier complete expressions from that cell remain applied.
 The worker installs a worker-owned `grDevices::png()` function as R's default graphics device and opens it lazily when a cell draws.

@@ -1,7 +1,6 @@
 ---
 !same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
 ---
-id: 3
 send:
   r: |
     first <- readline("first> ")
@@ -19,7 +18,6 @@ result:
         Ada|Lovelace
   isError: false
 ---
-id: 4
 send:
   r: |
     direct <- local({
@@ -40,7 +38,6 @@ result:
         [stdin needed]
   isError: false
 ---
-id: 5
 send:
   stdin: |
     callback
@@ -51,7 +48,6 @@ result:
         direct|callback
   isError: false
 ---
-id: 6
 send:
   r: |
     paste("color", readline("color> "))
@@ -63,7 +59,6 @@ result:
         [stdin needed]
   isError: false
 ---
-id: 7
 send:
   stdin: bl
   timeout_ms: 50
@@ -75,7 +70,6 @@ result:
         [stdin needed]
   isError: false
 ---
-id: 8
 send:
   stdin: |
     ue
@@ -86,7 +80,6 @@ result:
         [1] "color blue"
   isError: false
 ---
-id: 9
 send:
   r: |
     prompt <- paste0('quoted "prompt"', "\n", "> ")

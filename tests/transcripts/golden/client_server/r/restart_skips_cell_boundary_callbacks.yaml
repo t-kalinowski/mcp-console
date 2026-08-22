@@ -1,7 +1,6 @@
 ---
 !same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
 ---
-id: 3
 send:
   r: |
     dyn.load("./mcp_test_input_handler.so")
@@ -16,7 +15,6 @@ result:
       text: "[done]"
   isError: false
 ---
-id: 4
 send:
   r: cat("cell body ran\n")
 result:
@@ -27,7 +25,6 @@ result:
         [stdin needed]
   isError: false
 ---
-id: 5
 session:
   action: restart
 result:
@@ -40,7 +37,6 @@ result:
         [idle]
   isError: false
 ---
-id: 6
 send:
   r: |
     dyn.load("./mcp_test_input_handler.so")
@@ -62,7 +58,6 @@ result:
         [stdin needed]
   isError: false
 ---
-id: 7
 session:
   action: restart
 result:

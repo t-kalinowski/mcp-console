@@ -1,7 +1,6 @@
 ---
 !same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
 ---
-id: 3
 send:
   python: |
     runtime_generation_marker = "original runtime retained"
@@ -17,7 +16,6 @@ result:
       text: <running>
   isError: false
 ---
-id: 4
 session:
   action: prepare
   requirements:
@@ -31,7 +29,6 @@ result:
         requirements
   isError: true
 ---
-id: 5
 send: {}
 result:
   content:
@@ -39,7 +36,6 @@ result:
       text: "[done]"
   isError: false
 ---
-id: 6
 send:
   python: runtime_generation_marker
 result:

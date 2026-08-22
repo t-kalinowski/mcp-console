@@ -1,7 +1,6 @@
 ---
 !same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
 ---
-id: 3
 send:
   python: |
     name = input("name> ")
@@ -14,7 +13,6 @@ result:
         [stdin needed]
   isError: false
 ---
-id: 4
 send:
   stdin: |
     Ada
@@ -25,7 +23,6 @@ result:
         'Ada'
   isError: false
 ---
-id: 5
 send:
   python: |
     color = input("color> ")
@@ -40,7 +37,6 @@ result:
         'blue'
   isError: false
 ---
-id: 6
 send:
   python: |
     import sys

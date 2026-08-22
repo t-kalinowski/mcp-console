@@ -1,7 +1,6 @@
 ---
 !same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
 ---
-id: 3
 send:
   r: |
     library(mcpconsolepyrequire)
@@ -16,7 +15,6 @@ result:
       text: "[done]"
   isError: false
 ---
-id: 4
 send:
   r: tools::pskill(Sys.getpid(), signal = 9L)
 result:
@@ -30,7 +28,6 @@ result:
         [idle]
   isError: true
 ---
-id: 5
 send:
   r: |
     "py-yaml12" %in% reticulate::py_require()$packages

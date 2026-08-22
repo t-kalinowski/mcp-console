@@ -1,7 +1,6 @@
 ---
 !same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
 ---
-id: 3
 send:
   r: complete before partial sideband descendant
 result:
@@ -10,7 +9,6 @@ result:
       text: "[done]"
   isError: false
 ---
-id: 4
 session:
   action: restart
 result:
@@ -22,9 +20,8 @@ result:
         [idle]
   isError: false
 ---
-id: 5
 send:
-  r: echo
+  r: echo echo
 result:
   content:
     - type: text

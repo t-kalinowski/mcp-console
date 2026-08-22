@@ -1,7 +1,6 @@
 ---
 !same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
 ---
-id: 3
 send:
   r: |-
     invisible(reticulate::py_config())
@@ -19,7 +18,6 @@ result:
         [idle]
   isError: true
 ---
-id: 4
 send:
   r: |
     worker_pid <- Sys.getpid()
@@ -31,7 +29,6 @@ result:
         [1] TRUE
   isError: false
 ---
-id: 5
 send:
   python: |
     import yaml12

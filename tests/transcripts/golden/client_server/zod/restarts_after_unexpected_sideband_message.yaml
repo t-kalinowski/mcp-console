@@ -1,7 +1,6 @@
 ---
 !same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
 ---
-id: 3
 send:
   r: report process group
 result:
@@ -11,7 +10,6 @@ result:
         zod process group: <process group>
   isError: false
 ---
-id: 4
 send:
   r: violate protocol
 result:
@@ -26,7 +24,6 @@ result:
         [idle]
   isError: true
 ---
-id: 5
 send:
   r: complete silently
 result:

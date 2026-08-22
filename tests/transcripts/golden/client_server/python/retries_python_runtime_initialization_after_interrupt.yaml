@@ -1,7 +1,6 @@
 ---
 !same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
 ---
-id: 3
 send:
   r: |
     invisible(suppressMessages(base::trace(
@@ -24,7 +23,6 @@ result:
       text: "[done]"
   isError: false
 ---
-id: 4
 send:
   python: "42"
   timeout_ms: 0
@@ -36,7 +34,6 @@ result:
         [running]
   isError: false
 ---
-id: 5
 session:
   action: interrupt
 result:
@@ -45,7 +42,6 @@ result:
       text: "[interrupt sent]"
   isError: false
 ---
-id: 6
 send:
   timeout_ms: 3000
 result:
@@ -54,7 +50,6 @@ result:
       text: ""
   isError: false
 ---
-id: 7
 send:
   r: |
     invisible(suppressMessages(base::untrace(
@@ -69,7 +64,6 @@ result:
         [1] 1
   isError: false
 ---
-id: 8
 send:
   python: "42"
 result:
@@ -79,7 +73,6 @@ result:
         42
   isError: false
 ---
-id: 9
 send:
   python: |
     import logging

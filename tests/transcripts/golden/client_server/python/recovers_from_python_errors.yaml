@@ -1,7 +1,6 @@
 ---
 !same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
 ---
-id: 3
 send:
   python: |
     answer = 41
@@ -23,7 +22,6 @@ result:
         ValueError: boom
   isError: false
 ---
-id: 4
 send:
   python: |
     compile_partial = 9
@@ -38,7 +36,6 @@ result:
         SyntaxError: 'await' outside function
   isError: false
 ---
-id: 5
 send:
   python: '"compile_partial" in globals()'
 result:
@@ -48,7 +45,6 @@ result:
         False
   isError: false
 ---
-id: 6
 send:
   python: "nul_state = 42\0"
 result:
@@ -58,7 +54,6 @@ result:
         SyntaxError: source code string cannot contain null bytes
   isError: false
 ---
-id: 7
 send:
   python: answer
 result:

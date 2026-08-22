@@ -1,5 +1,4 @@
 ---
-id: 1
 input:
   method: initialize
   params:
@@ -19,7 +18,6 @@ result:
 input:
   method: notifications/initialized
 ---
-id: 2
 input:
   method: tools/list
 result:
@@ -110,10 +108,11 @@ result:
           stdin:
             description: |-
               Text for interactive reads and debugger commands such as R `readline()` or `browser()` and
-              Python `input()`, `breakpoint()`, or `pdb`. Its UTF-8 encoding is queued to worker stdin
-              exactly; no newline is added. Send it with a cell to prequeue input or on its own while the
-              worker is running or idle. If output ends in `[stdin needed]`, send the requested input here.
-              Unread text can satisfy later reads and is discarded by restart.
+              Python `input()`, `breakpoint()`, or `pdb`. Its UTF-8 encoding is queued exactly; no newline is
+              added. When sent with a cell, nonempty text is queued before the code is run; an already
+              waiting interactive read may consume it before the new cell begins. Empty text queues nothing.
+              Send it on its own while the console is running or idle. If output ends in `[stdin needed]`,
+              send the requested input here. Unread text can satisfy later reads and is discarded by restart.
             type:
               - string
               - "null"

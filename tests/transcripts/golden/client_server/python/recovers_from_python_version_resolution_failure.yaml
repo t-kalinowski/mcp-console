@@ -1,7 +1,6 @@
 ---
 !same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
 ---
-id: 3
 send:
   r: |
     worker_pid <- Sys.getpid()
@@ -20,7 +19,6 @@ result:
           running command ''<uv executable>' python list --all-versions --color never --output-format json --python-preference  only-managed' had status 99
   isError: false
 ---
-id: 4
 send:
   r: identical(Sys.getpid(), worker_pid)
 result:

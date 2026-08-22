@@ -1,7 +1,6 @@
 ---
 !same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
 ---
-id: 3
 send:
   sql: |
     CREATE TABLE __mcp_console_preview_e2 AS
@@ -12,7 +11,6 @@ result:
       text: "[done]"
   isError: false
 ---
-id: 4
 send:
   sql: |
     SELECT CAST(42 AS INTEGER) AS answer
@@ -26,7 +24,6 @@ result:
         1      42
   isError: false
 ---
-id: 5
 send:
   sql: |
     SELECT column_01 AS catalog_value

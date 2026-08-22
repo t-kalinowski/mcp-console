@@ -276,10 +276,15 @@ impl Worker {
             .operation
             .begin_cell(evaluation.clone(), capture_idle_prelude)?;
         let crate::cell::Cell { language, source } = cell;
-        self.relay
-            .commands
-            .send(RelayCommand::Evaluate { language, source })?;
         if let Err(error) = evaluation.attach_writer(self.stdin.clone()) {
+            self.operation.fail(error.clone());
+            return Err(error);
+        }
+        if let Err(error) = self
+            .relay
+            .commands
+            .send(RelayCommand::Evaluate { language, source })
+        {
             self.operation.fail(error.clone());
             return Err(error);
         }

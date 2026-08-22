@@ -1,7 +1,6 @@
 ---
 !same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
 ---
-id: 3
 send:
   r: initial_r_library <- .libPaths()[[1L]]
 result:
@@ -10,7 +9,6 @@ result:
       text: "[done]"
   isError: false
 ---
-id: 4
 session:
   action: prepare
   requirements:
@@ -22,7 +20,6 @@ result:
       text: "[prepared]"
   isError: false
 ---
-id: 5
 send:
   r: |
     cat(jsonlite::toJSON(.libPaths()[[1L]], auto_unbox = TRUE))
@@ -32,7 +29,6 @@ result:
       text: '"<current managed R library>"'
   isError: false
 ---
-id: 6
 send:
   r: |
     reticulate::py_require("py-yaml12")
@@ -43,7 +39,6 @@ result:
       text: "[done]"
   isError: false
 ---
-id: 7
 session:
   action: restart
   requirements:
@@ -60,7 +55,6 @@ result:
         [idle]
   isError: false
 ---
-id: 8
 send:
   r: |
     cat(jsonlite::toJSON(.libPaths()[[1L]], auto_unbox = TRUE))
