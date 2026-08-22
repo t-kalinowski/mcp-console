@@ -1,7 +1,6 @@
 ---
 !same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
 ---
-id: 3
 send:
   r: answer <- 41
 result:
@@ -10,7 +9,6 @@ result:
       text: "[done]"
   isError: false
 ---
-id: 4
 send:
   r: |
     g <- function() stop("boom")
@@ -23,7 +21,6 @@ result:
         Error in g() : boom
   isError: false
 ---
-id: 5
 send:
   r: |
     traceback()
@@ -36,7 +33,6 @@ result:
         1: f()
   isError: false
 ---
-id: 6
 send:
   r: |
     print.auto_print_failure <- function(...) {
@@ -50,7 +46,6 @@ result:
         Error in print.auto_print_failure(x) : print failed
   isError: false
 ---
-id: 7
 send:
   r: answer
 result:

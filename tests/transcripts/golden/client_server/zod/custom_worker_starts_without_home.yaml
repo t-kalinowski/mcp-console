@@ -1,9 +1,8 @@
 ---
 !same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
 ---
-id: 3
 send:
-  sql: echo
+  sql: echo echo
 result:
   content:
     - type: text
@@ -11,9 +10,8 @@ result:
         zod sql: echo
   isError: false
 ---
-id: 4
 send:
-  r: echo
+  r: echo echo
 result:
   content:
     - type: text

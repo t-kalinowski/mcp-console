@@ -1,7 +1,6 @@
 ---
 !same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
 ---
-id: 3
 session:
   action: prepare
   requirements:
@@ -13,7 +12,6 @@ result:
       text: "[prepared]"
   isError: false
 ---
-id: 4
 send:
   r: invisible(reticulate::py_config())
 result:
@@ -22,7 +20,6 @@ result:
       text: "[done]"
   isError: false
 ---
-id: 5
 send:
   r: |
     callback_gate <- tempfile("mcp-console-callback-gate-")
@@ -49,7 +46,6 @@ result:
         <worker callback complete>
   isError: false
 ---
-id: 6
 send: {}
 result:
   content:
@@ -60,7 +56,6 @@ result:
         [idle]
   isError: false
 ---
-id: 7
 session:
   action: restart
 result:
@@ -72,7 +67,6 @@ result:
         [idle]
   isError: false
 ---
-id: 8
 send:
   python: import yaml12; yaml12.__name__
 result:

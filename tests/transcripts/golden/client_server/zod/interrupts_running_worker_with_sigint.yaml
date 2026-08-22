@@ -1,7 +1,6 @@
 ---
 !same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
 ---
-id: 3
 send:
   r: interrupt
   timeout_ms: 0
@@ -13,7 +12,6 @@ result:
         [running]
   isError: false
 ---
-id: 4
 session:
   action: interrupt
 result:
@@ -22,7 +20,6 @@ result:
       text: "[interrupt sent]"
   isError: false
 ---
-id: 5
 send:
   timeout_ms: 3000
 result:
@@ -32,9 +29,8 @@ result:
         zod interrupted
   isError: false
 ---
-id: 6
 send:
-  r: echo
+  r: echo echo
 result:
   content:
     - type: text

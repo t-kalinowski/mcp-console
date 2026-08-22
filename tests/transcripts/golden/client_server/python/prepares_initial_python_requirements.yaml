@@ -1,7 +1,6 @@
 ---
 !same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
 ---
-id: 3
 session:
   action: prepare
   requirements:
@@ -13,7 +12,6 @@ result:
       text: "[prepared]"
   isError: false
 ---
-id: 4
 session:
   action: prepare
   requirements:
@@ -27,7 +25,6 @@ result:
         host-side managed resolution accepts named package requirements only
   isError: true
 ---
-id: 5
 session:
   action: prepare
   requirements:
@@ -41,7 +38,6 @@ result:
         host-side managed resolution accepts named package requirements only
   isError: true
 ---
-id: 6
 session:
   action: prepare
   requirements:
@@ -57,7 +53,6 @@ result:
         pandas` is not accepted: host-side managed resolution accepts named package requirements only
   isError: true
 ---
-id: 7
 send:
   r: |
     seed <- tail(reticulate::py_require()$history, 1L)[[1L]]
@@ -75,7 +70,6 @@ result:
       text: "[done]"
   isError: false
 ---
-id: 8
 send:
   python: |
     import yaml12
@@ -88,7 +82,6 @@ result:
         'yaml12'
   isError: false
 ---
-id: 9
 session:
   action: prepare
   requirements:

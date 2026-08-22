@@ -1,7 +1,6 @@
 ---
 !same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
 ---
-id: 3
 send:
   python: restart_marker = 42
 result:
@@ -10,7 +9,6 @@ result:
       text: "[done]"
   isError: false
 ---
-id: 4
 session:
   action: restart
   requirements:
@@ -24,7 +22,6 @@ result:
         host-side managed resolution accepts named package requirements only
   isError: true
 ---
-id: 5
 send:
   python: restart_marker
 result:

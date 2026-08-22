@@ -1,9 +1,8 @@
 ---
 !same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
 ---
-id: 3
 send:
-  r: echo
+  r: echo echo
 result:
   content:
     - type: text
@@ -11,7 +10,6 @@ result:
         zod: echo
   isError: false
 ---
-id: 4
 session:
   action: prepare
   requirements:
@@ -23,7 +21,6 @@ result:
       text: "[prepared]"
   isError: false
 ---
-id: 5
 session:
   action: prepare
   requirements:
@@ -35,7 +32,6 @@ result:
       text: "[prepared]"
   isError: false
 ---
-id: 6
 send:
   r: report managed R requirement
 result:
@@ -45,7 +41,6 @@ result:
         zod R requirement: prepared=true
   isError: false
 ---
-id: 7
 send:
   r: fail next r preparation after output
 result:
@@ -54,7 +49,6 @@ result:
       text: "[done]"
   isError: false
 ---
-id: 8
 session:
   action: prepare
   requirements:
@@ -74,7 +68,6 @@ result:
         zod rejected R preparation; further requirement changes are unavailable until session restart
   isError: true
 ---
-id: 9
 send:
   r: report managed python activation
 result:

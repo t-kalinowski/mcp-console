@@ -1,7 +1,6 @@
 ---
 !same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
 ---
-id: 3
 send:
   r: invisible(NULL)
 result:
@@ -10,7 +9,6 @@ result:
       text: "[done]"
   isError: false
 ---
-id: 4
 send:
   r: |
     Sys.sleep(0.25)
@@ -25,7 +23,6 @@ result:
         [running]
   isError: false
 ---
-id: 5
 send:
   timeout_ms: 3000
 result:
@@ -35,7 +32,6 @@ result:
         [1] 42
   isError: false
 ---
-id: 6
 send:
   r: answer + 1
 result:

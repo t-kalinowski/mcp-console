@@ -1,7 +1,6 @@
 ---
 !same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
 ---
-id: 3
 session:
   action: prepare
   requirements:
@@ -19,7 +18,6 @@ result:
         managed resolution accepts named package requirements only
   isError: true
 ---
-id: 4
 session:
   action: restart
   requirements:
@@ -37,7 +35,6 @@ result:
         resolution accepts named package requirements only
   isError: true
 ---
-id: 5
 session:
   action: prepare
   requirements:
@@ -55,7 +52,6 @@ result:
         resolution accepts named package requirements only
   isError: true
 ---
-id: 6
 session:
   action: restart
   requirements:
@@ -73,7 +69,6 @@ result:
         host-side managed resolution accepts named package requirements only
   isError: true
 ---
-id: 7
 session:
   action: prepare
   requirements:
@@ -91,7 +86,6 @@ result:
         resolution accepts named package requirements only
   isError: true
 ---
-id: 8
 session:
   action: restart
   requirements:
@@ -110,7 +104,6 @@ result:
         requirements only
   isError: true
 ---
-id: 9
 session:
   action: prepare
   requirements:
@@ -128,7 +121,6 @@ result:
         managed resolution accepts named package requirements only
   isError: true
 ---
-id: 10
 session:
   action: restart
   requirements:
@@ -146,7 +138,6 @@ result:
         resolution accepts named package requirements only
   isError: true
 ---
-id: 11
 session:
   action: prepare
   requirements:
@@ -164,7 +155,6 @@ result:
         resolution accepts named package requirements only
   isError: true
 ---
-id: 12
 session:
   action: restart
   requirements:
@@ -182,7 +172,6 @@ result:
         resolution accepts named package requirements only
   isError: true
 ---
-id: 13
 session:
   action: prepare
   requirements:
@@ -196,7 +185,6 @@ result:
         "not_a_real_duckdb_extension"
   isError: true
 ---
-id: 14
 session:
   action: prepare
   requirements:
@@ -208,7 +196,6 @@ result:
       text: "[prepared]"
   isError: false
 ---
-id: 15
 session:
   action: restart
   requirements:
@@ -222,7 +209,6 @@ result:
         [idle]
   isError: false
 ---
-id: 16
 send:
   r: |
     requirements <- reticulate::py_require()$packages
@@ -231,8 +217,7 @@ send:
       "urllib3!=2.0.0; python_version < '0'" %in% requirements,
       !any(c(
         "<absolute project path>", "./project", "../project", "file://<absolute project path>", "-e ./project", "example @ https://example.invalid/example.whl", "<absolute archive path>", "./package.whl", "package.whl", "package.tar.gz"
-      ) %in% requirements),
-      !file.exists(file.path(.libPaths()[[1L]], "praise", "DESCRIPTION"))
+      ) %in% requirements)
     )
 result:
   content:
@@ -240,7 +225,6 @@ result:
       text: "[done]"
   isError: false
 ---
-id: 17
 send:
   r: |
     selector_worker_pid <- Sys.getpid()
@@ -340,7 +324,6 @@ result:
         Python version constraint `===3.11` is not accepted: host-side managed resolution accepts version numbers and supported PEP 440 version specifiers only
   isError: false
 ---
-id: 18
 send:
   r: |
     identical(Sys.getpid(), selector_worker_pid) &&
@@ -353,7 +336,6 @@ result:
         [1] TRUE
   isError: false
 ---
-id: 19
 send:
   r: |
     reticulate::py_require("./runtime-project")

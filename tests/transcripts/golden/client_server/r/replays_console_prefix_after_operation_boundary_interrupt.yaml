@@ -1,7 +1,6 @@
 ---
 !same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
 ---
-id: 3
 send:
   r: |
     dyn.load("./mcp_test_input_handler.so")
@@ -24,7 +23,6 @@ result:
         [stdin needed]
   isError: false
 ---
-id: 4
 session:
   action: interrupt
 result:
@@ -33,7 +31,6 @@ result:
       text: "[interrupt sent]"
   isError: false
 ---
-id: 5
 send:
   timeout_ms: 3000
 result:
@@ -43,7 +40,6 @@ result:
         caught later-callback interrupt
   isError: false
 ---
-id: 6
 send:
   r: readline("after later callback> ")
   stdin: |
@@ -56,7 +52,6 @@ result:
         [1] "part!"
   isError: false
 ---
-id: 7
 send:
   r: |
     tryCatch(
@@ -84,7 +79,6 @@ result:
         [stdin needed]
   isError: false
 ---
-id: 8
 send:
   stdin: xxxxxx
   timeout_ms: 50
@@ -96,7 +90,6 @@ result:
         [running]
   isError: false
 ---
-id: 9
 session:
   action: interrupt
 result:
@@ -105,7 +98,6 @@ result:
       text: "[interrupt sent]"
   isError: false
 ---
-id: 10
 send:
   timeout_ms: 3000
 result:
@@ -115,7 +107,6 @@ result:
         caught between-callback interrupt
   isError: false
 ---
-id: 11
 send:
   r: identical(readline("after boundary> "), paste0(strrep("x", 6), "!"))
   stdin: |

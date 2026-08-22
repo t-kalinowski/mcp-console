@@ -3,11 +3,6 @@ relay:
   kind: ready
 ---
 server:
-  kind: stdin
-  data: |
-    answer
----
-server:
   kind: evaluate
   language: r
   source: "42"

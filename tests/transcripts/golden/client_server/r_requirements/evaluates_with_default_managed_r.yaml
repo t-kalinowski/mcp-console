@@ -1,7 +1,6 @@
 ---
 !same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
 ---
-id: 3
 send:
   r: |
     stopifnot(
@@ -31,7 +30,6 @@ result:
         [1] 42
   isError: false
 ---
-id: 4
 session:
   action: prepare
   requirements:

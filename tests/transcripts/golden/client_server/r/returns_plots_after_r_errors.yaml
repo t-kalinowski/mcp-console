@@ -1,7 +1,6 @@
 ---
 !same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
 ---
-id: 3
 send:
   r: |
     local({
@@ -18,7 +17,6 @@ result:
       mimeType: image/png
   isError: false
 ---
-id: 4
 send:
   r: plot(3:1)
 result:

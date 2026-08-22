@@ -1,7 +1,6 @@
 ---
 !same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
 ---
-id: 3
 send:
   sql: |
     CREATE TABLE agent_notes AS
@@ -12,7 +11,6 @@ result:
       text: "[done]"
   isError: false
 ---
-id: 4
 session:
   action: prepare
   requirements:
@@ -24,7 +22,6 @@ result:
       text: "[prepared]"
   isError: false
 ---
-id: 5
 send:
   r: |
     ragnar::ragnar_store_create(
@@ -41,7 +38,6 @@ result:
           cannot open file 'knowledge.ragnar.duckdb': Operation not permitted
   isError: false
 ---
-id: 6
 send:
   r: |
     store_path <- file.path(tempdir(), "knowledge.ragnar.duckdb")
@@ -75,7 +71,6 @@ result:
         created store under the worker tempdir
   isError: false
 ---
-id: 7
 session:
   action: prepare
   requirements:
@@ -88,7 +83,6 @@ result:
       text: "[prepared]"
   isError: false
 ---
-id: 8
 send:
   r: |
     stopifnot(
@@ -104,7 +98,6 @@ result:
         index built after extension preparation
   isError: false
 ---
-id: 9
 send:
   r: |
     creator_result <- ragnar::ragnar_retrieve(
@@ -123,7 +116,6 @@ result:
         1 beta.md "# Beta\n\nBananas are yellow fruit."
   isError: false
 ---
-id: 10
 send:
   r: |
     reader <- ragnar::ragnar_store_connect(
@@ -146,7 +138,6 @@ result:
         1 alpha.md "# Alpha\n\nApples are red fruit."
   isError: false
 ---
-id: 11
 send:
   sql: |
     SELECT origin FROM chunks ORDER BY origin
@@ -163,7 +154,6 @@ result:
         ℹ Error type: BINDER
   isError: false
 ---
-id: 12
 send:
   r: |
     writeLines(paste(
@@ -178,7 +168,6 @@ result:
         R chunks columns: start, end, context, text
   isError: false
 ---
-id: 13
 send:
   sql: |
     SELECT origin FROM chunks ORDER BY origin
@@ -195,7 +184,6 @@ result:
         ℹ Error type: CATALOG
   isError: false
 ---
-id: 14
 send:
   r: |
     sql_connection(reader@con)
@@ -206,7 +194,6 @@ result:
         Error in sql_connection(reader@con) : unused argument (reader@con)
   isError: false
 ---
-id: 15
 send:
   r: |
     connection <- sql_connection()
@@ -232,7 +219,6 @@ result:
         attached with both ragnar connections still open
   isError: false
 ---
-id: 16
 send:
   sql: |
     SELECT origin FROM knowledge.main.chunks ORDER BY origin
@@ -247,7 +233,6 @@ result:
         2 "beta.md"
   isError: false
 ---
-id: 17
 send:
   sql: |
     SELECT origin
@@ -266,7 +251,6 @@ result:
         ℹ Error type: CATALOG
   isError: false
 ---
-id: 18
 send:
   sql: |
     USE knowledge;

@@ -1,7 +1,6 @@
 ---
 !same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
 ---
-id: 3
 send:
   r: |
     invisible(reticulate::py_config())
@@ -18,7 +17,6 @@ result:
         <activation sent>
   isError: false
 ---
-id: 4
 send:
   r: |
     globals <- get(".globals", envir = asNamespace("reticulate"))
@@ -48,7 +46,6 @@ result:
         [worker stopped: in-memory state lost]
   isError: true
 ---
-id: 5
 session:
   action: restart
   requirements:
@@ -64,7 +61,6 @@ result:
         [idle]
   isError: false
 ---
-id: 6
 send:
   r: |
     packages <- reticulate::py_require()$packages

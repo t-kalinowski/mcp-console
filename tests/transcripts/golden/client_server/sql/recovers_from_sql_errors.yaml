@@ -1,7 +1,6 @@
 ---
 !same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
 ---
-id: 3
 send:
   sql: |
     SELECT * FROM table_that_does_not_exist
@@ -18,7 +17,6 @@ result:
         ℹ Error type: CATALOG
   isError: false
 ---
-id: 4
 send:
   sql: |
     SELECT CAST(42 AS INTEGER) AS answer

@@ -1,7 +1,6 @@
 ---
 !same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
 ---
-id: 3
 send:
   r: request input after timeout
   stdin: |
@@ -15,7 +14,6 @@ result:
         [running]
   isError: false
 ---
-id: 4
 send:
   timeout_ms: 3000
 result:

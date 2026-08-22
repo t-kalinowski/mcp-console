@@ -1,7 +1,6 @@
 ---
 !same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
 ---
-id: 3
 send:
   r: resolve python while idle
 result:
@@ -10,9 +9,8 @@ result:
       text: "[done]"
   isError: false
 ---
-id: 4
 send:
-  r: echo
+  r: echo echo
 result:
   content:
     - type: text
@@ -20,7 +18,6 @@ result:
         zod: echo
   isError: false
 ---
-id: 5
 send:
   r: request input while idle
 result:
@@ -30,9 +27,8 @@ result:
         [input requested: "idle> "]
   isError: false
 ---
-id: 6
 send:
-  r: echo
+  r: echo echo
   stdin: |
     continue
 result:

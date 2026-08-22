@@ -1,7 +1,6 @@
 ---
 !same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
 ---
-id: 3
 send:
   r: |
     answer <- 40
@@ -18,7 +17,6 @@ result:
         done
   isError: false
 ---
-id: 4
 send:
   r: |
     identical(
@@ -35,7 +33,6 @@ result:
         [1] TRUE
   isError: false
 ---
-id: 5
 send:
   r: stop("boom")
 result:
@@ -45,7 +42,6 @@ result:
         Error: boom
   isError: false
 ---
-id: 6
 send:
   r: answer
 result:
@@ -55,7 +51,6 @@ result:
         [1] 40
   isError: false
 ---
-id: 7
 send:
   r: silent <- 1
 result:

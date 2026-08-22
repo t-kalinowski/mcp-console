@@ -1,7 +1,6 @@
 ---
 !same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
 ---
-id: 3
 send:
   r: resolver_interrupt_state <- 41L
 result:
@@ -10,7 +9,6 @@ result:
       text: "[done]"
   isError: false
 ---
-id: 4
 session:
   action: prepare
   requirements:
@@ -22,7 +20,6 @@ result:
       text: managed Python resolution cancelled by interrupt
   isError: true
 ---
-id: 5
 session:
   action: interrupt
 result:
@@ -31,7 +28,6 @@ result:
       text: "[interrupt sent]"
   isError: false
 ---
-id: 6
 send:
   r: resolver_interrupt_state + 1L
 result:

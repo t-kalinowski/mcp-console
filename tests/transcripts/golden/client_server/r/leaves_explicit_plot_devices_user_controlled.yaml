@@ -1,7 +1,6 @@
 ---
 !same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
 ---
-id: 3
 send:
   r: |
     explicit_plot <- tempfile(fileext = ".png")
@@ -16,7 +15,6 @@ result:
         explicit current: <device>
   isError: false
 ---
-id: 4
 send:
   r: |
     cat(
@@ -36,7 +34,6 @@ result:
         explicit complete: TRUE
   isError: false
 ---
-id: 5
 send:
   r: plot(3:1)
 result:
@@ -46,7 +43,6 @@ result:
       mimeType: image/png
   isError: false
 ---
-id: 6
 send:
   r: |
     first_explicit_plot <- tempfile(fileext = ".png")

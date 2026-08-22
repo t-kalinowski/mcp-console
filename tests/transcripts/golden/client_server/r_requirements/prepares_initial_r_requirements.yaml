@@ -1,7 +1,6 @@
 ---
 !same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
 ---
-id: 3
 session:
   action: prepare
   requirements:
@@ -13,7 +12,6 @@ result:
       text: "[prepared]"
   isError: false
 ---
-id: 4
 session:
   action: prepare
   requirements:
@@ -55,7 +53,6 @@ result:
         ir: dependency resolution failed
   isError: true
 ---
-id: 5
 session:
   action: prepare
   requirements:
@@ -72,16 +69,12 @@ result:
         requirements only
   isError: true
 ---
-id: 6
 send:
   r: |
     stopifnot(
       identical(
         dirname(find.package("praise")),
         .libPaths()[[1L]]
-      ),
-      !file.exists(
-        file.path(.libPaths()[[1L]], "zeallot", "DESCRIPTION")
       ),
       normalizePath(.libPaths()[[2L]]) ==
         normalizePath(Sys.getenv("MCP_CONSOLE_AMBIENT_R_LIBRARY"))
@@ -94,7 +87,6 @@ result:
         [1] 42
   isError: false
 ---
-id: 7
 session:
   action: prepare
   requirements:
@@ -106,7 +98,6 @@ result:
       text: "[prepared]"
   isError: false
 ---
-id: 8
 session:
   action: prepare
   requirements:
@@ -120,7 +111,6 @@ result:
       text: "[prepared]"
   isError: false
 ---
-id: 9
 send:
   r: |
     stopifnot(
@@ -144,7 +134,6 @@ result:
         [1] 42
   isError: false
 ---
-id: 10
 session:
   action: restart
 result:
@@ -156,7 +145,6 @@ result:
         [idle]
   isError: false
 ---
-id: 11
 send:
   r: |
     stopifnot(

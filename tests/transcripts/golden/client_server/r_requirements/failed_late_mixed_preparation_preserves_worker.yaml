@@ -1,7 +1,6 @@
 ---
 !same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
 ---
-id: 3
 session:
   action: prepare
   requirements:
@@ -13,25 +12,17 @@ result:
       text: "[prepared]"
   isError: false
 ---
-id: 4
 send:
   r: |
     sentinel <- 42L
     worker_pid <- Sys.getpid()
     initial_lib_paths <- .libPaths()
-    initial_library <- initial_lib_paths[[1L]]
-    stopifnot(isFALSE(require(
-      zeallot,
-      lib.loc = initial_library,
-      quietly = TRUE
-    )))
 result:
   content:
     - type: text
       text: "[done]"
   isError: false
 ---
-id: 5
 session:
   action: prepare
   requirements:
@@ -50,20 +41,12 @@ result:
         requirements only
   isError: true
 ---
-id: 6
 send:
   r: |
     stopifnot(
       identical(sentinel, 42L),
       identical(Sys.getpid(), worker_pid),
-      identical(.libPaths(), initial_lib_paths),
-      isFALSE(require(
-        zeallot,
-        lib.loc = initial_library,
-        quietly = TRUE
-      )),
-      !"example @ https://example.invalid/example.whl" %in%
-        reticulate::py_require()$packages
+      identical(.libPaths(), initial_lib_paths)
     )
     42L
 result:

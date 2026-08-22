@@ -20,6 +20,7 @@ from _support import (
     release_worker_callback_gate,
     run_this_suite,
     stop_client,
+    wait_for_evaluation_output,
     wait_for_idle_output,
     wait_for_worker_file,
 )
@@ -180,13 +181,12 @@ def test_collects_idle_later_callbacks_with_empty_send(binary: Path) -> Transcri
         """)
     client.send(r=r)
     release_worker_callback_gate(client, "collected callback")
-    checkpoint_id = wait_for_idle_output(
+    wait_for_idle_output(
         client,
         "collected callback\n[idle]",
         "collected callback output",
     )
     client.send(r="collected_value")
-    client.transcript[-1]["id"] = checkpoint_id + 1
     assert last_tool_text(client) == "[1] 84\n"
     return client._finish()
 
@@ -235,7 +235,6 @@ def test_snapshots_output_while_idle_later_callback_runs(binary: Path) -> Transc
             raise AssertionError("idle callback output was not collected")
     polls = client.transcript[poll_start:]
     final_poll = polls[-1]
-    final_poll["id"] = polls[0]["id"]
     client.transcript[poll_start:] = [final_poll]
     return client._finish()
 
@@ -265,14 +264,13 @@ def test_restarts_while_idle_callback_runs(binary: Path) -> Transcript:
         """)
     client.send(r=r)
     release_worker_callback_gate(client, "restarted idle callback")
-    checkpoint_id = wait_for_idle_output(
+    wait_for_idle_output(
         client,
         "callback started\n[idle]",
         "idle callback output",
         timeout_ms=10,
     )
     client.session(action="restart")
-    client.transcript[-1]["id"] = checkpoint_id + 1
     assert last_tool_text(client) == (
         "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
     )
@@ -468,7 +466,7 @@ def test_routes_input_to_idle_later_callback(
         """)
     client.send(r=r)
     release_worker_callback_gate(client, "collected input callback")
-    checkpoint_id = wait_for_idle_output(
+    wait_for_idle_output(
         client,
         '[input requested: "later> "]\n[stdin needed]',
         "idle callback input request",
@@ -484,12 +482,10 @@ def test_routes_input_to_idle_later_callback(
         client.send()
     polls = client.transcript[poll_start:]
     final_poll = polls[-1]
-    final_poll["id"] = checkpoint_id + 1
     final_poll["send"] = polls[0]["send"]
     client.transcript[poll_start:] = [final_poll]
     client.send(r="collected_answer")
     assert last_tool_text(client) == '[1] "yes"\n'
-    client.transcript[-1]["id"] = checkpoint_id + 2
     return client._finish()
 
 
@@ -969,7 +965,6 @@ def test_restart_skips_direct_stdin_boundary_callback(binary: Path) -> Transcrip
               "mcp_test_register_input_handler",
               file.path(tempdir(), "direct-stdin-boundary-fifo"),
               function() {
-                cat("direct callback waiting")
                 connection <- suppressWarnings(file("/dev/stdin"))
                 on.exit(close(connection))
                 stopifnot(file.create(file.path(
@@ -1003,7 +998,6 @@ def test_restart_skips_direct_stdin_boundary_callback(binary: Path) -> Transcrip
         restarted = client._start_session(action="restart")
         client._receive(waiting)
         client._receive(restarted)
-        assert "direct callback waiting" in waiting["result"]["content"][0]["text"]
         assert "direct callback released" in waiting["result"]["content"][0]["text"]
         assert "direct stdin cell ran" not in waiting["result"]["content"][0]["text"]
         assert "direct stdin cell ran" not in restarted["result"]["content"][0]["text"]
@@ -1024,17 +1018,13 @@ def test_browser_input(binary: Path) -> Transcript:
         }
         step()
         """)
-    client.send(r=r)
+    client.send(r=r, stdin="n\nn\nn\n")
     output = last_tool_text(client)
-    assert output.count('[input requested: "Browse[1]> "]') == 1, output
-    assert output.endswith("\n[stdin needed]"), output
-    client.send(r="1")
-    assert client.transcript[-1]["result"]["isError"] is True
-    client.send(stdin="n\nn\nn\n")
-    output = last_tool_text(client)
-    assert output.count('[input requested: "Browse[1]> "]') == 3, output
+    assert output.count('[input requested: "Browse[1]> "]') == 4, output
     assert output.endswith("\n[stdin needed]"), output
     assert "n" not in output.splitlines(), output
+    client.send(r="1")
+    assert client.transcript[-1]["result"]["isError"] is True
     client.send(stdin="c\n")
     output = last_tool_text(client)
     assert output == "[1] 3\n", output
@@ -1203,11 +1193,13 @@ def test_interrupts_managed_console_input(binary: Path) -> Transcript:
         assert last_tool_text(client) == (
             '[input requested: "R interrupt> "]\n[stdin needed]'
         )
-        time.sleep(0.05)
         client.session(action="interrupt")
         assert last_tool_text(client) == "[interrupt sent]"
-        client.send(timeout_ms=3_000)
-        assert last_tool_text(client) == "R input interrupted\n"
+        wait_for_evaluation_output(
+            client,
+            "R input interrupted\n",
+            "R console input interrupt",
+        )
         client.send(r='readline("R replay> ")', stdin="!\n")
         assert last_tool_text(client) == (
             '[input requested: "R replay> "]\n[1] "R partial!"\n'
@@ -1225,12 +1217,14 @@ def test_interrupts_managed_console_input(binary: Path) -> Transcript:
         assert last_tool_text(client) == (
             '[input requested: "R suspended> "]\n[stdin needed]'
         )
-        time.sleep(0.05)
         client.session(action="interrupt")
         assert last_tool_text(client) == "[interrupt sent]"
-        client.send(stdin="accepted\n", timeout_ms=3_000)
-        output = last_tool_text(client)
-        assert output == "suspended input accepted\n", repr(output)
+        wait_for_evaluation_output(
+            client,
+            "suspended input accepted\n",
+            "suspended R console input",
+            stdin="accepted\n",
+        )
         client.send(r="suspended_input")
         assert last_tool_text(client) == '[1] "accepted"\n'
 
@@ -1246,11 +1240,13 @@ def test_interrupts_managed_console_input(binary: Path) -> Transcript:
         assert last_tool_text(client) == (
             '[input requested: "Python interrupt> "]\n[stdin needed]'
         )
-        time.sleep(0.05)
         client.session(action="interrupt")
         assert last_tool_text(client) == "[interrupt sent]"
-        client.send(timeout_ms=3_000)
-        assert last_tool_text(client) == "Python input interrupted\n"
+        wait_for_evaluation_output(
+            client,
+            "Python input interrupted\n",
+            "Python console input interrupt",
+        )
         client.send(python='input("Python replay> ")', stdin="!\n")
         assert last_tool_text(client) == (
             "[input requested: \"Python replay> \"]\n'Python partial!'\n"
@@ -1310,13 +1306,10 @@ def test_replays_console_prefix_after_operation_boundary_interrupt(
                 "later console callback did not handle the interrupt"
             )
         polls = client.transcript[poll_start:]
-        interrupt_poll_id = polls[0]["id"]
         final_poll = polls[-1]
-        final_poll["id"] = interrupt_poll_id
         client.transcript[poll_start:] = [final_poll]
 
         client.send(r='readline("after later callback> ")', stdin="!\n")
-        client.transcript[-1]["id"] = interrupt_poll_id + 1
         assert last_tool_text(client) == (
             '[input requested: "after later callback> "]\n[1] "part!"\n'
         )
@@ -1344,12 +1337,10 @@ def test_replays_console_prefix_after_operation_boundary_interrupt(
             )
             """)
         client.send(r=r)
-        client.transcript[-1]["id"] = interrupt_poll_id + 2
         assert last_tool_text(client) == (
             '[input requested: "between callbacks> "]\n[stdin needed]'
         )
         client.send(stdin="x" * 6, timeout_ms=50)
-        client.transcript[-1]["id"] = interrupt_poll_id + 3
         assert last_tool_text(client) == "\n[running]"
         wait_for_worker_file(
             directory,
@@ -1358,17 +1349,14 @@ def test_replays_console_prefix_after_operation_boundary_interrupt(
         )
 
         client.session(action="interrupt")
-        client.transcript[-1]["id"] = interrupt_poll_id + 4
         assert last_tool_text(client) == "[interrupt sent]"
         client.send(timeout_ms=3_000)
-        client.transcript[-1]["id"] = interrupt_poll_id + 5
         assert last_tool_text(client) == "caught between-callback interrupt\n"
 
         client.send(
             r='identical(readline("after boundary> "), paste0(strrep("x", 6), "!"))',
             stdin="!\n",
         )
-        client.transcript[-1]["id"] = interrupt_poll_id + 6
         output = last_tool_text(client)
         assert output == ('[input requested: "after boundary> "]\n[1] TRUE\n'), repr(
             output

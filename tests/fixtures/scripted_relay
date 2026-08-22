@@ -15,6 +15,7 @@ DONE_NAME = "mcp-console-scripted-relay-done"
 EVALUATING_NAME = "mcp-console-scripted-relay-evaluating"
 CHECKPOINT_NAME = "mcp-console-scripted-relay-checkpoint"
 RELEASE_NAME = "mcp-console-scripted-relay-release"
+STDIN_FAILURE_RELEASED_ENV = "MCP_CONSOLE_TEST_STDIN_FAILURE_RELEASED"
 SHUTDOWN_RECEIVED_NAME = "mcp-console-scripted-relay-shutdown-received"
 RETIREMENT_RELEASE_NAME = "mcp-console-scripted-relay-retirement-release"
 PRELUDE_RELEASE_NAME = "mcp-console-scripted-relay-prelude-release"
@@ -230,10 +231,42 @@ def run_raw_output(relay: ScriptedRelay) -> None:
 
 def run_stdin(relay: ScriptedRelay) -> None:
     relay.ready()
-    relay.expect(EVALUATION)
     relay.expect({"kind": "stdin", "data": "answer\n"})
+    relay.expect(EVALUATION)
     relay.complete()
     relay.retire()
+
+
+def run_stdin_forwarding_failure(relay: ScriptedRelay) -> None:
+    if Path(os.environ[STDIN_FAILURE_RELEASED_ENV]).exists():
+        relay.ready()
+        relay.expect(EVALUATION)
+        relay.complete()
+        relay.retire()
+        return
+
+    relay.ready()
+    readable, _, _ = select.select([sys.stdin.buffer], [], [], WAIT_SECONDS)
+    assert readable, "server sent no command to scripted relay"
+
+    prefix = bytearray()
+    while b'"kind":"' not in prefix or len(prefix) < 64:
+        chunk = sys.stdin.buffer.read1(64 - len(prefix))
+        assert chunk, "server command ended before its kind was readable"
+        prefix.extend(chunk)
+        if b"\n" in prefix:
+            command = json.loads(prefix)
+            relay.record({"server": command})
+            relay.retire(command)
+            return
+
+    assert prefix.startswith(b'{"kind":"stdin","data":"'), prefix
+    relay.record({"server_raw": base64.b64encode(prefix).decode("ascii")})
+    relay.wait_for_release()
+    os.close(0)
+    relay.mark_done()
+    while True:
+        time.sleep(60)
 
 
 def run_interrupt(relay: ScriptedRelay) -> None:
@@ -361,6 +394,25 @@ def run_pre_marker_r_prepared_replacement(relay: ScriptedRelay) -> None:
     relay.send({"kind": "worker_exited", "code": 0})
 
 
+def run_r_preparation_failure(relay: ScriptedRelay) -> None:
+    relay.ready()
+    command = relay.receive()
+    if command.get("kind") == "shutdown":
+        relay.retire(command)
+        return
+
+    assert command.get("kind") == "prepare_r", command
+    relay.send(
+        {
+            "kind": "r_preparation_failed",
+            "message": "scripted R preparation failed",
+        }
+    )
+    relay.expect(EVALUATION)
+    relay.complete()
+    relay.retire()
+
+
 def run_cancelled_waiting_send(relay: ScriptedRelay) -> None:
     relay.make_checkpoint(PRELUDE_RELEASE_NAME)
     relay.make_checkpoint(PRELUDE_PROCESSED_NAME)
@@ -474,12 +526,14 @@ def main() -> None:
         "evaluate": run_evaluate,
         "raw_output": run_raw_output,
         "stdin": run_stdin,
+        "stdin_forwarding_failure": run_stdin_forwarding_failure,
         "interrupt": run_interrupt,
         "serialized_cross_source_order": run_serialized_cross_source_order,
         "shutdown": run_shutdown,
         "blocked_live_r_resolver_shutdown": run_blocked_live_r_resolver_shutdown,
         "late_r_prepared_retirement": run_late_r_prepared_retirement,
         "pre_marker_r_prepared_replacement": run_pre_marker_r_prepared_replacement,
+        "r_preparation_failure": run_r_preparation_failure,
         "cancelled_waiting_send": run_cancelled_waiting_send,
         "fatal": run_fatal,
         "truncated": run_truncated,

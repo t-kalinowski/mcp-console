@@ -58,10 +58,11 @@ struct SendArguments {
     /// DuckDB CLI dot commands are not supported. Omit to send stdin or poll.
     sql: Option<String>,
     /// Text for interactive reads and debugger commands such as R `readline()` or `browser()` and
-    /// Python `input()`, `breakpoint()`, or `pdb`. Its UTF-8 encoding is queued to worker stdin
-    /// exactly; no newline is added. Send it with a cell to prequeue input or on its own while the
-    /// worker is running or idle. If output ends in `[stdin needed]`, send the requested input here.
-    /// Unread text can satisfy later reads and is discarded by restart.
+    /// Python `input()`, `breakpoint()`, or `pdb`. Its UTF-8 encoding is queued exactly; no newline is
+    /// added. When sent with a cell, nonempty text is queued before the code is run; an already
+    /// waiting interactive read may consume it before the new cell begins. Empty text queues nothing.
+    /// Send it on its own while the console is running or idle. If output ends in `[stdin needed]`,
+    /// send the requested input here. Unread text can satisfy later reads and is discarded by restart.
     stdin: Option<String>,
     /// Maximum time this call waits for an evaluation or one automatic worker replacement attempt.
     /// On expiry, the call returns available output followed by the current state, such as

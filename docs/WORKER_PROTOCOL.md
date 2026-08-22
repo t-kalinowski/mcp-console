@@ -4,6 +4,7 @@ This document describes the worker protocol implemented by `mcp-console serve`, 
 It describes the current code, not the broader design under `design-sketches/`.
 The message enums in `src/worker_protocol.rs`, the framing in `src/sideband.rs`, the relay in `src/worker_relay.rs`, the language bridges in `src/python.rs`, `src/r_bridge.rs`, `src/r_environment.rs`, `src/r_graphics.rs`, and `src/sql.rs`, and the worker-client orchestration, platform runtime, evaluation state, and output assembly in `src/worker_client.rs` and `src/worker_client/` are the source of truth.
 The separate private server-to-relay transport is documented in [`RELAY_PROTOCOL.md`](RELAY_PROTOCOL.md).
+Transcript-runner progress lines are test user-interface output, not MCP, relay, sideband, or worker-stream data.
 
 ## Scope
 
@@ -227,6 +228,8 @@ relay reader  <──  worker writer
 The relay also owns an independent FIFO writer connected to the worker's standard input (fd 0) and independent readers for standard output and standard error.
 The server UTF-8 encodes each accepted `stdin` string in a binary-safe relay command, and the relay queues the decoded bytes to that writer without inspection, line buffering, or worker-side framing.
 Each payload contributes bytes to the same generation-long stream rather than forming a record.
+For a call containing both a cell and nonempty stdin, the relay receives the stdin command before the evaluation command; empty stdin sends no relay command.
+That transport order is guaranteed, but the runtime determines which read consumes the bytes, including an already outstanding idle read.
 Line-oriented reads generally require an explicit newline; payload end is not EOF, and fd-0 closure retires the generation.
 There is no sideband input frame.
 
@@ -531,7 +534,10 @@ Each record ends in a newline when it is recorded.
 That delimiter separates an immediately received record from later evaluation output and remains in a silent completion; if the request stays outstanding, `[stdin needed]` follows it in the same response.
 
 An MCP call may contain one code field and `stdin`.
-The server flushes `evaluate` first, then attaches the evaluation to the worker's stdin writer and drains any queued input in submission order.
+The server first reserves the active evaluation and registers the worker operation without forwarding either command.
+It then attaches the evaluation to the worker's stdin writer, drains all nonempty queued input in submission order, and only after that succeeds queues `evaluate` through the same ordered relay-command sender.
+This guarantees `stdin` then `evaluate` on the wire, but not when the runtime consumes the bytes.
+An already outstanding idle read may consume some or all of them before the cell begins; the cell adopts any resulting idle output as its prelude.
 A later stdin-only call uses the same route without acquiring the evaluation's worker lock, including after an earlier call returned `\n[running]`.
 When no operation is tracked, nonempty stdin lazily starts the worker if necessary and enters the same worker-owned FIFO.
 The call then records and returns at the current server-side output cut immediately.
@@ -548,7 +554,7 @@ After a nonempty callback read, `input_received` closes that provisional request
 Each request frame produces one record, regardless of how many stdin payloads or polls occur while it remains outstanding.
 It does not acknowledge a particular stdin submission, identify which bytes satisfied the read, or report bytes consumed by code that reads fd 0 directly.
 If no terminal input frame arrives during the grace window, the request remains exposed as `\n[stdin needed]`; a partial follow-up therefore returns only `\n[stdin needed]` again rather than repeating the request record or returning `\n[running]`.
-Empty stdin writes no bytes and leaves an exposed request immediately reportable.
+Empty stdin sends no relay command, writes no bytes, and leaves an exposed request immediately reportable.
 Python `sys.stdin` and other code that reads fd 0 directly can consume bundled input or input sent after a polling timeout without sending either input frame.
 
 Acceptance means the bytes were queued, not that an evaluation consumed them.
@@ -898,13 +904,14 @@ As a custom worker, it sends no `python_activated` events.
 It acknowledges `prepare_r` and can report whether the server supplied its live R library and prepared the JSON extension in DuckDB's native cache.
 A dedicated mode sends a managed Python activation frame to verify that the server rejects it from a custom worker with a specific protocol error.
 The `emit console kinds` mode sends adjacent `console_output` and `console_diagnostic` frames to verify that MCP still returns one merged text block.
-When an R `source` is exactly `echo`, it sends two output chunks followed by `completed`:
+In every language, an `echo ` source emits its payload after the space without trimming it, then sends `completed`.
+For example, R source `echo hello` sends two output chunks that project to:
 
 ```text
-zod: echo\n
+zod: hello\n
 ```
 
-The Python and SQL `echo` modes return `zod python: echo\n` and `zod sql: echo\n`, verifying that the server preserves each language tag.
+The Python and SQL modes use the corresponding `zod python: ` and `zod sql: ` prefixes; their transcript cases include Unicode and repeated-space payloads to verify exact preservation.
 The `interrupt` mode waits after evaluation dispatch, handles a real process `SIGINT`, records its receipt, completes, and then accepts a later evaluation.
 The `emit image` mode sends text, a valid one-pixel PNG image, and more text before completion, verifying ordered MCP content projection.
 When an R `source` is exactly `stall`, Zod creates a checkpoint in its private temporary directory and sleeps forever.

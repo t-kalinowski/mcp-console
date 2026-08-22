@@ -8,7 +8,7 @@
   at: <UTC timestamp>
 - event: tool_call
   call_id: 1
-  request_id: 3
+  request_id: <request ID>
   request:
     name: send
     arguments:
@@ -48,7 +48,7 @@
   at: <UTC timestamp>
 - event: tool_call
   call_id: 2
-  request_id: 4
+  request_id: <request ID>
   request:
     _meta:
       progressToken: record-me
@@ -73,7 +73,7 @@
   at: <UTC timestamp>
 - event: tool_call
   call_id: 3
-  request_id: 5
+  request_id: <request ID>
   request:
     name: session
     arguments:

@@ -1,7 +1,6 @@
 ---
 !same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
 ---
-id: 3
 session:
   action: prepare
 result:
@@ -10,7 +9,6 @@ result:
       text: "`requirements` is required with `prepare`"
   isError: true
 ---
-id: 4
 session:
   action: prepare
   requirements: {}
@@ -22,7 +20,6 @@ result:
         `requirements.duckdb` is required
   isError: true
 ---
-id: 5
 session:
   action: prepare
   requirements:
@@ -36,7 +33,6 @@ result:
         contain only lowercase ASCII letters, digits, and underscores
   isError: true
 ---
-id: 6
 session:
   action: prepare
   requirements:
@@ -48,7 +44,6 @@ result:
       text: R requirement strings must not be empty
   isError: true
 ---
-id: 7
 session:
   action: prepare
   requirements:
@@ -62,7 +57,6 @@ result:
       text: R requirement strings must not contain NUL or line breaks
   isError: true
 ---
-id: 8
 session:
   action: interrupt
   requirements:
@@ -74,7 +68,6 @@ result:
       text: "`requirements` is not supported with `interrupt`"
   isError: true
 ---
-id: 9
 session:
   action: restart
   requirements: {}
@@ -86,7 +79,6 @@ result:
         `requirements.duckdb` is required
   isError: true
 ---
-id: 10
 session:
   action: restart
   requirements:
@@ -100,7 +92,6 @@ result:
       text: R requirement strings must not contain NUL or line breaks
   isError: true
 ---
-id: 11
 session:
   action: restart
   requirements:

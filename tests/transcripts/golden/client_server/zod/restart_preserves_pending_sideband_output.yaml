@@ -1,7 +1,6 @@
 ---
 !same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
 ---
-id: 3
 send:
   r: emit output and image before completion
   timeout_ms: 0
@@ -13,7 +12,6 @@ result:
         [running]
   isError: false
 ---
-id: 4
 session:
   action: restart
 result:

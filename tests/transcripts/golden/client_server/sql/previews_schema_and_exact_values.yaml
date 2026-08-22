@@ -1,7 +1,6 @@
 ---
 !same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
 ---
-id: 3
 send:
   r: |
     invisible(options(
@@ -28,7 +27,6 @@ result:
       text: "[done]"
   isError: false
 ---
-id: 4
 send:
   sql: |
     SELECT
@@ -50,7 +48,6 @@ result:
         1 NULL     9223372036854775807 12345678901234567890123456789.123456789 [1, NULL, 3]     {'name': Ada, 'active': true}       
   isError: false
 ---
-id: 5
 send:
   sql: |
     SELECT
@@ -78,7 +75,6 @@ result:
         #   ⁵​column_name_09_is_deliberately_long, ⁶​column_name_10_is_deliberately_long, ⁷​column_name_11_is_deliberately_long, ⁸​column_name_12_is_deliberately_long
   isError: false
 ---
-id: 6
 send:
   sql: |
     SELECT

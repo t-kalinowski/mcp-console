@@ -1,7 +1,6 @@
 ---
 !same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
 ---
-id: 3
 send:
   stdin: |
     cold fd 0
@@ -13,7 +12,6 @@ result:
         [idle]
   isError: false
 ---
-id: 4
 send:
   r: |
     local({
@@ -28,7 +26,6 @@ result:
         [1] "cold fd 0"
   isError: false
 ---
-id: 5
 send:
   r: |
     prompted <- readline("bundled> ")
@@ -49,7 +46,6 @@ result:
         [running]
   isError: false
 ---
-id: 6
 send:
   timeout_ms: 0
 result:
@@ -60,7 +56,6 @@ result:
         [running]
   isError: false
 ---
-id: 7
 send:
   stdin: "timed out "
   timeout_ms: 50
@@ -72,7 +67,6 @@ result:
         [running]
   isError: false
 ---
-id: 8
 send:
   stdin: |
     fd 0

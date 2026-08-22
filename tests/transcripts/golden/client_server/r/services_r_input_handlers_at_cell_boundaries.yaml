@@ -1,7 +1,6 @@
 ---
 !same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
 ---
-id: 3
 send:
   r: |
     dyn.load("./mcp_test_input_handler.so")
@@ -21,7 +20,6 @@ result:
         cell end callback
   isError: false
 ---
-id: 4
 send:
   r: |
     dyn.load("./mcp_test_input_handler.so")
@@ -37,7 +35,6 @@ result:
       text: "[done]"
   isError: false
 ---
-id: 5
 send:
   r: cat(cell_start_callback_ran, "\ncell body\n", sep = "")
 result:

@@ -1,7 +1,6 @@
 ---
 !same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
 ---
-id: 3
 send:
   sql: |
     SELECT
@@ -52,7 +51,6 @@ result:
         [cell values truncated to 160 characters]
   isError: false
 ---
-id: 4
 send:
   sql: |
     SELECT repeat('z', 1000) AS value
@@ -67,7 +65,6 @@ result:
         [cell values truncated to 160 characters]
   isError: false
 ---
-id: 5
 send:
   sql: |
     SELECT value

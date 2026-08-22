@@ -4,6 +4,7 @@ import base64
 import json
 import os
 import select
+import shutil
 import signal
 import subprocess
 import sys
@@ -219,6 +220,35 @@ static struct {
     return library
 
 
+def record_resolved_r_library(environment: dict[str, str], directory: Path) -> None:
+    real_ir = shutil.which("ir", path=environment.get("PATH"))
+    assert real_ir is not None, "ir is required"
+    identity = directory / "resolved-r-library"
+    fake_bin = directory / "fixture-r-bin"
+    fake_bin.mkdir()
+    ir = fake_bin / "ir"
+    ir.write_text(
+        code(r"""
+            #!/bin/sh
+
+            set -eu
+            if [ "$#" -eq 1 ] && [ "$1" = "--version" ]; then
+              exec "$MCP_CONSOLE_TEST_REAL_IR" "$@"
+            fi
+            library=$("$MCP_CONSOLE_TEST_REAL_IR" "$@")
+            printf '%s' "$library" > "$MCP_CONSOLE_TEST_R_LIBRARY_IDENTITY"
+            printf '%s' "$library"
+            """),
+        encoding="utf-8",
+    )
+    ir.chmod(0o755)
+    path = environment.get("PATH")
+    assert path is not None, "PATH is required"
+    environment["PATH"] = os.pathsep.join((str(fake_bin), path))
+    environment["MCP_CONSOLE_TEST_REAL_IR"] = real_ir
+    environment["MCP_CONSOLE_TEST_R_LIBRARY_IDENTITY"] = str(identity)
+
+
 def test_routes_send_over_sideband(binary: Path) -> Transcript:
     zod = Path(__file__).resolve().parents[2] / "fixtures" / "zod"
     client = McpClient(
@@ -226,9 +256,12 @@ def test_routes_send_over_sideband(binary: Path) -> Transcript:
         ("serve", "--worker", str(zod)),
     )
     client._initialize_and_list_tools()
-    client.send(r="echo")
-    client.send(python="echo")
-    client.send(sql="echo")
+    client.send(r="echo hello")
+    assert last_tool_text(client) == "zod: hello\n"
+    client.send(python="echo precise 👩🏽‍💻")
+    assert last_tool_text(client) == "zod python: precise 👩🏽‍💻\n"
+    client.send(sql="echo two  spaces")
+    assert last_tool_text(client) == "zod sql: two  spaces\n"
     return client._finish()
 
 
@@ -302,7 +335,7 @@ def test_materializes_records_only_for_console_use(binary: Path) -> Transcript:
             client._initialize_and_list_tools()
             assert not (workspace / ".mcp-console").exists(), workspace
             if tool == "send":
-                client.send(r="echo")
+                client.send(r="echo echo")
             else:
                 client.session(action="restart")
 
@@ -348,7 +381,7 @@ def test_continues_without_record_when_record_cannot_be_created(
         )
         client._initialize_and_list_tools()
 
-        client.send(r="echo")
+        client.send(r="echo echo")
         client.session(action="restart")
 
         client._request("tools/call", name="missing", arguments={})
@@ -386,7 +419,8 @@ def test_records_tool_calls_and_images(binary: Path) -> TranscriptWithCompanion:
         )
         client._initialize_and_list_tools()
         client.send(r="emit image")
-        client._request(
+        image_request_id = client.transcript[-1]["id"]
+        invalid = client._request(
             "tools/call",
             name="send",
             arguments={"r": "1", "python": "1"},
@@ -396,6 +430,7 @@ def test_records_tool_calls_and_images(binary: Path) -> TranscriptWithCompanion:
             action="prepare",
             requirements={"python": ["transcript-fixture"]},
         )
+        preparation_request_id = client.transcript[-1]["id"]
         session_result = client.transcript[-1]["result"]
         client._request("tools/call", name="missing", arguments={})
 
@@ -426,7 +461,7 @@ def test_records_tool_calls_and_images(binary: Path) -> TranscriptWithCompanion:
         assert all(event["schema_version"] == 1 for event in events), events
         assert [event["sequence"] for event in events] == list(range(1, 9)), events
         assert events[1]["call_id"] == events[2]["call_id"] == 1, events
-        assert events[1]["request_id"] == 3, events[1]
+        assert events[1]["request_id"] == image_request_id, events[1]
         assert events[1]["request"] == {
             "name": "send",
             "arguments": {"r": "emit image"},
@@ -455,7 +490,7 @@ def test_records_tool_calls_and_images(binary: Path) -> TranscriptWithCompanion:
             "isError": False,
         }, events[3]
         assert events[4]["call_id"] == events[5]["call_id"] == 2, events
-        assert events[4]["request_id"] == 4, events[4]
+        assert events[4]["request_id"] == invalid["id"], events[4]
         assert events[4]["request"] == {
             "name": "send",
             "arguments": {"r": "1", "python": "1"},
@@ -471,7 +506,7 @@ def test_records_tool_calls_and_images(binary: Path) -> TranscriptWithCompanion:
             "isError": True,
         }, events[5]
         assert events[6]["call_id"] == events[7]["call_id"] == 3, events
-        assert events[6]["request_id"] == 5, events[6]
+        assert events[6]["request_id"] == preparation_request_id, events[6]
         assert events[6]["request"] == {
             "name": "session",
             "arguments": {
@@ -510,6 +545,8 @@ def test_records_tool_calls_and_images(binary: Path) -> TranscriptWithCompanion:
             datetime.fromisoformat(event["at"])
             event["at"] = "<UTC timestamp>"
             event["run_id"] = "<run ID>"
+            if "request_id" in event:
+                event["request_id"] = "<request ID>"
         events[0]["working_directory"] = "<workspace>"
         assert journal_text.endswith("\n"), journal_text
 
@@ -541,7 +578,7 @@ def test_disables_recording_after_transcript_failure(binary: Path) -> Transcript
             current_directory=workspace,
         )
         client._initialize_and_list_tools()
-        client.send(r="echo")
+        client.send(r="echo echo")
         session = next((workspace / ".mcp-console" / "sessions").iterdir())
         artifacts = session / "artifacts"
         artifacts.rmdir()
@@ -569,7 +606,7 @@ def test_disables_recording_after_transcript_failure(binary: Path) -> Transcript
         ], events
         assert journal_after_failure.endswith("\n"), journal_after_failure
 
-        client.send(r="echo")
+        client.send(r="echo echo")
         assert journal.read_text(encoding="utf-8") == journal_after_failure
 
         transcript, standard_error = client._finish_with_standard_error()
@@ -748,7 +785,7 @@ def test_custom_worker_skips_managed_python_preflight(binary: Path) -> Transcrip
     client._initialize_and_list_tools()
     # fmt: python
     python = code(r"""
-        echo
+        echo echo
         """).removesuffix("\n")
     client.send(python=python)
     result = client.session(
@@ -767,7 +804,7 @@ def test_custom_worker_skips_managed_python_preflight(binary: Path) -> Transcrip
     assert result["content"][0]["text"] == (
         "Python requirements are unavailable with a custom worker"
     )
-    client.send(r="echo")
+    client.send(r="echo echo")
     assert last_tool_text(client) == "zod: echo\n"
     client.send()
     assert last_tool_text(client) == "\n[idle]"
@@ -785,10 +822,10 @@ def test_custom_worker_starts_without_home(binary: Path) -> Transcript:
     )
     client._initialize_and_list_tools()
 
-    client.send(sql="echo")
+    client.send(sql="echo echo")
     assert last_tool_text(client) == "zod sql: echo\n"
 
-    client.send(r="echo")
+    client.send(r="echo echo")
     assert last_tool_text(client) == "zod: echo\n"
     return client._finish()
 
@@ -798,18 +835,20 @@ def test_custom_worker_prepares_r_and_duckdb_requirements(binary: Path) -> Trans
     environment, _ = r_test_environment()
     environment["RETICULATE_PYTHON"] = ""
     with tempfile.TemporaryDirectory() as temporary:
-        isolated_library = Path(temporary) / "isolated-library"
+        temporary_path = Path(temporary)
+        isolated_library = temporary_path / "isolated-library"
         isolated_library.mkdir()
         environment["R_LIBS"] = str(isolated_library)
         environment["R_LIBS_SITE"] = str(isolated_library)
         environment["R_LIBS_USER"] = str(isolated_library)
+        record_resolved_r_library(environment, temporary_path)
         client = McpClient(
             binary,
             ("serve", "--worker", str(zod)),
             environment,
         )
         client._initialize_and_list_tools()
-        client.send(r="echo")
+        client.send(r="echo echo")
 
         client.session(
             action="prepare",
@@ -881,11 +920,13 @@ def test_custom_worker_reports_idle_input_before_preparation_failure(
     environment, _ = r_test_environment()
     environment["RETICULATE_PYTHON"] = ""
     with tempfile.TemporaryDirectory() as temporary:
-        isolated_library = Path(temporary) / "isolated-library"
+        temporary_path = Path(temporary)
+        isolated_library = temporary_path / "isolated-library"
         isolated_library.mkdir()
         environment["R_LIBS"] = str(isolated_library)
         environment["R_LIBS_SITE"] = str(isolated_library)
         environment["R_LIBS_USER"] = str(isolated_library)
+        record_resolved_r_library(environment, temporary_path)
         client = McpClient(
             binary,
             ("serve", "--worker", str(zod)),
@@ -917,11 +958,13 @@ def test_custom_worker_resolves_idle_activity_before_preparation(
     environment, _ = r_test_environment()
     environment["RETICULATE_PYTHON"] = ""
     with tempfile.TemporaryDirectory() as temporary:
-        isolated_library = Path(temporary) / "isolated-library"
+        temporary_path = Path(temporary)
+        isolated_library = temporary_path / "isolated-library"
         isolated_library.mkdir()
         environment["R_LIBS"] = str(isolated_library)
         environment["R_LIBS_SITE"] = str(isolated_library)
         environment["R_LIBS_USER"] = str(isolated_library)
+        record_resolved_r_library(environment, temporary_path)
         client = McpClient(
             binary,
             ("serve", "--worker", str(zod)),
@@ -956,12 +999,12 @@ def test_custom_worker_resolves_idle_activity_before_evaluation(
     client.send(r="resolve python while idle")
     assert last_tool_text(client) == "[done]", repr(last_tool_text(client))
 
-    client.send(r="echo")
+    client.send(r="echo echo")
     assert last_tool_text(client) == "zod: echo\n"
 
     client.send(r="request input while idle")
     assert last_tool_text(client) == '[input requested: "idle> "]\n'
-    client.send(r="echo", stdin="continue\n")
+    client.send(r="echo echo", stdin="continue\n")
     assert last_tool_text(client) == "zod: echo\n"
     return client._finish()
 
@@ -973,11 +1016,13 @@ def test_custom_worker_restart_prepares_r_and_duckdb_requirements(
     environment, _ = r_test_environment()
     environment["RETICULATE_PYTHON"] = ""
     with tempfile.TemporaryDirectory() as temporary:
-        isolated_library = Path(temporary) / "isolated-library"
+        temporary_path = Path(temporary)
+        isolated_library = temporary_path / "isolated-library"
         isolated_library.mkdir()
         environment["R_LIBS"] = str(isolated_library)
         environment["R_LIBS_SITE"] = str(isolated_library)
         environment["R_LIBS_USER"] = str(isolated_library)
+        record_resolved_r_library(environment, temporary_path)
         client = McpClient(
             binary,
             ("serve", "--worker", str(zod)),
@@ -1202,7 +1247,7 @@ def test_times_out_and_polls_running_evaluation(binary: Path) -> Transcript:
         ("serve", "--worker", str(zod)),
     )
     client._initialize_and_list_tools()
-    client.send(r="echo")
+    client.send(r="echo echo")
     client.send(
         r="complete after timeout",
         timeout_ms=10,
@@ -1212,7 +1257,7 @@ def test_times_out_and_polls_running_evaluation(binary: Path) -> Transcript:
     client.send(timeout_ms=3_000)
     output = client.transcript[-1]["result"]["content"][0]["text"]
     assert output == "zod: complete after timeout\n", output
-    client.send(r="echo")
+    client.send(r="echo echo")
     return client._finish()
 
 
@@ -1284,7 +1329,7 @@ def test_interrupts_running_worker_with_sigint(binary: Path) -> Transcript:
 
             client.send(timeout_ms=3_000)
             assert last_tool_text(client) == "zod interrupted\n"
-            client.send(r="echo")
+            client.send(r="echo echo")
             assert last_tool_text(client) == "zod: echo\n"
             transcript = client._finish()
             passed = True
@@ -1309,7 +1354,7 @@ def test_supervises_stopped_and_continued_workers(binary: Path) -> Transcript:
         passed = False
         try:
             client._initialize_and_list_tools()
-            evaluation = client._start_send(r="echo", timeout_ms=30_000)
+            evaluation = client._start_send(r="echo echo", timeout_ms=30_000)
             marker, worker_pid, worker_group = wait_for_stopped_worker(
                 temporary_path,
                 set(),
@@ -1373,7 +1418,7 @@ def test_supervises_stopped_and_continued_workers(binary: Path) -> Transcript:
                 "isError": False,
             }, restarted
 
-            client.send(r="echo")
+            client.send(r="echo echo")
             assert last_tool_text(client) == "zod: echo\n"
             transcript = client._finish()
             passed = True
@@ -1495,7 +1540,7 @@ def test_reports_resolver_interrupt_permission_error(binary: Path) -> Transcript
             assert preparation["result"] == expected, preparation
             assert interrupt["result"] == expected, interrupt
 
-            client.send(r="echo")
+            client.send(r="echo echo")
             assert last_tool_text(client) == "zod: echo\n"
             transcript = client._finish()
             passed = True
@@ -1621,14 +1666,27 @@ def test_routes_combined_and_followup_stdin(binary: Path) -> Transcript:
     client.send(stdin="second\n")
     assert last_tool_text(client) == "zod stdin: first|second\n"
 
-    client.send(r="echo", stdin="stale\n")
+    client.send(r="echo echo", stdin="stale\n")
     assert last_tool_text(client) == "zod: echo\n"
     client.send(r="input without request")
     assert last_tool_text(client) == "zod stdin: stale\n"
 
-    client.send(r="echo", stdin="x" * (128 * 1024), timeout_ms=1_000)
+    client.send(r="echo echo", stdin="x" * (128 * 1024), timeout_ms=1_000)
     client.transcript[-1]["send"]["stdin"] = "<large unread stdin>"
     assert last_tool_text(client) == "zod: echo\n"
+    return client._finish()
+
+
+def test_routes_same_call_stdin_to_direct_fd0(binary: Path) -> Transcript:
+    zod = Path(__file__).resolve().parents[2] / "fixtures" / "zod"
+    client = McpClient(
+        binary,
+        ("serve", "--worker", str(zod)),
+    )
+    client._initialize_and_list_tools()
+
+    client.send(r="read fd 0 directly", stdin="direct café\n")
+    assert last_tool_text(client) == "zod fd 0: 'direct café\\n'\n"
     return client._finish()
 
 
@@ -1696,7 +1754,7 @@ def test_bounds_pending_output_and_resets_after_completion(
         f"<retained {PENDING_TEXT_BUDGET} text bytes>{notice}"
     )
 
-    client.send(r="echo")
+    client.send(r="echo echo")
     assert last_tool_text(client) == "zod: echo\n"
     return client._finish()
 
@@ -1781,7 +1839,7 @@ def test_orders_failure_and_replacement_output(binary: Path) -> Transcript:
             "[idle]"
         )
 
-        client.send(r="echo")
+        client.send(r="echo echo")
         assert last_tool_text(client) == "zod: echo\n"
         return client._finish()
 
@@ -1824,7 +1882,7 @@ def test_preserves_raw_output_during_forced_stop(
             + "\n".join(notices)
         )
 
-    client.send(r="echo")
+    client.send(r="echo echo")
     assert last_tool_text(client) == "zod: echo\n"
     return client._finish()
 
@@ -1907,7 +1965,7 @@ def test_reports_replacement_startup_failure_and_retry(
         }, result
 
         startup_control.write_text("ready with stdout", encoding="utf-8")
-        client.send(r="echo")
+        client.send(r="echo echo")
         assert last_tool_text(client) == (
             "[starting new worker]\nzod replacement startup ready\nzod: echo\n"
         )
@@ -2031,7 +2089,7 @@ def test_orders_explicit_restart_output(binary: Path) -> Transcript:
             client,
         )
 
-        startup_control.write_text("ready with stdout", encoding="utf-8")
+        startup_control.write_text("ready", encoding="utf-8")
         client.session(action="restart")
         result = client.transcript[-1]["result"]
         assert result["isError"] is False, result
@@ -2039,7 +2097,6 @@ def test_orders_explicit_restart_output(binary: Path) -> Transcript:
             "\n[active evaluation stopped by session restart request]"
             "\n[worker stopped: in-memory state lost]"
             "\n[starting new worker]"
-            "\nzod replacement startup ready"
             "\n[idle]"
         )
         assert result["content"] == [{"type": "text", "text": expected}], result
@@ -2048,11 +2105,10 @@ def test_orders_explicit_restart_output(binary: Path) -> Transcript:
             "[active evaluation stopped by session restart request]\n"
             "[worker stopped: in-memory state lost]\n"
             "[starting new worker]\n"
-            "zod replacement startup ready\n"
             "[idle]"
         )
 
-        client.send(r="echo")
+        client.send(r="echo echo")
         assert last_tool_text(client) == "zod: echo\n"
         return client._finish()
 
@@ -2350,7 +2406,7 @@ def test_reports_unexpected_worker_exit_zero(binary: Path) -> Transcript:
         "isError": True,
     }
 
-    client.send(r="echo")
+    client.send(r="echo echo")
     assert last_tool_text(client) == "zod: echo\n"
     return client._finish()
 
@@ -2410,7 +2466,7 @@ def test_replaces_worker_after_relay_exit(binary: Path) -> Transcript:
                 "server stopped a different process group"
             )
 
-            client.send(r="echo")
+            client.send(r="echo echo")
             assert last_tool_text(client) == "zod: echo\n"
             transcript = client._finish()
             passed = True
@@ -2459,7 +2515,7 @@ def test_restart_closes_worker_stdin(binary: Path) -> Transcript:
             "[idle]"
         )
 
-        client.send(r="echo")
+        client.send(r="echo echo")
         assert last_tool_text(client) == "zod: echo\n"
         return client._finish()
 
@@ -2500,7 +2556,7 @@ def test_restart_force_stops_stalled_worker(binary: Path) -> Transcript:
                 "[idle]"
             )
 
-            client.send(r="echo")
+            client.send(r="echo echo")
             assert last_tool_text(client) == "zod: echo\n"
             transcript = client._finish()
             passed = True
@@ -2553,7 +2609,7 @@ def test_restart_allows_accepted_relay_shutdown_to_finish(
                 "[idle]"
             ), restart_output
 
-            client.send(r="echo")
+            client.send(r="echo echo")
             assert last_tool_text(client) == "zod: echo\n"
             transcript = client._finish()
             passed = True
@@ -2669,7 +2725,7 @@ def test_restart_outer_force_stops_unresponsive_relay(binary: Path) -> Transcrip
                 "[idle]"
             )
 
-            client.send(r="echo")
+            client.send(r="echo echo")
             assert last_tool_text(client) == "zod: echo\n"
             transcript = client._finish()
             passed = True
@@ -2714,7 +2770,7 @@ def test_restart_starts_first_worker_and_waits_until_ready(
                 wait_for_marker(temporary_path, "zod-process-group", client)
             )
 
-            while_restarting = client._start_send(r="echo")
+            while_restarting = client._start_send(r="echo echo")
             client._receive(while_restarting)
             result = while_restarting["result"]
             assert result["isError"] is True
@@ -2726,7 +2782,7 @@ def test_restart_starts_first_worker_and_waits_until_ready(
                 "[starting new worker]\n[idle]"
             )
 
-            after_restart = client._start_send(r="echo")
+            after_restart = client._start_send(r="echo echo")
             client._receive(after_restart)
             assert after_restart["result"]["content"][0]["text"] == "zod: echo\n"
             transcript = client._finish()
@@ -2763,7 +2819,7 @@ def test_restart_does_not_report_never_ready_worker_as_stopped(
         passed = False
         try:
             client._initialize_and_list_tools()
-            waiting = client._start_send(r="echo", timeout_ms=30_000)
+            waiting = client._start_send(r="echo echo", timeout_ms=30_000)
             wait_for_marker(
                 temporary_path,
                 "zod-replacement-waiting-ready",
@@ -2822,7 +2878,7 @@ def test_restart_does_not_report_never_ready_worker_as_stopped(
                 "isError": False,
             }, restarted
 
-            client.send(r="echo")
+            client.send(r="echo echo")
             assert last_tool_text(client) == "zod: echo\n"
             transcript = client._finish()
             passed = True
@@ -2882,7 +2938,7 @@ def test_restart_commits_lifecycle_before_replacement_callbacks(
             "Python requirements are unavailable with a custom worker"
         )
 
-        client.send(r="echo")
+        client.send(r="echo echo")
         assert last_tool_text(client) == "zod: echo\n"
         return client._finish()
 
@@ -2921,7 +2977,7 @@ def test_retries_initial_startup_silently(binary: Path) -> Transcript:
             environment,
         )
         client._initialize_and_list_tools()
-        client.send(r="echo")
+        client.send(r="echo echo")
         result = client.transcript[-1]["result"]
         assert result["isError"] is True
         assert result["content"][0]["text"] == (
@@ -2929,7 +2985,7 @@ def test_retries_initial_startup_silently(binary: Path) -> Transcript:
             "[worker exited with status 86]"
         )
         startup_control.write_text("ready", encoding="utf-8")
-        client.send(r="echo")
+        client.send(r="echo echo")
         assert last_tool_text(client) == "zod: echo\n"
         return client._finish()
 
@@ -3041,7 +3097,7 @@ def test_demarcates_idle_prelude_across_cell_outcomes(binary: Path) -> Transcrip
             client._initialize_and_list_tools()
 
             expose_idle_sideband_output(client, temporary_path, "success")
-            client.send(r="echo")
+            client.send(r="echo echo")
             assert last_tool_text(client) == (
                 "zod background sideband\n[output produced while idle]\nzod: echo\n"
             )
@@ -3175,7 +3231,7 @@ def test_restart_cancels_partial_sideband_frame(binary: Path) -> Transcript:
 
             stop_process_group(descendant_group)
             descendant_group = None
-            client.send(r="echo")
+            client.send(r="echo echo")
             assert last_tool_text(client) == "zod: echo\n"
             transcript = client._finish()
             passed = True
@@ -3236,7 +3292,7 @@ def test_restart_cancels_reader_after_operation_result(
 
             stop_process_group(descendant_group)
             descendant_group = None
-            client.send(r="echo")
+            client.send(r="echo echo")
             assert last_tool_text(client) == "zod: echo\n"
             transcript = client._finish()
             passed = True

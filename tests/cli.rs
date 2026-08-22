@@ -786,11 +786,15 @@ fn stdio_console_shutdown_is_bounded_with_detached_stdin_descendants() {
         }),
     );
 
-    let marker = wait_for_file(
+    let ready = wait_for_file(
         &temporary_path,
-        "zod-detached-stdin-pid",
+        "zod-detached-stdin-started",
         Duration::from_secs(2),
     );
+    let marker = ready
+        .parent()
+        .expect("detached stdin marker should have a parent")
+        .join("zod-detached-stdin-pid");
     let descendant = fs::read_to_string(marker)
         .expect("detached stdin PID should be readable")
         .parse()

@@ -1,7 +1,6 @@
 ---
 !same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
 ---
-id: 3
 send:
   sql: |
     CREATE TABLE retained_state AS
@@ -16,7 +15,6 @@ result:
       text: "[done]"
   isError: false
 ---
-id: 4
 session:
   action: prepare
   requirements:
@@ -28,7 +26,6 @@ result:
       text: "[prepared]"
   isError: false
 ---
-id: 5
 session:
   action: prepare
   requirements:
@@ -40,7 +37,6 @@ result:
       text: "[prepared]"
   isError: false
 ---
-id: 6
 session:
   action: prepare
   requirements:
@@ -52,7 +48,6 @@ result:
       text: "[prepared]"
   isError: false
 ---
-id: 7
 session:
   action: prepare
   requirements:
@@ -64,7 +59,6 @@ result:
       text: "[prepared]"
   isError: false
 ---
-id: 8
 session:
   action: prepare
   requirements:
@@ -78,7 +72,6 @@ result:
         "not_a_real_duckdb_extension"
   isError: true
 ---
-id: 9
 send:
   sql: |
     PRAGMA create_fts_index('retained_state', 'answer', 'body')
@@ -88,7 +81,6 @@ result:
       text: "[done]"
   isError: false
 ---
-id: 10
 send:
   sql: |
     SELECT
@@ -112,7 +104,6 @@ result:
         1 "loaded"
   isError: false
 ---
-id: 11
 session:
   action: restart
 result:
@@ -124,7 +115,6 @@ result:
         [idle]
   isError: false
 ---
-id: 12
 send:
   sql: LOAD fts
 result:
@@ -133,7 +123,6 @@ result:
       text: "[done]"
   isError: false
 ---
-id: 13
 send:
   sql: |
     CREATE TABLE replacement_state AS
@@ -146,7 +135,6 @@ result:
       text: "[done]"
   isError: false
 ---
-id: 14
 send:
   sql: |
     PRAGMA create_fts_index('replacement_state', 'answer', 'body')
@@ -156,7 +144,6 @@ result:
       text: "[done]"
   isError: false
 ---
-id: 15
 send:
   sql: |
     SELECT 'loaded' AS verified

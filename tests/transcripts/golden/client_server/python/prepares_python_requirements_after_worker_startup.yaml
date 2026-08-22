@@ -1,7 +1,6 @@
 ---
 !same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
 ---
-id: 3
 send:
   python: |
     import importlib.util; import os; import sys
@@ -14,7 +13,6 @@ result:
         True
   isError: false
 ---
-id: 4
 session:
   action: prepare
   requirements:
@@ -28,7 +26,6 @@ result:
         host-side managed resolution accepts named package requirements only
   isError: true
 ---
-id: 5
 send:
   python: |
     sentinel, os.getpid() == worker_pid, importlib.util.find_spec("yaml12") is None
@@ -39,7 +36,6 @@ result:
         (42, True, True)
   isError: false
 ---
-id: 6
 session:
   action: prepare
   requirements:
@@ -51,7 +47,6 @@ result:
       text: "[prepared]"
   isError: false
 ---
-id: 7
 send:
   python: |
     import os; import sys; import yaml12
@@ -63,7 +58,6 @@ result:
         (42, True, True, 'yaml12')
   isError: false
 ---
-id: 8
 session:
   action: restart
 result:
@@ -75,7 +69,6 @@ result:
         [idle]
   isError: false
 ---
-id: 9
 send:
   r: is.null(reticulate::py_require()$python_version)
 result:
@@ -85,7 +78,6 @@ result:
         [1] TRUE
   isError: false
 ---
-id: 10
 send:
   python: |
     import yaml12

@@ -2,6 +2,7 @@ import base64
 import json
 import os
 import re
+import select
 import shutil
 import subprocess
 import tempfile
@@ -23,6 +24,44 @@ class TranscriptWithCompanion:
     transcript: Transcript
     companion_name: str
     companion: YamlStream
+
+
+class FifoCheckpoint:
+    def __init__(self, path: Path) -> None:
+        self.path = path
+        os.mkfifo(path)
+        self.descriptor = os.open(path, os.O_RDWR | os.O_NONBLOCK)
+
+    def close(self) -> None:
+        os.close(self.descriptor)
+
+    def wait(self, description: str) -> None:
+        readable, _, _ = select.select([self.descriptor], [], [], 10)
+        assert readable, f"checkpoint was not reached: {description}"
+        assert os.read(self.descriptor, 1) == b"1"
+
+    def release(self) -> None:
+        assert os.write(self.descriptor, b"1") == 1
+
+
+def checkpoint_uv_environment(
+    temporary: Path,
+    argument: str,
+) -> tuple[dict[str, str], FifoCheckpoint, FifoCheckpoint]:
+    real_uv = shutil.which("uv")
+    assert real_uv is not None, "real uv is required"
+    started = FifoCheckpoint(temporary / "uv-started")
+    release = FifoCheckpoint(temporary / "uv-release")
+    environment = os.environ.copy()
+    environment["RETICULATE_UV"] = str(
+        Path(__file__).parent.parent / "fixtures" / "checkpoint_uv"
+    )
+    environment["MCP_CONSOLE_TEST_REAL_UV"] = real_uv
+    environment["MCP_CONSOLE_TEST_UV_CHECKPOINT_ARGUMENT"] = argument
+    environment["MCP_CONSOLE_TEST_UV_CHECKPOINT_CLAIM"] = str(temporary / "uv-claimed")
+    environment["MCP_CONSOLE_TEST_UV_STARTED"] = str(started.path)
+    environment["MCP_CONSOLE_TEST_UV_RELEASE"] = str(release.path)
+    return environment, started, release
 
 
 def code(source: str) -> str:
@@ -214,7 +253,7 @@ def wait_for_idle_output(
     expected: str,
     description: str,
     **send_arguments: Any,
-) -> int:
+) -> None:
     """Poll the public idle snapshot until a worker event reaches the server."""
     deadline = time.monotonic() + 3
     poll_start = len(client.transcript)
@@ -232,11 +271,35 @@ def wait_for_idle_output(
         time.sleep(0.01)
 
     polls = client.transcript[poll_start:]
-    first_id = polls[0]["id"]
     final_poll = polls[-1]
-    final_poll["id"] = first_id
     client.transcript[poll_start:] = [final_poll]
-    return first_id
+
+
+def wait_for_evaluation_output(
+    client: "McpClient",
+    expected: str,
+    description: str,
+    **send_arguments: Any,
+) -> None:
+    """Poll past a provisional input request and retain the submitted call."""
+    deadline = time.monotonic() + 3
+    poll_start = len(client.transcript)
+    result = client.send(timeout_ms=3_000, **send_arguments)
+    while True:
+        assert result.get("isError") is not True, result
+        content = result["content"]
+        assert len(content) == 1 and content[0]["type"] == "text", content
+        output = content[0]["text"]
+        if output == expected:
+            break
+        assert output == "\n[stdin needed]", repr(output)
+        assert time.monotonic() < deadline, f"{description} did not complete"
+        result = client.send(timeout_ms=3_000)
+
+    calls = client.transcript[poll_start:]
+    submitted = calls[0]
+    submitted["result"] = calls[-1]["result"]
+    client.transcript[poll_start:] = [submitted]
 
 
 def run_this_suite(suite_path: str) -> None:
@@ -285,6 +348,7 @@ class McpClient:
         self.stderr = process.stderr
         self.transcript: Transcript = []
         self._next_request_id = 1
+        self._issued_request_ids: set[int] = set()
 
     def send(self, **arguments: Any) -> ToolResult:
         return self._call_tool("send", **arguments)
@@ -298,7 +362,13 @@ class McpClient:
 
         entry = {}
         if "id" in recorded_message:
-            entry["id"] = recorded_message.pop("id")
+            request_id = recorded_message.pop("id")
+            assert isinstance(request_id, int), message
+            assert request_id not in self._issued_request_ids, (
+                f"JSON-RPC request ID was reused: {request_id}"
+            )
+            self._issued_request_ids.add(request_id)
+            entry["id"] = request_id
         params = recorded_message.get("params")
         if (
             recorded_message.keys() == {"method", "params"}
@@ -328,6 +398,7 @@ class McpClient:
 
     def _receive_many(self, entries: list[TranscriptEntry]) -> None:
         pending = {entry["id"]: entry for entry in entries}
+        assert len(pending) == len(entries), "response batch reused a request ID"
         for _ in entries:
             line = self.stdout.readline()
             assert line, "mcp-console stopped before replying"

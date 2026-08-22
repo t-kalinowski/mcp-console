@@ -73,7 +73,13 @@ def test_initializes_and_lists_tools(binary: Path) -> Transcript:
     stdin_description = " ".join(
         send["inputSchema"]["properties"]["stdin"]["description"].split()
     )
-    assert "Its UTF-8 encoding is queued to worker stdin exactly" in stdin_description
+    for guidance in (
+        "Its UTF-8 encoding is queued exactly",
+        "nonempty text is queued before the code is run",
+        "an already waiting interactive read may consume it before the new cell begins",
+        "Empty text queues nothing",
+    ):
+        assert guidance in stdin_description, guidance
 
     session = tools["session"]
     for guidance in (
