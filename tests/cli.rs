@@ -1,9 +1,13 @@
 use std::fs;
+#[cfg(target_os = "macos")]
+use std::fs::OpenOptions;
 use std::io::{BufRead, BufReader, Read, Write};
 #[cfg(target_os = "macos")]
 use std::net::TcpListener;
 #[cfg(target_os = "macos")]
-use std::os::unix::fs::PermissionsExt;
+use std::os::fd::AsRawFd;
+#[cfg(target_os = "macos")]
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -66,6 +70,68 @@ nchar(long_line_value)
         client.call_console(2, json!({"r": long_line})),
         "[1] 100000\n"
     );
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn stdio_console_waits_for_response_writes_before_later_requests() {
+    let zod = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/zod");
+    let test_directory = TestDirectory::new("response-write-ordering");
+    let mut command = Command::new(env!("CARGO_BIN_EXE_mcp-console"));
+    command
+        .arg("serve")
+        .arg("--worker")
+        .arg(zod)
+        .env("TMPDIR", test_directory.path())
+        .env("ZOD_SIGINT_CHECKPOINT", "1");
+    let mut client = McpClient::spawn(command);
+
+    client.send_console(2, json!({"r": "emit stdout"}));
+    // Zod's 4 MiB response exceeds the macOS pipe capacity. Observe the
+    // response without draining it so its transport write remains in flight.
+    wait_for_readable(
+        client.output.get_ref().as_raw_fd(),
+        Duration::from_secs(5),
+        "first response",
+    );
+    let checkpoint_path = fs::read_dir(test_directory.path())
+        .expect("test directory should be readable")
+        .filter_map(Result::ok)
+        .map(|entry| entry.path().join("zod-sigint-checkpoint"))
+        .find(|path| path.exists())
+        .expect("Zod should create its SIGINT checkpoint before evaluating");
+    let mut checkpoint = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NONBLOCK)
+        .open(checkpoint_path)
+        .expect("SIGINT checkpoint should open");
+
+    // The public interrupt must not reach the worker through that interval.
+    client.send_tool(3, "session", json!({"action": "interrupt"}));
+    assert!(
+        !readable_within(checkpoint.as_raw_fd(), Duration::from_secs(1)),
+        "later request reached the worker before the first response write settled"
+    );
+
+    let first = read_message(&mut client.output);
+    assert_eq!(first["id"], 2);
+    assert_eq!(first["result"]["isError"], false);
+
+    wait_for_readable(
+        checkpoint.as_raw_fd(),
+        Duration::from_secs(5),
+        "delayed SIGINT checkpoint",
+    );
+    let mut signal = [0];
+    checkpoint
+        .read_exact(&mut signal)
+        .expect("SIGINT checkpoint should contain one event");
+    assert_eq!(signal, [b'1']);
+
+    let second = read_message(&mut client.output);
+    assert_eq!(second["id"], 3, "{second}");
+    assert_eq!(second["result"]["isError"], false, "{second}");
+    assert_eq!(response_text(&second), "[interrupt sent]");
 }
 
 #[cfg(target_os = "macos")]
@@ -1025,6 +1091,42 @@ fn wait_for_file(root: &Path, name: &str, timeout: Duration) -> PathBuf {
         }
         assert!(started.elapsed() < timeout, "{name} was not created");
         std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn wait_for_readable(descriptor: std::os::fd::RawFd, timeout: Duration, description: &str) {
+    assert!(
+        readable_within(descriptor, timeout),
+        "{description} did not become readable"
+    );
+}
+
+#[cfg(target_os = "macos")]
+fn readable_within(descriptor: std::os::fd::RawFd, timeout: Duration) -> bool {
+    let timeout = i32::try_from(timeout.as_millis()).expect("poll timeout should fit in i32");
+    let mut descriptor = libc::pollfd {
+        fd: descriptor,
+        events: libc::POLLIN,
+        revents: 0,
+    };
+    loop {
+        // SAFETY: `descriptor` points to one initialized `pollfd` for this call.
+        let result = unsafe { libc::poll(&mut descriptor, 1, timeout) };
+        if result < 0 && std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted {
+            continue;
+        }
+        if result == 0 {
+            return false;
+        }
+        assert!(result > 0, "poll should succeed");
+        assert_ne!(
+            descriptor.revents & (libc::POLLIN | libc::POLLHUP),
+            0,
+            "unexpected poll events: {}",
+            descriptor.revents
+        );
+        return true;
     }
 }
 
