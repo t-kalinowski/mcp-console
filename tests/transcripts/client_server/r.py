@@ -98,15 +98,17 @@ def test_services_r_input_handlers_at_cell_boundaries(binary: Path) -> Transcrip
         assert last_tool_text(client) == "cell end callback\n"
 
         # Register an input handler while its FIFO is empty, then make the
-        # descriptor readable before submitting the next cell. The completed
-        # write is the readiness barrier for the initial boundary turn.
+        # descriptor readable before submitting the next cell. Whether the
+        # handler runs while idle or during the initial boundary turn, the
+        # submitted source must observe its state change.
         # fmt: r
         r = code(r"""
             dyn.load("./mcp_test_input_handler.so")
+            cell_start_callback_ran <- FALSE
             invisible(.Call(
               "mcp_test_register_input_handler",
               file.path(tempdir(), "cell-start-handler-fifo"),
-              function() cat("cell start callback\n")
+              function() cell_start_callback_ran <<- TRUE
             ))
             """)
         client.send(r=r)
@@ -118,8 +120,8 @@ def test_services_r_input_handlers_at_cell_boundaries(binary: Path) -> Transcrip
             client,
         )
         fifo.write_bytes(b"x")
-        client.send(r='cat("cell body\\n")')
-        assert last_tool_text(client) == "cell start callback\ncell body\n"
+        client.send(r='cat(cell_start_callback_ran, "\\ncell body\\n", sep = "")')
+        assert last_tool_text(client) == "TRUE\ncell body\n"
         return client._finish()
 
 
@@ -147,7 +149,9 @@ def test_services_later_callbacks_while_idle(binary: Path) -> Transcript:
     client.send(r=r)
     release_worker_callback_gate(client, "idle callback")
     client.send(r="idle_value")
-    assert last_tool_text(client) == "idle callback\n[1] 42\n"
+    assert last_tool_text(client) == (
+        "idle callback\n[output produced while idle]\n[1] 42\n"
+    )
     return client._finish()
 
 
@@ -434,9 +438,9 @@ def test_routes_input_to_idle_later_callbacks_before_a_cell(binary: Path) -> Tra
         r='cat("cell: ", idle_answer, "\\n", sep = "")',
         stdin="yes\n",
     )
-    assert last_tool_text(client) == ('[input requested: "later> "]\ncell: yes\n'), (
-        repr(last_tool_text(client))
-    )
+    assert last_tool_text(client) == (
+        '[input requested: "later> "]\n[output produced while idle]\ncell: yes\n'
+    ), repr(last_tool_text(client))
     return client._finish()
 
 
@@ -1149,8 +1153,14 @@ def test_interrupts_running_r_evaluation(binary: Path) -> Transcript:
 
             client.session(action="interrupt")
             assert last_tool_text(client) == "[interrupt sent]"
-            client.send(r="6 * 7")
-            assert last_tool_text(client) == "\n[1] 42\n"
+            # Signal delivery does not determine whether R writes its
+            # interrupt newline while idle or at the next cell boundary. A
+            # silent cell renders the same response under either ownership,
+            # and the following call verifies that the source ran.
+            client.send(r="idle_interrupt_state <- 42L")
+            assert last_tool_text(client) == "\n"
+            client.send(r="idle_interrupt_state")
+            assert last_tool_text(client) == "[1] 42\n"
 
             # Boundary checks must not process elapsed-time limits when no
             # interrupt is pending; R resets the limit when the cell begins.

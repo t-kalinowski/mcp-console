@@ -48,6 +48,7 @@ impl Worker {
         &mut self,
         cell: crate::cell::Cell,
         _evaluation: std::sync::Arc<super::Evaluation>,
+        _capture_idle_prelude: bool,
     ) -> Result<(), String> {
         let _ = cell;
         unreachable!("unsupported workers cannot start")
@@ -57,10 +58,10 @@ impl Worker {
         unreachable!("unsupported workers cannot start")
     }
 
-    pub(super) fn idle_response_boundary(
+    pub(super) fn idle_response_snapshot(
         &self,
         _output: &super::OutputTape,
-    ) -> Result<super::IdleResponseBoundary, String> {
+    ) -> Result<super::IdleResponseSnapshot, String> {
         unreachable!("unsupported workers cannot start")
     }
 

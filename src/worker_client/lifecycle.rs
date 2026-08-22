@@ -125,6 +125,24 @@ struct RestartContext {
     evaluation: Option<RestartReservation>,
 }
 
+struct RestartFailure {
+    message: String,
+    response: Response,
+}
+
+impl RestartFailure {
+    fn new(message: String) -> Self {
+        Self {
+            message,
+            response: Response::default(),
+        }
+    }
+
+    fn with_response(message: String, response: Response) -> Self {
+        Self { message, response }
+    }
+}
+
 #[derive(Clone, Default)]
 pub(super) struct ProcessStopHandles {
     worker: Option<platform::WorkerShutdownHandle>,
@@ -215,7 +233,7 @@ impl Client {
         requirements: super::Requirements,
         grace: Duration,
     ) -> Result<Response, String> {
-        let restart = if requirements.duckdb.is_empty()
+        let mut restart = if requirements.duckdb.is_empty()
             && requirements.python.is_empty()
             && requirements.r.is_empty()
         {
@@ -225,6 +243,7 @@ impl Client {
         };
         if let Err(mut error) = restart.processes.shutdown(restart.deadline) {
             let retirement = self.finish_worker_retirement();
+            let retired_worker = matches!(retirement, Ok(WorkerRetirement::Stopped { .. }));
             let outcome = match retirement {
                 Ok(WorkerRetirement::Stopped {
                     outcome,
@@ -242,21 +261,48 @@ impl Client {
                     None
                 }
             };
-            self.fail_restart(restart.deadline)?;
+            let mut response =
+                match self.settle_restart_evaluation(restart.evaluation.take(), retired_worker) {
+                    Ok(response) => response,
+                    Err(settlement) => {
+                        error.push_str(&format!(
+                            "; additionally failed to settle evaluation response ownership: {}",
+                            settlement.message
+                        ));
+                        settlement.response
+                    }
+                };
+            let transition = self.fail_restart(restart.deadline);
             self.0
                 .output
                 .push_failure(SendFailure::from(error).worker_outcome(outcome));
-            return Ok(self.0.output.take());
+            response.extend(self.0.output.take());
+            return Ok(self.retain_transition_result(transition, response));
         }
-        match self.replace_worker(restart.evaluation, restart.generation.clone()) {
+        match self.replace_worker(&mut restart.evaluation, restart.generation.clone()) {
             Ok(response) => {
-                self.finish_restart(&restart.generation)?;
-                Ok(response)
+                let transition = self.finish_restart(&restart.generation);
+                Ok(self.retain_transition_result(transition, response))
             }
-            Err(error) => {
-                self.fail_restart(restart.deadline)?;
-                self.0.output.push_failure(SendFailure::from(error));
-                Ok(self.0.output.take())
+            Err(mut failure) => {
+                if restart.evaluation.is_some() {
+                    match self.settle_restart_evaluation(restart.evaluation.take(), false) {
+                        Ok(response) => failure.response.extend(response),
+                        Err(settlement) => {
+                            failure.message.push_str(&format!(
+                                "; additionally failed to settle evaluation response ownership: {}",
+                                settlement.message
+                            ));
+                            failure.response.extend(settlement.response);
+                        }
+                    }
+                }
+                let transition = self.fail_restart(restart.deadline);
+                self.0
+                    .output
+                    .push_failure(SendFailure::from(failure.message));
+                failure.response.extend(self.0.output.take());
+                Ok(self.retain_transition_result(transition, failure.response))
             }
         }
     }
@@ -417,16 +463,16 @@ impl Client {
     /// can be published after the stopped notice below.
     fn replace_worker(
         &self,
-        evaluation: Option<RestartReservation>,
+        evaluation: &mut Option<RestartReservation>,
         generation: WorkerGeneration,
-    ) -> Result<Response, String> {
+    ) -> Result<Response, RestartFailure> {
         let mut worker = self
             .0
             .worker
             .lock()
-            .map_err(|_| "worker lock poisoned".to_string())?;
-        self.ensure_restarting()?;
-        let retirement = worker.finish_retirement()?;
+            .map_err(|_| RestartFailure::new("worker lock poisoned".to_string()))?;
+        self.ensure_restarting().map_err(RestartFailure::new)?;
+        let retirement = worker.finish_retirement().map_err(RestartFailure::new)?;
         if matches!(retirement, WorkerRetirement::NeverStarted) {
             *worker = WorkerState::Stopped;
         }
@@ -438,60 +484,22 @@ impl Client {
         {
             self.0.output.push_notice_line(outcome.diagnostic());
         }
-        let (old_output, post_completion_output) = evaluation.as_ref().map_or_else(
-            || (self.0.output.take(), Response::default()),
-            |evaluation| evaluation.take_output(&self.0.output),
-        );
         drop(worker);
 
-        let mut response = Response::default();
-        let mut wait_for_send = None;
-        let mut interrupted_notice = None;
-        if let Some(evaluation) = evaluation {
-            let unfinished = evaluation.unfinished();
-            if unfinished {
-                interrupted_notice = Some(evaluation.active_stopped_notice());
-            }
-            if evaluation.waiting {
-                let mut send_output = old_output;
-                if unfinished {
-                    send_output.push_notice(evaluation.stopped_notice());
-                    if retired_worker {
-                        send_output.push_notice(super::output::WORKER_STOPPED_NOTICE);
-                    }
-                    send_output.mark_error();
-                }
-                match evaluation.deliver(send_output)? {
-                    RestartDelivery::Waiting(acknowledged) => {
-                        wait_for_send = Some(acknowledged);
-                    }
-                    RestartDelivery::Unclaimed(output) => response.extend(output),
-                }
-            } else {
-                response.extend(old_output);
-            }
-        } else {
-            response.extend(old_output);
-        }
-        if let Some(acknowledged) = wait_for_send
-            && let Ok(ResponseAcknowledgment::Unclaimed(output)) = acknowledged.recv()
-        {
-            response.extend(output);
-        }
-        response.extend_at_boundary(post_completion_output);
-        if let Some(notice) = interrupted_notice {
-            response.push_notice(notice);
-        }
-        if retired_worker {
-            response.push_notice(super::output::WORKER_STOPPED_NOTICE);
-        }
+        let mut response = self.settle_restart_evaluation(evaluation.take(), retired_worker)?;
 
-        let mut worker = self
-            .0
-            .worker
-            .lock()
-            .map_err(|_| "worker lock poisoned".to_string())?;
-        self.ensure_restarting()?;
+        let mut worker = match self.0.worker.lock() {
+            Ok(worker) => worker,
+            Err(_) => {
+                return Err(RestartFailure::with_response(
+                    "worker lock poisoned".to_string(),
+                    response,
+                ));
+            }
+        };
+        if let Err(error) = self.ensure_restarting() {
+            return Err(RestartFailure::with_response(error, response));
+        }
         response.push_notice_line(super::output::WORKER_STARTING_NOTICE);
 
         let completion_generation = generation.clone();
@@ -514,6 +522,99 @@ impl Client {
         response.extend(self.0.output.take());
         response.push_notice(super::output::WORKER_IDLE_NOTICE);
         Ok(response)
+    }
+
+    /// Settles one reserved evaluation before restart publishes its own response.
+    fn settle_restart_evaluation(
+        &self,
+        mut evaluation: Option<RestartReservation>,
+        retired_worker: bool,
+    ) -> Result<Response, RestartFailure> {
+        let (old_output, post_completion_output) = evaluation.as_mut().map_or_else(
+            || (self.0.output.take(), Response::default()),
+            |evaluation| evaluation.take_output(&self.0.output),
+        );
+
+        let mut response = Response::default();
+        let mut wait_for_send = None;
+        let mut output_after_delivery = Response::default();
+        let mut waiting_response_includes_stopped = false;
+        let mut reclaimed_worker_stopped = false;
+        let mut interrupted_notice = None;
+        let mut settlement_error = None;
+        if let Some(mut evaluation) = evaluation {
+            let unfinished = evaluation.unfinished();
+            if unfinished {
+                interrupted_notice = Some(evaluation.active_stopped_notice());
+            }
+            if let Some(delivery) = evaluation.take_pending_delivery() {
+                wait_for_send = Some(delivery);
+                output_after_delivery = old_output;
+            } else if evaluation.waiting {
+                let mut send_output = old_output;
+                if unfinished {
+                    send_output.push_notice(evaluation.stopped_notice());
+                    if retired_worker {
+                        send_output.push_notice(super::output::WORKER_STOPPED_NOTICE);
+                        waiting_response_includes_stopped = true;
+                    }
+                    send_output.mark_error();
+                }
+                match evaluation.deliver(send_output) {
+                    Ok(RestartDelivery::Waiting(acknowledged)) => {
+                        wait_for_send = Some(acknowledged);
+                    }
+                    Ok(RestartDelivery::Unclaimed(output)) => {
+                        response.extend(output);
+                        reclaimed_worker_stopped = waiting_response_includes_stopped;
+                    }
+                    Err(failure) => {
+                        response.extend(failure.response);
+                        reclaimed_worker_stopped = waiting_response_includes_stopped;
+                        settlement_error = Some(failure.message);
+                    }
+                }
+            } else {
+                response.extend(old_output);
+            }
+        } else {
+            response.extend(old_output);
+        }
+        if let Some(acknowledged) = wait_for_send {
+            match acknowledged.recv().expect(
+                "a response delivery sender must return its owned response before disconnecting",
+            ) {
+                ResponseAcknowledgment::Delivered => {}
+                ResponseAcknowledgment::Unclaimed(output) => {
+                    response.extend(output);
+                    reclaimed_worker_stopped = waiting_response_includes_stopped;
+                }
+            }
+        }
+        response.extend_logical_region(output_after_delivery);
+        response.extend_logical_region(post_completion_output);
+        if let Some(notice) = interrupted_notice {
+            response.push_notice(notice);
+        }
+        if retired_worker && !reclaimed_worker_stopped {
+            response.push_notice(super::output::WORKER_STOPPED_NOTICE);
+        }
+        match settlement_error {
+            Some(error) => Err(RestartFailure::with_response(error, response)),
+            None => Ok(response),
+        }
+    }
+
+    fn retain_transition_result(
+        &self,
+        transition: Result<(), String>,
+        mut response: Response,
+    ) -> Response {
+        if let Err(error) = transition {
+            self.0.output.push_failure(SendFailure::from(error));
+            response.extend(self.0.output.take());
+        }
+        response
     }
 
     fn finish_worker_retirement(&self) -> Result<WorkerRetirement, String> {
@@ -835,5 +936,103 @@ impl Client {
         })
         .await
         .map_err(|error| format!("process shutdown task failed: {error}"))?
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::worker_client::evaluation::EvaluationWait;
+    use crate::worker_client::output::{Content, SendResponse, render_response};
+    use crate::worker_protocol::ConsoleChannel;
+
+    #[tokio::test]
+    async fn replacement_failure_preserves_an_unclaimed_assembled_response() {
+        let client = Client::with_arguments(
+            std::path::PathBuf::from("unused-worker"),
+            Vec::new(),
+            None,
+            None,
+        );
+        let evaluation = Arc::new(super::super::Evaluation::new(
+            crate::transcript::Transcript::new(),
+            None,
+            client.0.output.clone(),
+            Response::default(),
+        ));
+        evaluation.complete_cell(Ok(()));
+        let claim = evaluation.claim().unwrap();
+        let EvaluationWait::Completed(response) =
+            evaluation.wait(claim, Duration::ZERO).await.unwrap()
+        else {
+            panic!("completed evaluation did not assemble its response")
+        };
+        let response = render_response(SendResponse::Completed(response));
+        let mut reservation = Some(evaluation.reserve_for_restart().unwrap());
+        let failure = match client.replace_worker(&mut reservation, WorkerGeneration::new()) {
+            Ok(_) => panic!("replacement unexpectedly succeeded outside a restart"),
+            Err(failure) => failure,
+        };
+        assert_eq!(failure.message, "worker restart state changed");
+        assert!(reservation.is_some());
+        let (_, _, delivery) = response.into_parts();
+        delivery.unwrap().unclaimed();
+
+        let recovered = client
+            .settle_restart_evaluation(reservation.take(), false)
+            .unwrap_or_else(|failure| panic!("{}", failure.message));
+        let (content, is_error, delivery) = recovered.into_parts();
+
+        assert!(!is_error);
+        assert!(delivery.is_none());
+        assert!(matches!(content.as_slice(), [Content::Text(text)] if text == "[done]"));
+        let (remaining, is_error, delivery) = client.0.output.take().into_parts();
+        assert!(remaining.is_empty());
+        assert!(!is_error);
+        assert!(delivery.is_none());
+    }
+
+    #[tokio::test]
+    async fn failed_restart_excludes_a_delivered_response_but_keeps_later_output() {
+        let client = Client::with_arguments(
+            std::path::PathBuf::from("unused-worker"),
+            Vec::new(),
+            None,
+            None,
+        );
+        let evaluation = Arc::new(super::super::Evaluation::new(
+            crate::transcript::Transcript::new(),
+            None,
+            client.0.output.clone(),
+            Response::default(),
+        ));
+        evaluation.complete_cell(Ok(()));
+        let claim = evaluation.claim().unwrap();
+        let EvaluationWait::Completed(response) =
+            evaluation.wait(claim, Duration::ZERO).await.unwrap()
+        else {
+            panic!("completed evaluation did not assemble its response")
+        };
+        let response = render_response(SendResponse::Completed(response));
+        client
+            .0
+            .output
+            .push_console_text(ConsoleChannel::Output, "later output".to_string());
+        let reservation = evaluation.reserve_for_restart().unwrap();
+        let (_, _, delivery) = response.into_parts();
+        delivery.unwrap().delivered();
+
+        let recovered = client
+            .settle_restart_evaluation(Some(reservation), false)
+            .unwrap_or_else(|failure| panic!("{}", failure.message));
+        let (content, is_error, delivery) = recovered.into_parts();
+
+        assert!(!is_error);
+        assert!(delivery.is_none());
+        assert!(matches!(content.as_slice(), [Content::Text(text)] if text == "later output"));
+        let (remaining, is_error, delivery) = client.0.output.take().into_parts();
+        assert!(remaining.is_empty());
+        assert!(!is_error);
+        assert!(delivery.is_none());
     }
 }

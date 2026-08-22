@@ -15,6 +15,7 @@ from typing import Any, TextIO
 READ_FD_ENV = "MCP_CONSOLE_SIDEBAND_READ_FD"
 WRITE_FD_ENV = "MCP_CONSOLE_SIDEBAND_WRITE_FD"
 LARGE_OUTPUT_SIZE = 2 * 1024 * 1024
+PENDING_TEXT_BUDGET = 8 * 1024 * 1024
 PNG_1X1 = (
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42Y"
     "AAAAASUVORK5CYII="
@@ -386,6 +387,11 @@ def main() -> None:
         if source == "exit unexpectedly":
             os._exit(86)
 
+        if source == "overflow console output":
+            send_output(writer, "x" * (PENDING_TEXT_BUDGET + 7))
+            send(writer, {"kind": "completed"})
+            continue
+
         if source == "exit zero":
             os._exit(0)
 
@@ -449,19 +455,24 @@ def main() -> None:
             assert os.waitstatus_to_exitcode(status) == 0
             continue
 
-        if source == "start background sideband":
+        if source == "start background sideband" or source.startswith(
+            "start background sideband: "
+        ):
+            marker = source.removeprefix("start background sideband")
+            marker = marker.removeprefix(": ")
+            suffix = f"-{marker}" if marker else ""
             child = os.fork()
             if child == 0:
                 for descriptor in (0, 1, 2):
                     os.close(descriptor)
-                release = temporary / "zod-release-background-sideband"
+                release = temporary / f"zod-release-background-sideband{suffix}"
                 while not release.exists():
                     time.sleep(0.01)
                 send_output(writer, "zod background sideband\n")
                 wait_for_server_to_process_sideband(reader, writer)
-                (temporary / "zod-background-sideband-emitted").touch()
+                (temporary / f"zod-background-sideband-emitted{suffix}").touch()
                 os._exit(0)
-            (temporary / "zod-background-sideband-started").touch()
+            (temporary / f"zod-background-sideband-started{suffix}").touch()
             send(writer, {"kind": "completed"})
             child_pid, status = os.waitpid(child, 0)
             assert child_pid == child
@@ -530,6 +541,15 @@ def main() -> None:
             stdin = input()
             send(writer, {"kind": "input_received"})
             send_output(writer, f"zod stdin: {stdin}\n")
+            send(writer, {"kind": "completed"})
+            continue
+
+        if source == "language error":
+            send_output(
+                writer,
+                "zod language error\n",
+                ConsoleKind.DIAGNOSTIC,
+            )
             send(writer, {"kind": "completed"})
             continue
 
@@ -732,6 +752,12 @@ def main() -> None:
             time.sleep(0.25)
         elif source == "complete after release":
             (temporary / "zod-evaluation-started").touch()
+            while not (temporary / "zod-release-evaluation").exists():
+                time.sleep(0.01)
+        elif source == "output then complete after release":
+            send_output(writer, "zod cell output before completion\n")
+            wait_for_server_to_process_sideband(reader, writer)
+            (temporary / "zod-cell-output-processed").touch()
             while not (temporary / "zod-release-evaluation").exists():
                 time.sleep(0.01)
         elif source != "echo":

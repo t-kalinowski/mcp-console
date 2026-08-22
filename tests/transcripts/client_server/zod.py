@@ -27,6 +27,7 @@ from _support import (
 
 PLATFORMS = {"darwin"}
 LARGE_OUTPUT_SIZE = 2 * 1024 * 1024
+PENDING_TEXT_BUDGET = 8 * 1024 * 1024
 PNG_1X1 = (
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42Y"
     "AAAAASUVORK5CYII="
@@ -1671,6 +1672,35 @@ def last_tool_text(client: McpClient) -> str:
     return result["content"][0]["text"]
 
 
+def test_bounds_pending_output_and_resets_after_completion(
+    binary: Path,
+) -> Transcript:
+    zod = Path(__file__).resolve().parents[2] / "fixtures" / "zod"
+    client = McpClient(
+        binary,
+        ("serve", "--worker", str(zod)),
+    )
+    client._initialize_and_list_tools()
+
+    client.send(r="overflow console output")
+    output = last_tool_text(client)
+    retained = "x" * PENDING_TEXT_BUDGET
+    notice = (
+        "\n[output truncated: omitted 7 text bytes and "
+        "0 encoded image bytes across 1 event]"
+    )
+    assert output == retained + notice, (
+        f"unexpected bounded output: length={len(output)}, tail={output[-200:]!r}"
+    )
+    client.transcript[-1]["result"]["content"][0]["text"] = (
+        f"<retained {PENDING_TEXT_BUDGET} text bytes>{notice}"
+    )
+
+    client.send(r="echo")
+    assert last_tool_text(client) == "zod: echo\n"
+    return client._finish()
+
+
 def assert_large_output(output: str, prefix: str) -> None:
     expected = prefix + ("x" * LARGE_OUTPUT_SIZE)
     assert output.startswith(expected), (
@@ -2124,6 +2154,7 @@ def test_restart_interrupts_waiting_send(binary: Path) -> Transcript:
             environment,
         )
         client._initialize_and_list_tools()
+        expose_idle_sideband_output(client, temporary_path)
 
         waiting = client._start_send(
             r="emit output and image before completion",
@@ -2172,7 +2203,14 @@ def test_restart_interrupts_waiting_send(binary: Path) -> Transcript:
         }, restarted
         assert waiting["result"] == {
             "content": [
-                {"type": "text", "text": "before pending image\n"},
+                {
+                    "type": "text",
+                    "text": (
+                        "zod background sideband\n"
+                        "[output produced while idle]\n"
+                        "before pending image\n"
+                    ),
+                },
                 {"type": "image", "data": PNG_1X1, "mimeType": "image/png"},
                 {
                     "type": "text",
@@ -2961,7 +2999,33 @@ def test_shuts_down_stalled_worker(binary: Path) -> Transcript:
                 stop_process(client.process)
 
 
-def test_drains_background_sideband_while_idle(binary: Path) -> Transcript:
+def expose_idle_sideband_output(
+    client: McpClient,
+    temporary_path: Path,
+    marker: str | None = None,
+) -> None:
+    suffix = f"-{marker}" if marker else ""
+    source = (
+        f"start background sideband: {marker}"
+        if marker
+        else "start background sideband"
+    )
+    client.send(r=source)
+    assert last_tool_text(client) == "[done]", repr(last_tool_text(client))
+    started = wait_for_marker(
+        temporary_path,
+        f"zod-background-sideband-started{suffix}",
+        client,
+    )
+    (started.parent / f"zod-release-background-sideband{suffix}").touch()
+    wait_for_marker(
+        temporary_path,
+        f"zod-background-sideband-emitted{suffix}",
+        client,
+    )
+
+
+def test_demarcates_idle_prelude_across_cell_outcomes(binary: Path) -> Transcript:
     zod = Path(__file__).resolve().parents[2] / "fixtures" / "zod"
     with tempfile.TemporaryDirectory() as temporary_directory:
         temporary_path = Path(temporary_directory)
@@ -2975,23 +3039,82 @@ def test_drains_background_sideband_while_idle(binary: Path) -> Transcript:
         passed = False
         try:
             client._initialize_and_list_tools()
-            client.send(r="start background sideband")
-            assert last_tool_text(client) == "[done]"
-            started = wait_for_marker(
-                temporary_path,
-                "zod-background-sideband-started",
-                client,
-            )
 
-            (started.parent / "zod-release-background-sideband").touch()
-            wait_for_marker(
-                temporary_path,
-                "zod-background-sideband-emitted",
-                client,
-            )
-
+            expose_idle_sideband_output(client, temporary_path, "success")
             client.send(r="echo")
-            assert last_tool_text(client) == ("zod background sideband\nzod: echo\n")
+            assert last_tool_text(client) == (
+                "zod background sideband\n[output produced while idle]\nzod: echo\n"
+            )
+
+            expose_idle_sideband_output(client, temporary_path, "timeout")
+            timed_out = client._start_send(
+                r="output then complete after release",
+                timeout_ms=1_000,
+            )
+            processed = wait_for_marker(
+                temporary_path,
+                "zod-cell-output-processed",
+                client,
+            )
+            client._receive(timed_out)
+            assert timed_out["result"] == {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": (
+                            "zod background sideband\n"
+                            "[output produced while idle]\n"
+                            "zod cell output before completion\n\n"
+                            "[running]"
+                        ),
+                    }
+                ],
+                "isError": False,
+            }, timed_out
+
+            (processed.parent / "zod-release-evaluation").touch()
+            client.send(timeout_ms=3_000)
+            assert last_tool_text(client) == (
+                "zod: output then complete after release\n"
+            ), repr(last_tool_text(client))
+
+            expose_idle_sideband_output(client, temporary_path, "input")
+            client.send(r="request input", timeout_ms=3_000)
+            assert last_tool_text(client) == (
+                "zod background sideband\n"
+                "[output produced while idle]\n"
+                '[input requested: "zod> "]\n'
+                "[stdin needed]"
+            )
+            client.send(stdin="answer\n", timeout_ms=3_000)
+            assert last_tool_text(client) == "zod stdin: answer\n"
+
+            expose_idle_sideband_output(client, temporary_path, "language-error")
+            client.send(r="language error")
+            assert last_tool_text(client) == (
+                "zod background sideband\n"
+                "[output produced while idle]\n"
+                "zod language error\n"
+            )
+
+            expose_idle_sideband_output(client, temporary_path, "replacement")
+            client.send(r="exit unexpectedly")
+            result = client.transcript[-1]["result"]
+            assert result["isError"] is True, result
+            assert result["content"] == [
+                {
+                    "type": "text",
+                    "text": (
+                        "zod background sideband\n"
+                        "[output produced while idle]\n"
+                        "[worker sideband read failed: worker sideband closed]\n"
+                        "[worker exited with status 86]\n"
+                        "[worker stopped: in-memory state lost]\n"
+                        "[starting new worker]\n"
+                        "[idle]"
+                    ),
+                }
+            ], result
             transcript = client._finish()
             passed = True
             return transcript

@@ -17,6 +17,9 @@ CHECKPOINT_NAME = "mcp-console-scripted-relay-checkpoint"
 RELEASE_NAME = "mcp-console-scripted-relay-release"
 SHUTDOWN_RECEIVED_NAME = "mcp-console-scripted-relay-shutdown-received"
 RETIREMENT_RELEASE_NAME = "mcp-console-scripted-relay-retirement-release"
+PRELUDE_RELEASE_NAME = "mcp-console-scripted-relay-prelude-release"
+PRELUDE_PROCESSED_NAME = "mcp-console-scripted-relay-prelude-processed"
+EVALUATION_OUTPUT_READY_NAME = "mcp-console-scripted-relay-evaluation-output-ready"
 PREPARATION_RECEIVED_NAME = "mcp-console-scripted-relay-preparation-received"
 PREPARATION_RESULT_RELEASE_NAME = (
     "mcp-console-scripted-relay-preparation-result-release"
@@ -49,6 +52,11 @@ PYTHON_VERSION_RESOLUTION_FAILED = {
     "kind": "python_version_resolution_failed",
     "message": "Python requirements are unavailable with a custom worker",
 }
+PENDING_TEXT_BUDGET = 8 * 1024 * 1024
+PNG_1X1 = (
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42Y"
+    "AAAAASUVORK5CYII="
+)
 
 
 class ScriptedRelay:
@@ -353,6 +361,68 @@ def run_pre_marker_r_prepared_replacement(relay: ScriptedRelay) -> None:
     relay.send({"kind": "worker_exited", "code": 0})
 
 
+def run_cancelled_waiting_send(relay: ScriptedRelay) -> None:
+    relay.make_checkpoint(PRELUDE_RELEASE_NAME)
+    relay.make_checkpoint(PRELUDE_PROCESSED_NAME)
+    relay.make_checkpoint(EVALUATION_OUTPUT_READY_NAME)
+    relay.make_checkpoint(SHUTDOWN_RECEIVED_NAME)
+    relay.make_checkpoint(RETIREMENT_RELEASE_NAME)
+    relay.ready()
+
+    readable, _, _ = select.select(
+        [relay.checkpoints[PRELUDE_RELEASE_NAME], sys.stdin.buffer],
+        [],
+        [],
+        WAIT_SECONDS,
+    )
+    assert readable, "test neither released the prelude nor shut down the relay"
+    if sys.stdin.buffer in readable:
+        relay.retire(relay.receive())
+        return
+    relay.wait_for_checkpoint(PRELUDE_RELEASE_NAME)
+
+    relay.send_batch(
+        [
+            {"kind": "console_output", "data": "idle before image\n"},
+            {"kind": "image", "data": PNG_1X1, "mime_type": "image/png"},
+            {"kind": "console_diagnostic", "data": "idle after image\n"},
+            RESOLVE_PYTHON,
+        ]
+    )
+    relay.expect(PYTHON_RESOLUTION_FAILED)
+    relay.notify_checkpoint(PRELUDE_PROCESSED_NAME)
+
+    relay.expect(EVALUATION)
+    cell_prefix = "cell before image\n"
+    relay.send_batch(
+        [
+            {"kind": "console_output", "data": cell_prefix},
+            {"kind": "image", "data": PNG_1X1, "mime_type": "image/png"},
+            {
+                "kind": "console_output",
+                "data": "x" * (PENDING_TEXT_BUDGET + 7),
+            },
+            RESOLVE_PYTHON,
+        ]
+    )
+    relay.expect(PYTHON_RESOLUTION_FAILED)
+    relay.notify_checkpoint(EVALUATION_OUTPUT_READY_NAME)
+
+    command = relay.receive()
+    assert command.get("kind") == "shutdown", command
+    relay.send({"kind": "shutdown_started"})
+    relay.notify_checkpoint(SHUTDOWN_RECEIVED_NAME)
+    relay.wait_for_checkpoint(RETIREMENT_RELEASE_NAME)
+    relay.send_batch(
+        [
+            {"kind": "stdout_closed"},
+            {"kind": "stderr_closed"},
+            {"kind": "worker_sideband_closed"},
+            {"kind": "worker_exited", "code": 0},
+        ]
+    )
+
+
 def run_fatal(relay: ScriptedRelay) -> None:
     relay.wait_for_release()
     relay.send({"kind": "fatal", "message": "scripted relay failure"})
@@ -410,6 +480,7 @@ def main() -> None:
         "blocked_live_r_resolver_shutdown": run_blocked_live_r_resolver_shutdown,
         "late_r_prepared_retirement": run_late_r_prepared_retirement,
         "pre_marker_r_prepared_replacement": run_pre_marker_r_prepared_replacement,
+        "cancelled_waiting_send": run_cancelled_waiting_send,
         "fatal": run_fatal,
         "truncated": run_truncated,
         "exit_zero": run_exit_zero,

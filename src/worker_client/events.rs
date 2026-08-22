@@ -79,6 +79,7 @@ impl WorkerOperationState {
     pub(super) fn begin_cell(
         &self,
         evaluation: Arc<Evaluation>,
+        capture_idle_prelude: bool,
     ) -> Result<mpsc::Receiver<Result<OperationResult, String>>, String> {
         let (result, receiver) = mpsc::channel();
         let mut state = self.lock()?;
@@ -86,10 +87,15 @@ impl WorkerOperationState {
         if state.idle_input.take().is_some() {
             evaluation.resume_input_request()?;
         }
-        state.operation = Some(Operation {
-            kind: OperationKind::Cell(evaluation),
+        let mut operation = Some(Operation {
+            kind: OperationKind::Cell(evaluation.clone()),
             result: Some(result),
         });
+        if capture_idle_prelude {
+            evaluation.capture_prelude_before(|| state.operation = operation.take())?;
+        } else {
+            state.operation = operation.take();
+        }
         Ok(receiver)
     }
 
@@ -162,29 +168,28 @@ impl WorkerOperationState {
         Ok(self.lock()?.failure.is_some())
     }
 
-    pub(super) fn idle_response_boundary(
+    pub(super) fn idle_response_snapshot(
         &self,
         output: &OutputTape,
-    ) -> Result<super::IdleResponseBoundary, String> {
+    ) -> Result<super::IdleResponseSnapshot, String> {
         let state = self.lock()?;
-        Ok(super::IdleResponseBoundary {
-            checkpoint: output.checkpoint(),
+        Ok(super::IdleResponseSnapshot {
+            cut: output.cut(),
             failure: state.failure.clone(),
             input_requested: state.idle_input.is_some(),
         })
     }
 
-    fn route(&self) -> Result<Route, String> {
+    fn with_route<T>(&self, publish: impl FnOnce(Route) -> Result<T, String>) -> Result<T, String> {
         let state = self.lock()?;
-        Ok(
-            match state.operation.as_ref().map(|operation| &operation.kind) {
-                Some(OperationKind::Cell(evaluation)) => Route::Cell(evaluation.clone()),
-                Some(OperationKind::PrepareR { .. } | OperationKind::PreparePython { .. }) => {
-                    Route::Preparation
-                }
-                None => Route::Idle,
-            },
-        )
+        let route = match state.operation.as_ref().map(|operation| &operation.kind) {
+            Some(OperationKind::Cell(evaluation)) => Route::Cell(evaluation.clone()),
+            Some(OperationKind::PrepareR { .. } | OperationKind::PreparePython { .. }) => {
+                Route::Preparation
+            }
+            None => Route::Idle,
+        };
+        publish(route)
     }
 
     fn input_requested(
@@ -683,28 +688,28 @@ fn handle_semantic_event(
     use crate::worker_protocol::ConsoleChannel::{Diagnostic, Output};
 
     match event {
-        RelayEvent::ConsoleOutput { data } => match operation.route()? {
+        RelayEvent::ConsoleOutput { data } => operation.with_route(|route| match route {
             Route::Cell(evaluation) => evaluation.output(Output, data),
             Route::Preparation | Route::Idle => {
                 output.push_console_text(Output, data);
                 Ok(())
             }
-        },
-        RelayEvent::ConsoleDiagnostic { data } => match operation.route()? {
+        }),
+        RelayEvent::ConsoleDiagnostic { data } => operation.with_route(|route| match route {
             Route::Cell(evaluation) => evaluation.output(Diagnostic, data),
             Route::Preparation | Route::Idle => {
                 output.push_console_text(Diagnostic, data);
                 Ok(())
             }
-        },
-        RelayEvent::Image { data, mime_type } => match operation.route()? {
+        }),
+        RelayEvent::Image { data, mime_type } => operation.with_route(|route| match route {
             Route::Cell(evaluation) => evaluation.image(data, mime_type),
             Route::Preparation | Route::Idle => {
                 crate::transcript::validate_image_data(&data)?;
                 output.push_image(data, mime_type, None);
                 Ok(())
             }
-        },
+        }),
         RelayEvent::InputRequested { prompt } => {
             let rendered = serde_json::to_string(&prompt)
                 .map_err(|error| format!("failed to render worker input prompt: {error}"))?;
@@ -752,5 +757,81 @@ fn handle_semantic_event(
         | RelayEvent::WorkerExited { .. }
         | RelayEvent::WorkerSignaled { .. }
         | RelayEvent::Fatal { .. } => unreachable!("non-semantic relay event reached dispatcher"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::worker_client::EvaluationWait;
+    use crate::worker_client::output::{Content, Response, SendResponse, render_response};
+    use crate::worker_protocol::ConsoleChannel::Output;
+
+    #[tokio::test]
+    async fn cell_admission_captures_an_inflight_idle_route_as_prelude() {
+        let output = OutputTape::new();
+        let operation = WorkerOperationState::new();
+        let evaluation = Arc::new(Evaluation::new(
+            crate::transcript::Transcript::new(),
+            None,
+            output.clone(),
+            Response::default(),
+        ));
+        let claim = evaluation.claim().unwrap();
+        let (routed, routed_rx) = mpsc::sync_channel(0);
+        let (release, release_rx) = mpsc::sync_channel(0);
+
+        let idle_operation = operation.clone();
+        let idle_output = output.clone();
+        let idle = thread::spawn(move || {
+            idle_operation.with_route(|route| {
+                assert!(matches!(route, Route::Idle));
+                routed.send(()).unwrap();
+                release_rx.recv().unwrap();
+                idle_output.push_console_text(Output, "idle output");
+                Ok(())
+            })
+        });
+        routed_rx.recv().unwrap();
+
+        let admitting_operation = operation.clone();
+        let admitting_evaluation = evaluation.clone();
+        let (contending, contending_rx) = mpsc::sync_channel(0);
+        let admission = thread::spawn(move || {
+            assert!(matches!(
+                admitting_operation.0.try_lock(),
+                Err(std::sync::TryLockError::WouldBlock)
+            ));
+            contending.send(()).unwrap();
+            admitting_operation.begin_cell(admitting_evaluation, true)
+        });
+        contending_rx.recv().unwrap();
+        release.send(()).unwrap();
+        idle.join().unwrap().unwrap();
+        drop(admission.join().unwrap().unwrap());
+
+        operation
+            .with_route(|route| match route {
+                Route::Cell(evaluation) => evaluation.output(Output, "cell output".to_string()),
+                Route::Preparation | Route::Idle => panic!("cell route was not installed"),
+            })
+            .unwrap();
+        evaluation.complete_cell(Ok(()));
+        let EvaluationWait::Completed(response) = evaluation
+            .wait(claim, std::time::Duration::ZERO)
+            .await
+            .unwrap()
+        else {
+            panic!("cell did not complete")
+        };
+        let response = render_response(SendResponse::Completed(response));
+        let (content, is_error, delivery) = response.into_parts();
+        assert!(!is_error);
+        assert!(matches!(
+            content.as_slice(),
+            [Content::Text(text)]
+                if text == "idle output\n[output produced while idle]\ncell output"
+        ));
+        delivery.unwrap().delivered();
     }
 }

@@ -45,6 +45,7 @@ result:
     - type: text
       text: |
         idle callback
+        [output produced while idle]
         [1] 42
   isError: false
 ...

@@ -1,6 +1,15 @@
 use std::sync::mpsc::SyncSender;
 use std::sync::{Arc, Mutex};
 
+/// Maximum UTF-8 text and raw direct-output bytes retained between drains.
+const MAX_PENDING_TEXT_BYTES: usize = 8 * 1024 * 1024;
+/// Maximum encoded image payload bytes retained between drains.
+const MAX_PENDING_IMAGE_BYTES: usize = 8 * 1024 * 1024;
+/// Maximum image MIME-type bytes retained between drains.
+const MAX_PENDING_IMAGE_METADATA_BYTES: usize = 64 * 1024;
+/// Maximum ordinary text, direct-output, and image events retained between drains.
+const MAX_PENDING_OUTPUT_EVENTS: usize = 4_096;
+
 pub(super) const WORKER_STARTING_NOTICE: &str = "starting new worker";
 const WORKER_STARTING_STATE: &str = "worker starting";
 pub(super) const WORKER_STOPPED_NOTICE: &str = "worker stopped: in-memory state lost";
@@ -14,16 +23,55 @@ pub(super) const ACTIVE_EVALUATION_STOPPED_NOTICE: &str =
 #[derive(Clone)]
 pub(super) struct OutputTape(Arc<Mutex<OutputTapeState>>);
 
-#[derive(Default)]
 struct OutputTapeState {
-    direct_stdout: Vec<u8>,
-    direct_stderr: Vec<u8>,
+    direct_stdout: DirectDecoder,
+    direct_stderr: DirectDecoder,
     next_event: u64,
     events: Vec<(u64, OutputEvent)>,
+    limits: OutputLimits,
+    budget: PendingOutputBudget,
+    /// The truncation summary still open for observations before the next cut.
+    active_truncation: Option<u64>,
 }
 
 #[derive(Clone, Copy)]
-pub(super) struct OutputCheckpoint(u64);
+struct OutputLimits {
+    text_bytes: usize,
+    image_bytes: usize,
+    image_metadata_bytes: usize,
+    events: usize,
+}
+
+impl Default for OutputLimits {
+    fn default() -> Self {
+        Self {
+            text_bytes: MAX_PENDING_TEXT_BYTES,
+            image_bytes: MAX_PENDING_IMAGE_BYTES,
+            image_metadata_bytes: MAX_PENDING_IMAGE_METADATA_BYTES,
+            events: MAX_PENDING_OUTPUT_EVENTS,
+        }
+    }
+}
+
+#[derive(Default)]
+struct PendingOutputBudget {
+    text_bytes: usize,
+    image_bytes: usize,
+    image_metadata_bytes: usize,
+    events: usize,
+    dropping_ordinary_output: bool,
+}
+
+#[derive(Default)]
+struct DirectDecoder {
+    bytes: Vec<u8>,
+    /// Position of the first event contributing to the incomplete scalar.
+    origin: Option<u64>,
+}
+
+/// An opaque position whose only meaning is "all events published before here."
+#[derive(Clone, Copy)]
+pub(super) struct OutputCut(u64);
 
 /// One publication from a directly captured worker file descriptor.
 ///
@@ -43,24 +91,30 @@ enum OutputEvent {
     /// Text from a worker console-text sideband frame.
     WorkerConsoleText {
         channel: crate::worker_protocol::ConsoleChannel,
-        text: String,
+        text: Box<str>,
     },
     /// An image from a worker `image` sideband frame, already persisted when enabled.
     WorkerImage {
-        data: String,
-        mime_type: String,
+        data: Box<str>,
+        mime_type: Box<str>,
         artifact: Option<crate::transcript::Artifact>,
     },
-    /// An unbracketed server-owned lifecycle, state, or input notice.
-    ServerNotice {
-        message: String,
-        /// End the notice with a newline before later worker output arrives.
-        terminate_line: bool,
-    },
+    /// A server-owned lifecycle or input notice, terminated before later output.
+    ServerNotice(String),
     /// A server infrastructure, transport, or protocol failure.
     ///
     /// Language errors are normal evaluation output and do not use this event.
     ServerFailure(SendFailure),
+    /// One bounded summary for ordinary payload discarded in this cut segment.
+    Truncated(Truncation),
+}
+
+#[derive(Default)]
+struct Truncation {
+    text_bytes: usize,
+    image_bytes: usize,
+    image_metadata_bytes: usize,
+    events: usize,
 }
 
 #[cfg(target_os = "macos")]
@@ -88,9 +142,16 @@ pub(super) enum ResponseAcknowledgment {
     Unclaimed(Response),
 }
 
-/// Releases an explicit restart after the interrupted `send` reply is written.
-pub(crate) struct ResponseDelivery(Option<SyncSender<ResponseAcknowledgment>>);
+/// Reports whether an assembled evaluation response reached the MCP transport.
+///
+/// A bounded recovery copy remains owned here after MCP projection so transport
+/// cancellation or write failure can return the complete reply to restart.
+pub(crate) struct ResponseDelivery {
+    acknowledgment: Option<SyncSender<ResponseAcknowledgment>>,
+    unclaimed: Option<Response>,
+}
 
+#[derive(Clone)]
 pub(crate) enum Content {
     Text(String),
     Image {
@@ -98,6 +159,22 @@ pub(crate) enum Content {
         mime_type: String,
         artifact: Option<crate::transcript::Artifact>,
     },
+}
+
+/// The only implementation of public content coalescing and newline projection.
+#[derive(Default)]
+pub(super) struct ResponseBuilder {
+    response: Response,
+}
+
+#[derive(Clone, Copy)]
+pub(super) enum TerminalState {
+    Completed,
+    Running,
+    StdinNeeded,
+    Idle,
+    WorkerStarting,
+    ReplacementReady,
 }
 
 pub(super) enum SendResponse {
@@ -174,43 +251,37 @@ impl Response {
 
     /// Consumes the response for the MCP adapter.
     pub(crate) fn into_parts(mut self) -> (Vec<Content>, bool, Option<ResponseDelivery>) {
-        let content = std::mem::take(&mut self.content);
         let is_error = self.is_error;
         let delivery = self
             .acknowledgment
             .take()
-            .map(|acknowledgment| ResponseDelivery(Some(acknowledgment)));
+            .map(|acknowledgment| ResponseDelivery {
+                acknowledgment: Some(acknowledgment),
+                unclaimed: Some(Response {
+                    content: self.content.clone(),
+                    is_error,
+                    acknowledgment: None,
+                }),
+            });
+        let content = std::mem::take(&mut self.content);
         (content, is_error, delivery)
     }
 
     pub(super) fn extend(&mut self, mut other: Self) {
-        if other.acknowledgment.is_some() {
-            assert!(
-                self.acknowledgment.is_none(),
-                "a response can carry only one acknowledgment"
-            );
-            self.acknowledgment = other.acknowledgment.take();
-        }
-        for content in std::mem::take(&mut other.content) {
-            match content {
-                Content::Text(text) => self.push_text(text),
-                Content::Image {
-                    data,
-                    mime_type,
-                    artifact,
-                } => self.push_image(data, mime_type, artifact),
-            }
-        }
-        self.is_error |= other.is_error;
+        self.with_builder(|builder| builder.append_response(&mut other));
     }
 
-    pub(super) fn extend_at_boundary(&mut self, other: Self) {
-        if matches!(self.content.last(), Some(Content::Text(text)) if !text.ends_with('\n'))
-            && matches!(other.content.first(), Some(Content::Text(_)))
-        {
-            self.push_text("\n");
-        }
-        self.extend(other);
+    /// Appends another logical response region without inserting a server notice.
+    pub(super) fn extend_logical_region(&mut self, other: Self) {
+        self.with_builder(|builder| builder.append_logical_region(other));
+    }
+
+    /// Appends cell output after this response's owned idle prelude.
+    ///
+    /// The canonical builder inserts the separator only when both regions are
+    /// nonempty, preserving images and their order on either side.
+    pub(super) fn extend_cell_after_idle_prelude(&mut self, other: Self) {
+        self.with_builder(|builder| builder.append_cell_after_idle_prelude(other));
     }
 
     pub(super) fn acknowledge_with(&mut self, acknowledgment: SyncSender<ResponseAcknowledgment>) {
@@ -221,31 +292,6 @@ impl Response {
         self.acknowledgment = Some(acknowledgment);
     }
 
-    fn push_text(&mut self, text: impl Into<String>) {
-        let text = text.into();
-        if text.is_empty() {
-            return;
-        }
-        if let Some(Content::Text(output)) = self.content.last_mut() {
-            output.push_str(&text);
-        } else {
-            self.content.push(Content::Text(text));
-        }
-    }
-
-    fn push_image(
-        &mut self,
-        data: String,
-        mime_type: String,
-        artifact: Option<crate::transcript::Artifact>,
-    ) {
-        self.content.push(Content::Image {
-            data,
-            mime_type,
-            artifact,
-        });
-    }
-
     fn is_empty(&self) -> bool {
         self.content.is_empty()
     }
@@ -254,47 +300,222 @@ impl Response {
         self.is_error
     }
 
-    fn text_needs_newline(&self) -> bool {
-        !matches!(self.content.last(), Some(Content::Text(text)) if text.ends_with('\n'))
-    }
-
-    fn push_line(&mut self, text: impl Into<String>) {
-        if !self.is_empty() && self.text_needs_newline() {
-            self.push_text("\n");
-        }
-        self.push_text(text);
-    }
-
     pub(super) fn push_notice(&mut self, message: impl Into<String>) {
-        self.push_line(render_notice(message));
+        self.with_builder(|builder| builder.notice(message));
     }
 
     /// Adds a server notice and ends its line for any output appended later.
     pub(super) fn push_notice_line(&mut self, message: impl Into<String>) {
-        self.push_notice(message);
-        self.push_text("\n");
-    }
-
-    pub(super) fn push_server_failure(&mut self, message: impl Into<String>) {
-        self.push_notice(message);
-        self.mark_error();
+        self.with_builder(|builder| builder.notice_line(message));
     }
 
     pub(super) fn push_tool_error(&mut self, message: impl Into<String>) {
-        self.push_line(message);
-        self.mark_error();
+        self.with_builder(|builder| builder.tool_error(message));
     }
 
     pub(super) fn mark_error(&mut self) {
-        self.is_error = true;
+        self.with_builder(ResponseBuilder::mark_error);
+    }
+
+    fn with_builder(&mut self, operation: impl FnOnce(&mut ResponseBuilder)) {
+        let mut builder = ResponseBuilder::from_response(std::mem::take(self));
+        operation(&mut builder);
+        *self = builder.finish();
+    }
+}
+
+impl ResponseBuilder {
+    pub(super) fn new() -> Self {
+        Self::default()
+    }
+
+    pub(super) fn from_response(response: Response) -> Self {
+        Self { response }
+    }
+
+    pub(super) fn finish(self) -> Response {
+        self.response
+    }
+
+    pub(super) fn text(&mut self, text: impl Into<String>) {
+        let text = text.into();
+        if text.is_empty() {
+            return;
+        }
+        if let Some(Content::Text(output)) = self.response.content.last_mut() {
+            output.push_str(&text);
+        } else {
+            self.response.content.push(Content::Text(text));
+        }
+    }
+
+    pub(super) fn image(
+        &mut self,
+        data: String,
+        mime_type: String,
+        artifact: Option<crate::transcript::Artifact>,
+    ) {
+        self.response.content.push(Content::Image {
+            data,
+            mime_type,
+            artifact,
+        });
+    }
+
+    pub(super) fn append_response(&mut self, other: &mut Response) {
+        if other.acknowledgment.is_some() {
+            assert!(
+                self.response.acknowledgment.is_none(),
+                "a response can carry only one acknowledgment"
+            );
+            self.response.acknowledgment = other.acknowledgment.take();
+        }
+        for content in std::mem::take(&mut other.content) {
+            match content {
+                Content::Text(text) => self.text(text),
+                Content::Image {
+                    data,
+                    mime_type,
+                    artifact,
+                } => self.image(data, mime_type, artifact),
+            }
+        }
+        self.response.is_error |= other.is_error;
+    }
+
+    pub(super) fn append_logical_region(&mut self, mut other: Response) {
+        if matches!(self.response.content.last(), Some(Content::Text(text)) if !text.ends_with('\n'))
+            && matches!(other.content.first(), Some(Content::Text(_)))
+        {
+            self.text("\n");
+        }
+        self.append_response(&mut other);
+    }
+
+    pub(super) fn append_cell_after_idle_prelude(&mut self, mut cell: Response) {
+        if !self.response.is_empty() && !cell.is_empty() {
+            self.notice_line("output produced while idle");
+        }
+        self.append_response(&mut cell);
+    }
+
+    pub(super) fn notice(&mut self, message: impl Into<String>) {
+        self.line(render_notice(message));
+    }
+
+    pub(super) fn notice_line(&mut self, message: impl Into<String>) {
+        self.notice(message);
+        self.text("\n");
+    }
+
+    pub(super) fn server_failure(&mut self, message: impl Into<String>) {
+        self.notice(message);
+        self.mark_error();
+    }
+
+    pub(super) fn tool_error(&mut self, message: impl Into<String>) {
+        self.line(message);
+        self.mark_error();
+    }
+
+    fn truncation(&mut self, truncated: Truncation) {
+        let event = if truncated.events == 1 {
+            "event"
+        } else {
+            "events"
+        };
+        let message = if truncated.image_metadata_bytes == 0 {
+            format!(
+                "output truncated: omitted {} text bytes and {} encoded image bytes across {} {event}",
+                truncated.text_bytes, truncated.image_bytes, truncated.events
+            )
+        } else {
+            format!(
+                "output truncated: omitted {} text bytes, {} encoded image bytes, and {} image metadata bytes across {} {event}",
+                truncated.text_bytes,
+                truncated.image_bytes,
+                truncated.image_metadata_bytes,
+                truncated.events
+            )
+        };
+        self.notice(message);
+    }
+
+    pub(super) fn terminal(&mut self, state: TerminalState) {
+        match state {
+            TerminalState::Completed => {
+                if self.response.is_empty() {
+                    self.notice("done");
+                }
+            }
+            TerminalState::Running => self.state_banner("running"),
+            TerminalState::StdinNeeded => {
+                if self.needs_line_break() {
+                    self.text("\n");
+                }
+                self.text(render_notice("stdin needed"));
+            }
+            TerminalState::Idle => {
+                if !self.response.is_error() {
+                    self.state_banner(WORKER_IDLE_NOTICE);
+                }
+            }
+            TerminalState::WorkerStarting => self.notice(WORKER_STARTING_STATE),
+            TerminalState::ReplacementReady => self.notice(WORKER_IDLE_NOTICE),
+        }
+    }
+
+    pub(super) fn mark_error(&mut self) {
+        self.response.is_error = true;
+    }
+
+    fn line(&mut self, text: impl Into<String>) {
+        if !self.response.is_empty() && self.needs_line_break() {
+            self.text("\n");
+        }
+        self.text(text);
+    }
+
+    fn state_banner(&mut self, state: &str) {
+        self.text("\n");
+        self.text(render_notice(state));
+    }
+
+    fn needs_line_break(&self) -> bool {
+        !matches!(
+            self.response.content.last(),
+            Some(Content::Text(text)) if text.ends_with('\n')
+        )
     }
 }
 
 impl ResponseDelivery {
-    pub(crate) fn complete(mut self) {
-        if let Some(acknowledgment) = self.0.take() {
+    pub(crate) fn delivered(mut self) {
+        self.unclaimed = None;
+        if let Some(acknowledgment) = self.acknowledgment.take() {
             let _ = acknowledgment.send(ResponseAcknowledgment::Delivered);
         }
+    }
+
+    pub(crate) fn unclaimed(mut self) {
+        self.return_unclaimed();
+    }
+
+    fn return_unclaimed(&mut self) {
+        let Some(acknowledgment) = self.acknowledgment.take() else {
+            return;
+        };
+        let response = self
+            .unclaimed
+            .take()
+            .expect("response delivery with an acknowledgment must retain its reply");
+        let _ = acknowledgment.send(ResponseAcknowledgment::Unclaimed(response));
+    }
+}
+
+impl Drop for ResponseDelivery {
+    fn drop(&mut self) {
+        self.return_unclaimed();
     }
 }
 
@@ -313,22 +534,28 @@ impl Drop for Response {
 
 impl OutputTape {
     pub(super) fn new() -> Self {
-        Self(Arc::new(Mutex::new(OutputTapeState::default())))
+        Self::with_limits(OutputLimits::default())
+    }
+
+    fn with_limits(limits: OutputLimits) -> Self {
+        Self(Arc::new(Mutex::new(OutputTapeState::new(limits))))
     }
 
     #[cfg(target_os = "macos")]
     pub(super) fn direct_stdout(&self) -> DirectOutput {
-        DirectOutput {
-            output: self.clone(),
-            stream: DirectOutputStream::Stdout,
-        }
+        self.direct_output(DirectOutputStream::Stdout)
     }
 
     #[cfg(target_os = "macos")]
     pub(super) fn direct_stderr(&self) -> DirectOutput {
+        self.direct_output(DirectOutputStream::Stderr)
+    }
+
+    #[cfg(target_os = "macos")]
+    fn direct_output(&self, stream: DirectOutputStream) -> DirectOutput {
         DirectOutput {
             output: self.clone(),
-            stream: DirectOutputStream::Stderr,
+            stream,
         }
     }
 
@@ -339,7 +566,7 @@ impl OutputTape {
     ) {
         let text = text.into();
         if !text.is_empty() {
-            self.push_event(OutputEvent::WorkerConsoleText { channel, text });
+            self.lock().push_console_text(channel, text);
         }
     }
 
@@ -349,94 +576,82 @@ impl OutputTape {
         mime_type: String,
         artifact: Option<crate::transcript::Artifact>,
     ) {
-        self.push_event(OutputEvent::WorkerImage {
-            data,
-            mime_type,
-            artifact,
-        });
+        self.push_image_with_artifact(data, mime_type, move |_, _| Ok(artifact))
+            .expect("infallible image artifact closure failed");
+    }
+
+    /// Admits an image before creating its transcript artifact.
+    ///
+    /// The closure runs only when the complete encoded payload fits. It runs
+    /// while the tape is locked so direct-output readers cannot overtake the
+    /// image between admission and publication.
+    pub(super) fn push_image_with_artifact<F>(
+        &self,
+        data: String,
+        mime_type: String,
+        make_artifact: F,
+    ) -> Result<(), String>
+    where
+        F: FnOnce(&str, &str) -> Result<Option<crate::transcript::Artifact>, String>,
+    {
+        self.lock()
+            .push_image_with_artifact(data, mime_type, make_artifact)
     }
 
     /// Publishes a server notice that ends its line before later worker output.
     pub(super) fn push_notice_line(&self, message: impl Into<String>) {
-        self.push_event(OutputEvent::ServerNotice {
-            message: message.into(),
-            terminate_line: true,
-        });
+        self.lock()
+            .push_control(OutputEvent::ServerNotice(message.into()));
     }
 
     pub(super) fn push_failure(&self, failure: SendFailure) {
-        self.push_event(OutputEvent::ServerFailure(failure));
+        self.lock()
+            .push_control(OutputEvent::ServerFailure(failure));
     }
 
-    pub(super) fn checkpoint(&self) -> OutputCheckpoint {
-        OutputCheckpoint(self.lock().next_event)
+    pub(super) fn cut(&self) -> OutputCut {
+        let mut state = self.lock();
+        state.seal_truncation();
+        OutputCut(state.next_event)
     }
 
     pub(super) fn take(&self) -> Response {
-        self.take_until(OutputCheckpoint(u64::MAX))
+        let mut state = self.lock();
+        state.seal_truncation();
+        let cut = OutputCut(state.next_event);
+        drain_through(&mut state, cut)
     }
 
-    pub(super) fn take_until(&self, checkpoint: OutputCheckpoint) -> Response {
-        let mut state = self.lock();
-        let boundary = state
-            .events
-            .partition_point(|(sequence, _)| *sequence < checkpoint.0);
-        let remaining = state.events.split_off(boundary);
-        let events = std::mem::replace(&mut state.events, remaining);
-        let mut output = Response::default();
-
-        for (_, event) in events {
-            match event {
-                OutputEvent::DirectStdout(event) => {
-                    append_direct_output(&mut output, &mut state.direct_stdout, event);
-                }
-                OutputEvent::DirectStderr(event) => {
-                    append_direct_output(&mut output, &mut state.direct_stderr, event);
-                }
-                OutputEvent::WorkerConsoleText { channel, text } => match channel {
-                    crate::worker_protocol::ConsoleChannel::Output
-                    | crate::worker_protocol::ConsoleChannel::Diagnostic => output.push_text(text),
-                },
-                OutputEvent::WorkerImage {
-                    data,
-                    mime_type,
-                    artifact,
-                } => output.push_image(data, mime_type, artifact),
-                OutputEvent::ServerNotice {
-                    message,
-                    terminate_line,
-                } => {
-                    if terminate_line {
-                        output.push_notice_line(message);
-                    } else {
-                        output.push_notice(message);
-                    }
-                }
-                OutputEvent::ServerFailure(SendFailure {
-                    message,
-                    worker_stopped,
-                    worker_outcome,
-                    ..
-                }) => {
-                    output.push_server_failure(message);
-                    if let Some(outcome) = worker_outcome {
-                        output.push_notice(outcome.diagnostic());
-                    }
-                    if worker_stopped {
-                        output.push_notice(WORKER_STOPPED_NOTICE);
-                    }
-                }
-            }
-        }
-
-        output
+    /// Transfers all currently pending output into an evaluation-owned prelude.
+    ///
+    /// Unlike an ordinary poll, this closes incomplete direct-stream UTF-8 at
+    /// the ownership boundary so later cell bytes cannot complete idle output.
+    pub(super) fn take_prelude(&self) -> Response {
+        self.take_prelude_before(|| {})
     }
 
-    fn push_event(&self, event: OutputEvent) {
+    /// Transfers a prelude and establishes an admission boundary while the
+    /// tape remains locked.
+    pub(super) fn take_prelude_before(&self, boundary: impl FnOnce()) -> Response {
         let mut state = self.lock();
-        let sequence = state.next_event;
-        state.next_event = state.next_event.wrapping_add(1);
-        state.events.push((sequence, event));
+        state.seal_truncation();
+        let cut = OutputCut(state.next_event);
+        let mut response = drain_through(&mut state, cut);
+        let mut builder = ResponseBuilder::from_response(std::mem::take(&mut response));
+        let OutputTapeState {
+            direct_stdout,
+            direct_stderr,
+            ..
+        } = &mut *state;
+        flush_direct_decoders(&mut builder, direct_stdout, direct_stderr);
+        boundary();
+        state.recompute_budget();
+        builder.finish()
+    }
+
+    pub(super) fn drain_through(&self, cut: OutputCut) -> Response {
+        let mut state = self.lock();
+        drain_through(&mut state, cut)
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, OutputTapeState> {
@@ -449,95 +664,444 @@ impl OutputTape {
 #[cfg(target_os = "macos")]
 impl DirectOutput {
     pub(super) fn push(&self, bytes: &[u8]) {
-        self.push_event(DirectOutputEvent::Bytes(bytes.to_vec()));
+        self.output.lock().push_direct_output(self.stream, bytes);
     }
 
     pub(super) fn close(&self) {
-        self.push_event(DirectOutputEvent::Closed);
-    }
-
-    fn push_event(&self, event: DirectOutputEvent) {
-        let event = match self.stream {
-            DirectOutputStream::Stdout => OutputEvent::DirectStdout(event),
-            DirectOutputStream::Stderr => OutputEvent::DirectStderr(event),
-        };
-        self.output.push_event(event);
+        self.output
+            .lock()
+            .push_control(self.stream.event(DirectOutputEvent::Closed));
     }
 }
 
-fn append_direct_output(output: &mut Response, pending: &mut Vec<u8>, event: DirectOutputEvent) {
+#[cfg(target_os = "macos")]
+impl DirectOutputStream {
+    fn event(self, event: DirectOutputEvent) -> OutputEvent {
+        match self {
+            Self::Stdout => OutputEvent::DirectStdout(event),
+            Self::Stderr => OutputEvent::DirectStderr(event),
+        }
+    }
+}
+
+impl OutputTapeState {
+    fn new(limits: OutputLimits) -> Self {
+        Self {
+            direct_stdout: DirectDecoder::default(),
+            direct_stderr: DirectDecoder::default(),
+            next_event: 0,
+            events: Vec::new(),
+            limits,
+            budget: PendingOutputBudget::default(),
+            active_truncation: None,
+        }
+    }
+
+    fn push_console_text(&mut self, channel: crate::worker_protocol::ConsoleChannel, text: String) {
+        let original_length = text.len();
+        if self.budget.dropping_ordinary_output {
+            self.omit(original_length, 0, 0, 1);
+            return;
+        }
+
+        let remaining = self
+            .limits
+            .text_bytes
+            .saturating_sub(self.budget.text_bytes);
+        let retained = if self.budget.events < self.limits.events {
+            utf8_prefix_length(&text, remaining)
+        } else {
+            0
+        };
+        if retained > 0 {
+            let retained_text = if retained == original_length {
+                text.into_boxed_str()
+            } else {
+                Box::<str>::from(&text[..retained])
+            };
+            self.retain_ordinary(
+                OutputEvent::WorkerConsoleText {
+                    channel,
+                    text: retained_text,
+                },
+                retained,
+                0,
+                0,
+            );
+        }
+        if retained < original_length {
+            self.omit(original_length - retained, 0, 0, 1);
+        }
+    }
+
+    fn push_image_with_artifact<F>(
+        &mut self,
+        data: String,
+        mime_type: String,
+        make_artifact: F,
+    ) -> Result<(), String>
+    where
+        F: FnOnce(&str, &str) -> Result<Option<crate::transcript::Artifact>, String>,
+    {
+        let length = data.len();
+        let metadata_length = mime_type.len();
+        let fits = !self.budget.dropping_ordinary_output
+            && self.budget.events < self.limits.events
+            && length
+                <= self
+                    .limits
+                    .image_bytes
+                    .saturating_sub(self.budget.image_bytes)
+            && metadata_length
+                <= self
+                    .limits
+                    .image_metadata_bytes
+                    .saturating_sub(self.budget.image_metadata_bytes);
+        if fits {
+            let artifact = make_artifact(&data, &mime_type)?;
+            self.retain_ordinary(
+                OutputEvent::WorkerImage {
+                    data: data.into_boxed_str(),
+                    mime_type: mime_type.into_boxed_str(),
+                    artifact,
+                },
+                0,
+                length,
+                metadata_length,
+            );
+        } else {
+            self.omit(0, length, metadata_length, 1);
+        }
+        Ok(())
+    }
+
+    #[cfg(target_os = "macos")]
+    fn push_direct_output(&mut self, stream: DirectOutputStream, bytes: &[u8]) {
+        if bytes.is_empty() {
+            return;
+        }
+        if self.budget.dropping_ordinary_output {
+            self.omit(bytes.len(), 0, 0, 1);
+            return;
+        }
+
+        let retained = if self.budget.events < self.limits.events {
+            bytes.len().min(
+                self.limits
+                    .text_bytes
+                    .saturating_sub(self.budget.text_bytes),
+            )
+        } else {
+            0
+        };
+        if retained > 0 {
+            self.retain_ordinary(
+                stream.event(DirectOutputEvent::Bytes(bytes[..retained].to_vec())),
+                retained,
+                0,
+                0,
+            );
+        }
+        if retained < bytes.len() {
+            self.omit(bytes.len() - retained, 0, 0, 1);
+        }
+    }
+
+    fn retain_ordinary(
+        &mut self,
+        event: OutputEvent,
+        text_bytes: usize,
+        image_bytes: usize,
+        image_metadata_bytes: usize,
+    ) {
+        self.budget.text_bytes = self.budget.text_bytes.saturating_add(text_bytes);
+        self.budget.image_bytes = self.budget.image_bytes.saturating_add(image_bytes);
+        self.budget.image_metadata_bytes = self
+            .budget
+            .image_metadata_bytes
+            .saturating_add(image_metadata_bytes);
+        self.budget.events = self.budget.events.saturating_add(1);
+        self.push_event(event);
+    }
+
+    fn push_control(&mut self, event: OutputEvent) {
+        self.push_event(event);
+    }
+
+    fn push_event(&mut self, event: OutputEvent) -> u64 {
+        let sequence = self.allocate_position();
+        self.events.push((sequence, event));
+        sequence
+    }
+
+    fn omit(
+        &mut self,
+        text_bytes: usize,
+        image_bytes: usize,
+        image_metadata_bytes: usize,
+        events: usize,
+    ) {
+        self.budget.dropping_ordinary_output = true;
+        if let Some(sequence) = self.active_truncation {
+            let index = self
+                .events
+                .binary_search_by_key(&sequence, |(sequence, _)| *sequence)
+                .expect("active output truncation must remain on the tape");
+            let OutputEvent::Truncated(truncation) = &mut self.events[index].1 else {
+                unreachable!("active output truncation points at another event")
+            };
+            truncation.text_bytes = truncation.text_bytes.saturating_add(text_bytes);
+            truncation.image_bytes = truncation.image_bytes.saturating_add(image_bytes);
+            truncation.image_metadata_bytes = truncation
+                .image_metadata_bytes
+                .saturating_add(image_metadata_bytes);
+            truncation.events = truncation.events.saturating_add(events);
+            // Omitted publications still occupy observation-order positions, so a
+            // later cut can seal counts without retaining one event per chunk.
+            self.allocate_position();
+        } else {
+            let sequence = self.push_event(OutputEvent::Truncated(Truncation {
+                text_bytes,
+                image_bytes,
+                image_metadata_bytes,
+                events,
+            }));
+            self.active_truncation = Some(sequence);
+        }
+    }
+
+    fn allocate_position(&mut self) -> u64 {
+        let position = self.next_event;
+        self.next_event = self
+            .next_event
+            .checked_add(1)
+            .expect("output tape position overflowed");
+        position
+    }
+
+    fn seal_truncation(&mut self) {
+        self.active_truncation = None;
+    }
+
+    fn recompute_budget(&mut self) {
+        let mut budget = PendingOutputBudget {
+            text_bytes: self
+                .direct_stdout
+                .bytes
+                .len()
+                .saturating_add(self.direct_stderr.bytes.len()),
+            ..PendingOutputBudget::default()
+        };
+        for (_, event) in &self.events {
+            match event {
+                OutputEvent::DirectStdout(DirectOutputEvent::Bytes(bytes))
+                | OutputEvent::DirectStderr(DirectOutputEvent::Bytes(bytes)) => {
+                    budget.text_bytes = budget.text_bytes.saturating_add(bytes.len());
+                    budget.events = budget.events.saturating_add(1);
+                }
+                OutputEvent::WorkerConsoleText { text, .. } => {
+                    budget.text_bytes = budget.text_bytes.saturating_add(text.len());
+                    budget.events = budget.events.saturating_add(1);
+                }
+                OutputEvent::WorkerImage {
+                    data, mime_type, ..
+                } => {
+                    budget.image_bytes = budget.image_bytes.saturating_add(data.len());
+                    budget.image_metadata_bytes =
+                        budget.image_metadata_bytes.saturating_add(mime_type.len());
+                    budget.events = budget.events.saturating_add(1);
+                }
+                OutputEvent::Truncated(_) => budget.dropping_ordinary_output = true,
+                OutputEvent::DirectStdout(DirectOutputEvent::Closed)
+                | OutputEvent::DirectStderr(DirectOutputEvent::Closed)
+                | OutputEvent::ServerNotice(_)
+                | OutputEvent::ServerFailure(_) => {}
+            }
+        }
+        if self.active_truncation.is_some_and(|sequence| {
+            self.events
+                .binary_search_by_key(&sequence, |(sequence, _)| *sequence)
+                .is_err()
+        }) {
+            self.active_truncation = None;
+        }
+        self.budget = budget;
+    }
+}
+
+fn drain_through(state: &mut OutputTapeState, cut: OutputCut) -> Response {
+    let boundary = state
+        .events
+        .partition_point(|(sequence, _)| *sequence < cut.0);
+    let remaining = state.events.split_off(boundary);
+    let events = std::mem::replace(&mut state.events, remaining);
+    let mut output = ResponseBuilder::new();
+
+    for (sequence, event) in events {
+        match &event {
+            OutputEvent::DirectStdout(DirectOutputEvent::Bytes(_)) => {
+                flush_direct_decoder_before(&mut output, &mut state.direct_stderr, sequence);
+            }
+            OutputEvent::DirectStderr(DirectOutputEvent::Bytes(_)) => {
+                flush_direct_decoder_before(&mut output, &mut state.direct_stdout, sequence);
+            }
+            _ => flush_direct_decoders_before(
+                &mut output,
+                &mut state.direct_stdout,
+                &mut state.direct_stderr,
+                sequence,
+            ),
+        }
+        match event {
+            OutputEvent::DirectStdout(event) => {
+                append_direct_output(&mut output, &mut state.direct_stdout, sequence, event);
+            }
+            OutputEvent::DirectStderr(event) => {
+                append_direct_output(&mut output, &mut state.direct_stderr, sequence, event);
+            }
+            OutputEvent::WorkerConsoleText { channel, text } => match channel {
+                crate::worker_protocol::ConsoleChannel::Output
+                | crate::worker_protocol::ConsoleChannel::Diagnostic => {
+                    output.text(text.into_string())
+                }
+            },
+            OutputEvent::WorkerImage {
+                data,
+                mime_type,
+                artifact,
+            } => output.image(data.into_string(), mime_type.into_string(), artifact),
+            OutputEvent::ServerNotice(message) => output.notice_line(message),
+            OutputEvent::ServerFailure(SendFailure {
+                message,
+                worker_stopped,
+                worker_outcome,
+                ..
+            }) => {
+                output.server_failure(message);
+                if let Some(outcome) = worker_outcome {
+                    output.notice(outcome.diagnostic());
+                }
+                if worker_stopped {
+                    output.notice(WORKER_STOPPED_NOTICE);
+                }
+            }
+            OutputEvent::Truncated(truncated) => output.truncation(truncated),
+        }
+    }
+
+    state.recompute_budget();
+    output.finish()
+}
+
+fn append_direct_output(
+    output: &mut ResponseBuilder,
+    pending: &mut DirectDecoder,
+    sequence: u64,
+    event: DirectOutputEvent,
+) {
     match event {
         DirectOutputEvent::Bytes(bytes) => {
-            pending.extend_from_slice(&bytes);
-            let complete = complete_utf8_prefix(pending);
-            let incomplete = pending.split_off(complete);
-            let complete = std::mem::replace(pending, incomplete);
-            output.push_text(String::from_utf8_lossy(&complete));
+            let prior_origin = pending.origin.unwrap_or(sequence);
+            pending.bytes.extend_from_slice(&bytes);
+            let complete = complete_utf8_prefix(&pending.bytes);
+            let incomplete = pending.bytes.split_off(complete);
+            let complete = std::mem::replace(&mut pending.bytes, incomplete);
+            output.text(String::from_utf8_lossy(&complete));
+            pending.origin = if pending.bytes.is_empty() {
+                None
+            } else if complete.is_empty() {
+                Some(prior_origin)
+            } else {
+                Some(sequence)
+            };
         }
         DirectOutputEvent::Closed => {
-            output.push_text(String::from_utf8_lossy(pending));
-            pending.clear();
+            flush_direct_decoder(output, pending);
         }
     }
 }
 
-pub(super) fn project_completed(mut output: Response) -> Response {
-    if output.is_empty() {
-        output.push_notice("done");
-    }
-    output
+fn flush_direct_decoder(output: &mut ResponseBuilder, pending: &mut DirectDecoder) {
+    output.text(String::from_utf8_lossy(&pending.bytes));
+    pending.bytes.clear();
+    pending.origin = None;
 }
 
-pub(super) fn project_replacement_ready(mut output: Response) -> Response {
-    output.push_notice(WORKER_IDLE_NOTICE);
-    output
+fn flush_direct_decoder_before(
+    output: &mut ResponseBuilder,
+    pending: &mut DirectDecoder,
+    sequence: u64,
+) {
+    if pending.origin.is_some_and(|origin| origin < sequence) {
+        flush_direct_decoder(output, pending);
+    }
 }
 
-pub(super) fn project_idle(mut output: Response) -> Response {
-    if !output.is_error() {
-        append_state_banner(&mut output, WORKER_IDLE_NOTICE);
+fn flush_direct_decoders_before(
+    output: &mut ResponseBuilder,
+    stdout: &mut DirectDecoder,
+    stderr: &mut DirectDecoder,
+    sequence: u64,
+) {
+    let stdout_origin = stdout.origin.filter(|origin| *origin < sequence);
+    let stderr_origin = stderr.origin.filter(|origin| *origin < sequence);
+    if stdout_origin <= stderr_origin {
+        flush_direct_decoder_before(output, stdout, sequence);
+        flush_direct_decoder_before(output, stderr, sequence);
+    } else {
+        flush_direct_decoder_before(output, stderr, sequence);
+        flush_direct_decoder_before(output, stdout, sequence);
     }
-    output
+}
+
+fn flush_direct_decoders(
+    output: &mut ResponseBuilder,
+    stdout: &mut DirectDecoder,
+    stderr: &mut DirectDecoder,
+) {
+    if stdout.origin <= stderr.origin {
+        flush_direct_decoder(output, stdout);
+        flush_direct_decoder(output, stderr);
+    } else {
+        flush_direct_decoder(output, stderr);
+        flush_direct_decoder(output, stdout);
+    }
+}
+
+pub(super) fn project_completed(output: Response) -> Response {
+    project_terminal(output, TerminalState::Completed)
+}
+
+pub(super) fn project_replacement_ready(output: Response) -> Response {
+    project_terminal(output, TerminalState::ReplacementReady)
 }
 
 pub(super) fn render_response(response: SendResponse) -> Response {
-    match response {
-        SendResponse::Completed(output) => project_completed(output),
-        SendResponse::Failed(output) => output,
-        SendResponse::InputRequested(mut output) => {
-            append_input_banner(&mut output);
-            output
-        }
-        SendResponse::Running(mut output) => {
-            append_state_banner(&mut output, "running");
-            output
-        }
-        SendResponse::Idle(output) => project_idle(output),
-        SendResponse::ReplacementStarting(mut output) => {
-            output.push_notice(WORKER_STARTING_STATE);
-            output
-        }
-        SendResponse::ReplacementReady(output) => project_replacement_ready(output),
-        SendResponse::Restarted(output) => output,
+    let (output, terminal) = match response {
+        SendResponse::Completed(output) => (output, Some(TerminalState::Completed)),
+        SendResponse::Failed(output) | SendResponse::Restarted(output) => (output, None),
+        SendResponse::InputRequested(output) => (output, Some(TerminalState::StdinNeeded)),
+        SendResponse::Running(output) => (output, Some(TerminalState::Running)),
+        SendResponse::Idle(output) => (output, Some(TerminalState::Idle)),
+        SendResponse::ReplacementStarting(output) => (output, Some(TerminalState::WorkerStarting)),
+        SendResponse::ReplacementReady(output) => (output, Some(TerminalState::ReplacementReady)),
+    };
+    match terminal {
+        Some(terminal) => project_terminal(output, terminal),
+        None => output,
     }
+}
+
+fn project_terminal(output: Response, terminal: TerminalState) -> Response {
+    let mut builder = ResponseBuilder::from_response(output);
+    builder.terminal(terminal);
+    builder.finish()
 }
 
 pub(super) fn direct_failure(message: impl Into<String>) -> Response {
-    let mut output = Response::default();
-    output.push_server_failure(message);
-    output
-}
-
-fn append_input_banner(output: &mut Response) {
-    if output.text_needs_newline() {
-        output.push_text("\n");
-    }
-    output.push_text(render_notice("stdin needed"));
-}
-
-fn append_state_banner(output: &mut Response, state: &str) {
-    output.push_text("\n");
-    output.push_text(render_notice(state));
+    let mut builder = ResponseBuilder::new();
+    builder.server_failure(message);
+    builder.finish()
 }
 
 fn render_notice(message: impl Into<String>) -> String {
@@ -554,5 +1118,372 @@ fn complete_utf8_prefix(bytes: &[u8]) -> usize {
                 None => return offset + error.valid_up_to(),
             },
         }
+    }
+}
+
+fn utf8_prefix_length(text: &str, limit: usize) -> usize {
+    let mut length = text.len().min(limit);
+    while !text.is_char_boundary(length) {
+        length -= 1;
+    }
+    length
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use crate::worker_protocol::ConsoleChannel::{Diagnostic, Output};
+
+    fn limits(text_bytes: usize, image_bytes: usize, events: usize) -> OutputLimits {
+        OutputLimits {
+            text_bytes,
+            image_bytes,
+            image_metadata_bytes: 1_024,
+            events,
+        }
+    }
+
+    fn limits_with_image_metadata(
+        text_bytes: usize,
+        image_bytes: usize,
+        image_metadata_bytes: usize,
+        events: usize,
+    ) -> OutputLimits {
+        OutputLimits {
+            text_bytes,
+            image_bytes,
+            image_metadata_bytes,
+            events,
+        }
+    }
+
+    fn response_text(mut response: Response) -> String {
+        std::mem::take(&mut response.content)
+            .into_iter()
+            .filter_map(|content| match content {
+                Content::Text(text) => Some(text),
+                Content::Image { .. } => None,
+            })
+            .collect()
+    }
+
+    fn response_content(mut response: Response) -> Vec<Content> {
+        std::mem::take(&mut response.content)
+    }
+
+    fn assert_text(response: Response, expected: &str) {
+        assert_eq!(response_text(response), expected);
+    }
+
+    fn assert_single_image(response: Response, data: &str, mime_type: &str) {
+        assert!(matches!(
+            response_content(response).as_slice(),
+            [Content::Image {
+                data: actual_data,
+                mime_type: actual_mime_type,
+                ..
+            }] if actual_data == data && actual_mime_type == mime_type
+        ));
+    }
+
+    fn text_response(text: &str) -> Response {
+        let mut builder = ResponseBuilder::new();
+        builder.text(text);
+        builder.finish()
+    }
+
+    #[test]
+    fn text_budget_retains_below_exact_and_prefix_above_limit() {
+        for (size, expected, omitted) in [(4, 4, None), (5, 5, None), (6, 5, Some(1))] {
+            let output = OutputTape::with_limits(limits(5, 20, 20));
+            output.push_console_text(Output, "x".repeat(size));
+
+            let text = response_text(output.take());
+            assert!(text.starts_with(&"x".repeat(expected)));
+            match omitted {
+                Some(omitted) => assert!(text.ends_with(&format!(
+                    "[output truncated: omitted {omitted} text bytes and 0 encoded image bytes across 1 event]"
+                ))),
+                None => assert_eq!(text, "x".repeat(expected)),
+            }
+        }
+    }
+
+    #[test]
+    fn one_chunk_larger_than_the_entire_budget_is_copied_only_to_the_limit() {
+        let output = OutputTape::with_limits(limits(5, 20, 20));
+        output.push_console_text(Output, "x".repeat(100));
+
+        {
+            let state = output.lock();
+            let OutputEvent::WorkerConsoleText { text, .. } = &state.events[0].1 else {
+                panic!("the retained prefix must be stored as console text")
+            };
+            assert_eq!(text.len(), 5);
+        }
+
+        assert_text(
+            output.take(),
+            "xxxxx\n[output truncated: omitted 95 text bytes and 0 encoded image bytes across 1 event]",
+        );
+        output.push_console_text(Output, "fresh");
+        assert_text(output.take(), "fresh");
+    }
+
+    #[test]
+    fn event_budget_retains_below_exact_and_aggregates_later_events() {
+        let output = OutputTape::with_limits(limits(100, 100, 2));
+        output.push_console_text(Output, "a");
+        output.push_console_text(Diagnostic, "b");
+        output.push_console_text(Output, "c");
+        output.push_console_text(Diagnostic, "de");
+
+        assert_text(
+            output.take(),
+            "ab\n[output truncated: omitted 3 text bytes and 0 encoded image bytes across 2 events]",
+        );
+        output.push_console_text(Output, "fresh");
+        assert_text(output.take(), "fresh");
+    }
+
+    #[test]
+    fn image_budget_is_all_or_nothing_and_preserves_order() {
+        for data in ["123", "1234"] {
+            let accepted = OutputTape::with_limits(limits(100, 4, 20));
+            accepted.push_console_text(Output, "before");
+            accepted.push_image(data.to_string(), "image/test".to_string(), None);
+            accepted.push_console_text(Diagnostic, "after");
+            let content = response_content(accepted.take());
+            assert!(matches!(&content[0], Content::Text(text) if text == "before"));
+            assert!(matches!(
+                &content[1],
+                Content::Image { data: actual, mime_type, .. }
+                    if actual == data && mime_type == "image/test"
+            ));
+            assert!(matches!(&content[2], Content::Text(text) if text == "after"));
+        }
+
+        let rejected = OutputTape::with_limits(limits(100, 4, 20));
+        rejected.push_console_text(Output, "before");
+        rejected.push_image("12345".to_string(), "image/test".to_string(), None);
+        rejected.push_console_text(Output, "discarded");
+        assert_text(
+            rejected.take(),
+            "before\n[output truncated: omitted 9 text bytes, 5 encoded image bytes, and 10 image metadata bytes across 2 events]",
+        );
+        rejected.push_image("1234".to_string(), "image/test".to_string(), None);
+        assert_single_image(rejected.take(), "1234", "image/test");
+    }
+
+    #[test]
+    fn image_metadata_budget_retains_below_exact_and_omits_above_limit() {
+        for mime_type in ["abc", "abcd"] {
+            let output = OutputTape::with_limits(limits_with_image_metadata(100, 100, 4, 20));
+            output.push_image("1".to_string(), mime_type.to_string(), None);
+            assert!(matches!(
+                response_content(output.take()).as_slice(),
+                [Content::Image { mime_type: retained, .. }] if retained == mime_type
+            ));
+        }
+
+        let output = OutputTape::with_limits(limits_with_image_metadata(100, 100, 4, 20));
+        output.push_image("1".to_string(), "abcde".to_string(), None);
+        assert_text(
+            output.take(),
+            "[output truncated: omitted 0 text bytes, 1 encoded image bytes, and 5 image metadata bytes across 1 event]",
+        );
+        output.push_image("1".to_string(), "abcd".to_string(), None);
+        assert_single_image(output.take(), "1", "abcd");
+    }
+
+    #[test]
+    fn overflow_skips_image_artifact_creation() {
+        let output = OutputTape::with_limits(limits(100, 2, 20));
+        let called = std::cell::Cell::new(false);
+        output
+            .push_image_with_artifact("123".to_string(), "image/test".to_string(), |_, _| {
+                called.set(true);
+                Ok(None)
+            })
+            .unwrap();
+
+        assert!(!called.get());
+        assert_text(
+            output.take(),
+            "[output truncated: omitted 0 text bytes, 3 encoded image bytes, and 10 image metadata bytes across 1 event]",
+        );
+    }
+
+    #[test]
+    fn control_failures_and_process_outcomes_survive_truncation() {
+        let output = OutputTape::with_limits(limits(3, 3, 1));
+        output.push_console_text(Output, "overflow");
+        output.push_notice_line("input requested: \"prompt> \"");
+        output.push_failure(
+            SendFailure::from("worker transport failed".to_string())
+                .worker_outcome(Some(super::super::WorkerProcessOutcome::Exited(86)))
+                .worker_stopped(),
+        );
+
+        let response = output.take();
+        assert!(response.is_error);
+        assert_text(
+            response,
+            "ove\n[output truncated: omitted 5 text bytes and 0 encoded image bytes across 1 event]\n[input requested: \"prompt> \"]\n[worker transport failed]\n[worker exited with status 86]\n[worker stopped: in-memory state lost]",
+        );
+    }
+
+    #[test]
+    fn a_cut_seals_truncation_counts_and_leaves_later_output_pending() {
+        let output = OutputTape::with_limits(limits(3, 10, 10));
+        output.push_console_text(Output, "four");
+        let cut = output.cut();
+        output.push_console_text(Output, "zz");
+
+        assert_text(
+            output.drain_through(cut),
+            "fou\n[output truncated: omitted 1 text bytes and 0 encoded image bytes across 1 event]",
+        );
+        assert_text(
+            output.take(),
+            "[output truncated: omitted 2 text bytes and 0 encoded image bytes across 1 event]",
+        );
+
+        output.push_console_text(Output, "new");
+        assert_text(output.take(), "new");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn direct_utf8_obeys_truncation_and_stream_order() {
+        let output = OutputTape::with_limits(limits(2, 100, 100));
+        let stdout = output.direct_stdout();
+        stdout.push(&[0xe2, 0x82, 0xac]);
+        assert_text(
+            output.take(),
+            "�\n[output truncated: omitted 1 text bytes and 0 encoded image bytes across 1 event]",
+        );
+        stdout.push(&[0xac, 0xff]);
+        assert_text(output.take(), "��");
+
+        let output = OutputTape::with_limits(limits(2, 100, 100));
+        output.direct_stderr().push(&[0xe2]);
+        output.direct_stdout().push(&[0xe2]);
+        output.push_console_text(Output, "overflow");
+        assert_text(
+            output.take(),
+            "��\n[output truncated: omitted 8 text bytes and 0 encoded image bytes across 1 event]",
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn direct_utf8_respects_cut_and_prelude_boundaries() {
+        let output = OutputTape::with_limits(limits(100, 100, 100));
+        let stdout = output.direct_stdout();
+        stdout.push(&[0xe2, 0x82]);
+        let cut = output.cut();
+        assert_text(output.drain_through(cut), "");
+        stdout.push(&[0xac]);
+        assert_text(output.take(), "€");
+
+        let output = OutputTape::with_limits(limits(100, 100, 100));
+        let stdout = output.direct_stdout();
+        stdout.push(&[0xe2, 0x82]);
+        output.push_console_text(Output, "idle text");
+        let mut prelude = output.take_prelude();
+        stdout.push(&[0xac]);
+        prelude.extend_cell_after_idle_prelude(output.take());
+        assert_text(prelude, "�idle text\n[output produced while idle]\n�");
+
+        let output = OutputTape::with_limits(limits(100, 100, 100));
+        output.direct_stdout().push(&[0xe2]);
+        output.push_image("image".to_string(), "image/test".to_string(), None);
+        let content = response_content(output.take_prelude());
+        assert!(matches!(&content[0], Content::Text(text) if text == "�"));
+        assert!(matches!(&content[1], Content::Image { data, .. } if data == "image"));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn mixed_text_channels_direct_streams_images_and_notices_keep_order() {
+        let output = OutputTape::with_limits(limits(100, 100, 100));
+        output.push_console_text(Output, "console output|");
+        output.push_console_text(Diagnostic, "console diagnostic|");
+        output.direct_stdout().push(b"stdout|");
+        output.direct_stderr().push(b"stderr|");
+        output.push_image("image".to_string(), "image/test".to_string(), None);
+        output.push_notice_line("server notice");
+
+        let content = response_content(output.take());
+        assert!(matches!(
+            &content[0],
+            Content::Text(text)
+                if text == "console output|console diagnostic|stdout|stderr|"
+        ));
+        assert!(matches!(&content[1], Content::Image { data, .. } if data == "image"));
+        assert!(matches!(&content[2], Content::Text(text) if text == "\n[server notice]\n"));
+    }
+
+    #[test]
+    fn canonical_builder_delimits_idle_preludes_and_logical_regions() {
+        let mut prelude = text_response("idle output");
+        prelude.extend_cell_after_idle_prelude(text_response("cell output"));
+        assert_text(
+            prelude,
+            "idle output\n[output produced while idle]\ncell output",
+        );
+
+        let mut prelude_only = text_response("idle only");
+        prelude_only.extend_cell_after_idle_prelude(Response::default());
+        assert_text(prelude_only, "idle only");
+
+        let mut cell_only = Response::default();
+        cell_only.extend_cell_after_idle_prelude(text_response("cell only"));
+        assert_text(cell_only, "cell only");
+
+        let mut logical = text_response("first");
+        logical.extend_logical_region(text_response("second"));
+        assert_text(logical, "first\nsecond");
+    }
+
+    #[test]
+    fn every_terminal_state_uses_the_canonical_projection() {
+        let cases = [
+            (SendResponse::Completed(Response::default()), "[done]"),
+            (SendResponse::Running(Response::default()), "\n[running]"),
+            (
+                SendResponse::InputRequested(Response::default()),
+                "\n[stdin needed]",
+            ),
+            (SendResponse::Idle(Response::default()), "\n[idle]"),
+            (
+                SendResponse::ReplacementStarting(Response::default()),
+                "[worker starting]",
+            ),
+            (
+                SendResponse::ReplacementReady(Response::default()),
+                "[idle]",
+            ),
+        ];
+        for (response, expected) in cases {
+            assert_text(render_response(response), expected);
+        }
+
+        let mut failed = ResponseBuilder::new();
+        failed.server_failure("infrastructure failed");
+        assert_text(
+            render_response(SendResponse::Idle(failed.finish())),
+            "[infrastructure failed]",
+        );
+    }
+
+    #[test]
+    fn image_only_completion_does_not_add_done() {
+        let mut builder = ResponseBuilder::new();
+        builder.image("image".to_string(), "image/test".to_string(), None);
+        let content = response_content(render_response(SendResponse::Completed(builder.finish())));
+        assert!(matches!(content.as_slice(), [Content::Image { data, .. }] if data == "image"));
     }
 }

@@ -58,6 +58,7 @@ result:
     - type: text
       text: |
         idle Python ready
+        [output produced while idle]
         [1] "numpy"     "pandas"    "py-yaml12"
   isError: false
 ...

@@ -26,9 +26,10 @@ The first ordinary, non-task `send` or `session` call creates a run-specific rec
 Initialization, tool listing, unknown tool calls, and an otherwise unused `serve` process do not create `.mcp-console`.
 On Unix, newly created record directories use mode `0700`, and journal and artifact files use mode `0600`.
 It appends `session_started`, `tool_call`, `artifact_created`, and `tool_result` events to `internal/events.jsonl` for each ordinary, non-task `send` or `session` call, including timestamps, request and call IDs, exact arguments, ordered text and image blocks, and tool errors.
-Image bytes received during a `send` operation are decoded and flushed under `artifacts/` immediately, including images from an evaluation that is never polled again.
-A background image first received while idle or during live requirement preparation is validated and queued.
+Image payloads admitted to pending output during a `send` operation are decoded and flushed under `artifacts/` immediately, including images from an evaluation that is never polled again.
+A background image first received while idle or during live requirement preparation is validated and admitted to the pending-output budget before it is queued.
 It is persisted when a response drains and assembles that pending output, including the current failed preparation response, a later `send`, or a restart response.
+An image omitted by the pending-output budget is not persisted or spilled to another file.
 The JSONL result refers to each image's relative artifact path while the MCP response remains unchanged.
 The result record captures server assembly, not delivery; cancellation or disconnection may suppress the response.
 Recording is optional: if the run record cannot be created or a later write fails, MCP Console disables recording for that server process, emits one diagnostic to standard error, and continues serving console calls.
@@ -45,9 +46,9 @@ Only the relay's fd 0/1/2 cross the server/sandbox boundary; relay standard erro
 The relay validates each worker standard-output and standard-error read independently.
 Valid UTF-8 chunks use readable string events, while invalid chunks use base64 byte events so arbitrary bytes cannot corrupt the private JSONL framing.
 After a worker reports ready, the server continuously consumes the relay event stream containing its sideband, standard output, and standard error activity.
-With no evaluation active, an empty `send` immediately establishes an ephemeral idle-response boundary, drains the output collected through it, and returns `\n[idle]`, or `\n[stdin needed]` when an idle callback has an outstanding console read.
+With no evaluation active, an empty `send` immediately records an opaque server-side output-tape cut, drains the output collected through that cut, and returns `\n[idle]`, or `\n[stdin needed]` when an idle callback has an outstanding console read.
 It sends no worker command, does not wait for idle callbacks to finish, and is not delayed by `timeout_ms`.
-Output that reaches the server after that boundary remains pending for a later response.
+Output that reaches the server after that cut remains pending for a later response.
 An empty call does not start an initial or stopped worker.
 A call may also supply exact standard-input text with a code cell, during an evaluation, or while the worker is idle:
 
@@ -57,7 +58,7 @@ A call may also supply exact standard-input text with a code cell, during an eva
 
 The worker sees fd 0 as one unbuffered byte stream for the lifetime of its generation; `stdin` payloads contribute bytes to that stream rather than forming records.
 The server sends the cell first, then asks the relay to queue the string's UTF-8 bytes without inspecting or echoing them, adding a newline, imposing a size limit, or waiting for an input request.
-A stdin-only call while idle lazily starts the worker when needed, queues the bytes, and immediately returns at the resulting idle-response boundary.
+A stdin-only call while idle lazily starts the worker when needed, queues the bytes, and immediately returns at the resulting server-side cut.
 Queuing bytes does not acknowledge that a callback consumed them, so that response may still end with `\n[stdin needed]`; a later empty call observes an `input_received` frame and returns `\n[idle]`.
 Every `input_requested` event adds a server-owned record such as `[input requested: "name> "]`; the prompt is encoded as a JSON string so spaces and escaped characters remain explicit.
 During an evaluation, when that request remains outstanding for up to 10 milliseconds, bounded by the call deadline, `send` follows the record with the newline-prefixed banner `\n[stdin needed]`; a later call can supply more bytes with `{ "stdin": "Ada\n" }`.
@@ -191,6 +192,7 @@ Code and idle stdin remain associated with the worker that admitted them and can
 Without a waiting `send`, the restart response includes retained output from the old worker, `[active evaluation stopped by session restart request]` when restart interrupts an unfinished cell, `[worker stopped: in-memory state lost]` when restart retires a ready worker, `[starting new worker]`, startup output, and finally `[idle]`, in that order.
 If a `send` is waiting on the interrupted cell, that call receives the old worker's text and images through retirement, followed by `[stopped by session restart request before evaluation finished]` and, when restart retires a ready worker, `[worker stopped: in-memory state lost]`.
 The server writes that `send` reply before starting the replacement or returning the restart response.
+If that response is cancelled or dropped before delivery, its owned prelude, cell, truncation, and lifecycle output moves to the restart response exactly once.
 The restart response contains `[active evaluation stopped by session restart request]`, its own stopped notice when it retires a ready worker, `[starting new worker]`, replacement startup output, and `[idle]` without repeating the old worker's output.
 Idle callbacks do not create a waiting `send`; continuous collection leaves their output pending for the restart response before the worker is retired.
 On macOS, the default R and DuckDB extension preflights and, when required, the managed-Python preflight happen during `serve` startup; a successful `prepare` extends those initial selections before the first nonempty stdin submission or evaluation lazily starts the sandboxed relay and embedded R worker.
@@ -282,10 +284,10 @@ Shutdown or an infrastructure failure during the initial turn aborts the submitt
 After either turn, a worker-stdin hangup marks shutdown before the worker can dispatch or complete the cell, including when a callback reads fd 0 directly.
 Between cells, the worker uses `R_checkActivity()` to wait for either a registered R handler or its relay sideband, without busy polling or a worker-owned fixed interval.
 Callbacks registered by packages such as `later` can therefore run after a cell has returned.
-A generation-long server reader incrementally parses and enqueues flat relay events so retirement can cancel a partially received frame and idle output is not bounded by sideband pipe capacity.
+A generation-long server reader incrementally parses and enqueues flat relay events so retirement can cancel a partially received frame and the relay can keep draining worker pipes while the server bounds retained pending output.
 One ordered dispatcher publishes forwarded console output and images, services nested managed-Python requests, commits operation results, and updates console input state.
 Before ordered worker retirement, it commits successful old-generation environment events when restart reuses the retained environment, or discards them when restart has already committed a replacement environment.
-An empty `send` establishes an idle-response boundary for the output already collected without signaling the worker or waiting for the callback.
+An empty `send` records a server-side cut for the output already collected without signaling the worker or waiting for the callback.
 Before applying a live requirement preparation, the built-in worker gives registered R handlers one nonblocking turn, so a callback already ready when the command arrives is collected first.
 An empty `send` surfaces an idle callback's input request as `[stdin needed]`; a later stdin-only `send` continues it, and a call that already includes stdin can prequeue the input.
 A code-bearing `send` can also supply input requested by an idle callback.
@@ -331,7 +333,7 @@ Writes through `sys.stdout.buffer`, `sys.stderr.buffer`, or fd 1/2 directly rema
 After a Python cell calls `os.fork()`, reticulate restores the child's original fd-backed text streams after its sideband is disabled, so its ordinary stdout and stderr are captured too.
 Native extensions that fork without running CPython's registered fork callbacks and then resume Python are unsupported.
 Fork-child text capture requires reticulate from its `main` branch or a release containing fork-aware stream restoration.
-An exec descendant that retains fd 1/2 creates fresh standard streams backed by those descriptors, so its ordinary stdout and stderr are captured while that worker generation's output boundary remains open.
+An exec descendant that retains fd 1/2 creates fresh standard streams backed by those descriptors, so its ordinary stdout and stderr are captured while that worker generation's pipes remain open.
 SQL cells and `sql_connection()` lazily open one in-memory DuckDB connection through the `duckdb` and `DBI` R packages and reuse it for the worker generation.
 The connection leaves extension discovery to DuckDB while keeping secret and spill storage under the worker's private R temporary directory.
 DuckDB's native extension cache is readable but not writable from the sandbox, and the sandbox denies network access.
@@ -351,9 +353,27 @@ For example, `dplyr::tbl(sql_connection(), "answers")` creates a lazy relation t
 These paths avoid an eager snapshot transfer, but do not promise end-to-end zero-copy behavior: DuckDB converts R values during execution, and collecting a lazy relation materializes its result in R.
 Automatic Python relation sharing and affected-row summaries do not exist yet.
 
-The server appends relay-forwarded sideband text and images, worker standard-output and standard-error bytes, failures, and lifecycle notices to one pending output tape.
-Each successful `send` boundary drains the events available then; output produced while the worker is idle can therefore appear on a later idle poll before the server-owned `\n[idle]` banner.
-Standard-stream bytes remain undecoded until a response drains them, so incomplete UTF-8 can remain pending for a later response.
+The server appends relay-forwarded sideband text and images, worker standard-output and standard-error bytes, failures, and lifecycle notices to one long-lived ordered output tape.
+Between drains, it retains at most 8 MiB of combined text and direct-output bytes, 8 MiB of encoded image payloads, 64 KiB of image MIME-type bytes, and 4096 ordinary output events.
+It applies those limits before copying an incoming payload into the tape.
+On the first overflow in an undrained segment, the server retains the prefix of text or direct output that fits, omits an overflowing image as a whole, and inserts one typed truncation event at that tape position.
+It then discards later ordinary text and image payloads in that segment while continuing to retain input, failure, process-outcome, restart, and final-state notices.
+The response assembler renders the truncation event as `[output truncated: omitted T text bytes and I encoded image bytes across N events]`, using `event` when `N` is one and adding omitted image-metadata bytes when nonzero.
+Truncation does not turn an otherwise successful language evaluation into an MCP tool error.
+After a drain, the server recomputes the budget from events that remain after the cut and any incomplete direct-stream UTF-8 carry; if neither remains, later output receives a fresh budget, while an already-truncated post-cut segment continues discarding ordinary output until that segment drains.
+The server does not spill omitted output to artifacts or another output spool.
+
+Evaluation completion records an opaque server-side tape cut whose only meaning is that all events published before it belong to that response.
+The completed cell drains only through its cut; later output remains pending.
+An empty poll records a cut at the output available at that moment, and restart can drain old-generation output from the same tape.
+Cuts are not worker or relay state and add no relay frame or acknowledgment.
+When a new code cell starts with idle output already pending, the evaluation owns that output as its prelude.
+If both the prelude and the cell's own output are nonempty, the server inserts exactly one `[output produced while idle]` notice between them; it adds no separator when either region is empty and preserves image order in both regions.
+
+One response assembler coalesces adjacent text blocks, preserves image order, separates logical text regions, renders bracketed notices and terminal states, and marks infrastructure failures as MCP tool errors.
+Direct standard output, direct standard error, ordinary console output, and console diagnostics remain typed internally, but the public MCP result continues to merge adjacent text from those channels.
+Standard-stream bytes remain undecoded until a response drains them, so incomplete UTF-8 can remain pending for a later response; invalid bytes retain the existing replacement behavior.
+Idle-prelude capture closes an incomplete sequence with replacement so a new cell cannot complete idle output across that ownership boundary.
 Each worker source preserves its own order, and complete relay frames follow the order in which their reader threads enqueue them.
 Independent standard-output, standard-error, and sideband pipes provide no chronological cross-source ordering: raw output written before an operation result may be observed after it and remain pending for a later response.
 For an established worker, unexpected exit codes and termination signals are reported before stopped and replacement notices.

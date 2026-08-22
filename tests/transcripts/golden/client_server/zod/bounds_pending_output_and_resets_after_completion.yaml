@@ -3,11 +3,13 @@
 ---
 id: 3
 send:
-  r: start background sideband
+  r: overflow console output
 result:
   content:
     - type: text
-      text: "[done]"
+      text: |-
+        <retained 8388608 text bytes>
+        [output truncated: omitted 7 text bytes and 0 encoded image bytes across 1 event]
   isError: false
 ---
 id: 4
@@ -17,7 +19,6 @@ result:
   content:
     - type: text
       text: |
-        zod background sideband
         zod: echo
   isError: false
 ...

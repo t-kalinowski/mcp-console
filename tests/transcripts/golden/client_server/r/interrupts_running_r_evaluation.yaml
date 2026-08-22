@@ -118,16 +118,24 @@ result:
 ---
 id: 12
 send:
-  r: 6 * 7
+  r: idle_interrupt_state <- 42L
+result:
+  content:
+    - type: text
+      text: "\n"
+  isError: false
+---
+id: 13
+send:
+  r: idle_interrupt_state
 result:
   content:
     - type: text
       text: |
-
         [1] 42
   isError: false
 ---
-id: 13
+id: 14
 send:
   r: |
     setTimeLimit(elapsed = 10, transient = FALSE)
@@ -139,7 +147,7 @@ result:
       text: "[done]"
   isError: false
 ---
-id: 14
+id: 15
 send:
   r: '"idle time does not consume a cell limit"'
 result:

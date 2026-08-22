@@ -38,6 +38,7 @@ pub(crate) struct Call {
     result_images: Arc<Mutex<Option<Vec<Artifact>>>>,
 }
 
+#[derive(Clone)]
 pub(crate) struct Artifact {
     id: u64,
     path: String,

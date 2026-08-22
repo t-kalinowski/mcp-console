@@ -2,7 +2,7 @@ use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
 
 use super::output::{
-    OutputCheckpoint, OutputTape, Response, ResponseAcknowledgment, SendFailure, project_completed,
+    OutputCut, OutputTape, Response, ResponseAcknowledgment, SendFailure, project_completed,
     project_replacement_ready,
 };
 
@@ -20,7 +20,13 @@ pub(super) struct Evaluation {
 
 struct EvaluationState {
     phase: EvaluationPhase,
-    completion_checkpoint: Option<OutputCheckpoint>,
+    completion_cut: Option<OutputCut>,
+    /// Idle output captured immediately before this cell was admitted.
+    prelude: Option<Response>,
+    /// A response returned by the server but not claimed by its MCP transport.
+    reclaimed: Option<Response>,
+    /// Delivery of the most recently assembled response, until one owner settles it.
+    delivery: Option<mpsc::Receiver<ResponseAcknowledgment>>,
     /// Whether a waiter already drained the response for a completion phase.
     completion_collected: bool,
     input_report_at: Option<Instant>,
@@ -54,6 +60,7 @@ pub(super) enum EvaluationWait {
     Completed(Response),
     ReplacementStarting(Response),
     ReplacementReady(Response),
+    Reclaimed(Response),
     Restarted(Response),
 }
 
@@ -67,13 +74,20 @@ pub(super) struct RestartReservation {
     evaluation: Arc<Evaluation>,
     unfinished: bool,
     completion: Option<CompletionKind>,
-    completion_checkpoint: Option<OutputCheckpoint>,
+    completion_cut: Option<OutputCut>,
+    reclaimed: Option<Response>,
+    delivery: Option<mpsc::Receiver<ResponseAcknowledgment>>,
     pub(super) waiting: bool,
 }
 
 pub(super) enum RestartDelivery {
     Waiting(mpsc::Receiver<ResponseAcknowledgment>),
     Unclaimed(Response),
+}
+
+pub(super) struct RestartDeliveryFailure {
+    pub(super) message: String,
+    pub(super) response: Response,
 }
 
 /// Releases one response-draining claim whenever its `send` path exits.
@@ -86,11 +100,15 @@ impl Evaluation {
         transcript: crate::transcript::Transcript,
         call_id: Option<u64>,
         output: OutputTape,
+        prelude: Response,
     ) -> Self {
         Self {
             state: Mutex::new(EvaluationState {
                 phase: EvaluationPhase::Evaluating,
-                completion_checkpoint: None,
+                completion_cut: None,
+                prelude: Some(prelude),
+                reclaimed: None,
+                delivery: None,
                 completion_collected: false,
                 input_report_at: None,
                 waiting: false,
@@ -113,6 +131,9 @@ impl Evaluation {
             .state
             .lock()
             .map_err(|_| "worker evaluation state lock poisoned".to_string())?;
+        if !state.settle_delivery()? {
+            return Err("previous send response delivery is still pending".to_string());
+        }
         if state.restart_reserved {
             return Err("session restart began before this send could wait".to_string());
         }
@@ -157,9 +178,43 @@ impl Evaluation {
             evaluation: self.clone(),
             unfinished,
             completion,
-            completion_checkpoint: completion.and(state.completion_checkpoint),
+            completion_cut: completion.and(state.completion_cut),
+            reclaimed: state.reclaimed.take(),
+            delivery: state.delivery.take(),
             waiting,
         })
+    }
+
+    /// Reaps a completed evaluation only after its assembled response was delivered.
+    pub(super) fn reap_delivered_completion(&self) -> Result<bool, String> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| "worker evaluation state lock poisoned".to_string())?;
+        if !state.settle_delivery()? {
+            return Ok(false);
+        }
+        Ok(matches!(state.phase, EvaluationPhase::Complete(_))
+            && state.completion_collected
+            && state.delivery.is_none()
+            && state.reclaimed.is_none()
+            && !state.waiting
+            && !state.restart_reserved)
+    }
+
+    /// Adopts output that remained idle until the worker operation became active.
+    pub(super) fn capture_prelude_before(&self, boundary: impl FnOnce()) -> Result<(), String> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| "worker evaluation state lock poisoned".to_string())?;
+        let additional = self.output.take_prelude_before(boundary);
+        if let Some(prelude) = state.prelude.as_mut() {
+            prelude.extend(additional);
+        } else {
+            state.prelude = Some(additional);
+        }
+        Ok(())
     }
 
     /// Queues text and briefly defers any outstanding input report for its receipt.
@@ -212,11 +267,11 @@ impl Evaluation {
 
     #[cfg(target_os = "macos")]
     pub(super) fn image(&self, data: String, mime_type: String) -> Result<(), String> {
-        let artifact = self
-            .transcript
-            .persist_image(self.call_id, &data, &mime_type)?;
-        self.output.push_image(data, mime_type, artifact);
-        Ok(())
+        crate::transcript::validate_image_data(&data)?;
+        self.output
+            .push_image_with_artifact(data, mime_type, |data, mime_type| {
+                self.transcript.persist_image(self.call_id, data, mime_type)
+            })
     }
 
     #[cfg(target_os = "macos")]
@@ -293,7 +348,7 @@ impl Evaluation {
         };
         state.input_report_at = None;
         state.phase = EvaluationPhase::CellCompletionGrace(deadline);
-        state.completion_checkpoint = None;
+        state.completion_cut = None;
         state.completion_collected = false;
         self.changed.notify_one();
         drop(state);
@@ -316,7 +371,7 @@ impl Evaluation {
             return;
         }
         state.phase = EvaluationPhase::Complete(CompletionKind::Cell);
-        state.completion_checkpoint = Some(self.output.checkpoint());
+        state.completion_cut = Some(self.output.cut());
         state.completion_collected = false;
         self.changed.notify_one();
     }
@@ -334,7 +389,7 @@ impl Evaluation {
             return;
         };
         state.input_report_at = None;
-        state.completion_checkpoint = None;
+        state.completion_cut = None;
         self.output.push_failure(failure);
         state.phase = EvaluationPhase::ReplacementStarting;
         self.changed.notify_one();
@@ -353,7 +408,7 @@ impl Evaluation {
         &self,
         result: Result<(), SendFailure>,
         completion: CompletionKind,
-        checkpoint: Option<OutputCheckpoint>,
+        cut: Option<OutputCut>,
     ) {
         let Ok(mut state) = self.state.lock() else {
             return;
@@ -365,7 +420,7 @@ impl Evaluation {
             self.output.push_failure(failure);
         }
         state.phase = EvaluationPhase::Complete(completion);
-        state.completion_checkpoint = checkpoint;
+        state.completion_cut = Some(cut.unwrap_or_else(|| self.output.cut()));
         state.completion_collected = false;
         self.changed.notify_one();
     }
@@ -440,20 +495,34 @@ impl Evaluation {
                 None => EvaluationStatus::Waiting,
             });
         }
+        if let Some(mut response) = state.reclaimed.take() {
+            state.track_delivery(&mut response);
+            return Ok(EvaluationStatus::Report(EvaluationWait::Reclaimed(
+                response,
+            )));
+        }
         match state.phase {
             EvaluationPhase::Complete(CompletionKind::Cell)
             | EvaluationPhase::Complete(CompletionKind::ReplacementFailed) => {
                 state.completion_collected = true;
-                let output = state.completion_checkpoint.take().map_or_else(
-                    || self.output.take(),
-                    |checkpoint| self.output.take_until(checkpoint),
-                );
+                let cut = state
+                    .completion_cut
+                    .take()
+                    .expect("a completed evaluation must retain its output cut");
+                let mut output = take_owned_response(&mut state, &self.output, cut);
+                state.track_delivery(&mut output);
                 return Ok(EvaluationStatus::Report(EvaluationWait::Completed(output)));
             }
             EvaluationPhase::Complete(CompletionKind::ReplacementReady) => {
                 state.completion_collected = true;
+                let cut = state
+                    .completion_cut
+                    .take()
+                    .expect("a completed replacement must retain its output cut");
+                let mut output = take_owned_response(&mut state, &self.output, cut);
+                state.track_delivery(&mut output);
                 return Ok(EvaluationStatus::Report(EvaluationWait::ReplacementReady(
-                    self.output.take(),
+                    output,
                 )));
             }
             EvaluationPhase::CellCompletionGrace(deadline) => {
@@ -462,17 +531,21 @@ impl Evaluation {
                 ));
             }
             EvaluationPhase::ReplacementStarting if at_deadline => {
+                let cut = self.output.cut();
+                let mut output = take_owned_response(&mut state, &self.output, cut);
+                state.track_delivery(&mut output);
                 return Ok(EvaluationStatus::Report(
-                    EvaluationWait::ReplacementStarting(self.output.take()),
+                    EvaluationWait::ReplacementStarting(output),
                 ));
             }
             EvaluationPhase::Evaluating | EvaluationPhase::ReplacementStarting => {}
         }
         let Some(report_at) = state.input_report_at else {
             if at_deadline {
-                return Ok(EvaluationStatus::Report(EvaluationWait::Running(
-                    self.output.take(),
-                )));
+                let cut = self.output.cut();
+                let mut output = take_owned_response(&mut state, &self.output, cut);
+                state.track_delivery(&mut output);
+                return Ok(EvaluationStatus::Report(EvaluationWait::Running(output)));
             }
             return Ok(EvaluationStatus::Waiting);
         };
@@ -480,9 +553,48 @@ impl Evaluation {
         if !at_deadline && !grace.is_zero() {
             return Ok(EvaluationStatus::Grace(grace));
         }
+        let cut = self.output.cut();
+        let mut output = take_owned_response(&mut state, &self.output, cut);
+        state.track_delivery(&mut output);
         Ok(EvaluationStatus::Report(EvaluationWait::InputRequested(
-            self.output.take(),
+            output,
         )))
+    }
+}
+
+impl EvaluationState {
+    fn track_delivery(&mut self, response: &mut Response) {
+        assert!(
+            self.delivery.is_none(),
+            "an evaluation can have only one response awaiting delivery"
+        );
+        let (acknowledgment, delivered) = mpsc::sync_channel(1);
+        response.acknowledge_with(acknowledgment);
+        self.delivery = Some(delivered);
+    }
+
+    fn settle_delivery(&mut self) -> Result<bool, String> {
+        let Some(delivery) = self.delivery.as_ref() else {
+            return Ok(true);
+        };
+        match delivery.try_recv() {
+            Ok(ResponseAcknowledgment::Delivered) => {
+                self.delivery = None;
+                Ok(true)
+            }
+            Ok(ResponseAcknowledgment::Unclaimed(response)) => {
+                self.delivery = None;
+                assert!(
+                    self.reclaimed.replace(response).is_none(),
+                    "an evaluation can reclaim only one response at a time"
+                );
+                Ok(true)
+            }
+            Err(mpsc::TryRecvError::Empty) => Ok(false),
+            Err(mpsc::TryRecvError::Disconnected) => {
+                Err("previous send response delivery acknowledgment stopped".to_string())
+            }
+        }
     }
 }
 
@@ -501,14 +613,31 @@ impl RestartReservation {
         }
     }
 
-    pub(super) fn take_output(&self, output: &OutputTape) -> (Response, Response) {
-        match self.completion_checkpoint {
-            Some(checkpoint) => (
-                self.project_response(output.take_until(checkpoint)),
-                output.take(),
-            ),
-            None => (self.project_response(output.take()), Response::default()),
-        }
+    pub(super) fn take_output(&mut self, output: &OutputTape) -> (Response, Response) {
+        let cut = self.completion_cut.unwrap_or_else(|| output.cut());
+        let mut state = self
+            .evaluation
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let current_output = take_owned_response(&mut state, output, cut);
+        drop(state);
+        let post_completion = if self.completion_cut.is_some() {
+            output.take()
+        } else {
+            Response::default()
+        };
+        let current_output = self.project_response(current_output);
+        let mut old_output = self.reclaimed.take().unwrap_or_default();
+        old_output.extend_logical_region(current_output);
+        (old_output, post_completion)
+    }
+
+    /// Transfers an already assembled response's delivery claim to restart.
+    pub(super) fn take_pending_delivery(
+        &mut self,
+    ) -> Option<mpsc::Receiver<ResponseAcknowledgment>> {
+        self.delivery.take()
     }
 
     pub(super) fn stopped_notice(&self) -> &'static str {
@@ -519,12 +648,19 @@ impl RestartReservation {
         super::output::ACTIVE_EVALUATION_STOPPED_NOTICE
     }
 
-    pub(super) fn deliver(self, mut response: Response) -> Result<RestartDelivery, String> {
-        let mut state = self
-            .evaluation
-            .state
-            .lock()
-            .map_err(|_| "worker evaluation state lock poisoned".to_string())?;
+    pub(super) fn deliver(
+        self,
+        mut response: Response,
+    ) -> Result<RestartDelivery, RestartDeliveryFailure> {
+        let mut state = match self.evaluation.state.lock() {
+            Ok(state) => state,
+            Err(_) => {
+                return Err(RestartDeliveryFailure {
+                    message: "worker evaluation state lock poisoned".to_string(),
+                    response,
+                });
+            }
+        };
         if !state.waiting {
             state.restart_reserved = false;
             return Ok(RestartDelivery::Unclaimed(response));
@@ -535,6 +671,19 @@ impl RestartReservation {
         self.evaluation.changed.notify_one();
         Ok(RestartDelivery::Waiting(wait_for_acknowledgment))
     }
+}
+
+fn take_owned_response(
+    state: &mut EvaluationState,
+    output: &OutputTape,
+    cut: OutputCut,
+) -> Response {
+    let cell = output.drain_through(cut);
+    let Some(mut prelude) = state.prelude.take() else {
+        return cell;
+    };
+    prelude.extend_cell_after_idle_prelude(cell);
+    prelude
 }
 
 impl Drop for RestartReservation {
@@ -559,5 +708,99 @@ impl Drop for WaitClaim {
         self.evaluation.changed.notify_one();
         drop(state);
         drop(handoff);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::worker_client::output::{Content, SendResponse, render_response};
+
+    async fn completed_response() -> (Arc<Evaluation>, Response) {
+        let output = OutputTape::new();
+        let evaluation = Arc::new(Evaluation::new(
+            crate::transcript::Transcript::new(),
+            None,
+            output,
+            Response::default(),
+        ));
+        evaluation.complete_cell(Ok(()));
+        let claim = evaluation.claim().unwrap();
+        let EvaluationWait::Completed(response) =
+            evaluation.wait(claim, Duration::ZERO).await.unwrap()
+        else {
+            panic!("completed evaluation did not assemble its response")
+        };
+        (
+            evaluation,
+            render_response(SendResponse::Completed(response)),
+        )
+    }
+
+    fn response_text(response: Response) -> String {
+        let (content, is_error, delivery) = response.into_parts();
+        assert!(!is_error);
+        assert!(delivery.is_none());
+        let [Content::Text(text)] = content.as_slice() else {
+            panic!("expected one text response block")
+        };
+        text.clone()
+    }
+
+    #[tokio::test]
+    async fn completed_evaluation_remains_until_its_response_is_delivered() {
+        let (evaluation, response) = completed_response().await;
+        assert!(!evaluation.reap_delivered_completion().unwrap());
+
+        let (_, _, delivery) = response.into_parts();
+        delivery.unwrap().delivered();
+
+        assert!(evaluation.reap_delivered_completion().unwrap());
+    }
+
+    #[tokio::test]
+    async fn unclaimed_completed_response_is_replayed_once() {
+        let (evaluation, response) = completed_response().await;
+        let (_, _, delivery) = response.into_parts();
+        delivery.unwrap().unclaimed();
+        assert!(!evaluation.reap_delivered_completion().unwrap());
+
+        let claim = evaluation.claim().unwrap();
+        let EvaluationWait::Reclaimed(response) =
+            evaluation.wait(claim, Duration::ZERO).await.unwrap()
+        else {
+            panic!("unclaimed response was not replayed")
+        };
+        let response = render_response(SendResponse::Restarted(response));
+        let (content, is_error, delivery) = response.into_parts();
+        assert!(!is_error);
+        assert!(matches!(content.as_slice(), [Content::Text(text)] if text == "[done]"));
+        delivery.unwrap().delivered();
+
+        assert!(evaluation.reap_delivered_completion().unwrap());
+    }
+
+    #[tokio::test]
+    async fn restart_claims_an_assembled_response_until_delivery_resolves() {
+        let (evaluation, response) = completed_response().await;
+        let mut restart = evaluation.reserve_for_restart().unwrap();
+        let (_, post_completion) = restart.take_output(&evaluation.output);
+        let (post_completion, is_error, delivery) = post_completion.into_parts();
+        assert!(post_completion.is_empty());
+        assert!(!is_error);
+        assert!(delivery.is_none());
+        let delivery_result = restart.take_pending_delivery().unwrap();
+        assert!(matches!(
+            delivery_result.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+
+        let (_, _, delivery) = response.into_parts();
+        delivery.unwrap().unclaimed();
+        let ResponseAcknowledgment::Unclaimed(response) = delivery_result.recv().unwrap() else {
+            panic!("cancelled response was reported as delivered")
+        };
+        assert_eq!(response_text(response), "[done]");
+        assert!(delivery_result.try_recv().is_err());
     }
 }
