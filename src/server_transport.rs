@@ -22,7 +22,7 @@ pub(crate) struct ResponseDeliveryCall(Arc<Mutex<ResponseDeliveryCallState>>);
 #[derive(Default)]
 struct ResponseDeliveryState {
     active: HashMap<RequestId, ResponseDeliveryCall>,
-    /// Evaluation-response futures registered before they run on the service task.
+    /// Delivery-tracked response futures registered before they run on the service task.
     pending_writes: usize,
     closed: bool,
 }
