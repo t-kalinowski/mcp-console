@@ -378,6 +378,26 @@ mod tests {
         assert!(current_call(&deliveries, &request_id).is_none());
     }
 
+    #[tokio::test]
+    async fn cancelled_receive_retains_request_waiting_for_response_write() {
+        let deliveries = ResponseDeliveries::default();
+        deliveries.lock().pending_writes = 1;
+        let input =
+            std::io::Cursor::new(b"{\"jsonrpc\":\"2.0\",\"method\":\"ping\",\"id\":1}\n".to_vec());
+        let mut transport = ServerTransport::new(input, tokio::io::sink(), deliveries.clone());
+
+        let mut receive = Box::pin(transport.receive());
+        let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+        assert!(std::future::Future::poll(receive.as_mut(), &mut context).is_pending());
+        drop(receive);
+
+        deliveries.settle_write();
+        let Some(JsonRpcMessage::Request(request)) = transport.receive().await else {
+            panic!("cancelled receive should retain its parsed request");
+        };
+        assert_eq!(request.id, request_id(1));
+    }
+
     #[test]
     fn failed_write_releases_current_call() {
         let deliveries = ResponseDeliveries::default();
