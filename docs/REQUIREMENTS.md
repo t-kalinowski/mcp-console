@@ -30,6 +30,9 @@ The built-in server prepares these defaults before accepting MCP input:
 | Python | NumPy and pandas when Python is server-managed |
 | DuckDB | ICU and JSON extensions |
 
+MCP Console applies no deadline to these startup preflights, which run before the MCP transport starts.
+`session(action = "interrupt")` and closing MCP input therefore cannot cancel them; if a resolver does not finish, the server does not begin accepting MCP requests.
+
 Packages supplied by these environments are available but are not attached or imported automatically.
 The default DuckDB extensions are installed in DuckDB's native cache but are loaded only when DuckDB needs them inside the sandbox.
 
@@ -58,7 +61,7 @@ Successful preparation returns `[prepared]`.
 Before a worker starts, the server resolves every changed candidate on the host, commits the retained configuration only after the complete request succeeds, and does not start the worker.
 Exact repeats return `[prepared]` without resolving them again.
 
-After a worker starts, preparation is available only while it is idle:
+After a worker starts, requests that add to the retained environment are available only while it is idle:
 
 - R additions can update a worker that implements live R preparation.
 - Compatible Python additions can update an idle server-managed built-in worker.
@@ -68,8 +71,8 @@ Live R and Python preparation is noninteractive.
 Use `send` to satisfy and collect any managed input requested by an idle R callback before preparing R or Python requirements.
 If such a request is outstanding or arises during live preparation, the preparation fails and the server stops the worker, losing its in-memory state.
 
-Preparation during an active cell is rejected.
-If preparation overlaps worker startup, it returns `[requirements not prepared: worker is starting]` without resolving or retaining the additions.
+A request with new additions during an active cell is rejected.
+If a request with new additions overlaps worker startup, it returns `[requirements not prepared: worker is starting]` without resolving or retaining the additions.
 If the worker is stopped, new additions return `[restart required]`; use restart to prepare them and start a replacement.
 
 An explicit restart can cancel an in-flight live R or Python preparation.
@@ -152,6 +155,12 @@ The [implemented architecture](ARCHITECTURE.md) owns the replacement lifecycle; 
 R requirements are IR package references.
 MCP Console owns only the framing checks: each request may contain at most 64 nonempty strings, and a string may not contain NUL, carriage return, or newline.
 IR owns the accepted package reference syntax and dependency resolution.
+
+The built-in server uses `$R_HOME/bin/Rscript` when `R_HOME` is set.
+Otherwise it runs `R RHOME` using `R` from `PATH` and uses the reported home's `bin/Rscript`.
+It passes that exact `Rscript` to IR and uses it for DuckDB resolution.
+When Python is server-managed, the same `Rscript` also runs managed-Python resolution.
+The server prepends the resolved managed library to inherited `R_LIBS`, preserving its nonempty path entries after the managed library.
 
 The server requires `ir` 0.4.0 or later on `PATH`.
 It passes each requirement as a separate `ir run --with` argument; requirement text is never inserted into R source.

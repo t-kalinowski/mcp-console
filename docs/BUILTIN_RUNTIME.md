@@ -73,7 +73,7 @@ The built-in worker reports managed reads from:
 - Python `input()`, `breakpoint()`, and `pdb` when they use reticulate's R console bridge.
 
 A reported read adds a record such as `[input requested: "name> "]`.
-If it remains outstanding after a 10-millisecond exposure grace, the response ends in `[stdin needed]`.
+If the request is still outstanding when either its 10-millisecond exposure grace ends or the call reaches its deadline, the response ends in `[stdin needed]`.
 Input that was already queued can satisfy the read before that marker is returned.
 The grace controls only when the request becomes visible; it is not a read timeout.
 
@@ -212,7 +212,9 @@ Devices opened explicitly by user code are user-owned: MCP Console does not clos
 ### Matplotlib
 
 At the end of every Python cell, including after an exception, the worker renders each open `matplotlib.pyplot` figure in figure-number order, returns it as PNG, and closes all pyplot-managed figures.
-`show()` is optional and is replaced with a no-op for the noninteractive runtime.
+`show()` is optional and is replaced with a no-op by the runtime.
+When `MPLBACKEND` is absent, the worker sets it to Matplotlib's noninteractive `Agg` backend.
+A nonempty inherited `MPLBACKEND` takes precedence and may select an interactive backend that fails inside the sandbox.
 Calling `savefig()` does not suppress return of an open figure; calling `close()` before cell end does.
 Figures not registered with pyplot are not captured.
 
