@@ -321,6 +321,9 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::io::AsyncWriteExt;
+
+    const PING_REQUEST: &[u8] = b"{\"jsonrpc\":\"2.0\",\"method\":\"ping\",\"id\":1}\n";
 
     fn request_id(value: i64) -> RequestId {
         RequestId::Number(value)
@@ -394,9 +397,9 @@ mod tests {
     async fn cancelled_receive_retains_request_waiting_for_response_write() {
         let deliveries = ResponseDeliveries::default();
         deliveries.lock().pending_writes = 1;
-        let input =
-            std::io::Cursor::new(b"{\"jsonrpc\":\"2.0\",\"method\":\"ping\",\"id\":1}\n".to_vec());
-        let mut transport = ServerTransport::new(input, tokio::io::sink(), deliveries.clone());
+        let (mut input, read) = tokio::io::duplex(1024);
+        input.write_all(PING_REQUEST).await.unwrap();
+        let mut transport = ServerTransport::new(read, tokio::io::sink(), deliveries.clone());
 
         let mut receive = Box::pin(transport.receive());
         let mut context = std::task::Context::from_waker(std::task::Waker::noop());
@@ -408,6 +411,24 @@ mod tests {
             panic!("cancelled receive should retain its parsed request");
         };
         assert_eq!(request.id, request_id(1));
+    }
+
+    #[tokio::test]
+    async fn response_gate_observes_eof_after_queued_request() {
+        let deliveries = ResponseDeliveries::default();
+        deliveries.lock().pending_writes = 1;
+        let (mut input, read) = tokio::io::duplex(1024);
+        input.write_all(PING_REQUEST).await.unwrap();
+        input.shutdown().await.unwrap();
+        let mut transport = ServerTransport::new(read, tokio::io::sink(), deliveries.clone());
+
+        let mut receive = Box::pin(transport.receive());
+        let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+        assert!(matches!(
+            std::future::Future::poll(receive.as_mut(), &mut context),
+            std::task::Poll::Ready(None)
+        ));
+        assert!(deliveries.lock().closed);
     }
 
     #[test]
