@@ -55,7 +55,13 @@ fn run_server(
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()?;
-    runtime.block_on(server::run(worker, relay))
+    let result = runtime.block_on(server::run(worker, relay));
+    // `server::run` has already joined service and worker shutdown. Tokio's
+    // stdout uses a blocking task that cannot be cancelled while the client
+    // leaves its output pipe full, so runtime teardown must not wait for it.
+    // The process exits immediately after this function returns.
+    runtime.shutdown_background();
+    result
 }
 
 fn exit_with_error(error: impl std::fmt::Display) -> ExitCode {

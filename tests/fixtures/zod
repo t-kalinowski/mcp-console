@@ -162,11 +162,18 @@ def main() -> None:
     writer = open_sideband(WRITE_FD_ENV, "w")
     temporary = Path(os.environ["TMPDIR"])
     received_sigint = False
+    sigint_checkpoint = None
+    if os.environ.get("ZOD_SIGINT_CHECKPOINT") == "1":
+        checkpoint_path = temporary / "zod-sigint-checkpoint"
+        os.mkfifo(checkpoint_path)
+        sigint_checkpoint = os.open(checkpoint_path, os.O_RDWR | os.O_NONBLOCK)
 
     def handle_sigint(_signum: int, _frame: object) -> None:
         nonlocal received_sigint
         received_sigint = True
         (temporary / "zod-sigint-received").touch()
+        if sigint_checkpoint is not None:
+            assert os.write(sigint_checkpoint, b"1") == 1
 
     signal.signal(signal.SIGINT, handle_sigint)
     if os.environ.get("ZOD_REPORT_PROCESS_GROUP") == "1":
