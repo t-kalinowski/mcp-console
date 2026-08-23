@@ -1,5 +1,4 @@
 const R_ENVIRONMENT_BRIDGE_SOURCE: &str = include_str!("r_environment/bridge.R");
-const ENABLE_R_PACKAGE_PRESCAN: bool = true;
 
 #[cfg(target_os = "macos")]
 use libr::SEXP;
@@ -30,11 +29,6 @@ pub(crate) enum ResolutionOutcome {
     },
 }
 
-pub(crate) enum PreflightOutcome {
-    Continue,
-    Failed { message: String },
-}
-
 #[derive(serde::Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum PreparationOutcome {
@@ -57,21 +51,6 @@ impl Bridge {
             .ok_or_else(|| "R environment bridge returned no response".to_string())?;
         serde_json::from_str(&response)
             .map_err(|error| format!("invalid R environment preparation response: {error}"))
-    }
-
-    pub(crate) fn preflight(&self, source: &str) -> Result<PreflightOutcome, String> {
-        if !ENABLE_R_PACKAGE_PRESCAN {
-            return Ok(PreflightOutcome::Continue);
-        }
-        let message = self
-            .0
-            .call1_string(c"preflight", source)?
-            .ok_or_else(|| "R environment preflight returned no response".to_string())?;
-        if message.is_empty() {
-            Ok(PreflightOutcome::Continue)
-        } else {
-            Ok(PreflightOutcome::Failed { message })
-        }
     }
 }
 

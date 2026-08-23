@@ -283,11 +283,10 @@ Once `prepare_r` or `prepare_python` has begun, a worker-originated runtime R ca
 
 `r_resolution_failed.failure` classifies the response:
 
-- `host` is an ordinary request-validation, requirement-state, or host-resolver failure; an advisory R-cell prescan may ignore it and let normal evaluation continue;
+- `host` is an ordinary request-validation, requirement-state, or host-resolver failure;
 - `interrupted` means the host resolver was explicitly interrupted; and
 - `operation` means lifecycle cancellation or another operation-level failure and ends the affected worker boundary.
 
-Only `host` is advisory to the prescan.
 Transport, framing, sideband, and unexpected-response failures still fail the worker boundary rather than becoming host failures.
 
 ### Live Python preparation

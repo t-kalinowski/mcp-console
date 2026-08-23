@@ -34,7 +34,7 @@ A code-bearing call can declare additive R packages, Python packages, or DuckDB 
 The server prepares changed requirements before it dispatches the cell and retains successful additions for later cells and restarts.
 Already-retained requirements add no preparation work, and a successful combined call returns only the normal cell result, without `[prepared]`.
 Explicit preparation makes packages and extensions available but does not attach, import, or load them.
-R additionally has advisory static package scanning and runtime namespace resolution; Python imports and SQL are not scanned, and MCP Console does not replay a cell after a package-load or import failure.
+R resolves missing plain package names only when execution reaches a supported package-loading operation; R source, Python imports, and SQL are not scanned, and MCP Console does not replay a cell after a package-load or import failure.
 If validation, resolution, or live preparation fails, or if requirement changes require an explicit restart, the call is a tool error and the cell is not run.
 Calls without `requirements` skip that pre-dispatch preparation path; an R cell can still resolve a package while it runs.
 
@@ -99,7 +99,7 @@ They cannot consume a partial line that the built-in worker has preserved for th
 The call returns after the request or signal is sent, not after user code stops.
 If neither a resolver nor a worker is running, the call does not start a worker and returns the tool error `worker is not running`.
 A resolver signal error is returned by both the interrupt and resolution calls, and the server stops that resolver during cleanup.
-An interrupted automatic R resolver reports an interrupted outcome to the running cell rather than being ignored as an advisory prescan failure.
+An interrupted automatic R resolver reports an interrupted outcome to the running cell.
 A live but idle built-in worker still receives `SIGINT` and the call returns `[interrupt sent]`.
 R may consume that signal while idle or at the next managed boundary, so the following cell can execute while its response contains a bare interrupt newline attributable to the earlier interrupt.
 
@@ -152,8 +152,8 @@ They bypass automatic resolution for already available packages, `library()` hel
 
 Runtime discovery accepts plain package names only.
 Use `requirements.r` to stage a package before evaluation or to supply an explicit IR reference such as a remote source.
-A best-effort AST scan batches obvious static references before native evaluation, but does not evaluate code or resolve dynamic names.
-Parse errors and ordinary resolver failures caused only by the scan fall through to normal evaluation, and the runtime wrappers handle references that execution reaches.
+The worker does not inspect R source before evaluation.
+Each missing package is resolved only when execution reaches a covered operation, so unreachable or quoted code does not invoke IR and several new packages in one cell can cause several incremental IR calls in execution order.
 
 When the server returns a candidate library, the worker prepends it through the managed `.libPaths()` bridge and reports activation before resuming the original base call.
 The server retains the library only after that report.

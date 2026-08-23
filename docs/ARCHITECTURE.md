@@ -101,7 +101,7 @@ It reports readiness, accepts complete cells and supported preparation operation
 
 The built-in worker embeds R on its main thread.
 Its language adapters provide persistent Python and DuckDB SQL within that worker process.
-Its private R environment bridge wraps `base::library` and `base::loadNamespace`, performs the advisory cell prescan, applies accepted managed libraries, and reports activation outcomes.
+Its private R environment bridge wraps `base::library` and `base::loadNamespace`, applies accepted managed libraries, and reports activation outcomes.
 Their user-visible behavior belongs in the [built-in runtime guide](BUILTIN_RUNTIME.md), while the sideband contract remains independent of the interpreter implementation.
 
 ## Worker generations
@@ -143,7 +143,7 @@ The server releases the environment transition after launch; the active evaluati
 ### Worker-originated R resolution
 
 Automatic R resolution is a callback from the running built-in worker, not an idle preparation operation.
-Before native evaluation, an advisory worker-side AST scan can batch obvious static references; the `library()` and `loadNamespace()` wrappers remain the runtime correctness path.
+The `library()` and `loadNamespace()` wrappers issue callbacks only when evaluation reaches a missing package load; the worker does not inspect the cell in advance.
 The relay only translates the callback messages and preserves their transport order.
 
 The server atomically assigns environment-change ownership to either an idle runtime R callback or explicit environment preparation.
@@ -171,7 +171,7 @@ Ordinary resolver and activation errors leave an otherwise healthy worker availa
 An interrupt targets the active host resolver when one is registered; otherwise it targets the live worker through its relay.
 It stays associated with that resolver or worker and is not retried against a replacement.
 The call reports signal delivery rather than waiting for the resolver or evaluated code to stop.
-Resolver interruption and lifecycle cancellation are tracked as typed outcomes, so the advisory R prescan suppresses only ordinary host-resolution failures.
+Resolver interruption and lifecycle cancellation are tracked as typed outcomes for the affected operation.
 
 ### Explicit restart
 
