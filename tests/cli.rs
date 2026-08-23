@@ -1165,8 +1165,14 @@ fn stdio_console_shutdown_is_bounded_with_detached_stdin_descendants() {
         .arg(zod)
         .envs(environment);
     let mut client = McpClient::spawn(command);
+    // Start the worker before the detached-child checkpoint so its deadline
+    // does not also include lazy worker startup.
+    assert_eq!(
+        client.call_console(2, json!({"r": "echo ready"})),
+        "zod: ready\n"
+    );
     client.send_console(
-        2,
+        3,
         json!({
             "r": "stall with detached stdin",
             "stdin": "x".repeat(2 * 1024 * 1024),
