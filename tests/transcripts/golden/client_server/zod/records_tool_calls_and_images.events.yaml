@@ -13,6 +13,11 @@
     name: send
     arguments:
       r: emit image
+      stdin: |
+        recorded stdin
+      requirements:
+        r:
+          - praise
   schema_version: 1
   run_id: <run ID>
   sequence: 2

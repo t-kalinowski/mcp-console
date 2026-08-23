@@ -3,7 +3,7 @@
 **Status:** Implemented current behavior
 
 This document describes how MCP Console prepares and retains R packages, Python packages, and DuckDB extensions.
-The first sections are operational: they explain what `session(action = "prepare")` and `session(action = "restart")` do.
+The first sections are operational: they explain requirements declared for a `send` cell and what `session(action = "prepare")` and `session(action = "restart")` do.
 [Host resolution and trust](#host-resolution-and-trust) explains why requirement input is restricted and which work runs with server permissions.
 
 Prepared requirements configure the built-in worker; they do not attach an R package, import a Python package, or load a DuckDB extension.
@@ -32,7 +32,7 @@ The built-in server prepares these defaults before accepting MCP input:
 
 MCP Console applies no deadline to these startup preflights, which run before the MCP transport starts.
 `session(action = "interrupt")` and closing MCP input therefore cannot cancel them; if a resolver does not finish, the server does not begin accepting MCP requests.
-Host resolution for changed requirements started by explicit `prepare` or `restart` also has no deadline.
+Host resolution for changed requirements started by `send`, explicit `prepare`, or `restart` also has no deadline.
 The call remains pending until the resolver exits; while MCP input is open, `interrupt` sends `SIGINT` to the active resolver, and closing MCP input cancels it during server shutdown.
 
 Packages supplied by these environments are available but are not attached or imported automatically.
@@ -41,7 +41,46 @@ The default DuckDB extensions are installed in DuckDB's native cache but are loa
 A custom worker skips all three default preflights.
 Its more limited requirements contract is described under [Custom workers](#custom-workers).
 
-## Preparing requirements
+## Requirements for a cell
+
+Use the optional `requirements` field on a code-bearing `send` when that cell needs additional packages or extensions:
+
+```json
+{
+  "python": "import yaml12\nprint(yaml12.__name__)",
+  "requirements": {
+    "python": ["py-yaml12"]
+  }
+}
+```
+
+The field has the same R, Python, and DuckDB arrays as `session` requirements and requires at least one entry across them.
+It may accompany any cell language because the built-in languages share one worker environment: an R requirement can accompany a Python cell, for example.
+It is not accepted on an empty poll or a follow-up stdin call.
+
+Requirements are preconditions of the cell.
+The server validates the complete declaration, prepares all changed candidates, and reserves the cell as one operation.
+It does not dispatch the cell unless that work succeeds, and no other send, preparation, restart commit, or environment change can interleave between successful preparation and evaluation reservation.
+Successful additions are retained for later cells and restarts, but the response is the normal cell response and contains no `[prepared]` marker.
+An exact repeat performs no resolver or worker preparation.
+
+The behavior depends on worker state:
+
+- Before the worker starts, the server resolves all changed candidates, commits the complete retained environment only after they all succeed, starts the worker, and evaluates the cell.
+- With an idle running worker, the server applies the live R, Python, and DuckDB behavior described below, preserving supported live state, then immediately launches the cell in that worker generation.
+- With an eligible stopped worker, the server resolves and retains additions without live preparation, starts the normal replacement, and evaluates the cell there.
+- After a recoverable live R failure has made further environment changes require restart, new additions fail with `requirements require session restart; cell was not run`.
+  The live worker is not destroyed automatically, so its state can be saved before an explicit restart.
+
+A call may also include `stdin`.
+Preparation happens first; after the cell is dispatched, the existing stdin-before-evaluate command ordering applies.
+`timeout_ms` begins applying only after dispatch, so preparation can make the complete call take longer than the selected evaluation wait timeout.
+`session(action = "interrupt")` still targets an active host resolver, and explicit restart or closing MCP input retains its existing resolver-cancellation behavior.
+
+MCP Console does not discover requirements from `library()`, `require()`, `::`, Python imports, SQL, or `install.packages()`, and it does not retry a cell after a missing-package error.
+Prepared packages and extensions still must be attached, imported, or loaded by code when their runtime requires it.
+
+## Staging requirements ahead of time
 
 Use `session` with `action = "prepare"` to add requirements without replacing the worker:
 
@@ -202,7 +241,7 @@ The built-in server reads inherited `RETICULATE_PYTHON` when it starts:
 - any other nonempty value selects that existing Python environment.
 
 A user-selected environment is preserved for the worker.
-The server skips its managed-Python preflight and rejects Python additions from `prepare`, `restart`, or worker-originated managed-resolution requests.
+The server skips its managed-Python preflight and rejects Python additions from `send`, `prepare`, `restart`, or worker-originated managed-resolution requests.
 R requirements and DuckDB extensions remain available.
 The selected interpreter must still satisfy the [built-in runtime](BUILTIN_RUNTIME.md) requirement for Python 3.10 or later and must initialize under the worker's offline policy.
 
@@ -212,7 +251,7 @@ A custom worker always rejects managed Python requirements, regardless of `RETIC
 ## Custom workers
 
 Custom workers start without the built-in R library, managed Python environment, or default DuckDB extensions.
-They can use explicit R requirements and DuckDB extensions, but managed Python requirements are unavailable for both prepare and restart.
+They can use explicit R requirements and DuckDB extensions, but managed Python requirements are unavailable for send, prepare, and restart.
 
 Every explicitly resolved custom-worker R candidate includes DBI, DuckDB, and jsonlite so the host can prepare later DuckDB extensions with the same library.
 The server supplies the retained library through `R_LIBS` at worker launch.
@@ -253,6 +292,7 @@ The built-in worker has the opposite network policy: it forces `UV_OFFLINE=1` be
 
 Before worker startup and during restart, the server commits the retained R, Python, and DuckDB candidates only after all requested resolution succeeds.
 A failure does not change the retained manifest or replace the current worker.
+The same pre-start transaction is used for requirements declared by a cell, and any failure prevents that cell from being dispatched.
 
 That transaction covers server-owned state, not external resolver caches.
 IR, uv, reticulate, and DuckDB may download, build, or install files before a later step fails.
@@ -262,4 +302,5 @@ A future request may reuse such cache entries.
 Live preparation has one additional commit boundary: a Python activation is retained as soon as the worker reports it.
 It is not rolled back if a later R step in the same request fails.
 R and DuckDB changes commit only after their complete live operation succeeds.
+For a combined `send`, any such failure returns through that send and prevents its cell from running, while retaining or discarding candidates according to these existing live-preparation boundaries.
 The earlier sections describe how ordinary Python failure, recoverable R failure, and infrastructure failure affect the current worker.

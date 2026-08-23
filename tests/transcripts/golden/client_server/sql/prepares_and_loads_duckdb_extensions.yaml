@@ -29,28 +29,6 @@ result:
 session:
   action: prepare
   requirements:
-    duckdb:
-      - fts
-result:
-  content:
-    - type: text
-      text: "[prepared]"
-  isError: false
----
-session:
-  action: prepare
-  requirements:
-    duckdb:
-      - fts
-result:
-  content:
-    - type: text
-      text: "[prepared]"
-  isError: false
----
-session:
-  action: prepare
-  requirements:
     r:
       - praise
 result:
@@ -59,8 +37,8 @@ result:
       text: "[prepared]"
   isError: false
 ---
-session:
-  action: prepare
+send:
+  sql: CREATE TABLE failed_requirement_cell(answer INTEGER)
   requirements:
     duckdb:
       - not_a_real_duckdb_extension
@@ -73,12 +51,40 @@ result:
   isError: true
 ---
 send:
+  sql: >-
+    SELECT count(*) AS side_effects FROM duckdb_tables() WHERE table_name =
+    'failed_requirement_cell'
+result:
+  content:
+    - type: text
+      text: |
+        # A tibble: 1 × 1
+          side_effects
+               <int64>
+        1            0
+  isError: false
+---
+send:
   sql: |
     PRAGMA create_fts_index('retained_state', 'answer', 'body')
+  requirements:
+    duckdb:
+      - fts
 result:
   content:
     - type: text
       text: "[done]"
+  isError: false
+---
+session:
+  action: prepare
+  requirements:
+    duckdb:
+      - fts
+result:
+  content:
+    - type: text
+      text: "[prepared]"
   isError: false
 ---
 send:

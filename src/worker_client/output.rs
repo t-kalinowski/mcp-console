@@ -28,6 +28,8 @@ struct OutputTapeState {
     direct_stderr: DirectDecoder,
     next_event: u64,
     events: Vec<(u64, OutputEvent)>,
+    /// A failed pre-evaluation response reclaimed after unsuccessful MCP delivery.
+    recovered: Option<Response>,
     limits: OutputLimits,
     budget: PendingOutputBudget,
     /// The truncation summary still open for observations before the next cut.
@@ -134,7 +136,7 @@ enum DirectOutputStream {
 pub(crate) struct Response {
     content: Vec<Content>,
     is_error: bool,
-    acknowledgment: Option<SyncSender<ResponseAcknowledgment>>,
+    delivery: Option<ResponseDeliveryTarget>,
 }
 
 pub(super) enum ResponseAcknowledgment {
@@ -142,12 +144,17 @@ pub(super) enum ResponseAcknowledgment {
     Unclaimed(Response),
 }
 
-/// Reports whether an assembled evaluation response reached the MCP transport.
+enum ResponseDeliveryTarget {
+    Evaluation(SyncSender<ResponseAcknowledgment>),
+    Output(OutputTape),
+}
+
+/// Reports whether an assembled console response reached the MCP transport.
 ///
 /// A bounded recovery copy remains owned here after MCP projection so transport
 /// cancellation or write failure can return the complete reply to restart.
 pub(crate) struct ResponseDelivery {
-    acknowledgment: Option<SyncSender<ResponseAcknowledgment>>,
+    target: Option<ResponseDeliveryTarget>,
     unclaimed: Option<Response>,
 }
 
@@ -252,17 +259,14 @@ impl Response {
     /// Consumes the response for the MCP adapter.
     pub(crate) fn into_parts(mut self) -> (Vec<Content>, bool, Option<ResponseDelivery>) {
         let is_error = self.is_error;
-        let delivery = self
-            .acknowledgment
-            .take()
-            .map(|acknowledgment| ResponseDelivery {
-                acknowledgment: Some(acknowledgment),
-                unclaimed: Some(Response {
-                    content: self.content.clone(),
-                    is_error,
-                    acknowledgment: None,
-                }),
-            });
+        let delivery = self.delivery.take().map(|target| ResponseDelivery {
+            target: Some(target),
+            unclaimed: Some(Response {
+                content: self.content.clone(),
+                is_error,
+                delivery: None,
+            }),
+        });
         let content = std::mem::take(&mut self.content);
         (content, is_error, delivery)
     }
@@ -286,10 +290,18 @@ impl Response {
 
     pub(super) fn acknowledge_with(&mut self, acknowledgment: SyncSender<ResponseAcknowledgment>) {
         assert!(
-            self.acknowledgment.is_none(),
+            self.delivery.is_none(),
             "a response can carry only one acknowledgment"
         );
-        self.acknowledgment = Some(acknowledgment);
+        self.delivery = Some(ResponseDeliveryTarget::Evaluation(acknowledgment));
+    }
+
+    pub(super) fn recover_to(&mut self, output: OutputTape) {
+        assert!(
+            self.delivery.is_none(),
+            "a response can carry only one delivery target"
+        );
+        self.delivery = Some(ResponseDeliveryTarget::Output(output));
     }
 
     fn is_empty(&self) -> bool {
@@ -363,12 +375,12 @@ impl ResponseBuilder {
     }
 
     pub(super) fn append_response(&mut self, other: &mut Response) {
-        if other.acknowledgment.is_some() {
+        if other.delivery.is_some() {
             assert!(
-                self.response.acknowledgment.is_none(),
-                "a response can carry only one acknowledgment"
+                self.response.delivery.is_none(),
+                "a response can carry only one delivery target"
             );
-            self.response.acknowledgment = other.acknowledgment.take();
+            self.response.delivery = other.delivery.take();
         }
         for content in std::mem::take(&mut other.content) {
             match content {
@@ -492,8 +504,8 @@ impl ResponseBuilder {
 impl ResponseDelivery {
     pub(crate) fn delivered(mut self) {
         self.unclaimed = None;
-        if let Some(acknowledgment) = self.acknowledgment.take() {
-            let _ = acknowledgment.send(ResponseAcknowledgment::Delivered);
+        if let Some(target) = self.target.take() {
+            target.delivered();
         }
     }
 
@@ -502,14 +514,14 @@ impl ResponseDelivery {
     }
 
     fn return_unclaimed(&mut self) {
-        let Some(acknowledgment) = self.acknowledgment.take() else {
+        let Some(target) = self.target.take() else {
             return;
         };
         let response = self
             .unclaimed
             .take()
-            .expect("response delivery with an acknowledgment must retain its reply");
-        let _ = acknowledgment.send(ResponseAcknowledgment::Unclaimed(response));
+            .expect("response delivery with a target must retain its reply");
+        target.unclaimed(response);
     }
 }
 
@@ -521,13 +533,31 @@ impl Drop for ResponseDelivery {
 
 impl Drop for Response {
     fn drop(&mut self) {
-        if let Some(acknowledgment) = self.acknowledgment.take() {
-            let response = Self {
-                content: std::mem::take(&mut self.content),
-                is_error: self.is_error,
-                acknowledgment: None,
-            };
-            let _ = acknowledgment.send(ResponseAcknowledgment::Unclaimed(response));
+        let Some(target) = self.delivery.take() else {
+            return;
+        };
+        let response = Self {
+            content: std::mem::take(&mut self.content),
+            is_error: self.is_error,
+            delivery: None,
+        };
+        target.unclaimed(response);
+    }
+}
+
+impl ResponseDeliveryTarget {
+    fn delivered(self) {
+        if let Self::Evaluation(acknowledgment) = self {
+            let _ = acknowledgment.send(ResponseAcknowledgment::Delivered);
+        }
+    }
+
+    fn unclaimed(self, response: Response) {
+        match self {
+            Self::Evaluation(acknowledgment) => {
+                let _ = acknowledgment.send(ResponseAcknowledgment::Unclaimed(response));
+            }
+            Self::Output(output) => output.recover(response),
         }
     }
 }
@@ -539,6 +569,15 @@ impl OutputTape {
 
     fn with_limits(limits: OutputLimits) -> Self {
         Self(Arc::new(Mutex::new(OutputTapeState::new(limits))))
+    }
+
+    fn recover(&self, response: Response) {
+        let mut state = self.lock();
+        assert!(
+            state.recovered.is_none(),
+            "the output tape can recover only one response at a time"
+        );
+        state.recovered = Some(response);
     }
 
     #[cfg(target_os = "macos")]
@@ -691,6 +730,7 @@ impl OutputTapeState {
             direct_stderr: DirectDecoder::default(),
             next_event: 0,
             events: Vec::new(),
+            recovered: None,
             limits,
             budget: PendingOutputBudget::default(),
             active_truncation: None,
@@ -935,7 +975,7 @@ fn drain_through(state: &mut OutputTapeState, cut: OutputCut) -> Response {
         .partition_point(|(sequence, _)| *sequence < cut.0);
     let remaining = state.events.split_off(boundary);
     let events = std::mem::replace(&mut state.events, remaining);
-    let mut output = ResponseBuilder::new();
+    let mut output = ResponseBuilder::from_response(state.recovered.take().unwrap_or_default());
 
     for (sequence, event) in events {
         match &event {

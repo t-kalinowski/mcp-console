@@ -36,21 +36,13 @@ result:
         (42, True, True)
   isError: false
 ---
-session:
-  action: prepare
-  requirements:
-    python:
-      - py-yaml12
-result:
-  content:
-    - type: text
-      text: "[prepared]"
-  isError: false
----
 send:
   python: |
     import os; import sys; import yaml12
     (sentinel, os.getpid() == worker_pid, sys.prefix != initial_prefix, yaml12.__name__)
+  requirements:
+    python:
+      - py-yaml12
 result:
   content:
     - type: text

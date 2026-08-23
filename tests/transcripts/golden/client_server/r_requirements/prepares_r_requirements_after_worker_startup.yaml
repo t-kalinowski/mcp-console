@@ -23,17 +23,6 @@ result:
       text: "[done]"
   isError: false
 ---
-session:
-  action: prepare
-  requirements:
-    r:
-      - zeallot
-result:
-  content:
-    - type: text
-      text: "[prepared]"
-  isError: false
----
 send:
   r: |
     stopifnot(
@@ -43,6 +32,9 @@ send:
       identical(dirname(find.package("zeallot")), .libPaths()[[1L]])
     )
     42L
+  requirements:
+    r:
+      - zeallot
 result:
   content:
     - type: text

@@ -235,6 +235,11 @@ def record_resolved_r_library(environment: dict[str, str], directory: Path) -> N
             if [ "$#" -eq 1 ] && [ "$1" = "--version" ]; then
               exec "$MCP_CONSOLE_TEST_REAL_IR" "$@"
             fi
+            if [ -n "${MCP_CONSOLE_TEST_R_RESOLUTION_FAILURE:-}" ] &&
+              [ -e "$MCP_CONSOLE_TEST_R_RESOLUTION_FAILURE" ]; then
+              printf 'fixture R resolver failed\n' >&2
+              exit 1
+            fi
             library=$("$MCP_CONSOLE_TEST_REAL_IR" "$@")
             printf '%s' "$library" > "$MCP_CONSOLE_TEST_R_LIBRARY_IDENTITY"
             printf '%s' "$library"
@@ -411,14 +416,22 @@ def test_records_tool_calls_and_images(binary: Path) -> TranscriptWithCompanion:
     zod = Path(__file__).resolve().parents[2] / "fixtures" / "zod"
     with tempfile.TemporaryDirectory() as temporary_directory:
         workspace = Path(temporary_directory)
+        environment, _ = r_test_environment()
+        environment["RETICULATE_PYTHON"] = ""
+        record_resolved_r_library(environment, workspace)
         client = McpClient(
             binary,
             ("serve", "--worker", str(zod)),
+            environment,
             current_directory=workspace,
             umask=0,
         )
         client._initialize_and_list_tools()
-        client.send(r="emit image")
+        client.send(
+            r="emit image",
+            stdin="recorded stdin\n",
+            requirements={"r": ["praise"]},
+        )
         image_request_id = client.transcript[-1]["id"]
         invalid = client._request(
             "tools/call",
@@ -464,7 +477,11 @@ def test_records_tool_calls_and_images(binary: Path) -> TranscriptWithCompanion:
         assert events[1]["request_id"] == image_request_id, events[1]
         assert events[1]["request"] == {
             "name": "send",
-            "arguments": {"r": "emit image"},
+            "arguments": {
+                "r": "emit image",
+                "stdin": "recorded stdin\n",
+                "requirements": {"r": ["praise"]},
+            },
         }, events[1]
         assert {
             key: events[2][key]
@@ -515,6 +532,11 @@ def test_records_tool_calls_and_images(binary: Path) -> TranscriptWithCompanion:
             },
         }, events[6]
         assert events[7]["result"] == session_result, events[7]
+        assert [event["request"]["name"] for event in events if "request" in event] == [
+            "send",
+            "send",
+            "session",
+        ], events
         assert all(
             event.get("request", {}).get("name") != "missing" for event in events
         ), events
@@ -804,6 +826,14 @@ def test_custom_worker_skips_managed_python_preflight(binary: Path) -> Transcrip
     assert result["content"][0]["text"] == (
         "Python requirements are unavailable with a custom worker"
     )
+    result = client.send(
+        r="echo must not run",
+        requirements={"python": ["py-yaml12"]},
+    )
+    assert result["isError"] is True, result
+    assert result["content"][0]["text"] == (
+        "Python requirements are unavailable with a custom worker"
+    )
     client.send(r="echo echo")
     assert last_tool_text(client) == "zod: echo\n"
     client.send()
@@ -841,6 +871,7 @@ def test_custom_worker_prepares_r_and_duckdb_requirements(binary: Path) -> Trans
         environment["R_LIBS"] = str(isolated_library)
         environment["R_LIBS_SITE"] = str(isolated_library)
         environment["R_LIBS_USER"] = str(isolated_library)
+        environment["TMPDIR"] = temporary
         record_resolved_r_library(environment, temporary_path)
         client = McpClient(
             binary,
@@ -867,8 +898,8 @@ def test_custom_worker_prepares_r_and_duckdb_requirements(binary: Path) -> Trans
 
         client.send(r="fail next r preparation after output")
         assert last_tool_text(client) == "[done]"
-        result = client.session(
-            action="prepare",
+        result = client.send(
+            r="echo failed preparation cell ran",
             requirements={"r": ["zeallot"]},
         )
         assert result["isError"] is True, result
@@ -906,11 +937,179 @@ def test_custom_worker_prepares_r_and_duckdb_requirements(binary: Path) -> Trans
         }, recorded_result
         assert (session / artifact["path"]).read_bytes() == base64.b64decode(PNG_1X1)
 
+        client.send(r="emit output and image before completion", timeout_ms=0)
+        assert last_tool_text(client) == "\n[running]"
+        image_started = wait_for_marker(
+            temporary_path,
+            "zod-image-evaluation-started",
+            client,
+        )
+        (image_started.parent / "zod-release-image").touch()
+        wait_for_marker(temporary_path, "zod-image-processed", client)
+        try:
+            result = client.send(
+                r="echo active restart-required cell ran",
+                requirements={"r": ["cli"]},
+            )
+            assert result == {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": (
+                            "worker is already evaluating a cell; poll it before "
+                            "preparing requirements"
+                        ),
+                    }
+                ],
+                "isError": True,
+            }, result
+
+            client.send(timeout_ms=0)
+            assert client.transcript[-1]["result"] == {
+                "content": [
+                    {"type": "text", "text": "before pending image\n"},
+                    {"type": "image", "data": PNG_1X1, "mimeType": "image/png"},
+                    {"type": "text", "text": "after pending image\n\n[running]"},
+                ],
+                "isError": False,
+            }, client.transcript[-1]
+        finally:
+            (image_started.parent / "zod-release-image-completion").touch()
+        client.send(timeout_ms=3_000)
+        assert last_tool_text(client) == "[done]"
+
+        result = client.send(
+            r="echo restart-required cell ran",
+            requirements={"r": ["cli"]},
+        )
+        assert result == {
+            "content": [
+                {
+                    "type": "text",
+                    "text": "requirements require session restart; cell was not run",
+                }
+            ],
+            "isError": True,
+        }, result
+        client.send(r="echo worker remains usable")
+        assert last_tool_text(client) == "zod: worker remains usable\n"
+
         result = client.send(r="report managed python activation")
         assert result["isError"] is True, result
         failure = result["content"][0]["text"]
         assert "custom worker reported a managed Python activation" in failure, failure
         return client._finish()
+
+
+def test_cancelled_combined_preparation_failure_is_reclaimed_by_restart(
+    binary: Path,
+) -> Transcript:
+    zod = Path(__file__).resolve().parents[2] / "fixtures" / "zod"
+    ordered_ir = (
+        Path(__file__).resolve().parents[2] / "fixtures" / "ordered_retirement_ir"
+    )
+    environment, _ = r_test_environment()
+    environment["RETICULATE_PYTHON"] = ""
+    with tempfile.TemporaryDirectory() as temporary:
+        temporary_path = Path(temporary)
+        library = temporary_path / "resolved-library"
+        library.mkdir()
+        fake_bin = temporary_path / "bin"
+        fake_bin.mkdir()
+        (fake_bin / "ir").symlink_to(ordered_ir)
+        path = environment.get("PATH")
+        assert path is not None, "PATH is required"
+        environment["PATH"] = os.pathsep.join((str(fake_bin), path))
+        environment["TMPDIR"] = temporary
+        environment["MCP_CONSOLE_TEST_IR_COUNTER"] = str(temporary_path / "ir-counter")
+        environment["MCP_CONSOLE_TEST_IR_LIBRARIES"] = str(library)
+        client = McpClient(
+            binary,
+            ("serve", "--worker", str(zod)),
+            environment,
+        )
+        finished = False
+        try:
+            client._initialize_and_list_tools()
+            client.send(r="echo worker ready")
+            assert last_tool_text(client) == "zod: worker ready\n"
+            client.send(r="fail next r preparation after large output")
+            assert last_tool_text(client) == "[done]"
+
+            failed = client._start_send(
+                r="echo cancelled cell ran",
+                requirements={"r": ["praise"]},
+            )
+            # The 4 MiB response cannot fit in the stdout pipe. Once its first
+            # bytes are readable, cancellation can overtake the blocked write.
+            readable, _, _ = select.select([client.stdout], [], [], 10)
+            assert readable, "combined preparation failure did not reach MCP output"
+            client._notify(
+                "notifications/cancelled",
+                requestId=failed["id"],
+                reason="acceptance test cancelled the combined send",
+            )
+            cancellation = client.transcript[-1]["input"]["params"]
+            assert cancellation["requestId"] == failed["id"], cancellation
+            cancellation["requestId"] = "<request ID>"
+
+            # Flushing a second 4 MiB message cannot finish until the server
+            # asks the ordered input transport for the message after the
+            # cancellation. Keep stdout blocked until that causal barrier.
+            barrier_size = 2 * LARGE_OUTPUT_SIZE
+            client._notify(
+                "notifications/acceptance-test-barrier",
+                padding="b" * barrier_size,
+            )
+            barrier = client.transcript[-1]["input"]["params"]
+            assert len(barrier["padding"]) == barrier_size, barrier
+            barrier["padding"] = f"<input barrier: {barrier_size} bytes>"
+            restart = client._start_session(action="restart")
+
+            discarded = json.loads(client.stdout.readline())
+            assert discarded.pop("jsonrpc", None) == "2.0", discarded
+            assert discarded.pop("id", None) == failed["id"], discarded
+            assert discarded["result"]["isError"] is True, discarded
+            assert failed.keys() == {"id", "send"}, failed
+
+            client._receive(restart)
+            restarted = restart["result"]
+            large_output = "x" * (2 * LARGE_OUTPUT_SIZE)
+            assert restarted == {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "before failed preparation\n" + large_output,
+                    },
+                    {"type": "image", "data": PNG_1X1, "mimeType": "image/png"},
+                    {
+                        "type": "text",
+                        "text": (
+                            "\nzod rejected R preparation; further requirement "
+                            "changes are unavailable until session restart\n"
+                            "[worker stopped: in-memory state lost]\n"
+                            "[starting new worker]\n[idle]"
+                        ),
+                    },
+                ],
+                "isError": True,
+            }, restarted
+            assert all(
+                "zod: cancelled cell ran" not in content.get("text", "")
+                for content in restarted["content"]
+            ), restarted
+            restarted["content"][0]["text"] = (
+                f"before failed preparation\n<large output: {len(large_output)} bytes>"
+            )
+
+            client.send()
+            assert last_tool_text(client) == "\n[idle]"
+            transcript = client._finish()
+            finished = True
+            return transcript
+        finally:
+            if not finished:
+                stop_client(client)
 
 
 def test_custom_worker_reports_idle_input_before_preparation_failure(
@@ -981,6 +1180,70 @@ def test_custom_worker_resolves_idle_activity_before_preparation(
         assert last_tool_text(client) == "[prepared]"
         client.send(r="report managed R requirement")
         assert last_tool_text(client) == "zod R requirement: prepared=true\n"
+        return client._finish()
+
+
+def test_combined_requirements_keep_idle_output_as_one_prelude(
+    binary: Path,
+) -> Transcript:
+    zod = Path(__file__).resolve().parents[2] / "fixtures" / "zod"
+    environment, _ = r_test_environment()
+    environment["RETICULATE_PYTHON"] = ""
+    with tempfile.TemporaryDirectory() as temporary:
+        temporary_path = Path(temporary)
+        failure = temporary_path / "fail-r-resolution"
+        environment["TMPDIR"] = temporary
+        environment["MCP_CONSOLE_TEST_R_RESOLUTION_FAILURE"] = str(failure)
+        record_resolved_r_library(environment, temporary_path)
+        client = McpClient(
+            binary,
+            ("serve", "--worker", str(zod)),
+            environment,
+        )
+        client._initialize_and_list_tools()
+        expose_idle_sideband_output(client, temporary_path, "combined-requirements")
+
+        client.send(
+            r="echo combined cell",
+            requirements={"r": ["praise"]},
+        )
+        assert last_tool_text(client) == (
+            "zod background sideband\n"
+            "[output produced while idle]\n"
+            "zod: combined cell\n"
+        )
+        client.send()
+        assert last_tool_text(client) == "\n[idle]"
+
+        expose_idle_sideband_output(
+            client,
+            temporary_path,
+            "combined-requirements-failure",
+        )
+        failure.touch()
+        result = client.send(
+            r="echo failed resolver cell ran",
+            requirements={"r": ["cli"]},
+        )
+        assert result == {
+            "content": [
+                {"type": "text", "text": "idle before failure image\n"},
+                {"type": "image", "data": PNG_1X1, "mimeType": "image/png"},
+                {
+                    "type": "text",
+                    "text": (
+                        "idle after failure image\n"
+                        "[output produced while idle]\n"
+                        "R package resolution failed with exit status: 1: "
+                        "fixture R resolver failed"
+                    ),
+                },
+            ],
+            "isError": True,
+        }, result
+        failure.unlink()
+        client.send(r="echo worker still usable")
+        assert last_tool_text(client) == "zod: worker still usable\n"
         return client._finish()
 
 
@@ -1915,9 +2178,11 @@ def test_reports_replacement_startup_failure_and_retry(
     with tempfile.TemporaryDirectory() as temporary_directory:
         startup_control = Path(temporary_directory) / "zod-startup-control"
         startup_control.write_text("ready", encoding="utf-8")
-        environment = os.environ.copy()
+        environment, _ = r_test_environment()
+        environment["RETICULATE_PYTHON"] = ""
         environment["TMPDIR"] = temporary_directory
         environment["ZOD_STARTUP_CONTROL"] = str(startup_control)
+        record_resolved_r_library(environment, Path(temporary_directory))
         client = McpClient(
             binary,
             ("serve", "--worker", str(zod)),
@@ -1965,9 +2230,13 @@ def test_reports_replacement_startup_failure_and_retry(
         }, result
 
         startup_control.write_text("ready with stdout", encoding="utf-8")
-        client.send(r="echo echo")
+        client.send(
+            r="report managed R requirement",
+            requirements={"r": ["praise"]},
+        )
         assert last_tool_text(client) == (
-            "[starting new worker]\nzod replacement startup ready\nzod: echo\n"
+            "[starting new worker]\nzod replacement startup ready\n"
+            "zod R requirement: prepared=true\n"
         )
         return client._finish()
 
@@ -1979,10 +2248,12 @@ def test_polls_replacement_startup_after_send_timeout(binary: Path) -> Transcrip
         startup_control = temporary_path / "zod-startup-control"
         startup_release = temporary_path / "zod-startup-release"
         startup_control.write_text("ready", encoding="utf-8")
-        environment = os.environ.copy()
+        environment, _ = r_test_environment()
+        environment["RETICULATE_PYTHON"] = ""
         environment["TMPDIR"] = temporary_directory
         environment["ZOD_STARTUP_CONTROL"] = str(startup_control)
         environment["ZOD_STARTUP_RELEASE"] = str(startup_release)
+        record_resolved_r_library(environment, temporary_path)
         client = McpClient(
             binary,
             ("serve", "--worker", str(zod)),
@@ -2052,6 +2323,21 @@ def test_polls_replacement_startup_after_send_timeout(binary: Path) -> Transcrip
                 ],
                 "isError": True,
             }, client.transcript[-1]
+
+            combined = client.send(
+                r="echo startup overlap cell ran",
+                requirements={"r": ["praise"]},
+            )
+            assert combined == {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "[requirements not prepared: worker is starting]",
+                    }
+                ],
+                "isError": True,
+            }, combined
+            assert not (temporary_path / "resolved-r-library").exists()
 
             startup_release.touch()
             client.send(timeout_ms=3_000)

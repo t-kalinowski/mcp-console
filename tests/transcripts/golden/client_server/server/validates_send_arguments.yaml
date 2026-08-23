@@ -10,17 +10,91 @@ result:
     - type: text
       text: >-
         failed to deserialize parameters: unknown field `wait_ms`, expected one
-        of `r`, `python`, `sql`, `stdin`, `timeout_ms`
+        of `r`, `python`, `sql`, `requirements`, `stdin`, `timeout_ms`
   isError: true
 ---
 send:
   r: "1"
   python: "1"
   sql: SELECT 1
+  requirements:
+    r:
+      - praise
 result:
   content:
     - type: text
       text: only one of `r`, `python`, or `sql` may be supplied
+  isError: true
+---
+send:
+  requirements:
+    r:
+      - praise
+result:
+  content:
+    - type: text
+      text: "`requirements` requires a code cell"
+  isError: true
+---
+send:
+  stdin: |
+    answer
+  requirements:
+    r:
+      - praise
+result:
+  content:
+    - type: text
+      text: "`requirements` requires a code cell"
+  isError: true
+---
+send:
+  r: stop('cell was run')
+  requirements: {}
+result:
+  content:
+    - type: text
+      text: >-
+        at least one of `requirements.r`, `requirements.python`, or
+        `requirements.duckdb` is required
+  isError: true
+---
+send:
+  r: stop('cell was run')
+  requirements:
+    r:
+      - ""
+result:
+  content:
+    - type: text
+      text: R requirement strings must not be empty
+  isError: true
+---
+send:
+  r: stop('cell was run')
+  requirements:
+    python:
+      - example @ https://example.invalid/example.whl
+result:
+  content:
+    - type: text
+      text: >-
+        Python requirement `example @ https://example.invalid/example.whl` is
+        not accepted: host-side managed resolution accepts named package
+        requirements only
+  isError: true
+---
+send:
+  r: stop('cell was run')
+  requirements:
+    duckdb:
+      - spatial FROM community
+result:
+  content:
+    - type: text
+      text: >-
+        DuckDB extension names must start with a lowercase ASCII letter and
+        contain only lowercase ASCII letters, digits, and underscores
   isError: true
 ---
 send:

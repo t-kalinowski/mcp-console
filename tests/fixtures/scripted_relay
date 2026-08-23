@@ -237,6 +237,38 @@ def run_stdin(relay: ScriptedRelay) -> None:
     relay.retire()
 
 
+def run_initial_requirements_stdin_idempotent(relay: ScriptedRelay) -> None:
+    relay.ready()
+    relay.expect({"kind": "stdin", "data": "answer\n"})
+    relay.expect(
+        {
+            "kind": "evaluate",
+            "language": "python",
+            "source": "42",
+        }
+    )
+    relay.send(COMPLETED)
+    relay.expect(
+        {
+            "kind": "evaluate",
+            "language": "r",
+            "source": "43",
+        }
+    )
+    relay.complete()
+    relay.retire()
+
+
+def run_live_r_requirements_then_evaluate(relay: ScriptedRelay) -> None:
+    relay.ready()
+    command = relay.receive()
+    assert command.get("kind") == "prepare_r", command
+    relay.send({"kind": "r_prepared", "library": command["library"]})
+    relay.expect(EVALUATION)
+    relay.complete()
+    relay.retire()
+
+
 def run_stdin_forwarding_failure(relay: ScriptedRelay) -> None:
     if Path(os.environ[STDIN_FAILURE_RELEASED_ENV]).exists():
         relay.ready()
@@ -526,6 +558,10 @@ def main() -> None:
         "evaluate": run_evaluate,
         "raw_output": run_raw_output,
         "stdin": run_stdin,
+        "initial_requirements_stdin_idempotent": (
+            run_initial_requirements_stdin_idempotent
+        ),
+        "live_r_requirements_then_evaluate": run_live_r_requirements_then_evaluate,
         "stdin_forwarding_failure": run_stdin_forwarding_failure,
         "interrupt": run_interrupt,
         "serialized_cross_source_order": run_serialized_cross_source_order,

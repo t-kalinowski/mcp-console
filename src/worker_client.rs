@@ -19,7 +19,7 @@ mod platform;
 #[path = "worker_client/unsupported.rs"]
 mod platform;
 
-use environment::{Environment, PythonEnvironment};
+use environment::{Environment, PreparationIntent, PythonEnvironment};
 pub(crate) use environment::{PrepareResult, Requirements};
 use evaluation::{Evaluation, EvaluationWait};
 use lifecycle::{LifecycleControl, OldGenerationCommitDisposition, WorkerGeneration};
@@ -190,6 +190,11 @@ struct ActiveEvaluation {
     evaluation: Arc<Evaluation>,
 }
 
+enum PreparedEvaluation {
+    Started(Arc<Evaluation>, evaluation::WaitClaim),
+    Failed(Response),
+}
+
 impl Client {
     pub(crate) fn new(program: PathBuf, relay: Option<PathBuf>) -> Result<Self, String> {
         Ok(Self::with_arguments(
@@ -272,10 +277,19 @@ impl Client {
         &self,
         cell: Option<crate::cell::Cell>,
         stdin: Option<String>,
+        requirements: Option<Requirements>,
         timeout: Duration,
         transcript: crate::transcript::Transcript,
         call_id: Option<u64>,
     ) -> Response {
+        if let Some(requirements) = requirements {
+            let Some(cell) = cell else {
+                return output::direct_failure("`requirements` requires a code cell");
+            };
+            return self
+                .send_with_requirements(cell, stdin, requirements, timeout, transcript, call_id)
+                .await;
+        }
         match self
             .send_inner(cell, stdin, timeout, transcript, call_id)
             .await
@@ -283,6 +297,102 @@ impl Client {
             Ok(response) => output::render_response(response),
             Err(failure) => output::direct_failure(failure.message),
         }
+    }
+
+    async fn send_with_requirements(
+        &self,
+        cell: crate::cell::Cell,
+        stdin: Option<String>,
+        requirements: Requirements,
+        timeout: Duration,
+        transcript: crate::transcript::Transcript,
+        call_id: Option<u64>,
+    ) -> Response {
+        let client = self.clone();
+        let admission = tokio::task::spawn_blocking(move || {
+            client.prepare_and_start_evaluation(cell, stdin, requirements, transcript, call_id)
+        })
+        .await;
+        let admission = match admission {
+            Ok(Ok(admission)) => admission,
+            Ok(Err(error)) => return output::direct_failure(error),
+            Err(error) => {
+                return output::direct_failure(format!(
+                    "requirement preparation task failed: {error}"
+                ));
+            }
+        };
+        let (evaluation, wait_claim) = match admission {
+            PreparedEvaluation::Started(evaluation, wait_claim) => (evaluation, wait_claim),
+            PreparedEvaluation::Failed(response) => return response,
+        };
+        let response = match evaluation.wait(wait_claim, timeout).await {
+            Ok(EvaluationWait::Running(output)) => SendResponse::Running(output),
+            Ok(EvaluationWait::InputRequested(output)) => SendResponse::InputRequested(output),
+            Ok(EvaluationWait::ReplacementStarting(output)) => {
+                SendResponse::ReplacementStarting(output)
+            }
+            Ok(EvaluationWait::ReplacementReady(output)) => SendResponse::ReplacementReady(output),
+            Ok(EvaluationWait::Completed(output)) => SendResponse::Completed(output),
+            Ok(EvaluationWait::Reclaimed(output)) => SendResponse::Restarted(output),
+            Ok(EvaluationWait::Restarted(output)) => SendResponse::Restarted(output),
+            Err(error) => return output::direct_failure(error),
+        };
+        output::render_response(response)
+    }
+
+    fn prepare_and_start_evaluation(
+        &self,
+        cell: crate::cell::Cell,
+        stdin: Option<String>,
+        requirements: Requirements,
+        transcript: crate::transcript::Transcript,
+        call_id: Option<u64>,
+    ) -> Result<PreparedEvaluation, String> {
+        let generation = self.admit()?;
+        let preparation = match self.admit_preparation() {
+            Ok(preparation) => preparation,
+            Err(error) => {
+                let mut response = Response::default();
+                response.push_tool_error(error);
+                return Ok(PreparedEvaluation::Failed(response));
+            }
+        };
+        let prepared = match self.prepare_admitted(
+            requirements,
+            &generation,
+            &preparation,
+            PreparationIntent::BeforeEvaluation,
+        ) {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                let mut response = Response::default();
+                response.push_tool_error(error);
+                return Ok(PreparedEvaluation::Failed(response));
+            }
+        };
+        let result = match prepared {
+            PrepareResult::Prepared => {
+                let (evaluation, wait_claim) =
+                    self.start_evaluation(cell, stdin, generation, transcript, call_id)?;
+                PreparedEvaluation::Started(evaluation, wait_claim)
+            }
+            PrepareResult::RestartRequired => {
+                let mut response = self.0.output.take();
+                response.push_tool_error("requirements require session restart; cell was not run");
+                self.recover_failed_evaluation(response)
+            }
+            PrepareResult::Failed(response) | PrepareResult::WorkerStopped(response) => {
+                self.recover_failed_evaluation(response)
+            }
+        };
+        drop(preparation);
+        Ok(result)
+    }
+
+    fn recover_failed_evaluation(&self, mut response: Response) -> PreparedEvaluation {
+        response.recover_to(self.0.output.clone());
+        PreparedEvaluation::Failed(response)
     }
 
     async fn send_inner(

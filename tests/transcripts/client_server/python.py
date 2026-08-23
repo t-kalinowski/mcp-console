@@ -87,6 +87,14 @@ def test_preserves_configured_python_environment(binary: Path) -> Transcript:
         result = client.transcript[-1]["result"]
         assert result["isError"] is True, result
         assert last_tool_text(client) == disabled
+
+    client.send(
+        r="external_python_combined_side_effect <- TRUE",
+        requirements={"python": ["numpy"]},
+    )
+    result = client.transcript[-1]["result"]
+    assert result["isError"] is True, result
+    assert last_tool_text(client) == disabled
     # Reach the same worker-originated resolver request used by reticulate's
     # managed hooks. The server must enforce the external-selection policy
     # even though those hooks are not installed for this worker.
@@ -117,6 +125,7 @@ def test_preserves_configured_python_environment(binary: Path) -> Transcript:
         stopifnot(
           identical(Sys.getpid(), external_python_worker),
           identical(external_python_state, 42L),
+          !exists("external_python_combined_side_effect", inherits = FALSE),
           identical(
             Sys.getenv("RETICULATE_PYTHON", unset = NA_character_),
             "configured-by-user"
@@ -234,6 +243,23 @@ def test_evaluates_with_default_managed_python(binary: Path) -> Transcript:
 
 def test_evaluates_with_explicit_managed_python(binary: Path) -> Transcript:
     return managed_python_transcript(binary, configured=True)
+
+
+def test_sends_python_cell_with_initial_requirements(binary: Path) -> Transcript:
+    client = McpClient(binary, ("serve",))
+    client._initialize_and_list_tools()
+    # fmt: python
+    python = code("""
+        import yaml12
+
+        print(yaml12.__name__)
+        """)
+    client.send(
+        python=python,
+        requirements={"python": ["py-yaml12"]},
+    )
+    assert last_tool_text(client) == "yaml12\n"
+    return client._finish()
 
 
 def test_uses_200_column_default(binary: Path) -> Transcript:
@@ -1048,17 +1074,14 @@ def test_prepares_python_requirements_after_worker_startup(binary: Path) -> Tran
     client.send(python=python)
     assert last_tool_text(client) == "(42, True, True)\n"
 
-    client.session(
-        action="prepare",
-        requirements={"python": ["py-yaml12"]},
-    )
-    assert last_tool_text(client) == "[prepared]"
-
     python = code("""
         import os; import sys; import yaml12
         (sentinel, os.getpid() == worker_pid, sys.prefix != initial_prefix, yaml12.__name__)
         """)
-    client.send(python=python)
+    client.send(
+        python=python,
+        requirements={"python": ["py-yaml12"]},
+    )
     assert last_tool_text(client) == "(42, True, True, 'yaml12')\n"
 
     client.session(action="restart")
@@ -1075,6 +1098,68 @@ def test_prepares_python_requirements_after_worker_startup(binary: Path) -> Tran
         """)
     client.send(python=python)
     assert last_tool_text(client) == "(False, 'yaml12')\n"
+    return client._finish()
+
+
+def test_failed_live_python_requirements_do_not_run_cell(binary: Path) -> Transcript:
+    client = McpClient(binary, ("serve",))
+    client._initialize_and_list_tools()
+    client.send(python="import os; live_sentinel = 42; live_worker_pid = os.getpid()")
+    assert last_tool_text(client) == "[done]"
+
+    # fmt: r
+    r = code(r"""
+        reticulate_namespace <- asNamespace("reticulate")
+        original_py_require <- get("py_require", envir = reticulate_namespace)
+        unlockBinding("py_require", reticulate_namespace)
+        assign(
+          "py_require",
+          function(...) stop("synthetic live Python preparation failure"),
+          envir = reticulate_namespace
+        )
+        lockBinding("py_require", reticulate_namespace)
+        """)
+    client.send(r=r)
+    assert last_tool_text(client) == "[done]"
+
+    result = client.send(
+        python="failed_live_python_cell = True",
+        requirements={"python": ["py-yaml12"]},
+    )
+    assert result["isError"] is True, result
+    assert result["content"][0]["text"] == (
+        "synthetic live Python preparation failure"
+    ), result
+
+    # fmt: r
+    r = code(r"""
+        unlockBinding("py_require", reticulate_namespace)
+        assign(
+          "py_require",
+          original_py_require,
+          envir = reticulate_namespace
+        )
+        lockBinding("py_require", reticulate_namespace)
+        """)
+    client.send(r=r)
+    assert last_tool_text(client) == "[done]"
+
+    python = code("""
+        import os
+        import yaml12
+
+        (
+            live_sentinel,
+            os.getpid() == live_worker_pid,
+            "failed_live_python_cell" not in globals(),
+            yaml12.__name__,
+        )
+        """)
+    client.send(
+        python=python,
+        requirements={"python": ["py-yaml12"]},
+    )
+    assert last_tool_text(client) == "(42, True, True, 'yaml12')\n"
     return client._finish()
 
 
@@ -1436,8 +1521,17 @@ def test_rejects_python_preparation_while_evaluation_is_running(
     binary: Path,
 ) -> Transcript:
     with tempfile.TemporaryDirectory() as temporary_directory:
+        temporary = Path(temporary_directory)
+        real_uv = shutil.which("uv")
+        assert real_uv is not None, "real uv is required"
+        uv_record = temporary / "uv-record.jsonl"
         environment = os.environ.copy()
         environment["TMPDIR"] = temporary_directory
+        environment["RETICULATE_UV"] = str(
+            Path(__file__).parents[2] / "fixtures" / "record_uv_environment"
+        )
+        environment["MCP_CONSOLE_TEST_REAL_UV"] = real_uv
+        environment["MCP_CONSOLE_TEST_UV_RECORD"] = str(uv_record)
         client = McpClient(binary, ("serve",), environment)
         client._initialize_and_list_tools()
         python = code("""
@@ -1457,6 +1551,7 @@ def test_rejects_python_preparation_while_evaluation_is_running(
             client,
         )
         release = running.parent / "release-python"
+        uv_record.write_text("", encoding="utf-8")
 
         session_returned = threading.Event()
         forced_release = threading.Event()
@@ -1480,12 +1575,25 @@ def test_rejects_python_preparation_while_evaluation_is_running(
         assert result["content"][0]["text"] == (
             "worker is already evaluating a cell; poll it before preparing requirements"
         )
+        assert uv_record.read_text(encoding="utf-8") == ""
+
+        combined = client.send(
+            python="combined_cell_ran = True",
+            requirements={"python": ["py-yaml12"]},
+        )
+        assert combined["isError"] is True, combined
+        assert combined["content"][0]["text"] == (
+            "worker is already evaluating a cell; poll it before preparing requirements"
+        )
+        assert uv_record.read_text(encoding="utf-8") == ""
 
         release.touch()
         client.send()
         assert last_tool_text(client) == "[done]"
-        client.send(python="runtime_generation_marker")
-        assert last_tool_text(client) == "'original runtime retained'\n"
+        client.send(
+            python=("runtime_generation_marker, 'combined_cell_ran' not in globals()")
+        )
+        assert last_tool_text(client) == "('original runtime retained', True)\n"
         return client._finish()
 
 
@@ -1762,8 +1870,8 @@ def test_interrupts_live_python_resolver(binary: Path) -> Transcript:
             client.send(r="resolver_interrupt_state <- 41L")
             assert last_tool_text(client) == "[done]"
 
-            preparation = client._start_session(
-                action="prepare",
+            preparation = client._start_send(
+                r="resolver_interrupt_cell_ran <- TRUE",
                 requirements={"python": ["mcp-console-blocked-live-preparation"]},
             )
             uv_started.wait("live Python preparation")
@@ -1796,7 +1904,12 @@ def test_interrupts_live_python_resolver(binary: Path) -> Transcript:
                 "managed Python resolution cancelled by interrupt"
             )
 
-            client.send(r="resolver_interrupt_state + 1L")
+            client.send(
+                r=(
+                    "resolver_interrupt_state + "
+                    "as.integer(!exists('resolver_interrupt_cell_ran'))"
+                )
+            )
             assert last_tool_text(client) == "[1] 42\n"
             transcript = client._finish()
             passed = True
@@ -1822,8 +1935,8 @@ def test_restart_cancels_live_python_preparation(binary: Path) -> Transcript:
             client.send(r="restart_marker <- 42L")
             assert last_tool_text(client) == "[done]"
 
-            preparation = client._start_session(
-                action="prepare",
+            preparation = client._start_send(
+                r="stop('cancelled requirements cell ran')",
                 requirements={"python": ["mcp-console-blocked-live-preparation"]},
             )
             uv_started.wait("live Python preparation")
