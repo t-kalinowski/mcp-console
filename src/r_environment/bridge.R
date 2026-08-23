@@ -191,9 +191,6 @@ base::local(
       if (base::missing(package)) {
         return(delegate(call, original_library, caller))
       }
-      if (!base::missing(help)) {
-        return(delegate(call, original_library, caller))
-      }
 
       library_paths <- lib.loc
       if (!base::missing(lib.loc)) {
@@ -256,7 +253,18 @@ base::local(
     ) {
       call <- base::match.call(expand.dots = FALSE)
       caller <- base::parent.frame()
-      package_name <- base::as.character(package)[[1L]]
+      package_value <- package
+      package_name <- base::as.character(package_value)[[1L]]
+      if (
+        !base::is.null(base::attr(
+          package_value,
+          "LibPath",
+          exact = TRUE
+        ))
+      ) {
+        call <- rewrite_argument(call, "package", package_value)
+        return(delegate(call, original_load_namespace, caller))
+      }
       call <- rewrite_argument(call, "package", package_name)
 
       if (
@@ -390,10 +398,7 @@ base::local(
         }
 
         if (name %in% base::c("library", "require")) {
-          if (
-            has_argument(node, "help") ||
-              !base::is.null(call_argument(node, "lib.loc"))
-          ) {
+          if (!base::is.null(call_argument(node, "lib.loc"))) {
             return(base::invisible(NULL))
           }
           definition <- if (base::identical(name, "library")) {
@@ -404,13 +409,9 @@ base::local(
           matched <- static_match_call(node, definition)
           if (!base::is.null(matched)) {
             package <- matched[["package"]]
-            help <- matched[["help"]]
             library_paths <- matched[["lib.loc"]]
             character_only <- matched[["character.only"]]
-            if (
-              !base::is.null(help) ||
-                !base::is.null(library_paths)
-            ) {
+            if (!base::is.null(library_paths)) {
               package <- NULL
             }
             if (is_scalar_string(package)) {

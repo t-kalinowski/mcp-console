@@ -1283,6 +1283,63 @@ def test_explicit_r_preparation_owns_environment_before_host_resolution(
     return transcript
 
 
+def test_rejects_completion_before_runtime_r_activation(
+    binary: Path,
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        library = root / "automatic-candidate"
+        library.mkdir()
+        environment = _fake_ir_environment(root, [library])
+        client = ServerRelayClient(
+            binary,
+            "completion_before_r_activation",
+            environment,
+        )
+        client.start_worker()
+        old_root = client.relay_root()
+        old_capture = (old_root / CAPTURE_NAME).open(encoding="utf-8")
+        finished = False
+        try:
+            result = client.send(r="42")
+            assert result.get("isError") is True, result
+            output = result["content"][0]["text"]
+            assert output.startswith(
+                "[worker sent an operation result before completing runtime R "
+                "activation]\n"
+            ), output
+            assert output.endswith(
+                "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
+            ), output
+            old_transcript = client._read_open_capture(old_capture)
+            client.client._finish()
+            finished = True
+        finally:
+            if not finished:
+                stop_client(client.client)
+            old_capture.close()
+            client._temporary.cleanup()
+
+        assert (root / "ir-counter").read_text(encoding="utf-8") == "1"
+
+    transcript = old_transcript
+    shutdown = _normalize_shutdown_grace(transcript)
+    assert len(shutdown) == 1, transcript
+    resolved = [
+        entry["server"]
+        for entry in transcript
+        if entry.keys() == {"server"} and entry["server"].get("kind") == "r_resolved"
+    ]
+    assert resolved == [{"kind": "r_resolved", "library": str(library)}]
+    resolved[0]["library"] = "<automatic-candidate>"
+    assert not any(
+        entry.keys() == {"relay"}
+        and entry["relay"].get("kind") in {"r_activated", "r_activation_failed"}
+        for entry in transcript
+    ), transcript
+    return transcript
+
+
 def test_reports_fatal_failure(binary: Path) -> Transcript:
     client = ServerRelayClient(binary, "fatal")
     failed = client.client._start_send(r="42")

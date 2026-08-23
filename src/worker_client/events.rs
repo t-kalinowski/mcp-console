@@ -363,11 +363,15 @@ impl WorkerOperationState {
     ) -> Result<(), String> {
         let Operation { kind, result } = {
             let mut state = self.lock()?;
-            let operation = state.operation.take().ok_or_else(|| {
+            if state.runtime_r_callback {
+                return Err(
+                    "worker sent an operation result before completing runtime R activation"
+                        .to_string(),
+                );
+            }
+            state.operation.take().ok_or_else(|| {
                 "worker sent an operation result without an active operation".to_string()
-            })?;
-            state.runtime_r_callback = false;
-            operation
+            })?
         };
 
         if result.is_none() && kind.matches_result(&event) {

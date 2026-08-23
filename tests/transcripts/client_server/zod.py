@@ -1693,43 +1693,52 @@ def test_supervises_stopped_and_continued_workers(binary: Path) -> Transcript:
                 stop_process(client.process)
 
 
-def test_reports_resolver_interrupt_permission_error(binary: Path) -> Transcript:
-    zod = Path(__file__).resolve().parents[2] / "fixtures" / "zod"
+def resolver_interrupt_permission_environment(
+    temporary_path: Path,
+) -> tuple[dict[str, str], Path, Path]:
     environment, _ = r_test_environment()
     environment["RETICULATE_PYTHON"] = ""
+    fake_bin = temporary_path / "bin"
+    fake_bin.mkdir()
+    fake_ir = fake_bin / "ir"
+    fake_ir.write_text(
+        code(r"""
+            #!/bin/sh
+
+            set -eu
+            if [ "$#" -eq 1 ] && [ "$1" = "--version" ]; then
+              printf 'ir 0.4.0\n'
+              exit 0
+            fi
+            printf '%s\n' "$$" > "$MCP_CONSOLE_TEST_RESOLVER_STARTED"
+            exec /bin/sleep 30
+            """),
+        encoding="utf-8",
+    )
+    fake_ir.chmod(0o755)
+
+    path = environment.get("PATH")
+    assert path is not None, "PATH is required"
+    environment["PATH"] = os.pathsep.join((str(fake_bin), path))
+    environment["TMPDIR"] = str(temporary_path)
+    denied_interrupt = temporary_path / "resolver-sigint-denied"
+    resolver_started = temporary_path / "resolver-started"
+    environment["MCP_CONSOLE_TEST_DENIED_SIGINT"] = str(denied_interrupt)
+    environment["MCP_CONSOLE_TEST_RESOLVER_STARTED"] = str(resolver_started)
+    # The interposer removes its loader variable after reaching the server, so
+    # the resolver and Zod do not inherit it.
+    environment["DYLD_INSERT_LIBRARIES"] = str(
+        build_killpg_denial_interposer(temporary_path)
+    )
+    return environment, resolver_started, denied_interrupt
+
+
+def test_reports_resolver_interrupt_permission_error(binary: Path) -> Transcript:
+    zod = Path(__file__).resolve().parents[2] / "fixtures" / "zod"
     with tempfile.TemporaryDirectory() as temporary_directory:
         temporary_path = Path(temporary_directory)
-        fake_bin = temporary_path / "bin"
-        fake_bin.mkdir()
-        fake_ir = fake_bin / "ir"
-        fake_ir.write_text(
-            code(r"""
-                #!/bin/sh
-
-                set -eu
-                if [ "$#" -eq 1 ] && [ "$1" = "--version" ]; then
-                  printf 'ir 0.4.0\n'
-                  exit 0
-                fi
-                printf '%s\n' "$$" > "$MCP_CONSOLE_TEST_RESOLVER_STARTED"
-                exec /bin/sleep 30
-                """),
-            encoding="utf-8",
-        )
-        fake_ir.chmod(0o755)
-
-        path = environment.get("PATH")
-        assert path is not None, "PATH is required"
-        environment["PATH"] = os.pathsep.join((str(fake_bin), path))
-        environment["TMPDIR"] = temporary_directory
-        denied_interrupt = temporary_path / "resolver-sigint-denied"
-        resolver_started = temporary_path / "resolver-started"
-        environment["MCP_CONSOLE_TEST_DENIED_SIGINT"] = str(denied_interrupt)
-        environment["MCP_CONSOLE_TEST_RESOLVER_STARTED"] = str(resolver_started)
-        # The interposer removes its loader variable after reaching the server,
-        # so the resolver and Zod do not inherit it.
-        environment["DYLD_INSERT_LIBRARIES"] = str(
-            build_killpg_denial_interposer(temporary_path)
+        environment, resolver_started, denied_interrupt = (
+            resolver_interrupt_permission_environment(temporary_path)
         )
 
         client = McpClient(
@@ -1802,6 +1811,99 @@ def test_reports_resolver_interrupt_permission_error(binary: Path) -> Transcript
             }
             assert preparation["result"] == expected, preparation
             assert interrupt["result"] == expected, interrupt
+
+            client.send(r="echo echo")
+            assert last_tool_text(client) == "zod: echo\n"
+            transcript = client._finish()
+            passed = True
+            return transcript
+        finally:
+            if not passed:
+                stop_process_group(resolver_group)
+                stop_client(client)
+
+
+def test_reports_runtime_r_resolver_interrupt_permission_error(
+    binary: Path,
+) -> Transcript:
+    zod = Path(__file__).resolve().parents[2] / "fixtures" / "zod"
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        temporary_path = Path(temporary_directory)
+        environment, resolver_started, denied_interrupt = (
+            resolver_interrupt_permission_environment(temporary_path)
+        )
+        client = McpClient(
+            binary,
+            ("serve", "--worker", str(zod)),
+            environment,
+        )
+        resolver_group = None
+        passed = False
+        try:
+            client._initialize_and_list_tools()
+            evaluation = client._start_send(
+                r="report runtime R resolution failure",
+            )
+            resolver_group = int(
+                wait_for_marker(
+                    temporary_path,
+                    resolver_started.name,
+                    client,
+                ).read_text(encoding="utf-8")
+            )
+            assert resolver_group != os.getpgrp(), (
+                "resolver did not enter a dedicated process group"
+            )
+
+            interrupt = client._start_session(action="interrupt")
+            responses_returned = threading.Event()
+            forced_stop = threading.Event()
+
+            def stop_if_calls_block() -> None:
+                if not responses_returned.wait(2):
+                    forced_stop.set()
+                    stop_process_group(resolver_group)
+
+            watchdog = threading.Thread(target=stop_if_calls_block, daemon=True)
+            watchdog.start()
+            try:
+                client._receive_many([evaluation, interrupt])
+            finally:
+                responses_returned.set()
+                watchdog.join()
+
+            denied_group = int(
+                wait_for_marker(
+                    temporary_path,
+                    denied_interrupt.name,
+                    client,
+                ).read_text(encoding="utf-8")
+            )
+            assert denied_group == resolver_group, (
+                "SIGINT denial targeted a different process group"
+            )
+            wait_for_process_group_exit(resolver_group, client)
+            assert not forced_stop.is_set(), (
+                "resolver interrupt failure did not terminate both calls"
+            )
+
+            message = (
+                "failed to interrupt R package resolver `ir`: "
+                "Operation not permitted (os error 1)"
+            )
+            assert evaluation["result"] == {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": f"zod R resolution failure: host: {message}\n",
+                    }
+                ],
+                "isError": False,
+            }, evaluation
+            assert interrupt["result"] == {
+                "content": [{"type": "text", "text": message}],
+                "isError": True,
+            }, interrupt
 
             client.send(r="echo echo")
             assert last_tool_text(client) == "zod: echo\n"

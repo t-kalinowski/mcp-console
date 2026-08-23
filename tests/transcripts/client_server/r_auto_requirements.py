@@ -124,7 +124,12 @@ def test_batches_static_r_packages_and_resolves_dynamic_use(binary: Path) -> Tra
         # fmt: r
         static = code(r"""
             base::library(package = fortunes, quietly = TRUE)
-            library("english", character.only = TRUE, quietly = TRUE)
+            library(
+              "english",
+              help = stats,
+              character.only = TRUE,
+              quietly = TRUE
+            )
             stopifnot(
               base::require(whoami, quietly = TRUE),
               base::requireNamespace("mockery", quietly = TRUE),
@@ -156,11 +161,15 @@ def test_batches_static_r_packages_and_resolves_dynamic_use(binary: Path) -> Tra
         # fmt: r
         dynamic = code(r"""
             attached <- "RcppRoll"
-            stopifnot(base::library(
-              attached,
-              character.only = TRUE,
-              logical.return = TRUE,
-              quietly = TRUE
+            stopifnot(do.call(
+              base::library,
+              list(
+                package = attached,
+                help = NULL,
+                character.only = TRUE,
+                logical.return = TRUE,
+                quietly = TRUE
+              )
             ))
             package <- "snakecase"
             stopifnot(do.call(
@@ -337,6 +346,27 @@ def test_preserves_base_r_loading_semantics_without_resolution(
 
         # fmt: r
         r = code(r"""
+            ambient_package <- find.package("codetools")
+            hidden_library <- file.path(tempdir(), "libpath-library")
+            dir.create(hidden_library)
+            stopifnot(file.copy(
+              ambient_package,
+              hidden_library,
+              recursive = TRUE
+            ))
+            attributed_package <- structure(
+              "codetools",
+              LibPath = hidden_library
+            )
+            namespace <- loadNamespace(attributed_package)
+            if (getRversion() < "4.6.0") {
+              stopifnot(identical(
+                normalizePath(getNamespaceInfo(namespace, "path")),
+                normalizePath(file.path(hidden_library, "codetools"))
+              ))
+            }
+            unloadNamespace("codetools")
+
             listing <- library()
             help_info <- library(help = base)
             restricted <- suppressWarnings(library(

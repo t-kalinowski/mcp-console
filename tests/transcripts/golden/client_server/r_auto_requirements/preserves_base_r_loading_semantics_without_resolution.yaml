@@ -3,6 +3,27 @@
 ---
 send:
   r: |
+    ambient_package <- find.package("codetools")
+    hidden_library <- file.path(tempdir(), "libpath-library")
+    dir.create(hidden_library)
+    stopifnot(file.copy(
+      ambient_package,
+      hidden_library,
+      recursive = TRUE
+    ))
+    attributed_package <- structure(
+      "codetools",
+      LibPath = hidden_library
+    )
+    namespace <- loadNamespace(attributed_package)
+    if (getRversion() < "4.6.0") {
+      stopifnot(identical(
+        normalizePath(getNamespaceInfo(namespace, "path")),
+        normalizePath(file.path(hidden_library, "codetools"))
+      ))
+    }
+    unloadNamespace("codetools")
+
     listing <- library()
     help_info <- library(help = base)
     restricted <- suppressWarnings(library(

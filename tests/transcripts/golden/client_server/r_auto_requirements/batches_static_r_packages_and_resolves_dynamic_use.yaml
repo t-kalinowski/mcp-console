@@ -4,7 +4,12 @@
 send:
   r: |
     base::library(package = fortunes, quietly = TRUE)
-    library("english", character.only = TRUE, quietly = TRUE)
+    library(
+      "english",
+      help = stats,
+      character.only = TRUE,
+      quietly = TRUE
+    )
     stopifnot(
       base::require(whoami, quietly = TRUE),
       base::requireNamespace("mockery", quietly = TRUE),
@@ -25,11 +30,15 @@ result:
 send:
   r: |
     attached <- "RcppRoll"
-    stopifnot(base::library(
-      attached,
-      character.only = TRUE,
-      logical.return = TRUE,
-      quietly = TRUE
+    stopifnot(do.call(
+      base::library,
+      list(
+        package = attached,
+        help = NULL,
+        character.only = TRUE,
+        logical.return = TRUE,
+        quietly = TRUE
+      )
     ))
     package <- "snakecase"
     stopifnot(do.call(

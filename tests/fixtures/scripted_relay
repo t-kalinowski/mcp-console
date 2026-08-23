@@ -533,6 +533,20 @@ def run_explicit_r_preparation_owns_environment(relay: ScriptedRelay) -> None:
     relay.retire()
 
 
+def run_completion_before_r_activation(relay: ScriptedRelay) -> None:
+    relay.ready()
+    command = relay.receive()
+    if command.get("kind") == "shutdown":
+        relay.retire(command)
+        return
+    assert command == EVALUATION, command
+    relay.send({"kind": "resolve_r", "packages": ["praise"]})
+    resolved = relay.receive()
+    assert resolved.get("kind") == "r_resolved", resolved
+    relay.send(COMPLETED)
+    relay.retire()
+
+
 def run_cancelled_waiting_send(relay: ScriptedRelay) -> None:
     relay.make_checkpoint(PRELUDE_RELEASE_NAME)
     relay.make_checkpoint(PRELUDE_PROCESSED_NAME)
@@ -663,6 +677,7 @@ def main() -> None:
         "explicit_r_preparation_owns_environment": (
             run_explicit_r_preparation_owns_environment
         ),
+        "completion_before_r_activation": run_completion_before_r_activation,
         "cancelled_waiting_send": run_cancelled_waiting_send,
         "fatal": run_fatal,
         "truncated": run_truncated,
