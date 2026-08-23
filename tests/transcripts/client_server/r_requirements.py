@@ -2,11 +2,8 @@
 
 import os
 import shutil
-import signal
-import subprocess
 import sys
 import tempfile
-import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -25,86 +22,6 @@ from _support import (
 
 PLATFORMS = {"darwin"}
 REQUIRED_COMMANDS = {"ir"}
-
-
-def process_rows() -> dict[int, tuple[int, int, str, str]]:
-    result = subprocess.run(
-        ["ps", "-axo", "pid=,ppid=,pgid=,state=,command="],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    rows = {}
-    for line in result.stdout.splitlines():
-        process_id, parent_id, process_group, state, command = line.split(maxsplit=4)
-        rows[int(process_id)] = (
-            int(parent_id),
-            int(process_group),
-            state,
-            command,
-        )
-    return rows
-
-
-def stop_builtin_worker(client: McpClient) -> tuple[int, int, int, str]:
-    deadline = time.monotonic() + 3
-    while True:
-        rows = process_rows()
-        descendants = {client.process.pid}
-        changed = True
-        while changed:
-            changed = False
-            for process_id, (parent_id, _, _, _) in rows.items():
-                if parent_id in descendants and process_id not in descendants:
-                    descendants.add(process_id)
-                    changed = True
-        workers = [
-            (process_id, parent_id, process_group, command)
-            for process_id in descendants
-            if process_id in rows
-            for parent_id, process_group, _, command in (rows[process_id],)
-            if command.endswith(" worker") and " worker-relay " not in command
-        ]
-        if len(workers) == 1:
-            worker = workers[0]
-            break
-        assert client.process.poll() is None, "mcp-console stopped before its worker"
-        assert time.monotonic() < deadline, (
-            f"expected one built-in worker process, found {workers}"
-        )
-        time.sleep(0.01)
-
-    process_id, parent_id, process_group, command = worker
-    os.kill(process_id, signal.SIGSTOP)
-    deadline = time.monotonic() + 3
-    try:
-        while True:
-            row = process_rows().get(process_id)
-            assert row is not None and (
-                row[0],
-                row[1],
-                row[3],
-            ) == (parent_id, process_group, command), (
-                "worker exited or changed identity before SIGSTOP"
-            )
-            if row[2].startswith("T"):
-                return worker
-            assert time.monotonic() < deadline, "worker did not enter SIGSTOP"
-            time.sleep(0.01)
-    except BaseException:
-        continue_stopped_worker(worker)
-        raise
-
-
-def continue_stopped_worker(worker: tuple[int, int, int, str]) -> None:
-    process_id, parent_id, process_group, command = worker
-    row = process_rows().get(process_id)
-    if row is not None and (row[0], row[1], row[3]) == (
-        parent_id,
-        process_group,
-        command,
-    ):
-        os.kill(process_id, signal.SIGCONT)
 
 
 def named_requirement_error(requirement: str) -> str:
@@ -217,16 +134,12 @@ def test_rejects_local_r_installation(binary: Path) -> Transcript:
         progress, diagnostic_start, diagnostic = error.partition(
             "Error: IR_NO_LOCAL_SOURCES is set"
         )
-        assert progress.startswith(
-            "R package resolution failed with exit status: 1: "
-        ), error
+        failure_prefix = "R package resolution failed with exit status: 1: "
+        assert progress.startswith(failure_prefix), error
         assert diagnostic_start and "Resolving" in progress, error
         # IR may load cached metadata or refresh it before the same rejection.
         error = (
-            "R package resolution failed with exit status: 1: "
-            "ℹ Loading metadata database\n"
-            "✔ Loading metadata database ... done\n\n"
-            "<run-specific IR progress frames>\n"
+            f"{failure_prefix}<cache-dependent IR progress>\n"
             f"{diagnostic_start}{diagnostic}"
         )
         client.transcript[-1]["session"]["requirements"]["r"] = [
@@ -235,6 +148,12 @@ def test_rejects_local_r_installation(binary: Path) -> Transcript:
         result["content"][0]["text"] = error.replace(
             str(package), "<absolute package path>"
         )
+        client.transcript[-1]["transcript_normalization"] = {
+            "target": "result.content[0].text",
+            "replacements": {
+                "cache_dependent_ir_progress": "<cache-dependent IR progress>",
+            },
+        }
         return client._finish()
 
 
@@ -323,6 +242,11 @@ def test_stops_live_preparation_for_idle_callback_input(binary: Path) -> Transcr
             if (turns == 0L) {
               stopifnot(file.create(callback_checkpoint))
               readline("later> ")
+              # Keep the submitted callback alive if relay retirement closes
+              # fd 0 before the force-stop signal reaches the worker.
+              repeat {
+                Sys.sleep(1)
+              }
             } else {
               later::later(function() request_input(turns - 1L), delay = 0)
             }
@@ -339,18 +263,12 @@ def test_stops_live_preparation_for_idle_callback_input(binary: Path) -> Transcr
         '[input requested: "later> "]\n[stdin needed]',
         "idle callback input request",
     )
-    # Hold the worker in a kernel checkpoint so failed preparation must take
-    # the immediate force-stop path instead of racing fd-0 EOF against SIGKILL.
-    worker = stop_builtin_worker(client)
     # Keep this distinct from the callback's retained requirement so activation
     # cannot turn the preparation into an idempotent server-side no-op.
-    try:
-        result = client.session(
-            action="prepare",
-            requirements={"python": ["py-yaml12>=0"]},
-        )
-    finally:
-        continue_stopped_worker(worker)
+    result = client.session(
+        action="prepare",
+        requirements={"python": ["py-yaml12>=0"]},
+    )
     assert result["isError"] is True, result
     assert result["content"][0]["text"] == (
         '[idle R callback requested input "later> " during requirement '
