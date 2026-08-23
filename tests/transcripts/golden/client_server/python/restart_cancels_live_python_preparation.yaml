@@ -9,8 +9,8 @@ result:
       text: "[done]"
   isError: false
 ---
-session:
-  action: prepare
+send:
+  r: stop('cancelled requirements cell ran')
   requirements:
     python:
       - mcp-console-blocked-live-preparation

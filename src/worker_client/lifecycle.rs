@@ -1,10 +1,7 @@
-use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use super::environment::{
-    PythonEnvironment, ensure_python_additions_available, merge_python_requirements,
-};
+use super::environment::{Environment, RequirementDelta, ResolvedEnvironment};
 use super::evaluation::{RestartDelivery, RestartReservation};
 use super::output::{Response, ResponseAcknowledgment, SendFailure};
 use super::{Client, WorkerRetirement, WorkerRetirementFailure, WorkerState, platform};
@@ -322,97 +319,24 @@ impl Client {
             .lock()
             .map_err(|_| "worker environment lock poisoned".to_string())?;
         self.ensure_generation(&generation)?;
-        let super::Requirements { duckdb, python, r } = requirements;
-        ensure_python_additions_available(&environment, &python)?;
-
-        let duckdb_additions = duckdb.into_iter().collect::<BTreeSet<_>>();
-        let duckdb_changed = !duckdb_additions.is_subset(&environment.duckdb_extensions);
-        let duckdb_extensions = environment
-            .duckdb_extensions
-            .union(&duckdb_additions)
-            .cloned()
-            .collect::<BTreeSet<_>>();
-        let python_candidate = merge_python_requirements(
-            environment
-                .python
-                .as_ref()
-                .and_then(PythonEnvironment::managed),
-            python,
-        );
-        let mut r_additions = r.into_iter().collect::<BTreeSet<_>>();
-        if environment.custom_worker {
-            r_additions.extend(
-                super::CUSTOM_DUCKDB_R_REQUIREMENTS
-                    .iter()
-                    .map(|requirement| (*requirement).to_string()),
-            );
-        }
-        let current_r = environment
-            .r
-            .as_ref()
-            .map(|managed| managed.requirements().iter().cloned().collect())
-            .unwrap_or_default();
-        let r_changed = !r_additions.is_subset(&current_r);
-        if !duckdb_changed && python_candidate.is_none() && !r_changed {
+        let delta = RequirementDelta::calculate(&environment, requirements)?;
+        if delta.is_empty() {
             drop(environment);
             return self.begin_restart(grace);
         }
+        let resolved = self
+            .resolve_prestart_environment(&generation, &environment, delta)
+            .map_err(|failure| failure.into_message())?;
 
-        let mut managed_r = environment.r.clone();
-        if r_changed {
-            let requirements = current_r.union(&r_additions).cloned().collect();
-            let result = crate::resolver::resolve_r(requirements, |handle| {
-                self.register_resolver_stop_handle(&generation, handle)
-            });
-            self.clear_resolver_stop_handle(&generation)?;
-            managed_r = Some(result?);
-        }
-
-        if !duckdb_extensions.is_empty() && (duckdb_changed || r_changed) {
-            let target = managed_r.as_ref().ok_or_else(|| {
-                "DuckDB extension preparation requires a managed R environment".to_string()
-            })?;
-            let extensions = duckdb_extensions.iter().cloned().collect::<Vec<_>>();
-            self.resolve_duckdb_extensions(&generation, std::slice::from_ref(target), &extensions)?;
-        }
-
-        let managed_python = if let Some(candidate) = python_candidate {
-            let (_, resolver) = environment
-                .python
-                .as_ref()
-                .ok_or_else(|| "managed Python environment is unavailable".to_string())?
-                .managed_parts()?;
-            let resolver = resolver.clone();
-            let result = crate::resolver::resolve_python_host(
-                candidate,
-                &resolver,
-                managed_r.as_ref(),
-                |handle| self.register_resolver_stop_handle(&generation, handle),
-            );
-            self.clear_resolver_stop_handle(&generation)?;
-            Some(result?)
-        } else {
-            None
-        };
-
-        self.commit_environment_and_begin_restart(
-            &generation,
-            grace,
-            &mut environment,
-            managed_python,
-            managed_r,
-            duckdb_extensions,
-        )
+        self.commit_environment_and_begin_restart(&generation, grace, &mut environment, resolved)
     }
 
     fn commit_environment_and_begin_restart(
         &self,
         expected: &WorkerGeneration,
         grace: Duration,
-        environment: &mut super::environment::Environment,
-        managed_python: Option<crate::resolver::ManagedPython>,
-        managed_r: Option<crate::resolver::ManagedR>,
-        duckdb_extensions: BTreeSet<String>,
+        environment: &mut Environment,
+        resolved: ResolvedEnvironment,
     ) -> Result<RestartContext, String> {
         let mut evaluation = self.evaluation()?;
         let mut lifecycle = self
@@ -437,15 +361,15 @@ impl Client {
             .take()
             .map(|active| active.evaluation.reserve_for_restart())
             .transpose()?;
-        if let Some(managed_python) = managed_python {
+        if let Some(managed_python) = resolved.managed_python {
             environment
                 .python
                 .as_mut()
                 .ok_or_else(|| "managed Python environment is unavailable".to_string())?
                 .replace_managed(managed_python)?;
         }
-        environment.r = managed_r;
-        environment.duckdb_extensions = duckdb_extensions;
+        environment.r = resolved.managed_r;
+        environment.duckdb_extensions = resolved.duckdb_extensions;
         let (processes, deadline, generation) =
             lifecycle.start_restart(grace, OldGenerationCommitDisposition::DiscardForReplacement);
         Ok(RestartContext {

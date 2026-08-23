@@ -1,0 +1,20 @@
+---
+relay:
+  kind: ready
+---
+server:
+  kind: prepare_r
+  library: <timeout-candidate>
+---
+relay:
+  kind: r_prepared
+  library: <timeout-candidate>
+---
+server:
+  kind: evaluate
+  language: r
+  source: "42"
+---
+relay:
+  kind: completed
+...

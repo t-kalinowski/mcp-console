@@ -1,12 +1,93 @@
 #!/usr/bin/env -S uv run --script
 
 import json
+import os
 import sys
+import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from _support import McpClient, Transcript, code, run_this_suite
+from _support import McpClient, Transcript, code, run_this_suite, stop_client
+
+
+def assert_invalid_send_has_no_external_effects(binary: Path) -> None:
+    zod = Path(__file__).resolve().parents[2] / "fixtures" / "zod"
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        temporary = Path(temporary_directory)
+        fake_bin = temporary / "bin"
+        fake_bin.mkdir()
+        resolver_probe = fake_bin / "resolver-probe"
+        resolver_probe.write_text(
+            code(r"""
+                #!/bin/sh
+
+                set -eu
+                printf 'resolver started\n' >> "$MCP_CONSOLE_TEST_RESOLVER_RECORD"
+                exit 97
+                """),
+            encoding="utf-8",
+        )
+        resolver_probe.chmod(0o755)
+        (fake_bin / "ir").symlink_to(resolver_probe)
+
+        environment = os.environ.copy()
+        path = environment.get("PATH")
+        assert path is not None, "PATH is required"
+        environment["PATH"] = os.pathsep.join((str(fake_bin), path))
+        environment["RETICULATE_UV"] = str(resolver_probe)
+        resolver_record = temporary / "resolver-record"
+        worker_started = temporary / "zod-started"
+        environment["MCP_CONSOLE_TEST_RESOLVER_RECORD"] = str(resolver_record)
+        environment["MCP_CONSOLE_TEST_ZOD_STARTED"] = str(worker_started)
+
+        client = McpClient(binary, ("serve", "--worker", str(zod)), environment)
+        passed = False
+        try:
+            client._initialize_and_list_tools()
+            invalid = (
+                (
+                    {"r": "echo invalid R cell ran", "requirements": {"r": [""]}},
+                    "R requirement strings must not be empty",
+                ),
+                (
+                    {
+                        "python": "echo invalid Python cell ran",
+                        "requirements": {
+                            "python": ["example @ https://example.invalid/example.whl"]
+                        },
+                    },
+                    (
+                        "Python requirement `example @ "
+                        "https://example.invalid/example.whl` is not accepted: "
+                        "host-side managed resolution accepts named package "
+                        "requirements only"
+                    ),
+                ),
+                (
+                    {
+                        "sql": "echo invalid DuckDB cell ran",
+                        "requirements": {"duckdb": ["spatial FROM community"]},
+                    },
+                    (
+                        "DuckDB extension names must start with a lowercase ASCII "
+                        "letter and contain only lowercase ASCII letters, digits, "
+                        "and underscores"
+                    ),
+                ),
+            )
+            for arguments, expected in invalid:
+                result = client.send(**arguments)
+                assert result["isError"] is True, result
+                assert result["content"] == [{"type": "text", "text": expected}], result
+
+            assert not resolver_record.exists(), "invalid input started a host resolver"
+            assert not worker_started.exists(), "invalid input started or ran a worker"
+            client._finish()
+            passed = True
+        finally:
+            if not passed:
+                stop_client(client)
 
 
 def test_initializes_and_lists_tools(binary: Path) -> Transcript:
@@ -29,7 +110,10 @@ def test_initializes_and_lists_tools(binary: Path) -> Transcript:
         "SQL queries R data frames by name",
         "`sql_connection()`",
         "Do not probe package availability in cells",
-        "Use `session` to prepare other packages",
+        "Declare other packages or DuckDB extensions needed by a cell in `requirements`",
+        "use `session` to prepare them ahead of time",
+        "code is not inspected and missing-package errors are not retried",
+        "Preparation does not load, import, or attach packages or extensions",
         "If you use a custom Python installation, import packages already installed there directly",
         "Call `send` sequentially",
         "ordinary console output",
@@ -70,6 +154,19 @@ def test_initializes_and_lists_tools(binary: Path) -> Transcript:
         in python_description
     )
     assert "bounded preview" in send["inputSchema"]["properties"]["sql"]["description"]
+    send_requirements_description = " ".join(
+        send["inputSchema"]["properties"]["requirements"]["description"].split()
+    )
+    for guidance in (
+        "needed by this cell",
+        "prepared before the cell is evaluated and retained for later cells",
+        "Requirements may accompany any cell language",
+        "The cell is not run if preparation fails or further changes require restart",
+        "does not inspect code for requirements or retry missing-package errors",
+        "Resolution runs outside the worker sandbox",
+        "This field requires one `r`, `python`, or `sql` cell",
+    ):
+        assert guidance in send_requirements_description, guidance
     stdin_description = " ".join(
         send["inputSchema"]["properties"]["stdin"]["description"].split()
     )
@@ -80,6 +177,18 @@ def test_initializes_and_lists_tools(binary: Path) -> Transcript:
         "Empty text queues nothing",
     ):
         assert guidance in stdin_description, guidance
+    timeout_description = " ".join(
+        send["inputSchema"]["properties"]["timeout_ms"]["description"].split()
+    )
+    for guidance in (
+        "once the cell has been dispatched",
+        "Requirement preparation happens first",
+        "may make the complete call take longer",
+    ):
+        assert guidance in timeout_description, guidance
+    send_schema = json.dumps(send["inputSchema"])
+    assert '"$defs"' not in send_schema, send["inputSchema"]
+    assert '"$ref"' not in send_schema, send["inputSchema"]
 
     session = tools["session"]
     for guidance in (
@@ -102,6 +211,31 @@ def test_initializes_and_lists_tools(binary: Path) -> Transcript:
     session_schema = json.dumps(session["inputSchema"])
     assert '"$defs"' not in session_schema, session["inputSchema"]
     assert '"$ref"' not in session_schema, session["inputSchema"]
+    send_requirements = send["inputSchema"]["properties"]["requirements"]
+    session_requirements = session["inputSchema"]["properties"]["requirements"]
+    send_requirements_shape = {
+        key: value for key, value in send_requirements.items() if key != "description"
+    }
+    session_requirements_shape = {
+        key: value
+        for key, value in session_requirements.items()
+        if key != "description"
+    }
+    assert send_requirements_shape == session_requirements_shape, (
+        send_requirements,
+        session_requirements,
+    )
+    assert send_requirements["type"] == ["object", "null"], send_requirements
+    assert send_requirements["additionalProperties"] is False, send_requirements
+    requirement_properties = send_requirements["properties"]
+    assert requirement_properties.keys() == {"duckdb", "r", "python"}
+    for requirement in requirement_properties.values():
+        assert requirement["type"] == "array", requirement
+        assert requirement["maxItems"] == 64, requirement
+        assert requirement["default"] == [], requirement
+        assert requirement["items"]["type"] == "string", requirement
+        assert requirement["items"]["minLength"] == 1, requirement
+    assert requirement_properties["duckdb"]["items"]["maxLength"] == 64
     action_description = " ".join(
         session["inputSchema"]["properties"]["action"]["description"].split()
     )
@@ -146,6 +280,7 @@ def test_initializes_and_lists_tools(binary: Path) -> Transcript:
 
 
 def test_validates_send_arguments(binary: Path) -> Transcript:
+    assert_invalid_send_has_no_external_effects(binary)
     client = McpClient(binary, ("serve",))
     client._initialize_and_list_tools()
     client.send(
@@ -155,7 +290,62 @@ def test_validates_send_arguments(binary: Path) -> Transcript:
         """),
         wait_ms=0,
     )
-    client.send(r="1", python="1", sql="SELECT 1")
+    result = client.send(
+        r="1",
+        python="1",
+        sql="SELECT 1",
+        requirements={"r": ["praise"]},
+    )
+    assert result["isError"] is True, result
+    assert result["content"][0]["text"] == (
+        "only one of `r`, `python`, or `sql` may be supplied"
+    ), result
+
+    result = client.send(requirements={"r": ["praise"]})
+    assert result["isError"] is True, result
+    assert result["content"][0]["text"] == "`requirements` requires a code cell", result
+
+    result = client.send(stdin="answer\n", requirements={"r": ["praise"]})
+    assert result["isError"] is True, result
+    assert result["content"][0]["text"] == "`requirements` requires a code cell", result
+
+    result = client.send(r="stop('cell was run')", requirements={})
+    assert result["isError"] is True, result
+    assert result["content"][0]["text"] == (
+        "at least one of `requirements.r`, `requirements.python`, or "
+        "`requirements.duckdb` is required"
+    ), result
+
+    result = client.send(
+        r="stop('cell was run')",
+        requirements={"r": [""]},
+    )
+    assert result["isError"] is True, result
+    assert result["content"][0]["text"] == "R requirement strings must not be empty", (
+        result
+    )
+
+    invalid_python = "example @ https://example.invalid/example.whl"
+    result = client.send(
+        r="stop('cell was run')",
+        requirements={"python": [invalid_python]},
+    )
+    assert result["isError"] is True, result
+    assert result["content"][0]["text"] == (
+        f"Python requirement `{invalid_python}` is not accepted: host-side managed "
+        "resolution accepts named package requirements only"
+    ), result
+
+    result = client.send(
+        r="stop('cell was run')",
+        requirements={"duckdb": ["spatial FROM community"]},
+    )
+    assert result["isError"] is True, result
+    assert result["content"][0]["text"] == (
+        "DuckDB extension names must start with a lowercase ASCII letter and "
+        "contain only lowercase ASCII letters, digits, and underscores"
+    ), result
+
     client.send(r=None)
     output = client.transcript[-1]["result"]["content"][0]["text"]
     assert output == "\n[idle]", output

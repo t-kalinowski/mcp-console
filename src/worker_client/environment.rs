@@ -115,10 +115,100 @@ pub(crate) enum PrepareResult {
     WorkerStopped(super::Response),
 }
 
+#[derive(Clone, Copy)]
+pub(super) enum PreparationIntent {
+    Standalone,
+    BeforeEvaluation,
+}
+
 pub(crate) struct Requirements {
     pub(crate) duckdb: Vec<String>,
     pub(crate) python: Vec<String>,
     pub(crate) r: Vec<String>,
+}
+
+pub(super) struct RequirementDelta {
+    duckdb_extensions: BTreeSet<String>,
+    duckdb_changed: bool,
+    python_additions: BTreeSet<String>,
+    python_candidate: Option<crate::worker_protocol::PythonRequirementManifest>,
+    r_requirements: Vec<String>,
+    r_changed: bool,
+}
+
+impl RequirementDelta {
+    pub(super) fn calculate(
+        environment: &Environment,
+        requirements: Requirements,
+    ) -> Result<Self, String> {
+        let Requirements { duckdb, python, r } = requirements;
+        ensure_python_additions_available(environment, &python)?;
+
+        let duckdb_additions = duckdb.into_iter().collect::<BTreeSet<_>>();
+        let duckdb_changed = !duckdb_additions.is_subset(&environment.duckdb_extensions);
+        let duckdb_extensions = environment
+            .duckdb_extensions
+            .union(&duckdb_additions)
+            .cloned()
+            .collect();
+
+        let python_additions = python.into_iter().collect::<BTreeSet<_>>();
+        let python_candidate = merge_python_requirements(
+            environment
+                .python
+                .as_ref()
+                .and_then(PythonEnvironment::managed),
+            python_additions.iter().cloned().collect(),
+        );
+
+        let mut r_additions = r.into_iter().collect::<BTreeSet<_>>();
+        if environment.custom_worker {
+            r_additions.extend(
+                super::CUSTOM_DUCKDB_R_REQUIREMENTS
+                    .iter()
+                    .map(|requirement| (*requirement).to_string()),
+            );
+        }
+        let current_r = environment
+            .r
+            .as_ref()
+            .map(|managed| managed.requirements().iter().cloned().collect())
+            .unwrap_or_default();
+        let r_changed = !r_additions.is_subset(&current_r);
+        let r_requirements = current_r.union(&r_additions).cloned().collect();
+
+        Ok(Self {
+            duckdb_extensions,
+            duckdb_changed,
+            python_additions,
+            python_candidate,
+            r_requirements,
+            r_changed,
+        })
+    }
+
+    pub(super) fn is_empty(&self) -> bool {
+        !self.duckdb_changed && self.python_candidate.is_none() && !self.r_changed
+    }
+}
+
+pub(super) struct ResolvedEnvironment {
+    pub(super) duckdb_extensions: BTreeSet<String>,
+    pub(super) managed_python: Option<crate::resolver::ManagedPython>,
+    pub(super) managed_r: Option<crate::resolver::ManagedR>,
+}
+
+pub(super) enum EnvironmentResolutionFailure {
+    Host(String),
+    Operation(String),
+}
+
+impl EnvironmentResolutionFailure {
+    pub(super) fn into_message(self) -> String {
+        match self {
+            Self::Host(message) | Self::Operation(message) => message,
+        }
+    }
 }
 
 pub(super) fn merge_python_requirements(
@@ -183,7 +273,22 @@ impl Client {
 
     fn prepare_blocking(&self, requirements: Requirements) -> Result<PrepareResult, String> {
         let generation = self.admit()?;
-        let _preparation = self.admit_preparation()?;
+        let preparation = self.admit_preparation()?;
+        self.prepare_admitted(
+            requirements,
+            &generation,
+            &preparation,
+            PreparationIntent::Standalone,
+        )
+    }
+
+    pub(super) fn prepare_admitted(
+        &self,
+        requirements: Requirements,
+        generation: &WorkerGeneration,
+        _preparation: &tokio::sync::RwLockWriteGuard<'_, ()>,
+        intent: PreparationIntent,
+    ) -> Result<PrepareResult, String> {
         let environment = self
             .0
             .environment
@@ -196,49 +301,17 @@ impl Client {
         let mut environment = environment
             .lock()
             .map_err(|_| "worker environment lock poisoned".to_string())?;
-        self.ensure_generation(&generation)?;
-        let Requirements { duckdb, python, r } = requirements;
-        ensure_python_additions_available(&environment, &python)?;
-        let duckdb_additions = duckdb.into_iter().collect::<BTreeSet<_>>();
-        let duckdb_candidate = if duckdb_additions.is_subset(&environment.duckdb_extensions) {
-            None
-        } else {
-            Some(
-                environment
-                    .duckdb_extensions
-                    .union(&duckdb_additions)
-                    .cloned()
-                    .collect::<BTreeSet<_>>(),
-            )
-        };
-        let python_additions = python.into_iter().collect::<BTreeSet<_>>();
-        let python_candidate = merge_python_requirements(
-            environment
-                .python
-                .as_ref()
-                .and_then(PythonEnvironment::managed),
-            python_additions.iter().cloned().collect(),
-        );
-        let mut r_additions = r.into_iter().collect::<BTreeSet<_>>();
-        if environment.custom_worker {
-            r_additions.extend(
-                super::CUSTOM_DUCKDB_R_REQUIREMENTS
-                    .iter()
-                    .map(|requirement| (*requirement).to_string()),
-            );
-        }
-        let current_r = environment
-            .r
-            .as_ref()
-            .map(|managed| managed.requirements().iter().cloned().collect())
-            .unwrap_or_default();
-        if duckdb_candidate.is_none()
-            && python_candidate.is_none()
-            && r_additions.is_subset(&current_r)
-        {
+        self.ensure_generation(generation)?;
+        let delta = RequirementDelta::calculate(&environment, requirements)?;
+        if delta.is_empty() {
             return Ok(PrepareResult::Prepared);
         }
-        if self.requirement_change_state(&generation)? == RequirementChangeState::RestartRequired {
+        if matches!(intent, PreparationIntent::BeforeEvaluation)
+            && let Some(active) = active_operation.as_ref()
+        {
+            return Err(active.reject_preparation_message().to_string());
+        }
+        if self.requirement_change_state(generation)? == RequirementChangeState::RestartRequired {
             return Ok(PrepareResult::RestartRequired);
         }
         if let Some(active) = active_operation {
@@ -253,44 +326,56 @@ impl Client {
                 return Err("worker lock poisoned".to_string());
             }
         };
-        if matches!(*worker, WorkerState::Stopped) {
+        if matches!(*worker, WorkerState::Stopped)
+            && matches!(intent, PreparationIntent::Standalone)
+        {
             return Ok(PrepareResult::RestartRequired);
         }
         if matches!(*worker, WorkerState::Running(_)) {
-            let managed_r = if r_additions.is_subset(&current_r) {
-                None
+            let RequirementDelta {
+                duckdb_extensions,
+                duckdb_changed,
+                python_additions,
+                python_candidate,
+                r_requirements,
+                r_changed,
+            } = delta;
+            let managed_r = if r_changed {
+                match self.resolve_managed_r(generation, r_requirements) {
+                    Ok(managed_r) => Some(managed_r),
+                    Err(failure) => {
+                        return self
+                            .finish_environment_resolution_failure(generation, intent, failure);
+                    }
+                }
             } else {
-                let requirements = current_r.union(&r_additions).cloned().collect();
-                let result = crate::resolver::resolve_r(requirements, |handle| {
-                    self.register_resolver_stop_handle(&generation, handle)
-                });
-                self.clear_resolver_stop_handle(&generation)?;
-                Some(result?)
+                None
             };
-            let duckdb_extensions = duckdb_candidate
-                .as_ref()
-                .unwrap_or(&environment.duckdb_extensions);
-            if !duckdb_extensions.is_empty() && (duckdb_candidate.is_some() || managed_r.is_some())
-            {
+            if !duckdb_extensions.is_empty() && (duckdb_changed || managed_r.is_some()) {
                 let mut targets = Vec::new();
-                if duckdb_candidate.is_some() {
+                if duckdb_changed {
                     targets.extend(environment.duckdb_r_targets.iter().cloned());
                 }
                 if let Some(managed_r) = managed_r.as_ref() {
                     push_duckdb_r_target(&mut targets, managed_r.clone());
                 }
                 let duckdb_extensions = duckdb_extensions.iter().cloned().collect::<Vec<_>>();
-                self.resolve_duckdb_extensions(&generation, &targets, &duckdb_extensions)?;
+                if let Err(failure) =
+                    self.resolve_duckdb_extensions(generation, &targets, &duckdb_extensions)
+                {
+                    return self.finish_environment_resolution_failure(generation, intent, failure);
+                }
             }
             let python_packages = if python_candidate.is_some() {
                 python_additions.into_iter().collect()
             } else {
                 Vec::new()
             };
+            let duckdb_candidate = duckdb_changed.then_some(duckdb_extensions);
             if python_packages.is_empty() && managed_r.is_none() {
                 if let Some(duckdb_candidate) = duckdb_candidate {
                     self.commit_locked_duckdb_environment(
-                        &generation,
+                        generation,
                         &mut environment,
                         duckdb_candidate,
                     )?;
@@ -299,7 +384,7 @@ impl Client {
             }
             drop(environment);
             return self.prepare_running(
-                &generation,
+                generation,
                 worker,
                 python_packages,
                 managed_r,
@@ -307,48 +392,11 @@ impl Client {
             );
         }
 
-        let r_requirements = current_r.union(&r_additions).cloned().collect::<Vec<_>>();
-
-        let mut managed_r = environment.r.clone();
-        if !r_additions.is_subset(&current_r) {
-            let result = crate::resolver::resolve_r(r_requirements, |handle| {
-                self.register_resolver_stop_handle(&generation, handle)
-            });
-            self.clear_resolver_stop_handle(&generation)?;
-            managed_r = Some(result?);
-        }
-
-        let duckdb_extensions = duckdb_candidate
-            .as_ref()
-            .unwrap_or(&environment.duckdb_extensions);
-        if !duckdb_extensions.is_empty()
-            && (duckdb_candidate.is_some() || !r_additions.is_subset(&current_r))
-        {
-            let mut targets = Vec::new();
-            if let Some(managed_r) = managed_r.as_ref() {
-                push_duckdb_r_target(&mut targets, managed_r.clone());
+        let resolved = match self.resolve_prestart_environment(generation, &environment, delta) {
+            Ok(resolved) => resolved,
+            Err(failure) => {
+                return self.finish_environment_resolution_failure(generation, intent, failure);
             }
-            let duckdb_extensions = duckdb_extensions.iter().cloned().collect::<Vec<_>>();
-            self.resolve_duckdb_extensions(&generation, &targets, &duckdb_extensions)?;
-        }
-
-        let managed_python = if let Some(candidate) = python_candidate {
-            let (_, resolver) = environment
-                .python
-                .as_ref()
-                .ok_or_else(|| "managed Python environment is unavailable".to_string())?
-                .managed_parts()?;
-            let resolver = resolver.clone();
-            let result = crate::resolver::resolve_python_host(
-                candidate,
-                &resolver,
-                managed_r.as_ref(),
-                |handle| self.register_resolver_stop_handle(&generation, handle),
-            );
-            self.clear_resolver_stop_handle(&generation)?;
-            Some(result?)
-        } else {
-            None
         };
 
         let mut lifecycle = self
@@ -357,19 +405,17 @@ impl Client {
             .lock()
             .map_err(|_| "worker lifecycle lock poisoned".to_string())?;
         match lifecycle.state {
-            LifecycleState::Ready if lifecycle.generation.is(&generation) => {
+            LifecycleState::Ready if lifecycle.generation.is(generation) => {
                 lifecycle.processes.resolver = None;
-                if let Some(managed_python) = managed_python {
+                if let Some(managed_python) = resolved.managed_python {
                     environment
                         .python
                         .as_mut()
                         .ok_or_else(|| "managed Python environment is unavailable".to_string())?
                         .replace_managed(managed_python)?;
                 }
-                environment.r = managed_r;
-                if let Some(duckdb_candidate) = duckdb_candidate {
-                    environment.duckdb_extensions = duckdb_candidate;
-                }
+                environment.r = resolved.managed_r;
+                environment.duckdb_extensions = resolved.duckdb_extensions;
                 Ok(PrepareResult::Prepared)
             }
             LifecycleState::Ready => {
@@ -380,26 +426,129 @@ impl Client {
         }
     }
 
-    pub(super) fn resolve_duckdb_extensions(
+    pub(super) fn resolve_prestart_environment(
+        &self,
+        generation: &WorkerGeneration,
+        environment: &Environment,
+        delta: RequirementDelta,
+    ) -> Result<ResolvedEnvironment, EnvironmentResolutionFailure> {
+        let RequirementDelta {
+            duckdb_extensions,
+            duckdb_changed,
+            python_additions: _,
+            python_candidate,
+            r_requirements,
+            r_changed,
+        } = delta;
+        let mut managed_r = environment.r.clone();
+        if r_changed {
+            managed_r = Some(self.resolve_managed_r(generation, r_requirements)?);
+        }
+        if !duckdb_extensions.is_empty() && (duckdb_changed || r_changed) {
+            let target = managed_r.as_ref().ok_or_else(|| {
+                EnvironmentResolutionFailure::Operation(
+                    "DuckDB extension preparation requires a managed R environment".to_string(),
+                )
+            })?;
+            let extensions = duckdb_extensions.iter().cloned().collect::<Vec<_>>();
+            self.resolve_duckdb_extensions(generation, std::slice::from_ref(target), &extensions)?;
+        }
+        let managed_python = if let Some(candidate) = python_candidate {
+            let (_, resolver) = environment
+                .python
+                .as_ref()
+                .ok_or_else(|| {
+                    EnvironmentResolutionFailure::Operation(
+                        "managed Python environment is unavailable".to_string(),
+                    )
+                })?
+                .managed_parts()
+                .map_err(EnvironmentResolutionFailure::Operation)?;
+            Some(self.resolve_managed_python_host(
+                generation,
+                candidate,
+                resolver,
+                managed_r.as_ref(),
+            )?)
+        } else {
+            None
+        };
+        Ok(ResolvedEnvironment {
+            duckdb_extensions,
+            managed_python,
+            managed_r,
+        })
+    }
+
+    fn resolve_managed_r(
+        &self,
+        generation: &WorkerGeneration,
+        requirements: Vec<String>,
+    ) -> Result<crate::resolver::ManagedR, EnvironmentResolutionFailure> {
+        let result = crate::resolver::resolve_r(requirements, |handle| {
+            self.register_resolver_stop_handle(generation, handle)
+        });
+        self.clear_resolver_stop_handle(generation)
+            .map_err(EnvironmentResolutionFailure::Operation)?;
+        result.map_err(EnvironmentResolutionFailure::Host)
+    }
+
+    fn resolve_managed_python_host(
+        &self,
+        generation: &WorkerGeneration,
+        requirements: crate::worker_protocol::PythonRequirementManifest,
+        resolver: &crate::resolver::ManagedPythonResolverConfiguration,
+        managed_r: Option<&crate::resolver::ManagedR>,
+    ) -> Result<crate::resolver::ManagedPython, EnvironmentResolutionFailure> {
+        let result =
+            crate::resolver::resolve_python_host(requirements, resolver, managed_r, |handle| {
+                self.register_resolver_stop_handle(generation, handle)
+            });
+        self.clear_resolver_stop_handle(generation)
+            .map_err(EnvironmentResolutionFailure::Operation)?;
+        result.map_err(EnvironmentResolutionFailure::Host)
+    }
+
+    fn resolve_duckdb_extensions(
         &self,
         generation: &WorkerGeneration,
         managed_r: &[crate::resolver::ManagedR],
         extensions: &[String],
-    ) -> Result<(), String> {
+    ) -> Result<(), EnvironmentResolutionFailure> {
         if managed_r.is_empty() {
-            return Err(
+            return Err(EnvironmentResolutionFailure::Operation(
                 "DuckDB extension preparation requires a managed R environment".to_string(),
-            );
+            ));
         }
         for managed_r in managed_r {
             let result =
                 crate::resolver::resolve_duckdb_extensions(managed_r, extensions, |handle| {
                     self.register_resolver_stop_handle(generation, handle)
                 });
-            self.clear_resolver_stop_handle(generation)?;
-            result?;
+            self.clear_resolver_stop_handle(generation)
+                .map_err(EnvironmentResolutionFailure::Operation)?;
+            result.map_err(EnvironmentResolutionFailure::Host)?;
         }
         Ok(())
+    }
+
+    fn finish_environment_resolution_failure(
+        &self,
+        generation: &WorkerGeneration,
+        intent: PreparationIntent,
+        failure: EnvironmentResolutionFailure,
+    ) -> Result<PrepareResult, String> {
+        match (intent, failure) {
+            (PreparationIntent::BeforeEvaluation, EnvironmentResolutionFailure::Host(error)) => {
+                match self.generation_status(generation)? {
+                    GenerationStatus::CurrentReady => {
+                        Ok(self.failed_pre_evaluation_resolution(error))
+                    }
+                    GenerationStatus::CurrentClosing | GenerationStatus::Changed => Err(error),
+                }
+            }
+            (_, failure) => Err(failure.into_message()),
+        }
     }
 
     fn commit_locked_duckdb_environment(
@@ -596,6 +745,14 @@ impl Client {
     fn failed_preparation_response(&self, error: String) -> PrepareResult {
         let mut response = self.0.output.take();
         response.push_tool_error(error);
+        PrepareResult::Failed(response)
+    }
+
+    fn failed_pre_evaluation_resolution(&self, error: String) -> PrepareResult {
+        let mut response = self.0.output.take_prelude();
+        let mut failure = super::Response::default();
+        failure.push_tool_error(error);
+        response.extend_cell_after_idle_prelude(failure);
         PrepareResult::Failed(response)
     }
 

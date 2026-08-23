@@ -30,8 +30,16 @@ A `send` call accepts exactly one complete `r`, `python`, or `sql` cell.
 The source is not an interactive fragment assembled across calls.
 R uses its native top-level evaluation behavior; Python parses the entire submitted source before executing it; SQL passes the complete string to DuckDB.
 
+A code-bearing call can declare additive R packages, Python packages, or DuckDB extensions in `requirements`, regardless of the cell language.
+The server prepares changed requirements before it dispatches the cell and retains successful additions for later cells and restarts.
+Already-retained requirements add no preparation work, and a successful combined call returns only the normal cell result, without `[prepared]`.
+Preparation makes packages and extensions available but does not attach, import, or load them, and MCP Console does not inspect cells or retry package-load or import failures.
+If validation, resolution, or live preparation fails, or if requirement changes require an explicit restart, the call is a tool error and the cell is not run.
+Calls without `requirements` preserve the ordinary send path.
+
 The optional `timeout_ms` defaults to 60,000 milliseconds.
-It limits only how long a call waits after starting or attaching to an evaluation, including its worker startup and one automatic replacement attempt.
+For a combined call, requirement resolution and live preparation finish before the cell is dispatched and before this deadline begins applying, so the complete MCP call can take longer than `timeout_ms`.
+The deadline then limits only how long a call waits after starting or attaching to an evaluation, including its worker startup and one automatic replacement attempt.
 A stdin-only call with no active evaluation instead waits without that deadline if it must start an initial or stopped worker.
 The deadline does not stop worker startup, dependency resolution, or evaluation.
 When the deadline expires, the response contains output available so far and ends in a state notice such as `[running]` or `[worker starting]`.
@@ -62,7 +70,8 @@ Only a later managed console callback can replay the preserved prefix.
 To complete that line, the next reader must therefore be managed; Python `sys.stdin`, direct fd-0 reads, and descendants cannot consume the prefix.
 All unread input and managed-console pushback are discarded when the worker generation ends.
 
-When one call contains both nonempty `stdin` and a cell, the bytes are queued before the evaluation command.
+When one call contains requirements, nonempty `stdin`, and a cell, requirement preparation completes first.
+The bytes are then queued before the evaluation command.
 That is a transport-order guarantee, not a consumption guarantee.
 An already waiting idle read can consume the bytes before the new cell begins.
 A stdin-only call can queue bytes while an evaluation is running or while the worker is idle; it starts the worker lazily when necessary.

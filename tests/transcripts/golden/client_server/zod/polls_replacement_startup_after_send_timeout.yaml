@@ -35,6 +35,17 @@ result:
   isError: true
 ---
 send:
+  r: echo startup overlap cell ran
+  requirements:
+    r:
+      - praise
+result:
+  content:
+    - type: text
+      text: "[requirements not prepared: worker is starting]"
+  isError: true
+---
+send:
   timeout_ms: 3000
 result:
   content:

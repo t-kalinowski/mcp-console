@@ -306,6 +306,127 @@ def test_empty_stdin_sends_no_relay_command(binary: Path) -> Transcript:
     return client.finish_active()
 
 
+def test_prepares_initial_requirements_before_stdin_and_skips_retained_resolution(
+    binary: Path,
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        library = root / "initial-candidate"
+        library.mkdir()
+        environment = _fake_ir_environment(root, [library])
+        client = ServerRelayClient(
+            binary,
+            "initial_requirements_stdin_idempotent",
+            environment,
+        )
+
+        assert (
+            _tool_text(
+                client.send(
+                    python="42",
+                    stdin="answer\n",
+                    requirements={"r": ["initial-requirement"]},
+                )
+            )
+            == "[done]"
+        )
+        assert (
+            _tool_text(
+                client.send(
+                    r="43",
+                    requirements={"r": ["initial-requirement"]},
+                )
+            )
+            == "[done]"
+        )
+        transcript = client.finish_active()
+
+        assert (root / "ir-counter").read_text(encoding="utf-8") == "1"
+
+    server_commands = [
+        entry["server"] for entry in transcript if entry.keys() == {"server"}
+    ]
+    assert [command["kind"] for command in server_commands[:3]] == [
+        "stdin",
+        "evaluate",
+        "evaluate",
+    ], server_commands
+    assert not any(command["kind"] == "prepare_r" for command in server_commands)
+    return transcript
+
+
+def test_send_timeout_starts_after_blocked_requirements_resolver(
+    binary: Path,
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        library = root / "timeout-candidate"
+        library.mkdir()
+        environment = _fake_ir_environment(root, [library])
+        resolver_started = FifoCheckpoint(root / "resolver-started", create=True)
+        resolver_release = FifoCheckpoint(root / "resolver-release", create=True)
+        environment["MCP_CONSOLE_TEST_IR_STARTED"] = str(resolver_started.path)
+        environment["MCP_CONSOLE_TEST_IR_RELEASE"] = str(resolver_release.path)
+        client = ServerRelayClient(
+            binary,
+            "live_r_requirements_then_evaluate",
+            environment,
+        )
+        client.start_worker()
+        finished = False
+        try:
+            evaluation = client.client._start_send(
+                r="42",
+                requirements={"r": ["timeout-requirement"]},
+                timeout_ms=50,
+            )
+            resolver_started.wait()
+            readable, _, _ = select.select([client.client.stdout], [], [], 0.25)
+            assert not readable, (
+                "send timeout applied while requirements were resolving"
+            )
+
+            resolver_release.release()
+            _receive_checkpointed(
+                client.client,
+                evaluation,
+                "the evaluation after requirement resolution",
+            )
+            assert _tool_text(evaluation["result"]) == "[done]"
+            transcript = client.finish_active()
+            finished = True
+        finally:
+            if not finished:
+                stop_client(client.client)
+                client._temporary.cleanup()
+            resolver_started.close()
+            resolver_release.close()
+
+        assert (root / "ir-counter").read_text(encoding="utf-8") == "1"
+
+    prepare_commands = [
+        entry["server"]
+        for entry in transcript
+        if entry.keys() == {"server"} and entry["server"].get("kind") == "prepare_r"
+    ]
+    assert prepare_commands == [{"kind": "prepare_r", "library": str(library)}]
+    prepare_commands[0]["library"] = "<timeout-candidate>"
+    prepared_events = [
+        entry["relay"]
+        for entry in transcript
+        if entry.keys() == {"relay"} and entry["relay"].get("kind") == "r_prepared"
+    ]
+    assert prepared_events == [{"kind": "r_prepared", "library": str(library)}]
+    prepared_events[0]["library"] = "<timeout-candidate>"
+    evaluations = [
+        entry["server"]
+        for entry in transcript
+        if entry.keys() == {"server"} and entry["server"].get("kind") == "evaluate"
+    ]
+    assert evaluations == [{"kind": "evaluate", "language": "r", "source": "42"}]
+    return transcript
+
+
 def test_stdin_forwarding_failure_does_not_execute_cell(
     binary: Path,
 ) -> Transcript:
@@ -439,8 +560,8 @@ def test_shutdown_precedes_blocked_resolver_cancellation(binary: Path) -> Transc
         retirement_release = FifoCheckpoint(relay_root / RETIREMENT_RELEASE_NAME)
         finished = False
         try:
-            preparation = client.client._start_session(
-                action="prepare",
+            preparation = client.client._start_send(
+                r="must not execute during shutdown",
                 requirements={"r": ["blocked-resolver"]},
             )
             resolver_started.wait()
@@ -602,8 +723,8 @@ def test_restart_consumes_late_r_preparation_retirement_events(
         retirement_release = FifoCheckpoint(old_root / RETIREMENT_RELEASE_NAME)
         finished = False
         try:
-            preparation = client.client._start_session(
-                action="prepare",
+            preparation = client.client._start_send(
+                r="must not execute after resolver restart race",
                 requirements={"r": ["ordered-retirement"]},
             )
             preparation_received.wait()
@@ -688,6 +809,10 @@ def test_restart_consumes_late_r_preparation_retirement_events(
     assert [event["library"] for event in prepared_events] == list(map(str, libraries))
     for event in prepared_events:
         event["library"] = f"<{Path(event['library']).name}>"
+    assert not any(
+        entry.keys() == {"server"} and entry["server"].get("kind") == "evaluate"
+        for entry in transcript
+    ), transcript
     return transcript
 
 
@@ -845,8 +970,8 @@ def test_r_preparation_failure_requires_restart_and_preserves_worker(
         )
         client.start_worker()
 
-        result = client.session(
-            action="prepare",
+        result = client.send(
+            r="must not execute",
             requirements={"r": ["failing-preparation"]},
         )
         assert result == {
@@ -863,16 +988,22 @@ def test_r_preparation_failure_requires_restart_and_preserves_worker(
         }, result
 
         assert _tool_text(client.send(r="42")) == "[done]"
-        assert (
-            _tool_text(
-                client.session(
-                    action="prepare",
-                    requirements={"r": ["not-forwarded"]},
-                )
-            )
-            == "[restart required]"
+        result = client.send(
+            r="must not execute after restart requirement",
+            requirements={"r": ["not-forwarded"]},
         )
+        assert result == {
+            "content": [
+                {
+                    "type": "text",
+                    "text": ("requirements require session restart; cell was not run"),
+                }
+            ],
+            "isError": True,
+        }, result
         transcript = client.finish_active()
+
+        assert (root / "ir-counter").read_text(encoding="utf-8") == "1"
 
     prepare_commands = [
         entry["server"]
@@ -881,6 +1012,12 @@ def test_r_preparation_failure_requires_restart_and_preserves_worker(
     ]
     assert prepare_commands == [{"kind": "prepare_r", "library": str(library)}]
     prepare_commands[0]["library"] = "<failed-candidate>"
+    evaluations = [
+        entry["server"]
+        for entry in transcript
+        if entry.keys() == {"server"} and entry["server"].get("kind") == "evaluate"
+    ]
+    assert evaluations == [{"kind": "evaluate", "language": "r", "source": "42"}]
     return transcript
 
 

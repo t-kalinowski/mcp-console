@@ -185,6 +185,26 @@ def test_prepares_and_uses_cran_packages(binary: Path) -> Transcript:
     return client._finish()
 
 
+def test_sends_r_cell_with_initial_requirements(binary: Path) -> Transcript:
+    environment, _ = r_test_environment()
+    environment["RETICULATE_PYTHON"] = ""
+    client = McpClient(binary, ("serve",), environment)
+    client._initialize_and_list_tools()
+
+    # fmt: r
+    r = code(r"""
+        stopifnot(
+          identical(dirname(find.package("praise")), .libPaths()[[1L]])
+        )
+        praise::praise("ready")
+        """)
+    client.send(r=r, requirements={"r": ["praise"]})
+    output = last_tool_text(client)
+    assert output.startswith('[1] "') and "ready" in output, output
+    assert "[prepared]" not in output, output
+    return client._finish()
+
+
 def test_prepares_r_requirements_after_worker_startup(binary: Path) -> Transcript:
     environment, _ = r_test_environment()
     environment["RETICULATE_PYTHON"] = ""
@@ -202,9 +222,6 @@ def test_prepares_r_requirements_after_worker_startup(binary: Path) -> Transcrip
     client.send(r=r)
     assert last_tool_text(client) == "[done]"
 
-    client.session(action="prepare", requirements={"r": ["zeallot"]})
-    assert last_tool_text(client) == "[prepared]"
-
     # fmt: r
     r = code(r"""
         stopifnot(
@@ -215,7 +232,7 @@ def test_prepares_r_requirements_after_worker_startup(binary: Path) -> Transcrip
         )
         42L
         """)
-    client.send(r=r)
+    client.send(r=r, requirements={"r": ["zeallot"]})
     assert last_tool_text(client) == "[1] 42\n"
     return client._finish()
 

@@ -49,8 +49,8 @@ result:
       text: "[done]"
   isError: false
 ---
-session:
-  action: prepare
+send:
+  r: echo failed preparation cell ran
   requirements:
     r:
       - zeallot
@@ -67,6 +67,75 @@ result:
 
         zod rejected R preparation; further requirement changes are unavailable until session restart
   isError: true
+---
+send:
+  r: emit output and image before completion
+  timeout_ms: 0
+result:
+  content:
+    - type: text
+      text: |-
+
+        [running]
+  isError: false
+---
+send:
+  r: echo active restart-required cell ran
+  requirements:
+    r:
+      - cli
+result:
+  content:
+    - type: text
+      text: >-
+        worker is already evaluating a cell; poll it before preparing
+        requirements
+  isError: true
+---
+send:
+  timeout_ms: 0
+result:
+  content:
+    - type: text
+      text: |
+        before pending image
+    - type: image
+      data: iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=
+      mimeType: image/png
+    - type: text
+      text: |-
+        after pending image
+
+        [running]
+  isError: false
+---
+send:
+  timeout_ms: 3000
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+send:
+  r: echo restart-required cell ran
+  requirements:
+    r:
+      - cli
+result:
+  content:
+    - type: text
+      text: requirements require session restart; cell was not run
+  isError: true
+---
+send:
+  r: echo worker remains usable
+result:
+  content:
+    - type: text
+      text: |
+        zod: worker remains usable
+  isError: false
 ---
 send:
   r: report managed python activation

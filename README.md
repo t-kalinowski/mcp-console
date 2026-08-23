@@ -26,12 +26,14 @@ An agent can load data once, build useful objects, inspect an intermediate resul
 
 The MCP interface has two tools:
 
-- `send` runs one complete R, Python, or SQL cell, supplies interactive input, or collects pending output.
-- `session` prepares R or Python packages and DuckDB extensions, interrupts work, or restarts the runtime.
+- `send` runs one complete R, Python, or SQL cell, can prepare additive requirements needed by that cell, supplies interactive input, or collects pending output.
+- `session` stages R or Python packages and DuckDB extensions ahead of time, interrupts work, or restarts the runtime.
 
 Calls to `send` are sequential.
 R and Python global state and the in-memory DuckDB catalog remain available until the worker is restarted, replaced after failure, or the server exits.
 Prepared requirements remain available across worker restarts, but in-memory language, database, debugger, and unread-input state does not.
+Requirements declared on `send` are prepared before its cell runs and remain available to later cells.
+Preparation makes packages and extensions available; it does not import, attach, or load them.
 
 ## Example workflow
 
@@ -112,7 +114,7 @@ R and Python package installation and DuckDB extension installation run outside 
 Those operations may access the network and execute installation or build code, so only trusted requirements should be supplied.
 See [Requirements and environments](docs/REQUIREMENTS.md) for the accepted inputs and trust model.
 
-Session records contain submitted source, standard input, results, and images without redaction.
+Session records contain submitted source, standard input, declared requirements, results, and images without redaction.
 See [Implemented architecture](docs/ARCHITECTURE.md) for recording and process placement.
 
 ## Development

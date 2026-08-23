@@ -46,6 +46,19 @@ result:
   isError: true
 ---
 send:
+  r: external_python_combined_side_effect <- TRUE
+  requirements:
+    python:
+      - numpy
+result:
+  content:
+    - type: text
+      text: >-
+        managed Python requirements are disabled because the session uses a
+        user-selected Python environment
+  isError: true
+---
+send:
   r: |
     environment_request <- jsonlite::toJSON(list(
       requirements = list(packages = I("numpy")),
@@ -76,6 +89,7 @@ send:
     stopifnot(
       identical(Sys.getpid(), external_python_worker),
       identical(external_python_state, 42L),
+      !exists("external_python_combined_side_effect", inherits = FALSE),
       identical(
         Sys.getenv("RETICULATE_PYTHON", unset = NA_character_),
         "configured-by-user"

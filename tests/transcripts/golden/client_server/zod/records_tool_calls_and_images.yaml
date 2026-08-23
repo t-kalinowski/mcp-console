@@ -3,6 +3,11 @@
 ---
 send:
   r: emit image
+  stdin: |
+    recorded stdin
+  requirements:
+    r:
+      - praise
 result:
   content:
     - type: text

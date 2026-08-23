@@ -168,23 +168,12 @@ def test_prepares_and_loads_duckdb_extensions(binary: Path) -> Transcript:
 
         client.session(
             action="prepare",
-            requirements={"duckdb": ["fts"]},
-        )
-        assert last_tool_text(client) == "[prepared]"
-        client.session(
-            action="prepare",
-            requirements={"duckdb": ["fts"]},
-        )
-        assert last_tool_text(client) == "[prepared]"
-
-        client.session(
-            action="prepare",
             requirements={"r": ["praise"]},
         )
         assert last_tool_text(client) == "[prepared]"
 
-        client.session(
-            action="prepare",
+        client.send(
+            sql="CREATE TABLE failed_requirement_cell(answer INTEGER)",
             requirements={"duckdb": ["not_a_real_duckdb_extension"]},
         )
         result = client.transcript[-1]["result"]
@@ -197,11 +186,25 @@ def test_prepares_and_loads_duckdb_extensions(binary: Path) -> Transcript:
         assert "unknown core DuckDB extension" not in failure, failure
         result["content"][0]["text"] = duckdb_native_failure(failure)
 
+        client.send(
+            sql=(
+                "SELECT count(*) AS side_effects FROM duckdb_tables() "
+                "WHERE table_name = 'failed_requirement_cell'"
+            )
+        )
+        assert last_tool_text(client).splitlines()[-1].split() == ["1", "0"]
+
         sql = code(r"""
             PRAGMA create_fts_index('retained_state', 'answer', 'body')
             """)
-        client.send(sql=sql)
+        client.send(sql=sql, requirements={"duckdb": ["fts"]})
         assert last_tool_text(client) == "[done]"
+
+        client.session(
+            action="prepare",
+            requirements={"duckdb": ["fts"]},
+        )
+        assert last_tool_text(client) == "[prepared]"
 
         sql = code(r"""
             SELECT
@@ -255,6 +258,23 @@ def test_prepares_and_loads_duckdb_extensions(binary: Path) -> Transcript:
         preview = last_tool_text(client)
         assert preview.splitlines()[-1].split() == ["1", '"loaded"']
         return client._finish()
+
+
+def test_sends_sql_cell_with_initial_requirements(binary: Path) -> Transcript:
+    environment, _ = r_test_environment()
+    environment["RETICULATE_PYTHON"] = ""
+    client = McpClient(binary, ("serve",), environment)
+    client._initialize_and_list_tools()
+
+    sql = code(r"""
+        LOAD fts;
+        SELECT count(*) AS loaded
+        FROM duckdb_extensions()
+        WHERE extension_name = 'fts' AND loaded
+        """)
+    client.send(sql=sql, requirements={"duckdb": ["fts"]})
+    assert last_tool_text(client).splitlines()[-1].split() == ["1", "1"]
+    return client._finish()
 
 
 def test_queries_a_ragnar_store_created_in_r(binary: Path) -> Transcript:

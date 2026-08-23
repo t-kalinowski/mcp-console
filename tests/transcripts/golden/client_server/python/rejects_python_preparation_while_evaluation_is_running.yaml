@@ -29,6 +29,19 @@ result:
         requirements
   isError: true
 ---
+send:
+  python: combined_cell_ran = True
+  requirements:
+    python:
+      - py-yaml12
+result:
+  content:
+    - type: text
+      text: >-
+        worker is already evaluating a cell; poll it before preparing
+        requirements
+  isError: true
+---
 send: {}
 result:
   content:
@@ -37,11 +50,11 @@ result:
   isError: false
 ---
 send:
-  python: runtime_generation_marker
+  python: runtime_generation_marker, 'combined_cell_ran' not in globals()
 result:
   content:
     - type: text
       text: |
-        'original runtime retained'
+        ('original runtime retained', True)
   isError: false
 ...

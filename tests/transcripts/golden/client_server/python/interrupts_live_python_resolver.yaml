@@ -9,8 +9,8 @@ result:
       text: "[done]"
   isError: false
 ---
-session:
-  action: prepare
+send:
+  r: resolver_interrupt_cell_ran <- TRUE
   requirements:
     python:
       - mcp-console-blocked-live-preparation
@@ -29,7 +29,9 @@ result:
   isError: false
 ---
 send:
-  r: resolver_interrupt_state + 1L
+  r: >-
+    resolver_interrupt_state +
+    as.integer(!exists('resolver_interrupt_cell_ran'))
 result:
   content:
     - type: text

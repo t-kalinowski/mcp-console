@@ -25,13 +25,16 @@ result:
   isError: true
 ---
 send:
-  r: echo echo
+  r: report managed R requirement
+  requirements:
+    r:
+      - praise
 result:
   content:
     - type: text
       text: |
         [starting new worker]
         zod replacement startup ready
-        zod: echo
+        zod R requirement: prepared=true
   isError: false
 ...

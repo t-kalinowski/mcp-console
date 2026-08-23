@@ -134,6 +134,11 @@ The server admits one cell against the current generation, starts a worker if ne
 Worker sideband output and direct fd output are published to the server-owned output tape as the relay observes them.
 The server waits, polls, or completes the MCP response without moving response ownership into the relay or worker.
 
+When a code-bearing `send` declares requirements, the server treats them as preconditions of that evaluation.
+One exclusive environment transition covers requirement-delta calculation, host resolution, live preparation or a pre-start retained-environment commit, and reservation and launch of the evaluation in the same generation.
+No other send or environment-changing operation can enter that boundary, and a failed or superseded transition cannot dispatch the cell.
+The server releases the environment transition after launch; the active evaluation continues to own stdin, waiting, output cuts, response delivery, and restart handoff.
+
 ### Interruption
 
 An interrupt targets the active host resolver when one is registered; otherwise it targets the live worker through its relay.
