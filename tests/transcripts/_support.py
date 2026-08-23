@@ -284,7 +284,7 @@ def wait_for_evaluation_output(
     """Poll past a provisional input request and retain the submitted call."""
     deadline = time.monotonic() + 3
     poll_start = len(client.transcript)
-    result = client.send(timeout_ms=3_000, **send_arguments)
+    result = client.send(**send_arguments)
     while True:
         assert result.get("isError") is not True, result
         content = result["content"]

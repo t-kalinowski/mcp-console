@@ -1025,9 +1025,12 @@ def test_browser_input(binary: Path) -> Transcript:
     assert "n" not in output.splitlines(), output
     client.send(r="1")
     assert client.transcript[-1]["result"]["isError"] is True
-    client.send(stdin="c\n")
-    output = last_tool_text(client)
-    assert output == "[1] 3\n", output
+    wait_for_evaluation_output(
+        client,
+        "[1] 3\n",
+        "R browser input",
+        stdin="c\n",
+    )
     return client._finish()
 
 
@@ -1199,6 +1202,7 @@ def test_interrupts_managed_console_input(binary: Path) -> Transcript:
             client,
             "R input interrupted\n",
             "R console input interrupt",
+            timeout_ms=3_000,
         )
         client.send(r='readline("R replay> ")', stdin="!\n")
         assert last_tool_text(client) == (
@@ -1224,6 +1228,7 @@ def test_interrupts_managed_console_input(binary: Path) -> Transcript:
             "suspended input accepted\n",
             "suspended R console input",
             stdin="accepted\n",
+            timeout_ms=3_000,
         )
         client.send(r="suspended_input")
         assert last_tool_text(client) == '[1] "accepted"\n'
@@ -1246,6 +1251,7 @@ def test_interrupts_managed_console_input(binary: Path) -> Transcript:
             client,
             "Python input interrupted\n",
             "Python console input interrupt",
+            timeout_ms=3_000,
         )
         client.send(python='input("Python replay> ")', stdin="!\n")
         assert last_tool_text(client) == (

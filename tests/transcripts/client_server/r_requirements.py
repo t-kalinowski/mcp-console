@@ -131,16 +131,15 @@ def test_rejects_local_r_installation(binary: Path) -> Transcript:
         assert "IR_NO_LOCAL_SOURCES is set" in error, error
         assert "mcpconsolerinstallescape" in error, error
         assert "Use a remote package source" in error, error
-        prefix, progress_start, progress_and_error = error.partition("\n\n\r")
-        assert progress_start and prefix.endswith(
-            "Loading metadata database ... done"
-        ), error
-        progress, diagnostic_start, diagnostic = progress_and_error.partition(
+        progress, diagnostic_start, diagnostic = error.partition(
             "Error: IR_NO_LOCAL_SOURCES is set"
         )
+        failure_prefix = "R package resolution failed with exit status: 1: "
+        assert progress.startswith(failure_prefix), error
         assert diagnostic_start and "Resolving" in progress, error
+        # IR may load cached metadata or refresh it before the same rejection.
         error = (
-            f"{prefix}\n\n<run-specific IR progress frames>\n"
+            f"{failure_prefix}<cache-dependent IR progress>\n"
             f"{diagnostic_start}{diagnostic}"
         )
         client.transcript[-1]["session"]["requirements"]["r"] = [
@@ -149,6 +148,12 @@ def test_rejects_local_r_installation(binary: Path) -> Transcript:
         result["content"][0]["text"] = error.replace(
             str(package), "<absolute package path>"
         )
+        client.transcript[-1]["transcript_normalization"] = {
+            "target": "result.content[0].text",
+            "replacements": {
+                "cache_dependent_ir_progress": "<cache-dependent IR progress>",
+            },
+        }
         return client._finish()
 
 
@@ -237,6 +242,11 @@ def test_stops_live_preparation_for_idle_callback_input(binary: Path) -> Transcr
             if (turns == 0L) {
               stopifnot(file.create(callback_checkpoint))
               readline("later> ")
+              # Keep the submitted callback alive if relay retirement closes
+              # fd 0 before the force-stop signal reaches the worker.
+              repeat {
+                Sys.sleep(1)
+              }
             } else {
               later::later(function() request_input(turns - 1L), delay = 0)
             }

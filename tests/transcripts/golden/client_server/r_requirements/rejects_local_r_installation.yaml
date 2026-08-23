@@ -10,14 +10,15 @@ result:
   content:
     - type: text
       text: |-
-        R package resolution failed with exit status: 1: ℹ Loading metadata database
-        ✔ Loading metadata database ... done
-
-        <run-specific IR progress frames>
+        R package resolution failed with exit status: 1: <cache-dependent IR progress>
         Error: IR_NO_LOCAL_SOURCES is set, but installing this environment would use packages from the local file system:
         - requested package `mcpconsolerinstallescape` from `file://<absolute package path>`
         Use a remote package source or unset IR_NO_LOCAL_SOURCES.
         Execution halted
         ir: dependency resolution failed
   isError: true
+transcript_normalization:
+  target: result.content[0].text
+  replacements:
+    cache_dependent_ir_progress: <cache-dependent IR progress>
 ...
