@@ -1,4 +1,4 @@
-use std::sync::{Arc, Mutex, mpsc};
+use std::sync::{Arc, Condvar, Mutex, mpsc};
 use std::thread;
 
 use crate::relay_protocol::{RelayCommand, RelayEvent};
@@ -9,7 +9,7 @@ use super::{
 };
 
 #[derive(Clone)]
-pub(super) struct WorkerOperationState(Arc<Mutex<OperationState>>);
+pub(super) struct WorkerOperationState(Arc<OperationStateCell>);
 
 pub(super) enum WorkerEvent {
     Relay(RelayEvent),
@@ -35,9 +35,20 @@ struct OperationState {
     operation: Option<Operation>,
     failure: Option<String>,
     idle_input: Option<String>,
-    runtime_r_callback: bool,
+    runtime_r_callback: Option<RuntimeRCallbackPhase>,
     environment_preparation_reserved: bool,
     retiring: bool,
+}
+
+struct OperationStateCell {
+    state: Mutex<OperationState>,
+    runtime_r_reply: Condvar,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RuntimeRCallbackPhase {
+    Resolving,
+    AwaitingActivation,
 }
 
 pub(super) struct EnvironmentPreparationReservation {
@@ -80,14 +91,17 @@ pub(super) enum OperationResult {
 
 impl WorkerOperationState {
     pub(super) fn new() -> Self {
-        Self(Arc::new(Mutex::new(OperationState {
-            operation: None,
-            failure: None,
-            idle_input: None,
-            runtime_r_callback: false,
-            environment_preparation_reserved: false,
-            retiring: false,
-        })))
+        Self(Arc::new(OperationStateCell {
+            state: Mutex::new(OperationState {
+                operation: None,
+                failure: None,
+                idle_input: None,
+                runtime_r_callback: None,
+                environment_preparation_reserved: false,
+                retiring: false,
+            }),
+            runtime_r_reply: Condvar::new(),
+        }))
     }
 
     pub(super) fn reserve_environment_preparation(
@@ -98,7 +112,7 @@ impl WorkerOperationState {
 
         let mut state = self.lock().map_err(Infrastructure)?;
         state.ensure_available().map_err(Infrastructure)?;
-        if state.runtime_r_callback {
+        if state.runtime_r_callback.is_some() {
             return Err(Busy(
                 "requirements were not prepared because an idle runtime R callback owns environment changes"
                     .to_string(),
@@ -122,7 +136,17 @@ impl WorkerOperationState {
     ) -> Result<mpsc::Receiver<Result<OperationResult, String>>, String> {
         let (result, receiver) = mpsc::channel();
         let mut state = self.lock()?;
-        state.ensure_available()?;
+        loop {
+            state.ensure_available()?;
+            if state.runtime_r_callback != Some(RuntimeRCallbackPhase::Resolving) {
+                break;
+            }
+            state = self
+                .0
+                .runtime_r_reply
+                .wait(state)
+                .map_err(|_| "worker operation state lock poisoned".to_string())?;
+        }
         if state.idle_input.take().is_some() {
             evaluation.resume_input_request()?;
         }
@@ -191,16 +215,17 @@ impl WorkerOperationState {
 
     pub(super) fn fail(&self, error: String) {
         let operation = {
-            let Ok(mut state) = self.0.lock() else {
+            let Ok(mut state) = self.0.state.lock() else {
                 return;
             };
             if state.failure.is_none() {
                 state.failure = Some(error.clone());
             }
-            state.runtime_r_callback = false;
+            state.runtime_r_callback = None;
             state.environment_preparation_reserved = false;
             state.operation.take()
         };
+        self.0.runtime_r_reply.notify_all();
         if let Some(result) = operation.and_then(|operation| operation.result) {
             let _ = result.send(Err(error));
         }
@@ -208,17 +233,18 @@ impl WorkerOperationState {
 
     pub(super) fn retire_operation(&self, error: String) {
         let result = {
-            let Ok(mut state) = self.0.lock() else {
+            let Ok(mut state) = self.0.state.lock() else {
                 return;
             };
             state.retiring = true;
-            state.runtime_r_callback = false;
+            state.runtime_r_callback = None;
             state.environment_preparation_reserved = false;
             state
                 .operation
                 .as_mut()
                 .and_then(|operation| operation.result.take())
         };
+        self.0.runtime_r_reply.notify_all();
         if let Some(result) = result {
             let _ = result.send(Err(error));
         }
@@ -271,7 +297,7 @@ impl WorkerOperationState {
             }
             Some(OperationKind::Cell(_)) | None => {}
         }
-        if state.runtime_r_callback {
+        if state.runtime_r_callback.is_some() {
             return Err("worker sent a second runtime R callback before activation".to_string());
         }
         if state.environment_preparation_reserved {
@@ -280,8 +306,20 @@ impl WorkerOperationState {
             reject_busy()?;
             return Ok(RuntimeRCallbackAdmission::Busy);
         }
-        state.runtime_r_callback = true;
+        state.runtime_r_callback = Some(RuntimeRCallbackPhase::Resolving);
         Ok(RuntimeRCallbackAdmission::Admitted)
+    }
+
+    fn runtime_r_reply_sent(&self, awaiting_activation: bool) -> Result<(), String> {
+        let mut state = self.lock()?;
+        if state.runtime_r_callback != Some(RuntimeRCallbackPhase::Resolving) {
+            return Err("worker has no pending runtime R resolver reply".to_string());
+        }
+        state.runtime_r_callback =
+            awaiting_activation.then_some(RuntimeRCallbackPhase::AwaitingActivation);
+        drop(state);
+        self.0.runtime_r_reply.notify_all();
+        Ok(())
     }
 
     fn ensure_runtime_r_activation_phase(&self) -> Result<(), String> {
@@ -294,7 +332,7 @@ impl WorkerOperationState {
             }
             Some(OperationKind::Cell(_)) | None => {}
         }
-        if !state.runtime_r_callback {
+        if state.runtime_r_callback != Some(RuntimeRCallbackPhase::AwaitingActivation) {
             return Err(
                 "worker sent R activation without an active runtime R callback".to_string(),
             );
@@ -304,10 +342,10 @@ impl WorkerOperationState {
 
     fn finish_runtime_r_callback(&self) -> Result<(), String> {
         let mut state = self.lock()?;
-        if !state.runtime_r_callback {
+        if state.runtime_r_callback != Some(RuntimeRCallbackPhase::AwaitingActivation) {
             return Err("worker has no active runtime R callback".to_string());
         }
-        state.runtime_r_callback = false;
+        state.runtime_r_callback = None;
         Ok(())
     }
 
@@ -363,7 +401,7 @@ impl WorkerOperationState {
     ) -> Result<(), String> {
         let Operation { kind, result } = {
             let mut state = self.lock()?;
-            if state.runtime_r_callback {
+            if state.runtime_r_callback.is_some() {
                 return Err(
                     "worker sent an operation result before completing runtime R activation"
                         .to_string(),
@@ -472,6 +510,7 @@ impl WorkerOperationState {
 
     fn lock(&self) -> Result<std::sync::MutexGuard<'_, OperationState>, String> {
         self.0
+            .state
             .lock()
             .map_err(|_| "worker operation state lock poisoned".to_string())
     }
@@ -485,7 +524,7 @@ impl WorkerOperationState {
 
 impl Drop for EnvironmentPreparationReservation {
     fn drop(&mut self) {
-        if let Ok(mut state) = self.operation.0.lock() {
+        if let Ok(mut state) = self.operation.0.state.lock() {
             state.environment_preparation_reserved = false;
         }
     }
@@ -942,10 +981,7 @@ fn handle_semantic_event(
                 }
             };
             commands.send(response)?;
-            if !awaiting_activation {
-                operation.finish_runtime_r_callback()?;
-            }
-            Ok(())
+            operation.runtime_r_reply_sent(awaiting_activation)
         }
         RelayEvent::RActivated { library } => {
             operation.ensure_runtime_r_activation_phase()?;
@@ -1043,7 +1079,7 @@ mod tests {
         let (contending, contending_rx) = mpsc::sync_channel(0);
         let admission = thread::spawn(move || {
             assert!(matches!(
-                admitting_operation.0.try_lock(),
+                admitting_operation.0.state.try_lock(),
                 Err(std::sync::TryLockError::WouldBlock)
             ));
             contending.send(()).unwrap();

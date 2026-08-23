@@ -44,6 +44,7 @@ R_PREPARATION_RESOLVE_CHECKPOINT_NAME = "mcp-console-r-preparation-resolve-check
 R_PREPARATION_RESOLVE_RELEASE_NAME = "mcp-console-r-preparation-resolve-release"
 IDLE_R_RESOLUTION_READY_NAME = "mcp-console-idle-r-resolution-ready"
 IDLE_R_RESOLUTION_RELEASE_NAME = "mcp-console-idle-r-resolution-release"
+IDLE_R_EVALUATION_RECEIVED_NAME = "mcp-console-idle-r-evaluation-received"
 EXPLICIT_R_PREPARATION_CALLBACK_NAME = "mcp-console-explicit-r-preparation-callback"
 EXPLICIT_R_PREPARATION_CALLBACK_REPLY_NAME = (
     "mcp-console-explicit-r-preparation-callback-reply"
@@ -1139,6 +1140,9 @@ def test_idle_runtime_r_resolution_owns_environment_until_activation(
         relay_root = client.relay_root()
         ready = FifoCheckpoint(relay_root / IDLE_R_RESOLUTION_READY_NAME)
         release = FifoCheckpoint(relay_root / IDLE_R_RESOLUTION_RELEASE_NAME)
+        evaluation_received = FifoCheckpoint(
+            relay_root / IDLE_R_EVALUATION_RECEIVED_NAME
+        )
         resolver_released = False
         ready_reached = False
         activation_released = False
@@ -1156,13 +1160,15 @@ def test_idle_runtime_r_resolution_owns_environment_until_activation(
             )
             _tool_error(preparation, "idle runtime R callback owns environment changes")
 
+            assert _tool_text(client.send(r="42", timeout_ms=0)) == "\n[running]"
             resolver_release.release()
             resolver_released = True
             ready.wait()
             ready_reached = True
+            evaluation_received.wait()
             release.release()
             activation_released = True
-            assert _tool_text(client.send(r="42")) == "[done]"
+            assert _tool_text(client.send()) == "[done]"
             transcript = client.finish_active()
             finished = True
         finally:
@@ -1176,6 +1182,7 @@ def test_idle_runtime_r_resolution_owns_environment_until_activation(
             resolver_release.close()
             ready.close()
             release.close()
+            evaluation_received.close()
             if not finished:
                 stop_client(client.client)
                 client._temporary.cleanup()

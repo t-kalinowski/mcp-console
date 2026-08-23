@@ -11,14 +11,14 @@ server:
   kind: r_resolved
   library: <automatic-candidate>
 ---
-relay:
-  kind: r_activated
-  library: <automatic-candidate>
----
 server:
   kind: evaluate
   language: r
   source: "42"
+---
+relay:
+  kind: r_activated
+  library: <automatic-candidate>
 ---
 relay:
   kind: resolve_r

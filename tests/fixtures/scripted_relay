@@ -30,6 +30,7 @@ R_PREPARATION_RESOLVE_CHECKPOINT_NAME = "mcp-console-r-preparation-resolve-check
 R_PREPARATION_RESOLVE_RELEASE_NAME = "mcp-console-r-preparation-resolve-release"
 IDLE_R_RESOLUTION_READY_NAME = "mcp-console-idle-r-resolution-ready"
 IDLE_R_RESOLUTION_RELEASE_NAME = "mcp-console-idle-r-resolution-release"
+IDLE_R_EVALUATION_RECEIVED_NAME = "mcp-console-idle-r-evaluation-received"
 EXPLICIT_R_PREPARATION_CALLBACK_NAME = "mcp-console-explicit-r-preparation-callback"
 EXPLICIT_R_PREPARATION_CALLBACK_REPLY_NAME = (
     "mcp-console-explicit-r-preparation-callback-reply"
@@ -483,6 +484,7 @@ def run_r_resolution_during_r_preparation(relay: ScriptedRelay) -> None:
 def run_idle_r_resolution_owns_environment(relay: ScriptedRelay) -> None:
     relay.make_checkpoint(IDLE_R_RESOLUTION_READY_NAME)
     relay.make_checkpoint(IDLE_R_RESOLUTION_RELEASE_NAME)
+    relay.make_checkpoint(IDLE_R_EVALUATION_RECEIVED_NAME)
     relay.ready()
     request = {"kind": "resolve_r", "packages": ["praise"]}
     relay.send(request)
@@ -490,10 +492,10 @@ def run_idle_r_resolution_owns_environment(relay: ScriptedRelay) -> None:
     assert resolved.get("kind") == "r_resolved", resolved
     library = resolved["library"]
     relay.notify_checkpoint(IDLE_R_RESOLUTION_READY_NAME)
+    relay.expect(EVALUATION)
+    relay.notify_checkpoint(IDLE_R_EVALUATION_RECEIVED_NAME)
     relay.wait_for_checkpoint(IDLE_R_RESOLUTION_RELEASE_NAME)
     relay.send({"kind": "r_activated", "library": library})
-
-    relay.expect(EVALUATION)
     relay.send(request)
     relay.expect({"kind": "r_resolved", "library": library})
     relay.send({"kind": "r_activated", "library": library})
