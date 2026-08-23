@@ -380,14 +380,19 @@ impl Client {
             PrepareResult::RestartRequired => {
                 let mut response = self.0.output.take();
                 response.push_tool_error("requirements require session restart; cell was not run");
-                PreparedEvaluation::Failed(response)
+                self.recover_failed_evaluation(response)
             }
             PrepareResult::Failed(response) | PrepareResult::WorkerStopped(response) => {
-                PreparedEvaluation::Failed(response)
+                self.recover_failed_evaluation(response)
             }
         };
         drop(preparation);
         Ok(result)
+    }
+
+    fn recover_failed_evaluation(&self, mut response: Response) -> PreparedEvaluation {
+        response.recover_to(self.0.output.clone());
+        PreparedEvaluation::Failed(response)
     }
 
     async fn send_inner(

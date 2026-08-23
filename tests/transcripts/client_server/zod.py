@@ -1001,6 +1001,117 @@ def test_custom_worker_prepares_r_and_duckdb_requirements(binary: Path) -> Trans
         return client._finish()
 
 
+def test_cancelled_combined_preparation_failure_is_reclaimed_by_restart(
+    binary: Path,
+) -> Transcript:
+    zod = Path(__file__).resolve().parents[2] / "fixtures" / "zod"
+    ordered_ir = (
+        Path(__file__).resolve().parents[2] / "fixtures" / "ordered_retirement_ir"
+    )
+    environment, _ = r_test_environment()
+    environment["RETICULATE_PYTHON"] = ""
+    with tempfile.TemporaryDirectory() as temporary:
+        temporary_path = Path(temporary)
+        library = temporary_path / "resolved-library"
+        library.mkdir()
+        fake_bin = temporary_path / "bin"
+        fake_bin.mkdir()
+        (fake_bin / "ir").symlink_to(ordered_ir)
+        path = environment.get("PATH")
+        assert path is not None, "PATH is required"
+        environment["PATH"] = os.pathsep.join((str(fake_bin), path))
+        environment["TMPDIR"] = temporary
+        environment["MCP_CONSOLE_TEST_IR_COUNTER"] = str(temporary_path / "ir-counter")
+        environment["MCP_CONSOLE_TEST_IR_LIBRARIES"] = str(library)
+        client = McpClient(
+            binary,
+            ("serve", "--worker", str(zod)),
+            environment,
+        )
+        finished = False
+        try:
+            client._initialize_and_list_tools()
+            client.send(r="echo worker ready")
+            assert last_tool_text(client) == "zod: worker ready\n"
+            client.send(r="fail next r preparation after large output")
+            assert last_tool_text(client) == "[done]"
+
+            failed = client._start_send(
+                r="echo cancelled cell ran",
+                requirements={"r": ["praise"]},
+            )
+            # The 4 MiB response cannot fit in the stdout pipe. Once its first
+            # bytes are readable, cancellation can overtake the blocked write.
+            readable, _, _ = select.select([client.stdout], [], [], 10)
+            assert readable, "combined preparation failure did not reach MCP output"
+            client._notify(
+                "notifications/cancelled",
+                requestId=failed["id"],
+                reason="acceptance test cancelled the combined send",
+            )
+            cancellation = client.transcript[-1]["input"]["params"]
+            assert cancellation["requestId"] == failed["id"], cancellation
+            cancellation["requestId"] = "<request ID>"
+
+            # Flushing a second 4 MiB message cannot finish until the server
+            # asks the ordered input transport for the message after the
+            # cancellation. Keep stdout blocked until that causal barrier.
+            barrier_size = 2 * LARGE_OUTPUT_SIZE
+            client._notify(
+                "notifications/acceptance-test-barrier",
+                padding="b" * barrier_size,
+            )
+            barrier = client.transcript[-1]["input"]["params"]
+            assert len(barrier["padding"]) == barrier_size, barrier
+            barrier["padding"] = f"<input barrier: {barrier_size} bytes>"
+            restart = client._start_session(action="restart")
+
+            discarded = json.loads(client.stdout.readline())
+            assert discarded.pop("jsonrpc", None) == "2.0", discarded
+            assert discarded.pop("id", None) == failed["id"], discarded
+            assert discarded["result"]["isError"] is True, discarded
+            assert failed.keys() == {"id", "send"}, failed
+
+            client._receive(restart)
+            restarted = restart["result"]
+            large_output = "x" * (2 * LARGE_OUTPUT_SIZE)
+            assert restarted == {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "before failed preparation\n" + large_output,
+                    },
+                    {"type": "image", "data": PNG_1X1, "mimeType": "image/png"},
+                    {
+                        "type": "text",
+                        "text": (
+                            "\nzod rejected R preparation; further requirement "
+                            "changes are unavailable until session restart\n"
+                            "[worker stopped: in-memory state lost]\n"
+                            "[starting new worker]\n[idle]"
+                        ),
+                    },
+                ],
+                "isError": True,
+            }, restarted
+            assert all(
+                "zod: cancelled cell ran" not in content.get("text", "")
+                for content in restarted["content"]
+            ), restarted
+            restarted["content"][0]["text"] = (
+                f"before failed preparation\n<large output: {len(large_output)} bytes>"
+            )
+
+            client.send()
+            assert last_tool_text(client) == "\n[idle]"
+            transcript = client._finish()
+            finished = True
+            return transcript
+        finally:
+            if not finished:
+                stop_client(client)
+
+
 def test_custom_worker_reports_idle_input_before_preparation_failure(
     binary: Path,
 ) -> Transcript:

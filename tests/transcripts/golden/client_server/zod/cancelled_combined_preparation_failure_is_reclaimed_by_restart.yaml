@@ -1,0 +1,66 @@
+---
+!same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
+---
+send:
+  r: echo worker ready
+result:
+  content:
+    - type: text
+      text: |
+        zod: worker ready
+  isError: false
+---
+send:
+  r: fail next r preparation after large output
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+send:
+  r: echo cancelled cell ran
+  requirements:
+    r:
+      - praise
+---
+input:
+  method: notifications/cancelled
+  params:
+    requestId: "<request ID>"
+    reason: acceptance test cancelled the combined send
+---
+input:
+  method: notifications/acceptance-test-barrier
+  params:
+    padding: "<input barrier: 4194304 bytes>"
+---
+session:
+  action: restart
+result:
+  content:
+    - type: text
+      text: |-
+        before failed preparation
+        <large output: 4194304 bytes>
+    - type: image
+      data: iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=
+      mimeType: image/png
+    - type: text
+      text: |-
+
+        zod rejected R preparation; further requirement changes are unavailable until session restart
+        [worker stopped: in-memory state lost]
+        [starting new worker]
+        [idle]
+  isError: true
+---
+send: {}
+result:
+  content:
+    - type: text
+      text: |-
+
+        [idle]
+  isError: false
+...
