@@ -1528,7 +1528,10 @@ def test_keeps_stdin_open_after_partial_payload(binary: Path) -> Transcript:
         value <- readline("partial> ")
         value
         """)
-    client.send(r=r, stdin="without newline", timeout_ms=1_000)
+    client.send(r=r, stdin="without newline", timeout_ms=0)
+    assert last_tool_text(client) == "\n[running]"
+
+    client.send(timeout_ms=3_000)
     output = last_tool_text(client)
     assert output == 'before\n[input requested: "partial> "]\n[stdin needed]', output
 
