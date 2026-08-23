@@ -112,7 +112,7 @@ def test_initializes_and_lists_tools(binary: Path) -> Transcript:
         "R package namespaces are resolved on demand",
         "Treat CRAN packages as available",
         "do not probe for installation or call `install.packages()`",
-        "R source is not scanned in advance",
+        "best-effort scan batches obvious static package references",
         "Automatic additions are additive and retained across cells and restart",
         "attaches it only through the user's original `library()` or `require()` call",
         "Use `requirements.r` only to stage packages ahead of time",

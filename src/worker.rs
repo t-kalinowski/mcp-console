@@ -271,6 +271,7 @@ mod platform {
                     let result = evaluate_cell(
                         Cell { language, source },
                         &self.graphics,
+                        &self.r_environment,
                         &mut self.python,
                         &mut self.sql,
                     );
@@ -604,6 +605,7 @@ mod platform {
     fn evaluate_cell(
         cell: Cell,
         graphics: &crate::r_graphics::Bridge,
+        r_environment: &crate::r_environment::Bridge,
         python: &mut crate::python::Bridge,
         sql: &mut crate::sql::Bridge,
     ) -> Result<(), String> {
@@ -615,7 +617,7 @@ mod platform {
             return Err(message);
         }
         let result = match cell.language {
-            Language::R => evaluate_r_cell(cell.source, graphics),
+            Language::R => evaluate_r_cell(cell.source, graphics, r_environment),
             Language::Python => evaluate_python_cell(cell.source, graphics, python),
             Language::Sql => evaluate_sql_cell(cell.source, sql),
         };
@@ -629,13 +631,28 @@ mod platform {
         result
     }
 
-    fn evaluate_r_cell(r: String, graphics: &crate::r_graphics::Bridge) -> Result<(), String> {
+    fn evaluate_r_cell(
+        r: String,
+        graphics: &crate::r_graphics::Bridge,
+        r_environment: &crate::r_environment::Bridge,
+    ) -> Result<(), String> {
         if r.contains('\0') {
             emit_output(
                 ConsoleChannel::Diagnostic,
                 b"Error: R source cannot contain NUL\n",
             );
             return Ok(());
+        }
+
+        match r_environment.preflight(&r)? {
+            crate::r_environment::PreflightOutcome::Continue => {}
+            crate::r_environment::PreflightOutcome::Failed { message } => {
+                emit_output(
+                    ConsoleChannel::Diagnostic,
+                    format!("Error: {message}\n").as_bytes(),
+                );
+                return Ok(());
+            }
         }
 
         defer_interrupts(|| graphics.begin(), check_interrupts)?;

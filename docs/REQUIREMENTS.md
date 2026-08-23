@@ -113,15 +113,17 @@ This transition does not restart the worker.
 Its R process, PID, globals, loaded namespaces, Python state, DuckDB catalog, and stdin state remain in place.
 The server commits after `.libPaths()` accepts the candidate but before the original package operation resumes, so the environment remains retained if a later `.onLoad`, namespace operation, or expression in the cell fails.
 
-The worker does not inspect R source before evaluation.
-Each missing package is resolved only when execution reaches one of these operations, so unreachable or quoted code does not invoke IR.
-Several new package loads in one cell can therefore cause several incremental IR calls in execution order.
+Before native R evaluation, a lightweight advisory scan parses the cell without evaluating it and batches statically obvious package references into at most one request.
+It recognizes bare or literal package names in direct or base-qualified `library()` and `require()` calls, literal names in `requireNamespace()` and `loadNamespace()`, and bare or literal names on the left of `::` and `:::`.
+It does not perform symbol lookup, force promises, follow aliases, or infer dynamic names, and it skips quoted expressions and function bodies where practical.
+Parse failures and ordinary host-resolution failures caused only by this scan fall through to normal evaluation; the runtime wrappers remain the correctness path for code that executes.
+The scan is controlled by the module-local `ENABLE_R_PACKAGE_PRESCAN` constant, and disabling it does not disable runtime resolution.
 
 An automatic request is part of the active R evaluation.
 If `timeout_ms` expires, `send` can return `[running]` while its resolver continues; the resolver is not cancelled by that wait timeout.
 `session(action = "interrupt")` targets the active resolver, while an unchanged restart or shutdown cancels it.
 A restart that also adds requirements serializes behind the active environment resolution before it prepares those additions and replaces the worker.
-An interrupted or lifecycle-cancelled request is reported to its operation, and a candidate from a replaced generation cannot commit into its replacement.
+An interrupted or lifecycle-cancelled request is not suppressed as an advisory scan miss, and a candidate from a replaced generation cannot commit into its replacement.
 
 If IR cannot resolve a package requested at runtime, `library()` and namespace loads surface their normal R errors, while `require()` may return `FALSE` according to `logical.return`; the worker remains available.
 If applying the candidate library fails, the worker reports `RActivationFailed`, the server discards the candidate, and further requirement changes in that generation require restart; the worker remains available so its in-memory state can be saved.

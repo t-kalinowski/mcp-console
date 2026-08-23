@@ -113,7 +113,7 @@ def test_resolves_missing_r_packages_during_evaluation(binary: Path) -> Transcri
     return client._finish()
 
 
-def test_resolves_reached_r_packages_at_runtime(binary: Path) -> Transcript:
+def test_batches_static_r_packages_and_resolves_dynamic_use(binary: Path) -> Transcript:
     with tempfile.TemporaryDirectory() as temporary:
         directory = Path(temporary)
         environment, record = recording_ir_environment(directory)
@@ -144,22 +144,18 @@ def test_resolves_reached_r_packages_at_runtime(binary: Path) -> Transcript:
         client.send(r=static)
         assert last_tool_text(client) == "[1] 42\n"
         static_runs = ir_run_records(record)[baseline:]
-        packages = (
+        assert len(static_runs) == 1, static_runs
+        requirements = ir_requirements(static_runs[0])
+        for package in (
             "fortunes",
             "english",
             "whoami",
             "mockery",
             "microbenchmark",
             "cyclocomp",
-        )
-        assert len(static_runs) == len(packages), static_runs
-        for index, (run, package) in enumerate(zip(static_runs, packages, strict=True)):
-            requirements = ir_requirements(run)
+        ):
             assert requirements.count(package) == 1, requirements
-            for retained in packages[: index + 1]:
-                assert requirements.count(retained) == 1, requirements
-            assert all(later not in requirements for later in packages[index + 1 :])
-            assert run["no_local_sources"] == "1", run
+        assert static_runs[0]["no_local_sources"] == "1", static_runs[0]
 
         dynamic_baseline = len(ir_run_records(record))
         # fmt: r
@@ -223,7 +219,7 @@ def test_retains_automatic_r_package_after_error_and_restart(
         return client._finish()
 
 
-def test_does_not_resolve_unreached_package_loads(binary: Path) -> Transcript:
+def test_falls_back_from_advisory_r_resolution_failure(binary: Path) -> Transcript:
     missing = "mcpconsolenotarealpackage"
     with tempfile.TemporaryDirectory() as temporary:
         environment, record = recording_ir_environment(
@@ -236,18 +232,18 @@ def test_does_not_resolve_unreached_package_loads(binary: Path) -> Transcript:
 
         client.send(r=f"if (FALSE) library({missing}); 42L")
         assert last_tool_text(client) == "[1] 42\n"
-        assert len(ir_run_records(record)) == baseline
+        assert len(ir_run_records(record)) == baseline + 1
 
         client.send(r=f"library({missing})")
         assert f"synthetic IR failure for {missing}" in last_tool_text(client)
         failed = len(ir_run_records(record))
-        assert failed == baseline + 1
+        assert failed == baseline + 3
 
         client.send(r="42L")
         assert last_tool_text(client) == "[1] 42\n"
         client.send(r=f"library({missing})")
         assert f"synthetic IR failure for {missing}" in last_tool_text(client)
-        assert len(ir_run_records(record)) == failed + 1
+        assert len(ir_run_records(record)) == failed + 2
         return client._finish()
 
 
@@ -286,6 +282,56 @@ def test_rejects_non_package_runtime_names_before_ir(binary: Path) -> Transcript
         output = last_tool_text(client)
         assert output == "[1] 42\n", repr(output)
         assert len(ir_run_records(record)) == baseline
+        return client._finish()
+
+
+def test_prescan_skips_code_and_caps_one_request(binary: Path) -> Transcript:
+    packages = [f"mcpconsolefake{index:02d}" for index in range(65)]
+    with tempfile.TemporaryDirectory() as temporary:
+        environment, record = recording_ir_environment(
+            Path(temporary),
+            fail_requirement=packages[0],
+        )
+        client = McpClient(binary, ("serve",), environment)
+        client._initialize_and_list_tools()
+        baseline = len(ir_run_records(record))
+
+        calls = "\n".join(f"library({package})" for package in packages)
+        # fmt: off
+        r = code(f"""
+            quoted <- quote(library(mcpconsolequoted))
+            closure <- function() library(mcpconsolefunction)
+            dynamic_package <- "mcpconsolecharacter"
+            if (FALSE) library(dynamic_package, character.only = TRUE)
+            if (FALSE) requireNamespace(dynamic_package)
+            if (FALSE) mcpconsolehead::never()
+            if (FALSE) mcpconsoletriple:::never()
+            if (FALSE) {{
+              {calls}
+            }}
+            42L
+            """)
+        # fmt: on
+        client.send(r=r)
+        assert last_tool_text(client) == "[1] 42\n"
+        runs = ir_run_records(record)[baseline:]
+        assert len(runs) == 1, runs
+        requirements = ir_requirements(runs[0])
+        assert "mcpconsolehead" in requirements, requirements
+        assert "mcpconsoletriple" in requirements, requirements
+        assert all(package in requirements for package in packages[:62]), requirements
+        assert all(package not in requirements for package in packages[62:]), (
+            requirements
+        )
+        assert "mcpconsolequoted" not in requirements, requirements
+        assert "mcpconsolefunction" not in requirements, requirements
+        assert "dynamic_package" not in requirements, requirements
+        assert "mcpconsolecharacter" not in requirements, requirements
+
+        parse_baseline = len(ir_run_records(record))
+        client.send(r="library(fortunes")
+        assert "Error: Incomplete code" in last_tool_text(client)
+        assert len(ir_run_records(record)) == parse_baseline
         return client._finish()
 
 
@@ -420,8 +466,9 @@ def test_r_activation_failure_requires_restart_without_stopping_worker(
         assert last_tool_text(client) == "[done]"
         baseline = len(ir_run_records(record))
 
-        # The private bridge deliberately uses the live base::.libPaths binding
-        # shared with explicit preparation.
+        # Use a dynamic load so the patch runs before the advisory prescan can
+        # activate the package. The private bridge deliberately uses the live
+        # base::.libPaths binding shared with explicit preparation.
         # fmt: r
         r = code(r"""
             local({
@@ -579,6 +626,7 @@ def test_interrupts_automatic_r_resolver_and_preserves_worker(
             assert last_tool_text(client) == "[done]"
             baseline = len(ir_run_records(record))
 
+            # do.call() is intentionally outside the advisory scanner contract.
             # fmt: r
             r = code(r"""
                 package <- "RcppRoll"
