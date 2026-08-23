@@ -411,6 +411,10 @@ impl ServerHandler for ConsoleServer {
         }
         // A response can be visible before its write future settles. Delay only
         // console operations so transport receipt remains live for cancellation and EOF.
+        let admission = context
+            .extensions
+            .remove::<crate::server_transport::ResponseDeliveryAdmission>()
+            .expect("console operations must carry transport admission");
         let delivery = tokio::select! {
             biased;
             _ = context.ct.cancelled() => {
@@ -419,7 +423,7 @@ impl ServerHandler for ConsoleServer {
                     None,
                 ));
             }
-            delivery = self.deliveries.admit(request_id.clone()) => {
+            delivery = admission.admit(request_id.clone()) => {
                 let Some(delivery) = delivery else {
                     return Err(ErrorData::internal_error(
                         "MCP input closed before request execution",

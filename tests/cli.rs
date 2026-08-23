@@ -165,6 +165,52 @@ fn stdio_console_orders_requests_and_cancellation_during_response_writes() {
         !readable_within(checkpoint.as_raw_fd(), Duration::from_secs(1)),
         "cancelled interrupt reached the worker"
     );
+
+    client.send_console(7, json!({"r": "emit stdout"}));
+    wait_for_readable(
+        client.output.get_ref().as_raw_fd(),
+        Duration::from_secs(5),
+        "fifth response",
+    );
+    client.send_console(8, json!({"r": "emit stdout"}));
+    client.send_tool(9, "session", json!({"action": "interrupt"}));
+    write_message(
+        client.input.as_mut().expect("stdin should be open"),
+        &json!({
+            "jsonrpc": "2.0",
+            "method": "notifications/cancelled",
+            "params": {"requestId": 9}
+        }),
+    );
+    client.send_tool(10, "session", json!({"action": "interrupt"}));
+
+    let fifth = read_message(&mut client.output);
+    assert_eq!(fifth["id"], 7, "{fifth}");
+    wait_for_readable(
+        client.output.get_ref().as_raw_fd(),
+        Duration::from_secs(5),
+        "sixth response",
+    );
+    assert!(
+        !readable_within(checkpoint.as_raw_fd(), Duration::from_secs(1)),
+        "second gated operation reached the worker before the first settled"
+    );
+
+    let sixth = read_message(&mut client.output);
+    assert_eq!(sixth["id"], 8, "{sixth}");
+    wait_for_readable(
+        checkpoint.as_raw_fd(),
+        Duration::from_secs(5),
+        "second delayed SIGINT checkpoint",
+    );
+    checkpoint
+        .read_exact(&mut signal)
+        .expect("SIGINT checkpoint should contain one event");
+    assert_eq!(signal, [b'1']);
+
+    let seventh = read_message(&mut client.output);
+    assert_eq!(seventh["id"], 10, "{seventh}");
+    assert_eq!(response_text(&seventh), "[interrupt sent]");
 }
 
 #[cfg(target_os = "macos")]
