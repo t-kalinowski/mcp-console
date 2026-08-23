@@ -204,6 +204,7 @@ impl ConsoleServer {
             response,
             &call,
             &self.transcript,
+            &self.deliveries,
             &delivery,
         ))
     }
@@ -240,6 +241,7 @@ impl ConsoleServer {
                             response,
                             &call,
                             &self.transcript,
+                            &self.deliveries,
                             &delivery,
                         ));
                     }
@@ -248,6 +250,7 @@ impl ConsoleServer {
                             response,
                             &call,
                             &self.transcript,
+                            &self.deliveries,
                             &delivery,
                         ));
                     }
@@ -277,6 +280,7 @@ impl ConsoleServer {
                     response,
                     &call,
                     &self.transcript,
+                    &self.deliveries,
                     &delivery,
                 ));
             }
@@ -289,6 +293,7 @@ fn response_to_tool_result(
     mut response: crate::worker_client::Response,
     call: &crate::transcript::Call,
     transcript: &crate::transcript::Transcript,
+    deliveries: &crate::server_transport::ResponseDeliveries,
     delivery: &crate::server_transport::ResponseDeliveryCall,
 ) -> CallToolResult {
     if let Err(error) = response.persist_images(transcript, call.id()) {
@@ -314,7 +319,7 @@ fn response_to_tool_result(
         transcript.disable(error);
     }
     if let Some(response_delivery) = response_delivery {
-        delivery.register(response_delivery);
+        deliveries.register(delivery, response_delivery);
     }
     if is_error {
         CallToolResult::error(content)
@@ -415,7 +420,7 @@ impl ServerHandler for ConsoleServer {
             .extensions
             .remove::<crate::server_transport::ResponseDeliveryAdmission>()
             .expect("console operations must carry transport admission");
-        let delivery = tokio::select! {
+        let (delivery, operation) = tokio::select! {
             biased;
             _ = context.ct.cancelled() => {
                 return Err(ErrorData::internal_error(
@@ -423,14 +428,22 @@ impl ServerHandler for ConsoleServer {
                     None,
                 ));
             }
-            delivery = admission.admit(request_id.clone()) => {
-                let Some(delivery) = delivery else {
-                    return Err(ErrorData::internal_error(
-                        "MCP input closed before request execution",
-                        None,
-                    ));
-                };
-                delivery
+            delivery = admission.admit() => {
+                match delivery {
+                    Ok(delivery) => delivery,
+                    Err(crate::server_transport::ResponseDeliveryAdmissionError::Cancelled) => {
+                        return Err(ErrorData::internal_error(
+                            "request cancelled before execution",
+                            None,
+                        ));
+                    }
+                    Err(crate::server_transport::ResponseDeliveryAdmissionError::Closed) => {
+                        return Err(ErrorData::internal_error(
+                            "MCP input closed before request execution",
+                            None,
+                        ));
+                    }
+                }
             }
         };
         context.extensions.insert(delivery);
@@ -467,7 +480,10 @@ impl ServerHandler for ConsoleServer {
         {
             transcript.disable(format!("transcript task failed: {error}"));
         }
-        Arc::into_inner(result).expect("transcript task should release the tool result")
+        let result =
+            Arc::into_inner(result).expect("transcript task should release the tool result");
+        operation.complete();
+        result
     }
 }
 

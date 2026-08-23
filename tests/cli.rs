@@ -215,6 +215,229 @@ fn stdio_console_orders_requests_and_cancellation_during_response_writes() {
 
 #[cfg(target_os = "macos")]
 #[test]
+fn stdio_console_releases_calls_received_after_response_gate_settles() {
+    let zod = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/zod");
+    let test_directory = TestDirectory::new("response-gate-release");
+    let mut command = Command::new(env!("CARGO_BIN_EXE_mcp-console"));
+    command
+        .arg("serve")
+        .arg("--worker")
+        .arg(zod)
+        .env("TMPDIR", test_directory.path())
+        .env("ZOD_SIGINT_CHECKPOINT", "1");
+    let mut client = McpClient::spawn(command);
+
+    client.send_console(2, json!({"r": "emit stdout"}));
+    wait_for_readable(
+        client.output.get_ref().as_raw_fd(),
+        Duration::from_secs(5),
+        "blocked response",
+    );
+    client.send_console(3, json!({"r": "stall"}));
+
+    let first = read_message(&mut client.output);
+    assert_eq!(first["id"], 2, "{first}");
+    let stalled = wait_for_file(test_directory.path(), "zod-stalled", Duration::from_secs(5));
+    let checkpoint_path = stalled
+        .parent()
+        .expect("stall marker should have a parent")
+        .join("zod-sigint-checkpoint");
+    let mut checkpoint = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NONBLOCK)
+        .open(checkpoint_path)
+        .expect("SIGINT checkpoint should open");
+
+    client.send_tool(4, "session", json!({"action": "interrupt"}));
+    wait_for_readable(
+        checkpoint.as_raw_fd(),
+        Duration::from_secs(5),
+        "interrupt after response gate",
+    );
+    let mut signal = [0];
+    checkpoint
+        .read_exact(&mut signal)
+        .expect("SIGINT checkpoint should contain one event");
+    assert_eq!(signal, [b'1']);
+
+    let interrupt = read_message(&mut client.output);
+    assert_eq!(interrupt["id"], 4, "{interrupt}");
+    assert_eq!(response_text(&interrupt), "[interrupt sent]");
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn stdio_console_keeps_later_calls_behind_an_existing_gated_cohort() {
+    let zod = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/zod");
+    let test_directory = TestDirectory::new("response-gated-cohort");
+    let mut command = Command::new(env!("CARGO_BIN_EXE_mcp-console"));
+    command
+        .arg("serve")
+        .arg("--worker")
+        .arg(zod)
+        .env("TMPDIR", test_directory.path())
+        .env("ZOD_SIGINT_CHECKPOINT", "1");
+    let mut client = McpClient::spawn(command);
+
+    client.send_console(2, json!({"r": "emit stdout"}));
+    wait_for_readable(
+        client.output.get_ref().as_raw_fd(),
+        Duration::from_secs(5),
+        "blocked response",
+    );
+    client.send_console(3, json!({"r": "complete after release"}));
+    client.send_tool(4, "session", json!({"action": "interrupt"}));
+
+    let first = read_message(&mut client.output);
+    assert_eq!(first["id"], 2, "{first}");
+    let started = wait_for_file(
+        test_directory.path(),
+        "zod-evaluation-started",
+        Duration::from_secs(5),
+    );
+    let worker_temporary = started
+        .parent()
+        .expect("evaluation marker should have a parent");
+    let checkpoint_path = worker_temporary.join("zod-sigint-checkpoint");
+    let mut checkpoint = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NONBLOCK)
+        .open(checkpoint_path)
+        .expect("SIGINT checkpoint should open");
+
+    client.send_tool(5, "session", json!({"action": "interrupt"}));
+    assert!(
+        !readable_within(checkpoint.as_raw_fd(), Duration::from_secs(1)),
+        "a later call overtook the existing gated cohort"
+    );
+
+    fs::write(worker_temporary.join("zod-release-evaluation"), "")
+        .expect("evaluation release should be created");
+    let evaluation = read_message(&mut client.output);
+    assert_eq!(evaluation["id"], 3, "{evaluation}");
+    let first_interrupt = read_message(&mut client.output);
+    assert_eq!(first_interrupt["id"], 4, "{first_interrupt}");
+    assert_eq!(response_text(&first_interrupt), "[interrupt sent]");
+    let second_interrupt = read_message(&mut client.output);
+    assert_eq!(second_interrupt["id"], 5, "{second_interrupt}");
+    assert_eq!(response_text(&second_interrupt), "[interrupt sent]");
+
+    wait_for_readable(
+        checkpoint.as_raw_fd(),
+        Duration::from_secs(5),
+        "cohort SIGINT checkpoint",
+    );
+    let mut signal = [0];
+    checkpoint
+        .read_exact(&mut signal)
+        .expect("SIGINT checkpoint should contain an event");
+    assert_eq!(signal, [b'1']);
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn stdio_console_keeps_cancelled_gated_operation_ordered_until_it_stops() {
+    let zod = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/zod");
+    let test_directory = TestDirectory::new("cancelled-gated-operation");
+    let mut command = Command::new(env!("CARGO_BIN_EXE_mcp-console"));
+    command
+        .arg("serve")
+        .arg("--worker")
+        .arg(zod)
+        .env("TMPDIR", test_directory.path())
+        .env("ZOD_SIGINT_CHECKPOINT", "1");
+    let mut client = McpClient::spawn(command);
+
+    client.send_console(2, json!({"r": "emit stdout"}));
+    wait_for_readable(
+        client.output.get_ref().as_raw_fd(),
+        Duration::from_secs(5),
+        "blocked response",
+    );
+    client.send_console(3, json!({"r": "complete after release"}));
+
+    let first = read_message(&mut client.output);
+    assert_eq!(first["id"], 2, "{first}");
+    let started = wait_for_file(
+        test_directory.path(),
+        "zod-evaluation-started",
+        Duration::from_secs(5),
+    );
+    let worker_temporary = started
+        .parent()
+        .expect("evaluation marker should have a parent");
+    let checkpoint_path = worker_temporary.join("zod-sigint-checkpoint");
+    let mut checkpoint = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NONBLOCK)
+        .open(checkpoint_path)
+        .expect("SIGINT checkpoint should open");
+    write_message(
+        client.input.as_mut().expect("stdin should be open"),
+        &json!({
+            "jsonrpc": "2.0",
+            "method": "notifications/cancelled",
+            "params": {"requestId": 3}
+        }),
+    );
+    write_message(
+        client.input.as_mut().expect("stdin should be open"),
+        &json!({
+            "jsonrpc": "2.0",
+            "id": 4,
+            "method": "ping"
+        }),
+    );
+    let ping = read_message(&mut client.output);
+    assert_eq!(ping["id"], 4, "{ping}");
+
+    client.send_tool(5, "session", json!({"action": "interrupt"}));
+
+    assert!(
+        !readable_within(checkpoint.as_raw_fd(), Duration::from_secs(1)),
+        "successor reached the worker before the cancelled operation stopped"
+    );
+    fs::write(worker_temporary.join("zod-release-evaluation"), "")
+        .expect("evaluation release should be created");
+    wait_for_readable(
+        checkpoint.as_raw_fd(),
+        Duration::from_secs(5),
+        "successor interrupt",
+    );
+    let mut signal = [0];
+    checkpoint
+        .read_exact(&mut signal)
+        .expect("SIGINT checkpoint should contain one event");
+    assert_eq!(signal, [b'1']);
+
+    let interrupt = read_message(&mut client.output);
+    assert_eq!(interrupt["id"], 5, "{interrupt}");
+    assert_eq!(response_text(&interrupt), "[interrupt sent]");
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn stdio_console_bounds_response_gated_calls() {
+    let zod = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/zod");
+    let mut command = Command::new(env!("CARGO_BIN_EXE_mcp-console"));
+    command.arg("serve").arg("--worker").arg(zod);
+    let mut client = McpClient::spawn(command);
+
+    client.send_console(2, json!({"r": "emit stdout"}));
+    wait_for_readable(
+        client.output.get_ref().as_raw_fd(),
+        Duration::from_secs(5),
+        "blocked response",
+    );
+    for id in 3..=67 {
+        client.send_tool(id, "session", json!({"action": "interrupt"}));
+    }
+
+    client.wait_for_exit_within(Duration::from_secs(2));
+}
+
+#[cfg(target_os = "macos")]
+#[test]
 fn stdio_console_shutdown_observes_eof_behind_response_gate() {
     let zod = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/zod");
     let mut command = Command::new(env!("CARGO_BIN_EXE_mcp-console"));
@@ -1121,6 +1344,13 @@ impl McpClient {
             return Duration::ZERO;
         }
         drop(self.input.take());
+        self.wait_for_exit_within(timeout)
+    }
+
+    fn wait_for_exit_within(&mut self, timeout: Duration) -> Duration {
+        if self.closed {
+            return Duration::ZERO;
+        }
         let started = Instant::now();
         let status = loop {
             if let Some(status) = self

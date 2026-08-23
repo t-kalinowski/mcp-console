@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use rmcp::RoleServer;
@@ -11,11 +11,17 @@ use tokio::sync::Notify;
 
 use crate::worker_client::ResponseDelivery;
 
+// A blocked stdout cannot carry a correlated overload response. Closing the
+// transport at this bound keeps rmcp's detached handler backlog finite.
+const MAX_RESPONSE_GATED_CALLS: usize = 64;
+
 #[derive(Clone, Default)]
 pub(crate) struct ResponseDeliveries {
     state: Arc<Mutex<ResponseDeliveryState>>,
-    write_finished: Arc<Notify>,
+    gate_changed: Arc<Notify>,
     transport_closed: Arc<Notify>,
+    /// Counts live admission nodes, including terminal nodes retained by a successor.
+    admission_count: Arc<AtomicUsize>,
 }
 
 #[derive(Clone)]
@@ -24,30 +30,49 @@ pub(crate) struct ResponseDeliveryAdmission(Arc<ResponseDeliveryAdmissionState>)
 #[derive(Clone)]
 pub(crate) struct ResponseDeliveryCall(Arc<Mutex<ResponseDeliveryCallState>>);
 
+pub(crate) struct ResponseDeliveryOperation {
+    deliveries: ResponseDeliveries,
+    request_id: RequestId,
+    call: ResponseDeliveryCall,
+    completed: bool,
+}
+
+pub(crate) enum ResponseDeliveryAdmissionError {
+    Cancelled,
+    Closed,
+}
+
 #[derive(Default)]
 struct ResponseDeliveryState {
     active: HashMap<RequestId, ResponseDeliveryCall>,
+    /// Only node-backed reservations enter this map, so the node cap also bounds it.
+    pending: HashMap<RequestId, u64>,
+    next_admission_token: u64,
     /// Delivery-tracked response-write futures registered before they run on the service task.
     pending_writes: usize,
-    /// Tail of the wire-order chain, retained across cancellation gaps.
+    /// Last waiting member of the wire-order chain, retained across cancellation gaps.
     admission_tail: Option<Arc<ResponseDeliveryAdmissionNode>>,
     closed: bool,
 }
 
 struct ResponseDeliveryAdmissionState {
     deliveries: ResponseDeliveries,
+    request_id: RequestId,
+    token: Option<u64>,
     node: Mutex<Option<Arc<ResponseDeliveryAdmissionNode>>>,
 }
 
 struct ResponseDeliveryAdmissionNode {
     state: AtomicU8,
-    /// A skipped token retains this dependency so its successor cannot overtake it.
-    predecessor: Option<Arc<ResponseDeliveryAdmissionNode>>,
+    /// Cleared only after the dependency settles so cancellation cannot break the chain.
+    predecessor: Mutex<Option<Arc<ResponseDeliveryAdmissionNode>>>,
     changed: Notify,
+    admission_count: Arc<AtomicUsize>,
 }
 
 struct ResponseDeliveryCallState {
     active: bool,
+    operation_finished: bool,
     delivery: Option<ResponseDelivery>,
     admission: Option<Arc<ResponseDeliveryAdmissionNode>>,
 }
@@ -57,43 +82,77 @@ struct ResponseDeliveryWrite {
     deliveries: ResponseDeliveries,
     request_id: RequestId,
     call: ResponseDeliveryCall,
-    tracks_delivery: bool,
+    tracks_gate: bool,
     finished: bool,
 }
 
 impl ResponseDeliveries {
     #[cfg(test)]
-    fn start(&self, request_id: RequestId) -> ResponseDeliveryCall {
+    fn start_response(&self, request_id: RequestId) -> ResponseDeliveryCall {
+        self.admission_count.fetch_add(1, Ordering::AcqRel);
+        let admission = Arc::new(ResponseDeliveryAdmissionNode::new(
+            None,
+            Arc::clone(&self.admission_count),
+        ));
+        admission.admit();
         let (call, replaced) = {
             let mut state = self.lock();
-            Self::start_call(&mut state, request_id, None)
+            Self::start_call(&mut state, request_id, Some(admission))
         };
         if let Some(replaced) = replaced {
             replaced.unclaimed();
+        }
+        {
+            let mut state = call.lock();
+            state.operation_finished = true;
+            if !state.active {
+                ResponseDeliveryCall::finish_admission(&mut state);
+            }
         }
         call
     }
 
     /// Reserves transport order without retaining the request message.
-    fn reserve(&self) -> ResponseDeliveryAdmission {
-        let node = {
+    fn reserve(&self, request_id: RequestId) -> Option<ResponseDeliveryAdmission> {
+        let (token, node) = {
             let mut state = self.lock();
-            let predecessor = state
-                .admission_tail
-                .take()
-                .and_then(|tail| tail.unresolved());
-            if state.closed || (state.pending_writes == 0 && predecessor.is_none()) {
+            Self::prune_admission_tail(&mut state);
+            if state.closed {
+                return None;
+            }
+            let node = if !Self::reservation_gate_active(&state) {
                 None
             } else {
-                let node = Arc::new(ResponseDeliveryAdmissionNode::new(predecessor.clone()));
+                if self.admission_count.load(Ordering::Acquire) >= MAX_RESPONSE_GATED_CALLS {
+                    return None;
+                }
+                self.admission_count.fetch_add(1, Ordering::AcqRel);
+                let predecessor = state.admission_tail.clone();
+                let node = Arc::new(ResponseDeliveryAdmissionNode::new(
+                    predecessor,
+                    Arc::clone(&self.admission_count),
+                ));
                 state.admission_tail = Some(Arc::clone(&node));
                 Some(node)
-            }
+            };
+            let token = node.as_ref().map(|_| {
+                let token = state.next_admission_token;
+                state.next_admission_token = token
+                    .checked_add(1)
+                    .expect("response admission token space exhausted");
+                state.pending.insert(request_id.clone(), token);
+                token
+            });
+            (token, node)
         };
-        ResponseDeliveryAdmission(Arc::new(ResponseDeliveryAdmissionState {
+        let admission = ResponseDeliveryAdmission(Arc::new(ResponseDeliveryAdmissionState {
             deliveries: self.clone(),
+            request_id,
+            token,
             node: Mutex::new(node),
-        }))
+        }));
+        self.gate_changed.notify_waiters();
+        Some(admission)
     }
 
     fn start_call(
@@ -107,7 +166,7 @@ impl ResponseDeliveries {
         } else {
             state.active.insert(request_id, call.clone())
         };
-        let delivery = replaced.and_then(|replaced| replaced.finish());
+        let delivery = replaced.and_then(|replaced| replaced.abandon());
         Self::prune_admission_tail(state);
         (call, delivery)
     }
@@ -115,33 +174,89 @@ impl ResponseDeliveries {
     pub(crate) fn cancel(&self, request_id: &RequestId) {
         let delivery = {
             let mut state = self.lock();
-            let delivery = state
-                .active
-                .remove(request_id)
-                .and_then(|call| call.finish());
+            // A pending reuse of the ID is newer than an active call whose
+            // already-visible response write has not settled yet.
+            let pending = state.pending.remove(request_id).is_some();
+            let delivery = (!pending)
+                .then(|| state.active.get(request_id).cloned())
+                .flatten()
+                .and_then(|call| {
+                    let (remove, delivery) = call.cancel();
+                    if remove {
+                        state.active.remove(request_id);
+                    }
+                    delivery
+                });
             Self::prune_admission_tail(&mut state);
             delivery
         };
         if let Some(delivery) = delivery {
             delivery.unclaimed();
         }
+        self.gate_changed.notify_waiters();
+    }
+
+    pub(crate) fn register(&self, call: &ResponseDeliveryCall, delivery: ResponseDelivery) {
+        let rejected = {
+            let state = self.lock();
+            let current = state.active.values().find(|current| current.is(call));
+            if current.is_some() {
+                call.register(delivery).err()
+            } else {
+                Some(delivery)
+            }
+        };
+        if let Some(delivery) = rejected {
+            delivery.unclaimed();
+        }
+    }
+
+    fn finish_operation(
+        &self,
+        request_id: &RequestId,
+        expected: &ResponseDeliveryCall,
+        completed: bool,
+    ) {
+        let delivery = {
+            let mut state = self.lock();
+            let Some(current) = state.active.get(request_id) else {
+                return;
+            };
+            if !current.is(expected) {
+                return;
+            }
+            let (remove, delivery) = if completed {
+                expected.complete_operation()
+            } else {
+                (true, expected.abandon())
+            };
+            if remove {
+                state.active.remove(request_id);
+            }
+            Self::prune_admission_tail(&mut state);
+            delivery
+        };
+        if let Some(delivery) = delivery {
+            delivery.unclaimed();
+        }
+        self.gate_changed.notify_waiters();
     }
 
     fn write(&self, request_id: &RequestId) -> Option<ResponseDeliveryWrite> {
-        let (call, tracks_delivery) = {
+        let (call, tracks_gate) = {
             let mut state = self.lock();
             let call = state.active.get(request_id).cloned()?;
-            let tracks_delivery = call.has_delivery();
-            if tracks_delivery {
+            let tracks_gate = call.tracks_write();
+            if tracks_gate {
                 state.pending_writes += 1;
             }
-            (call, tracks_delivery)
+            (call, tracks_gate)
         };
         Some(ResponseDeliveryWrite {
             deliveries: self.clone(),
             request_id: request_id.clone(),
             call,
-            tracks_delivery,
+            tracks_gate,
             finished: false,
         })
     }
@@ -153,13 +268,14 @@ impl ResponseDeliveries {
             let deliveries = state
                 .active
                 .drain()
-                .filter_map(|(_, call)| call.finish())
+                .filter_map(|(_, call)| call.abandon())
                 .collect::<Vec<_>>();
+            state.pending.clear();
             state.admission_tail = None;
             deliveries
         };
         self.transport_closed.notify_waiters();
-        self.write_finished.notify_waiters();
+        self.gate_changed.notify_waiters();
         for delivery in deliveries {
             delivery.unclaimed();
         }
@@ -178,7 +294,7 @@ impl ResponseDeliveries {
         let delivery = state
             .active
             .remove(request_id)
-            .and_then(|call| call.finish());
+            .and_then(|call| call.finish_write());
         Self::prune_admission_tail(&mut state);
         delivery
     }
@@ -192,7 +308,19 @@ impl ResponseDeliveries {
             );
             state.pending_writes -= 1;
         }
-        self.write_finished.notify_waiters();
+        self.gate_changed.notify_waiters();
+    }
+
+    fn response_gate_active(state: &ResponseDeliveryState) -> bool {
+        state.pending_writes > 0
+            || state
+                .active
+                .values()
+                .any(ResponseDeliveryCall::blocks_new_admissions)
+    }
+
+    fn reservation_gate_active(state: &ResponseDeliveryState) -> bool {
+        Self::response_gate_active(state) || state.admission_tail.is_some()
     }
 
     async fn wait_for_close(&self) {
@@ -206,14 +334,34 @@ impl ResponseDeliveries {
     }
 
     fn prune_admission_tail(state: &mut ResponseDeliveryState) {
-        state.admission_tail = state
-            .admission_tail
-            .take()
-            .and_then(|tail| tail.unresolved());
+        state.admission_tail = state.admission_tail.take().and_then(|tail| tail.waiting());
     }
 
-    fn prune_tail(&self) {
-        Self::prune_admission_tail(&mut self.lock());
+    fn owns_pending(
+        state: &ResponseDeliveryState,
+        admission: &ResponseDeliveryAdmissionState,
+    ) -> bool {
+        admission.token.is_none_or(|expected| {
+            state
+                .pending
+                .get(&admission.request_id)
+                .is_some_and(|token| *token == expected)
+        })
+    }
+
+    fn unregister_pending(&self, request_id: &RequestId, token: u64) {
+        {
+            let mut state = self.lock();
+            if state
+                .pending
+                .get(request_id)
+                .is_some_and(|current| *current == token)
+            {
+                state.pending.remove(request_id);
+            }
+            Self::prune_admission_tail(&mut state);
+        }
+        self.gate_changed.notify_waiters();
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, ResponseDeliveryState> {
@@ -225,31 +373,55 @@ impl ResponseDeliveries {
 
 impl ResponseDeliveryAdmission {
     /// Registers the call when every earlier gated call and response write has settled.
-    pub(crate) async fn admit(self, request_id: RequestId) -> Option<ResponseDeliveryCall> {
+    pub(crate) async fn admit(
+        self,
+    ) -> Result<(ResponseDeliveryCall, ResponseDeliveryOperation), ResponseDeliveryAdmissionError>
+    {
         let node = self.0.node();
         let queued = node.is_some();
-        if let Some(node) = node {
-            tokio::select! {
-                _ = node.wait_for_predecessor() => {}
-                _ = self.0.deliveries.wait_for_close() => return None,
+        if let Some(node) = &node {
+            loop {
+                let gate_changed = self.0.deliveries.gate_changed.notified();
+                {
+                    let state = self.0.deliveries.lock();
+                    if state.closed {
+                        return Err(ResponseDeliveryAdmissionError::Closed);
+                    }
+                    if !ResponseDeliveries::owns_pending(&state, &self.0) {
+                        return Err(ResponseDeliveryAdmissionError::Cancelled);
+                    }
+                }
+                tokio::select! {
+                    _ = node.wait_for_predecessor() => break,
+                    _ = gate_changed => {}
+                }
             }
         }
         loop {
-            let write_finished = self.0.deliveries.write_finished.notified();
+            let gate_changed = self.0.deliveries.gate_changed.notified();
             let admission = {
                 let mut state = self.0.deliveries.lock();
                 if state.closed {
-                    return None;
+                    return Err(ResponseDeliveryAdmissionError::Closed);
                 }
-                if !queued || state.pending_writes == 0 {
-                    let node = queued.then(|| {
+                if !ResponseDeliveries::owns_pending(&state, &self.0) {
+                    return Err(ResponseDeliveryAdmissionError::Cancelled);
+                }
+                if !queued || !ResponseDeliveries::response_gate_active(&state) {
+                    if self.0.token.is_some() {
+                        state.pending.remove(&self.0.request_id);
+                    }
+                    let node = node.as_ref().map(|_| {
                         self.0
                             .take_node()
                             .expect("queued admission must retain its node")
                     });
+                    if let Some(node) = &node {
+                        node.admit();
+                    }
                     Some(ResponseDeliveries::start_call(
                         &mut state,
-                        request_id.clone(),
+                        self.0.request_id.clone(),
                         node,
                     ))
                 } else {
@@ -260,9 +432,16 @@ impl ResponseDeliveryAdmission {
                 if let Some(replaced) = replaced {
                     replaced.unclaimed();
                 }
-                return Some(call);
+                self.0.deliveries.gate_changed.notify_waiters();
+                let operation = ResponseDeliveryOperation {
+                    deliveries: self.0.deliveries.clone(),
+                    request_id: self.0.request_id.clone(),
+                    call: call.clone(),
+                    completed: false,
+                };
+                return Ok((call, operation));
             }
-            write_finished.await;
+            gate_changed.await;
         }
     }
 }
@@ -292,73 +471,75 @@ impl Drop for ResponseDeliveryAdmissionState {
             .take()
         {
             node.skip();
-            self.deliveries.prune_tail();
+        }
+        if let Some(token) = self.token {
+            self.deliveries.unregister_pending(&self.request_id, token);
         }
     }
 }
 
 impl ResponseDeliveryAdmissionNode {
-    const PENDING: u8 = 0;
-    const FINISHED: u8 = 1;
-    const SKIPPED: u8 = 2;
+    const WAITING: u8 = 0;
+    const ADMITTED: u8 = 1;
+    const FINISHED: u8 = 2;
+    const SKIPPED: u8 = 3;
 
-    fn new(predecessor: Option<Arc<Self>>) -> Self {
+    fn new(predecessor: Option<Arc<Self>>, admission_count: Arc<AtomicUsize>) -> Self {
         Self {
-            state: AtomicU8::new(Self::PENDING),
-            predecessor,
+            state: AtomicU8::new(Self::WAITING),
+            predecessor: Mutex::new(predecessor),
             changed: Notify::new(),
+            admission_count,
         }
+    }
+
+    fn admit(&self) {
+        self.transition(Self::WAITING, Self::ADMITTED);
     }
 
     fn finish(&self) {
-        if self
-            .state
-            .compare_exchange(
-                Self::PENDING,
-                Self::FINISHED,
-                Ordering::AcqRel,
-                Ordering::Acquire,
-            )
-            .is_ok()
-        {
-            self.changed.notify_waiters();
-        }
+        self.transition(Self::ADMITTED, Self::FINISHED);
     }
 
     fn skip(&self) {
+        self.transition(Self::WAITING, Self::SKIPPED);
+    }
+
+    fn transition(&self, expected: u8, next: u8) {
         if self
             .state
-            .compare_exchange(
-                Self::PENDING,
-                Self::SKIPPED,
-                Ordering::AcqRel,
-                Ordering::Acquire,
-            )
+            .compare_exchange(expected, next, Ordering::AcqRel, Ordering::Acquire)
             .is_ok()
         {
             self.changed.notify_waiters();
         }
     }
 
-    /// Discards skipped nodes while retaining their first unfinished dependency.
-    fn unresolved(self: &Arc<Self>) -> Option<Arc<Self>> {
+    /// Finds the last waiting node without restoring an admitted predecessor as the tail.
+    fn waiting(self: &Arc<Self>) -> Option<Arc<Self>> {
         let mut current = Arc::clone(self);
         loop {
             match current.state.load(Ordering::Acquire) {
-                Self::FINISHED => return None,
+                Self::WAITING => return Some(current),
+                Self::ADMITTED | Self::FINISHED => return None,
                 Self::SKIPPED => {
-                    let predecessor = current.predecessor.as_ref()?;
-                    current = Arc::clone(predecessor);
+                    current = current.predecessor()?;
                 }
-                Self::PENDING => return Some(current),
                 _ => unreachable!("unknown response admission state"),
             }
         }
     }
 
     async fn wait_for_predecessor(&self) {
-        if let Some(predecessor) = self.predecessor.as_ref() {
+        if let Some(predecessor) = self.predecessor() {
             predecessor.wait().await;
+            let mut current = self.lock_predecessor();
+            if current
+                .as_ref()
+                .is_some_and(|current| Arc::ptr_eq(current, &predecessor))
+            {
+                *current = None;
+            }
         }
     }
 
@@ -369,17 +550,34 @@ impl ResponseDeliveryAdmissionNode {
             match current.state.load(Ordering::Acquire) {
                 Self::FINISHED => return,
                 Self::SKIPPED => {
-                    let predecessor = current.predecessor.clone();
+                    let predecessor = current.predecessor();
                     drop(changed);
                     let Some(predecessor) = predecessor else {
                         return;
                     };
                     current = predecessor;
                 }
-                Self::PENDING => changed.await,
+                Self::WAITING | Self::ADMITTED => changed.await,
                 _ => unreachable!("unknown response admission state"),
             }
         }
+    }
+
+    fn predecessor(&self) -> Option<Arc<Self>> {
+        self.lock_predecessor().clone()
+    }
+
+    fn lock_predecessor(&self) -> std::sync::MutexGuard<'_, Option<Arc<Self>>> {
+        self.predecessor
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+}
+
+impl Drop for ResponseDeliveryAdmissionNode {
+    fn drop(&mut self) {
+        let previous = self.admission_count.fetch_sub(1, Ordering::AcqRel);
+        assert!(previous > 0, "a reserved admission must occupy one slot");
     }
 }
 
@@ -387,45 +585,119 @@ impl ResponseDeliveryCall {
     fn new(active: bool, admission: Option<Arc<ResponseDeliveryAdmissionNode>>) -> Self {
         Self(Arc::new(Mutex::new(ResponseDeliveryCallState {
             active,
+            operation_finished: false,
             delivery: None,
             admission,
         })))
     }
 
-    pub(crate) fn register(&self, delivery: ResponseDelivery) {
+    fn register(&self, delivery: ResponseDelivery) -> Result<(), ResponseDelivery> {
         let mut state = self.lock();
         if !state.active {
-            drop(state);
-            delivery.unclaimed();
-            return;
+            return Err(delivery);
         }
+        assert!(
+            !state.operation_finished,
+            "response delivery must register before operation completion"
+        );
         assert!(
             state.delivery.replace(delivery).is_none(),
             "a response can register only one delivery acknowledgment"
         );
+        Ok(())
     }
 
-    fn finish(&self) -> Option<ResponseDelivery> {
+    fn cancel(&self) -> (bool, Option<ResponseDelivery>) {
         let mut state = self.lock();
         state.active = false;
+        let delivery = state.delivery.take();
+        if state.operation_finished {
+            Self::finish_admission(&mut state);
+            (true, delivery)
+        } else {
+            (false, delivery)
+        }
+    }
+
+    fn complete_operation(&self) -> (bool, Option<ResponseDelivery>) {
+        let mut state = self.lock();
+        assert!(
+            !state.operation_finished,
+            "a response operation can complete only once"
+        );
+        state.operation_finished = true;
+        if !state.active {
+            Self::finish_admission(&mut state);
+            return (true, state.delivery.take());
+        }
+        if state.admission.is_none() && state.delivery.is_none() {
+            state.active = false;
+            return (true, None);
+        }
+        (false, None)
+    }
+
+    fn abandon(&self) -> Option<ResponseDelivery> {
+        let mut state = self.lock();
+        state.active = false;
+        state.operation_finished = true;
+        Self::finish_admission(&mut state);
+        state.delivery.take()
+    }
+
+    fn finish_write(&self) -> Option<ResponseDelivery> {
+        let mut state = self.lock();
+        state.active = false;
+        Self::finish_admission(&mut state);
+        state.delivery.take()
+    }
+
+    fn finish_admission(state: &mut ResponseDeliveryCallState) {
         if let Some(admission) = state.admission.take() {
             admission.finish();
         }
-        state.delivery.take()
     }
 
     fn is(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.0, &other.0)
     }
 
-    fn has_delivery(&self) -> bool {
-        self.lock().delivery.is_some()
+    fn blocks_new_admissions(&self) -> bool {
+        let state = self.lock();
+        state.delivery.is_some()
+            || (state.admission.is_some() && (state.operation_finished || !state.active))
+    }
+
+    fn tracks_write(&self) -> bool {
+        let state = self.lock();
+        assert!(
+            state.operation_finished,
+            "response writing must follow operation completion"
+        );
+        state.delivery.is_some() || state.admission.is_some()
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, ResponseDeliveryCallState> {
         self.0
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+}
+
+impl ResponseDeliveryOperation {
+    pub(crate) fn complete(mut self) {
+        self.completed = true;
+        self.deliveries
+            .finish_operation(&self.request_id, &self.call, true);
+    }
+}
+
+impl Drop for ResponseDeliveryOperation {
+    fn drop(&mut self) {
+        if !self.completed {
+            self.deliveries
+                .finish_operation(&self.request_id, &self.call, false);
+        }
     }
 }
 
@@ -449,7 +721,7 @@ impl ResponseDeliveryWrite {
         {
             settle_delivery(delivery);
         }
-        if self.tracks_delivery {
+        if self.tracks_gate {
             self.deliveries.settle_write();
         }
     }
@@ -528,7 +800,13 @@ where
                 if let ClientRequest::CallToolRequest(call) = &mut request.request
                     && matches!(call.params.name.as_ref(), "send" | "session")
                 {
-                    call.extensions.insert(self.deliveries.reserve());
+                    let Some(admission) = self.deliveries.reserve(request.id.clone()) else {
+                        // Under stdout backpressure another response is not reliable,
+                        // so overload retires the connection and its worker session.
+                        self.deliveries.close();
+                        return None;
+                    };
+                    call.extensions.insert(admission);
                 }
             }
             Some(JsonRpcMessage::Notification(notification)) => {
@@ -580,7 +858,7 @@ mod tests {
     fn keeps_call_registered_until_response_write_finishes() {
         let deliveries = ResponseDeliveries::default();
         let request_id = request_id(1);
-        let call = deliveries.start(request_id.clone());
+        let call = deliveries.start_response(request_id.clone());
         let write = deliveries.write(&request_id).unwrap();
 
         assert!(current_call(&deliveries, &request_id).is_some_and(|current| current.is(&call)));
@@ -596,9 +874,9 @@ mod tests {
     fn old_write_cannot_remove_reused_request_id() {
         let deliveries = ResponseDeliveries::default();
         let request_id = request_id(1);
-        let old_call = deliveries.start(request_id.clone());
+        let old_call = deliveries.start_response(request_id.clone());
         let old_write = deliveries.write(&request_id).unwrap();
-        let new_call = deliveries.start(request_id.clone());
+        let new_call = deliveries.start_response(request_id.clone());
 
         assert!(!is_active(&old_call));
         assert!(
@@ -617,7 +895,7 @@ mod tests {
     fn cancellation_wins_over_in_flight_write() {
         let deliveries = ResponseDeliveries::default();
         let request_id = request_id(1);
-        let call = deliveries.start(request_id.clone());
+        let call = deliveries.start_response(request_id.clone());
         let write = deliveries.write(&request_id).unwrap();
 
         deliveries.cancel(&request_id);
@@ -633,7 +911,7 @@ mod tests {
     async fn response_gate_does_not_delay_cancellation_notifications() {
         let deliveries = ResponseDeliveries::default();
         deliveries.lock().pending_writes = 1;
-        let cancelled = deliveries.start(request_id(9));
+        let cancelled = deliveries.start_response(request_id(9));
         let (mut input, read) = tokio::io::duplex(1024);
         input.write_all(PING_REQUEST).await.unwrap();
         input.write_all(CANCEL_REQUEST_9).await.unwrap();
@@ -665,29 +943,31 @@ mod tests {
     async fn response_gate_skips_cancelled_calls_without_reordering() {
         let deliveries = ResponseDeliveries::default();
         deliveries.lock().pending_writes = 1;
-        let first = deliveries.reserve();
-        let cancelled = deliveries.reserve();
+        let first = deliveries.reserve(request_id(1)).unwrap();
+        let cancelled = deliveries.reserve(request_id(9)).unwrap();
         drop(cancelled);
-        let second = deliveries.reserve();
-        let mut first = Box::pin(first.admit(request_id(1)));
-        let mut second = Box::pin(second.admit(request_id(2)));
+        let second = deliveries.reserve(request_id(2)).unwrap();
+        let mut first = Box::pin(first.admit());
+        let mut second = Box::pin(second.admit());
         let mut context = std::task::Context::from_waker(std::task::Waker::noop());
 
         assert!(std::future::Future::poll(second.as_mut(), &mut context).is_pending());
         assert!(std::future::Future::poll(first.as_mut(), &mut context).is_pending());
         deliveries.settle_write();
         assert!(std::future::Future::poll(second.as_mut(), &mut context).is_pending());
-        let first_call = match std::future::Future::poll(first.as_mut(), &mut context) {
-            std::task::Poll::Ready(Some(call)) => call,
-            _ => panic!("the first reserved call should be admitted"),
-        };
+        let (first_call, first_operation) =
+            match std::future::Future::poll(first.as_mut(), &mut context) {
+                std::task::Poll::Ready(Ok(call)) => call,
+                _ => panic!("the first reserved call should be admitted"),
+            };
 
+        first_operation.complete();
         let first_write = deliveries.write(&request_id(1)).unwrap();
         assert!(std::future::Future::poll(second.as_mut(), &mut context).is_pending());
         first_write.delivered();
         assert!(matches!(
             std::future::Future::poll(second.as_mut(), &mut context),
-            std::task::Poll::Ready(Some(_))
+            std::task::Poll::Ready(Ok((_call, _operation)))
         ));
         assert!(!is_active(&first_call));
     }
@@ -696,7 +976,7 @@ mod tests {
     fn failed_write_releases_current_call() {
         let deliveries = ResponseDeliveries::default();
         let request_id = request_id(1);
-        let call = deliveries.start(request_id.clone());
+        let call = deliveries.start_response(request_id.clone());
         let write = deliveries.write(&request_id).unwrap();
 
         write.unclaimed();
@@ -709,7 +989,7 @@ mod tests {
     fn dropped_write_releases_current_call() {
         let deliveries = ResponseDeliveries::default();
         let request_id = request_id(1);
-        let call = deliveries.start(request_id.clone());
+        let call = deliveries.start_response(request_id.clone());
         let write = deliveries.write(&request_id).unwrap();
 
         drop(write);
@@ -722,9 +1002,9 @@ mod tests {
     fn dropped_write_releases_only_its_own_call() {
         let deliveries = ResponseDeliveries::default();
         let request_id = request_id(1);
-        let old_call = deliveries.start(request_id.clone());
+        let old_call = deliveries.start_response(request_id.clone());
         let old_write = deliveries.write(&request_id).unwrap();
-        let new_call = deliveries.start(request_id.clone());
+        let new_call = deliveries.start_response(request_id.clone());
 
         drop(old_write);
 
@@ -737,8 +1017,8 @@ mod tests {
     #[test]
     fn close_releases_all_active_calls() {
         let deliveries = ResponseDeliveries::default();
-        let first = deliveries.start(request_id(1));
-        let second = deliveries.start(request_id(2));
+        let first = deliveries.start_response(request_id(1));
+        let second = deliveries.start_response(request_id(2));
 
         deliveries.close();
 
@@ -746,7 +1026,7 @@ mod tests {
         assert!(!is_active(&first));
         assert!(!is_active(&second));
 
-        let after_close = deliveries.start(request_id(3));
+        let after_close = deliveries.start_response(request_id(3));
         assert!(!is_active(&after_close));
         assert!(deliveries.lock().active.is_empty());
     }
