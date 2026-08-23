@@ -78,9 +78,13 @@ fn runner_fixture(name: &str) -> (TestDirectory, PathBuf, File) {
     ] {
         fs::create_dir_all(parent).unwrap();
     }
-    fs::copy(
-        repository.join("tests/transcripts/_run.py"),
-        transcripts.join("_run.py"),
+    let runner = transcripts.join("_run.py");
+    fs::copy(repository.join("tests/transcripts/_run.py"), &runner).unwrap();
+    let source = fs::read_to_string(&runner).unwrap();
+    assert_eq!(source.matches("SLOW_TEST_SECONDS = 5.0").count(), 1);
+    fs::write(
+        &runner,
+        source.replace("SLOW_TEST_SECONDS = 5.0", "SLOW_TEST_SECONDS = 0.1"),
     )
     .unwrap();
     fs::copy(

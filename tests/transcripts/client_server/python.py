@@ -56,6 +56,31 @@ def normalize_duckdb_resolution_error(error: str, extension: str) -> str:
     return detail.partition(' at URL "')[0]
 
 
+def ir_cache_directory(environment: dict[str, str]) -> str:
+    ir = shutil.which("ir", path=environment.get("PATH"))
+    assert ir is not None, "ir is required"
+    cache = subprocess.run(
+        [ir, "cache", "dir"],
+        check=True,
+        capture_output=True,
+        text=True,
+        env=environment,
+    ).stdout.strip()
+    assert cache and Path(cache).is_absolute(), (
+        f"ir returned invalid cache directory: {cache}"
+    )
+    return cache
+
+
+def matplotlib_test_environment(cache_home: Path) -> dict[str, str]:
+    environment = os.environ.copy()
+    cache = ir_cache_directory(environment)
+    environment["IR_CACHE_DIR"] = cache
+    environment["XDG_CACHE_HOME"] = str(cache_home)
+    assert ir_cache_directory(environment) == cache
+    return environment
+
+
 def test_preserves_configured_python_environment(binary: Path) -> Transcript:
     environment = os.environ.copy()
     environment["RETICULATE_PYTHON"] = "configured-by-user"
@@ -851,10 +876,9 @@ def test_does_not_fail_resolution_when_matplotlib_cache_cannot_be_written(
 ) -> Transcript:
     with tempfile.TemporaryDirectory() as temporary_directory:
         temporary = Path(temporary_directory)
-        environment = os.environ.copy()
+        environment = matplotlib_test_environment(temporary / "host-cache")
         cache_directory = temporary / "user-matplotlib"
         environment["MPLCONFIGDIR"] = str(cache_directory)
-        environment["XDG_CACHE_HOME"] = str(temporary / "host-cache")
         environment["MPL_IGNORE_SYSTEM_FONTS"] = "1"
         client = McpClient(
             binary,
@@ -2257,11 +2281,10 @@ def test_returns_matplotlib_plots(binary: Path) -> Transcript:
         host_matplotlib.mkdir()
         host_matplotlibrc = host_matplotlib / "matplotlibrc"
         host_matplotlibrc.write_text("lines.linewidth: 7.25\n", encoding="utf-8")
-        environment = os.environ.copy()
+        environment = matplotlib_test_environment(temporary / "host-cache")
         environment["TMPDIR"] = temporary_directory
         environment["FONTCONFIG_FILE"] = str(fontconfig)
         environment["MPLCONFIGDIR"] = str(host_matplotlib)
-        environment["XDG_CACHE_HOME"] = str(temporary / "host-cache")
         environment["MCP_CONSOLE_TEST_MATPLOTLIBRC"] = str(host_matplotlibrc)
         environment["MCP_CONSOLE_TEST_SYSTEM_PROFILER"] = system_profiler
         environment["PATH"] = os.pathsep.join((str(probe.parent), path))
@@ -2569,9 +2592,8 @@ def test_inherits_explicit_matplotlib_config(binary: Path) -> Transcript:
             "lines.linewidth: 18.25\n",
             encoding="utf-8",
         )
-        environment = os.environ.copy()
+        environment = matplotlib_test_environment(temporary / "host-cache")
         environment["TMPDIR"] = temporary_directory
-        environment["XDG_CACHE_HOME"] = str(temporary / "host-cache")
         environment["MPLCONFIGDIR"] = str(inherited)
         environment["MATPLOTLIBRC"] = str(explicit_rc)
         environment["MPL_IGNORE_SYSTEM_FONTS"] = "1"
@@ -2659,10 +2681,9 @@ def test_inherits_default_matplotlib_config(binary: Path) -> Transcript:
             capture_output=True,
             text=True,
         ).stdout.strip()
-        environment = os.environ.copy()
+        environment = matplotlib_test_environment(temporary / "host-cache")
         environment["HOME"] = str(home)
         environment["TMPDIR"] = temporary_directory
-        environment["XDG_CACHE_HOME"] = str(temporary / "host-cache")
         environment["R_LIBS_USER"] = os.pathsep.join(r_libraries)
         environment["RETICULATE_UV"] = uv
         environment["UV_CACHE_DIR"] = uv_cache
