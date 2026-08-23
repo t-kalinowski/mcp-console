@@ -1126,6 +1126,10 @@ def test_idle_runtime_r_resolution_owns_environment_until_activation(
         for library in libraries:
             library.mkdir()
         environment = _fake_ir_environment(root, libraries)
+        resolver_started = FifoCheckpoint(root / "resolver-started", create=True)
+        resolver_release = FifoCheckpoint(root / "resolver-release", create=True)
+        environment["MCP_CONSOLE_TEST_IR_STARTED"] = str(resolver_started.path)
+        environment["MCP_CONSOLE_TEST_IR_RELEASE"] = str(resolver_release.path)
         client = ServerRelayClient(
             binary,
             "idle_r_resolution_owns_environment",
@@ -1135,33 +1139,48 @@ def test_idle_runtime_r_resolution_owns_environment_until_activation(
         relay_root = client.relay_root()
         ready = FifoCheckpoint(relay_root / IDLE_R_RESOLUTION_READY_NAME)
         release = FifoCheckpoint(relay_root / IDLE_R_RESOLUTION_RELEASE_NAME)
-        released = False
+        resolver_released = False
+        ready_reached = False
+        activation_released = False
         finished = False
         try:
-            ready.wait()
+            resolver_started.wait()
             preparation = client.client._start_session(
                 action="prepare",
                 requirements={"r": ["english"]},
             )
-            readable, _, _ = select.select([client.client.stdout], [], [], 10)
-            assert readable, "explicit preparation waited for an idle R callback"
-            client.client._receive(preparation)
+            _receive_checkpointed(
+                client.client,
+                preparation,
+                "explicit preparation while the idle R resolver was blocked",
+            )
             _tool_error(preparation, "idle runtime R callback owns environment changes")
-            assert (root / "ir-counter").read_text(encoding="utf-8") == "1"
 
+            resolver_release.release()
+            resolver_released = True
+            ready.wait()
+            ready_reached = True
             release.release()
-            released = True
+            activation_released = True
             assert _tool_text(client.send(r="42")) == "[done]"
             transcript = client.finish_active()
             finished = True
         finally:
-            if not released:
+            if not resolver_released:
+                resolver_release.release()
+            if not ready_reached:
+                ready.wait()
+            if not activation_released:
                 release.release()
+            resolver_started.close()
+            resolver_release.close()
             ready.close()
             release.close()
             if not finished:
                 stop_client(client.client)
                 client._temporary.cleanup()
+
+        assert (root / "ir-counter").read_text(encoding="utf-8") == "1"
 
     assert not any(
         entry.keys() == {"server"}

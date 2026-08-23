@@ -2,6 +2,7 @@
 
 import json
 import os
+import select
 import shutil
 import sys
 import tempfile
@@ -554,6 +555,66 @@ def test_restart_discards_unactivated_r_candidate(binary: Path) -> Transcript:
             return transcript
         finally:
             if not passed:
+                stop_client(client)
+
+
+def test_rejects_preparation_while_automatic_r_resolver_is_running(
+    binary: Path,
+) -> Transcript:
+    package = "RcppRoll"
+    with tempfile.TemporaryDirectory() as temporary:
+        directory = Path(temporary)
+        environment, record = recording_ir_environment(directory)
+        started = FifoCheckpoint(directory / "ir-started")
+        release = FifoCheckpoint(directory / "ir-release")
+        environment["MCP_CONSOLE_TEST_IR_BLOCK_REQUIREMENT"] = package
+        environment["MCP_CONSOLE_TEST_IR_STARTED"] = str(started.path)
+        environment["MCP_CONSOLE_TEST_IR_RELEASE"] = str(release.path)
+        client = McpClient(binary, ("serve",), environment)
+        resolver_released = False
+        finished = False
+        try:
+            client._initialize_and_list_tools()
+            baseline = len(ir_run_records(record))
+
+            evaluation = client._start_send(
+                r=(f'invisible(base::loadNamespace("{package}")); 42L')
+            )
+            started.wait("automatic R resolver")
+            preparation = client._start_session(
+                action="prepare",
+                requirements={"r": ["english"]},
+            )
+            readable, _, _ = select.select([client.stdout], [], [], 10)
+            assert readable, "preparation waited for the active R resolver"
+            client._receive(preparation)
+            assert preparation["result"] == {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": (
+                            "worker is already evaluating a cell; poll it before "
+                            "preparing requirements"
+                        ),
+                    }
+                ],
+                "isError": True,
+            }, preparation
+
+            release.release()
+            resolver_released = True
+            client._receive(evaluation)
+            assert last_tool_text_from_entry(evaluation) == "[1] 42\n"
+            assert len(ir_run_records(record)) == baseline + 1
+            transcript = client._finish()
+            finished = True
+            return transcript
+        finally:
+            if not resolver_released:
+                release.release()
+            started.close()
+            release.close()
+            if not finished:
                 stop_client(client)
 
 

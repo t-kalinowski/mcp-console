@@ -359,25 +359,49 @@ impl Client {
             .evaluation()?
             .as_ref()
             .map(|active| active.evaluation.clone());
-        let mut environment = environment
-            .lock()
-            .map_err(|_| "worker environment lock poisoned".to_string())?;
-        self.ensure_generation(generation)?;
-        let delta = RequirementDelta::calculate(&environment, requirements)?;
-        if delta.is_empty() {
-            return Ok(PrepareResult::Prepared);
-        }
-        if matches!(intent, PreparationIntent::BeforeEvaluation)
-            && let Some(active) = active_operation.as_ref()
-        {
-            return Err(active.reject_preparation_message().to_string());
-        }
-        if self.requirement_change_state(generation)? == RequirementChangeState::RestartRequired {
-            return Ok(PrepareResult::RestartRequired);
-        }
         if let Some(active) = active_operation {
+            let environment = match environment.try_lock() {
+                Ok(environment) => environment,
+                Err(std::sync::TryLockError::WouldBlock) => {
+                    return Err(active.reject_preparation_message().to_string());
+                }
+                Err(std::sync::TryLockError::Poisoned(_)) => {
+                    return Err("worker environment lock poisoned".to_string());
+                }
+            };
+            self.ensure_generation(generation)?;
+            let delta = RequirementDelta::calculate(&environment, requirements)?;
+            if delta.is_empty() {
+                return Ok(PrepareResult::Prepared);
+            }
+            if matches!(intent, PreparationIntent::Standalone)
+                && self.requirement_change_state(generation)?
+                    == RequirementChangeState::RestartRequired
+            {
+                return Ok(PrepareResult::RestartRequired);
+            }
             return Err(active.reject_preparation_message().to_string());
         }
+        let mut pending_requirements = Some(requirements);
+        let available_environment = match environment.try_lock() {
+            Ok(environment) => {
+                self.ensure_generation(generation)?;
+                let delta = RequirementDelta::calculate(
+                    &environment,
+                    pending_requirements
+                        .take()
+                        .expect("environment requirements were already consumed"),
+                )?;
+                if delta.is_empty() {
+                    return Ok(PrepareResult::Prepared);
+                }
+                Some((environment, delta))
+            }
+            Err(std::sync::TryLockError::WouldBlock) => None,
+            Err(std::sync::TryLockError::Poisoned(_)) => {
+                return Err("worker environment lock poisoned".to_string());
+            }
+        };
         let mut worker = match self.0.worker.try_lock() {
             Ok(worker) => worker,
             Err(std::sync::TryLockError::WouldBlock) => {
@@ -387,21 +411,9 @@ impl Client {
                 return Err("worker lock poisoned".to_string());
             }
         };
-        if matches!(*worker, WorkerState::Stopped)
-            && matches!(intent, PreparationIntent::Standalone)
-        {
-            return Ok(PrepareResult::RestartRequired);
-        }
-        if matches!(*worker, WorkerState::Running(_)) {
-            let includes_r = delta.r_changed;
-            let environment_preparation = {
-                let WorkerState::Running(running) = &*worker else {
-                    unreachable!("running worker state was already checked");
-                };
-                running.reserve_environment_preparation()
-            };
-            let _environment_preparation = match environment_preparation {
-                Ok(reservation) => reservation,
+        let environment_preparation = if let WorkerState::Running(running) = &*worker {
+            match running.reserve_environment_preparation() {
+                Ok(reservation) => Ok(Some(reservation)),
                 Err(EnvironmentPreparationAdmissionFailure::Busy(error)) => {
                     return self.finish_environment_resolution_failure(
                         generation,
@@ -409,17 +421,53 @@ impl Client {
                         EnvironmentResolutionFailure::Host(error),
                     );
                 }
-                Err(EnvironmentPreparationAdmissionFailure::Infrastructure(error)) => {
-                    drop(environment);
-                    return self.fail_running_preparation(
-                        &mut worker,
-                        generation,
-                        true,
-                        error,
-                        includes_r,
-                    );
+                Err(EnvironmentPreparationAdmissionFailure::Infrastructure(error)) => Err(error),
+            }
+        } else {
+            Ok(None)
+        };
+        let (mut environment, delta) = match available_environment {
+            Some(snapshot) => snapshot,
+            None => {
+                let environment = environment
+                    .lock()
+                    .map_err(|_| "worker environment lock poisoned".to_string())?;
+                self.ensure_generation(generation)?;
+                let delta = RequirementDelta::calculate(
+                    &environment,
+                    pending_requirements
+                        .take()
+                        .expect("environment requirements were already consumed"),
+                )?;
+                if delta.is_empty() {
+                    return Ok(PrepareResult::Prepared);
                 }
-            };
+                (environment, delta)
+            }
+        };
+        let includes_r = delta.r_changed;
+        let _environment_preparation = match environment_preparation {
+            Ok(reservation) => reservation,
+            Err(error) => {
+                drop(environment);
+                return self.fail_running_preparation(
+                    &mut worker,
+                    generation,
+                    true,
+                    error,
+                    includes_r,
+                );
+            }
+        };
+        if self.requirement_change_state(generation)? == RequirementChangeState::RestartRequired {
+            return Ok(PrepareResult::RestartRequired);
+        }
+        if matches!(*worker, WorkerState::Stopped)
+            && matches!(intent, PreparationIntent::Standalone)
+        {
+            return Ok(PrepareResult::RestartRequired);
+        }
+        if matches!(*worker, WorkerState::Running(_)) {
             let RequirementDelta {
                 duckdb_extensions,
                 duckdb_changed,
