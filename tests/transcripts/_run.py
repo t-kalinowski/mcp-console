@@ -32,7 +32,7 @@ initialization_case = "initializes_and_lists_tools"
 initialization_reference = (
     f"tests/transcripts/golden/{initialization_suite}/{initialization_case}.yaml"
 )
-SLOW_TEST_SECONDS = 3.0
+SLOW_TEST_SECONDS = 5.0
 FREQUENT_STATUS_SECONDS = 30.0
 FREQUENT_STATUS_UNTIL_SECONDS = 180.0
 LATER_STATUS_SECONDS = 60.0
