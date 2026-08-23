@@ -49,7 +49,7 @@ Never hand-edit files under `tests/transcripts/golden/`.
 They may change only through `scripts/test --update ...` or Yamark via `scripts/format`.
 If regeneration produces an incorrect snapshot, fix the code or serializer and regenerate it.
 
-The transcript runner's submitted, started, and final status lines are runner user-interface output only.
+The transcript runner's progress dots and slow or failed case status lines are runner user-interface output only.
 They are not MCP, relay, sideband, or worker-stream records.
 
 ## Process and ownership boundaries

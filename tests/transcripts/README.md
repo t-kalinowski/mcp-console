@@ -62,9 +62,12 @@ scripts/test --update client_server/server::initializes_and_lists_tools
 
 With no selectors, `scripts/test` runs every suite and case in parallel, using at least two worker processes and otherwise one per available CPU by default.
 Pass `--jobs N` to set the maximum concurrency or `--jobs 1` to run serially.
-For every selected case, the runner prints one complete, flushed line with its fully qualified selector when the case is submitted and another when its execution starts, followed by the existing `...: ok` or `updated ...` result.
-On failure, it prints the fully qualified selector before the error or diff.
-These progress records are test-runner user-interface output only; they are not captured transcript data and are not part of the MCP or relay protocol.
+Normal runs emit one flushed `.` for every passing case and end the progress line with a newline.
+A case that runs for three seconds is named with its current status.
+The runner reports it again at 30-second elapsed intervals through three minutes, then once per minute, and names it when it finishes.
+On failure, the runner prints the fully qualified selector before the error or diff.
+Snapshot updates retain their named `updated ...` and `removed ...` records instead of dots.
+This output belongs only to the test-runner user interface; it is not captured transcript data or part of the MCP or relay protocol.
 A `BOUNDARY/SUITE` selector runs every case in that file; a `BOUNDARY/SUITE::CASE` selector runs one named function.
 Use `--update` only to accept an intentional transcript change.
 A full `scripts/test --update` also removes goldens for deleted suites and cases, as well as obsolete companion goldens for cases that ran; selected updates leave other goldens alone.

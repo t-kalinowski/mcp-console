@@ -10,8 +10,10 @@ import os
 import runpy
 import shutil
 import sys
+import time
 from collections.abc import Callable, Iterator
 from concurrent.futures import FIRST_COMPLETED, Future, ProcessPoolExecutor, wait
+from dataclasses import dataclass
 from multiprocessing import Manager
 from pathlib import Path
 from queue import Empty
@@ -30,6 +32,10 @@ initialization_case = "initializes_and_lists_tools"
 initialization_reference = (
     f"tests/transcripts/golden/{initialization_suite}/{initialization_case}.yaml"
 )
+SLOW_TEST_SECONDS = 3.0
+FREQUENT_STATUS_SECONDS = 30.0
+FREQUENT_STATUS_UNTIL_SECONDS = 180.0
+LATER_STATUS_SECONDS = 60.0
 
 parser = argparse.ArgumentParser(prog="scripts/test")
 parser.add_argument("--list", action="store_true", dest="list_tests")
@@ -48,9 +54,9 @@ RecordedTranscript = Transcript | TranscriptWithCompanion
 
 
 class ProgressQueue(Protocol):
-    def put(self, item: int) -> None: ...
+    def put(self, item: tuple[int, float]) -> None: ...
 
-    def get_nowait(self) -> int: ...
+    def get_nowait(self) -> tuple[int, float]: ...
 
 
 def suite_identifier(suite_path: Path) -> str:
@@ -164,7 +170,6 @@ def check_golden(golden: Path, actual: YamlStream, case: str, *, update: bool) -
         print(f"updated {golden.relative_to(root)}", flush=True)
         return
     if not golden.exists():
-        print(f"{case}: failed", file=sys.stderr, flush=True)
         raise SystemExit(
             f"{golden.relative_to(root)} is missing; run scripts/test --update {case}"
         )
@@ -172,8 +177,7 @@ def check_golden(golden: Path, actual: YamlStream, case: str, *, update: bool) -
     expected = read_yaml(golden, multi=True)
     if not identical(actual, expected):
         expected_text = format_transcript(expected)
-        print(f"{case}: failed", file=sys.stderr, flush=True)
-        sys.stderr.writelines(
+        difference = "".join(
             difflib.unified_diff(
                 expected_text.splitlines(keepends=True),
                 actual_text.splitlines(keepends=True),
@@ -181,9 +185,7 @@ def check_golden(golden: Path, actual: YamlStream, case: str, *, update: bool) -
                 tofile="actual",
             )
         )
-        raise SystemExit(f"{case} differs from its golden snapshot")
-
-    print(f"{golden.relative_to(root)}: ok", flush=True)
+        raise SystemExit(f"{difference}{case} differs from its golden snapshot")
 
 
 def record_case(
@@ -194,7 +196,7 @@ def record_case(
 ) -> RecordedTranscript:
     if progress is not None:
         assert progress_id is not None
-        progress.put(progress_id)
+        progress.put((progress_id, time.monotonic()))
     cases, _, _ = load_suite(suite_path)
     return cases[case_name](binary)
 
@@ -245,41 +247,112 @@ def check_recording(
     return checked
 
 
-def announce(selector: str, state: str, *, error: bool = False) -> None:
-    print(
-        f"{selector}: {state}",
-        file=sys.stderr if error else sys.stdout,
-        flush=True,
-    )
+def format_duration(elapsed: float) -> str:
+    seconds = max(0, int(elapsed))
+    minutes, seconds = divmod(seconds, 60)
+    if minutes == 0:
+        return f"{seconds}s"
+    if seconds == 0:
+        return f"{minutes}m"
+    return f"{minutes}m {seconds}s"
 
 
-def record_serial(
-    suite_path: Path, case_name: str, selector: str
-) -> RecordedTranscript:
-    announce(selector, "submitted")
-    announce(selector, "started")
-    try:
-        return record_case(suite_path, case_name)
-    except BaseException:
-        announce(selector, "failed", error=True)
-        raise
+def next_status_after(elapsed: float) -> float:
+    if elapsed < FREQUENT_STATUS_UNTIL_SECONDS:
+        next_status = (int(elapsed // FREQUENT_STATUS_SECONDS) + 1) * (
+            FREQUENT_STATUS_SECONDS
+        )
+        return max(FREQUENT_STATUS_SECONDS, next_status)
+    return (int(elapsed // LATER_STATUS_SECONDS) + 1) * LATER_STATUS_SECONDS
+
+
+@dataclass
+class RunningCase:
+    selector: str
+    started_at: float
+    next_status_at: float = SLOW_TEST_SECONDS
+    reported: bool = False
+
+
+class ProgressReporter:
+    def __init__(self, *, update: bool) -> None:
+        self.update = update
+        self.running: dict[int, RunningCase] = {}
+        self.progress_line_open = False
+
+    def start(self, index: int, selector: str, started_at: float) -> None:
+        assert index not in self.running, index
+        self.running[index] = RunningCase(selector, started_at)
+
+    def is_running(self, index: int) -> bool:
+        return index in self.running
+
+    def report_due(self) -> None:
+        now = time.monotonic()
+        for running in self.running.values():
+            elapsed = now - running.started_at
+            if elapsed < running.next_status_at:
+                continue
+            self._line(f"{running.selector}: running for {format_duration(elapsed)}")
+            running.reported = True
+            running.next_status_at = next_status_after(elapsed)
+
+    def finish(
+        self,
+        index: int,
+        *,
+        succeeded: bool,
+        count_progress: bool = True,
+    ) -> None:
+        running = self.running.pop(index)
+        elapsed = time.monotonic() - running.started_at
+        if succeeded:
+            if running.reported or elapsed >= SLOW_TEST_SECONDS:
+                self._line(
+                    f"{running.selector}: finished in {format_duration(elapsed)}"
+                )
+            if count_progress and not self.update:
+                self._dot()
+        elif running.reported or elapsed >= SLOW_TEST_SECONDS:
+            self._line(
+                f"{running.selector}: failed in {format_duration(elapsed)}",
+                error=True,
+            )
+        else:
+            self._line(f"{running.selector}: failed", error=True)
+
+    def close(self) -> None:
+        if self.progress_line_open:
+            print(flush=True)
+            self.progress_line_open = False
+
+    def _dot(self) -> None:
+        print(".", end="", flush=True)
+        self.progress_line_open = True
+
+    def _line(self, message: str, *, error: bool = False) -> None:
+        self.close()
+        print(message, file=sys.stderr if error else sys.stdout, flush=True)
 
 
 def drain_started(
     progress: ProgressQueue,
     selected: list[tuple[str, str, Path]],
-    started: set[int],
+    reporter: ProgressReporter,
 ) -> None:
     while True:
         try:
-            index = progress.get_nowait()
+            index, started_at = progress.get_nowait()
         except Empty:
             return
         assert 0 <= index < len(selected), index
-        assert index not in started, index
+        assert not reporter.is_running(index), index
         suite_name, case_name, _ = selected[index]
-        announce(f"{suite_name}::{case_name}", "started")
-        started.add(index)
+        reporter.start(
+            index,
+            f"{suite_name}::{case_name}",
+            started_at,
+        )
 
 
 def selected_cases(
@@ -364,6 +437,100 @@ def prune_stale_goldens(suites: dict[str, Path], checked_goldens: set[Path]) -> 
             path.rmdir()
 
 
+def run_cases(
+    selected: list[tuple[str, str, Path]],
+    *,
+    jobs: int,
+    update: bool,
+    checked_goldens: set[Path],
+    reporter: ProgressReporter,
+) -> None:
+    if not selected:
+        return
+
+    max_workers = min(jobs, len(selected))
+    if sys.platform == "win32":
+        max_workers = min(max_workers, 61)
+
+    with Manager() as manager:
+        progress = manager.Queue()
+        executor = ProcessPoolExecutor(max_workers=max_workers)
+        futures: dict[Future[RecordedTranscript], int] = {}
+        try:
+            for index, (_, case_name, suite_path) in enumerate(selected):
+                future = executor.submit(
+                    record_case,
+                    suite_path,
+                    case_name,
+                    progress,
+                    index,
+                )
+                futures[future] = index
+
+            pending = set(futures)
+            while pending:
+                done, pending = wait(
+                    pending,
+                    timeout=0.1,
+                    return_when=FIRST_COMPLETED,
+                )
+                drain_started(progress, selected, reporter)
+                for future in sorted(done, key=futures.__getitem__):
+                    index = futures[future]
+                    suite_name, case_name, _ = selected[index]
+                    selector = f"{suite_name}::{case_name}"
+                    assert reporter.is_running(index), (
+                        f"{selector} completed before reporting that it started"
+                    )
+                    try:
+                        recorded = future.result()
+                        checked = check_recording(
+                            suite_name,
+                            case_name,
+                            recorded,
+                            update=update,
+                        )
+                    except BaseException:
+                        reporter.finish(index, succeeded=False)
+                        raise
+                    else:
+                        checked_goldens.update(checked)
+                        reporter.finish(index, succeeded=True)
+                reporter.report_due()
+        except BaseException:
+            for future in futures:
+                future.cancel()
+            unfinished = set(futures)
+            while unfinished:
+                done, unfinished = wait(
+                    unfinished,
+                    timeout=0.1,
+                    return_when=FIRST_COMPLETED,
+                )
+                drain_started(progress, selected, reporter)
+                for future in done:
+                    index = futures[future]
+                    if not reporter.is_running(index):
+                        continue
+                    try:
+                        future.result()
+                    except BaseException:
+                        reporter.finish(index, succeeded=False)
+                    else:
+                        reporter.finish(
+                            index,
+                            succeeded=True,
+                            count_progress=False,
+                        )
+                reporter.report_due()
+            executor.shutdown(cancel_futures=True)
+            drain_started(progress, selected, reporter)
+            raise
+        else:
+            executor.shutdown()
+            drain_started(progress, selected, reporter)
+
+
 def main() -> None:
     options = parser.parse_args()
     if options.jobs < 1:
@@ -382,94 +549,33 @@ def main() -> None:
 
     selected = selected_cases(suites, options.selectors)
     checked_goldens: set[Path] = set()
-    for index, (suite_name, case_name, suite_path) in enumerate(selected):
+    initialization: list[tuple[str, str, Path]] = []
+    for index, (suite_name, case_name, _) in enumerate(selected):
         if (suite_name, case_name) != (initialization_suite, initialization_case):
             continue
-        selector = f"{suite_name}::{case_name}"
-        recorded = record_serial(suite_path, case_name, selector)
-        checked_goldens.update(
-            check_recording(suite_name, case_name, recorded, update=options.update)
-        )
-        selected.pop(index)
+        initialization.append(selected.pop(index))
         break
 
-    arguments = [(suite_path, case_name) for _, case_name, suite_path in selected]
-    if options.jobs == 1 or len(arguments) < 2:
-        for suite_name, case_name, suite_path in selected:
-            selector = f"{suite_name}::{case_name}"
-            recorded = record_serial(suite_path, case_name, selector)
-            checked_goldens.update(
-                check_recording(
-                    suite_name,
-                    case_name,
-                    recorded,
-                    update=options.update,
-                )
-            )
+    reporter = ProgressReporter(update=options.update)
+    try:
+        run_cases(
+            initialization,
+            jobs=1,
+            update=options.update,
+            checked_goldens=checked_goldens,
+            reporter=reporter,
+        )
+        run_cases(
+            selected,
+            jobs=options.jobs,
+            update=options.update,
+            checked_goldens=checked_goldens,
+            reporter=reporter,
+        )
         if options.update and not options.selectors:
             prune_stale_goldens(suites, checked_goldens)
-        return
-
-    max_workers = min(options.jobs, len(arguments))
-    if sys.platform == "win32":
-        max_workers = min(max_workers, 61)
-
-    with Manager() as manager:
-        progress = manager.Queue()
-        executor = ProcessPoolExecutor(max_workers=max_workers)
-        futures: dict[Future[RecordedTranscript], int] = {}
-        started: set[int] = set()
-        try:
-            for index, (suite_path, case_name) in enumerate(arguments):
-                suite_name = selected[index][0]
-                selector = f"{suite_name}::{case_name}"
-                future = executor.submit(
-                    record_case,
-                    suite_path,
-                    case_name,
-                    progress,
-                    index,
-                )
-                futures[future] = index
-                announce(selector, "submitted")
-
-            pending = set(futures)
-            while pending:
-                done, pending = wait(
-                    pending,
-                    timeout=0.1,
-                    return_when=FIRST_COMPLETED,
-                )
-                drain_started(progress, selected, started)
-                for future in done:
-                    index = futures[future]
-                    suite_name, case_name, _ = selected[index]
-                    selector = f"{suite_name}::{case_name}"
-                    assert index in started, (
-                        f"{selector} completed before reporting that it started"
-                    )
-                    try:
-                        recorded = future.result()
-                    except BaseException:
-                        announce(selector, "failed", error=True)
-                        raise
-                    checked_goldens.update(
-                        check_recording(
-                            suite_name,
-                            case_name,
-                            recorded,
-                            update=options.update,
-                        )
-                    )
-        except BaseException:
-            executor.shutdown(cancel_futures=True)
-            drain_started(progress, selected, started)
-            raise
-        else:
-            executor.shutdown()
-            drain_started(progress, selected, started)
-    if options.update and not options.selectors:
-        prune_stale_goldens(suites, checked_goldens)
+    finally:
+        reporter.close()
 
 
 if __name__ == "__main__":
