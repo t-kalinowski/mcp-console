@@ -20,6 +20,15 @@ where
 }
 
 #[cfg(target_os = "macos")]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum RResolutionFailureKind {
+    Host,
+    Interrupted,
+    Operation,
+}
+
+#[cfg(target_os = "macos")]
 #[derive(Deserialize, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum ServerMessage {
@@ -29,6 +38,13 @@ pub(crate) enum ServerMessage {
     },
     PrepareR {
         library: String,
+    },
+    RResolved {
+        library: String,
+    },
+    RResolutionFailed {
+        failure: RResolutionFailureKind,
+        message: String,
     },
     PreparePython {
         packages: Vec<String>,
@@ -136,6 +152,16 @@ pub(crate) enum WorkerMessage {
     RPreparationFailed {
         message: String,
     },
+    ResolveR {
+        packages: Vec<String>,
+    },
+    RActivated {
+        library: String,
+    },
+    RActivationFailed {
+        library: String,
+        message: String,
+    },
     ResolvePython {
         request: PythonResolveRequest,
     },
@@ -156,7 +182,7 @@ pub(crate) enum WorkerMessage {
 
 #[cfg(all(test, target_os = "macos"))]
 mod tests {
-    use super::{ServerMessage, WorkerMessage};
+    use super::{RResolutionFailureKind, ServerMessage, WorkerMessage};
 
     fn assert_encoding(message: &impl serde::Serialize, expected: &str) {
         assert_eq!(serde_json::to_string(message).unwrap(), expected);
@@ -182,6 +208,31 @@ mod tests {
     #[test]
     fn payload_free_server_messages_retain_their_encoding() {
         assert_encoding(&ServerMessage::Shutdown, r#"{"kind":"shutdown"}"#);
+    }
+
+    #[test]
+    fn runtime_r_server_messages_retain_their_encoding() {
+        assert_encoding(
+            &ServerMessage::RResolved {
+                library: "/managed/r".to_string(),
+            },
+            r#"{"kind":"r_resolved","library":"/managed/r"}"#,
+        );
+        for (failure, encoded) in [
+            (RResolutionFailureKind::Host, "host"),
+            (RResolutionFailureKind::Interrupted, "interrupted"),
+            (RResolutionFailureKind::Operation, "operation"),
+        ] {
+            assert_encoding(
+                &ServerMessage::RResolutionFailed {
+                    failure,
+                    message: "resolution failed".to_string(),
+                },
+                &format!(
+                    r#"{{"kind":"r_resolution_failed","failure":"{encoded}","message":"resolution failed"}}"#
+                ),
+            );
+        }
     }
 
     #[test]
@@ -212,6 +263,33 @@ mod tests {
                 r#"{"kind":"python_prepared"}"#,
             ),
             (WorkerMessage::Completed, r#"{"kind":"completed"}"#),
+        ] {
+            assert_encoding(&message, expected);
+        }
+    }
+
+    #[test]
+    fn runtime_r_worker_messages_retain_their_encoding() {
+        for (message, expected) in [
+            (
+                WorkerMessage::ResolveR {
+                    packages: vec!["cli".to_string(), "glue".to_string()],
+                },
+                r#"{"kind":"resolve_r","packages":["cli","glue"]}"#,
+            ),
+            (
+                WorkerMessage::RActivated {
+                    library: "/managed/r".to_string(),
+                },
+                r#"{"kind":"r_activated","library":"/managed/r"}"#,
+            ),
+            (
+                WorkerMessage::RActivationFailed {
+                    library: "/managed/r".to_string(),
+                    message: "activation failed".to_string(),
+                },
+                r#"{"kind":"r_activation_failed","library":"/managed/r","message":"activation failed"}"#,
+            ),
         ] {
             assert_encoding(&message, expected);
         }

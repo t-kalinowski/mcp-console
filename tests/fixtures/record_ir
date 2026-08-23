@@ -1,0 +1,47 @@
+#!/usr/bin/env python3
+
+import json
+import os
+import sys
+from pathlib import Path
+
+
+def notify(path: str) -> None:
+    with Path(path).open("wb", buffering=0) as checkpoint:
+        checkpoint.write(b"1")
+
+
+def wait(path: str) -> None:
+    with Path(path).open("rb", buffering=0) as checkpoint:
+        assert checkpoint.read(1) == b"1"
+
+
+def main() -> None:
+    arguments = sys.argv[1:]
+    record = Path(os.environ["MCP_CONSOLE_TEST_IR_RECORD"])
+    with record.open("a", encoding="utf-8") as stream:
+        json.dump(
+            {
+                "arguments": arguments,
+                "no_local_sources": os.environ.get("IR_NO_LOCAL_SOURCES"),
+            },
+            stream,
+        )
+        stream.write("\n")
+
+    fail = os.environ.get("MCP_CONSOLE_TEST_IR_FAIL_REQUIREMENT")
+    if fail is not None and fail in arguments:
+        print(f"synthetic IR failure for {fail}", file=sys.stderr)
+        raise SystemExit(1)
+
+    block = os.environ.get("MCP_CONSOLE_TEST_IR_BLOCK_REQUIREMENT")
+    if block is not None and block in arguments:
+        notify(os.environ["MCP_CONSOLE_TEST_IR_STARTED"])
+        wait(os.environ["MCP_CONSOLE_TEST_IR_RELEASE"])
+
+    executable = os.environ["MCP_CONSOLE_TEST_REAL_IR"]
+    os.execv(executable, [executable, *arguments])
+
+
+if __name__ == "__main__":
+    main()

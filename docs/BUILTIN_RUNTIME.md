@@ -33,15 +33,18 @@ R uses its native top-level evaluation behavior; Python parses the entire submit
 A code-bearing call can declare additive R packages, Python packages, or DuckDB extensions in `requirements`, regardless of the cell language.
 The server prepares changed requirements before it dispatches the cell and retains successful additions for later cells and restarts.
 Already-retained requirements add no preparation work, and a successful combined call returns only the normal cell result, without `[prepared]`.
-Preparation makes packages and extensions available but does not attach, import, or load them, and MCP Console does not inspect cells or retry package-load or import failures.
+Explicit preparation makes packages and extensions available but does not attach, import, or load them.
+R additionally has advisory static package scanning and runtime namespace resolution; Python imports and SQL are not scanned, and MCP Console does not replay a cell after a package-load or import failure.
 If validation, resolution, or live preparation fails, or if requirement changes require an explicit restart, the call is a tool error and the cell is not run.
-Calls without `requirements` preserve the ordinary send path.
+Calls without `requirements` skip that pre-dispatch preparation path; an R cell can still resolve a package while it runs.
 
 The optional `timeout_ms` defaults to 60,000 milliseconds.
 For a combined call, requirement resolution and live preparation finish before the cell is dispatched and before this deadline begins applying, so the complete MCP call can take longer than `timeout_ms`.
 The deadline then limits only how long a call waits after starting or attaching to an evaluation, including its worker startup and one automatic replacement attempt.
 A stdin-only call with no active evaluation instead waits without that deadline if it must start an initial or stopped worker.
 The deadline does not stop worker startup, dependency resolution, or evaluation.
+Automatic R resolution begins after the cell is dispatched and remains part of that active evaluation.
+If it outlives the call's wait, the response can end in `[running]` while the resolver and cell continue.
 When the deadline expires, the response contains output available so far and ends in a state notice such as `[running]` or `[worker starting]`.
 
 Call `send` again without code or standard input to poll.
@@ -95,7 +98,8 @@ They cannot consume a partial line that the built-in worker has preserved for th
 `session(action = "interrupt")` first targets an active host dependency resolver; otherwise it requests `SIGINT` for the live worker.
 The call returns after the request or signal is sent, not after user code stops.
 If neither a resolver nor a worker is running, the call does not start a worker and returns the tool error `worker is not running`.
-A resolver signal error is returned by both the interrupt and resolution calls, and the server stops that resolver during cleanup; an interrupted resolver otherwise reports its ordinary resolution failure.
+A resolver signal error is returned by both the interrupt and resolution calls, and the server stops that resolver during cleanup.
+An interrupted automatic R resolver reports an interrupted outcome to the running cell rather than being ignored as an advisory prescan failure.
 A live but idle built-in worker still receives `SIGINT` and the call returns `[interrupt sent]`.
 R may consume that signal while idle or at the next managed boundary, so the following cell can execute while its response contains a bare interrupt newline attributable to the earlier interrupt.
 
@@ -134,6 +138,33 @@ Output produced while idle remains pending until a later response drains it; whe
 Ordinary R console output and diagnostics remain distinct worker channels but both appear as MCP text.
 The built-in startup width is 200 columns; evaluated code may change its options.
 Packages prepared for the session are available but are not attached automatically.
+
+### On-demand R packages
+
+The built-in worker can prepare a missing plain R package name while the current cell is running.
+This covers direct `library()`, `require()`, `requireNamespace()`, and `loadNamespace()` calls and package use through `::` and `:::`.
+Use these operations normally; there is no need to probe package availability or call `install.packages()` first.
+
+The worker wraps `base::library` and `base::loadNamespace` and delegates to their captured originals after any required activation.
+A `loadNamespace()` wrapper alone would miss `library()` because `library()` checks `find.package()` first.
+The wrappers preserve ordinary R behavior: `library()` and `require()` attach only when the original call does, while `::`, `:::`, `requireNamespace()`, and `loadNamespace()` load a namespace without attaching the package.
+They bypass automatic resolution for already available packages, `library()` help and listing calls, an explicit non-NULL `lib.loc`, and partial namespace loads.
+
+Runtime discovery accepts plain package names only.
+Use `requirements.r` to stage a package before evaluation or to supply an explicit IR reference such as a remote source.
+A best-effort AST scan batches obvious static references before native evaluation, but does not evaluate code or resolve dynamic names.
+Parse errors and ordinary resolver failures caused only by the scan fall through to normal evaluation, and the runtime wrappers handle references that execution reaches.
+
+When the server returns a candidate library, the worker prepends it through the managed `.libPaths()` bridge and reports activation before resuming the original base call.
+The server retains the library only after that report.
+The worker is not replaced, so its PID, R globals, loaded namespaces, Python objects, DuckDB catalog, and unread input remain available.
+Once activation succeeds, the retained environment survives later namespace or cell errors and is reused by later cells and restart.
+
+An ordinary resolution failure follows the original base operation: `library()` and namespace loads report R errors, while `require()` may return `FALSE`; the worker remains reusable.
+An activation failure also leaves the worker available for state recovery, but further requirement changes need restart because the live and retained library state may differ.
+An unchanged restart or shutdown cancels an active resolver and discards candidates owned by the old worker generation.
+A restart that adds requirements waits for active environment resolution before preparing its additions and replacing the worker; generation checks still prevent an unactivated old candidate from committing.
+Transport, protocol, and bridge-infrastructure failures retain the normal worker-failure behavior.
 
 The worker installs `py` and `sql_connection()` in `tools:mcp-console` at search position 2.
 R can read Python globals through `py$name` and use the borrowed DuckDB connection through DBI or dplyr.
@@ -244,7 +275,8 @@ Invalid UTF-8 from raw standard streams is replaced when projected to MCP text; 
 
 Bracketed records such as `[running]`, `[stdin needed]`, `[idle]`, and worker-replacement notices are server state, not language output.
 R errors, Python exceptions, and DuckDB errors are ordinary console text and normally leave the worker reusable.
-Host dependency-resolver failures are MCP tool errors, but preserve any current worker and its in-memory state; [requirements and environments](REQUIREMENTS.md) describes their request-specific effects.
+Host dependency-resolver failures during explicit preparation are MCP tool errors, but preserve any current worker and its in-memory state.
+An ordinary automatic R resolver failure is instead reported inside the running R evaluation; [requirements and environments](REQUIREMENTS.md) describes the request-specific effects.
 Worker, relay, and protocol failures are MCP tool errors and may stop and replace the worker.
 
 If initial lazy startup for a code-bearing `send` fails before the worker reaches `ready`, the call reports startup failure details without worker-loss or replacement notices, and its cell is not replayed.

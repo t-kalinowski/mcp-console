@@ -40,6 +40,14 @@ PREPARATION_RESULT_RELEASE_NAME = (
     "mcp-console-scripted-relay-preparation-result-release"
 )
 PREPARATION_RESULT_SENT_NAME = "mcp-console-scripted-relay-preparation-result-sent"
+R_PREPARATION_RESOLVE_CHECKPOINT_NAME = "mcp-console-r-preparation-resolve-checkpoint"
+R_PREPARATION_RESOLVE_RELEASE_NAME = "mcp-console-r-preparation-resolve-release"
+IDLE_R_RESOLUTION_READY_NAME = "mcp-console-idle-r-resolution-ready"
+IDLE_R_RESOLUTION_RELEASE_NAME = "mcp-console-idle-r-resolution-release"
+EXPLICIT_R_PREPARATION_CALLBACK_NAME = "mcp-console-explicit-r-preparation-callback"
+EXPLICIT_R_PREPARATION_CALLBACK_REPLY_NAME = (
+    "mcp-console-explicit-r-preparation-callback-reply"
+)
 PENDING_TEXT_BUDGET = 8 * 1024 * 1024
 PNG_1X1 = (
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42Y"
@@ -519,12 +527,31 @@ def test_orders_cross_source_output_by_serialized_observation(
         for index, entry in enumerate(transcript)
         if entry == {"relay": {"kind": "completed"}}
     )
-    resolved = next(
+    first_callback = next(
         index
         for index, entry in enumerate(transcript)
-        if entry.keys() == {"relay"} and entry["relay"].get("kind") == "resolve_python"
+        if entry.keys() == {"relay"} and entry["relay"].get("kind") == "resolve_r"
     )
-    assert all(entry.keys() == {"relay"} for entry in transcript[completed:resolved])
+    assert all(
+        entry.keys() == {"relay"} for entry in transcript[completed:first_callback]
+    )
+    r_failures = [
+        entry["server"]
+        for entry in transcript
+        if entry.keys() == {"server"}
+        and entry["server"].get("kind") == "r_resolution_failed"
+    ]
+    assert r_failures == [
+        {
+            "kind": "r_resolution_failed",
+            "failure": "host",
+            "message": (
+                "automatic R package name `github::owner/repo` is not accepted: "
+                "names must start with an ASCII letter, end with an ASCII letter "
+                "or digit, and contain only ASCII letters, digits, and dots"
+            ),
+        }
+    ]
     return transcript
 
 
@@ -1018,6 +1045,241 @@ def test_r_preparation_failure_requires_restart_and_preserves_worker(
         if entry.keys() == {"server"} and entry["server"].get("kind") == "evaluate"
     ]
     assert evaluations == [{"kind": "evaluate", "language": "r", "source": "42"}]
+    return transcript
+
+
+def test_rejects_runtime_r_resolution_during_r_preparation(
+    binary: Path,
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        libraries = [root / "explicit-candidate", root / "nested-candidate"]
+        for library in libraries:
+            library.mkdir()
+        environment = _fake_ir_environment(root, libraries)
+        client = ServerRelayClient(
+            binary,
+            "r_resolution_during_r_preparation",
+            environment,
+        )
+        client.start_worker()
+        old_root = client.relay_root()
+        checkpoint = FifoCheckpoint(old_root / R_PREPARATION_RESOLVE_CHECKPOINT_NAME)
+        release = FifoCheckpoint(old_root / R_PREPARATION_RESOLVE_RELEASE_NAME)
+        old_capture = (old_root / CAPTURE_NAME).open(encoding="utf-8")
+        finished = False
+        try:
+            evaluation = client.client._start_send(
+                r="must not execute",
+                requirements={"r": ["explicit-package"]},
+            )
+            checkpoint.wait()
+            release.release()
+            _receive_checkpointed(client.client, evaluation, "the rejected R callback")
+            result = evaluation["result"]
+            assert result.get("isError") is True, result
+            output = result["content"][0]["text"]
+            assert output.endswith("[worker stopped: in-memory state lost]"), output
+            old_transcript = client._read_open_capture(old_capture)
+            client.client._finish()
+            finished = True
+        finally:
+            if not finished:
+                stop_client(client.client)
+            old_capture.close()
+            checkpoint.close()
+            release.close()
+            client._temporary.cleanup()
+
+        assert (root / "ir-counter").read_text(encoding="utf-8") == "1"
+
+    transcript = old_transcript
+    shutdown = _normalize_shutdown_grace(transcript)
+    assert len(shutdown) == 1, transcript
+    prepare_commands = [
+        entry["server"]
+        for entry in transcript
+        if entry.keys() == {"server"} and entry["server"].get("kind") == "prepare_r"
+    ]
+    assert prepare_commands == [{"kind": "prepare_r", "library": str(libraries[0])}]
+    prepare_commands[0]["library"] = "<explicit-candidate>"
+    assert not any(
+        entry.keys() == {"server"}
+        and entry["server"].get("kind") in {"r_resolved", "r_resolution_failed"}
+        for entry in transcript
+    ), transcript
+    assert not any(
+        entry.keys() == {"server"}
+        and entry["server"].get("kind") == "evaluate"
+        and entry["server"].get("source") == "must not execute"
+        for entry in transcript
+    ), transcript
+    return transcript
+
+
+def test_idle_runtime_r_resolution_owns_environment_until_activation(
+    binary: Path,
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        libraries = [root / "automatic-candidate", root / "stale-explicit-candidate"]
+        for library in libraries:
+            library.mkdir()
+        environment = _fake_ir_environment(root, libraries)
+        client = ServerRelayClient(
+            binary,
+            "idle_r_resolution_owns_environment",
+            environment,
+        )
+        client.start_worker()
+        relay_root = client.relay_root()
+        ready = FifoCheckpoint(relay_root / IDLE_R_RESOLUTION_READY_NAME)
+        release = FifoCheckpoint(relay_root / IDLE_R_RESOLUTION_RELEASE_NAME)
+        released = False
+        finished = False
+        try:
+            ready.wait()
+            preparation = client.client._start_session(
+                action="prepare",
+                requirements={"r": ["english"]},
+            )
+            readable, _, _ = select.select([client.client.stdout], [], [], 10)
+            assert readable, "explicit preparation waited for an idle R callback"
+            client.client._receive(preparation)
+            _tool_error(preparation, "idle runtime R callback owns environment changes")
+            assert (root / "ir-counter").read_text(encoding="utf-8") == "1"
+
+            release.release()
+            released = True
+            assert _tool_text(client.send(r="42")) == "[done]"
+            transcript = client.finish_active()
+            finished = True
+        finally:
+            if not released:
+                release.release()
+            ready.close()
+            release.close()
+            if not finished:
+                stop_client(client.client)
+                client._temporary.cleanup()
+
+    assert not any(
+        entry.keys() == {"server"}
+        and entry["server"].get("kind") in {"prepare_r", "r_resolution_failed"}
+        for entry in transcript
+    ), transcript
+    for entry in transcript:
+        message = entry.get("server", entry.get("relay", {}))
+        if message.get("kind") in {"r_resolved", "r_activated"}:
+            assert message["library"] == str(libraries[0]), message
+            message["library"] = "<automatic-candidate>"
+    return transcript
+
+
+def test_explicit_r_preparation_owns_environment_before_host_resolution(
+    binary: Path,
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        library = root / "explicit-candidate"
+        library.mkdir()
+        environment = _fake_ir_environment(root, [library])
+        resolver_started = FifoCheckpoint(root / "resolver-started", create=True)
+        resolver_release = FifoCheckpoint(root / "resolver-release", create=True)
+        environment["MCP_CONSOLE_TEST_IR_STARTED"] = str(resolver_started.path)
+        environment["MCP_CONSOLE_TEST_IR_RELEASE"] = str(resolver_release.path)
+        client = ServerRelayClient(
+            binary,
+            "explicit_r_preparation_owns_environment",
+            environment,
+        )
+        client.start_worker()
+        relay_root = client.relay_root()
+        callback = FifoCheckpoint(relay_root / EXPLICIT_R_PREPARATION_CALLBACK_NAME)
+        callback_reply = FifoCheckpoint(
+            relay_root / EXPLICIT_R_PREPARATION_CALLBACK_REPLY_NAME
+        )
+        callback_released = False
+        resolver_released = False
+        finished = False
+        try:
+            preparation = client.client._start_session(
+                action="prepare",
+                requirements={"r": ["english"]},
+            )
+            resolver_started.wait()
+            callback.release()
+            callback_released = True
+            callback_reply.wait()
+            readable, _, _ = select.select([client.client.stdout], [], [], 0.25)
+            assert not readable, (
+                "preparation completed before its resolver was released"
+            )
+
+            resolver_release.release()
+            resolver_released = True
+            client.client._receive(preparation)
+            assert _tool_text(preparation["result"]) == "[prepared]"
+            assert _tool_text(client.send(r="42")) == "[done]"
+            transcript = client.finish_active()
+            finished = True
+        finally:
+            if not callback_released:
+                callback.release()
+            if not resolver_released:
+                resolver_release.release()
+            callback.close()
+            callback_reply.close()
+            resolver_started.close()
+            resolver_release.close()
+            if not finished:
+                stop_client(client.client)
+                client._temporary.cleanup()
+
+        assert (root / "ir-counter").read_text(encoding="utf-8") == "1"
+
+    failures = [
+        entry["server"]
+        for entry in transcript
+        if entry.keys() == {"server"}
+        and entry["server"].get("kind") == "r_resolution_failed"
+    ]
+    assert failures == [
+        {
+            "kind": "r_resolution_failed",
+            "failure": "host",
+            "message": (
+                "R package resolution is unavailable during requirement preparation"
+            ),
+        }
+    ]
+    prepare_commands = [
+        entry["server"]
+        for entry in transcript
+        if entry.keys() == {"server"} and entry["server"].get("kind") == "prepare_r"
+    ]
+    assert prepare_commands == [{"kind": "prepare_r", "library": str(library)}]
+    prepare_commands[0]["library"] = "<explicit-candidate>"
+    prepared = [
+        entry["relay"]
+        for entry in transcript
+        if entry.keys() == {"relay"} and entry["relay"].get("kind") == "r_prepared"
+    ]
+    assert prepared == [{"kind": "r_prepared", "library": str(library)}]
+    prepared[0]["library"] = "<explicit-candidate>"
+    runtime_environment = [
+        message
+        for entry in transcript
+        if entry.keys() in ({"server"}, {"relay"})
+        and (message := next(iter(entry.values()))).get("kind")
+        in {"r_resolved", "r_activated"}
+    ]
+    assert runtime_environment == [
+        {"kind": "r_resolved", "library": str(library)},
+        {"kind": "r_activated", "library": str(library)},
+    ]
+    for message in runtime_environment:
+        message["library"] = "<explicit-candidate>"
     return transcript
 
 

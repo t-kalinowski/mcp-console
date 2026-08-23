@@ -1,0 +1,72 @@
+---
+!same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
+---
+send:
+  r: |
+    activation_checkpoint <- base::file.path(
+      base::tempdir(),
+      "automatic-r-activation-before-report"
+    )
+    activation_gate_used <- FALSE
+    invisible(suppressMessages(base::trace(
+      ".libPaths",
+      tracer = quote({
+        if (
+          !missing(new) &&
+            base::length(new) > 0L &&
+            !activation_gate_used
+        ) {
+          activation_gate_used <<- TRUE
+          base::stopifnot(base::file.create(activation_checkpoint))
+          gate <- base::suppressWarnings(base::file(
+            "/dev/stdin",
+            open = "rb"
+          ))
+          base::on.exit(base::close(gate), add = TRUE)
+          base::stopifnot(base::length(base::readBin(
+            gate,
+            what = "raw",
+            n = 1L
+          )) == 0L)
+        }
+      }),
+      print = FALSE,
+      where = base::baseenv()
+    )))
+    package <- "fortunes"
+    invisible(base::do.call(
+      base::loadNamespace,
+      list(package = package)
+    ))
+  timeout_ms: 0
+result:
+  content:
+    - type: text
+      text: |-
+
+        [running]
+  isError: false
+---
+session:
+  action: restart
+result:
+  content:
+    - type: text
+      text: |-
+        [active evaluation stopped by session restart request]
+        [worker stopped: in-memory state lost]
+        [starting new worker]
+        [idle]
+  isError: false
+---
+send:
+  r: >-
+    package <- 'fortunes'; invisible(base::do.call(base::loadNamespace,
+    list(package = package))); 42L
+result:
+  content:
+    - type: text
+      text: |
+        [1] 42
+  isError: false
+...

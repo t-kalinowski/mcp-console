@@ -10,8 +10,8 @@ use serde::{Deserialize, Serialize};
 use crate::cell::Language;
 #[cfg(target_os = "macos")]
 use crate::worker_protocol::{
-    PythonRequirementManifest, PythonResolveRequest, PythonVersionResolveRequest, WorkerMessage,
-    deserialize_payload_free,
+    PythonRequirementManifest, PythonResolveRequest, PythonVersionResolveRequest,
+    RResolutionFailureKind, WorkerMessage, deserialize_payload_free,
 };
 
 #[cfg(target_os = "macos")]
@@ -23,16 +23,44 @@ pub(crate) struct EncodedBytes(String);
 #[derive(Deserialize, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum RelayCommand {
-    Evaluate { language: Language, source: String },
-    PrepareR { library: String },
-    PreparePython { packages: Vec<String> },
-    PythonResolved { python: String },
-    PythonResolutionFailed { message: String },
-    PythonVersionResolved { version: String },
-    PythonVersionResolutionFailed { message: String },
-    Stdin { data: String },
-    Interrupt { request_id: u64 },
-    Shutdown { grace_millis: u64 },
+    Evaluate {
+        language: Language,
+        source: String,
+    },
+    PrepareR {
+        library: String,
+    },
+    RResolved {
+        library: String,
+    },
+    RResolutionFailed {
+        failure: RResolutionFailureKind,
+        message: String,
+    },
+    PreparePython {
+        packages: Vec<String>,
+    },
+    PythonResolved {
+        python: String,
+    },
+    PythonResolutionFailed {
+        message: String,
+    },
+    PythonVersionResolved {
+        version: String,
+    },
+    PythonVersionResolutionFailed {
+        message: String,
+    },
+    Stdin {
+        data: String,
+    },
+    Interrupt {
+        request_id: u64,
+    },
+    Shutdown {
+        grace_millis: u64,
+    },
 }
 
 #[cfg(target_os = "macos")]
@@ -62,6 +90,16 @@ pub(crate) enum RelayEvent {
         library: String,
     },
     RPreparationFailed {
+        message: String,
+    },
+    ResolveR {
+        packages: Vec<String>,
+    },
+    RActivated {
+        library: String,
+    },
+    RActivationFailed {
+        library: String,
         message: String,
     },
     ResolvePython {
@@ -129,6 +167,11 @@ impl From<WorkerMessage> for RelayEvent {
             WorkerMessage::InputCancelled => Self::InputCancelled,
             WorkerMessage::RPrepared { library } => Self::RPrepared { library },
             WorkerMessage::RPreparationFailed { message } => Self::RPreparationFailed { message },
+            WorkerMessage::ResolveR { packages } => Self::ResolveR { packages },
+            WorkerMessage::RActivated { library } => Self::RActivated { library },
+            WorkerMessage::RActivationFailed { library, message } => {
+                Self::RActivationFailed { library, message }
+            }
             WorkerMessage::ResolvePython { request } => Self::ResolvePython { request },
             WorkerMessage::ResolvePythonVersion { request } => {
                 Self::ResolvePythonVersion { request }
@@ -215,7 +258,8 @@ impl<W: Write> JsonlWriter<W> {
 
 #[cfg(all(test, target_os = "macos"))]
 mod tests {
-    use super::RelayEvent;
+    use super::{RelayCommand, RelayEvent};
+    use crate::worker_protocol::RResolutionFailureKind;
 
     fn assert_encoding(message: &impl serde::Serialize, expected: &str) {
         assert_eq!(serde_json::to_string(message).unwrap(), expected);
@@ -263,6 +307,58 @@ mod tests {
             ),
         ] {
             assert_encoding(&message, expected);
+        }
+    }
+
+    #[test]
+    fn runtime_r_relay_commands_retain_their_encoding() {
+        assert_encoding(
+            &RelayCommand::RResolved {
+                library: "/managed/r".to_string(),
+            },
+            r#"{"kind":"r_resolved","library":"/managed/r"}"#,
+        );
+        for (failure, encoded) in [
+            (RResolutionFailureKind::Host, "host"),
+            (RResolutionFailureKind::Interrupted, "interrupted"),
+            (RResolutionFailureKind::Operation, "operation"),
+        ] {
+            assert_encoding(
+                &RelayCommand::RResolutionFailed {
+                    failure,
+                    message: "resolution failed".to_string(),
+                },
+                &format!(
+                    r#"{{"kind":"r_resolution_failed","failure":"{encoded}","message":"resolution failed"}}"#
+                ),
+            );
+        }
+    }
+
+    #[test]
+    fn runtime_r_relay_events_retain_their_encoding() {
+        for (event, expected) in [
+            (
+                RelayEvent::ResolveR {
+                    packages: vec!["cli".to_string(), "glue".to_string()],
+                },
+                r#"{"kind":"resolve_r","packages":["cli","glue"]}"#,
+            ),
+            (
+                RelayEvent::RActivated {
+                    library: "/managed/r".to_string(),
+                },
+                r#"{"kind":"r_activated","library":"/managed/r"}"#,
+            ),
+            (
+                RelayEvent::RActivationFailed {
+                    library: "/managed/r".to_string(),
+                    message: "activation failed".to_string(),
+                },
+                r#"{"kind":"r_activation_failed","library":"/managed/r","message":"activation failed"}"#,
+            ),
+        ] {
+            assert_encoding(&event, expected);
         }
     }
 }

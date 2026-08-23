@@ -54,6 +54,8 @@ The server can send these flat frames:
 
 - `{"kind":"evaluate","language":"r","source":"1 + 1"}` sends the unchanged worker-sideband evaluation command.
 - `{"kind":"prepare_r","library":"..."}` sends the unchanged live R-preparation command.
+- `{"kind":"r_resolved","library":"..."}` returns one provisional host R-resolution result.
+- `{"kind":"r_resolution_failed","failure":"host","message":"..."}` returns one host R-resolution failure; `failure` is `host`, `interrupted`, or `operation`.
 - `{"kind":"prepare_python","packages":["py-yaml12"]}` asks the worker to perform explicit live reticulate preparation.
 - `{"kind":"python_resolved","python":"..."}` returns one host Python-resolution result.
 - `{"kind":"python_resolution_failed","message":"..."}` returns one host Python-resolution failure.
@@ -85,6 +87,9 @@ The relay can emit these flat frames:
 - `{"kind":"input_cancelled"}` forwards managed input cancellation.
 - `{"kind":"r_prepared","library":"..."}` completes live R preparation successfully.
 - `{"kind":"r_preparation_failed","message":"..."}` completes live R preparation with an ordinary failure.
+- `{"kind":"resolve_r","packages":["cli","glue"]}` requests host resolution of plain R package names.
+- `{"kind":"r_activated","library":"..."}` reports that the worker accepted a provisional R library.
+- `{"kind":"r_activation_failed","library":"...","message":"..."}` reports that the worker could not apply a provisional R library.
 - `{"kind":"resolve_python","request":{"requirements":{"packages":["numpy","pandas"]},"retained_requirements":{"packages":["numpy","pandas"]}}}` requests host Python-environment resolution.
 - `{"kind":"resolve_python_version","request":{"constraints":[]}}` requests host Python-version selection.
 - `{"kind":"python_activated","requirements":{"packages":["numpy","pandas"]}}` reports a retained managed-Python activation.
@@ -105,9 +110,12 @@ The relay can emit these flat frames:
 - `{"kind":"worker_signaled","signal":9}` reports direct-worker signal termination.
 - `{"kind":"fatal","message":"..."}` reports relay infrastructure or protocol failure while relay stdout remains usable.
 
-The [worker protocol](WORKER_PROTOCOL.md#python-request-objects) defines the complete nested Python request and manifest schemas represented above.
+The [worker protocol](WORKER_PROTOCOL.md#nested-managed-r-resolution) defines runtime R resolution, failure classes, and activation ordering.
+Its [Python request section](WORKER_PROTOCOL.md#python-request-objects) defines the complete nested Python request and manifest schemas represented above.
 Worker semantic events are the worker-sideband message variants flattened into the relay event namespace.
 The relay translates them without changing the worker-sideband framing or message shapes.
+It does not run host resolvers, track provisional candidates, interpret activation, or commit retained environments; those are server responsibilities.
+It keeps no nested-resolver wait state and applies no special queueing to these frames.
 Unknown event kinds and fields are rejected.
 Payload-free events contain exactly the shown `kind` field: `ready`, `input_received`, `input_cancelled`, `python_prepared`, `completed`, `stdout_closed`, `stderr_closed`, `worker_sideband_closed`, and `shutdown_started` reject every additional field.
 Their serialized JSON remains unchanged.
@@ -132,7 +140,8 @@ Those are server concerns described conceptually in [Implemented architecture](A
 
 When the server sends an `interrupt` command, the relay calls `kill(worker_pid, SIGINT)` and returns `interrupt_result`; the request ID matches that result to the caller.
 Success means that the operating system accepted signal delivery, not that the worker has already handled the signal or stopped its current operation.
-Host-resolver interruption does not cross this boundary.
+Host-resolver interruption requests do not cross this boundary as relay `interrupt` commands.
+The server can still classify the resulting runtime R reply as `r_resolution_failed` with `failure` set to `interrupted`.
 
 For restart or server shutdown, the server registers one relay-shutdown request and queues one `shutdown` command against the existing absolute one-second worker deadline.
 The sole relay-command writer computes `grace_millis` from the time remaining when it serializes that command, so earlier queued writes cannot extend the worker deadline.

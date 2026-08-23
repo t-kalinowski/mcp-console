@@ -22,9 +22,9 @@ The relay translates matching server-relay commands and events at the transport 
 
 One sideband belongs to one worker generation.
 The server admits at most one evaluation or explicit live preparation at a time.
-A server-managed worker may also make at most one synchronous nested Python resolver request at a time.
+A server-managed worker may also make at most one synchronous nested R or Python resolver request at a time.
 
-The sideband carries complete cells, live R and Python preparation, managed Python resolution, console text, images, managed-input observations, readiness, evaluation completion, and shutdown.
+The sideband carries complete cells, live R and Python preparation, managed R and Python resolution, console text, images, managed-input observations, readiness, evaluation completion, and shutdown.
 
 Worker fd 0 carries interactive input as one generation-long byte stream.
 Worker fd 1 and fd 2 carry independent raw output streams.
@@ -125,6 +125,8 @@ In particular, raw output written before a `completed` or preparation-result fra
 | --- | --- |
 | `{"kind":"evaluate","language":"r","source":"..."}` | Evaluate one complete source string. `language` is `r`, `python`, or `sql`. |
 | `{"kind":"prepare_r","library":"..."}` | Apply this resolved R library to the live R search path. |
+| `{"kind":"r_resolved","library":"..."}` | Return the provisional library selected for the current `resolve_r` request. |
+| `{"kind":"r_resolution_failed","failure":"host","message":"..."}` | Fail the current `resolve_r` request. `failure` is `host`, `interrupted`, or `operation`. |
 | `{"kind":"prepare_python","packages":["py-yaml12"]}` | Add these package requirements through the live managed-Python preparation operation. |
 | `{"kind":"python_resolved","python":"..."}` | Return the interpreter path selected for the current `resolve_python` request. |
 | `{"kind":"python_resolution_failed","message":"..."}` | Return an ordinary failure for the current `resolve_python` request. |
@@ -145,6 +147,9 @@ In particular, raw output written before a `completed` or preparation-result fra
 | `{"kind":"input_cancelled"}` | Report that interruption cancelled the outstanding managed read. |
 | `{"kind":"r_prepared","library":"..."}` | Complete `prepare_r` successfully with the applied library path. |
 | `{"kind":"r_preparation_failed","message":"..."}` | Complete `prepare_r` with an ordinary live-update failure. |
+| `{"kind":"resolve_r","packages":["cli","glue"]}` | Request host resolution of these plain R package names. |
+| `{"kind":"r_activated","library":"..."}` | Report that the worker accepted this resolved R library. |
+| `{"kind":"r_activation_failed","library":"...","message":"..."}` | Report that the worker could not apply this resolved R library. |
 | `{"kind":"resolve_python","request":{"requirements":{"packages":["numpy","pandas"]},"retained_requirements":{"packages":["numpy","pandas"]}}}` | Request host resolution of one managed-Python environment. |
 | `{"kind":"resolve_python_version","request":{"constraints":[]}}` | Request host Python-version selection. |
 | `{"kind":"python_activated","requirements":{"packages":["numpy","pandas"]}}` | Report that the worker accepted this complete logical managed-Python manifest. |
@@ -205,7 +210,7 @@ A second `ready` is a protocol violation.
 An evaluation begins with one `evaluate` frame while the worker is idle.
 The `source` string is one complete cell; the protocol has no continuation message.
 
-During the evaluation, the worker may send zero or more console, image, input, Python-resolver, Python-version-resolver, or Python-activation messages.
+During the evaluation, the worker may send zero or more console, image, input, R-resolver, R-activation, Python-resolver, Python-version-resolver, or Python-activation messages.
 An ordinary language result ends with exactly one `completed` frame.
 `completed` carries no payload and no Python manifest.
 
@@ -254,6 +259,37 @@ For success, `r_prepared.library` must equal the requested normalized library pa
 Any different path is a protocol violation.
 `r_preparation_failed` is an ordinary operation result; an infrastructure failure instead closes the worker boundary.
 
+### Nested managed-R resolution
+
+Runtime R resolution is distinct from the idle-only `prepare_r` operation.
+During an evaluation or idle runtime callback, a worker may send one `resolve_r` request containing plain package names and wait synchronously for `r_resolved` or `r_resolution_failed`.
+The built-in worker uses this automatically; a custom worker may opt into the same callback contract.
+The server validates the names again and resolves the complete retained R environment outside the worker sandbox.
+
+An `r_resolved` library is provisional.
+After the worker adds it to the live R library search path, it sends `r_activated` before continuing the original package load.
+The server owns candidate tracking and commits the retained environment only for a matching activation from the current generation.
+It discards unactivated or stale candidates on activation failure, operation completion, retirement, or generation replacement.
+A package's later load failure does not undo an environment already reported as activated.
+
+If applying the library fails, the worker sends `r_activation_failed` before propagating the R error.
+The server discards that candidate and records the current generation's restart-required requirement state; the activation failure is not itself a worker-transport failure.
+
+For an idle callback, the server atomically reserves environment-change ownership from `resolve_r` admission through `r_activated` or `r_activation_failed`.
+Explicit environment preparation cannot enter that interval and returns a nonfatal tool error.
+If explicit preparation owns the reservation before the idle request arrives, the server replies with an ordinary `host` failure without invoking the resolver.
+It queues that reply before the explicit live-preparation command.
+Once `prepare_r` or `prepare_python` has begun, a worker-originated runtime R callback is instead an out-of-phase protocol failure.
+
+`r_resolution_failed.failure` classifies the response:
+
+- `host` is an ordinary request-validation, requirement-state, or host-resolver failure; an advisory R-cell prescan may ignore it and let normal evaluation continue;
+- `interrupted` means the host resolver was explicitly interrupted; and
+- `operation` means lifecycle cancellation or another operation-level failure and ends the affected worker boundary.
+
+Only `host` is advisory to the prescan.
+Transport, framing, sideband, and unexpected-response failures still fail the worker boundary rather than becoming host failures.
+
 ### Live Python preparation
 
 `prepare_python` is an idle-only operation for a server-managed worker.
@@ -278,7 +314,6 @@ After initialization, any new resolved environment that the worker activates mus
 
 A server-managed worker may send `resolve_python` or `resolve_python_version` during an evaluation, preparation, or idle runtime callback.
 It then waits for exactly one matching success or failure reply.
-There is no request ID because only one nested request can be outstanding.
 
 Every successful `python_resolved` reply is provisional.
 When the live runtime accepts that environment, the worker sends `python_activated` with the complete normalized logical manifest.
@@ -288,13 +323,23 @@ Activation is reported before the enclosing operation result.
 An explicit pre-initialization preparation may instead materialize the last resolved candidate and finish with `python_prepared` without activation.
 Other unmatched candidates are discarded when the enclosing operation ends.
 
-While a worker waits for a resolver reply, an unrelated `evaluate`, `prepare_r`, or `prepare_python` command may already be queued on the sideband.
-It is not a resolver response and is processed only after the nested request finishes.
-`shutdown` terminates the wait and begins worker exit.
-
 Managed Python is unavailable to custom workers.
 A custom worker must not send `python_activated`; doing so is a protocol failure.
 It must not depend on host Python resolution, whose requests are rejected for custom workers.
+
+A custom worker may opt into runtime managed-R resolution and the matching `r_activated` and `r_activation_failed` messages.
+The server merges each request with the complete retained R environment and the custom worker's fixed R requirements.
+It validates package names before invoking IR, so an invalid request receives an ordinary `host` rejection.
+Activation messages remain subject to the same candidate and generation matching rules as the built-in worker.
+
+### Synchronous resolver waits
+
+There is no resolver request ID because only one nested R, Python-environment, or Python-version request may be outstanding.
+While the built-in worker waits for its matching reply, an unrelated `evaluate` command may already be queued on the sideband.
+The worker retains that command and processes it only after the nested request finishes.
+An idle runtime R callback and explicit environment preparation are admitted atomically, so those two environment transitions do not queue behind each other.
+`shutdown` terminates the wait and begins worker exit.
+A response for another resolver kind, or any resolver response without its matching outstanding request, is a protocol failure.
 
 ## Ordering and valid results
 
@@ -314,11 +359,14 @@ Console, image, and permitted nested resolver frames do not by themselves change
 | preparing Python | worker -> server `python_preparation_failed` | idle |
 | idle or evaluating | worker -> server `input_requested` | same phase, input outstanding |
 | input outstanding | worker -> server `input_received` or `input_cancelled` | prior phase |
+| idle or evaluating | worker -> server `resolve_r` | same phase, nested R resolution |
+| nested R resolution | server -> worker `r_resolved` or `r_resolution_failed` | prior phase |
 | idle, evaluating, or preparing | worker -> server `resolve_python` | same phase, nested resolution |
 | idle, evaluating, or preparing | worker -> server `resolve_python_version` | same phase, nested version selection |
 | nested resolution | server -> worker matching success or failure reply | prior phase |
 | any live phase | server -> worker `shutdown` | terminal |
 
+`r_activated` or `r_activation_failed` may occur while idle or evaluating, but only for a matching provisional R library.
 `python_activated` may occur while idle, evaluating, or preparing, but only for a matching managed environment.
 An input request during preparation is an error, as described above.
 
@@ -362,6 +410,7 @@ The following fail the worker boundary:
 - an R success receipt for a different library;
 - an invalid image base64 payload;
 - inconsistent managed-input request and receipt ordering;
+- an out-of-phase managed-R request or an activation receipt that does not match a provisional library;
 - an invalid or unmatched managed-Python request or activation;
 - worker-sideband I/O failure or unexpected closure; and
 - unexpected worker exit, including exit status zero before intentional retirement completes.
@@ -382,6 +431,7 @@ A conforming custom worker:
 - treats fd 0 as a generation-long byte stream;
 - implements `prepare_r` when using explicit R or DuckDB requirements and returns the requested normalized library path;
 - honors a prepared `R_LIBS`, applies its first resolved R library before loading DuckDB, and uses DuckDB's native extension cache;
+- may opt into runtime managed-R resolution and activation messages using the exact candidate-confirmation contract above;
 - does not use managed-Python activation messages;
 - exits without replying to `shutdown`; and
 - defines its own behavior for the process `SIGINT` sent by the relay.

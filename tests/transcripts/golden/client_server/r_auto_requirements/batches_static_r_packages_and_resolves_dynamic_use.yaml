@@ -1,0 +1,46 @@
+---
+!same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
+---
+send:
+  r: |
+    base::library(package = fortunes, quietly = TRUE)
+    library("english", character.only = TRUE, quietly = TRUE)
+    stopifnot(
+      base::require(whoami, quietly = TRUE),
+      base::requireNamespace("mockery", quietly = TRUE),
+      is.environment(base::loadNamespace("microbenchmark")),
+      is.environment(cyclocomp:::.__NAMESPACE__.),
+      is.function(fortunes::fortune),
+      is.function("fortunes"::fortune),
+      is.function(fortunes::fortune)
+    )
+    42L
+result:
+  content:
+    - type: text
+      text: |
+        [1] 42
+  isError: false
+---
+send:
+  r: |
+    attached <- "RcppRoll"
+    stopifnot(base::library(
+      attached,
+      character.only = TRUE,
+      logical.return = TRUE,
+      quietly = TRUE
+    ))
+    package <- "snakecase"
+    stopifnot(do.call(
+      base::requireNamespace,
+      list(package = package, quietly = TRUE)
+    ))
+    42L
+result:
+  content:
+    - type: text
+      text: |
+        [1] 42
+  isError: false
+...

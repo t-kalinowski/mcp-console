@@ -1,0 +1,43 @@
+---
+!same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
+---
+send:
+  r: resolver_interrupt_state <- 41L; resolver_pid <- Sys.getpid()
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+send:
+  r: |
+    package <- "RcppRoll"
+    do.call(base::loadNamespace, list(package = package))
+    resolver_interrupt_cell_ran <- TRUE
+result:
+  content:
+    - type: text
+      text: |
+        Error: R package resolution interrupted
+  isError: false
+---
+session:
+  action: interrupt
+result:
+  content:
+    - type: text
+      text: "[interrupt sent]"
+  isError: false
+---
+send:
+  r: >-
+    resolver_interrupt_state +
+    as.integer(!exists('resolver_interrupt_cell_ran')) +
+    as.integer(identical(Sys.getpid(), resolver_pid)) - 1L
+result:
+  content:
+    - type: text
+      text: |
+        [1] 42
+  isError: false
+...

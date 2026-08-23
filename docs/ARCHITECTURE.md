@@ -101,6 +101,7 @@ It reports readiness, accepts complete cells and supported preparation operation
 
 The built-in worker embeds R on its main thread.
 Its language adapters provide persistent Python and DuckDB SQL within that worker process.
+Its private R environment bridge wraps `base::library` and `base::loadNamespace`, performs the advisory cell prescan, applies accepted managed libraries, and reports activation outcomes.
 Their user-visible behavior belongs in the [built-in runtime guide](BUILTIN_RUNTIME.md), while the sideband contract remains independent of the interpreter implementation.
 
 ## Worker generations
@@ -139,11 +140,38 @@ One exclusive environment transition covers requirement-delta calculation, host 
 No other send or environment-changing operation can enter that boundary, and a failed or superseded transition cannot dispatch the cell.
 The server releases the environment transition after launch; the active evaluation continues to own stdin, waiting, output cuts, response delivery, and restart handoff.
 
+### Worker-originated R resolution
+
+Automatic R resolution is a callback from the running built-in worker, not an idle preparation operation.
+Before native evaluation, an advisory worker-side AST scan can batch obvious static references; the `library()` and `loadNamespace()` wrappers remain the runtime correctness path.
+The relay only translates the callback messages and preserves their transport order.
+
+The server atomically assigns environment-change ownership to either an idle runtime R callback or explicit environment preparation.
+An admitted callback keeps that ownership through activation or failure, so preparation cannot resolve and later commit a stale retained-environment snapshot.
+If the callback already owns the transition, preparation returns a nonfatal tool error; if preparation reserved it first, an otherwise idle callback receives an ordinary host failure.
+A runtime R callback sent after live preparation begins is a protocol failure.
+
+For a request, the server verifies the worker generation and validates the supplied plain package names.
+It serializes access to the retained environment and host resolver, merges the names into the complete retained R requirement set, and returns the existing managed environment without invoking IR when that set is unchanged.
+Otherwise it resolves the complete candidate on the host and prepares every retained DuckDB extension for that candidate library.
+The server rechecks the generation and returns the candidate path without committing it.
+
+The worker applies the candidate through its managed `.libPaths()` bridge, then reports either activation or activation failure.
+On `RActivated`, the server matches the exact uncommitted candidate and commits it only when the reporting generation is still current and ready.
+That commit updates both the retained R environment and the DuckDB R-library target history.
+The original R package operation resumes after the receipt, so later namespace or cell failure does not roll back a successfully accepted environment.
+
+On `RActivationFailed`, the server discards the candidate and marks requirement changes as restart-required for the same current generation.
+An unchanged restart or shutdown cancels an active resolver.
+A restart that adds requirements serializes behind active environment resolution before replacing the worker; generation checks prevent any unactivated old candidate from committing into the replacement.
+Ordinary resolver and activation errors leave an otherwise healthy worker available; transport, protocol, or bridge-infrastructure failure follows the existing worker-failure lifecycle.
+
 ### Interruption
 
 An interrupt targets the active host resolver when one is registered; otherwise it targets the live worker through its relay.
 It stays associated with that resolver or worker and is not retried against a replacement.
 The call reports signal delivery rather than waiting for the resolver or evaluated code to stop.
+Resolver interruption and lifecycle cancellation are tracked as typed outcomes, so the advisory R prescan suppresses only ordinary host-resolution failures.
 
 ### Explicit restart
 

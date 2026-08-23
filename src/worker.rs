@@ -271,6 +271,7 @@ mod platform {
                     let result = evaluate_cell(
                         Cell { language, source },
                         &self.graphics,
+                        &self.r_environment,
                         &mut self.python,
                         &mut self.sql,
                     );
@@ -328,12 +329,14 @@ mod platform {
                     }
                 }
                 ServerMessage::Shutdown => return Ok(false),
-                ServerMessage::PythonResolved { .. }
+                ServerMessage::RResolved { .. }
+                | ServerMessage::RResolutionFailed { .. }
+                | ServerMessage::PythonResolved { .. }
                 | ServerMessage::PythonResolutionFailed { .. }
                 | ServerMessage::PythonVersionResolved { .. }
                 | ServerMessage::PythonVersionResolutionFailed { .. } => {
                     return Err(io::Error::other(
-                        "worker received an unexpected Python resolver response",
+                        "worker received an unexpected resolver response",
                     )
                     .into());
                 }
@@ -404,6 +407,11 @@ mod platform {
                 Ok(python)
             }
             ServerMessage::PythonResolutionFailed { message } => Err(message),
+            ServerMessage::RResolved { .. } | ServerMessage::RResolutionFailed { .. } => {
+                Err(infrastructure_failure(
+                    "worker received an R environment response while resolving Python".to_string(),
+                ))
+            }
             ServerMessage::PythonVersionResolved { .. }
             | ServerMessage::PythonVersionResolutionFailed { .. } => Err(infrastructure_failure(
                 "worker received a Python version response while resolving Python".to_string(),
@@ -430,6 +438,54 @@ mod platform {
         send_worker_message(&WorkerMessage::PythonActivated { requirements })
     }
 
+    pub(crate) fn resolve_r(
+        packages: Vec<String>,
+    ) -> Result<crate::r_environment::ResolutionOutcome, String> {
+        use crate::r_environment::{ResolutionFailureKind, ResolutionOutcome};
+        use crate::worker_protocol::RResolutionFailureKind;
+
+        send_worker_message(&WorkerMessage::ResolveR { packages })?;
+        match receive_resolver_message().map_err(infrastructure_failure)? {
+            ServerMessage::RResolved { library } => Ok(ResolutionOutcome::Resolved { library }),
+            ServerMessage::RResolutionFailed { failure, message } => {
+                let failure = match failure {
+                    RResolutionFailureKind::Host => ResolutionFailureKind::Host,
+                    RResolutionFailureKind::Interrupted => ResolutionFailureKind::Interrupted,
+                    RResolutionFailureKind::Operation => {
+                        return Err(infrastructure_failure(message));
+                    }
+                };
+                Ok(ResolutionOutcome::Failed { failure, message })
+            }
+            ServerMessage::Shutdown => {
+                WORKER_SHUTDOWN.store(true, Ordering::SeqCst);
+                Err("worker is shutting down".to_string())
+            }
+            ServerMessage::PythonResolved { .. }
+            | ServerMessage::PythonResolutionFailed { .. }
+            | ServerMessage::PythonVersionResolved { .. }
+            | ServerMessage::PythonVersionResolutionFailed { .. } => Err(infrastructure_failure(
+                "worker received a Python resolver response while resolving R".to_string(),
+            )),
+            ServerMessage::Evaluate { .. }
+            | ServerMessage::PreparePython { .. }
+            | ServerMessage::PrepareR { .. } => Err(infrastructure_failure(
+                "worker received an operation while resolving R".to_string(),
+            )),
+        }
+    }
+
+    pub(crate) fn publish_r_activation(library: String) -> Result<(), String> {
+        send_worker_message(&WorkerMessage::RActivated { library })
+    }
+
+    pub(crate) fn publish_r_activation_failure(
+        library: String,
+        message: String,
+    ) -> Result<(), String> {
+        send_worker_message(&WorkerMessage::RActivationFailed { library, message })
+    }
+
     pub(crate) fn resolve_python_version(
         request: crate::worker_protocol::PythonVersionResolveRequest,
     ) -> Result<String, String> {
@@ -450,6 +506,12 @@ mod platform {
             ServerMessage::PrepareR { .. } => Err(infrastructure_failure(
                 "worker received R preparation while resolving a Python version".to_string(),
             )),
+            ServerMessage::RResolved { .. } | ServerMessage::RResolutionFailed { .. } => {
+                Err(infrastructure_failure(
+                    "worker received an R environment response while resolving a Python version"
+                        .to_string(),
+                ))
+            }
             ServerMessage::PythonResolved { .. } | ServerMessage::PythonResolutionFailed { .. } => {
                 Err(infrastructure_failure(
                     "worker received a Python environment response while resolving a Python version"
@@ -523,7 +585,9 @@ mod platform {
 
     fn send_worker_message(message: &WorkerMessage) -> Result<(), String> {
         if !crate::sideband::available_in_process() {
-            return Err("managed Python resolution is unavailable in a fork child".to_string());
+            return Err(
+                "managed environment resolution is unavailable in a fork child".to_string(),
+            );
         }
         WORKER_WRITER
             .get()
@@ -541,6 +605,7 @@ mod platform {
     fn evaluate_cell(
         cell: Cell,
         graphics: &crate::r_graphics::Bridge,
+        r_environment: &crate::r_environment::Bridge,
         python: &mut crate::python::Bridge,
         sql: &mut crate::sql::Bridge,
     ) -> Result<(), String> {
@@ -552,7 +617,7 @@ mod platform {
             return Err(message);
         }
         let result = match cell.language {
-            Language::R => evaluate_r_cell(cell.source, graphics),
+            Language::R => evaluate_r_cell(cell.source, graphics, r_environment),
             Language::Python => evaluate_python_cell(cell.source, graphics, python),
             Language::Sql => evaluate_sql_cell(cell.source, sql),
         };
@@ -566,13 +631,28 @@ mod platform {
         result
     }
 
-    fn evaluate_r_cell(r: String, graphics: &crate::r_graphics::Bridge) -> Result<(), String> {
+    fn evaluate_r_cell(
+        r: String,
+        graphics: &crate::r_graphics::Bridge,
+        r_environment: &crate::r_environment::Bridge,
+    ) -> Result<(), String> {
         if r.contains('\0') {
             emit_output(
                 ConsoleChannel::Diagnostic,
                 b"Error: R source cannot contain NUL\n",
             );
             return Ok(());
+        }
+
+        match r_environment.preflight(&r)? {
+            crate::r_environment::PreflightOutcome::Continue => {}
+            crate::r_environment::PreflightOutcome::Failed { message } => {
+                emit_output(
+                    ConsoleChannel::Diagnostic,
+                    format!("Error: {message}\n").as_bytes(),
+                );
+                return Ok(());
+            }
         }
 
         defer_interrupts(|| graphics.begin(), check_interrupts)?;
@@ -1122,7 +1202,8 @@ mod platform {
 
 #[cfg(target_os = "macos")]
 pub(crate) use platform::{
-    publish_plot, publish_python_activation, resolve_python, resolve_python_version, run,
+    publish_plot, publish_python_activation, publish_r_activation, publish_r_activation_failure,
+    resolve_python, resolve_python_version, resolve_r, run,
 };
 
 #[cfg(not(target_os = "macos"))]

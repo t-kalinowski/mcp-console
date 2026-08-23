@@ -1,0 +1,96 @@
+---
+!same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
+---
+send:
+  r: |
+    listing <- library()
+    help_info <- library(help = base)
+    restricted <- suppressWarnings(library(
+      "fortunes",
+      lib.loc = .Library,
+      character.only = TRUE,
+      logical.return = TRUE,
+      quietly = TRUE
+    ))
+    partial_failed <- inherits(
+      try(
+        loadNamespace("fortunes", lib.loc = .Library, partial = TRUE),
+        silent = TRUE
+      ),
+      "try-error"
+    )
+    package <- "methods"
+    library(package, character.only = TRUE, quietly = TRUE)
+    invalid <- require(
+      "mcpconsole-invalid",
+      character.only = TRUE,
+      quietly = TRUE
+    )
+    stopifnot(
+      inherits(listing, "libraryIQR"),
+      inherits(help_info, "packageInfo"),
+      identical(restricted, FALSE),
+      partial_failed,
+      identical(invalid, FALSE),
+      identical(jsonlite::fromJSON("42"), 42L)
+    )
+    42L
+result:
+  content:
+    - type: text
+      text: |
+        [1] 42
+  isError: false
+---
+send:
+  r: |
+    stopifnot(!"package:splines" %in% search())
+    forwarded <- function(x) {
+      base::library(
+        splines,
+        attach.required = x,
+        quietly = TRUE
+      )
+    }
+    error <- try(forwarded(), silent = TRUE)
+    stopifnot(
+      inherits(error, "try-error"),
+      identical(
+        conditionMessage(attr(error, "condition")),
+        'argument "x" is missing, with no default'
+      )
+    )
+    42L
+result:
+  content:
+    - type: text
+      text: |
+        [1] 42
+  isError: false
+---
+send:
+  r: |
+    stopifnot(!isNamespaceLoaded("stats4"))
+    forwarded <- function(x) {
+      base::loadNamespace("stats4", keep.source = x)
+    }
+    messages <- capture.output(
+      error <- try(forwarded(), silent = TRUE),
+      type = "message"
+    )
+    stopifnot(
+      inherits(error, "try-error"),
+      any(grepl(
+        'argument "x" is missing, with no default',
+        messages,
+        fixed = TRUE
+      ))
+    )
+    42L
+result:
+  content:
+    - type: text
+      text: |
+        [1] 42
+  isError: false
+...

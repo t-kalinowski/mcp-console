@@ -41,6 +41,19 @@ relay:
     stdout after grace
 ---
 relay:
+  kind: resolve_r
+  packages:
+    - github::owner/repo
+---
+server:
+  kind: r_resolution_failed
+  failure: host
+  message: >-
+    automatic R package name `github::owner/repo` is not accepted: names
+    must start with an ASCII letter, end with an ASCII letter or digit, and
+    contain only ASCII letters, digits, and dots
+---
+relay:
   kind: resolve_python
   request:
     requirements:

@@ -5,7 +5,7 @@ use super::lifecycle::{
     FailedWorkerStop, GenerationStatus, LifecycleState, OldGenerationCommitDisposition,
     RequirementChangeState, WorkerGeneration,
 };
-use super::{Client, PreparationOutcome, WorkerState};
+use super::{Client, EnvironmentPreparationAdmissionFailure, PreparationOutcome, WorkerState};
 
 pub(super) struct Environment {
     pub(super) custom_worker: bool,
@@ -161,21 +161,7 @@ impl RequirementDelta {
             python_additions.iter().cloned().collect(),
         );
 
-        let mut r_additions = r.into_iter().collect::<BTreeSet<_>>();
-        if environment.custom_worker {
-            r_additions.extend(
-                super::CUSTOM_DUCKDB_R_REQUIREMENTS
-                    .iter()
-                    .map(|requirement| (*requirement).to_string()),
-            );
-        }
-        let current_r = environment
-            .r
-            .as_ref()
-            .map(|managed| managed.requirements().iter().cloned().collect())
-            .unwrap_or_default();
-        let r_changed = !r_additions.is_subset(&current_r);
-        let r_requirements = current_r.union(&r_additions).cloned().collect();
+        let (r_requirements, r_changed) = merge_r_requirements(environment, r);
 
         Ok(Self {
             duckdb_extensions,
@@ -200,15 +186,56 @@ pub(super) struct ResolvedEnvironment {
 
 pub(super) enum EnvironmentResolutionFailure {
     Host(String),
+    Interrupted(String),
+    Cancelled(String),
     Operation(String),
 }
 
 impl EnvironmentResolutionFailure {
     pub(super) fn into_message(self) -> String {
         match self {
-            Self::Host(message) | Self::Operation(message) => message,
+            Self::Host(message)
+            | Self::Interrupted(message)
+            | Self::Cancelled(message)
+            | Self::Operation(message) => message,
         }
     }
+}
+
+pub(super) enum RuntimeRResolutionFailure {
+    Ordinary(String),
+    Interrupted,
+    Cancelled(String),
+    Infrastructure(String),
+}
+
+impl From<EnvironmentResolutionFailure> for RuntimeRResolutionFailure {
+    fn from(failure: EnvironmentResolutionFailure) -> Self {
+        match failure {
+            EnvironmentResolutionFailure::Host(message) => Self::Ordinary(message),
+            EnvironmentResolutionFailure::Interrupted(_) => Self::Interrupted,
+            EnvironmentResolutionFailure::Cancelled(message) => Self::Cancelled(message),
+            EnvironmentResolutionFailure::Operation(message) => Self::Infrastructure(message),
+        }
+    }
+}
+
+fn merge_r_requirements(environment: &Environment, additions: Vec<String>) -> (Vec<String>, bool) {
+    let mut additions = additions.into_iter().collect::<BTreeSet<_>>();
+    if environment.custom_worker {
+        additions.extend(
+            super::CUSTOM_DUCKDB_R_REQUIREMENTS
+                .iter()
+                .map(|requirement| (*requirement).to_string()),
+        );
+    }
+    let current = environment
+        .r
+        .as_ref()
+        .map(|managed| managed.requirements().iter().cloned().collect())
+        .unwrap_or_default();
+    let changed = !additions.is_subset(&current);
+    (current.union(&additions).cloned().collect(), changed)
 }
 
 pub(super) fn merge_python_requirements(
@@ -247,6 +274,18 @@ fn select_python_activation(
         .ok_or_else(|| "worker activation does not match a resolved Python environment".to_string())
 }
 
+fn select_r_activation(
+    library: &str,
+    candidates: &mut Vec<crate::resolver::ManagedR>,
+) -> Result<crate::resolver::ManagedR, String> {
+    let candidate = candidates
+        .iter()
+        .rposition(|candidate| candidate.library().to_str() == Some(library))
+        .map(|index| candidates.remove(index));
+    candidates.clear();
+    candidate.ok_or_else(|| "worker activation does not match a resolved R environment".to_string())
+}
+
 fn push_duckdb_r_target(
     targets: &mut Vec<crate::resolver::ManagedR>,
     candidate: crate::resolver::ManagedR,
@@ -257,6 +296,28 @@ fn push_duckdb_r_target(
     {
         targets.push(candidate);
     }
+}
+
+fn commit_managed_r(environment: &mut Environment, managed_r: crate::resolver::ManagedR) {
+    push_duckdb_r_target(&mut environment.duckdb_r_targets, managed_r.clone());
+    environment.r = Some(managed_r);
+}
+
+fn classify_resolver_result<T>(
+    result: Result<T, String>,
+    handle: Option<&crate::resolver::ResolverStopHandle>,
+) -> Result<T, EnvironmentResolutionFailure> {
+    result.map_err(
+        |message| match handle.and_then(|handle| handle.control_outcome()) {
+            Some(crate::resolver::ResolverControlOutcome::Interrupted) => {
+                EnvironmentResolutionFailure::Interrupted(message)
+            }
+            Some(crate::resolver::ResolverControlOutcome::Cancelled) => {
+                EnvironmentResolutionFailure::Cancelled(message)
+            }
+            None => EnvironmentResolutionFailure::Host(message),
+        },
+    )
 }
 
 impl Client {
@@ -317,7 +378,7 @@ impl Client {
         if let Some(active) = active_operation {
             return Err(active.reject_preparation_message().to_string());
         }
-        let worker = match self.0.worker.try_lock() {
+        let mut worker = match self.0.worker.try_lock() {
             Ok(worker) => worker,
             Err(std::sync::TryLockError::WouldBlock) => {
                 return Err("[requirements not prepared: worker is starting]".to_string());
@@ -332,6 +393,33 @@ impl Client {
             return Ok(PrepareResult::RestartRequired);
         }
         if matches!(*worker, WorkerState::Running(_)) {
+            let includes_r = delta.r_changed;
+            let environment_preparation = {
+                let WorkerState::Running(running) = &*worker else {
+                    unreachable!("running worker state was already checked");
+                };
+                running.reserve_environment_preparation()
+            };
+            let _environment_preparation = match environment_preparation {
+                Ok(reservation) => reservation,
+                Err(EnvironmentPreparationAdmissionFailure::Busy(error)) => {
+                    return self.finish_environment_resolution_failure(
+                        generation,
+                        intent,
+                        EnvironmentResolutionFailure::Host(error),
+                    );
+                }
+                Err(EnvironmentPreparationAdmissionFailure::Infrastructure(error)) => {
+                    drop(environment);
+                    return self.fail_running_preparation(
+                        &mut worker,
+                        generation,
+                        true,
+                        error,
+                        includes_r,
+                    );
+                }
+            };
             let RequirementDelta {
                 duckdb_extensions,
                 duckdb_changed,
@@ -485,12 +573,14 @@ impl Client {
         generation: &WorkerGeneration,
         requirements: Vec<String>,
     ) -> Result<crate::resolver::ManagedR, EnvironmentResolutionFailure> {
+        let mut stop_handle = None;
         let result = crate::resolver::resolve_r(requirements, |handle| {
+            stop_handle = Some(handle.clone());
             self.register_resolver_stop_handle(generation, handle)
         });
         self.clear_resolver_stop_handle(generation)
             .map_err(EnvironmentResolutionFailure::Operation)?;
-        result.map_err(EnvironmentResolutionFailure::Host)
+        classify_resolver_result(result, stop_handle.as_ref())
     }
 
     fn resolve_managed_python_host(
@@ -521,13 +611,15 @@ impl Client {
             ));
         }
         for managed_r in managed_r {
+            let mut stop_handle = None;
             let result =
                 crate::resolver::resolve_duckdb_extensions(managed_r, extensions, |handle| {
+                    stop_handle = Some(handle.clone());
                     self.register_resolver_stop_handle(generation, handle)
                 });
             self.clear_resolver_stop_handle(generation)
                 .map_err(EnvironmentResolutionFailure::Operation)?;
-            result.map_err(EnvironmentResolutionFailure::Host)?;
+            classify_resolver_result(result, stop_handle.as_ref())?;
         }
         Ok(())
     }
@@ -539,14 +631,14 @@ impl Client {
         failure: EnvironmentResolutionFailure,
     ) -> Result<PrepareResult, String> {
         match (intent, failure) {
-            (PreparationIntent::BeforeEvaluation, EnvironmentResolutionFailure::Host(error)) => {
-                match self.generation_status(generation)? {
-                    GenerationStatus::CurrentReady => {
-                        Ok(self.failed_pre_evaluation_resolution(error))
-                    }
-                    GenerationStatus::CurrentClosing | GenerationStatus::Changed => Err(error),
-                }
-            }
+            (
+                PreparationIntent::BeforeEvaluation,
+                EnvironmentResolutionFailure::Host(error)
+                | EnvironmentResolutionFailure::Interrupted(error),
+            ) => match self.generation_status(generation)? {
+                GenerationStatus::CurrentReady => Ok(self.failed_pre_evaluation_resolution(error)),
+                GenerationStatus::CurrentClosing | GenerationStatus::Changed => Err(error),
+            },
             (_, failure) => Err(failure.into_message()),
         }
     }
@@ -627,7 +719,7 @@ impl Client {
                 }
                 Ok(PreparationOutcome::Completed(Ok(())))
             });
-            let result = running.prepare_python(python_packages, commit);
+            let result = running.prepare_python(python_packages, includes_r, commit);
             match result {
                 Ok(PreparationOutcome::Completed(Ok(()))) => {}
                 Ok(PreparationOutcome::Completed(Err(error))) => {
@@ -779,8 +871,7 @@ impl Client {
         match disposition {
             OldGenerationCommitDisposition::Commit => {
                 if let Some(managed_r) = managed_r {
-                    push_duckdb_r_target(&mut environment.duckdb_r_targets, managed_r.clone());
-                    environment.r = Some(managed_r);
+                    commit_managed_r(&mut environment, managed_r);
                 }
                 if let Some(duckdb_extensions) = duckdb_extensions {
                     environment.duckdb_extensions = duckdb_extensions;
@@ -828,6 +919,139 @@ impl Client {
                 Ok(disposition)
             }
             OldGenerationCommitDisposition::DiscardForReplacement => Ok(disposition),
+        }
+    }
+
+    pub(super) fn resolve_runtime_r(
+        &self,
+        generation: WorkerGeneration,
+        packages: Vec<String>,
+    ) -> Result<crate::resolver::ManagedR, RuntimeRResolutionFailure> {
+        self.ensure_runtime_r_generation(&generation)?;
+        crate::r_package_name::validate_all(&packages)
+            .map_err(RuntimeRResolutionFailure::Ordinary)?;
+        let environment = self.0.environment.as_ref().ok_or_else(|| {
+            RuntimeRResolutionFailure::Infrastructure(
+                "managed R requirements are unavailable".to_string(),
+            )
+        })?;
+        // This lock serializes the retained-environment snapshot and the one
+        // lifecycle-owned host resolver slot through both resolver phases.
+        let environment = environment.lock().map_err(|_| {
+            RuntimeRResolutionFailure::Infrastructure(
+                "worker environment lock poisoned".to_string(),
+            )
+        })?;
+        let (requirements, changed) = merge_r_requirements(&environment, packages);
+        if !changed {
+            let managed = environment.r.clone().ok_or_else(|| {
+                RuntimeRResolutionFailure::Infrastructure(
+                    "managed R environment is unavailable".to_string(),
+                )
+            })?;
+            self.ensure_runtime_r_generation(&generation)?;
+            return Ok(managed);
+        }
+        match self
+            .requirement_change_state(&generation)
+            .map_err(RuntimeRResolutionFailure::Infrastructure)?
+        {
+            RequirementChangeState::Available => {}
+            RequirementChangeState::RestartRequired => {
+                return Err(RuntimeRResolutionFailure::Ordinary(
+                    "requirement changes are unavailable until session restart".to_string(),
+                ));
+            }
+        }
+
+        let managed = self
+            .resolve_managed_r(&generation, requirements)
+            .map_err(RuntimeRResolutionFailure::from)?;
+        if !environment.duckdb_extensions.is_empty() {
+            let extensions = environment
+                .duckdb_extensions
+                .iter()
+                .cloned()
+                .collect::<Vec<_>>();
+            self.resolve_duckdb_extensions(
+                &generation,
+                std::slice::from_ref(&managed),
+                &extensions,
+            )
+            .map_err(RuntimeRResolutionFailure::from)?;
+        }
+        self.ensure_runtime_r_generation(&generation)?;
+        Ok(managed)
+    }
+
+    pub(super) fn activate_runtime_r(
+        &self,
+        generation: WorkerGeneration,
+        library: String,
+        candidates: &mut Vec<crate::resolver::ManagedR>,
+    ) -> Result<OldGenerationCommitDisposition, String> {
+        let managed = select_r_activation(&library, candidates)?;
+        let environment = self
+            .0
+            .environment
+            .as_ref()
+            .ok_or_else(|| "managed R environment is unavailable".to_string())?;
+        let mut environment = environment
+            .lock()
+            .map_err(|_| "worker environment lock poisoned".to_string())?;
+        let lifecycle = self
+            .0
+            .lifecycle
+            .lock()
+            .map_err(|_| "worker lifecycle lock poisoned".to_string())?;
+        if lifecycle.state == LifecycleState::Ready && lifecycle.generation.is(&generation) {
+            commit_managed_r(&mut environment, managed);
+            Ok(OldGenerationCommitDisposition::Commit)
+        } else {
+            Ok(OldGenerationCommitDisposition::DiscardForReplacement)
+        }
+    }
+
+    pub(super) fn fail_runtime_r_activation(
+        &self,
+        generation: WorkerGeneration,
+        library: String,
+        candidates: &mut Vec<crate::resolver::ManagedR>,
+    ) -> Result<OldGenerationCommitDisposition, String> {
+        let _managed = select_r_activation(&library, candidates)?;
+        let environment = self
+            .0
+            .environment
+            .as_ref()
+            .ok_or_else(|| "managed R environment is unavailable".to_string())?;
+        let _environment = environment
+            .lock()
+            .map_err(|_| "worker environment lock poisoned".to_string())?;
+        let mut lifecycle = self
+            .0
+            .lifecycle
+            .lock()
+            .map_err(|_| "worker lifecycle lock poisoned".to_string())?;
+        if lifecycle.state == LifecycleState::Ready && lifecycle.generation.is(&generation) {
+            lifecycle.requirement_changes = RequirementChangeState::RestartRequired;
+            Ok(OldGenerationCommitDisposition::Commit)
+        } else {
+            Ok(OldGenerationCommitDisposition::DiscardForReplacement)
+        }
+    }
+
+    fn ensure_runtime_r_generation(
+        &self,
+        generation: &WorkerGeneration,
+    ) -> Result<(), RuntimeRResolutionFailure> {
+        match self.generation_status(generation) {
+            Ok(GenerationStatus::CurrentReady) => Ok(()),
+            Ok(GenerationStatus::CurrentClosing | GenerationStatus::Changed) => {
+                Err(RuntimeRResolutionFailure::Cancelled(
+                    "R package resolution cancelled by session lifecycle change".to_string(),
+                ))
+            }
+            Err(error) => Err(RuntimeRResolutionFailure::Infrastructure(error)),
         }
     }
 

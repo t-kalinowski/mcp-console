@@ -2,6 +2,12 @@ use std::collections::BTreeMap;
 use std::ffi::{OsStr, OsString};
 use std::sync::Arc;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ResolverControlOutcome {
+    Interrupted,
+    Cancelled,
+}
+
 #[cfg(target_os = "macos")]
 mod managed_duckdb;
 #[cfg(target_os = "macos")]
