@@ -1,0 +1,97 @@
+---
+!same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
+---
+send:
+  python: |
+    import importlib.machinery
+    import os
+    import sys
+
+    live_pid = os.getpid()
+    live_sentinel = 42
+
+
+    class FailingPsutilFinder:
+        def __init__(self):
+            self.visible_lookups = 0
+
+        def find_spec(self, fullname, path=None, target=None):
+            if fullname != "psutil":
+                return None
+            specification = importlib.machinery.PathFinder.find_spec(
+                fullname,
+                path,
+            )
+            if specification is None:
+                return None
+            self.visible_lookups += 1
+            if self.visible_lookups == 2:
+                sys.meta_path.remove(self)
+                raise ImportError("synthetic psutil setup import failure")
+            return specification
+
+
+    failing_psutil_finder = FailingPsutilFinder()
+    sys.meta_path.insert(0, failing_psutil_finder)
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+send:
+  python: |
+    import os
+    import psutil
+
+    (
+        psutil.__name__,
+        failing_psutil_finder.visible_lookups,
+        live_sentinel,
+        os.getpid() == live_pid,
+    )
+result:
+  content:
+    - type: text
+      text: |
+        ('psutil', 2, 42, True)
+  isError: false
+---
+send:
+  r: '"psutil" %in% reticulate::py_require()$packages'
+result:
+  content:
+    - type: text
+      text: |
+        [1] TRUE
+  isError: false
+---
+session:
+  action: restart
+result:
+  content:
+    - type: text
+      text: |-
+        [worker stopped: in-memory state lost]
+        [starting new worker]
+        [idle]
+  isError: false
+---
+send:
+  r: '"psutil" %in% reticulate::py_require()$packages'
+result:
+  content:
+    - type: text
+      text: |
+        [1] TRUE
+  isError: false
+---
+send:
+  python: import psutil; psutil.__name__
+result:
+  content:
+    - type: text
+      text: |
+        'psutil'
+  isError: false
+...

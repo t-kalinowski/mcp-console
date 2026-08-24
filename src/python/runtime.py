@@ -445,6 +445,7 @@ def _mcp_console_take_images(_image_state=_mcp_console_image_state):
 
 
 def _mcp_console_configure_psutil(
+    _Exception=_builtins.Exception,
     _callable=_builtins.callable,
     _getattr=_builtins.getattr,
     _import_module=_importlib.import_module,
@@ -470,7 +471,10 @@ def _mcp_console_configure_psutil(
     if resolved != installed:
         return None
     if psutil is None:
-        psutil = _import_module("psutil")
+        try:
+            psutil = _import_module("psutil")
+        except _Exception:
+            return None
     platform = _getattr(psutil, "_psplatform", None)
     pids = _getattr(platform, "pids", None)
     if not _callable(pids) or _getattr(pids, "_mcp_console_sandbox", False):

@@ -412,6 +412,78 @@ def test_inspects_sandbox_child_processes_with_psutil(binary: Path) -> Transcrip
     return client._finish()
 
 
+def test_retains_environment_when_optional_psutil_setup_fails(
+    binary: Path,
+) -> Transcript:
+    environment = os.environ.copy()
+    environment.pop("RETICULATE_PYTHON", None)
+    client = McpClient(binary, ("serve",), environment)
+    client._initialize_and_list_tools()
+    # fmt: python
+    python = code("""
+        import importlib.machinery
+        import os
+        import sys
+
+        live_pid = os.getpid()
+        live_sentinel = 42
+
+
+        class FailingPsutilFinder:
+            def __init__(self):
+                self.visible_lookups = 0
+
+            def find_spec(self, fullname, path=None, target=None):
+                if fullname != "psutil":
+                    return None
+                specification = importlib.machinery.PathFinder.find_spec(
+                    fullname,
+                    path,
+                )
+                if specification is None:
+                    return None
+                self.visible_lookups += 1
+                if self.visible_lookups == 2:
+                    sys.meta_path.remove(self)
+                    raise ImportError("synthetic psutil setup import failure")
+                return specification
+
+
+        failing_psutil_finder = FailingPsutilFinder()
+        sys.meta_path.insert(0, failing_psutil_finder)
+        """)
+    client.send(python=python)
+    assert last_tool_text(client) == "[done]"
+
+    # fmt: python
+    python = code("""
+        import os
+        import psutil
+
+        (
+            psutil.__name__,
+            failing_psutil_finder.visible_lookups,
+            live_sentinel,
+            os.getpid() == live_pid,
+        )
+        """)
+    client.send(python=python)
+    assert last_tool_text(client) == "('psutil', 2, 42, True)\n"
+
+    client.send(r='"psutil" %in% reticulate::py_require()$packages')
+    assert last_tool_text(client) == "[1] TRUE\n"
+
+    client.session(action="restart")
+    assert last_tool_text(client) == (
+        "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
+    )
+    client.send(r='"psutil" %in% reticulate::py_require()$packages')
+    assert last_tool_text(client) == "[1] TRUE\n"
+    client.send(python="import psutil; psutil.__name__")
+    assert last_tool_text(client) == "'psutil'\n"
+    return client._finish()
+
+
 def test_does_not_import_local_psutil_during_bootstrap(binary: Path) -> Transcript:
     with tempfile.TemporaryDirectory() as temporary:
         directory = Path(temporary)
