@@ -287,6 +287,17 @@ fn stdio_console_keeps_later_calls_behind_an_existing_gated_cohort() {
     );
     client.send_console(3, json!({"r": "complete after release"}));
     client.send_tool(4, "session", json!({"action": "interrupt"}));
+    // Flushing this 4 MiB input message cannot finish until the server's ordered
+    // input transport consumes the preceding calls. Keep stdout blocked until
+    // this proves requests 3 and 4 were reserved behind response 2.
+    write_message(
+        client.input.as_mut().expect("stdin should be open"),
+        &json!({
+            "jsonrpc": "2.0",
+            "method": "notifications/acceptance-test-barrier",
+            "params": {"padding": "b".repeat(4 * 1024 * 1024)}
+        }),
+    );
 
     let first = read_message(&mut client.output);
     assert_eq!(first["id"], 2, "{first}");
