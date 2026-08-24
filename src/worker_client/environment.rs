@@ -259,19 +259,47 @@ pub(super) fn merge_python_requirements(
 fn select_python_activation(
     current: Option<&crate::resolver::ManagedPython>,
     requirements: crate::worker_protocol::PythonRequirementManifest,
-    candidates: &mut Vec<crate::resolver::ManagedPython>,
+    candidate: Option<crate::resolver::ManagedPython>,
 ) -> Result<crate::resolver::ManagedPython, String> {
     let requirements = requirements.normalized();
-    if let Some(index) = candidates
-        .iter()
-        .rposition(|candidate| candidate.requirements() == &requirements)
-    {
-        return Ok(candidates.remove(index));
+    if let Some(candidate) = candidate {
+        return (candidate.requirements() == &requirements)
+            .then_some(candidate)
+            .ok_or_else(|| {
+                "worker activation does not match a resolved Python environment".to_string()
+            });
     }
     current
         .cloned()
         .filter(|current| current.requirements() == &requirements)
         .ok_or_else(|| "worker activation does not match a resolved Python environment".to_string())
+}
+
+fn validate_python_import_resolution(
+    resolution: &crate::worker_protocol::PythonImportResolution,
+    requirements: &crate::worker_protocol::PythonRequirementManifest,
+) -> Result<(), String> {
+    let module = resolution.module.as_bytes();
+    let distribution = resolution.distribution.as_bytes();
+    let valid_module = module
+        .first()
+        .is_some_and(|byte| byte.is_ascii_alphabetic() || *byte == b'_')
+        && module
+            .iter()
+            .all(|byte| byte.is_ascii_alphanumeric() || *byte == b'_');
+    let valid_distribution = distribution.first().is_some_and(u8::is_ascii_alphanumeric)
+        && distribution.last().is_some_and(u8::is_ascii_alphanumeric)
+        && distribution
+            .iter()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(*byte, b'-' | b'_' | b'.'));
+    if resolution.module == resolution.distribution
+        || !valid_module
+        || !valid_distribution
+        || !requirements.packages.contains(&resolution.distribution)
+    {
+        return Err("invalid automatic Python import resolution metadata".to_string());
+    }
+    Ok(())
 }
 
 fn select_r_activation(
@@ -1125,16 +1153,19 @@ impl Client {
             .ok_or_else(|| "managed Python environment is unavailable".to_string())?
             .managed_parts()?;
         let current = current.clone();
-        crate::python_requirement::validate_all(&request.requirements.packages)?;
-        crate::python_requirement::validate_all(&request.retained_requirements.packages)?;
+        let crate::worker_protocol::PythonResolveRequest {
+            requirements,
+            retained_requirements,
+            import_resolution,
+        } = request;
+        crate::python_requirement::validate_all(&requirements.packages)?;
+        crate::python_requirement::validate_all(&retained_requirements.packages)?;
+        crate::python_requirement::validate_version_constraints(&requirements.python_version)?;
         crate::python_requirement::validate_version_constraints(
-            &request.requirements.python_version,
+            &retained_requirements.python_version,
         )?;
-        crate::python_requirement::validate_version_constraints(
-            &request.retained_requirements.python_version,
-        )?;
-        let requirements = request.requirements.normalized();
-        let retained_requirements = request.retained_requirements.normalized();
+        let requirements = requirements.normalized();
+        let retained_requirements = retained_requirements.normalized();
         if requirements.packages != retained_requirements.packages
             || requirements.exclude_newer != retained_requirements.exclude_newer
         {
@@ -1142,6 +1173,9 @@ impl Client {
                 "Python resolution and retained requirements differ outside the Python version"
                     .to_string(),
             );
+        }
+        if let Some(resolution) = import_resolution.as_ref() {
+            validate_python_import_resolution(resolution, &retained_requirements)?;
         }
         if current.requirements() == &retained_requirements {
             self.ensure_generation(&generation)?;
@@ -1206,7 +1240,7 @@ impl Client {
         &self,
         generation: WorkerGeneration,
         requirements: crate::worker_protocol::PythonRequirementManifest,
-        candidates: &mut Vec<crate::resolver::ManagedPython>,
+        candidate: Option<crate::resolver::ManagedPython>,
     ) -> Result<OldGenerationCommitDisposition, String> {
         let environment = self
             .0
@@ -1225,8 +1259,7 @@ impl Client {
             .ok_or_else(|| "managed Python environment is unavailable".to_string())?
             .managed_parts()?
             .0;
-        let managed = select_python_activation(Some(current), requirements, candidates)?;
-        candidates.clear();
+        let managed = select_python_activation(Some(current), requirements, candidate)?;
         self.commit_locked_runtime_python(&generation, &mut environment, managed)
     }
 

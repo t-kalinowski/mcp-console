@@ -355,6 +355,17 @@ fn stdio_console_keeps_cancelled_gated_operation_ordered_until_it_stops() {
         "blocked response",
     );
     client.send_console(3, json!({"r": "complete after release"}));
+    // Flushing this 4 MiB input message cannot finish until the server's ordered
+    // input transport consumes the preceding request. Keep stdout blocked until
+    // this proves request 3 was reserved behind response 2.
+    write_message(
+        client.input.as_mut().expect("stdin should be open"),
+        &json!({
+            "jsonrpc": "2.0",
+            "method": "notifications/acceptance-test-barrier",
+            "params": {"padding": "b".repeat(4 * 1024 * 1024)}
+        }),
+    );
 
     let first = read_message(&mut client.output);
     assert_eq!(first["id"], 2, "{first}");

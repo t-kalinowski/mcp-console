@@ -852,9 +852,9 @@ impl WorkerCallbacks {
     fn activate_python(
         &self,
         requirements: crate::worker_protocol::PythonRequirementManifest,
-        candidates: &mut Vec<crate::resolver::ManagedPython>,
+        candidate: Option<crate::resolver::ManagedPython>,
     ) -> Result<OldGenerationCommitDisposition, String> {
         self.client
-            .activate_runtime_python(self.generation.clone(), requirements, candidates)
+            .activate_runtime_python(self.generation.clone(), requirements, candidate)
     }
 }

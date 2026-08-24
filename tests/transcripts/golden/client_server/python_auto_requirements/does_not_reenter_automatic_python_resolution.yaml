@@ -1,0 +1,81 @@
+---
+!same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
+---
+send:
+  python: None
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+send:
+  r: |
+    reticulate_namespace <- asNamespace("reticulate")
+    original_py_require <- get("py_require", envir = reticulate_namespace)
+    automatic_nested_calls <- 0L
+    automatic_nested_error <- NULL
+    automatic_nested_triggered <- FALSE
+    unlockBinding("py_require", reticulate_namespace)
+    assign(
+      "py_require",
+      function(...) {
+        if (!automatic_nested_triggered) {
+          automatic_nested_triggered <<- TRUE
+          automatic_nested_calls <<- automatic_nested_calls + 1L
+          automatic_nested_error <<- tryCatch(
+            {
+              reticulate::py_run_string(
+                "import mcp_console_nested_resolution_missing",
+                local = TRUE
+              )
+              NA_character_
+            },
+            error = conditionMessage
+          )
+        }
+        original_py_require(...)
+      },
+      envir = reticulate_namespace
+    )
+    lockBinding("py_require", reticulate_namespace)
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+send:
+  python: import yaml12; yaml12.__name__
+result:
+  content:
+    - type: text
+      text: |
+        [resolved PyPI distribution 'py-yaml12' for Python import 'yaml12']
+        'yaml12'
+  isError: false
+---
+send:
+  r: |
+    cat(
+      automatic_nested_calls,
+      grepl("mcp_console_nested_resolution_missing", automatic_nested_error, fixed = TRUE),
+      sep = "\n"
+    )
+result:
+  content:
+    - type: text
+      text: |
+        1
+        TRUE
+  isError: false
+---
+send:
+  python: 6 * 7
+result:
+  content:
+    - type: text
+      text: |
+        42
+  isError: false
+...

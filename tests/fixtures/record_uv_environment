@@ -4,7 +4,6 @@ import json
 import os
 import sys
 
-
 record = {
     name: os.environ.get(name)
     for name in ("UV_CACHE_DIR", "UV_DEFAULT_INDEX", "UV_OFFLINE")
@@ -12,6 +11,11 @@ record = {
 with open(os.environ["MCP_CONSOLE_TEST_UV_RECORD"], "a", encoding="utf-8") as stream:
     json.dump(record, stream, sort_keys=True)
     stream.write("\n")
+
+if arguments_record := os.environ.get("MCP_CONSOLE_TEST_UV_ARGUMENTS_RECORD"):
+    with open(arguments_record, "a", encoding="utf-8") as stream:
+        json.dump(sys.argv[1:], stream)
+        stream.write("\n")
 
 if r_libs_record := os.environ.get("MCP_CONSOLE_TEST_R_LIBS_RECORD"):
     with open(r_libs_record, "a", encoding="utf-8") as stream:
@@ -30,4 +34,12 @@ if (
     raise SystemExit(99)
 
 uv = os.environ["MCP_CONSOLE_TEST_REAL_UV"]
-os.execv(uv, [uv, *sys.argv[1:]])
+arguments = sys.argv[1:]
+substitute = os.environ.get("MCP_CONSOLE_TEST_UV_SUBSTITUTE_REQUIREMENT")
+replacement = os.environ.get("MCP_CONSOLE_TEST_UV_REPLACEMENT_REQUIREMENT")
+assert (substitute is None) == (replacement is None)
+if substitute and replacement:
+    arguments = [
+        replacement if argument == substitute else argument for argument in arguments
+    ]
+os.execv(uv, [uv, *arguments])

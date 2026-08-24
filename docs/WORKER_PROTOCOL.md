@@ -188,6 +188,10 @@ Their `packages` and `exclude_newer` values must match.
 Only `python_version` may differ, allowing physical resolution against an exact active Python patch version while preserving a logical constraint.
 The server validates both manifests and their requirement syntax before starting a resolver.
 
+An automatic import may also include `import_resolution` with `module` and `distribution` strings.
+The module must be a top-level ASCII Python identifier, the distribution must be a different bare package name present in both manifests, and this metadata is valid only during an evaluation.
+The server associates valid metadata with the provisional environment and emits a bounded notice only if the matching `python_activated` event commits it for the current generation.
+
 `resolve_python_version.request.constraints` is a required array of version constraints.
 A successful version reply creates no environment candidate and requires no `python_activated` receipt.
 
@@ -312,12 +316,15 @@ After initialization, any new resolved environment that the worker activates mus
 ### Nested managed-Python resolution
 
 A server-managed worker may send `resolve_python` or `resolve_python_version` during an evaluation, preparation, or idle runtime callback.
+The request may come from an evaluated Python import through the built-in private bridge, a reticulate API, or R package behavior.
 It then waits for exactly one matching success or failure reply.
 
 Every successful `python_resolved` reply is provisional.
 When the live runtime accepts that environment, the worker sends `python_activated` with the complete normalized logical manifest.
 The manifest must match a resolved candidate or the unchanged current managed environment.
 Activation is reported before the enclosing operation result.
+For automatic import resolution, `python_activated` is sent before the original import resumes.
+A later missing-module or language error does not undo that accepted environment.
 
 An explicit pre-initialization preparation may instead materialize the last resolved candidate and finish with `python_prepared` without activation.
 Other unmatched candidates are discarded when the enclosing operation ends.

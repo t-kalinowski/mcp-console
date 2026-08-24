@@ -69,6 +69,7 @@ def code(source: str) -> str:
 
 
 def normalize_python_resolution_error(error: str, invalid: str | None = None) -> str:
+    error = normalize_python_traceback_paths(error)
     error, python_patch = re.subn(
         r'(?m)^(  "python": "\d+\.\d+)\.\d+( \(reticulate default\))?(",)$',
         r"\1.x\2\3",
@@ -86,6 +87,27 @@ def normalize_python_resolution_error(error: str, invalid: str | None = None) ->
     assert python_version_patch == int(has_python_version), error
     if invalid is not None:
         assert invalid in error, error
+    return error
+
+
+def normalize_python_traceback_paths(error: str) -> str:
+    replacements = (
+        (
+            r'(?m)^(\s+File ")[^"\n]*/reticulate/python/(rpytools/loader\.py")',
+            r"\1<reticulate>/python/\2",
+        ),
+        (
+            r'(?m)^(\s+File ")[^"\n]*/lib/python\d+\.\d+/(importlib/__init__\.py")',
+            r"\1<python-stdlib>/\2",
+        ),
+        (
+            r'(?m)^(\s+File ")[^"\n]*/(tests/fixtures/checkpoint_uv")',
+            r"\1<workspace>/\2",
+        ),
+    )
+    for pattern, replacement in replacements:
+        error = re.sub(pattern, replacement, error)
+    assert re.search(r'(?m)^\s+File "/', error) is None, error
     return error
 
 

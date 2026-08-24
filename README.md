@@ -34,22 +34,13 @@ R and Python global state and the in-memory DuckDB catalog remain available unti
 Prepared requirements remain available across worker restarts, but in-memory language, database, debugger, and unread-input state does not.
 Requirements declared on `send` are prepared before its cell runs and remain available to later cells.
 Preparation makes packages and extensions available; it does not import, attach, or load them.
+The built-in worker resolves missing plain R packages and managed Python imports on demand.
+Use packages directly; declare an explicit Python requirement when exact distribution metadata is needed or automatic inference asks for it.
+Successful package additions survive restart, while attached packages, imported modules, and other in-memory state do not.
 
 ## Example workflow
 
-An agent investigating `measurements.csv` could first prepare Matplotlib through `session`:
-
-```json
-{
-  "action": "prepare",
-  "requirements": {
-    "python": ["matplotlib"]
-  }
-}
-```
-
-Each remaining block is one complete cell submitted through `send`.
-The agent could load the data and fit a model in R:
+An agent investigating `measurements.csv` could load the data and fit a model in one R cell submitted through `send`:
 
 ```r
 measurements <- readr::read_csv(
@@ -110,7 +101,7 @@ Submitted R, Python, and SQL have shell-class capability inside the worker sandb
 The worker can read host files, but direct network access and regular-file writes outside its private temporary directory are denied.
 This is a process boundary, not a safe evaluator for untrusted code with access to sensitive readable files.
 
-R and Python package installation and DuckDB extension installation run outside the worker sandbox with server permissions.
+The server installs automatically inferred or explicitly declared R and Python packages and DuckDB extensions outside the worker sandbox with server permissions.
 Those operations may access the network and execute installation or build code, so only trusted requirements should be supplied.
 See [Requirements and environments](docs/REQUIREMENTS.md) for the accepted inputs and trust model.
 

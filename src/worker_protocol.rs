@@ -104,11 +104,20 @@ pub(crate) fn default_python_requirement_manifest() -> PythonRequirementManifest
     }
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct PythonImportResolution {
+    pub(crate) module: String,
+    pub(crate) distribution: String,
+}
+
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct PythonResolveRequest {
     pub(crate) requirements: PythonRequirementManifest,
     pub(crate) retained_requirements: PythonRequirementManifest,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) import_resolution: Option<PythonImportResolution>,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -182,7 +191,10 @@ pub(crate) enum WorkerMessage {
 
 #[cfg(all(test, target_os = "macos"))]
 mod tests {
-    use super::{RResolutionFailureKind, ServerMessage, WorkerMessage};
+    use super::{
+        PythonImportResolution, PythonResolveRequest, RResolutionFailureKind, ServerMessage,
+        WorkerMessage, default_python_requirement_manifest,
+    };
 
     fn assert_encoding(message: &impl serde::Serialize, expected: &str) {
         assert_eq!(serde_json::to_string(message).unwrap(), expected);
@@ -293,5 +305,28 @@ mod tests {
         ] {
             assert_encoding(&message, expected);
         }
+    }
+
+    #[test]
+    fn python_import_resolution_metadata_rejects_unknown_fields_and_retains_its_encoding() {
+        assert!(
+            serde_json::from_str::<PythonResolveRequest>(
+                r#"{"requirements":{"packages":["numpy","pandas","py-yaml12"]},"retained_requirements":{"packages":["numpy","pandas","py-yaml12"]},"import_resolution":{"module":"yaml12","distribution":"py-yaml12","obsolete":true}}"#,
+            )
+            .is_err()
+        );
+        let mut requirements = default_python_requirement_manifest();
+        requirements.packages.push("py-yaml12".to_string());
+        assert_encoding(
+            &PythonResolveRequest {
+                requirements: requirements.clone(),
+                retained_requirements: requirements,
+                import_resolution: Some(PythonImportResolution {
+                    module: "yaml12".to_string(),
+                    distribution: "py-yaml12".to_string(),
+                }),
+            },
+            r#"{"requirements":{"packages":["numpy","pandas","py-yaml12"]},"retained_requirements":{"packages":["numpy","pandas","py-yaml12"]},"import_resolution":{"module":"yaml12","distribution":"py-yaml12"}}"#,
+        );
     }
 }

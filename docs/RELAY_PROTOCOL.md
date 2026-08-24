@@ -91,6 +91,7 @@ The relay can emit these flat frames:
 - `{"kind":"r_activated","library":"..."}` reports that the worker accepted a provisional R library.
 - `{"kind":"r_activation_failed","library":"...","message":"..."}` reports that the worker could not apply a provisional R library.
 - `{"kind":"resolve_python","request":{"requirements":{"packages":["numpy","pandas"]},"retained_requirements":{"packages":["numpy","pandas"]}}}` requests host Python-environment resolution.
+  For an inferred mapping, `request` may additionally contain `"import_resolution":{"module":"yaml12","distribution":"py-yaml12"}`.
 - `{"kind":"resolve_python_version","request":{"constraints":[]}}` requests host Python-version selection.
 - `{"kind":"python_activated","requirements":{"packages":["numpy","pandas"]}}` reports a retained managed-Python activation.
 - `{"kind":"python_prepared"}` returns the worker's explicit Python-preparation success result, including before Python initialization.
@@ -112,6 +113,7 @@ The relay can emit these flat frames:
 
 The [worker protocol](WORKER_PROTOCOL.md#nested-managed-r-resolution) defines runtime R resolution, failure classes, and activation ordering.
 Its [Python request section](WORKER_PROTOCOL.md#python-request-objects) defines the complete nested Python request and manifest schemas represented above.
+The relay preserves the optional `import_resolution` object unchanged.
 Worker semantic events are the worker-sideband message variants flattened into the relay event namespace.
 The relay translates them without changing the worker-sideband framing or message shapes.
 It does not run host resolvers, track provisional candidates, interpret activation, or commit retained environments; those are server responsibilities.

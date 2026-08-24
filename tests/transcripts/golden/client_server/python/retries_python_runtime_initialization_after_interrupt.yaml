@@ -4,12 +4,15 @@
 send:
   r: |
     invisible(suppressMessages(base::trace(
-      "import",
-      exit = quote({
-        if (identical(module, "_mcp_console")) {
+      "py_set_attr",
+      tracer = quote({
+        if (
+          identical(name, "operation") &&
+            identical(value, "configure_import_resolution")
+        ) {
           invisible(file.create(file.path(
             tempdir(),
-            "python-runtime-imported"
+            "python-runtime-configuring"
           )))
           repeat {}
         }
@@ -53,7 +56,7 @@ result:
 send:
   r: |
     invisible(suppressMessages(base::untrace(
-      "import",
+      "py_set_attr",
       where = asNamespace("reticulate")
     )))
     length(getHook("reticulate::matplotlib.pyplot::load"))
@@ -71,6 +74,16 @@ result:
     - type: text
       text: |
         42
+  isError: false
+---
+send:
+  python: import yaml12; yaml12.__name__
+result:
+  content:
+    - type: text
+      text: |
+        [resolved PyPI distribution 'py-yaml12' for Python import 'yaml12']
+        'yaml12'
   isError: false
 ---
 send:

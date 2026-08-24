@@ -1765,12 +1765,15 @@ def test_retries_python_runtime_initialization_after_interrupt(
             # fmt: r
             r = code(r"""
                 invisible(suppressMessages(base::trace(
-                  "import",
-                  exit = quote({
-                    if (identical(module, "_mcp_console")) {
+                  "py_set_attr",
+                  tracer = quote({
+                    if (
+                      identical(name, "operation") &&
+                        identical(value, "configure_import_resolution")
+                    ) {
                       invisible(file.create(file.path(
                         tempdir(),
-                        "python-runtime-imported"
+                        "python-runtime-configuring"
                       )))
                       repeat {}
                     }
@@ -1786,7 +1789,7 @@ def test_retries_python_runtime_initialization_after_interrupt(
             assert last_tool_text(client) == "\n[running]"
             wait_for_worker_file(
                 temporary_path,
-                "python-runtime-imported",
+                "python-runtime-configuring",
                 client,
             )
 
@@ -1802,7 +1805,7 @@ def test_retries_python_runtime_initialization_after_interrupt(
             # fmt: r
             r = code(r"""
                 invisible(suppressMessages(base::untrace(
-                  "import",
+                  "py_set_attr",
                   where = asNamespace("reticulate")
                 )))
                 length(getHook("reticulate::matplotlib.pyplot::load"))
@@ -1813,6 +1816,13 @@ def test_retries_python_runtime_initialization_after_interrupt(
             client.send(python="42")
             output = last_tool_text(client)
             assert output == "42\n", repr(output)
+            client.send(python="import yaml12; yaml12.__name__")
+            output = last_tool_text(client)
+            assert output == (
+                "[resolved PyPI distribution 'py-yaml12' "
+                "for Python import 'yaml12']\n"
+                "'yaml12'\n"
+            ), repr(output)
             # fmt: python
             python = code("""
                 import logging

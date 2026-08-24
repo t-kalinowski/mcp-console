@@ -266,6 +266,12 @@ impl Evaluation {
     }
 
     #[cfg(target_os = "macos")]
+    pub(super) fn bounded_notice(&self, message: String) -> Result<(), String> {
+        self.output.push_bounded_notice_line(message);
+        Ok(())
+    }
+
+    #[cfg(target_os = "macos")]
     pub(super) fn image(&self, data: String, mime_type: String) -> Result<(), String> {
         crate::transcript::validate_image_data(&data)?;
         self.output

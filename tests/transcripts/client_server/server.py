@@ -113,22 +113,28 @@ def test_initializes_and_lists_tools(binary: Path) -> Transcript:
         "Treat CRAN packages as available",
         "do not probe for installation or call `install.packages()`",
         "R source is not scanned in advance",
-        "Automatic additions are additive and retained across cells and restart",
+        "Successful automatic R and Python additions are cached, retained across cells, and reused after restart",
         "attaches it only through the user's original `library()` or `require()` call",
         "Use `requirements.r` only to stage packages ahead of time",
-        "Python imports and SQL are not scanned",
+        "missing imports are resolved on demand",
+        "curated mapping handles well-known differences between import names and PyPI distribution names",
+        "distribution name matches the top-level module",
+        "Import the packages best suited to the task instead of probing availability or running pip",
+        "Python source is not scanned in advance",
+        "Automatic Python imports infer only bare distribution names",
+        "Use `requirements.python` when the distribution differs from the inferred name",
+        "Explicit `requirements.python` accepts supported named PEP 508 registry requirements",
         "Explicit preparation does not load, import, or attach packages or extensions",
-        "If you use a custom Python installation, import packages already installed there directly",
+        "If you use a user-selected Python environment, import packages already installed there directly",
         "Call `send` sequentially",
         "ordinary console output",
         "cannot directly access the network",
-        "Automatic R resolution and managed Python resolution triggered by evaluated R code",
-        "Automatic R discovery accepts only plain package names",
-        "Managed Python accepts only named registry requirements",
+        "whether triggered by Python imports or evaluated R code",
+        "Automatic R discovery and Python import inference accept only plain names",
         "Managed Python version requests accept version numbers",
         "not interpreter selectors",
         "changes to `UV_*` made by evaluated code do not configure it",
-        "nonempty user-selected `RETICULATE_PYTHON` disables managed Python",
+        "nonempty user-selected `RETICULATE_PYTHON` disables automatic and explicit managed Python additions",
         "Package availability and system compatibility can still produce ordinary installation or load errors",
     ):
         assert guidance in send["description"], guidance
@@ -158,10 +164,18 @@ def test_initializes_and_lists_tools(binary: Path) -> Transcript:
         "The built-in managed Python environment includes NumPy and pandas"
         in python_description
     )
-    assert (
-        "If you use a custom Python installation, import packages already installed there directly"
-        in python_description
-    )
+    for guidance in (
+        "Import other packages directly",
+        "resolves a PyPI distribution on demand",
+        "curated mapping for well-known import/distribution differences",
+        "distribution matches the top-level module",
+        "Successful additions are retained across cells and restart",
+        "Python source is not scanned",
+        "Use `requirements.python` when exact distribution metadata is needed",
+        "user-selected Python environment disables both automatic resolution and managed requirements",
+        "install packages into that environment or restart with managed Python enabled",
+    ):
+        assert guidance in python_description, guidance
     assert "bounded preview" in send["inputSchema"]["properties"]["sql"]["description"]
     send_requirements_description = " ".join(
         send["inputSchema"]["properties"]["requirements"]["description"].split()
@@ -170,8 +184,11 @@ def test_initializes_and_lists_tools(binary: Path) -> Transcript:
         "prepare before this cell and retain for later cells",
         "Ordinary CRAN packages used by the built-in R worker need not be declared here",
         "use `requirements.r` to stage packages ahead of evaluation",
-        "Python imports and SQL are not scanned",
-        "The cell is not run if preparation fails or further changes require restart",
+        "missing imports normally resolve at runtime",
+        "Use `requirements.python` to stage a distribution before the cell",
+        "Python source is not pre-scanned",
+        "SQL does not trigger package discovery",
+        "The cell is not run if explicit preparation fails or further changes require restart",
         "Resolution runs outside the worker sandbox",
         "This field requires one `r`, `python`, or `sql` cell",
     ):
@@ -193,7 +210,7 @@ def test_initializes_and_lists_tools(binary: Path) -> Transcript:
         "once the cell has been dispatched",
         "Requirement preparation happens first",
         "may make the complete call take longer",
-        "Automatic R resolution is part of the running evaluation",
+        "Automatic R and Python import resolution are part of the running evaluation",
     ):
         assert guidance in timeout_description, guidance
     send_schema = json.dumps(send["inputSchema"])
@@ -204,7 +221,8 @@ def test_initializes_and_lists_tools(binary: Path) -> Transcript:
     for guidance in (
         "Make additional R or Python packages and DuckDB extensions available",
         "prepares DuckDB's JSON and ICU extensions by default",
-        "In the built-in worker, ordinary plain CRAN packages resolve automatically when used by R",
+        "missing Python imports resolve automatically in the server-managed environment",
+        "Import appropriate Python packages directly",
         "stage R packages ahead of a cell",
         "supply explicit IR references",
         "idle worker can add R requirements or DuckDB extensions",
@@ -212,15 +230,16 @@ def test_initializes_and_lists_tools(binary: Path) -> Transcript:
         "without losing live state",
         "evaluation remains available so state can be saved",
         "new requirement additions require restart",
-        "successfully activated automatic R additions are additive, idempotent, and persist across restart",
+        "successfully activated automatic R and Python additions are additive, idempotent, and persist across restart",
         "Preparation does not import, attach, or load packages or extensions",
-        "active automatic R or other host resolver",
+        "active automatic R or Python resolver",
         "loses all in-memory R, Python, and SQL state",
-        "named PEP 508 registry requirements only",
+        "Explicit managed Python additions accept named PEP 508 registry requirements",
         "paths, file URLs, editable requirements, direct references, local archives, and local projects are rejected",
         "server's startup `UV_*` configuration",
-        "nonempty user-selected `RETICULATE_PYTHON` disables managed Python requirements",
+        "nonempty user-selected `RETICULATE_PYTHON` disables automatic resolution and managed Python requirements",
         "Automatic R discovery accepts only plain package names",
+        "Use explicit `requirements.python` when exact distribution metadata is needed",
     ):
         assert guidance in session["description"], guidance
     session_schema = json.dumps(session["inputSchema"])
@@ -272,7 +291,7 @@ def test_initializes_and_lists_tools(binary: Path) -> Transcript:
         requirements_description
     )
     assert (
-        "Successfully activated automatic R additions also persist across restart"
+        "Successfully activated automatic R and Python additions also persist across restart"
         in (requirements_description)
     )
     r_requirements_description = " ".join(
@@ -294,9 +313,12 @@ def test_initializes_and_lists_tools(binary: Path) -> Transcript:
     )
     for guidance in (
         "named PEP 508 registry requirements",
-        "Extras, version specifiers, and environment markers are accepted",
+        "automatic import inference needs a different distribution",
+        "a version, an extra, or an environment marker",
+        "Automatic imports infer bare distribution names only",
         "Paths, file URLs, editable requirements, direct references, local archives, and local projects are rejected",
-        "nonempty user-selected `RETICULATE_PYTHON` disables managed Python requirements",
+        "Preparation does not import the package",
+        "nonempty user-selected `RETICULATE_PYTHON` disables automatic resolution and managed Python requirements",
     ):
         assert guidance in python_requirements_description, guidance
     duckdb_description = session["inputSchema"]["properties"]["requirements"][
