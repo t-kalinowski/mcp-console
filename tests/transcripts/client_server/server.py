@@ -91,7 +91,10 @@ def assert_invalid_send_has_no_external_effects(binary: Path) -> None:
 
 
 def test_initializes_and_lists_tools(binary: Path) -> Transcript:
-    client = McpClient(binary, ("serve",))
+    assert_limits_send_languages_from_environment(binary)
+    environment = os.environ.copy()
+    environment.pop("MCP_CONSOLE_LANGUAGES", None)
+    client = McpClient(binary, ("serve",), environment)
     assert client.temporary_directory is not None
     workspace = Path(client.temporary_directory.name)
     client._initialize_and_list_tools()
@@ -360,6 +363,42 @@ def test_initializes_and_lists_tools(binary: Path) -> Transcript:
     transcript = client._finish()
     assert not (workspace / ".mcp-console").exists(), workspace
     return transcript
+
+
+def assert_limits_send_languages_from_environment(binary: Path) -> None:
+    zod = Path(__file__).resolve().parents[2] / "fixtures" / "zod"
+    environment = os.environ.copy()
+    environment["MCP_CONSOLE_LANGUAGES"] = "r,sql"
+    client_directory = tempfile.TemporaryDirectory()
+    worker_started = Path(client_directory.name) / "zod-started"
+    environment["MCP_CONSOLE_TEST_ZOD_STARTED"] = str(worker_started)
+    client = McpClient(
+        binary,
+        ("serve", "--worker", str(zod)),
+        environment,
+    )
+    client._initialize_and_list_tools()
+
+    tools = {tool["name"]: tool for tool in client.transcript[-1]["result"]["tools"]}
+    send_properties = tools["send"]["inputSchema"]["properties"]
+    assert send_properties.keys() == {
+        "r",
+        "sql",
+        "requirements",
+        "stdin",
+        "timeout_ms",
+    }
+    result = client.send(python="raise AssertionError('disabled cell ran')")
+    assert result["isError"] is True, result
+    assert result["content"] == [
+        {
+            "type": "text",
+            "text": "`python` cells are disabled by `MCP_CONSOLE_LANGUAGES`",
+        }
+    ], result
+    assert not worker_started.exists(), worker_started
+    client._finish()
+    client_directory.cleanup()
 
 
 def test_validates_send_arguments(binary: Path) -> Transcript:

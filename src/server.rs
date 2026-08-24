@@ -7,7 +7,9 @@ use std::time::{Duration, Instant};
 
 use rmcp::{
     RoleServer, ServerHandler, ServiceExt,
-    handler::server::{common::Extension, tool::ToolCallContext, wrapper::Parameters},
+    handler::server::{
+        common::Extension, router::tool::ToolRouter, tool::ToolCallContext, wrapper::Parameters,
+    },
     model::{CallToolRequestParams, CallToolResult, ContentBlock, ErrorData},
     schemars,
     service::RequestContext,
@@ -19,12 +21,72 @@ use tokio::sync::oneshot;
 
 const WORKER_SHUTDOWN_GRACE: Duration = Duration::from_secs(1);
 const DEFAULT_TIMEOUT_MS: u64 = 60_000;
+// Internal eval configuration; intentionally not exposed through the CLI.
+const LANGUAGES_ENV: &str = "MCP_CONSOLE_LANGUAGES";
+
+#[derive(Clone, Copy, Default)]
+struct Languages {
+    r: bool,
+    python: bool,
+    sql: bool,
+}
+
+impl Languages {
+    fn from_environment() -> Result<Self, String> {
+        let Some(value) = std::env::var_os(LANGUAGES_ENV) else {
+            return Ok(Self::all());
+        };
+        let value = value
+            .into_string()
+            .map_err(|_| Self::invalid_configuration())?;
+        let mut languages = Self::default();
+        for language in value.split(',') {
+            match language {
+                "r" => languages.r = true,
+                "python" => languages.python = true,
+                "sql" => languages.sql = true,
+                _ => return Err(Self::invalid_configuration()),
+            }
+        }
+        Ok(languages)
+    }
+
+    fn all() -> Self {
+        Self {
+            r: true,
+            python: true,
+            sql: true,
+        }
+    }
+
+    fn enables(self, language: crate::cell::Language) -> bool {
+        match language {
+            crate::cell::Language::R => self.r,
+            crate::cell::Language::Python => self.python,
+            crate::cell::Language::Sql => self.sql,
+        }
+    }
+
+    fn field(language: crate::cell::Language) -> &'static str {
+        match language {
+            crate::cell::Language::R => "r",
+            crate::cell::Language::Python => "python",
+            crate::cell::Language::Sql => "sql",
+        }
+    }
+
+    fn invalid_configuration() -> String {
+        format!("`{LANGUAGES_ENV}` must be a comma-separated subset of `r`, `python`, and `sql`")
+    }
+}
 
 #[derive(Clone)]
 struct ConsoleServer {
     worker: crate::worker_client::Client,
     transcript: crate::transcript::Transcript,
     deliveries: crate::server_transport::ResponseDeliveries,
+    languages: Languages,
+    tool_router: ToolRouter<Self>,
 }
 
 #[derive(Deserialize, schemars::JsonSchema)]
@@ -171,6 +233,8 @@ fn default_timeout_ms() -> u64 {
 
 impl ConsoleServer {
     fn new(worker: Option<PathBuf>, relay: Option<PathBuf>) -> Result<Self, String> {
+        let languages = Languages::from_environment()?;
+        let tool_router = Self::configured_tool_router(languages);
         let transcript = crate::transcript::Transcript::new();
         let worker = match (worker, relay) {
             (Some(program), relay) => crate::worker_client::Client::new(program, relay)?,
@@ -181,7 +245,34 @@ impl ConsoleServer {
             worker,
             transcript,
             deliveries: crate::server_transport::ResponseDeliveries::default(),
+            languages,
+            tool_router,
         })
+    }
+
+    fn configured_tool_router(languages: Languages) -> ToolRouter<Self> {
+        let mut router = Self::tool_router();
+        let send = router
+            .map
+            .get_mut("send")
+            .expect("send tool must be registered");
+        let schema = Arc::make_mut(&mut send.attr.input_schema);
+        let properties = schema
+            .get_mut("properties")
+            .and_then(serde_json::Value::as_object_mut)
+            .expect("send schema must have object properties");
+        // Keep the normal tool prose and nested requirements unchanged; evals
+        // only need to project which direct code fields the client can call.
+        for (field, enabled) in [
+            ("r", languages.r),
+            ("python", languages.python),
+            ("sql", languages.sql),
+        ] {
+            if !enabled {
+                properties.shift_remove(field);
+            }
+        }
+        router
     }
 }
 
@@ -227,6 +318,14 @@ The built-in worker resolves ordinary CRAN packages and missing imports in its m
                 return Err("only one of `r`, `python`, or `sql` may be supplied".to_string());
             }
         };
+        if let Some(cell) = cell.as_ref()
+            && !self.languages.enables(cell.language)
+        {
+            return Err(format!(
+                "`{}` cells are disabled by `{LANGUAGES_ENV}`",
+                Languages::field(cell.language)
+            ));
+        }
         if requirements.is_some() && cell.is_none() {
             return Err("`requirements` requires a code cell".to_string());
         }
@@ -450,7 +549,7 @@ fn validate_requirements(
     Ok(())
 }
 
-#[tool_handler(name = "mcp-console")]
+#[tool_handler(name = "mcp-console", router = self.tool_router)]
 impl ServerHandler for ConsoleServer {
     async fn call_tool(
         &self,
@@ -459,7 +558,8 @@ impl ServerHandler for ConsoleServer {
     ) -> Result<CallToolResult, ErrorData> {
         let request_id = context.id.clone();
         if !matches!(request.name.as_ref(), "send" | "session") {
-            return Self::tool_router()
+            return self
+                .tool_router
                 .call(ToolCallContext::new(self, request, context))
                 .await;
         }
@@ -516,7 +616,7 @@ impl ServerHandler for ConsoleServer {
             Arc::into_inner(request).expect("transcript task should release the tool request");
         context.extensions.insert(call.clone());
         let result = Arc::new(
-            Self::tool_router()
+            self.tool_router
                 .call(ToolCallContext::new(self, request, context))
                 .await,
         );
