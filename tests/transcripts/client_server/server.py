@@ -97,109 +97,106 @@ def test_initializes_and_lists_tools(binary: Path) -> Transcript:
     client._initialize_and_list_tools()
     tools = {tool["name"]: tool for tool in client.transcript[-1]["result"]["tools"]}
     send = tools["send"]
+    send_description = " ".join(send["description"].split())
     for guidance in (
-        "Use it whenever exact computation or direct inspection would improve accuracy",
-        "arithmetic, string counting, parsing",
-        "Use a REPL-style workflow",
-        "final visible expression autoprints",
-        "A single assistant turn may make multiple sequential `send` calls",
-        "Concurrent calls are unsupported",
-        "Poll with an empty `send`",
+        "Persistent R, Python, and DuckDB SQL workbench",
+        "State persists across sequential calls",
+        "choose the clearest language for each step and switch between calls",
+        "Send one complete `r`, `python`, or `sql` cell per call",
+        "Calls must be sequential because only one evaluation can be active",
+        "leave the primary result last",
+        "R and Python display a final visible top-level expression",
+        "SQL returns a bounded preview",
+        "Cells are not transactional",
+        "`timeout_ms` limits how long the call waits",
+        "after dispatch or attachment",
+        "explicit requirement preparation can make the complete call take longer",
+        "does not cancel startup, dependency resolution, or evaluation",
+        "[running; poll with an empty send]",
+        "call `send` again without code or stdin",
+        "do not resubmit the cell",
+        "Send `stdin` without code to answer an active prompt or debugger",
         '`session(action = "interrupt")` to request interruption',
-        "Interactive prompts and debugger sessions remain active between calls",
-        'stdin = "sys.calls()\\n"',
-        'stdin = "c\\n"',
+        "`r.name`",
+        "`py$name`",
+        "SQL can query R data frames by name",
+        "`sql_connection()`",
+        "resolves ordinary CRAN packages and missing imports",
+        "Use `requirements` for explicit R references, exact Python distribution metadata, or DuckDB extensions",
+        "preparation makes dependencies available but does not import, attach, or load them",
+        "open `matplotlib.pyplot` figures return as PNG images",
+        "cannot directly access the network",
+        "write only in the worker's private temporary directory",
+        "Dependency resolution runs outside the sandbox",
+        "use only trusted dependencies",
+    ):
+        assert guidance in send_description, guidance
+    for tutorial in (
+        "```",
         "ls.str()",
         "reticulate::py_run_string",
         'DBI::dbGetQuery(sql_connection(), "SHOW TABLES")',
-        "A failed cell is not transactional",
+        'stdin = "sys.calls()\\n"',
+        'stdin = "c\\n"',
         "Inspect warnings before relying on a result",
-        "Choose the clearest language for each step",
-        "The default R environment includes tidyverse, reticulate, DBI, and duckdb",
-        "their full dependency sets",
-        "The built-in managed Python environment includes NumPy and pandas",
-        "Language-native help and introspection are available",
-        "`r.name`",
-        "`py$name`",
-        "SQL queries R data frames by name",
-        "`sql_connection()`",
-        "R package namespaces are resolved on demand",
-        "Treat CRAN packages as available",
-        "do not probe for installation or call `install.packages()`",
-        "R source is not scanned in advance",
-        "Successful automatic R and Python additions are cached, retained across cells, and reused after restart",
-        "attaches it only through the user's original `library()` or `require()` call",
-        "Use `requirements.r` only to stage packages ahead of time",
-        "missing imports are resolved on demand",
-        "curated mapping handles well-known differences between import names and PyPI distribution names",
-        "distribution name matches the top-level module",
-        "Import the packages best suited to the task instead of probing availability or running pip",
-        "Python source is not scanned in advance",
-        "Automatic Python imports infer only bare distribution names",
-        "Use `requirements.python` when the distribution differs from the inferred name",
-        "Explicit `requirements.python` accepts supported named PEP 508 registry requirements",
-        "Explicit preparation does not load, import, or attach packages or extensions",
-        "If you use a user-selected Python environment, import packages already installed there directly",
-        "Call `send` sequentially",
-        "ordinary console output",
-        "cannot directly access the network",
-        "whether triggered by Python imports or evaluated R code",
-        "Automatic R discovery and Python import inference accept only plain names",
-        "Managed Python version requests accept version numbers",
-        "not interpreter selectors",
-        "changes to `UV_*` made by evaluated code do not configure it",
-        "nonempty user-selected `RETICULATE_PYTHON` disables automatic and explicit managed Python additions",
-        "Package availability and system compatibility can still produce ordinary installation or load errors",
+        "coercion, overflow, dropped observations, or model convergence",
+        "200-column startup width",
+        "Responses remain ordinary text and image content",
     ):
-        assert guidance in send["description"], guidance
-    assert (
-        "Default-device plots" in send["inputSchema"]["properties"]["r"]["description"]
-    )
+        assert tutorial not in send_description, tutorial
     r_description = " ".join(
         send["inputSchema"]["properties"]["r"]["description"].split()
     )
     for guidance in (
+        "One complete R cell",
+        "persistent global state",
         "final visible expression autoprints",
-        "State persists across sequential calls",
-        "tidyverse, reticulate, DBI, duckdb, and their full dependency sets",
-        "Use other CRAN packages directly",
+        "Leave the primary result last",
+        "missing plain CRAN package names on demand",
         "`loadNamespace()`",
-        "resolves missing plain package names on demand and retains successful additions",
-        "does not attach it except through the original `library()` or `require()` call",
+        "do not probe package availability or call `install.packages()`",
+        "`py$name`",
+        "R data frames are directly queryable by name from later SQL cells",
+        "borrowed `sql_connection()`",
+        "do not disconnect it",
+        "Default-device plots return as PNG images",
+        "`options(console.plot.width",
+        "Omit this field for polling or stdin-only calls",
     ):
         assert guidance in r_description, guidance
-    assert "ggplot2::" not in r_description
-    assert "dplyr::" not in r_description
-    assert "readr::" not in r_description
-    assert "jsonlite::" not in r_description
     python_description = " ".join(
         send["inputSchema"]["properties"]["python"]["description"].split()
     )
-    assert "`matplotlib.pyplot`" in python_description
-    assert (
-        "The built-in managed Python environment includes NumPy and pandas"
-        in python_description
-    )
     for guidance in (
+        "One complete Python cell",
+        "persistent `__main__` state",
         "final visible expression autoprints",
-        "State persists across sequential calls",
-        "Import other packages directly",
+        "Leave the primary result last",
+        "When an import is missing",
         "resolves a PyPI distribution on demand",
         "curated mapping for well-known import/distribution differences",
         "distribution matches the top-level module",
-        "Successful additions are retained across cells and restart",
-        "Python source is not scanned",
-        "Use `requirements.python` when exact distribution metadata is needed",
+        "Use `requirements.python` when the distribution differs from the inferred name",
+        "exact registry metadata is needed",
         "user-selected Python environment disables both automatic resolution and managed requirements",
-        "install packages into that environment or restart with managed Python enabled",
+        "`r.name`",
+        "bind them to an R name first",
+        "open `matplotlib.pyplot` figure returns once as a PNG image and is closed",
+        "Omit this field for polling or stdin-only calls",
     ):
         assert guidance in python_description, guidance
     sql_description = " ".join(
         send["inputSchema"]["properties"]["sql"]["description"].split()
     )
     for guidance in (
-        "State persists across sequential calls",
+        "One complete DuckDB SQL cell",
+        "persistent catalog",
         "final query result returns a bounded preview",
+        "unqualified relation name can query a data frame in R global state",
+        "DuckDB table or view with the same name takes precedence",
+        "`SHOW TABLES`",
+        "DuckDB CLI dot commands are not supported",
+        "Omit this field for polling or stdin-only calls",
     ):
         assert guidance in sql_description, guidance
     send_requirements_description = " ".join(
@@ -212,10 +209,10 @@ def test_initializes_and_lists_tools(binary: Path) -> Transcript:
         "use `requirements.r` to stage packages ahead of evaluation",
         "missing imports normally resolve at runtime",
         "Use `requirements.python` to stage a distribution before the cell",
-        "Python source is not pre-scanned",
         "SQL does not trigger package discovery",
         "The cell is not run if explicit preparation fails or further changes require restart",
         "Resolution runs outside the worker sandbox",
+        "Use only trusted requirements",
         "This field requires one `r`, `python`, or `sql` cell",
     ):
         assert guidance in send_requirements_description, guidance
@@ -225,13 +222,17 @@ def test_initializes_and_lists_tools(binary: Path) -> Transcript:
     for guidance in (
         "Input for an active read, prompt, or debugger",
         "omit R, Python, and SQL code",
-        "inspect an R `browser()` frame with `sys.calls()`",
         "Its UTF-8 encoding is queued exactly",
+        "no newline is added",
+        "trailing `\\n`",
+        "requirement preparation completes first",
         "nonempty text is queued before the code is run",
         "an already waiting interactive read may consume it before the new cell begins",
-        "Empty text queues nothing",
+        "[waiting for stdin]",
+        "Unread text can satisfy later reads and is discarded by restart",
     ):
         assert guidance in stdin_description, guidance
+    assert "sys.calls()" not in stdin_description
     timeout_description = " ".join(
         send["inputSchema"]["properties"]["timeout_ms"]["description"].split()
     )
@@ -243,6 +244,7 @@ def test_initializes_and_lists_tools(binary: Path) -> Transcript:
         "Requirement preparation happens first",
         "may make the complete call take longer",
         "Automatic R and Python import resolution are part of the running evaluation",
+        "do not resubmit the cell",
     ):
         assert guidance in timeout_description, guidance
     send_schema = json.dumps(send["inputSchema"])
@@ -250,37 +252,23 @@ def test_initializes_and_lists_tools(binary: Path) -> Transcript:
     assert '"$ref"' not in send_schema, send["inputSchema"]
 
     session = tools["session"]
+    session_description = " ".join(session["description"].split())
     for guidance in (
-        "Manage requirements and the lifecycle of the persistent MCP Console worker",
-        "Use `prepare` when dependencies are known in advance",
-        "Inspect partial state before retrying the original cell",
-        "Interruption is cooperative",
-        "Poll afterward to determine whether execution stopped",
-        "Use `restart` only when a clean worker is required",
-        "Ordinary language errors do not normally require a restart",
-        "Make additional R or Python packages and DuckDB extensions available",
-        "prepares DuckDB's JSON and ICU extensions by default",
-        "normally resolves plain CRAN package names and missing managed-Python imports",
-        "Import appropriate Python packages directly",
-        "stage R packages ahead of a cell",
-        "supply explicit IR references",
-        "idle worker can add R requirements or DuckDB extensions",
-        "compatible Python additions require a server-managed worker",
-        "without losing live state",
-        "evaluation remains available so state can be saved",
-        "new requirement additions require restart",
-        "successfully activated automatic R and Python additions are additive, idempotent, and persist across restart",
+        "Manage dependencies and the lifecycle of the persistent worker",
+        "`prepare` makes additional R or Python requirements or DuckDB extensions available without evaluating a cell",
+        "`interrupt` requests SIGINT for the active host resolver or live worker and returns after sending the request",
+        "interruption is cooperative",
+        "if an evaluation remains active, use an empty `send` afterward to observe whether it stopped",
+        "`restart` optionally prepares requirements, replaces the worker, and discards all in-memory R, Python, SQL, debugger, and unread-stdin state",
+        "Requirements are additive, idempotent, and persist across restart",
         "Preparation does not import, attach, or load packages or extensions",
-        "active automatic R or Python resolver",
-        "loses all in-memory R, Python, and SQL state",
-        "Explicit managed Python additions accept named PEP 508 registry requirements",
-        "paths, file URLs, editable requirements, direct references, local archives, and local projects are rejected",
-        "server's startup `UV_*` configuration",
-        "nonempty user-selected `RETICULATE_PYTHON` disables automatic resolution and managed Python requirements",
-        "Automatic R discovery accepts only plain package names",
-        "Use explicit `requirements.python` when exact distribution metadata is needed",
+        "Use `restart` only when clean state or a restart-required dependency change is needed",
+        "ordinary language errors normally leave the worker reusable",
+        "Dependency resolution runs outside the sandbox",
+        "use only trusted requirements",
     ):
-        assert guidance in session["description"], guidance
+        assert guidance in session_description, guidance
+    assert "Inspect partial state before retrying" not in session_description
     session_schema = json.dumps(session["inputSchema"])
     assert '"$defs"' not in session_schema, session["inputSchema"]
     assert '"$ref"' not in session_schema, session["inputSchema"]

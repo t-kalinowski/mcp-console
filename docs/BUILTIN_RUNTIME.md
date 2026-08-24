@@ -372,7 +372,6 @@ Invalid UTF-8 from raw standard streams is replaced when projected to MCP text; 
 Bracketed records such as `[running; poll with an empty send]`, `[waiting for stdin]`, `[idle]`, mapped Python import resolutions, and worker-replacement notices are server state, not language output.
 R errors, Python exceptions, and DuckDB errors are ordinary console text and normally leave the worker reusable.
 Warnings are ordinary runtime output too.
-Inspect warnings before relying on a result, especially warnings about coercion, overflow, dropped observations, or model convergence.
 Host dependency-resolver failures during explicit preparation are MCP tool errors, but preserve any current worker and its in-memory state.
 An ordinary automatic R resolver failure is instead reported inside the running R evaluation.
 An ordinary automatic Python failure becomes an actionable `ModuleNotFoundError` in the running Python evaluation.
