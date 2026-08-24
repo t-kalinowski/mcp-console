@@ -1,0 +1,18 @@
+---
+!same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
+---
+send:
+  python: |
+    from joblib import Parallel, delayed
+
+    Parallel(n_jobs=2)(delayed(abs)(value) for value in range(-2, 3))
+  requirements:
+    python:
+      - joblib
+result:
+  content:
+    - type: text
+      text: |
+        [2, 1, 0, 1, 2]
+  isError: false
+...

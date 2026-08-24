@@ -270,6 +270,26 @@ def test_evaluates_with_explicit_managed_python(binary: Path) -> Transcript:
     return managed_python_transcript(binary, configured=True)
 
 
+def test_runs_joblib_process_backend(binary: Path) -> Transcript:
+    environment = os.environ.copy()
+    environment.pop("RETICULATE_PYTHON", None)
+    client = McpClient(binary, ("serve",), environment)
+    client._initialize_and_list_tools()
+    # fmt: python
+    python = code("""
+        from joblib import Parallel, delayed
+
+        Parallel(n_jobs=2)(delayed(abs)(value) for value in range(-2, 3))
+        """)
+    client.send(
+        python=python,
+        requirements={"python": ["joblib"]},
+    )
+    output = last_tool_text(client)
+    assert output == "[2, 1, 0, 1, 2]\n", repr(output)
+    return client._finish()
+
+
 def test_sends_python_cell_with_initial_requirements(binary: Path) -> Transcript:
     client = McpClient(binary, ("serve",))
     client._initialize_and_list_tools()

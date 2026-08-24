@@ -90,6 +90,8 @@
   (sysctl-name "kern.hostname")
   (sysctl-name "kern.maxfilesperproc")
   (sysctl-name "kern.maxproc")
+  ; Python's SC_SEM_NSEMS_MAX query reads this before joblib starts loky.
+  (sysctl-name "kern.sysv.semmns")
   ; Quarto's platform probes invoke sysctl(8) for this value.
   (sysctl-name "kern.ngroups")
   (sysctl-name "kern.osproductversion")
