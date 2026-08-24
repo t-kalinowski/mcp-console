@@ -445,15 +445,35 @@ def _mcp_console_take_images(_image_state=_mcp_console_image_state):
 
 
 def _mcp_console_configure_psutil(
+    _callable=_builtins.callable,
     _getattr=_builtins.getattr,
     _import_module=_importlib.import_module,
     _find_spec=_importlib_util.find_spec,
     _os=_os,
+    _sys=_sys,
 ):
-    if _find_spec("psutil") is None:
+    psutil = _sys.modules.get("psutil")
+    specification = (
+        _find_spec("psutil") if psutil is None else _getattr(psutil, "__spec__", None)
+    )
+    if specification is None or specification.origin is None:
         return None
-    psutil = _import_module("psutil")
-    if _getattr(psutil._psplatform.pids, "_mcp_console_sandbox", False):
+    metadata = _import_module("importlib.metadata")
+    try:
+        distribution = metadata.distribution("psutil")
+    except metadata.PackageNotFoundError:
+        return None
+    resolved = _os.path.realpath(specification.origin)
+    installed = _os.path.realpath(
+        _os.fspath(distribution.locate_file("psutil/__init__.py"))
+    )
+    if resolved != installed:
+        return None
+    if psutil is None:
+        psutil = _import_module("psutil")
+    platform = _getattr(psutil, "_psplatform", None)
+    pids = _getattr(platform, "pids", None)
+    if not _callable(pids) or _getattr(pids, "_mcp_console_sandbox", False):
         return None
 
     ctypes = _import_module("ctypes")
@@ -487,7 +507,7 @@ def _mcp_console_configure_psutil(
     process_group_ids._mcp_console_sandbox = True
     # Keep psutil's public wrapper so it retains its sorted-list contract. The
     # platform hook also survives activation during the first psutil import.
-    psutil._psplatform.pids = process_group_ids
+    platform.pids = process_group_ids
     return None
 
 

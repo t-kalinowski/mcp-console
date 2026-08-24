@@ -412,6 +412,43 @@ def test_inspects_sandbox_child_processes_with_psutil(binary: Path) -> Transcrip
     return client._finish()
 
 
+def test_does_not_import_local_psutil_during_bootstrap(binary: Path) -> Transcript:
+    with tempfile.TemporaryDirectory() as temporary:
+        directory = Path(temporary)
+        (directory / "psutil.py").write_text(
+            "import builtins\n"
+            "builtins.mcp_console_local_psutil_imported = True\n"
+            "answer = 42\n",
+            encoding="utf-8",
+        )
+        environment = os.environ.copy()
+        environment.pop("RETICULATE_PYTHON", None)
+        client = McpClient(
+            binary,
+            ("serve",),
+            environment,
+            current_directory=directory,
+        )
+        client._initialize_and_list_tools()
+        # fmt: python
+        python = code("""
+            import builtins
+            import sys
+
+            (
+                40 + 2,
+                hasattr(builtins, "mcp_console_local_psutil_imported"),
+                "psutil" in sys.modules,
+            )
+            """)
+        client.send(python=python)
+        output = last_tool_text(client)
+        assert output == "(42, False, False)\n", repr(output)
+        client.send(python="import psutil; psutil.answer")
+        assert last_tool_text(client) == "42\n"
+        return client._finish()
+
+
 def test_sends_python_cell_with_initial_requirements(binary: Path) -> Transcript:
     client = McpClient(binary, ("serve",))
     client._initialize_and_list_tools()
