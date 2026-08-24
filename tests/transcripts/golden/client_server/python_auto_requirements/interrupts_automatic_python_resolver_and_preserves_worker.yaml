@@ -55,15 +55,12 @@ result:
         }
         uv output:
         Traceback (most recent call last):
-          File "<workspace>/tests/fixtures/checkpoint_uv", line 36, in <module>
+          File "<workspace>/tests/fixtures/checkpoint_uv", line 39, in <module>
             main()
-            ~~~~^^
-          File "<workspace>/tests/fixtures/checkpoint_uv", line 30, in main
+          File "<workspace>/tests/fixtures/checkpoint_uv", line 33, in main
             checkpoint()
-            ~~~~~~~~~~^^
-          File "<workspace>/tests/fixtures/checkpoint_uv", line 26, in checkpoint
-            assert stream.read(1) == b"1"
-                   ~~~~~~~~~~~^^^
+          File "<workspace>/tests/fixtures/checkpoint_uv", line 29, in checkpoint
+            raise KeyboardInterrupt from None
         KeyboardInterrupt
 
         Import names and PyPI distribution names can differ. Retry with the correct distribution declared through `requirements.python` in the `send` call, for example:

@@ -16,14 +16,17 @@ def checkpoint() -> None:
         return
     os.close(descriptor)
 
-    started = os.environ["MCP_CONSOLE_TEST_UV_STARTED"]
-    descriptor = os.open(started, os.O_WRONLY | os.O_NONBLOCK)
-    with os.fdopen(descriptor, "wb", buffering=0) as stream:
-        stream.write(b"1")
+    try:
+        started = os.environ["MCP_CONSOLE_TEST_UV_STARTED"]
+        descriptor = os.open(started, os.O_WRONLY | os.O_NONBLOCK)
+        with os.fdopen(descriptor, "wb", buffering=0) as stream:
+            stream.write(b"1")
 
-    release = os.environ["MCP_CONSOLE_TEST_UV_RELEASE"]
-    with open(release, "rb", buffering=0) as stream:
-        assert stream.read(1) == b"1"
+        release = os.environ["MCP_CONSOLE_TEST_UV_RELEASE"]
+        with open(release, "rb", buffering=0) as stream:
+            assert stream.read(1) == b"1"
+    except KeyboardInterrupt:
+        raise KeyboardInterrupt from None
 
 
 def main() -> None:
