@@ -197,6 +197,9 @@ def test_initializes_and_lists_tools(binary: Path) -> Transcript:
         "unqualified relation name can query a data frame in R global state",
         "DuckDB table or view with the same name takes precedence",
         "`SHOW TABLES`",
+        "outside the worker's private temporary directory",
+        "`ATTACH 'path' AS name (READ_ONLY)`",
+        "the sandbox blocks DuckDB's default writable mode for those paths",
         "DuckDB CLI dot commands are not supported",
         "Omit this field for polling or stdin-only calls",
     ):

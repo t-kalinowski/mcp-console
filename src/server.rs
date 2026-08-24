@@ -62,9 +62,11 @@ struct SendArguments {
     python: Option<String>,
     /// One complete DuckDB SQL cell evaluated in the persistent catalog. The final query result returns
     /// a bounded preview. An unqualified relation name can query a data frame in R global state; a
-    /// DuckDB table or view with the same name takes precedence. Use `SHOW TABLES`, `DESCRIBE`,
-    /// `SUMMARIZE`, and `EXPLAIN` for discovery. DuckDB CLI dot commands are not supported. Omit this
-    /// field for polling or stdin-only calls.
+    /// DuckDB table or view with the same name takes precedence. When attaching an existing DuckDB
+    /// database outside the worker's private temporary directory, use
+    /// `ATTACH 'path' AS name (READ_ONLY)`; the sandbox blocks DuckDB's default writable mode for those
+    /// paths. Use `SHOW TABLES`, `DESCRIBE`, `SUMMARIZE`, and `EXPLAIN` for discovery. DuckDB CLI dot
+    /// commands are not supported. Omit this field for polling or stdin-only calls.
     sql: Option<String>,
     /// Additive R packages, Python packages, or DuckDB extensions to prepare before this cell and
     /// retain for later cells. Requirements are additive and persist for the session. Preparation does
