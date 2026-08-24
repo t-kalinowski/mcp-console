@@ -227,13 +227,14 @@ def test_initializes_and_lists_tools(binary: Path) -> Transcript:
         "Its UTF-8 encoding is queued exactly",
         "no newline is added",
         "trailing `\\n`",
-        "requirement preparation completes first",
-        "nonempty text is queued before the code is run",
+        "If requirements are also supplied, preparation completes first",
+        "When sent with a cell, nonempty text is queued before the code is run",
         "an already waiting interactive read may consume it before the new cell begins",
         "[waiting for stdin]",
         "Unread text can satisfy later reads and is discarded by restart",
     ):
         assert guidance in stdin_description, guidance
+    assert "When sent with requirements and a cell" not in stdin_description
     assert "sys.calls()" not in stdin_description
     timeout_description = " ".join(
         send["inputSchema"]["properties"]["timeout_ms"]["description"].split()

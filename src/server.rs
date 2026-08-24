@@ -80,11 +80,11 @@ struct SendArguments {
     requirements: Option<Requirements>,
     /// Input for an active read, prompt, or debugger. When responding to active input, omit R, Python,
     /// and SQL code and send stdin on its own. Its UTF-8 encoding is queued exactly; no newline is added.
-    /// Line-oriented input therefore normally needs a trailing `\n`. When sent with requirements and a
-    /// cell, requirement preparation completes first, then nonempty text is queued before the code is
-    /// run; an already waiting interactive read may consume it before the new cell begins. Empty text
-    /// queues nothing. If output ends in `[waiting for stdin]`, send the requested input here. Unread text
-    /// can satisfy later reads and is discarded by restart.
+    /// Line-oriented input therefore normally needs a trailing `\n`. If requirements are also supplied,
+    /// preparation completes first. When sent with a cell, nonempty text is queued before the code is run;
+    /// an already waiting interactive read may consume it before the new cell begins. Empty text queues
+    /// nothing. If output ends in `[waiting for stdin]`, send the requested input here. Unread text can
+    /// satisfy later reads and is discarded by restart.
     stdin: Option<String>,
     /// Maximum time this call waits once a cell has been dispatched or the call has attached to an
     /// active evaluation, including one automatic worker replacement attempt. Reaching the timeout
