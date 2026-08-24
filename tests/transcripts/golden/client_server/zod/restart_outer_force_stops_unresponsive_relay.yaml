@@ -9,7 +9,7 @@ result:
     - type: text
       text: |-
 
-        [running]
+        [running; poll with an empty send]
   isError: false
 ---
 session:

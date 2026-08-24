@@ -462,12 +462,12 @@ impl ResponseBuilder {
                     self.notice("done");
                 }
             }
-            TerminalState::Running => self.state_banner("running"),
+            TerminalState::Running => self.state_banner("running; poll with an empty send"),
             TerminalState::StdinNeeded => {
                 if self.needs_line_break() {
                     self.text("\n");
                 }
-                self.text(render_notice("stdin needed"));
+                self.text(render_notice("waiting for stdin"));
             }
             TerminalState::Idle => {
                 if !self.response.is_error() {
@@ -1528,10 +1528,13 @@ mod tests {
     fn every_terminal_state_uses_the_canonical_projection() {
         let cases = [
             (SendResponse::Completed(Response::default()), "[done]"),
-            (SendResponse::Running(Response::default()), "\n[running]"),
+            (
+                SendResponse::Running(Response::default()),
+                "\n[running; poll with an empty send]",
+            ),
             (
                 SendResponse::InputRequested(Response::default()),
-                "\n[stdin needed]",
+                "\n[waiting for stdin]",
             ),
             (SendResponse::Idle(Response::default()), "\n[idle]"),
             (

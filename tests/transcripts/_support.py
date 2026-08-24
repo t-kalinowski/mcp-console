@@ -314,7 +314,7 @@ def wait_for_evaluation_output(
         output = content[0]["text"]
         if output == expected:
             break
-        assert output == "\n[stdin needed]", repr(output)
+        assert output == "\n[waiting for stdin]", repr(output)
         assert time.monotonic() < deadline, f"{description} did not complete"
         result = client.send(timeout_ms=3_000)
 

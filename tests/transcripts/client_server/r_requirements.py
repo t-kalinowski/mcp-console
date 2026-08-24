@@ -277,7 +277,7 @@ def test_stops_live_preparation_for_idle_callback_input(binary: Path) -> Transcr
     release_worker_callback_gate(client, "idle input callback")
     wait_for_idle_output(
         client,
-        '[input requested: "later> "]\n[stdin needed]',
+        '[input requested: "later> "]\n[waiting for stdin]',
         "idle callback input request",
     )
     # Keep this distinct from the callback's retained requirement so activation

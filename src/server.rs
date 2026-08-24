@@ -30,14 +30,17 @@ struct ConsoleServer {
 #[derive(Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct SendArguments {
-    /// Complete multiline R cell evaluated in persistent global state. The default R environment
+    /// One complete R cell evaluated in persistent global state. Its final visible expression
+    /// autoprints through R's normal console display; R also autoprints earlier visible top-level
+    /// expressions. Leave the primary result last and use explicit printing only for additional
+    /// intermediate output. State persists across sequential calls. The default R environment
     /// includes tidyverse, reticulate, DBI, duckdb, and their full dependency sets, such as ggplot2,
-    /// dplyr, readr, and jsonlite. Use other CRAN packages directly through `library()`, `require()`,
-    /// `requireNamespace()`, `loadNamespace()`, `::`, or `:::`; the built-in worker resolves missing
-    /// plain package names on demand and retains successful additions. Resolution makes a package
-    /// available but does not attach it except through the original `library()` or `require()` call;
-    /// `pkg::fun()` loads only the namespace as usual. Do not probe package availability or call
-    /// `install.packages()`. Read
+    /// dplyr, readr, and jsonlite. Use other CRAN packages directly through
+    /// `library()`, `require()`, `requireNamespace()`, `loadNamespace()`, `::`, or `:::`; the built-in
+    /// worker resolves missing plain package names on demand and retains successful additions.
+    /// Resolution makes a package available but does not attach it except through the original
+    /// `library()` or `require()` call; `pkg::fun()` loads only the namespace as usual. Do not probe
+    /// package availability or call `install.packages()`. Read
     /// Python globals through `py$name`; for example,
     /// `df <- tibble::as_tibble(py$df)`. R data frames are directly queryable by name from later SQL
     /// cells. Access DuckDB tables and views through the borrowed `sql_connection()` with DBI or
@@ -46,55 +49,60 @@ struct SendArguments {
     /// `options(console.plot.width = ..., console.plot.height = ..., console.plot.dpi = ...)`;
     /// width and height are in inches. Omit to send stdin or poll.
     r: Option<String>,
-    /// Complete multiline Python cell evaluated in persistent `__main__` state; its final expression
-    /// is displayed. The built-in managed Python environment includes NumPy and pandas. Import other
-    /// packages directly. When an import is missing, the built-in worker resolves a PyPI distribution
-    /// on demand, using a curated mapping for well-known import/distribution differences and otherwise
-    /// assuming the distribution matches the top-level module. Successful additions are retained
-    /// across cells and restart. Python source is not scanned; resolution starts only when execution
-    /// reaches the import, and preparation does not itself import the package. Use
-    /// `requirements.python` when exact distribution metadata is needed or automatic inference asks
-    /// for it. A user-selected Python environment disables both automatic resolution and managed
-    /// requirements; install packages into that environment or restart with managed Python enabled.
-    /// Read R globals and call R functions through `r.name`; for example,
+    /// One complete Python cell evaluated in persistent `__main__` state. Its final visible expression
+    /// autoprints through Python's normal display hook. Leave the primary result last and use explicit
+    /// printing only for additional intermediate output. State persists across sequential calls. The
+    /// built-in managed Python environment includes NumPy and pandas. Import other packages directly.
+    /// When an import is missing, the built-in worker resolves a PyPI distribution on demand, using a
+    /// curated mapping for well-known import/distribution differences and otherwise assuming the
+    /// distribution matches the top-level module. Successful additions are retained across cells and
+    /// restart. Python source is not scanned; resolution starts only when execution reaches the import,
+    /// and preparation does not itself import the package. Use `requirements.python` when exact
+    /// distribution metadata is needed or automatic inference asks for it. A user-selected Python
+    /// environment disables both automatic resolution and managed requirements; install packages into
+    /// that environment or restart with managed Python enabled. Read R globals and call R functions
+    /// through `r.name`; for example,
     /// `frame = r.df`. Return Python globals to R through `py$name`. Python data frames are not
     /// automatically visible to SQL; bind them to an R name first. At cell end, including after a
     /// Python error, every open `matplotlib.pyplot` figure returns once as a PNG image and is closed.
     /// `show()` is optional. R plots called through `r` follow the R plot rules. Omit to send stdin or
     /// poll.
     python: Option<String>,
-    /// Complete DuckDB SQL cell evaluated in the persistent catalog. Use it for filtering, joins,
-    /// aggregation, and tabular inspection. An unqualified relation name can query a data frame in R
-    /// global state; a DuckDB table or view with the same name takes precedence. Query results return
-    /// a bounded preview. Use `SHOW TABLES`, `DESCRIBE`, `SUMMARIZE`, and `EXPLAIN` for discovery.
-    /// DuckDB CLI dot commands are not supported. Omit to send stdin or poll.
+    /// One complete DuckDB SQL cell evaluated in the persistent catalog. State persists across
+    /// sequential calls, and the final query result returns a bounded preview. Use SQL for filtering,
+    /// joins, aggregation, and tabular inspection. An unqualified relation name can query a data frame
+    /// in R global state; a DuckDB table or view with the same name takes precedence. Use `SHOW TABLES`,
+    /// `DESCRIBE`, `SUMMARIZE`, and `EXPLAIN` for discovery. DuckDB CLI dot commands are not supported.
+    /// Omit to send stdin or poll.
     sql: Option<String>,
     /// Additive R packages, Python packages, or DuckDB extensions to prepare before this cell and
-    /// retain for later cells. Preparation does not import, attach, or load them. Ordinary CRAN
-    /// packages used by the built-in R worker need not be declared here; use `requirements.r` to
-    /// stage packages ahead of evaluation or provide explicit IR references. In the built-in managed
-    /// Python environment, missing imports normally resolve at runtime. Use `requirements.python` to
-    /// stage a distribution before the cell, provide a version, extra, or marker, or correct automatic
-    /// inference. Python source is not pre-scanned, and SQL does not trigger package discovery. The
-    /// cell is not run if explicit preparation fails or further changes require restart. Resolution
-    /// runs outside the worker sandbox and may download packages or extensions or execute installation
-    /// or build code on the host. Use only trusted requirements. This field requires one `r`, `python`,
-    /// or `sql` cell.
+    /// retain for later cells. Requirements are additive and persist for the session. Preparation does
+    /// not import, attach, or load them. Ordinary CRAN packages used by the built-in R worker need not
+    /// be declared here; use `requirements.r` to stage packages ahead of evaluation or provide explicit
+    /// IR references. In the built-in managed Python environment, missing imports normally resolve at
+    /// runtime. Use `requirements.python` to stage a distribution before the cell, provide a version,
+    /// extra, or marker, or correct automatic inference. Python source is not pre-scanned, and SQL does
+    /// not trigger package discovery. The cell is not run if explicit preparation fails or further
+    /// changes require restart. Resolution runs outside the worker sandbox and may download packages
+    /// or extensions or execute installation or build code on the host. Use only trusted requirements.
+    /// This field requires one `r`, `python`, or `sql` cell.
     requirements: Option<Requirements>,
-    /// Text for interactive reads and debugger commands such as R `readline()` or `browser()` and
-    /// Python `input()`, `breakpoint()`, or `pdb`. Its UTF-8 encoding is queued exactly; no newline is
-    /// added. When sent with a cell, requirement preparation completes first, then nonempty text is
-    /// queued before the code is run; an already waiting interactive read may consume it before the
-    /// new cell begins. Empty text queues nothing. Send it on its own while the console is running or
-    /// idle. If output ends in `[stdin needed]`, send the requested input here. Unread text can satisfy
-    /// later reads and is discarded by restart.
+    /// Input for an active read, prompt, or debugger. When responding to active input, omit R, Python,
+    /// and SQL code and send stdin on its own. For example, inspect an R `browser()` frame with
+    /// `sys.calls()` and continue with `c`. Its UTF-8 encoding is queued exactly; no newline is added.
+    /// Line-oriented input therefore normally needs a trailing `\n`. When sent with a cell, requirement
+    /// preparation completes first, then nonempty text is queued before the code is run; an already
+    /// waiting interactive read may consume it before the new cell begins. Empty text queues nothing.
+    /// Send it on its own while the console is running or idle. If output ends in `[waiting for stdin]`,
+    /// send the requested input here. Unread text can satisfy later reads and is discarded by restart.
     stdin: Option<String>,
-    /// Maximum time this call waits once the cell has been dispatched, including one automatic
-    /// worker replacement attempt. Requirement preparation happens first and may make the complete
-    /// call take longer. Automatic R and Python import resolution are part of the running evaluation
-    /// and count toward this wait. On expiry, the call returns available output followed by the
-    /// current state, such as `[running]` or `[worker starting]`, without stopping the computation or
-    /// startup. Poll by calling `send` again without `r`, `python`, `sql`, or `stdin`.
+    /// Maximum time this call waits once a cell has been dispatched or the call has attached to an
+    /// active evaluation, including one automatic worker replacement attempt. Reaching the timeout
+    /// does not cancel evaluation, resolution, or startup. Requirement preparation happens first and
+    /// may make the complete call take longer. Automatic R and Python import resolution are part of
+    /// the running evaluation and count toward this wait. On expiry, the call returns available output
+    /// and a state marker, such as `[running; poll with an empty send]` or `[worker starting]`. If
+    /// evaluation remains active, poll with an empty `send` call; do not resubmit the cell.
     #[serde(default = "default_timeout_ms")]
     timeout_ms: u64,
 }
@@ -154,15 +162,16 @@ struct SessionArguments {
     action: SessionAction,
     /// Additive packages or DuckDB extensions to make available. `prepare` requires at least one R,
     /// Python, or DuckDB entry. `interrupt` accepts no requirements. `restart` accepts the same
-    /// additions; omit `requirements` to restart unchanged. Requirements persist across restart but
-    /// do not import, attach, or load packages or extensions. Successfully activated automatic R and
-    /// Python additions also persist across restart. After a recoverable live preparation or automatic
-    /// R activation failure, evaluation remains available so state can be saved, but new requirement
-    /// additions return `[restart required]` until restart. Resolution runs outside the worker sandbox
-    /// and may download packages or extensions or execute package installation or build code on the
-    /// host. Managed Python uses the server's startup resolver configuration; evaluated code cannot
-    /// configure that host resolver. Managed Python resolution, startup, and Matplotlib cache warming
-    /// may also execute selected code on the host; use only trusted requirements.
+    /// additions; omit `requirements` to restart unchanged. Requirements are additive and persist
+    /// across restart but do not import, attach, or load packages or extensions. Successfully activated
+    /// automatic R and Python additions also persist across restart. After a recoverable live
+    /// preparation or automatic R activation failure, evaluation remains available so state can be
+    /// saved, but new requirement additions return `[restart required]` until restart. Resolution runs
+    /// outside the worker sandbox and may download packages or extensions or execute package
+    /// installation or build code on the host. Managed Python uses the server's startup resolver
+    /// configuration; evaluated code cannot configure that host resolver. Managed Python resolution,
+    /// startup, and Matplotlib cache warming may also execute selected code on the host; use only
+    /// trusted requirements.
     requirements: Option<Requirements>,
 }
 
@@ -189,7 +198,47 @@ impl ConsoleServer {
 #[tool_router]
 impl ConsoleServer {
     #[tool(
-        description = "Persistent mixed-language computational workbench. Use it whenever exact computation or direct inspection would improve accuracy—from arithmetic, string counting, parsing, and file or binary-data inspection to data wrangling, exploratory analysis, visualization, statistics, simulation, and model training or tuning. Choose the clearest language for each step and switch freely between calls. The default R environment includes tidyverse, reticulate, DBI, and duckdb, together with their full dependency sets, such as ggplot2, dplyr, readr, and jsonlite. The built-in managed Python environment includes NumPy and pandas. DuckDB SQL is also available. State persists across calls. Python reads R globals through `r.name`; R reads Python globals through `py$name`; SQL queries R data frames by name; R accesses the DuckDB catalog through `sql_connection()`. Language-native help and introspection are available. In the built-in worker, R package namespaces are resolved on demand when an R cell first uses a missing plain CRAN package through `library()`, `require()`, `requireNamespace()`, `loadNamespace()`, `::`, or `:::`. Treat CRAN packages as available and use the packages best suited to the task; do not probe for installation or call `install.packages()`. Resolution is typically fast, especially after first use, because environments and package installations are cached. Resolution begins only when execution reaches one of those operations; R source is not scanned in advance. Resolution makes a package available but attaches it only through the user's original `library()` or `require()` call; `pkg::fun()` loads only its namespace, as usual. Use `requirements.r` only to stage packages ahead of time or provide an explicit IR reference such as a non-CRAN source. In the built-in managed Python environment, missing imports are resolved on demand. A curated mapping handles well-known differences between import names and PyPI distribution names; otherwise MCP Console assumes the distribution name matches the top-level module. Import the packages best suited to the task instead of probing availability or running pip. Resolution begins only when execution reaches the import; Python source is not scanned in advance. Preparation does not itself import a package; the original import continues normally. Successful automatic R and Python additions are cached, retained across cells, and reused after restart. Automatic Python imports infer only bare distribution names. Use `requirements.python` when the distribution differs from the inferred name, when a version, extra, or environment marker is needed, when an error asks for an exact requirement, or when the package should be prepared before the cell. Explicit `requirements.python` accepts supported named PEP 508 registry requirements. Explicit preparation does not load, import, or attach packages or extensions. If you use a user-selected Python environment, import packages already installed there directly. R default-device plots and open `matplotlib.pyplot` figures return as PNG images. Send exactly one complete `r`, `python`, or `sql` cell. Call `send` sequentially; concurrent calls are unsupported. Use `stdin` for interactive reads or debugger commands; omit code and stdin to poll an active evaluation or immediately collect output produced while the worker is idle. A wait timeout applies after a cell is dispatched and does not stop computation. Explicit requirement preparation happens first and can make the complete call take longer. Runtime R and Python import resolution are part of the running evaluation, so the wait can return `[running]` while a resolver continues; `session(action = \"interrupt\")` targets that resolver. Running work must be collected before new code is sent. R errors, Python exceptions, and DuckDB errors are ordinary console output, so inspect result text and continue or correct the cell. Evaluated code can read host files but cannot directly access the network and can write only within the worker's private temporary directory. Automatic R resolution and managed Python resolution, whether triggered by Python imports or evaluated R code, are host-side exceptions: they may access the network and execute installation or build code, so use only trusted packages. Automatic R discovery and Python import inference accept only plain names; use explicit requirements for other supported metadata. Managed Python version requests accept version numbers and supported PEP 440 comparison specifiers, not interpreter selectors. Python resolution uses the server's startup configuration; changes to `UV_*` made by evaluated code do not configure it. Starting the server with a nonempty user-selected `RETICULATE_PYTHON` disables automatic and explicit managed Python additions; install packages into that environment or restart with managed Python enabled. Package availability and system compatibility can still produce ordinary installation or load errors."
+        description = r#"Persistent mixed-language computational workbench. Use it whenever exact computation or direct inspection would improve accuracy—from arithmetic, string counting, parsing, and file or binary-data inspection to data wrangling, exploratory analysis, visualization, statistics, simulation, and model training or tuning. Choose the clearest language for each step and switch freely between calls.
+
+Send exactly one complete `r`, `python`, or `sql` cell. Runtime state persists across sequential calls. Use a REPL-style workflow: submit one coherent cell, inspect its result, and construct the next cell from what you learned. A single assistant turn may make multiple sequential `send` calls. Call `send` sequentially. Concurrent calls are unsupported, and only one evaluation may be active.
+
+Leave the primary result last. In R and Python, the final visible expression autoprints through the runtime's normal display method. R also autoprints earlier visible top-level expressions. SQL returns the final query result as a bounded preview. Use explicit printing only for additional intermediate output. R and Python data frames use their ordinary display methods with a 200-column startup width.
+
+R, Python, and SQL share one workbench. The default R environment includes tidyverse, reticulate, DBI, and duckdb, together with their full dependency sets, such as ggplot2, dplyr, readr, and jsonlite. The built-in managed Python environment includes NumPy and pandas. DuckDB SQL is also available. Python reads R globals through `r.name`; R reads Python globals through `py$name`; SQL queries R data frames by name; R accesses the DuckDB catalog through `sql_connection()`. Language-native help and introspection are available.
+
+Inspect persistent state with ordinary runtime code. For example, this executable R cell inventories R objects, Python globals, and DuckDB tables:
+
+```r
+ls.str()
+reticulate::py_run_string(
+  "print({k: type(v).__name__ for k, v in globals().items() if not k.startswith('_')})"
+)
+DBI::dbGetQuery(sql_connection(), "SHOW TABLES")
+```
+
+`timeout_ms` limits how long a call waits after dispatch or attachment; it does not cancel evaluation, runtime dependency resolution, or worker startup. Explicit requirement preparation happens first and can make the complete call take longer. If output ends in `[running; poll with an empty send]`, the evaluation has not completed. Poll with an empty `send`; do not resubmit the cell or submit unrelated code. Use `session(action = "interrupt")` to request interruption.
+
+Interactive prompts and debugger sessions remain active between calls. For example, submit this R cell:
+
+```r
+inspect_mean <- function(x) {
+  browser()
+  mean(x)
+}
+inspect_mean(c(1, 2, 3))
+```
+
+When R enters `Browse[1]>`, omit code and send newline-terminated debugger commands through stdin, such as `stdin = "sys.calls()\n"`, `stdin = "ls.str()\n"`, or `stdin = "x\n"`. Send `stdin = "c\n"` to continue or `stdin = "Q\n"` to quit. Do not submit a new R, Python, or SQL cell until the interactive evaluation finishes.
+
+R errors, Python exceptions, DuckDB errors, warnings, and stderr are ordinary console output. Inspect warnings before relying on a result, especially warnings about coercion, overflow, dropped observations, or model convergence. A failed cell is not transactional: objects or other changes created before an error may remain in the session. Inspect or reconstruct partial state before rerunning code.
+
+In the built-in worker, R package namespaces are resolved on demand when a cell first uses a missing plain CRAN package through `library()`, `require()`, `requireNamespace()`, `loadNamespace()`, `::`, or `:::`. Treat CRAN packages as available and use them directly; do not probe for installation or call `install.packages()`. R source is not scanned in advance. Resolution makes a package available but attaches it only through the user's original `library()` or `require()` call. Use `requirements.r` only to stage packages ahead of time or provide an explicit IR reference.
+
+In the built-in managed Python environment, missing imports are resolved on demand. A curated mapping handles well-known differences between import names and PyPI distribution names; otherwise MCP Console assumes the distribution name matches the top-level module. Import the packages best suited to the task instead of probing availability or running pip. Python source is not scanned in advance. Automatic Python imports infer only bare distribution names. Use `requirements.python` when the distribution differs from the inferred name, exact registry metadata is needed, or the package should be prepared before the cell. Explicit `requirements.python` accepts supported named PEP 508 registry requirements. If you use a user-selected Python environment, import packages already installed there directly.
+
+Successful automatic R and Python additions are cached, retained across cells, and reused after restart. Explicit preparation does not load, import, or attach packages or extensions. R default-device plots and open `matplotlib.pyplot` figures return as PNG images. Responses remain ordinary text and image content.
+
+Evaluated code can read host files but cannot directly access the network and can write only within the worker's private temporary directory. Automatic R resolution and managed Python resolution, whether triggered by Python imports or evaluated R code, run outside the worker sandbox and may access the network or execute installation or build code, so use only trusted packages. Automatic R discovery and Python import inference accept only plain names; use explicit requirements for other supported metadata. Managed Python version requests accept version numbers and supported PEP 440 comparison specifiers, not interpreter selectors. Python resolution uses the server's startup configuration; changes to `UV_*` made by evaluated code do not configure it. Starting the server with a nonempty user-selected `RETICULATE_PYTHON` disables automatic and explicit managed Python additions. Package availability and system compatibility can still produce ordinary installation or load errors."#
     )]
     async fn send(
         &self,
@@ -252,7 +301,25 @@ impl ConsoleServer {
     }
 
     #[tool(
-        description = "Make additional R or Python packages and DuckDB extensions available, request SIGINT for an active host resolver or otherwise send it to the live worker, or restart the persistent console session. The built-in worker prepares DuckDB's JSON and ICU extensions by default. In the built-in worker, ordinary plain CRAN packages resolve automatically when used by R, and missing Python imports resolve automatically in the server-managed environment. Import appropriate Python packages directly. Use `prepare` to stage R packages ahead of a cell, supply explicit IR references such as supported remote sources, add DuckDB extensions, or prepare an exact Python distribution, version, extra, or marker before a cell. Preparation does not import, attach, or load packages or extensions. An idle worker can add R requirements or DuckDB extensions without losing live state; compatible Python additions require a server-managed worker. Requirements and successfully activated automatic R and Python additions are additive, idempotent, and persist across restart. After a recoverable live preparation or automatic R activation failure, evaluation remains available so state can be saved, but new requirement additions require restart. Automatic Python imports infer bare distribution names only. Explicit managed Python additions accept named PEP 508 registry requirements; paths, file URLs, editable requirements, direct references, local archives, and local projects are rejected. Managed Python resolution uses the server's startup `UV_*` configuration, which evaluated code cannot change. A nonempty user-selected `RETICULATE_PYTHON` disables automatic resolution and managed Python requirements. `interrupt` returns after targeting an active automatic R or Python resolver, another host resolver, or the live worker; user code may catch or delay it. `restart` may optionally add R, Python, and DuckDB requirements, then replaces the worker and loses all in-memory R, Python, and SQL state, debugger state, and unread stdin. Requirement resolution runs outside the execution sandbox and may download packages or extensions or execute package installation or build code on the host; use only trusted requirements. Automatic R discovery accepts only plain package names; use explicit `requirements.r` for other IR references. Use explicit `requirements.python` when exact distribution metadata is needed or automatic inference reports that it cannot recover safely."
+        description = r#"Manage requirements and the lifecycle of the persistent MCP Console worker. Make additional R or Python packages and DuckDB extensions available, request interruption, or replace the worker.
+
+- `prepare` makes additional requirements available.
+- `interrupt` targets an active host resolver or otherwise requests SIGINT from the live worker.
+- `restart` optionally adds requirements, then replaces the worker and discards its in-memory state.
+
+Requirements and successfully activated automatic R and Python additions are additive, idempotent, and persist across restart. Preparation does not import, attach, or load packages or extensions.
+
+Use `prepare` when dependencies are known in advance, when an exact R or Python requirement is needed, or when automatic inference requests one. The built-in worker normally resolves plain CRAN package names and missing managed-Python imports as execution reaches them. Import appropriate Python packages directly. Inspect partial state before retrying the original cell because failed cells are not transactional.
+
+Interruption is cooperative: runtime code may catch or delay it. The `interrupt` call returns after targeting an active automatic R or Python resolver, another host resolver, or the live worker; it does not wait for evaluation to stop. Poll afterward to determine whether execution stopped.
+
+Use `restart` only when a clean worker is required or dependency activation cannot recover. Restart loses all in-memory R, Python, and SQL state, debugger state, and unread stdin. Ordinary language errors do not normally require a restart.
+
+The built-in worker prepares DuckDB's JSON and ICU extensions by default. Use `prepare` to stage R packages ahead of a cell, supply explicit IR references such as supported remote sources, add DuckDB extensions, or prepare an exact Python distribution, version, extra, or marker. An idle worker can add R requirements or DuckDB extensions without losing live state; compatible Python additions require a server-managed worker. After a recoverable live preparation or automatic R activation failure, evaluation remains available so state can be saved, but new requirement additions require restart.
+
+Automatic Python imports infer bare distribution names only. Explicit managed Python additions accept named PEP 508 registry requirements; paths, file URLs, editable requirements, direct references, local archives, and local projects are rejected. Managed Python resolution uses the server's startup `UV_*` configuration, which evaluated code cannot change. A nonempty user-selected `RETICULATE_PYTHON` disables automatic resolution and managed Python requirements.
+
+Requirement resolution runs outside the execution sandbox and may download packages or extensions or execute package installation or build code on the host; use only trusted requirements. Automatic R discovery accepts only plain package names; use explicit `requirements.r` for other IR references. Use explicit `requirements.python` when exact distribution metadata is needed or automatic inference reports that it cannot recover safely."#
     )]
     async fn session(
         &self,
