@@ -37,4 +37,5 @@ def test_blocks_before_queued_case(binary: Path) -> list[dict[str, str]]:
 
 
 def test_runs_after_blocked_case(binary: Path) -> list[dict[str, str]]:
+    test_initializes_and_lists_tools(binary)
     return [{"runner": "queued"}]

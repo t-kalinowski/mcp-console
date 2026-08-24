@@ -278,6 +278,7 @@ fn transcript_test_script_does_not_time_cases_waiting_for_a_worker() {
     });
 
     let running_prefix = "client_server/server::blocks_before_queued_case: running for ";
+    let queued_running_prefix = "client_server/server::runs_after_blocked_case: running for ";
     let deadline = Instant::now() + Duration::from_secs(10);
     let mut lines = Vec::new();
     let observed = loop {
@@ -304,18 +305,59 @@ fn transcript_test_script_does_not_time_cases_waiting_for_a_worker() {
     );
 
     release_gate.write_all(b"1").unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let observed = loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        match receiver.recv_timeout(remaining) {
+            Ok(line) => {
+                let matched = line.starts_with(queued_running_prefix);
+                lines.push(line);
+                if matched {
+                    break true;
+                }
+            }
+            Err(_) => break false,
+        }
+    };
+    if !observed {
+        panic!("queued case was not reported after starting: {lines:?}");
+    }
+
+    release_gate.write_all(b"1").unwrap();
     let (status, stderr) = wait_for_runner(child);
     reader.join().unwrap();
     lines.extend(receiver.try_iter());
 
     assert!(status.success(), "transcript test failed: {stderr}");
-    assert_eq!(lines.len(), 3, "unexpected stdout: {lines:?}");
-    assert!(lines[0].starts_with(running_prefix));
+    let prefixes = [
+        running_prefix,
+        "client_server/server::blocks_before_queued_case: finished in ",
+        queued_running_prefix,
+        "client_server/server::runs_after_blocked_case: finished in ",
+    ];
     assert!(
-        lines[1].starts_with("client_server/server::blocks_before_queued_case: finished in "),
-        "missing completion line: {lines:?}"
+        lines.iter().all(|line| {
+            prefixes.iter().any(|prefix| line.starts_with(prefix))
+                || (!line.is_empty() && line.bytes().all(|byte| byte == b'.'))
+        }),
+        "unexpected stdout: {lines:?}"
     );
-    assert_eq!(lines[2], "..");
+    for prefix in prefixes {
+        assert_eq!(
+            lines.iter().filter(|line| line.starts_with(prefix)).count(),
+            1,
+            "unexpected stdout: {lines:?}"
+        );
+    }
+    assert_eq!(
+        lines
+            .iter()
+            .filter(|line| !line.is_empty() && line.bytes().all(|byte| byte == b'.'))
+            .map(String::len)
+            .sum::<usize>(),
+        2,
+        "unexpected stdout: {lines:?}"
+    );
 }
 
 #[cfg(unix)]
