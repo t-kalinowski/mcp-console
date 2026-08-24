@@ -1160,7 +1160,10 @@ def test_idle_runtime_r_resolution_owns_environment_until_activation(
             )
             _tool_error(preparation, "idle runtime R callback owns environment changes")
 
-            assert _tool_text(client.send(r="42", timeout_ms=0)) == "\n[running]"
+            assert (
+                _tool_text(client.send(r="42", timeout_ms=0))
+                == "\n[running; poll with an empty send]"
+            )
             resolver_release.release()
             resolver_released = True
             ready.wait()

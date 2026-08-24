@@ -81,8 +81,8 @@ def send_and_collect_runtime_r_resolution(
         output = last_tool_text(client)
         # A timeout can drain final R output before the completion event,
         # so retain every output delta instead of only the last poll.
-        if output.endswith("\n[running]"):
-            chunks.append(output.removesuffix("\n[running]"))
+        if output.endswith("\n[running; poll with an empty send]"):
+            chunks.append(output.removesuffix("\n[running; poll with an empty send]"))
             if attempt == 4:
                 raise AssertionError(
                     "automatic R resolution remained running after five responses: "
@@ -569,7 +569,10 @@ def test_restart_discards_unactivated_r_candidate(binary: Path) -> Transcript:
 
             restart = client._start_session(action="restart")
             client._receive_many([evaluation, restart])
-            assert last_tool_text_from_entry(evaluation) == "\n[running]"
+            assert (
+                last_tool_text_from_entry(evaluation)
+                == "\n[running; poll with an empty send]"
+            )
             assert last_tool_text_from_entry(restart) == (
                 "[active evaluation stopped by session restart request]\n"
                 "[worker stopped: in-memory state lost]\n"

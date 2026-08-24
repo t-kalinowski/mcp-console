@@ -14,7 +14,7 @@ result:
     - type: text
       text: |-
         [input requested: "R interrupt> "]
-        [stdin needed]
+        [waiting for stdin]
   isError: false
 ---
 session:
@@ -58,7 +58,7 @@ result:
     - type: text
       text: |-
         [input requested: "R suspended> "]
-        [stdin needed]
+        [waiting for stdin]
   isError: false
 ---
 session:
@@ -102,7 +102,7 @@ result:
     - type: text
       text: |-
         [input requested: "Python interrupt> "]
-        [stdin needed]
+        [waiting for stdin]
   isError: false
 ---
 session:

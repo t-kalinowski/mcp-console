@@ -13,7 +13,7 @@ result:
     - type: text
       text: |-
 
-        [running]
+        [running; poll with an empty send]
   isError: false
 ---
 send:
@@ -24,7 +24,7 @@ result:
       text: |-
         before
         [input requested: "partial> "]
-        [stdin needed]
+        [waiting for stdin]
   isError: false
 ---
 send:

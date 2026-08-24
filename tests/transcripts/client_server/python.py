@@ -1567,7 +1567,7 @@ def test_rejects_python_preparation_while_evaluation_is_running(
                 time.sleep(0.01)
             """)
         client.send(python=python, timeout_ms=0)
-        assert last_tool_text(client) == "\n[running]"
+        assert last_tool_text(client) == "\n[running; poll with an empty send]"
         client.transcript[-1]["result"]["content"][0]["text"] = "<running>"
         running = wait_for_worker_file(
             Path(temporary_directory),
@@ -1650,7 +1650,7 @@ def test_interrupts_running_python_evaluation(binary: Path) -> Transcript:
             assert output == "[done]", repr(output)
 
             client.send(python="42", timeout_ms=0)
-            assert last_tool_text(client) == "\n[running]"
+            assert last_tool_text(client) == "\n[running; poll with an empty send]"
             wait_for_worker_file(
                 temporary_path,
                 "python-r-interrupt-started",
@@ -1707,7 +1707,7 @@ def test_interrupts_running_python_evaluation(binary: Path) -> Transcript:
                     pass
                 """)
             client.send(python=python, timeout_ms=0)
-            assert last_tool_text(client) == "\n[running]"
+            assert last_tool_text(client) == "\n[running; poll with an empty send]"
             wait_for_worker_file(
                 temporary_path,
                 "python-interrupt-started",
@@ -1786,7 +1786,7 @@ def test_retries_python_runtime_initialization_after_interrupt(
             assert last_tool_text(client) == "[done]"
 
             client.send(python="42", timeout_ms=0)
-            assert last_tool_text(client) == "\n[running]"
+            assert last_tool_text(client) == "\n[running; poll with an empty send]"
             wait_for_worker_file(
                 temporary_path,
                 "python-runtime-configuring",
@@ -2810,7 +2810,7 @@ def test_routes_python_input(binary: Path) -> Transcript:
         name
         """)
     client.send(python=python)
-    assert last_tool_text(client) == '[input requested: "name> "]\n[stdin needed]'
+    assert last_tool_text(client) == '[input requested: "name> "]\n[waiting for stdin]'
     client.send(stdin="Ada\n")
     assert last_tool_text(client) == "'Ada'\n"
 
@@ -2849,7 +2849,9 @@ def test_python_debugger_input(binary: Path) -> Transcript:
     client.send(python=python, stdin="p debug_value\n")
     output = last_tool_text(client)
     assert output.count('[input requested: "(Pdb) "]') == 2, output
-    assert output.endswith('41\n[input requested: "(Pdb) "]\n[stdin needed]'), output
+    assert output.endswith('41\n[input requested: "(Pdb) "]\n[waiting for stdin]'), (
+        output
+    )
 
     wait_for_evaluation_output(
         client,

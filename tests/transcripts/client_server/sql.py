@@ -735,7 +735,7 @@ def test_interrupts_running_sql_query(binary: Path) -> Transcript:
                 FROM range(1000000000000) AS values(value)
                 """)
             client.send(sql=sql, timeout_ms=0)
-            assert last_tool_text(client) == "\n[running]"
+            assert last_tool_text(client) == "\n[running; poll with an empty send]"
             wait_for_worker_file(
                 temporary_path,
                 "sql-interrupt-started",
@@ -1148,7 +1148,7 @@ def test_bounds_query_previews_without_materializing_results(
     assert "a" * 161 not in wide
     assert f'"{"z" * 159}…"' in long_cell
     assert "[cell values truncated to 160 characters]" in long_cell
-    assert large != "\n[running]"
+    assert large != "\n[running; poll with an empty send]"
     assert len(large.encode("utf-8")) <= 12 * 1024
     assert "[additional rows omitted]" in large
     return transcript

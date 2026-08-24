@@ -10,7 +10,7 @@ result:
     - type: text
       text: |-
         [input requested: "restart> "]
-        [stdin needed]
+        [waiting for stdin]
   isError: false
 ---
 session:

@@ -27,7 +27,7 @@ result:
         [input requested: "Browse[1]> "]
         debug at #6: value
         [input requested: "Browse[1]> "]
-        [stdin needed]
+        [waiting for stdin]
   isError: false
 ---
 send:

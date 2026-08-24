@@ -100,6 +100,20 @@ def test_initializes_and_lists_tools(binary: Path) -> Transcript:
     for guidance in (
         "Use it whenever exact computation or direct inspection would improve accuracy",
         "arithmetic, string counting, parsing",
+        "Use a REPL-style workflow",
+        "final visible expression autoprints",
+        "A single assistant turn may make multiple sequential `send` calls",
+        "Concurrent calls are unsupported",
+        "Poll with an empty `send`",
+        '`session(action = "interrupt")` to request interruption',
+        "Interactive prompts and debugger sessions remain active between calls",
+        'stdin = "sys.calls()\\n"',
+        'stdin = "c\\n"',
+        "ls.str()",
+        "reticulate::py_run_string",
+        'DBI::dbGetQuery(sql_connection(), "SHOW TABLES")',
+        "A failed cell is not transactional",
+        "Inspect warnings before relying on a result",
         "Choose the clearest language for each step",
         "The default R environment includes tidyverse, reticulate, DBI, and duckdb",
         "their full dependency sets",
@@ -145,6 +159,8 @@ def test_initializes_and_lists_tools(binary: Path) -> Transcript:
         send["inputSchema"]["properties"]["r"]["description"].split()
     )
     for guidance in (
+        "final visible expression autoprints",
+        "State persists across sequential calls",
         "tidyverse, reticulate, DBI, duckdb, and their full dependency sets",
         "Use other CRAN packages directly",
         "`loadNamespace()`",
@@ -165,6 +181,8 @@ def test_initializes_and_lists_tools(binary: Path) -> Transcript:
         in python_description
     )
     for guidance in (
+        "final visible expression autoprints",
+        "State persists across sequential calls",
         "Import other packages directly",
         "resolves a PyPI distribution on demand",
         "curated mapping for well-known import/distribution differences",
@@ -176,11 +194,19 @@ def test_initializes_and_lists_tools(binary: Path) -> Transcript:
         "install packages into that environment or restart with managed Python enabled",
     ):
         assert guidance in python_description, guidance
-    assert "bounded preview" in send["inputSchema"]["properties"]["sql"]["description"]
+    sql_description = " ".join(
+        send["inputSchema"]["properties"]["sql"]["description"].split()
+    )
+    for guidance in (
+        "State persists across sequential calls",
+        "final query result returns a bounded preview",
+    ):
+        assert guidance in sql_description, guidance
     send_requirements_description = " ".join(
         send["inputSchema"]["properties"]["requirements"]["description"].split()
     )
     for guidance in (
+        "additive and persist for the session",
         "prepare before this cell and retain for later cells",
         "Ordinary CRAN packages used by the built-in R worker need not be declared here",
         "use `requirements.r` to stage packages ahead of evaluation",
@@ -197,6 +223,9 @@ def test_initializes_and_lists_tools(binary: Path) -> Transcript:
         send["inputSchema"]["properties"]["stdin"]["description"].split()
     )
     for guidance in (
+        "Input for an active read, prompt, or debugger",
+        "omit R, Python, and SQL code",
+        "inspect an R `browser()` frame with `sys.calls()`",
         "Its UTF-8 encoding is queued exactly",
         "nonempty text is queued before the code is run",
         "an already waiting interactive read may consume it before the new cell begins",
@@ -207,7 +236,10 @@ def test_initializes_and_lists_tools(binary: Path) -> Transcript:
         send["inputSchema"]["properties"]["timeout_ms"]["description"].split()
     )
     for guidance in (
-        "once the cell has been dispatched",
+        "Maximum time this call waits",
+        "does not cancel evaluation",
+        "poll with an empty `send` call",
+        "once a cell has been dispatched or the call has attached",
         "Requirement preparation happens first",
         "may make the complete call take longer",
         "Automatic R and Python import resolution are part of the running evaluation",
@@ -219,9 +251,16 @@ def test_initializes_and_lists_tools(binary: Path) -> Transcript:
 
     session = tools["session"]
     for guidance in (
+        "Manage requirements and the lifecycle of the persistent MCP Console worker",
+        "Use `prepare` when dependencies are known in advance",
+        "Inspect partial state before retrying the original cell",
+        "Interruption is cooperative",
+        "Poll afterward to determine whether execution stopped",
+        "Use `restart` only when a clean worker is required",
+        "Ordinary language errors do not normally require a restart",
         "Make additional R or Python packages and DuckDB extensions available",
         "prepares DuckDB's JSON and ICU extensions by default",
-        "missing Python imports resolve automatically in the server-managed environment",
+        "normally resolves plain CRAN package names and missing managed-Python imports",
         "Import appropriate Python packages directly",
         "stage R packages ahead of a cell",
         "supply explicit IR references",

@@ -40,7 +40,7 @@ result:
     - type: text
       text: |-
         [input requested: "later> "]
-        [stdin needed]
+        [waiting for stdin]
   isError: false
 ---
 send:

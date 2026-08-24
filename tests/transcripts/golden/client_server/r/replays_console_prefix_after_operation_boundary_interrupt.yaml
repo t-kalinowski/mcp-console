@@ -20,7 +20,7 @@ result:
       text: |-
         [input requested: "small callbacks> "]
         [input requested: "small callbacks> "]
-        [stdin needed]
+        [waiting for stdin]
   isError: false
 ---
 session:
@@ -76,7 +76,7 @@ result:
     - type: text
       text: |-
         [input requested: "between callbacks> "]
-        [stdin needed]
+        [waiting for stdin]
   isError: false
 ---
 send:
@@ -87,7 +87,7 @@ result:
     - type: text
       text: |-
 
-        [running]
+        [running; poll with an empty send]
   isError: false
 ---
 session:

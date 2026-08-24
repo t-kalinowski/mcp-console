@@ -39,7 +39,7 @@ result:
         [output produced while idle]
         zod cell output before completion
 
-        [running]
+        [running; poll with an empty send]
   isError: false
 ---
 send:
@@ -69,7 +69,7 @@ result:
         zod background sideband
         [output produced while idle]
         [input requested: "zod> "]
-        [stdin needed]
+        [waiting for stdin]
   isError: false
 ---
 send:

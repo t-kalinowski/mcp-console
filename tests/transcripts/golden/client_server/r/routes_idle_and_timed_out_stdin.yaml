@@ -43,7 +43,7 @@ result:
     - type: text
       text: |-
 
-        [running]
+        [running; poll with an empty send]
   isError: false
 ---
 send:
@@ -53,7 +53,7 @@ result:
     - type: text
       text: |-
 
-        [running]
+        [running; poll with an empty send]
   isError: false
 ---
 send:
@@ -64,7 +64,7 @@ result:
     - type: text
       text: |-
 
-        [running]
+        [running; poll with an empty send]
   isError: false
 ---
 send:

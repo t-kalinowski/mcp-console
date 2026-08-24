@@ -704,11 +704,13 @@ def test_flushes_calls_and_keeps_unpolled_images(binary: Path) -> Transcript:
             timeout_ms=0,
         )
         assert client.transcript[-1]["result"] == {
-            "content": [{"type": "text", "text": "\n[running]"}],
+            "content": [
+                {"type": "text", "text": "\n[running; poll with an empty send]"}
+            ],
             "isError": False,
         }, client.transcript[-1]
         client.transcript[-1]["result"]["content"][0]["text"] = (
-            "<leading newline>[running]"
+            "<leading newline>[running; poll with an empty send]"
         )
         image_started = wait_for_marker(
             temporary,
@@ -938,7 +940,7 @@ def test_custom_worker_prepares_r_and_duckdb_requirements(binary: Path) -> Trans
         assert (session / artifact["path"]).read_bytes() == base64.b64decode(PNG_1X1)
 
         client.send(r="emit output and image before completion", timeout_ms=0)
-        assert last_tool_text(client) == "\n[running]"
+        assert last_tool_text(client) == "\n[running; poll with an empty send]"
         image_started = wait_for_marker(
             temporary_path,
             "zod-image-evaluation-started",
@@ -969,7 +971,10 @@ def test_custom_worker_prepares_r_and_duckdb_requirements(binary: Path) -> Trans
                 "content": [
                     {"type": "text", "text": "before pending image\n"},
                     {"type": "image", "data": PNG_1X1, "mimeType": "image/png"},
-                    {"type": "text", "text": "after pending image\n\n[running]"},
+                    {
+                        "type": "text",
+                        "text": "after pending image\n\n[running; poll with an empty send]",
+                    },
                 ],
                 "isError": False,
             }, client.transcript[-1]
@@ -1516,7 +1521,7 @@ def test_times_out_and_polls_running_evaluation(binary: Path) -> Transcript:
         timeout_ms=10,
     )
     output = client.transcript[-1]["result"]["content"][0]["text"]
-    assert output == "\n[running]", output
+    assert output == "\n[running; poll with an empty send]", output
     client.send(timeout_ms=3_000)
     output = client.transcript[-1]["result"]["content"][0]["text"]
     assert output == "zod: complete after timeout\n", output
@@ -1538,7 +1543,7 @@ def test_drains_pending_sideband_output_while_running(binary: Path) -> Transcrip
         client._initialize_and_list_tools()
 
         client.send(r="emit output and image before completion", timeout_ms=0)
-        assert last_tool_text(client) == "\n[running]"
+        assert last_tool_text(client) == "\n[running; poll with an empty send]"
         image_started = wait_for_marker(
             temporary_path,
             "zod-image-evaluation-started",
@@ -1553,7 +1558,10 @@ def test_drains_pending_sideband_output_while_running(binary: Path) -> Transcrip
             "content": [
                 {"type": "text", "text": "before pending image\n"},
                 {"type": "image", "data": PNG_1X1, "mimeType": "image/png"},
-                {"type": "text", "text": "after pending image\n\n[running]"},
+                {
+                    "type": "text",
+                    "text": "after pending image\n\n[running; poll with an empty send]",
+                },
             ],
             "isError": False,
         }, result
@@ -1579,7 +1587,7 @@ def test_interrupts_running_worker_with_sigint(binary: Path) -> Transcript:
         try:
             client._initialize_and_list_tools()
             client.send(r="interrupt", timeout_ms=0)
-            assert last_tool_text(client) == "\n[running]"
+            assert last_tool_text(client) == "\n[running; poll with an empty send]"
             wait_for_marker(
                 temporary_path,
                 "zod-interrupt-evaluation-started",
@@ -2011,14 +2019,14 @@ def test_routes_combined_and_followup_stdin(binary: Path) -> Transcript:
     assert last_tool_text(client) == "zod stdin length: 1030\n"
 
     client.send(r="input without request", timeout_ms=0)
-    assert last_tool_text(client) == "\n[running]"
+    assert last_tool_text(client) == "\n[running; poll with an empty send]"
     client.send(stdin="followup\n", timeout_ms=3_000)
     assert last_tool_text(client) == "zod stdin: followup\n"
 
     client.send(r="request input")
-    assert last_tool_text(client) == '[input requested: "zod> "]\n[stdin needed]'
+    assert last_tool_text(client) == '[input requested: "zod> "]\n[waiting for stdin]'
     client.send(stdin="")
-    assert last_tool_text(client) == "\n[stdin needed]"
+    assert last_tool_text(client) == "\n[waiting for stdin]"
     client.send(stdin="prompted\n")
     assert last_tool_text(client) == "zod stdin: prompted\n"
 
@@ -2027,7 +2035,9 @@ def test_routes_combined_and_followup_stdin(binary: Path) -> Transcript:
         stdin="first\n",
         timeout_ms=1_000,
     )
-    assert last_tool_text(client) == '[input requested: "second> "]\n[stdin needed]'
+    assert (
+        last_tool_text(client) == '[input requested: "second> "]\n[waiting for stdin]'
+    )
     client.send(stdin="second\n")
     assert last_tool_text(client) == "zod stdin: first|second\n"
 
@@ -2073,7 +2083,7 @@ def test_preserves_unexposed_input_output(binary: Path) -> Transcript:
             stdin="answer\n",
             timeout_ms=0,
         )
-        assert last_tool_text(client) == "\n[running]"
+        assert last_tool_text(client) == "\n[running; poll with an empty send]"
         waiting = wait_for_marker(
             temporary_path,
             "zod-waiting-to-request-input",
@@ -2470,7 +2480,7 @@ def test_orders_explicit_restart_output(binary: Path) -> Transcript:
         client._initialize_and_list_tools()
 
         client.send(r="wait for stdin close", timeout_ms=0)
-        assert last_tool_text(client) == "\n[running]"
+        assert last_tool_text(client) == "\n[running; poll with an empty send]"
         wait_for_marker(
             temporary_path,
             "zod-waiting-for-stdin-close",
@@ -2515,7 +2525,7 @@ def test_restart_preserves_pending_sideband_output(binary: Path) -> Transcript:
         client._initialize_and_list_tools()
 
         client.send(r="emit output and image before completion", timeout_ms=0)
-        assert last_tool_text(client) == "\n[running]"
+        assert last_tool_text(client) == "\n[running; poll with an empty send]"
         image_started = wait_for_marker(
             temporary_path,
             "zod-image-evaluation-started",
@@ -2562,7 +2572,7 @@ def test_restart_preserves_completion_boundary_before_idle_output(
         client._initialize_and_list_tools()
 
         client.send(r="start background sideband", timeout_ms=0)
-        assert last_tool_text(client) == "\n[running]"
+        assert last_tool_text(client) == "\n[running; poll with an empty send]"
         started = wait_for_marker(
             temporary_path,
             "zod-background-sideband-started",
@@ -2879,7 +2889,7 @@ def test_restart_closes_worker_stdin(binary: Path) -> Transcript:
         )
         client._initialize_and_list_tools()
         client.send(r="wait for stdin close", timeout_ms=0)
-        assert last_tool_text(client) == "\n[running]"
+        assert last_tool_text(client) == "\n[running; poll with an empty send]"
         wait_for_marker(
             temporary_path,
             "zod-waiting-for-stdin-close",
@@ -2925,7 +2935,7 @@ def test_restart_force_stops_stalled_worker(binary: Path) -> Transcript:
         try:
             client._initialize_and_list_tools()
             client.send(r="stall", timeout_ms=0)
-            assert last_tool_text(client) == "\n[running]"
+            assert last_tool_text(client) == "\n[running; poll with an empty send]"
             group_marker = wait_for_marker(
                 temporary_path,
                 "zod-process-group",
@@ -2973,7 +2983,7 @@ def test_restart_allows_accepted_relay_shutdown_to_finish(
         try:
             client._initialize_and_list_tools()
             client.send(r="stall accepted relay shutdown", timeout_ms=0)
-            assert last_tool_text(client) == "\n[running]"
+            assert last_tool_text(client) == "\n[running; poll with an empty send]"
             helper_marker = wait_for_marker(
                 temporary_path,
                 "zod-relay-resume-helper",
@@ -3037,7 +3047,7 @@ def test_restart_outer_force_stops_unresponsive_relay(binary: Path) -> Transcrip
         try:
             client._initialize_and_list_tools()
             client.send(r="stall with stopped relay", timeout_ms=0)
-            assert last_tool_text(client) == "\n[running]"
+            assert last_tool_text(client) == "\n[running; poll with an empty send]"
             helper_marker = wait_for_marker(
                 temporary_path,
                 "zod-relay-stop-helper",
@@ -3509,7 +3519,7 @@ def test_demarcates_idle_prelude_across_cell_outcomes(binary: Path) -> Transcrip
                             "zod background sideband\n"
                             "[output produced while idle]\n"
                             "zod cell output before completion\n\n"
-                            "[running]"
+                            "[running; poll with an empty send]"
                         ),
                     }
                 ],
@@ -3528,7 +3538,7 @@ def test_demarcates_idle_prelude_across_cell_outcomes(binary: Path) -> Transcrip
                 "zod background sideband\n"
                 "[output produced while idle]\n"
                 '[input requested: "zod> "]\n'
-                "[stdin needed]"
+                "[waiting for stdin]"
             )
             client.send(stdin="answer\n", timeout_ms=3_000)
             assert last_tool_text(client) == "zod stdin: answer\n"
@@ -3583,7 +3593,7 @@ def test_restart_cancels_partial_sideband_frame(binary: Path) -> Transcript:
         try:
             client._initialize_and_list_tools()
             client.send(r="start partial sideband descendant", timeout_ms=0)
-            assert last_tool_text(client) == "\n[running]"
+            assert last_tool_text(client) == "\n[running; poll with an empty send]"
             marker = wait_for_marker(
                 temporary_path,
                 "zod-sideband-descendant-pid",
@@ -3707,7 +3717,7 @@ def test_shutdown_cancels_partial_sideband_frame(binary: Path) -> Transcript:
         try:
             client._initialize_and_list_tools()
             client.send(r="start partial sideband descendant", timeout_ms=0)
-            assert last_tool_text(client) == "\n[running]"
+            assert last_tool_text(client) == "\n[running; poll with an empty send]"
             marker = wait_for_marker(
                 temporary_path,
                 "zod-sideband-descendant-pid",

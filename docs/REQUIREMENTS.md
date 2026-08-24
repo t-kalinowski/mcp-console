@@ -119,7 +119,7 @@ Each missing package is resolved only when execution reaches one of these operat
 Several new package loads in one cell can therefore cause several incremental IR calls in execution order.
 
 An automatic request is part of the active R evaluation.
-If `timeout_ms` expires, `send` can return `[running]` while its resolver continues; the resolver is not cancelled by that wait timeout.
+If `timeout_ms` expires, `send` can return `[running; poll with an empty send]` while its resolver continues; the resolver is not cancelled by that wait timeout.
 `session(action = "interrupt")` targets the active resolver, while an unchanged restart or shutdown cancels it.
 A restart that also adds requirements serializes behind the active environment resolution before it prepares those additions and replaces the worker.
 An interrupted or lifecycle-cancelled request is reported to its operation, and a candidate from a replaced generation cannot commit into its replacement.
@@ -170,7 +170,7 @@ Resolver diagnostics name the import and inferred distribution and show the `req
 
 Resolution occurs only when execution reaches a missing import.
 Unreachable branches and uncalled functions do not invoke uv, and several new imports in one cell resolve incrementally in execution order.
-An automatic request belongs to the active Python evaluation, so `timeout_ms` can return `[running]` while its resolver and cell continue.
+An automatic request belongs to the active Python evaluation, so `timeout_ms` can return `[running; poll with an empty send]` while its resolver and cell continue.
 An empty `send` polls that evaluation, and `session(action = "interrupt")` targets its active host resolver.
 Restart, shutdown, and generation checks cancel or discard unactivated candidates from an old worker; an earlier `PythonActivated` commit remains retained.
 

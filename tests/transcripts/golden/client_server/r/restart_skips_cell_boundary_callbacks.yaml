@@ -22,7 +22,7 @@ result:
     - type: text
       text: |-
         [input requested: "callback> "]
-        [stdin needed]
+        [waiting for stdin]
   isError: false
 ---
 session:
@@ -55,7 +55,7 @@ result:
     - type: text
       text: |-
         [input requested: "cell> "]
-        [stdin needed]
+        [waiting for stdin]
   isError: false
 ---
 session:

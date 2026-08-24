@@ -91,8 +91,8 @@ def send_and_collect_runtime_python_resolution(
     chunks = []
     for attempt in range(8):
         output = last_tool_text(client)
-        if output.endswith("\n[running]"):
-            chunks.append(output.removesuffix("\n[running]"))
+        if output.endswith("\n[running; poll with an empty send]"):
+            chunks.append(output.removesuffix("\n[running; poll with an empty send]"))
             if attempt == 7:
                 raise AssertionError(
                     "automatic Python resolution remained running after eight "
@@ -910,7 +910,10 @@ def test_times_out_and_polls_automatic_python_resolution(
             evaluation = client._start_send(python=python, timeout_ms=1)
             started.wait("automatic Python resolver")
             client._receive(evaluation)
-            assert last_tool_text_from_entry(evaluation) == "\n[running]"
+            assert (
+                last_tool_text_from_entry(evaluation)
+                == "\n[running; poll with an empty send]"
+            )
 
             release.release()
             resolver_released = True

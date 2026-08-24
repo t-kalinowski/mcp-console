@@ -30,6 +30,30 @@ A `send` call accepts exactly one complete `r`, `python`, or `sql` cell.
 The source is not an interactive fragment assembled across calls.
 R uses its native top-level evaluation behavior; Python parses the entire submitted source before executing it; SQL passes the complete string to DuckDB.
 
+Use a REPL-style workflow: submit one coherent cell, inspect its result, then submit the next cell based on what the result showed.
+One assistant turn can make several sequential calls.
+Leave the primary result last so the runtime displays it normally; use explicit printing only for additional intermediate output.
+R also autoprints earlier visible top-level expressions.
+
+For example, an analysis can progress through these calls:
+
+```r
+jobs <- read.csv("hpc_jobs.csv")
+str(jobs)
+```
+
+```r
+jobs$queued <- jobs$pending_job_count > 0
+aggregate(queued ~ protocol_id, jobs, mean)
+```
+
+```python
+jobs = r.jobs
+jobs.shape
+```
+
+Each call reuses state created by earlier calls, and its output informs the next cell.
+
 A code-bearing call can declare additive R packages, Python packages, or DuckDB extensions in `requirements`, regardless of the cell language.
 The server prepares changed requirements before it dispatches the cell and retains successful additions for later cells and restarts.
 Already-retained requirements add no preparation work, and a successful combined call returns only the normal cell result, without `[prepared]`.
@@ -46,8 +70,8 @@ The deadline then limits only how long a call waits after starting or attaching 
 A stdin-only call with no active evaluation instead waits without that deadline if it must start an initial or stopped worker.
 The deadline does not stop worker startup, dependency resolution, or evaluation.
 Automatic R and Python import resolution begins after the cell is dispatched and remains part of that active evaluation.
-If it outlives the call's wait, the response can end in `[running]` while the resolver and cell continue.
-When the deadline expires, the response contains output available so far and ends in a state notice such as `[running]` or `[worker starting]`.
+If it outlives the call's wait, the response can end in `[running; poll with an empty send]` while the resolver and cell continue.
+When the deadline expires, the response contains output available so far and ends in a state notice such as `[running; poll with an empty send]` or `[worker starting]`.
 
 Call `send` again without code or standard input to poll.
 While an evaluation is active, the poll waits up to its own deadline and collects newly available output.
@@ -87,9 +111,25 @@ The built-in worker reports managed reads from:
 - Python `input()`, `breakpoint()`, and `pdb` when they use reticulate's R console bridge.
 
 A reported read adds a record such as `[input requested: "name> "]`.
-If the request is still outstanding when either its 10-millisecond exposure grace ends or the call reaches its deadline, the response ends in `[stdin needed]`.
+If the request is still outstanding when either its 10-millisecond exposure grace ends or the call reaches its deadline, the response ends in `[waiting for stdin]`.
 Input that was already queued can satisfy the read before that marker is returned.
 The grace controls only when the request becomes visible; it is not a read timeout.
+
+Interactive debugger state also persists between calls.
+For example, this R cell enters `browser()`:
+
+```r
+inspect_mean <- function(x) {
+  browser()
+  mean(x)
+}
+
+inspect_mean(c(1, 2, 3))
+```
+
+After the response shows `Browse[1]>`, send `sys.calls()\n`, `ls.str()\n`, or `x\n` through `stdin` without a code field.
+Send `c\n` to continue or `Q\n` to quit the debugger.
+Do not submit another code cell until the active evaluation finishes.
 
 Direct reads from Python `sys.stdin`, fd 0, or a descendant bypass managed input reporting.
 They can consume bytes still queued on fd 0 but produce no request or receipt record.
@@ -242,7 +282,7 @@ A nonempty user-selected `RETICULATE_PYTHON` disables both automatic managed res
 Its missing-import error directs the user to install the distribution into that environment or restart MCP Console with managed Python enabled.
 
 Automatic import resolution counts toward the active evaluation's `timeout_ms` wait.
-A short wait can therefore return `[running]`; poll with an empty `send`, interrupt the active resolver with `session(action = "interrupt")`, or restart according to the normal generation lifecycle.
+A short wait can therefore return `[running; poll with an empty send]`; poll with an empty `send`, interrupt the active resolver with `session(action = "interrupt")`, or restart according to the normal generation lifecycle.
 
 ## R and Python interoperability
 
@@ -329,8 +369,10 @@ The server preserves each producer's order but cannot reconstruct chronology acr
 It does not normalize carriage returns, ANSI sequences, or ordinary whitespace.
 Invalid UTF-8 from raw standard streams is replaced when projected to MCP text; the private relay transport still preserves the bytes.
 
-Bracketed records such as `[running]`, `[stdin needed]`, `[idle]`, mapped Python import resolutions, and worker-replacement notices are server state, not language output.
+Bracketed records such as `[running; poll with an empty send]`, `[waiting for stdin]`, `[idle]`, mapped Python import resolutions, and worker-replacement notices are server state, not language output.
 R errors, Python exceptions, and DuckDB errors are ordinary console text and normally leave the worker reusable.
+Warnings are ordinary runtime output too.
+Inspect warnings before relying on a result, especially warnings about coercion, overflow, dropped observations, or model convergence.
 Host dependency-resolver failures during explicit preparation are MCP tool errors, but preserve any current worker and its in-memory state.
 An ordinary automatic R resolver failure is instead reported inside the running R evaluation.
 An ordinary automatic Python failure becomes an actionable `ModuleNotFoundError` in the running Python evaluation.
