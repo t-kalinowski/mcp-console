@@ -58,6 +58,26 @@ def _mcp_console_explicit_requirement(distribution):
     return f'requirements: {{"python": ["{distribution}"]}}'
 
 
+class _McpConsolePsutilLoader:
+    def __init__(self, loader, callback):
+        self._loader = loader
+        self._callback = callback
+
+    def __getattr__(self, name):
+        return getattr(self._loader, name)
+
+    def create_module(self, specification):
+        create = getattr(self._loader, "create_module", None)
+        return None if create is None else create(specification)
+
+    def exec_module(self, module):
+        module.__loader__ = self._loader
+        module.__spec__.loader = self._loader
+        self._loader.exec_module(module)
+        self._callback()
+        return None
+
+
 class _McpConsoleImportFinder:
     _mcp_console_import_finder = True
 
@@ -75,6 +95,7 @@ class _McpConsoleImportFinder:
         missing_module,
         missing_submodule,
         explicit_requirement,
+        psutil_loader,
     ):
         self._importlib = importlib
         self._importlib_util = importlib_util
@@ -88,6 +109,8 @@ class _McpConsoleImportFinder:
         self._missing_module = missing_module
         self._missing_submodule = missing_submodule
         self._explicit_requirement = explicit_requirement
+        self._psutil_loader = psutil_loader
+        self._psutil_callback = None
         self._fromlist_code = importlib._bootstrap._handle_fromlist.__code__
         self._callback = None
         self._disabled_reason = "automatic Python package resolution is not configured"
@@ -100,6 +123,10 @@ class _McpConsoleImportFinder:
         self._disabled_reason = disabled_reason
         self._pid = self._os.getpid()
         self._thread = self._threading.get_ident()
+        return None
+
+    def configure_psutil(self, callback):
+        self._psutil_callback = callback
         return None
 
     def _find_spec(self, finders, fullname, path, target):
@@ -240,6 +267,17 @@ class _McpConsoleImportFinder:
                 target,
             )
             if specification is not None:
+                # A transient activation probe can fail before psutil loads.
+                # Retry after module execution, before the import returns.
+                if (
+                    fullname == "psutil"
+                    and self._psutil_callback is not None
+                    and hasattr(specification.loader, "exec_module")
+                ):
+                    specification.loader = self._psutil_loader(
+                        specification.loader,
+                        self._psutil_callback,
+                    )
                 return specification
         finally:
             self._state.resolving = False
@@ -329,6 +367,7 @@ if _mcp_console_import_finder is None:
         _mcp_console_missing_module,
         _mcp_console_missing_submodule,
         _mcp_console_explicit_requirement,
+        _McpConsolePsutilLoader,
     )
     _sys.meta_path.append(_mcp_console_import_finder)
 
@@ -522,6 +561,9 @@ def _mcp_console_configure_psutil(
     except _Exception:
         pass
     return None
+
+
+_mcp_console_import_finder.configure_psutil(_mcp_console_configure_psutil)
 
 
 def _mcp_console_activate_process_environment(

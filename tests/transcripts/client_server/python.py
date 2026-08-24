@@ -456,17 +456,40 @@ def test_retains_environment_when_optional_psutil_setup_fails(
     # fmt: python
     python = code("""
         import os
+        import subprocess
+        import sys
+
         import psutil
+
+        command = [sys.executable, "-c", "import time; time.sleep(30)"]
+        child = subprocess.Popen(command)
+        try:
+            visible = psutil.pids()
+            descendants = psutil.Process().children(recursive=True)
+            observed = [process.pid for process in descendants]
+            process_group = os.getpgrp()
+            visible_groups = [os.getpgid(pid) for pid in visible]
+        finally:
+            child.terminate()
+            child.wait()
 
         (
             psutil.__name__,
             failing_psutil_finder.visible_lookups,
             live_sentinel,
             os.getpid() == live_pid,
+            1 not in visible,
+            visible == sorted(visible),
+            all(group == process_group for group in visible_groups),
+            child.pid in visible,
+            child.pid in observed,
         )
         """)
     client.send(python=python)
-    assert last_tool_text(client) == "('psutil', 1, 42, True)\n"
+    output = last_tool_text(client)
+    assert output == ("('psutil', 1, 42, True, True, True, True, True, True)\n"), repr(
+        output
+    )
 
     client.send(r='"psutil" %in% reticulate::py_require()$packages')
     assert last_tool_text(client) == "[1] TRUE\n"
