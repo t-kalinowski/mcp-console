@@ -739,6 +739,7 @@ def test_disables_automatic_resolution_for_user_selected_python(
         directory = Path(temporary)
         environment, record = recording_uv_environment(directory)
         environment["RETICULATE_PYTHON"] = str(Path(sys.executable).resolve())
+        environment["PYTHONNODEBUGRANGES"] = "1"
         client = McpClient(binary, ("serve",), environment)
         client._initialize_and_list_tools()
         baseline = initialize_python_and_record_baseline(client, record)
