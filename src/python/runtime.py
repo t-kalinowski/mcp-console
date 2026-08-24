@@ -50,6 +50,10 @@ def _mcp_console_missing_module(fullname, message):
     raise ModuleNotFoundError(message, name=fullname) from None
 
 
+def _mcp_console_missing_submodule(fullname, message):
+    raise ImportError(message, name=fullname) from None
+
+
 def _mcp_console_explicit_requirement(distribution):
     return f'requirements: {{"python": ["{distribution}"]}}'
 
@@ -69,6 +73,7 @@ class _McpConsoleImportFinder:
         ambiguous_roots,
         default_roots,
         missing_module,
+        missing_submodule,
         explicit_requirement,
     ):
         self._importlib = importlib
@@ -81,7 +86,9 @@ class _McpConsoleImportFinder:
         self._ambiguous_roots = ambiguous_roots
         self._default_roots = default_roots
         self._missing_module = missing_module
+        self._missing_submodule = missing_submodule
         self._explicit_requirement = explicit_requirement
+        self._fromlist_code = importlib._bootstrap._handle_fromlist.__code__
         self._callback = None
         self._disabled_reason = "automatic Python package resolution is not configured"
         self._pid = None
@@ -165,7 +172,12 @@ class _McpConsoleImportFinder:
                 "for example:\n\n" + self._explicit_requirement("distribution-name"),
             )
         if fullname != root and root in self._sys.modules:
-            self._missing_module(
+            missing = (
+                self._missing_submodule
+                if self._is_fromlist_import(fullname)
+                else self._missing_module
+            )
+            missing(
                 fullname,
                 f"No module named {fullname!r}.\n\n"
                 f"MCP Console did not resolve the top-level import {root!r} again "
@@ -200,7 +212,7 @@ class _McpConsoleImportFinder:
         self._state.resolving = True
         try:
             try:
-                response = self._json.loads(self._callback(distribution))
+                response = self._json.loads(self._callback(root, distribution))
             except Exception as error:
                 self._raise_resolution_failure(fullname, root, distribution, str(error))
 
@@ -264,6 +276,17 @@ class _McpConsoleImportFinder:
             frame = frame.f_back
         return False
 
+    def _is_fromlist_import(self, fullname):
+        frame = self._sys._getframe(1)
+        while frame is not None:
+            if (
+                frame.f_code is self._fromlist_code
+                and frame.f_locals.get("from_name") == fullname
+            ):
+                return True
+            frame = frame.f_back
+        return False
+
     def _raise_unsafe_inference(self, fullname, root):
         self._missing_module(
             fullname,
@@ -304,6 +327,7 @@ if _mcp_console_import_finder is None:
         _MCP_CONSOLE_AMBIGUOUS_IMPORT_ROOTS,
         _MCP_CONSOLE_DEFAULT_IMPORT_ROOTS,
         _mcp_console_missing_module,
+        _mcp_console_missing_submodule,
         _mcp_console_explicit_requirement,
     )
     _sys.meta_path.append(_mcp_console_import_finder)

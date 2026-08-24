@@ -24,6 +24,7 @@ from _support import (
 )
 
 PLATFORMS = {"darwin"}
+PENDING_TEXT_BUDGET = 8 * 1024 * 1024
 
 
 def recording_uv_environment(
@@ -141,6 +142,7 @@ def test_resolves_missing_python_import_without_replaying_cell(
     # fmt: python
     python = code("""
         automatic_python_attempts = globals().get("automatic_python_attempts", 0) + 1
+        print("prefix", end="")
         import yaml12
 
         assert automatic_python_attempts == 1
@@ -154,15 +156,47 @@ def test_resolves_missing_python_import_without_replaying_cell(
         """)
     client.send(python=python, stdin="42\n")
     output = last_tool_text(client)
-    assert output == ("[input requested: \"\"]\n('yaml12', 42, True, '42')\n"), repr(
-        output
-    )
+    assert output == (
+        "prefix\n"
+        "[resolved PyPI distribution 'py-yaml12' for Python import 'yaml12']\n"
+        '[input requested: ""]\n'
+        "('yaml12', 42, True, '42')\n"
+    ), repr(output)
     assert "[prepared]" not in output
 
     client.send(r="automatic_python_r_state")
     assert last_tool_text(client) == "[1] 42\n"
     client.send(sql="SELECT answer FROM automatic_python_state")
     assert last_tool_text(client).splitlines()[-1].split() == ["1", "42"]
+    return client._finish()
+
+
+def test_keeps_mapped_resolution_notice_atomic_at_output_limit(
+    binary: Path,
+) -> Transcript:
+    environment = os.environ.copy()
+    environment.pop("RETICULATE_PYTHON", None)
+    client = McpClient(binary, ("serve",), environment)
+    client._initialize_and_list_tools()
+
+    retained = PENDING_TEXT_BUDGET - 8
+    # fmt: python
+    python = code(f"""
+        print("x" * {retained}, end="")
+        import yaml12
+
+        yaml12.__name__
+        """)
+    client.send(python=python, timeout_ms=120_000)
+    output = last_tool_text(client)
+    prefix = "x" * retained
+    assert output.startswith(prefix), len(output)
+    remainder = output.removeprefix(prefix)
+    assert remainder.startswith("\n[output truncated: omitted "), repr(remainder[:200])
+    assert "resolved PyPI distribution" not in remainder, repr(remainder[:200])
+    client.transcript[-1]["result"]["content"][0]["text"] = (
+        f"<retained {retained} text bytes>{remainder}"
+    )
     return client._finish()
 
 
@@ -278,6 +312,8 @@ def test_infers_python_distributions_for_normal_import_forms(
             """)
         output = send_and_collect_runtime_python_resolution(client, python=python)
         assert output == (
+            "[resolved PyPI distribution 'pyyaml' for Python import 'yaml']\n"
+            "[resolved PyPI distribution 'py-yaml12' for Python import 'yaml12']\n"
             "({'answer': 42}, {'answer': 43}, True, 'Yaml', 'pydash')\n"
         ), repr(output)
         assert "[prepared]" not in output
@@ -360,7 +396,10 @@ def test_does_not_resolve_unreached_or_available_python_imports(
             client,
             python="import yaml12; yaml12.__name__",
         )
-        assert output == "'yaml12'\n"
+        assert output == (
+            "[resolved PyPI distribution 'py-yaml12' for Python import 'yaml12']\n"
+            "'yaml12'\n"
+        )
         resolved = len(uv_tool_run_requirements(record))
         assert resolved == baseline + 2
 
@@ -420,7 +459,10 @@ def test_does_not_reenter_automatic_python_resolution(binary: Path) -> Transcrip
             client,
             python="import yaml12; yaml12.__name__",
         )
-        assert output == "'yaml12'\n"
+        assert output == (
+            "[resolved PyPI distribution 'py-yaml12' for Python import 'yaml12']\n"
+            "'yaml12'\n"
+        )
         runs = uv_tool_run_requirements(record)[baseline:]
         assert len(runs) == 1 and "py-yaml12" in runs[0], runs
 
@@ -591,6 +633,18 @@ def test_requires_explicit_python_requirements_for_ambiguous_or_installed_roots(
         package = directory / "mcp_console_available_root"
         package.mkdir()
         (package / "__init__.py").write_text("answer = 42\n", encoding="utf-8")
+        fromlist_parent = directory / "mcp_console_fromlist_parent"
+        fromlist_parent.mkdir()
+        (fromlist_parent / "__init__.py").write_text("", encoding="utf-8")
+        (fromlist_parent / "missing.py").write_text(
+            """try:
+    import mcp_console_available_root.nested_missing
+except ModuleNotFoundError as error:
+    missing_name = error.name
+    answer = 42
+""",
+            encoding="utf-8",
+        )
         environment, record = recording_uv_environment(directory)
         client = McpClient(
             binary,
@@ -617,6 +671,17 @@ def test_requires_explicit_python_requirements_for_ambiguous_or_installed_roots(
             except ModuleNotFoundError as error:
                 print(f"installed-root name: {error.name}")
                 print(error)
+
+            try:
+                from mcp_console_available_root import missing
+            except ImportError as error:
+                print(f"from-import name: {error.name}")
+                print(error)
+
+            from mcp_console_fromlist_parent import missing as nested_direct
+
+            assert nested_direct.answer == 42
+            print(f"nested-direct name: {nested_direct.missing_name}")
             """)
         client.send(python=python)
         output = last_tool_text(client)
@@ -624,10 +689,12 @@ def test_requires_explicit_python_requirements_for_ambiguous_or_installed_roots(
             "ambiguous name: azure",
             "could not safely infer a PyPI distribution",
             "installed-root name: mcp_console_available_root.missing",
+            "from-import name: mcp_console_available_root.missing",
+            "nested-direct name: mcp_console_available_root.nested_missing",
             "requirements.python",
         ):
             assert expected in output, (expected, output)
-        assert output.count("requirements.python") >= 2, output
+        assert output.count("requirements.python") >= 3, output
         assert len(uv_tool_run_requirements(record)) == baseline
         return client._finish()
 
@@ -848,7 +915,10 @@ def test_times_out_and_polls_automatic_python_resolution(
             release.release()
             resolver_released = True
             client.send(timeout_ms=30_000)
-            assert last_tool_text(client) == "('yaml12', 1)\n"
+            assert last_tool_text(client) == (
+                "[resolved PyPI distribution 'py-yaml12' for Python import 'yaml12']\n"
+                "('yaml12', 1)\n"
+            )
             transcript = client._finish()
             finished = True
             return transcript

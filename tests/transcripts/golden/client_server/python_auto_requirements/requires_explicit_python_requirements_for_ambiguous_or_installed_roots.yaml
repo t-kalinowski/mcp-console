@@ -25,6 +25,17 @@ send:
     except ModuleNotFoundError as error:
         print(f"installed-root name: {error.name}")
         print(error)
+
+    try:
+        from mcp_console_available_root import missing
+    except ImportError as error:
+        print(f"from-import name: {error.name}")
+        print(error)
+
+    from mcp_console_fromlist_parent import missing as nested_direct
+
+    assert nested_direct.answer == 42
+    print(f"nested-direct name: {nested_direct.missing_name}")
 result:
   content:
     - type: text
@@ -43,5 +54,12 @@ result:
         MCP Console did not resolve the top-level import 'mcp_console_available_root' again because it is already present. The missing submodule may require an optional extra or a different distribution. Pass the correct distribution through `requirements.python` in the `send` call, for example:
 
         requirements: {"python": ["distribution-name"]}
+        from-import name: mcp_console_available_root.missing
+        No module named 'mcp_console_available_root.missing'.
+
+        MCP Console did not resolve the top-level import 'mcp_console_available_root' again because it is already present. The missing submodule may require an optional extra or a different distribution. Pass the correct distribution through `requirements.python` in the `send` call, for example:
+
+        requirements: {"python": ["distribution-name"]}
+        nested-direct name: mcp_console_available_root.nested_missing
   isError: false
 ...

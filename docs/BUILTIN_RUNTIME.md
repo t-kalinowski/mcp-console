@@ -195,7 +195,9 @@ MCP Console does not add notebook event-loop behavior.
 The built-in server-managed Python environment resolves missing imports while the current cell runs.
 Import the packages appropriate for the task directly; do not probe for their installation or run pip in the worker.
 Availability queries such as `importlib.util.find_spec()` inspect the current environment without triggering resolution.
-Successful resolution emits no `[prepared]` marker or other notice.
+Successful resolution emits no `[prepared]` marker.
+When the import and inferred distribution have different names, the server reports the committed mapping, for example `[resolved PyPI distribution 'py-yaml12' for Python import 'yaml12']`.
+Same-name resolution emits no notice.
 
 The private runtime appends a finder to `sys.meta_path` after Python's existing finders.
 Built-in, frozen, standard-library, local, already-installed, and already-loaded modules therefore resolve normally before MCP Console sees an import.
@@ -209,7 +211,9 @@ Automatic inference produces one bare distribution name; it does not infer versi
 
 MCP Console declines the fallback when it cannot safely identify one distribution.
 This includes broad shared namespaces such as `google`, `azure`, `zope`, `opentelemetry`, and `backports`, a missing submodule whose top-level package is already present, and a standard-library module absent from the selected Python build.
-The resulting `ModuleNotFoundError` asks for the correct distribution through `requirements.python` when explicit preparation can help.
+The resulting import error asks for the correct distribution through `requirements.python` when explicit preparation can help.
+A direct missing-submodule import retains its ordinary `ModuleNotFoundError`; for the exact submodule lookup performed by `from package import missing`, MCP Console uses `ImportError` so CPython does not suppress the guidance.
+Both forms report the full missing-submodule name.
 
 Resolution starts only when execution reaches the missing import.
 Python source is not scanned, so imports in unreachable branches or uncalled functions do not invoke the resolver.
@@ -219,6 +223,7 @@ The finder calls the private R bridge, which adds the inferred distribution to r
 After reticulate activates that environment, the worker reports the complete manifest to the server.
 Only then does the original import resume against invalidated import caches.
 Preparation makes the distribution available; the original import still performs the import normally.
+The automatic resolver request carries a differently named import and distribution together, and the server adds the bounded notice when it commits the matching activation.
 
 This transition does not restart the worker or Python interpreter.
 Python and R globals, Python objects, the DuckDB catalog, worker PID, and stdin state remain available.
@@ -324,7 +329,7 @@ The server preserves each producer's order but cannot reconstruct chronology acr
 It does not normalize carriage returns, ANSI sequences, or ordinary whitespace.
 Invalid UTF-8 from raw standard streams is replaced when projected to MCP text; the private relay transport still preserves the bytes.
 
-Bracketed records such as `[running]`, `[stdin needed]`, `[idle]`, and worker-replacement notices are server state, not language output.
+Bracketed records such as `[running]`, `[stdin needed]`, `[idle]`, mapped Python import resolutions, and worker-replacement notices are server state, not language output.
 R errors, Python exceptions, and DuckDB errors are ordinary console text and normally leave the worker reusable.
 Host dependency-resolver failures during explicit preparation are MCP tool errors, but preserve any current worker and its in-memory state.
 An ordinary automatic R resolver failure is instead reported inside the running R evaluation.

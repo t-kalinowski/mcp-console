@@ -29,6 +29,8 @@ result:
   content:
     - type: text
       text: |
+        [resolved PyPI distribution 'pyyaml' for Python import 'yaml']
+        [resolved PyPI distribution 'py-yaml12' for Python import 'yaml12']
         ({'answer': 42}, {'answer': 43}, True, 'Yaml', 'pydash')
   isError: false
 ...

@@ -32,6 +32,7 @@ result:
 send:
   python: |
     automatic_python_attempts = globals().get("automatic_python_attempts", 0) + 1
+    print("prefix", end="")
     import yaml12
 
     assert automatic_python_attempts == 1
@@ -48,6 +49,8 @@ result:
   content:
     - type: text
       text: |
+        prefix
+        [resolved PyPI distribution 'py-yaml12' for Python import 'yaml12']
         [input requested: ""]
         ('yaml12', 42, True, '42')
   isError: false

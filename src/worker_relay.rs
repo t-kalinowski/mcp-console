@@ -646,7 +646,7 @@ mod platform {
 
     enum EventRequest {
         Send {
-            event: RelayEvent,
+            event: Box<RelayEvent>,
             confirmation: Option<mpsc::SyncSender<Result<(), String>>>,
         },
         Finish,
@@ -693,7 +693,7 @@ mod platform {
         fn send(&self, event: RelayEvent) -> Result<(), String> {
             self.0
                 .send(EventRequest::Send {
-                    event,
+                    event: Box::new(event),
                     confirmation: None,
                 })
                 .map_err(|_| "relay event writer stopped".to_string())
@@ -703,7 +703,7 @@ mod platform {
             let (confirmation, receiver) = mpsc::sync_channel(0);
             self.0
                 .send(EventRequest::Send {
-                    event,
+                    event: Box::new(event),
                     confirmation: Some(confirmation),
                 })
                 .map_err(|_| "relay event writer stopped".to_string())?;

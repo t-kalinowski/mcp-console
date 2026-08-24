@@ -1818,7 +1818,11 @@ def test_retries_python_runtime_initialization_after_interrupt(
             assert output == "42\n", repr(output)
             client.send(python="import yaml12; yaml12.__name__")
             output = last_tool_text(client)
-            assert output == "'yaml12'\n", repr(output)
+            assert output == (
+                "[resolved PyPI distribution 'py-yaml12' "
+                "for Python import 'yaml12']\n"
+                "'yaml12'\n"
+            ), repr(output)
             # fmt: python
             python = code("""
                 import logging

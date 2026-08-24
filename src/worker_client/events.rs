@@ -3,6 +3,7 @@ use std::thread;
 
 use crate::relay_protocol::{RelayCommand, RelayEvent};
 
+use super::lifecycle::OldGenerationCommitDisposition;
 use super::{
     Evaluation, OutputTape, PythonPreparationCommit, RPreparationCommit, WorkerCallbacks,
     WorkerProcessOutcome,
@@ -76,6 +77,24 @@ enum Route {
     Cell(Arc<Evaluation>),
     Preparation,
     Idle,
+}
+
+struct PendingPythonCandidate {
+    managed: crate::resolver::ManagedPython,
+    import_resolution: Option<crate::worker_protocol::PythonImportResolution>,
+}
+
+#[derive(Default)]
+struct RuntimeCandidates {
+    r: Vec<crate::resolver::ManagedR>,
+    python: Vec<PendingPythonCandidate>,
+}
+
+impl RuntimeCandidates {
+    fn clear(&mut self) {
+        self.r.clear();
+        self.python.clear();
+    }
 }
 
 enum RuntimeRCallbackAdmission {
@@ -397,7 +416,7 @@ impl WorkerOperationState {
         &self,
         event: RelayEvent,
         r_candidates: &mut Vec<crate::resolver::ManagedR>,
-        python_candidates: &mut Vec<crate::resolver::ManagedPython>,
+        python_candidates: &mut Vec<PendingPythonCandidate>,
     ) -> Result<(), String> {
         let Operation { kind, result } = {
             let mut state = self.lock()?;
@@ -457,7 +476,7 @@ impl WorkerOperationState {
                 commit(Err(message)).map(OperationResult::RPrepared)
             }
             (OperationKind::PreparePython { commit, .. }, RelayEvent::PythonPrepared) => {
-                let candidate = python_candidates.pop();
+                let candidate = python_candidates.pop().map(|candidate| candidate.managed);
                 r_candidates.clear();
                 python_candidates.clear();
                 commit(Ok(candidate)).map(OperationResult::PythonPrepared)
@@ -616,8 +635,7 @@ fn dispatch_worker_events(
     let mut startup = Some(startup);
     let stdout = output.direct_stdout();
     let stderr = output.direct_stderr();
-    let mut r_candidates = Vec::new();
-    let mut python_candidates = Vec::new();
+    let mut candidates = RuntimeCandidates::default();
     let mut runtime_started = false;
     let mut semantic_failure = false;
     let mut stdout_closed = false;
@@ -781,21 +799,18 @@ fn dispatch_worker_events(
                         &commands,
                         &output,
                         &callbacks,
-                        &mut r_candidates,
-                        &mut python_candidates,
+                        &mut candidates,
                     ),
                 };
                 if let Err(error) = result {
-                    r_candidates.clear();
-                    python_candidates.clear();
+                    candidates.clear();
                     fail_dispatch(&operation, &mut startup, &interrupts, error);
                     semantic_failure = true;
                 }
             }
             WorkerEvent::TransportFailure(error) => {
                 if !retiring {
-                    r_candidates.clear();
-                    python_candidates.clear();
+                    candidates.clear();
                     fail_dispatch(&operation, &mut startup, &interrupts, error);
                     semantic_failure = true;
                 }
@@ -806,8 +821,7 @@ fn dispatch_worker_events(
                 }
                 interrupts.fail(error.clone());
                 operation.retire_operation(error);
-                r_candidates.clear();
-                python_candidates.clear();
+                candidates.clear();
                 retiring = true;
                 let _ = reached.send(());
                 if relay_closed {
@@ -900,8 +914,7 @@ fn handle_semantic_event(
     commands: &super::platform::RelayCommandSender,
     output: &OutputTape,
     callbacks: &WorkerCallbacks,
-    r_candidates: &mut Vec<crate::resolver::ManagedR>,
-    python_candidates: &mut Vec<crate::resolver::ManagedPython>,
+    candidates: &mut RuntimeCandidates,
 ) -> Result<(), String> {
     use crate::worker_protocol::ConsoleChannel::{Diagnostic, Output};
 
@@ -958,7 +971,7 @@ fn handle_semantic_event(
                         .to_str()
                         .ok_or_else(|| "resolved R library path is not UTF-8".to_string())?
                         .to_string();
-                    r_candidates.push(managed);
+                    candidates.r.push(managed);
                     (RelayCommand::RResolved { library }, true)
                 }
                 Err(failure) => {
@@ -985,7 +998,7 @@ fn handle_semantic_event(
         }
         RelayEvent::RActivated { library } => {
             operation.ensure_runtime_r_activation_phase()?;
-            callbacks.activate_r(library, r_candidates)?;
+            callbacks.activate_r(library, &mut candidates.r)?;
             operation.finish_runtime_r_callback()
         }
         RelayEvent::RActivationFailed {
@@ -993,14 +1006,27 @@ fn handle_semantic_event(
             message: _,
         } => {
             operation.ensure_runtime_r_activation_phase()?;
-            callbacks.fail_r_activation(library, r_candidates)?;
+            callbacks.fail_r_activation(library, &mut candidates.r)?;
             operation.finish_runtime_r_callback()
         }
         RelayEvent::ResolvePython { request } => {
+            if request.import_resolution.is_some() {
+                operation.with_route(|route| match route {
+                    Route::Cell(_) => Ok(()),
+                    Route::Preparation | Route::Idle => Err(
+                        "worker requested automatic Python import resolution outside an evaluation"
+                            .to_string(),
+                    ),
+                })?;
+            }
+            let import_resolution = request.import_resolution.clone();
             let response = match callbacks.resolve_python(request) {
                 Ok(managed) => {
                     let python = managed.python().to_string_lossy().into_owned();
-                    python_candidates.push(managed);
+                    candidates.python.push(PendingPythonCandidate {
+                        managed,
+                        import_resolution,
+                    });
                     RelayCommand::PythonResolved { python }
                 }
                 Err(message) => RelayCommand::PythonResolutionFailed { message },
@@ -1014,15 +1040,41 @@ fn handle_semantic_event(
             };
             commands.send(response)
         }
-        RelayEvent::PythonActivated { requirements } => callbacks
-            .activate_python(requirements, python_candidates)
-            .map(|_| ()),
+        RelayEvent::PythonActivated { requirements } => {
+            let activated = requirements.clone().normalized();
+            let candidate = candidates
+                .python
+                .iter()
+                .rposition(|candidate| candidate.managed.requirements() == &activated)
+                .map(|index| candidates.python.remove(index));
+            let (managed, resolution) = match candidate {
+                Some(candidate) => (Some(candidate.managed), candidate.import_resolution),
+                None => (None, None),
+            };
+            candidates.python.clear();
+            let disposition = callbacks.activate_python(requirements, managed)?;
+            if disposition == OldGenerationCommitDisposition::Commit
+                && let Some(resolution) = resolution
+            {
+                operation.with_route(|route| match route {
+                    Route::Cell(evaluation) => evaluation.bounded_notice(format!(
+                        "resolved PyPI distribution '{}' for Python import '{}'",
+                        resolution.distribution, resolution.module
+                    )),
+                    Route::Preparation | Route::Idle => Err(
+                        "worker activated an automatic Python import resolution outside an evaluation"
+                            .to_string(),
+                    ),
+                })?;
+            }
+            Ok(())
+        }
         event @ (RelayEvent::Completed
         | RelayEvent::RPrepared { .. }
         | RelayEvent::RPreparationFailed { .. }
         | RelayEvent::PythonPrepared
         | RelayEvent::PythonPreparationFailed { .. }) => {
-            operation.complete(event, r_candidates, python_candidates)
+            operation.complete(event, &mut candidates.r, &mut candidates.python)
         }
         RelayEvent::Ready
         | RelayEvent::Stdout { .. }

@@ -103,6 +103,8 @@ enum OutputEvent {
     },
     /// A server-owned lifecycle or input notice, terminated before later output.
     ServerNotice(String),
+    /// A server-owned informational notice retained atomically within output limits.
+    BoundedServerNotice(Box<str>),
     /// A server infrastructure, transport, or protocol failure.
     ///
     /// Language errors are normal evaluation output and do not use this event.
@@ -643,6 +645,11 @@ impl OutputTape {
             .push_control(OutputEvent::ServerNotice(message.into()));
     }
 
+    /// Publishes a bounded server notice, retaining either the complete line or none of it.
+    pub(super) fn push_bounded_notice_line(&self, message: impl Into<String>) {
+        self.lock().push_bounded_notice_line(message.into());
+    }
+
     pub(super) fn push_failure(&self, failure: SendFailure) {
         self.lock()
             .push_control(OutputEvent::ServerFailure(failure));
@@ -771,6 +778,28 @@ impl OutputTapeState {
         }
         if retained < original_length {
             self.omit(original_length - retained, 0, 0, 1);
+        }
+    }
+
+    fn push_bounded_notice_line(&mut self, message: String) {
+        // Include brackets, the trailing newline, and a possible leading delimiter.
+        let rendered_length = message.len().saturating_add(4);
+        let fits = !self.budget.dropping_ordinary_output
+            && self.budget.events < self.limits.events
+            && rendered_length
+                <= self
+                    .limits
+                    .text_bytes
+                    .saturating_sub(self.budget.text_bytes);
+        if fits {
+            self.retain_ordinary(
+                OutputEvent::BoundedServerNotice(message.into_boxed_str()),
+                rendered_length,
+                0,
+                0,
+            );
+        } else {
+            self.omit(rendered_length, 0, 0, 1);
         }
     }
 
@@ -943,6 +972,12 @@ impl OutputTapeState {
                     budget.text_bytes = budget.text_bytes.saturating_add(text.len());
                     budget.events = budget.events.saturating_add(1);
                 }
+                OutputEvent::BoundedServerNotice(message) => {
+                    budget.text_bytes = budget
+                        .text_bytes
+                        .saturating_add(message.len().saturating_add(4));
+                    budget.events = budget.events.saturating_add(1);
+                }
                 OutputEvent::WorkerImage {
                     data, mime_type, ..
                 } => {
@@ -1011,6 +1046,7 @@ fn drain_through(state: &mut OutputTapeState, cut: OutputCut) -> Response {
                 artifact,
             } => output.image(data.into_string(), mime_type.into_string(), artifact),
             OutputEvent::ServerNotice(message) => output.notice_line(message),
+            OutputEvent::BoundedServerNotice(message) => output.notice_line(message.into_string()),
             OutputEvent::ServerFailure(SendFailure {
                 message,
                 worker_stopped,

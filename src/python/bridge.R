@@ -9,6 +9,7 @@ base::local(
     python_dispatch <-
       "(lambda: None).__builtins__['_mcp_console_dispatch']()"
     python_module <- NULL
+    pending_import_resolution <- NULL
     pending_requirements <- NULL
     source <- NULL
     `%||%` <- function(x, y) if (is.null(x)) y else x
@@ -30,12 +31,20 @@ base::local(
       )
     }
 
-    request_json <- function(requirements, retained_requirements) {
+    request_json <- function(
+      requirements,
+      retained_requirements,
+      import_resolution = NULL
+    ) {
+      request <- list(
+        requirements = requirements,
+        retained_requirements = retained_requirements
+      )
+      if (!is.null(import_resolution)) {
+        request$import_resolution <- import_resolution
+      }
       jsonlite::toJSON(
-        list(
-          requirements = requirements,
-          retained_requirements = retained_requirements
-        ),
+        request,
         auto_unbox = TRUE,
         null = "null",
         na = "null"
@@ -90,7 +99,11 @@ base::local(
         )
         .Call(
           "mcp_console_resolve_python",
-          request_json(requirements, retained_requirements)
+          request_json(
+            requirements,
+            retained_requirements,
+            pending_import_resolution
+          )
         )
       }
       resolve_version <- function(constraints = NULL, uv = NULL) {
@@ -260,8 +273,17 @@ base::local(
       )
     }
 
-    resolve_import_distribution <- function(distribution) {
+    resolve_import_distribution <- function(module, distribution) {
+      module <- reticulate::py_to_r(module)
       distribution <- reticulate::py_to_r(distribution)
+      stopifnot(is.null(pending_import_resolution))
+      if (!identical(module, distribution)) {
+        pending_import_resolution <<- list(
+          module = module,
+          distribution = distribution
+        )
+      }
+      on.exit(pending_import_resolution <<- NULL)
       jsonlite::toJSON(
         prepare_packages(distribution),
         auto_unbox = TRUE,

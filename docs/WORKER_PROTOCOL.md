@@ -188,6 +188,10 @@ Their `packages` and `exclude_newer` values must match.
 Only `python_version` may differ, allowing physical resolution against an exact active Python patch version while preserving a logical constraint.
 The server validates both manifests and their requirement syntax before starting a resolver.
 
+An automatic import may also include `import_resolution` with `module` and `distribution` strings.
+The module must be a top-level ASCII Python identifier, the distribution must be a different bare package name present in both manifests, and this metadata is valid only during an evaluation.
+The server associates valid metadata with the provisional environment and emits a bounded notice only if the matching `python_activated` event commits it for the current generation.
+
 `resolve_python_version.request.constraints` is a required array of version constraints.
 A successful version reply creates no environment candidate and requires no `python_activated` receipt.
 

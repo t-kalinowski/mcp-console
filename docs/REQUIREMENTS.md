@@ -145,7 +145,9 @@ The inferred name is validated through the same named-registry requirement path 
 
 Automatic inference does not produce versions, extras, markers, paths, URLs, direct references, or other requirement syntax.
 It also declines a same-name fallback for broad shared namespaces, a missing submodule whose top-level package is already present, and a standard-library module unavailable in the selected Python build.
-These cases report an actionable `ModuleNotFoundError` instead of installing an ambiguous or misleading distribution.
+These cases report an actionable import error instead of installing an ambiguous or misleading distribution.
+A direct missing-submodule import retains its ordinary `ModuleNotFoundError`; for the exact submodule lookup performed by `from package import missing`, MCP Console uses `ImportError` so CPython does not suppress the guidance.
+Both forms report the full missing-submodule name.
 
 When inference succeeds, the Python finder calls a private R closure supplied by the reticulate bridge.
 That closure snapshots reticulate's current requirement state, adds the inferred distribution through `reticulate::py_require(..., action = "add")`, and materializes the complete manifest through the existing managed-Python callback.
@@ -157,6 +159,8 @@ The server matches and commits the candidate when it processes the report; sideb
 The finder then invalidates Python's import caches and retries the current meta-path finders for the requested module.
 If the module is present, the original import continues in place.
 The cell is not replayed, and successful resolution emits no preparation marker.
+When the import and inferred distribution names differ, the server emits a bounded notice such as `[resolved PyPI distribution 'py-yaml12' for Python import 'yaml12']` after it commits the matching activation.
+Same-name inference and explicit preparation emit no resolution notice.
 The worker process, Python interpreter, Python objects, R globals, DuckDB catalog, stdin state, and PID remain in place.
 
 A successfully activated environment remains committed if the inferred distribution does not provide the requested module or if later code in the cell fails.
