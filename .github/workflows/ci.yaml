@@ -25,6 +25,12 @@ jobs:
         if: runner.os == 'macOS'
         uses: r-lib/actions/setup-r@v2
 
+      - name: Install CRAN macOS gettext
+        if: runner.os == 'macOS'
+        run: |
+          sudo Rscript --vanilla -e \
+            'source("https://mac.R-project.org/bin/install.R"); install.libs("gettext"); stopifnot(file.exists(file.path("/opt/R", Sys.info()[["machine"]], "include", "libintl.h")))'
+
       - name: Install R dependencies
         if: runner.os == 'macOS'
         uses: r-lib/actions/setup-r-dependencies@v2
