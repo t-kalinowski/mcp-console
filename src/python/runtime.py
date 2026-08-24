@@ -444,8 +444,7 @@ def _mcp_console_take_images(_image_state=_mcp_console_image_state):
     return images
 
 
-def _mcp_console_configure_psutil(
-    _Exception=_builtins.Exception,
+def _mcp_console_apply_psutil_process_group(
     _callable=_builtins.callable,
     _getattr=_builtins.getattr,
     _import_module=_importlib.import_module,
@@ -471,10 +470,7 @@ def _mcp_console_configure_psutil(
     if resolved != installed:
         return None
     if psutil is None:
-        try:
-            psutil = _import_module("psutil")
-        except _Exception:
-            return None
+        psutil = _import_module("psutil")
     platform = _getattr(psutil, "_psplatform", None)
     pids = _getattr(platform, "pids", None)
     if not _callable(pids) or _getattr(pids, "_mcp_console_sandbox", False):
@@ -512,6 +508,19 @@ def _mcp_console_configure_psutil(
     # Keep psutil's public wrapper so it retains its sorted-list contract. The
     # platform hook also survives activation during the first psutil import.
     platform.pids = process_group_ids
+    return None
+
+
+def _mcp_console_configure_psutil(
+    _Exception=_builtins.Exception,
+    _apply=_mcp_console_apply_psutil_process_group,
+):
+    # This adapter may run after reticulate has activated an environment, so
+    # its optional probe and setup must not abort activation.
+    try:
+        _apply()
+    except _Exception:
+        pass
     return None
 
 

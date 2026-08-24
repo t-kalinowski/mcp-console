@@ -443,10 +443,8 @@ def test_retains_environment_when_optional_psutil_setup_fails(
                 if specification is None:
                     return None
                 self.visible_lookups += 1
-                if self.visible_lookups == 2:
-                    sys.meta_path.remove(self)
-                    raise ImportError("synthetic psutil setup import failure")
-                return specification
+                sys.meta_path.remove(self)
+                raise ImportError("synthetic psutil probe failure")
 
 
         failing_psutil_finder = FailingPsutilFinder()
@@ -468,7 +466,7 @@ def test_retains_environment_when_optional_psutil_setup_fails(
         )
         """)
     client.send(python=python)
-    assert last_tool_text(client) == "('psutil', 2, 42, True)\n"
+    assert last_tool_text(client) == "('psutil', 1, 42, True)\n"
 
     client.send(r='"psutil" %in% reticulate::py_require()$packages')
     assert last_tool_text(client) == "[1] TRUE\n"

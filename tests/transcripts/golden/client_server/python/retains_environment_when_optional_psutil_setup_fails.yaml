@@ -25,10 +25,8 @@ send:
             if specification is None:
                 return None
             self.visible_lookups += 1
-            if self.visible_lookups == 2:
-                sys.meta_path.remove(self)
-                raise ImportError("synthetic psutil setup import failure")
-            return specification
+            sys.meta_path.remove(self)
+            raise ImportError("synthetic psutil probe failure")
 
 
     failing_psutil_finder = FailingPsutilFinder()
@@ -54,7 +52,7 @@ result:
   content:
     - type: text
       text: |
-        ('psutil', 2, 42, True)
+        ('psutil', 1, 42, True)
   isError: false
 ---
 send:
