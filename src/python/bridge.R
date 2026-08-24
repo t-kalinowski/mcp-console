@@ -193,6 +193,11 @@ base::local(
       activate <- function(requirements) {
         stopifnot(is.null(pending_requirements))
         config <- original_activate(requirements)
+        reticulate::py_set_attr(
+          reticulate::import("sys", convert = FALSE),
+          "executable",
+          config$executable
+        )
         pending_requirements <<- manifest(
           requirements$packages,
           requirements$python_version,

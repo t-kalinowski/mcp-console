@@ -1,0 +1,30 @@
+---
+!same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
+---
+send:
+  python: |
+    import subprocess
+    import sys
+
+    import psutil
+
+    command = [sys.executable, "-c", "import time; time.sleep(30)"]
+    child = subprocess.Popen(command)
+    try:
+        descendants = psutil.Process().children(recursive=True)
+        observed = [process.pid for process in descendants]
+    finally:
+        child.terminate()
+        child.wait()
+
+    child.pid in observed
+  requirements:
+    python:
+      - psutil
+result:
+  content:
+    - type: text
+      text: |
+        True
+  isError: false
+...

@@ -290,6 +290,57 @@ def test_runs_joblib_process_backend(binary: Path) -> Transcript:
     return client._finish()
 
 
+def test_runs_joblib_process_backend_after_live_resolution(binary: Path) -> Transcript:
+    environment = os.environ.copy()
+    environment.pop("RETICULATE_PYTHON", None)
+    client = McpClient(binary, ("serve",), environment)
+    client._initialize_and_list_tools()
+    client.send(python="import sys")
+    assert last_tool_text(client) == "[done]"
+    # fmt: python
+    python = code("""
+        from joblib import Parallel, delayed
+
+        Parallel(n_jobs=2)(delayed(abs)(value) for value in range(-2, 3))
+        """)
+    client.send(python=python)
+    output = last_tool_text(client)
+    assert output == "[2, 1, 0, 1, 2]\n", repr(output)
+    return client._finish()
+
+
+def test_inspects_sandbox_child_processes_with_psutil(binary: Path) -> Transcript:
+    environment = os.environ.copy()
+    environment.pop("RETICULATE_PYTHON", None)
+    client = McpClient(binary, ("serve",), environment)
+    client._initialize_and_list_tools()
+    # fmt: python
+    python = code("""
+        import subprocess
+        import sys
+
+        import psutil
+
+        command = [sys.executable, "-c", "import time; time.sleep(30)"]
+        child = subprocess.Popen(command)
+        try:
+            descendants = psutil.Process().children(recursive=True)
+            observed = [process.pid for process in descendants]
+        finally:
+            child.terminate()
+            child.wait()
+
+        child.pid in observed
+        """)
+    client.send(
+        python=python,
+        requirements={"python": ["psutil"]},
+    )
+    output = last_tool_text(client)
+    assert output == "True\n", repr(output)
+    return client._finish()
+
+
 def test_sends_python_cell_with_initial_requirements(binary: Path) -> Transcript:
     client = McpClient(binary, ("serve",))
     client._initialize_and_list_tools()

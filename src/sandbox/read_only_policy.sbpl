@@ -110,6 +110,8 @@
   (sysctl-name-prefix "sysctl.name.")
   (sysctl-name "vm.loadavg")
   (sysctl-name-prefix "hw.perflevel")
+  ; psutil enumerates processes before selecting sandbox child processes.
+  (sysctl-name "kern.proc.all")
   (sysctl-name-prefix "kern.proc.pgrp.")
   (sysctl-name-prefix "kern.proc.pid.")
   (sysctl-name-prefix "net.routetable.")
