@@ -27,7 +27,7 @@ send:
 input:
   method: notifications/cancelled
   params:
-    requestId: "<request ID>"
+    requestId: <request ID>
     reason: acceptance test cancelled the combined send
 ---
 input:

@@ -499,8 +499,8 @@ def main() -> None:
                 wait_for_server_to_process_sideband(reader, writer)
                 (temporary / f"zod-background-sideband-emitted{suffix}").touch()
                 os._exit(0)
-            (temporary / f"zod-background-sideband-started{suffix}").touch()
             send(writer, {"kind": "completed"})
+            (temporary / f"zod-background-sideband-started{suffix}").touch()
             child_pid, status = os.waitpid(child, 0)
             assert child_pid == child
             assert os.waitstatus_to_exitcode(status) == 0
