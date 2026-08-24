@@ -309,6 +309,45 @@ def test_runs_joblib_process_backend_after_live_resolution(binary: Path) -> Tran
     return client._finish()
 
 
+def test_runs_spawn_process_after_live_resolution(binary: Path) -> Transcript:
+    environment = os.environ.copy()
+    environment.pop("RETICULATE_PYTHON", None)
+    client = McpClient(binary, ("serve",), environment)
+    client._initialize_and_list_tools()
+    # fmt: python
+    python = code("""
+        import multiprocessing.spawn
+        import sys
+
+        initial_executable = sys.executable
+        """)
+    client.send(python=python)
+    assert last_tool_text(client) == "[done]"
+    # fmt: python
+    python = code("""
+        import multiprocessing
+        import sys
+
+        import joblib
+
+        context = multiprocessing.get_context("spawn")
+        with context.Pool(1) as pool:
+            child_executable = pool.apply(
+                eval,
+                ("__import__('sys').executable",),
+            )
+
+        (
+            initial_executable != sys.executable,
+            child_executable == sys.executable,
+        )
+        """)
+    client.send(python=python)
+    output = last_tool_text(client)
+    assert output == "(True, True)\n", repr(output)
+    return client._finish()
+
+
 def test_inspects_sandbox_child_processes_with_psutil(binary: Path) -> Transcript:
     environment = os.environ.copy()
     environment.pop("RETICULATE_PYTHON", None)
@@ -316,28 +355,60 @@ def test_inspects_sandbox_child_processes_with_psutil(binary: Path) -> Transcrip
     client._initialize_and_list_tools()
     # fmt: python
     python = code("""
+        import sys
+
+        initial_executable = sys.executable
+        """)
+    client.send(python=python)
+    assert last_tool_text(client) == "[done]"
+    # fmt: python
+    python = code("""
+        import ctypes
+        import errno
+        import os
         import subprocess
         import sys
 
         import psutil
 
+        mib = (ctypes.c_int * 3)(1, 14, 0)
+        size = ctypes.c_size_t()
+        ctypes.set_errno(0)
+        result = ctypes.CDLL(None, use_errno=True).sysctl(
+            mib,
+            len(mib),
+            None,
+            ctypes.byref(size),
+            None,
+            0,
+        )
+        denied = result == -1 and ctypes.get_errno() == errno.EPERM
+
         command = [sys.executable, "-c", "import time; time.sleep(30)"]
         child = subprocess.Popen(command)
         try:
+            visible = psutil.pids()
             descendants = psutil.Process().children(recursive=True)
             observed = [process.pid for process in descendants]
+            process_group = os.getpgrp()
+            visible_groups = [os.getpgid(pid) for pid in visible]
         finally:
             child.terminate()
             child.wait()
 
-        child.pid in observed
+        (
+            initial_executable != sys.executable,
+            denied,
+            1 not in visible,
+            visible == sorted(visible),
+            all(group == process_group for group in visible_groups),
+            child.pid in visible,
+            child.pid in observed,
+        )
         """)
-    client.send(
-        python=python,
-        requirements={"python": ["psutil"]},
-    )
+    client.send(python=python)
     output = last_tool_text(client)
-    assert output == "True\n", repr(output)
+    assert output == "(True, True, True, True, True, True, True)\n", repr(output)
     return client._finish()
 
 

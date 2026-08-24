@@ -444,6 +444,66 @@ def _mcp_console_take_images(_image_state=_mcp_console_image_state):
     return images
 
 
+def _mcp_console_configure_psutil(
+    _getattr=_builtins.getattr,
+    _import_module=_importlib.import_module,
+    _find_spec=_importlib_util.find_spec,
+    _os=_os,
+):
+    if _find_spec("psutil") is None:
+        return None
+    psutil = _import_module("psutil")
+    if _getattr(psutil._psplatform.pids, "_mcp_console_sandbox", False):
+        return None
+
+    ctypes = _import_module("ctypes")
+    libproc = ctypes.CDLL("/usr/lib/libproc.dylib", use_errno=True)
+    list_process_group = libproc.proc_listpgrppids
+    list_process_group.argtypes = [ctypes.c_int, ctypes.c_void_p, ctypes.c_int]
+    list_process_group.restype = ctypes.c_int
+    process_group = _os.getpgrp()
+
+    def process_group_ids():
+        capacity = 16
+        while True:
+            buffer = (ctypes.c_int * capacity)()
+            ctypes.set_errno(0)
+            count = list_process_group(
+                process_group,
+                buffer,
+                ctypes.sizeof(buffer),
+            )
+            if count <= 0:
+                error = ctypes.get_errno()
+                if error:
+                    raise OSError(error, _os.strerror(error))
+                if count < 0:
+                    raise RuntimeError("process-group enumeration failed")
+                return []
+            if count < capacity:
+                return buffer[:count]
+            capacity *= 2
+
+    process_group_ids._mcp_console_sandbox = True
+    # Keep psutil's public wrapper so it retains its sorted-list contract. The
+    # platform hook also survives activation during the first psutil import.
+    psutil._psplatform.pids = process_group_ids
+    return None
+
+
+def _mcp_console_activate_process_environment(
+    executable,
+    _configure_psutil=_mcp_console_configure_psutil,
+    _sys=_sys,
+):
+    _sys.executable = executable
+    multiprocessing = _sys.modules.get("multiprocessing")
+    if multiprocessing is not None:
+        multiprocessing.set_executable(executable)
+    _configure_psutil()
+    return None
+
+
 _mcp_console = _types.ModuleType("_mcp_console")
 
 
@@ -453,6 +513,7 @@ def _mcp_console_dispatch(state=_mcp_console.__dict__):
     return state[operation](*arguments)
 
 
+_mcp_console.activate_process_environment = _mcp_console_activate_process_environment
 _mcp_console.disable_matplotlib_show = _mcp_console_disable_matplotlib_show
 _mcp_console.configure_import_resolution = _mcp_console_import_finder.configure
 _mcp_console.eval_cell = _mcp_console_eval_cell
@@ -460,3 +521,4 @@ _mcp_console.take_images = _mcp_console_take_images
 _mcp_console.dispatch = _mcp_console_dispatch
 _sys.modules[_mcp_console.__name__] = _mcp_console
 _builtins.__dict__["_mcp_console_dispatch"] = _mcp_console_dispatch
+_mcp_console_configure_psutil()
