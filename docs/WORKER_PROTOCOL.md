@@ -312,12 +312,15 @@ After initialization, any new resolved environment that the worker activates mus
 ### Nested managed-Python resolution
 
 A server-managed worker may send `resolve_python` or `resolve_python_version` during an evaluation, preparation, or idle runtime callback.
+The request may come from an evaluated Python import through the built-in private bridge, a reticulate API, or R package behavior.
 It then waits for exactly one matching success or failure reply.
 
 Every successful `python_resolved` reply is provisional.
 When the live runtime accepts that environment, the worker sends `python_activated` with the complete normalized logical manifest.
 The manifest must match a resolved candidate or the unchanged current managed environment.
 Activation is reported before the enclosing operation result.
+For automatic import resolution, `python_activated` is sent before the original import resumes.
+A later missing-module or language error does not undo that accepted environment.
 
 An explicit pre-initialization preparation may instead materialize the last resolved candidate and finish with `python_prepared` without activation.
 Other unmatched candidates are discarded when the enclosing operation ends.

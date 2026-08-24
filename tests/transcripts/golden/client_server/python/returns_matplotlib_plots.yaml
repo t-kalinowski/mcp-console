@@ -110,7 +110,7 @@ result:
     - type: text
       text: |
         Traceback (most recent call last):
-          File "<string>", line 105, in _mcp_console_eval_cell
+          File "<string>", line 389, in _mcp_console_eval_cell
           File "<mcp-console:python:e5>", line 5, in <module>
         ValueError: cell failed
     - type: image
@@ -144,7 +144,7 @@ result:
     - type: text
       text: |
         Traceback (most recent call last):
-          File "<string>", line 64, in _mcp_console_collect_plots
+          File "<string>", line 348, in _mcp_console_collect_plots
           File "<mcp-console:python:e7>", line 2, in fail_plot_capture
         RuntimeError: plot render failed
     - type: image

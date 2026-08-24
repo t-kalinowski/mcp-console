@@ -34,16 +34,18 @@ A code-bearing call can declare additive R packages, Python packages, or DuckDB 
 The server prepares changed requirements before it dispatches the cell and retains successful additions for later cells and restarts.
 Already-retained requirements add no preparation work, and a successful combined call returns only the normal cell result, without `[prepared]`.
 Explicit preparation makes packages and extensions available but does not attach, import, or load them.
-R resolves missing plain package names only when execution reaches a supported package-loading operation; R source, Python imports, and SQL are not scanned, and MCP Console does not replay a cell after a package-load or import failure.
-If validation, resolution, or live preparation fails, or if requirement changes require an explicit restart, the call is a tool error and the cell is not run.
-Calls without `requirements` skip that pre-dispatch preparation path; an R cell can still resolve a package while it runs.
+R resolves missing plain package names when execution reaches a supported package-loading operation.
+The built-in managed Python environment likewise resolves a missing import when Python's ordinary import finders cannot satisfy it.
+Neither language's source is scanned in advance, and MCP Console does not replay a cell after a package-load or import failure.
+If explicit requirement validation, pre-dispatch resolution, or live preparation fails, or if requirement changes require an explicit restart, the call is a tool error and the cell is not run.
+Calls without `requirements` skip that pre-dispatch preparation path; R package loads and managed Python imports can still resolve packages while the cell runs.
 
 The optional `timeout_ms` defaults to 60,000 milliseconds.
 For a combined call, requirement resolution and live preparation finish before the cell is dispatched and before this deadline begins applying, so the complete MCP call can take longer than `timeout_ms`.
 The deadline then limits only how long a call waits after starting or attaching to an evaluation, including its worker startup and one automatic replacement attempt.
 A stdin-only call with no active evaluation instead waits without that deadline if it must start an initial or stopped worker.
 The deadline does not stop worker startup, dependency resolution, or evaluation.
-Automatic R resolution begins after the cell is dispatched and remains part of that active evaluation.
+Automatic R and Python import resolution begins after the cell is dispatched and remains part of that active evaluation.
 If it outlives the call's wait, the response can end in `[running]` while the resolver and cell continue.
 When the deadline expires, the response contains output available so far and ends in a state notice such as `[running]` or `[worker starting]`.
 
@@ -99,7 +101,7 @@ They cannot consume a partial line that the built-in worker has preserved for th
 The call returns after the request or signal is sent, not after user code stops.
 If neither a resolver nor a worker is running, the call does not start a worker and returns the tool error `worker is not running`.
 A resolver signal error is returned by both the interrupt and resolution calls, and the server stops that resolver during cleanup.
-An interrupted automatic R resolver reports an interrupted outcome to the running cell.
+An interrupted automatic R or Python resolver reports an interrupted outcome to the running cell.
 A live but idle built-in worker still receives `SIGINT` and the call returns `[interrupt sent]`.
 R may consume that signal while idle or at the next managed boundary, so the following cell can execute while its response contains a bare interrupt newline attributable to the earlier interrupt.
 
@@ -187,6 +189,55 @@ There is no guaranteed chronology between independent sideband, stdout, and stde
 
 Asynchronous Python work runs only when user code starts and manages it explicitly.
 MCP Console does not add notebook event-loop behavior.
+
+### On-demand Python packages
+
+The built-in server-managed Python environment resolves missing imports while the current cell runs.
+Import the packages appropriate for the task directly; do not probe for their installation or run pip in the worker.
+Availability queries such as `importlib.util.find_spec()` inspect the current environment without triggering resolution.
+Successful resolution emits no `[prepared]` marker or other notice.
+
+The private runtime appends a finder to `sys.meta_path` after Python's existing finders.
+Built-in, frozen, standard-library, local, already-installed, and already-loaded modules therefore resolve normally before MCP Console sees an import.
+Ordinary `import` statements, `from ... import ...`, and `importlib.import_module()` all use this machinery.
+Missing optional imports reached while the default NumPy or pandas package is initializing stay on Python's ordinary path, so importing either available default does not start host resolution.
+Import an optional dependency directly after initialization, or declare it through `requirements.python`, when it is needed.
+When every earlier finder misses, MCP Console takes the top-level name from the requested import.
+A curated table maps established differences such as `yaml` to `pyyaml`, `PIL` to `pillow`, and `sklearn` to `scikit-learn`.
+For other conservative ASCII identifiers, it assumes that the PyPI distribution has the same name as the top-level module.
+Automatic inference produces one bare distribution name; it does not infer versions, extras, markers, URLs, paths, or other requirement syntax.
+
+MCP Console declines the fallback when it cannot safely identify one distribution.
+This includes broad shared namespaces such as `google`, `azure`, `zope`, `opentelemetry`, and `backports`, a missing submodule whose top-level package is already present, and a standard-library module absent from the selected Python build.
+The resulting `ModuleNotFoundError` asks for the correct distribution through `requirements.python` when explicit preparation can help.
+
+Resolution starts only when execution reaches the missing import.
+Python source is not scanned, so imports in unreachable branches or uncalled functions do not invoke the resolver.
+Each reached missing import resolves in execution order, and the cell is never replayed.
+
+The finder calls the private R bridge, which adds the inferred distribution to reticulate's managed manifest and asks the existing host uv resolver for a compatible environment.
+After reticulate activates that environment, the worker reports the complete manifest to the server.
+Only then does the original import resume against invalidated import caches.
+Preparation makes the distribution available; the original import still performs the import normally.
+
+This transition does not restart the worker or Python interpreter.
+Python and R globals, Python objects, the DuckDB catalog, worker PID, and stdin state remain available.
+The server retains a successfully activated environment for later cells and restart, even if the inferred distribution does not provide the requested module or later code in the cell fails.
+An ordinary resolution failure before activation restores the earlier reticulate manifest and leaves the worker usable.
+Errors include the inferred distribution, the host resolver diagnostic when available, and an explicit `requirements.python` recovery example.
+
+Use `requirements.python` when the correct distribution differs from the inferred name, a version, extra, or environment marker is needed, a namespace is ambiguous, or the package should be prepared before the cell starts.
+Explicit preparation accepts supported named PEP 508 registry requirements and does not import the package.
+
+Automatic resolution can call R and reticulate only from the main worker process and the Python thread that configured the runtime.
+A missing import reached from a fork child or another Python thread reports that the distribution must be prepared before that child or thread starts; it does not invoke the host resolver.
+Imports already handled by ordinary Python finders remain available in those contexts.
+
+A nonempty user-selected `RETICULATE_PYTHON` disables both automatic managed resolution and `requirements.python`.
+Its missing-import error directs the user to install the distribution into that environment or restart MCP Console with managed Python enabled.
+
+Automatic import resolution counts toward the active evaluation's `timeout_ms` wait.
+A short wait can therefore return `[running]`; poll with an empty `send`, interrupt the active resolver with `session(action = "interrupt")`, or restart according to the normal generation lifecycle.
 
 ## R and Python interoperability
 
@@ -276,7 +327,9 @@ Invalid UTF-8 from raw standard streams is replaced when projected to MCP text; 
 Bracketed records such as `[running]`, `[stdin needed]`, `[idle]`, and worker-replacement notices are server state, not language output.
 R errors, Python exceptions, and DuckDB errors are ordinary console text and normally leave the worker reusable.
 Host dependency-resolver failures during explicit preparation are MCP tool errors, but preserve any current worker and its in-memory state.
-An ordinary automatic R resolver failure is instead reported inside the running R evaluation; [requirements and environments](REQUIREMENTS.md) describes the request-specific effects.
+An ordinary automatic R resolver failure is instead reported inside the running R evaluation.
+An ordinary automatic Python failure becomes an actionable `ModuleNotFoundError` in the running Python evaluation.
+[Requirements and environments](REQUIREMENTS.md) describes the request-specific effects.
 Worker, relay, and protocol failures are MCP tool errors and may stop and replace the worker.
 
 If initial lazy startup for a code-bearing `send` fails before the worker reaches `ready`, the call reports startup failure details without worker-loss or replacement notices, and its cell is not replayed.

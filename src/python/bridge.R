@@ -11,6 +11,14 @@ base::local(
     python_module <- NULL
     pending_requirements <- NULL
     source <- NULL
+    `%||%` <- function(x, y) if (is.null(x)) y else x
+    managed_python_disabled_message <- paste0(
+      "MCP Console is using a user-selected Python environment. ",
+      "Automatic managed package resolution is disabled, and ",
+      "`requirements.python` is also disabled for this interpreter selection. ",
+      "Install the distribution into the selected environment or restart MCP ",
+      "Console with managed Python enabled."
+    )
     # Capture the embedded runtime once before reticulate hooks can initialize Python.
     python_runtime_source <- .Call("mcp_console_python_runtime_source")
 
@@ -194,7 +202,6 @@ base::local(
 
     if (!is.na(managed)) {
       Sys.unsetenv("MCP_CONSOLE_MANAGED_PYTHON")
-      `%||%` <- function(x, y) if (is.null(x)) y else x
       setHook(
         packageEvent("reticulate", "onLoad"),
         install_managed_python,
@@ -203,6 +210,64 @@ base::local(
       if ("reticulate" %in% loadedNamespaces()) {
         install_managed_python()
       }
+    }
+
+    materialize_manifest <- function() {
+      if (is.na(managed) || !"reticulate" %in% loadedNamespaces()) {
+        return(NULL)
+      }
+      namespace <- asNamespace("reticulate")
+      requirements <- reticulate::py_require()
+      initialized <- get("is_python_initialized", envir = namespace)()
+      if (!initialized) {
+        invisible(get("uv_get_or_create_env", envir = namespace)(
+          requirements$packages,
+          requirements$python_version,
+          requirements$exclude_newer
+        ))
+      }
+      manifest(
+        requirements$packages,
+        requirements$python_version,
+        requirements$exclude_newer
+      )
+    }
+
+    prepare_packages <- function(packages) {
+      if (is.na(managed)) {
+        return(list(
+          kind = "disabled",
+          message = managed_python_disabled_message
+        ))
+      }
+
+      namespace <- asNamespace("reticulate")
+      globals <- get(".globals", envir = namespace)
+      snapshot <- get("py_reqs_get", envir = namespace)()
+      tryCatch(
+        {
+          reticulate::py_require(packages, action = "add")
+          requirements <- materialize_manifest()
+          if (is.null(requirements)) {
+            stop("Python preparation did not produce a managed manifest")
+          }
+          list(kind = "ready")
+        },
+        error = function(error) {
+          globals$python_requirements <- snapshot
+          list(kind = "failed", message = conditionMessage(error))
+        }
+      )
+    }
+
+    resolve_import_distribution <- function(distribution) {
+      distribution <- reticulate::py_to_r(distribution)
+      jsonlite::toJSON(
+        prepare_packages(distribution),
+        auto_unbox = TRUE,
+        null = "null",
+        na = "null"
+      )
     }
 
     dispatch_python <- function(operation, arguments = list()) {
@@ -247,6 +312,33 @@ base::local(
         convert = FALSE
       )
       python_module <<- reticulate::import("_mcp_console", convert = FALSE)
+      configured <- FALSE
+      on.exit(
+        if (!configured) python_module <<- NULL,
+        add = TRUE
+      )
+      disabled_reason <- if (is.na(managed)) {
+        managed_python_disabled_message
+      } else {
+        NULL
+      }
+      callback <- if (is.na(managed)) NULL else resolve_import_distribution
+      reticulate::py_set_attr(
+        python_module,
+        "operation",
+        "configure_import_resolution"
+      )
+      reticulate::py_set_attr(
+        python_module,
+        "arguments",
+        list(callback, disabled_reason)
+      )
+      invisible(reticulate::py_run_string(
+        python_dispatch,
+        local = TRUE,
+        convert = FALSE
+      ))
+      configured <- TRUE
       invisible(TRUE)
     }
 
@@ -297,49 +389,15 @@ base::local(
       install_python_hooks()
     }
 
-    materialize_manifest <- function() {
-      if (is.na(managed) || !"reticulate" %in% loadedNamespaces()) {
-        return(NULL)
-      }
-      namespace <- asNamespace("reticulate")
-      requirements <- reticulate::py_require()
-      initialized <- get("is_python_initialized", envir = namespace)()
-      if (!initialized) {
-        invisible(get("uv_get_or_create_env", envir = namespace)(
-          requirements$packages,
-          requirements$python_version,
-          requirements$exclude_newer
-        ))
-      }
-      manifest(
-        requirements$packages,
-        requirements$python_version,
-        requirements$exclude_newer
-      )
-    }
-
     prepare <- function(request) {
       if (is.na(managed)) {
         stop("Python preparation requires a server-managed interpreter")
       }
-      namespace <- asNamespace("reticulate")
-      globals <- get(".globals", envir = namespace)
-      snapshot <- get("py_reqs_get", envir = namespace)()
-      result <- tryCatch(
-        {
-          packages <- unlist(jsonlite::fromJSON(request), use.names = FALSE)
-          reticulate::py_require(packages, action = "add")
-          requirements <- materialize_manifest()
-          if (is.null(requirements)) {
-            stop("Python preparation did not produce a managed manifest")
-          }
-          list(kind = "prepared")
-        },
-        error = function(error) {
-          globals$python_requirements <- snapshot
-          list(kind = "failed", message = conditionMessage(error))
-        }
-      )
+      packages <- unlist(jsonlite::fromJSON(request), use.names = FALSE)
+      result <- prepare_packages(packages)
+      if (identical(result$kind, "ready")) {
+        result$kind <- "prepared"
+      }
       jsonlite::toJSON(
         result,
         auto_unbox = TRUE,

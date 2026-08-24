@@ -1,0 +1,75 @@
+---
+!same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
+---
+send:
+  python: None
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+send:
+  python: import sklearn
+result:
+  content:
+    - type: text
+      text: |
+        Traceback (most recent call last):
+          File "<string>", line 389, in _mcp_console_eval_cell
+          File "<mcp-console:python:e2>", line 1, in <module>
+          File "<reticulate>/python/rpytools/loader.py", line 122, in _find_and_load_hook
+            return _run_hook(name, _hook)
+                   ^^^^^^^^^^^^^^^^^^^^^^
+          File "<reticulate>/python/rpytools/loader.py", line 96, in _run_hook
+            module = hook()
+                     ^^^^^^
+          File "<reticulate>/python/rpytools/loader.py", line 120, in _hook
+            return _find_and_load(name, import_)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+          File "<string>", line 201, in find_spec
+          File "<string>", line 262, in _raise_resolution_failure
+          File "<string>", line 51, in _mcp_console_missing_module
+        ModuleNotFoundError: No module named 'sklearn'.
+
+        MCP Console inferred the PyPI distribution `scikit-learn` from the import `sklearn`, but automatic package resolution failed:
+
+        managed Python resolution failed:
+        resolver input:
+        {
+          "python": "3.12.x",
+          "packages": [
+            "numpy",
+            "pandas",
+            "scikit-learn"
+          ],
+          "python_version": [
+            "3.12.x"
+          ]
+        }
+        uv output:
+        synthetic uv failure
+
+        Import names and PyPI distribution names can differ. Retry with the correct distribution declared through `requirements.python` in the `send` call, for example:
+
+        requirements: {"python": ["scikit-learn"]}
+  isError: false
+---
+send:
+  r: '"scikit-learn" %in% reticulate::py_require()$packages'
+result:
+  content:
+    - type: text
+      text: |
+        [1] FALSE
+  isError: false
+---
+send:
+  python: 6 * 7
+result:
+  content:
+    - type: text
+      text: |
+        42
+  isError: false
+...

@@ -1,0 +1,33 @@
+---
+!same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
+---
+send:
+  python: |
+    automatic_timeout_attempts = (
+        globals().get(
+            "automatic_timeout_attempts",
+            0,
+        )
+        + 1
+    )
+    import yaml12
+
+    (yaml12.__name__, automatic_timeout_attempts)
+  timeout_ms: 1
+result:
+  content:
+    - type: text
+      text: |-
+
+        [running]
+  isError: false
+---
+send:
+  timeout_ms: 30000
+result:
+  content:
+    - type: text
+      text: |
+        ('yaml12', 1)
+  isError: false
+...

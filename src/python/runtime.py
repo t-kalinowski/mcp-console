@@ -3,11 +3,295 @@ import __main__ as _main
 import ast as _ast
 import base64 as _base64
 import builtins as _builtins
+import importlib as _importlib
+import importlib.machinery as _machinery
+import importlib.util as _importlib_util
 import io as _io
+import json as _json
 import logging as _logging
+import os as _os
 import sys as _sys
+import threading as _threading
 import traceback as _traceback
 import types as _types
+
+
+_MCP_CONSOLE_IMPORT_DISTRIBUTIONS = {
+    "PIL": "pillow",
+    "OpenSSL": "pyopenssl",
+    "Crypto": "pycryptodome",
+    "_cffi_backend": "cffi",
+    "attr": "attrs",
+    "bs4": "beautifulsoup4",
+    "cv2": "opencv-python",
+    "dateutil": "python-dateutil",
+    "docx": "python-docx",
+    "dotenv": "python-dotenv",
+    "jwt": "pyjwt",
+    "pptx": "python-pptx",
+    "serial": "pyserial",
+    "skimage": "scikit-image",
+    "sklearn": "scikit-learn",
+    "yaml": "pyyaml",
+    "yaml12": "py-yaml12",
+}
+
+_MCP_CONSOLE_AMBIGUOUS_IMPORT_ROOTS = {
+    "azure",
+    "backports",
+    "google",
+    "opentelemetry",
+    "zope",
+}
+
+_MCP_CONSOLE_DEFAULT_IMPORT_ROOTS = {"numpy", "pandas"}
+
+
+def _mcp_console_missing_module(fullname, message):
+    raise ModuleNotFoundError(message, name=fullname) from None
+
+
+def _mcp_console_explicit_requirement(distribution):
+    return f'requirements: {{"python": ["{distribution}"]}}'
+
+
+class _McpConsoleImportFinder:
+    _mcp_console_import_finder = True
+
+    def __init__(
+        self,
+        importlib,
+        importlib_util,
+        machinery,
+        json,
+        os,
+        sys,
+        threading,
+        distributions,
+        ambiguous_roots,
+        default_roots,
+        missing_module,
+        explicit_requirement,
+    ):
+        self._importlib = importlib
+        self._importlib_util = importlib_util
+        self._machinery = machinery
+        self._json = json
+        self._os = os
+        self._sys = sys
+        self._threading = threading
+        self._distributions = distributions
+        self._ambiguous_roots = ambiguous_roots
+        self._default_roots = default_roots
+        self._missing_module = missing_module
+        self._explicit_requirement = explicit_requirement
+        self._callback = None
+        self._disabled_reason = "automatic Python package resolution is not configured"
+        self._pid = None
+        self._thread = None
+        self._state = threading.local()
+
+    def configure(self, callback, disabled_reason):
+        self._callback = callback
+        self._disabled_reason = disabled_reason
+        self._pid = self._os.getpid()
+        self._thread = self._threading.get_ident()
+        return None
+
+    def find_spec(self, fullname, path=None, target=None):
+        root = fullname.partition(".")[0]
+        if getattr(self._state, "resolving", False):
+            return None
+        # Availability probes must observe the environment without changing it.
+        # A real import can resolve the distribution if the caller proceeds.
+        if self._is_availability_probe():
+            return None
+        # The default packages probe for optional dependencies while importing.
+        # Keep those probes from changing the managed environment merely because
+        # a user imported an already-available default package.
+        if self._is_default_package_initialization():
+            return None
+        # Some libraries append importers after Python initializes. Give only
+        # that later suffix its ordinary chance before acting as the last finder.
+        finders = self._sys.meta_path
+        position = finders.index(self)
+        for finder in tuple(finders[position + 1 :]):
+            if hasattr(finder, "find_spec"):
+                specification = finder.find_spec(fullname, path, target)
+            elif self._sys.version_info < (3, 12):
+                find_module = getattr(finder, "find_module", None)
+                loader = None if find_module is None else find_module(fullname, path)
+                specification = (
+                    None
+                    if loader is None
+                    else self._importlib_util.spec_from_loader(fullname, loader)
+                )
+            else:
+                # Python 3.12 and later ignore legacy-only meta-path finders.
+                specification = None
+            if specification is not None:
+                return specification
+        if self._callback is None:
+            self._missing_module(
+                fullname,
+                f"No module named {fullname!r}.\n\n{self._disabled_reason}",
+            )
+        if self._pid != self._os.getpid():
+            self._missing_module(
+                fullname,
+                f"No module named {fullname!r}.\n\n"
+                "MCP Console automatic package resolution is available only in the "
+                "main worker process. Prepare the distribution through "
+                "`requirements.python` in the parent before starting the child, for "
+                "example:\n\n" + self._explicit_requirement("distribution-name"),
+            )
+        if self._thread != self._threading.get_ident():
+            self._missing_module(
+                fullname,
+                f"No module named {fullname!r}.\n\n"
+                "MCP Console automatic package resolution is available only on the "
+                "configuring thread for the Python worker. Prepare the distribution "
+                "through `requirements.python` before starting the background thread, "
+                "for example:\n\n" + self._explicit_requirement("distribution-name"),
+            )
+        if fullname != root and root in self._sys.modules:
+            self._missing_module(
+                fullname,
+                f"No module named {fullname!r}.\n\n"
+                f"MCP Console did not resolve the top-level import {root!r} again "
+                "because it is already present. The missing submodule may require an "
+                "optional extra or a different distribution. Pass the correct "
+                "distribution through `requirements.python` in the `send` call, for "
+                "example:\n\n" + self._explicit_requirement("distribution-name"),
+            )
+        if root in self._sys.stdlib_module_names:
+            self._missing_module(
+                fullname,
+                f"No module named {fullname!r}.\n\n"
+                f"{root!r} is a Python standard-library module, but it is unavailable "
+                "in the selected Python build. MCP Console did not try to install a "
+                "same-named PyPI distribution.",
+            )
+        if root in self._ambiguous_roots:
+            self._raise_unsafe_inference(fullname, root)
+
+        distribution = self._distributions.get(root)
+        if distribution is None:
+            safe = (
+                root.isascii()
+                and root.isidentifier()
+                and root[0].isalnum()
+                and root[-1].isalnum()
+            )
+            if not safe:
+                self._raise_unsafe_inference(fullname, root)
+            distribution = root
+
+        self._state.resolving = True
+        try:
+            try:
+                response = self._json.loads(self._callback(distribution))
+            except Exception as error:
+                self._raise_resolution_failure(fullname, root, distribution, str(error))
+        finally:
+            self._state.resolving = False
+
+        kind = response.get("kind") if isinstance(response, dict) else None
+        if kind == "failed" and isinstance(response.get("message"), str):
+            self._raise_resolution_failure(
+                fullname,
+                root,
+                distribution,
+                response["message"],
+            )
+        if kind == "disabled" and isinstance(response.get("message"), str):
+            self._missing_module(
+                fullname,
+                f"No module named {fullname!r}.\n\n{response['message']}",
+            )
+        if kind != "ready":
+            raise RuntimeError("invalid automatic Python package resolver response")
+
+        self._importlib.invalidate_caches()
+        specification = self._machinery.PathFinder.find_spec(fullname, path, target)
+        if specification is not None:
+            return specification
+        self._missing_module(
+            fullname,
+            f"No module named {fullname!r}.\n\n"
+            f"MCP Console prepared the inferred PyPI distribution `{distribution}`, "
+            f"but it did not provide the import `{fullname}`.\n\n"
+            "Pass the correct distribution through `requirements.python` in the "
+            "`send` call:\n\n"
+            + self._explicit_requirement("correct-distribution-name"),
+        )
+
+    def _is_default_package_initialization(self):
+        frame = self._sys._getframe(1)
+        while frame is not None:
+            specification = frame.f_globals.get("__spec__")
+            module = frame.f_globals.get("__name__", "")
+            root = module.partition(".")[0]
+            if root in self._default_roots and getattr(
+                specification, "_initializing", False
+            ):
+                return True
+            frame = frame.f_back
+        return False
+
+    def _is_availability_probe(self):
+        probe_code = getattr(self._importlib_util.find_spec, "__code__", None)
+        frame = self._sys._getframe(1)
+        while frame is not None:
+            if frame.f_code is probe_code:
+                return True
+            frame = frame.f_back
+        return False
+
+    def _raise_unsafe_inference(self, fullname, root):
+        self._missing_module(
+            fullname,
+            f"No module named {fullname!r}.\n\n"
+            "MCP Console could not safely infer a PyPI distribution for the missing "
+            f"import `{root}`.\n\n"
+            "Pass the distribution through `requirements.python` in the `send` call, "
+            "for example:\n\n" + self._explicit_requirement("distribution-name"),
+        )
+
+    def _raise_resolution_failure(self, fullname, root, distribution, diagnostic):
+        self._missing_module(
+            fullname,
+            f"No module named {fullname!r}.\n\n"
+            f"MCP Console inferred the PyPI distribution `{distribution}` from the "
+            f"import `{root}`, but automatic package resolution failed:\n\n"
+            f"{diagnostic}\n\n"
+            "Import names and PyPI distribution names can differ. Retry with the "
+            "correct distribution declared through `requirements.python` in the "
+            "`send` call, for example:\n\n" + self._explicit_requirement(distribution),
+        )
+
+
+_mcp_console_import_finder = None
+for _mcp_console_finder in _sys.meta_path:
+    if _builtins.getattr(_mcp_console_finder, "_mcp_console_import_finder", False):
+        _mcp_console_import_finder = _mcp_console_finder
+        break
+if _mcp_console_import_finder is None:
+    _mcp_console_import_finder = _McpConsoleImportFinder(
+        _importlib,
+        _importlib_util,
+        _machinery,
+        _json,
+        _os,
+        _sys,
+        _threading,
+        _MCP_CONSOLE_IMPORT_DISTRIBUTIONS,
+        _MCP_CONSOLE_AMBIGUOUS_IMPORT_ROOTS,
+        _MCP_CONSOLE_DEFAULT_IMPORT_ROOTS,
+        _mcp_console_missing_module,
+        _mcp_console_explicit_requirement,
+    )
+    _sys.meta_path.append(_mcp_console_import_finder)
 
 
 class _McpConsoleMatplotlibLogFilter(_logging.Filter):
@@ -131,6 +415,7 @@ def _mcp_console_dispatch(state=_mcp_console.__dict__):
 
 
 _mcp_console.disable_matplotlib_show = _mcp_console_disable_matplotlib_show
+_mcp_console.configure_import_resolution = _mcp_console_import_finder.configure
 _mcp_console.eval_cell = _mcp_console_eval_cell
 _mcp_console.take_images = _mcp_console_take_images
 _mcp_console.dispatch = _mcp_console_dispatch
