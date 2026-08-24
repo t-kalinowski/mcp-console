@@ -69,6 +69,45 @@ def ir_requirements(record: dict[str, object]) -> list[str]:
     ]
 
 
+def send_and_collect_runtime_r_resolution(
+    client: McpClient,
+    expected: str,
+    **arguments: object,
+) -> None:
+    call_start = len(client.transcript)
+    client.send(**arguments)
+    chunks = []
+    for attempt in range(5):
+        output = last_tool_text(client)
+        # A timeout can drain final R output before the completion event,
+        # so retain every output delta instead of only the last poll.
+        if output.endswith("\n[running]"):
+            chunks.append(output.removesuffix("\n[running]"))
+            if attempt == 4:
+                raise AssertionError(
+                    "automatic R resolution remained running after five responses: "
+                    f"collected={''.join(chunks)!r}, last={output!r}"
+                )
+            client.send()
+            continue
+
+        if output != "[done]" or not chunks:
+            chunks.append(output)
+        collected = "".join(chunks)
+        assert collected == expected, repr(collected)
+
+        calls = client.transcript[call_start:]
+        submitted = calls[0]
+        final_result = calls[-1]["result"]
+        assert isinstance(final_result, dict), final_result
+        content = final_result["content"]
+        assert len(content) == 1 and content[0]["type"] == "text", content
+        content[0]["text"] = collected
+        submitted["result"] = final_result
+        client.transcript[call_start:] = [submitted]
+        return
+
+
 def test_resolves_missing_r_packages_during_evaluation(binary: Path) -> Transcript:
     environment, _ = r_test_environment()
     environment["RETICULATE_PYTHON"] = ""
@@ -142,8 +181,7 @@ def test_resolves_reached_r_packages_at_runtime(binary: Path) -> Transcript:
             )
             42L
             """)
-        client.send(r=static)
-        assert last_tool_text(client) == "[1] 42\n"
+        send_and_collect_runtime_r_resolution(client, "[1] 42\n", r=static)
         static_runs = ir_run_records(record)[baseline:]
         packages = (
             "fortunes",
@@ -183,8 +221,7 @@ def test_resolves_reached_r_packages_at_runtime(binary: Path) -> Transcript:
             ))
             42L
             """)
-        client.send(r=dynamic)
-        assert last_tool_text(client) == "[1] 42\n"
+        send_and_collect_runtime_r_resolution(client, "[1] 42\n", r=dynamic)
         dynamic_runs = ir_run_records(record)[dynamic_baseline:]
         assert len(dynamic_runs) == 2, dynamic_runs
         assert "RcppRoll" in ir_requirements(dynamic_runs[0]), dynamic_runs
