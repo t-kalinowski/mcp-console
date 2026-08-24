@@ -162,6 +162,7 @@ The cell is not replayed, and successful resolution emits no preparation marker.
 When the import and inferred distribution names differ, the server emits a bounded notice such as `[resolved PyPI distribution 'py-yaml12' for Python import 'yaml12']` after it commits the matching activation.
 Same-name inference and explicit preparation emit no resolution notice.
 The worker process, Python interpreter, Python objects, R globals, DuckDB catalog, stdin state, and PID remain in place.
+New subprocesses use the activated environment and can import its retained packages.
 
 A successfully activated environment remains committed if the inferred distribution does not provide the requested module or if later code in the cell fails.
 A later cell and a replacement after restart reuse it.

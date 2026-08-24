@@ -290,6 +290,258 @@ def test_runs_joblib_process_backend(binary: Path) -> Transcript:
     return client._finish()
 
 
+def test_runs_joblib_process_backend_after_live_resolution(binary: Path) -> Transcript:
+    environment = os.environ.copy()
+    environment.pop("RETICULATE_PYTHON", None)
+    client = McpClient(binary, ("serve",), environment)
+    client._initialize_and_list_tools()
+    client.send(python="import sys")
+    assert last_tool_text(client) == "[done]"
+    # fmt: python
+    python = code("""
+        from joblib import Parallel, delayed
+
+        Parallel(n_jobs=2)(delayed(abs)(value) for value in range(-2, 3))
+        """)
+    client.send(python=python)
+    output = last_tool_text(client)
+    assert output == "[2, 1, 0, 1, 2]\n", repr(output)
+    return client._finish()
+
+
+def test_runs_spawn_process_after_live_resolution(binary: Path) -> Transcript:
+    environment = os.environ.copy()
+    environment.pop("RETICULATE_PYTHON", None)
+    client = McpClient(binary, ("serve",), environment)
+    client._initialize_and_list_tools()
+    # fmt: python
+    python = code("""
+        import multiprocessing.spawn
+        import sys
+
+        initial_executable = sys.executable
+        """)
+    client.send(python=python)
+    assert last_tool_text(client) == "[done]"
+    # fmt: python
+    python = code("""
+        import multiprocessing
+        import sys
+
+        import joblib
+
+        context = multiprocessing.get_context("spawn")
+        with context.Pool(1) as pool:
+            child_executable = pool.apply(
+                eval,
+                ("__import__('sys').executable",),
+            )
+
+        (
+            initial_executable != sys.executable,
+            child_executable == sys.executable,
+        )
+        """)
+    client.send(python=python)
+    output = last_tool_text(client)
+    assert output == "(True, True)\n", repr(output)
+    return client._finish()
+
+
+def test_inspects_sandbox_child_processes_with_psutil(binary: Path) -> Transcript:
+    environment = os.environ.copy()
+    environment.pop("RETICULATE_PYTHON", None)
+    client = McpClient(binary, ("serve",), environment)
+    client._initialize_and_list_tools()
+    # fmt: python
+    python = code("""
+        import sys
+
+        initial_executable = sys.executable
+        """)
+    client.send(python=python)
+    assert last_tool_text(client) == "[done]"
+    # fmt: python
+    python = code("""
+        import ctypes
+        import errno
+        import os
+        import subprocess
+        import sys
+
+        import psutil
+
+        mib = (ctypes.c_int * 3)(1, 14, 0)
+        size = ctypes.c_size_t()
+        ctypes.set_errno(0)
+        result = ctypes.CDLL(None, use_errno=True).sysctl(
+            mib,
+            len(mib),
+            None,
+            ctypes.byref(size),
+            None,
+            0,
+        )
+        denied = result == -1 and ctypes.get_errno() == errno.EPERM
+
+        command = [sys.executable, "-c", "import time; time.sleep(30)"]
+        child = subprocess.Popen(command)
+        try:
+            visible = psutil.pids()
+            descendants = psutil.Process().children(recursive=True)
+            observed = [process.pid for process in descendants]
+            process_group = os.getpgrp()
+            visible_groups = [os.getpgid(pid) for pid in visible]
+        finally:
+            child.terminate()
+            child.wait()
+
+        (
+            initial_executable != sys.executable,
+            denied,
+            1 not in visible,
+            visible == sorted(visible),
+            all(group == process_group for group in visible_groups),
+            child.pid in visible,
+            child.pid in observed,
+        )
+        """)
+    client.send(python=python)
+    output = last_tool_text(client)
+    assert output == "(True, True, True, True, True, True, True)\n", repr(output)
+    return client._finish()
+
+
+def test_retains_environment_when_optional_psutil_setup_fails(
+    binary: Path,
+) -> Transcript:
+    environment = os.environ.copy()
+    environment.pop("RETICULATE_PYTHON", None)
+    client = McpClient(binary, ("serve",), environment)
+    client._initialize_and_list_tools()
+    # fmt: python
+    python = code("""
+        import importlib.machinery
+        import os
+        import sys
+
+        live_pid = os.getpid()
+        live_sentinel = 42
+
+
+        class FailingPsutilFinder:
+            def __init__(self):
+                self.visible_lookups = 0
+
+            def find_spec(self, fullname, path=None, target=None):
+                if fullname != "psutil":
+                    return None
+                specification = importlib.machinery.PathFinder.find_spec(
+                    fullname,
+                    path,
+                )
+                if specification is None:
+                    return None
+                self.visible_lookups += 1
+                sys.meta_path.remove(self)
+                raise ImportError("synthetic psutil probe failure")
+
+
+        failing_psutil_finder = FailingPsutilFinder()
+        sys.meta_path.insert(0, failing_psutil_finder)
+        """)
+    client.send(python=python)
+    assert last_tool_text(client) == "[done]"
+
+    # fmt: python
+    python = code("""
+        import os
+        import subprocess
+        import sys
+
+        import psutil
+
+        command = [sys.executable, "-c", "import time; time.sleep(30)"]
+        child = subprocess.Popen(command)
+        try:
+            visible = psutil.pids()
+            descendants = psutil.Process().children(recursive=True)
+            observed = [process.pid for process in descendants]
+            process_group = os.getpgrp()
+            visible_groups = [os.getpgid(pid) for pid in visible]
+        finally:
+            child.terminate()
+            child.wait()
+
+        (
+            psutil.__name__,
+            failing_psutil_finder.visible_lookups,
+            live_sentinel,
+            os.getpid() == live_pid,
+            1 not in visible,
+            visible == sorted(visible),
+            all(group == process_group for group in visible_groups),
+            child.pid in visible,
+            child.pid in observed,
+        )
+        """)
+    client.send(python=python)
+    output = last_tool_text(client)
+    assert output == ("('psutil', 1, 42, True, True, True, True, True, True)\n"), repr(
+        output
+    )
+
+    client.send(r='"psutil" %in% reticulate::py_require()$packages')
+    assert last_tool_text(client) == "[1] TRUE\n"
+
+    client.session(action="restart")
+    assert last_tool_text(client) == (
+        "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
+    )
+    client.send(r='"psutil" %in% reticulate::py_require()$packages')
+    assert last_tool_text(client) == "[1] TRUE\n"
+    client.send(python="import psutil; psutil.__name__")
+    assert last_tool_text(client) == "'psutil'\n"
+    return client._finish()
+
+
+def test_does_not_import_local_psutil_during_bootstrap(binary: Path) -> Transcript:
+    with tempfile.TemporaryDirectory() as temporary:
+        directory = Path(temporary)
+        (directory / "psutil.py").write_text(
+            "import builtins\n"
+            "builtins.mcp_console_local_psutil_imported = True\n"
+            "answer = 42\n",
+            encoding="utf-8",
+        )
+        environment = os.environ.copy()
+        environment.pop("RETICULATE_PYTHON", None)
+        client = McpClient(
+            binary,
+            ("serve",),
+            environment,
+            current_directory=directory,
+        )
+        client._initialize_and_list_tools()
+        # fmt: python
+        python = code("""
+            import builtins
+            import sys
+
+            (
+                40 + 2,
+                hasattr(builtins, "mcp_console_local_psutil_imported"),
+                "psutil" in sys.modules,
+            )
+            """)
+        client.send(python=python)
+        output = last_tool_text(client)
+        assert output == "(42, False, False)\n", repr(output)
+        client.send(python="import psutil; psutil.answer")
+        assert last_tool_text(client) == "42\n"
+        return client._finish()
+
+
 def test_sends_python_cell_with_initial_requirements(binary: Path) -> Transcript:
     client = McpClient(binary, ("serve",))
     client._initialize_and_list_tools()

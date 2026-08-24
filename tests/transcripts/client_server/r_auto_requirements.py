@@ -157,6 +157,9 @@ def test_resolves_reached_r_packages_at_runtime(binary: Path) -> Transcript:
     with tempfile.TemporaryDirectory() as temporary:
         directory = Path(temporary)
         environment, record = recording_ir_environment(directory)
+        isolated_library = directory / "r-library"
+        environment["R_LIBS_SITE"] = str(isolated_library)
+        environment["R_LIBS_USER"] = str(isolated_library)
         client = McpClient(binary, ("serve",), environment)
         client._initialize_and_list_tools()
         baseline = len(ir_run_records(record))

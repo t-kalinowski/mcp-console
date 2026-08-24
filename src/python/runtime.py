@@ -58,6 +58,26 @@ def _mcp_console_explicit_requirement(distribution):
     return f'requirements: {{"python": ["{distribution}"]}}'
 
 
+class _McpConsolePsutilLoader:
+    def __init__(self, loader, callback):
+        self._loader = loader
+        self._callback = callback
+
+    def __getattr__(self, name):
+        return getattr(self._loader, name)
+
+    def create_module(self, specification):
+        create = getattr(self._loader, "create_module", None)
+        return None if create is None else create(specification)
+
+    def exec_module(self, module):
+        module.__loader__ = self._loader
+        module.__spec__.loader = self._loader
+        self._loader.exec_module(module)
+        self._callback()
+        return None
+
+
 class _McpConsoleImportFinder:
     _mcp_console_import_finder = True
 
@@ -75,6 +95,7 @@ class _McpConsoleImportFinder:
         missing_module,
         missing_submodule,
         explicit_requirement,
+        psutil_loader,
     ):
         self._importlib = importlib
         self._importlib_util = importlib_util
@@ -88,6 +109,8 @@ class _McpConsoleImportFinder:
         self._missing_module = missing_module
         self._missing_submodule = missing_submodule
         self._explicit_requirement = explicit_requirement
+        self._psutil_loader = psutil_loader
+        self._psutil_callback = None
         self._fromlist_code = importlib._bootstrap._handle_fromlist.__code__
         self._callback = None
         self._disabled_reason = "automatic Python package resolution is not configured"
@@ -100,6 +123,10 @@ class _McpConsoleImportFinder:
         self._disabled_reason = disabled_reason
         self._pid = self._os.getpid()
         self._thread = self._threading.get_ident()
+        return None
+
+    def configure_psutil(self, callback):
+        self._psutil_callback = callback
         return None
 
     def _find_spec(self, finders, fullname, path, target):
@@ -240,6 +267,17 @@ class _McpConsoleImportFinder:
                 target,
             )
             if specification is not None:
+                # A transient activation probe can fail before psutil loads.
+                # Retry after module execution, before the import returns.
+                if (
+                    fullname == "psutil"
+                    and self._psutil_callback is not None
+                    and hasattr(specification.loader, "exec_module")
+                ):
+                    specification.loader = self._psutil_loader(
+                        specification.loader,
+                        self._psutil_callback,
+                    )
                 return specification
         finally:
             self._state.resolving = False
@@ -329,6 +367,7 @@ if _mcp_console_import_finder is None:
         _mcp_console_missing_module,
         _mcp_console_missing_submodule,
         _mcp_console_explicit_requirement,
+        _McpConsolePsutilLoader,
     )
     _sys.meta_path.append(_mcp_console_import_finder)
 
@@ -444,6 +483,102 @@ def _mcp_console_take_images(_image_state=_mcp_console_image_state):
     return images
 
 
+def _mcp_console_apply_psutil_process_group(
+    _callable=_builtins.callable,
+    _getattr=_builtins.getattr,
+    _import_module=_importlib.import_module,
+    _find_spec=_importlib_util.find_spec,
+    _os=_os,
+    _sys=_sys,
+):
+    psutil = _sys.modules.get("psutil")
+    specification = (
+        _find_spec("psutil") if psutil is None else _getattr(psutil, "__spec__", None)
+    )
+    if specification is None or specification.origin is None:
+        return None
+    metadata = _import_module("importlib.metadata")
+    try:
+        distribution = metadata.distribution("psutil")
+    except metadata.PackageNotFoundError:
+        return None
+    resolved = _os.path.realpath(specification.origin)
+    installed = _os.path.realpath(
+        _os.fspath(distribution.locate_file("psutil/__init__.py"))
+    )
+    if resolved != installed:
+        return None
+    if psutil is None:
+        psutil = _import_module("psutil")
+    platform = _getattr(psutil, "_psplatform", None)
+    pids = _getattr(platform, "pids", None)
+    if not _callable(pids) or _getattr(pids, "_mcp_console_sandbox", False):
+        return None
+
+    ctypes = _import_module("ctypes")
+    libproc = ctypes.CDLL("/usr/lib/libproc.dylib", use_errno=True)
+    list_process_group = libproc.proc_listpgrppids
+    list_process_group.argtypes = [ctypes.c_int, ctypes.c_void_p, ctypes.c_int]
+    list_process_group.restype = ctypes.c_int
+    process_group = _os.getpgrp()
+
+    def process_group_ids():
+        capacity = 16
+        while True:
+            buffer = (ctypes.c_int * capacity)()
+            ctypes.set_errno(0)
+            count = list_process_group(
+                process_group,
+                buffer,
+                ctypes.sizeof(buffer),
+            )
+            if count <= 0:
+                error = ctypes.get_errno()
+                if error:
+                    raise OSError(error, _os.strerror(error))
+                if count < 0:
+                    raise RuntimeError("process-group enumeration failed")
+                return []
+            if count < capacity:
+                return buffer[:count]
+            capacity *= 2
+
+    process_group_ids._mcp_console_sandbox = True
+    # Keep psutil's public wrapper so it retains its sorted-list contract. The
+    # platform hook also survives activation during the first psutil import.
+    platform.pids = process_group_ids
+    return None
+
+
+def _mcp_console_configure_psutil(
+    _Exception=_builtins.Exception,
+    _apply=_mcp_console_apply_psutil_process_group,
+):
+    # This adapter may run after reticulate has activated an environment, so
+    # its optional probe and setup must not abort activation.
+    try:
+        _apply()
+    except _Exception:
+        pass
+    return None
+
+
+_mcp_console_import_finder.configure_psutil(_mcp_console_configure_psutil)
+
+
+def _mcp_console_activate_process_environment(
+    executable,
+    _configure_psutil=_mcp_console_configure_psutil,
+    _sys=_sys,
+):
+    _sys.executable = executable
+    multiprocessing = _sys.modules.get("multiprocessing")
+    if multiprocessing is not None:
+        multiprocessing.set_executable(executable)
+    _configure_psutil()
+    return None
+
+
 _mcp_console = _types.ModuleType("_mcp_console")
 
 
@@ -453,6 +588,7 @@ def _mcp_console_dispatch(state=_mcp_console.__dict__):
     return state[operation](*arguments)
 
 
+_mcp_console.activate_process_environment = _mcp_console_activate_process_environment
 _mcp_console.disable_matplotlib_show = _mcp_console_disable_matplotlib_show
 _mcp_console.configure_import_resolution = _mcp_console_import_finder.configure
 _mcp_console.eval_cell = _mcp_console_eval_cell
@@ -460,3 +596,4 @@ _mcp_console.take_images = _mcp_console_take_images
 _mcp_console.dispatch = _mcp_console_dispatch
 _sys.modules[_mcp_console.__name__] = _mcp_console
 _builtins.__dict__["_mcp_console_dispatch"] = _mcp_console_dispatch
+_mcp_console_configure_psutil()
