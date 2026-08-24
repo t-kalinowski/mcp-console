@@ -101,7 +101,9 @@ def test_initializes_and_lists_tools(binary: Path) -> Transcript:
     for guidance in (
         "Persistent R, Python, and DuckDB SQL workbench",
         "State persists across sequential calls",
-        "choose the clearest language for each step and switch between calls",
+        "Reassess the language for each cell and switch whenever another language is a better fit",
+        "do not stay in one language solely because state already exists there",
+        "Use the available live bridges when switching",
         "Send one complete `r`, `python`, or `sql` cell per call",
         "Calls must be sequential because only one evaluation can be active",
         "leave the primary result last",

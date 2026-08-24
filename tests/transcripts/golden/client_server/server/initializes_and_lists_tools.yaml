@@ -24,7 +24,7 @@ result:
   tools:
     - name: send
       description: |-
-        Persistent R, Python, and DuckDB SQL workbench for exact computation, file and data inspection, transformation, visualization, statistics, simulation, and modeling. State persists across sequential calls; choose the clearest language for each step and switch between calls. Python reads R globals through `r.name`, R reads Python globals through `py$name`, SQL can query R data frames by name, and R accesses DuckDB through `sql_connection()`.
+        Persistent R, Python, and DuckDB SQL workbench for exact computation, file and data inspection, transformation, visualization, statistics, simulation, and modeling. State persists across sequential calls. Reassess the language for each cell and switch whenever another language is a better fit; do not stay in one language solely because state already exists there. Use the available live bridges when switching: Python reads R globals through `r.name`, R reads Python globals through `py$name`, SQL can query R data frames by name, and R accesses DuckDB through `sql_connection()`.
 
         Send one complete `r`, `python`, or `sql` cell per call. Calls must be sequential because only one evaluation can be active. When an intermediate result affects the next step, inspect it before sending another cell. R and Python display a final visible top-level expression, and SQL returns a bounded preview, so leave the primary result last and print only when additional output is needed. Cells are not transactional; changes made before an error may remain.
 
