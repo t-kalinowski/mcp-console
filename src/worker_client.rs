@@ -19,7 +19,7 @@ mod platform;
 #[path = "worker_client/unsupported.rs"]
 mod platform;
 
-use environment::{Environment, PreparationIntent, PythonEnvironment};
+use environment::{Environment, PreparationIntent, PythonEnvironment, RuntimeRResolutionFailure};
 pub(crate) use environment::{PrepareResult, Requirements};
 use evaluation::{Evaluation, EvaluationWait};
 use lifecycle::{LifecycleControl, OldGenerationCommitDisposition, WorkerGeneration};
@@ -89,6 +89,11 @@ type PythonPreparationCommit = Box<
 enum PreparationOutcome {
     Completed(Result<(), String>),
     DiscardedByReplacement,
+}
+
+enum EnvironmentPreparationAdmissionFailure {
+    Busy(String),
+    Infrastructure(String),
 }
 
 #[derive(Clone, Copy)]
@@ -802,6 +807,32 @@ impl Client {
 }
 
 impl WorkerCallbacks {
+    fn resolve_r(
+        &self,
+        packages: Vec<String>,
+    ) -> Result<crate::resolver::ManagedR, RuntimeRResolutionFailure> {
+        self.client
+            .resolve_runtime_r(self.generation.clone(), packages)
+    }
+
+    fn activate_r(
+        &self,
+        library: String,
+        candidates: &mut Vec<crate::resolver::ManagedR>,
+    ) -> Result<OldGenerationCommitDisposition, String> {
+        self.client
+            .activate_runtime_r(self.generation.clone(), library, candidates)
+    }
+
+    fn fail_r_activation(
+        &self,
+        library: String,
+        candidates: &mut Vec<crate::resolver::ManagedR>,
+    ) -> Result<OldGenerationCommitDisposition, String> {
+        self.client
+            .fail_runtime_r_activation(self.generation.clone(), library, candidates)
+    }
+
     fn resolve_python(
         &self,
         request: crate::worker_protocol::PythonResolveRequest,

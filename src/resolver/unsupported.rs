@@ -17,6 +17,10 @@ impl ResolverStopHandle {
     pub(crate) fn interrupt(&self) -> Result<bool, String> {
         Ok(false)
     }
+
+    pub(crate) fn control_outcome(&self) -> Option<super::ResolverControlOutcome> {
+        None
+    }
 }
 
 impl ManagedPython {

@@ -12,6 +12,7 @@ mod r_bridge;
 mod r_environment;
 #[cfg(target_os = "macos")]
 mod r_graphics;
+mod r_package_name;
 mod relay_protocol;
 mod resolver;
 mod sandbox;

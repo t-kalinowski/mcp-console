@@ -230,6 +230,15 @@ impl WorkerRuntime {
 }
 
 impl Worker {
+    pub(super) fn reserve_environment_preparation(
+        &self,
+    ) -> Result<
+        super::events::EnvironmentPreparationReservation,
+        super::EnvironmentPreparationAdmissionFailure,
+    > {
+        self.operation.reserve_environment_preparation()
+    }
+
     pub(super) fn prepare_r(
         &mut self,
         library: &std::path::Path,
@@ -254,9 +263,12 @@ impl Worker {
     pub(super) fn prepare_python(
         &mut self,
         packages: Vec<String>,
+        continue_environment_preparation: bool,
         commit: PythonPreparationCommit,
     ) -> Result<PreparationOutcome, String> {
-        let result = self.operation.begin_python_preparation(commit)?;
+        let result = self
+            .operation
+            .begin_python_preparation(commit, continue_environment_preparation)?;
         self.relay
             .commands
             .send(RelayCommand::PreparePython { packages })?;

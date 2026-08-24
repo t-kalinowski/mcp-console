@@ -26,6 +26,15 @@ PREPARATION_RESULT_RELEASE_NAME = (
     "mcp-console-scripted-relay-preparation-result-release"
 )
 PREPARATION_RESULT_SENT_NAME = "mcp-console-scripted-relay-preparation-result-sent"
+R_PREPARATION_RESOLVE_CHECKPOINT_NAME = "mcp-console-r-preparation-resolve-checkpoint"
+R_PREPARATION_RESOLVE_RELEASE_NAME = "mcp-console-r-preparation-resolve-release"
+IDLE_R_RESOLUTION_READY_NAME = "mcp-console-idle-r-resolution-ready"
+IDLE_R_RESOLUTION_RELEASE_NAME = "mcp-console-idle-r-resolution-release"
+IDLE_R_EVALUATION_RECEIVED_NAME = "mcp-console-idle-r-evaluation-received"
+EXPLICIT_R_PREPARATION_CALLBACK_NAME = "mcp-console-explicit-r-preparation-callback"
+EXPLICIT_R_PREPARATION_CALLBACK_REPLY_NAME = (
+    "mcp-console-explicit-r-preparation-callback-reply"
+)
 WAIT_SECONDS = 10
 
 EVALUATION = {
@@ -34,6 +43,15 @@ EVALUATION = {
     "source": "42",
 }
 COMPLETED = {"kind": "completed"}
+RESOLVE_R = {
+    "kind": "resolve_r",
+    "packages": ["github::owner/repo"],
+}
+R_RESOLUTION_FAILED = {
+    "kind": "r_resolution_failed",
+    "failure": "host",
+    "message": "automatic R package name `github::owner/repo` is not accepted: names must start with an ASCII letter, end with an ASCII letter or digit, and contain only ASCII letters, digits, and dots",
+}
 RESOLVE_PYTHON = {
     "kind": "resolve_python",
     "request": {
@@ -329,6 +347,8 @@ def run_serialized_cross_source_order(relay: ScriptedRelay) -> None:
     )
     relay.wait_for_release()
     relay.send({"kind": "stdout", "data": "stdout after grace\n"})
+    relay.send(RESOLVE_R)
+    relay.expect(R_RESOLUTION_FAILED)
     relay.send(RESOLVE_PYTHON)
     relay.expect(PYTHON_RESOLUTION_FAILED)
     relay.send(RESOLVE_PYTHON_VERSION)
@@ -442,6 +462,90 @@ def run_r_preparation_failure(relay: ScriptedRelay) -> None:
     )
     relay.expect(EVALUATION)
     relay.complete()
+    relay.retire()
+
+
+def run_r_resolution_during_r_preparation(relay: ScriptedRelay) -> None:
+    relay.make_checkpoint(R_PREPARATION_RESOLVE_CHECKPOINT_NAME)
+    relay.make_checkpoint(R_PREPARATION_RESOLVE_RELEASE_NAME)
+    relay.ready()
+    command = relay.receive()
+    assert command.get("kind") == "prepare_r", command
+    relay.send({"kind": "resolve_r", "packages": ["praise"]})
+    relay.notify_checkpoint(R_PREPARATION_RESOLVE_CHECKPOINT_NAME)
+    relay.wait_for_checkpoint(R_PREPARATION_RESOLVE_RELEASE_NAME)
+    command = relay.receive()
+    assert command.get("kind") == "shutdown", (
+        f"R preparation resolver callback received a reply: {command!r}"
+    )
+    relay.retire(command)
+
+
+def run_idle_r_resolution_owns_environment(relay: ScriptedRelay) -> None:
+    relay.make_checkpoint(IDLE_R_RESOLUTION_READY_NAME)
+    relay.make_checkpoint(IDLE_R_RESOLUTION_RELEASE_NAME)
+    relay.make_checkpoint(IDLE_R_EVALUATION_RECEIVED_NAME)
+    relay.ready()
+    request = {"kind": "resolve_r", "packages": ["praise"]}
+    relay.send(request)
+    resolved = relay.receive()
+    assert resolved.get("kind") == "r_resolved", resolved
+    library = resolved["library"]
+    relay.notify_checkpoint(IDLE_R_RESOLUTION_READY_NAME)
+    relay.expect(EVALUATION)
+    relay.notify_checkpoint(IDLE_R_EVALUATION_RECEIVED_NAME)
+    relay.wait_for_checkpoint(IDLE_R_RESOLUTION_RELEASE_NAME)
+    relay.send({"kind": "r_activated", "library": library})
+    relay.send(request)
+    relay.expect({"kind": "r_resolved", "library": library})
+    relay.send({"kind": "r_activated", "library": library})
+    relay.complete()
+    relay.retire()
+
+
+def run_explicit_r_preparation_owns_environment(relay: ScriptedRelay) -> None:
+    relay.make_checkpoint(EXPLICIT_R_PREPARATION_CALLBACK_NAME)
+    relay.make_checkpoint(EXPLICIT_R_PREPARATION_CALLBACK_REPLY_NAME)
+    relay.ready()
+    relay.wait_for_checkpoint(EXPLICIT_R_PREPARATION_CALLBACK_NAME)
+    relay.send({"kind": "resolve_r", "packages": ["praise"]})
+    relay.expect(
+        {
+            "kind": "r_resolution_failed",
+            "failure": "host",
+            "message": (
+                "R package resolution is unavailable during requirement preparation"
+            ),
+        }
+    )
+    relay.notify_checkpoint(EXPLICIT_R_PREPARATION_CALLBACK_REPLY_NAME)
+    command = relay.receive()
+    assert command.get("kind") == "prepare_r", command
+    library = command["library"]
+    relay.send_batch(
+        [
+            {"kind": "r_prepared", "library": library},
+            {"kind": "resolve_r", "packages": ["english"]},
+        ]
+    )
+    relay.expect({"kind": "r_resolved", "library": library})
+    relay.send({"kind": "r_activated", "library": library})
+    relay.expect(EVALUATION)
+    relay.complete()
+    relay.retire()
+
+
+def run_completion_before_r_activation(relay: ScriptedRelay) -> None:
+    relay.ready()
+    command = relay.receive()
+    if command.get("kind") == "shutdown":
+        relay.retire(command)
+        return
+    assert command == EVALUATION, command
+    relay.send({"kind": "resolve_r", "packages": ["praise"]})
+    resolved = relay.receive()
+    assert resolved.get("kind") == "r_resolved", resolved
+    relay.send(COMPLETED)
     relay.retire()
 
 
@@ -570,6 +674,12 @@ def main() -> None:
         "late_r_prepared_retirement": run_late_r_prepared_retirement,
         "pre_marker_r_prepared_replacement": run_pre_marker_r_prepared_replacement,
         "r_preparation_failure": run_r_preparation_failure,
+        "r_resolution_during_r_preparation": run_r_resolution_during_r_preparation,
+        "idle_r_resolution_owns_environment": run_idle_r_resolution_owns_environment,
+        "explicit_r_preparation_owns_environment": (
+            run_explicit_r_preparation_owns_environment
+        ),
+        "completion_before_r_activation": run_completion_before_r_activation,
         "cancelled_waiting_send": run_cancelled_waiting_send,
         "fatal": run_fatal,
         "truncated": run_truncated,

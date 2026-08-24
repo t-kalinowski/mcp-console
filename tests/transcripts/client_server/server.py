@@ -109,21 +109,27 @@ def test_initializes_and_lists_tools(binary: Path) -> Transcript:
         "`py$name`",
         "SQL queries R data frames by name",
         "`sql_connection()`",
-        "Do not probe package availability in cells",
-        "Declare other packages or DuckDB extensions needed by a cell in `requirements`",
-        "use `session` to prepare them ahead of time",
-        "code is not inspected and missing-package errors are not retried",
-        "Preparation does not load, import, or attach packages or extensions",
+        "R package namespaces are resolved on demand",
+        "Treat CRAN packages as available",
+        "do not probe for installation or call `install.packages()`",
+        "R source is not scanned in advance",
+        "Automatic additions are additive and retained across cells and restart",
+        "attaches it only through the user's original `library()` or `require()` call",
+        "Use `requirements.r` only to stage packages ahead of time",
+        "Python imports and SQL are not scanned",
+        "Explicit preparation does not load, import, or attach packages or extensions",
         "If you use a custom Python installation, import packages already installed there directly",
         "Call `send` sequentially",
         "ordinary console output",
         "cannot directly access the network",
-        "Managed Python requirement resolution triggered by R code",
-        "Only named registry requirements are accepted",
+        "Automatic R resolution and managed Python resolution triggered by evaluated R code",
+        "Automatic R discovery accepts only plain package names",
+        "Managed Python accepts only named registry requirements",
         "Managed Python version requests accept version numbers",
         "not interpreter selectors",
         "changes to `UV_*` made by evaluated code do not configure it",
         "nonempty user-selected `RETICULATE_PYTHON` disables managed Python",
+        "Package availability and system compatibility can still produce ordinary installation or load errors",
     ):
         assert guidance in send["description"], guidance
     assert (
@@ -134,7 +140,10 @@ def test_initializes_and_lists_tools(binary: Path) -> Transcript:
     )
     for guidance in (
         "tidyverse, reticulate, DBI, duckdb, and their full dependency sets",
-        "Packages are not attached automatically",
+        "Use other CRAN packages directly",
+        "`loadNamespace()`",
+        "resolves missing plain package names on demand and retains successful additions",
+        "does not attach it except through the original `library()` or `require()` call",
     ):
         assert guidance in r_description, guidance
     assert "ggplot2::" not in r_description
@@ -158,11 +167,11 @@ def test_initializes_and_lists_tools(binary: Path) -> Transcript:
         send["inputSchema"]["properties"]["requirements"]["description"].split()
     )
     for guidance in (
-        "needed by this cell",
-        "prepared before the cell is evaluated and retained for later cells",
-        "Requirements may accompany any cell language",
+        "prepare before this cell and retain for later cells",
+        "Ordinary CRAN packages used by the built-in R worker need not be declared here",
+        "use `requirements.r` to stage packages ahead of evaluation",
+        "Python imports and SQL are not scanned",
         "The cell is not run if preparation fails or further changes require restart",
-        "does not inspect code for requirements or retry missing-package errors",
         "Resolution runs outside the worker sandbox",
         "This field requires one `r`, `python`, or `sql` cell",
     ):
@@ -184,6 +193,7 @@ def test_initializes_and_lists_tools(binary: Path) -> Transcript:
         "once the cell has been dispatched",
         "Requirement preparation happens first",
         "may make the complete call take longer",
+        "Automatic R resolution is part of the running evaluation",
     ):
         assert guidance in timeout_description, guidance
     send_schema = json.dumps(send["inputSchema"])
@@ -194,18 +204,23 @@ def test_initializes_and_lists_tools(binary: Path) -> Transcript:
     for guidance in (
         "Make additional R or Python packages and DuckDB extensions available",
         "prepares DuckDB's JSON and ICU extensions by default",
-        "packages not included in the built-in environments",
+        "In the built-in worker, ordinary plain CRAN packages resolve automatically when used by R",
+        "stage R packages ahead of a cell",
+        "supply explicit IR references",
         "idle worker can add R requirements or DuckDB extensions",
         "compatible Python additions require a server-managed worker",
         "without losing live state",
         "evaluation remains available so state can be saved",
         "new requirement additions require restart",
-        "Packages and extensions are not imported, attached, or loaded automatically by preparation",
+        "successfully activated automatic R additions are additive, idempotent, and persist across restart",
+        "Preparation does not import, attach, or load packages or extensions",
+        "active automatic R or other host resolver",
         "loses all in-memory R, Python, and SQL state",
         "named PEP 508 registry requirements only",
         "paths, file URLs, editable requirements, direct references, local archives, and local projects are rejected",
         "server's startup `UV_*` configuration",
         "nonempty user-selected `RETICULATE_PYTHON` disables managed Python requirements",
+        "Automatic R discovery accepts only plain package names",
     ):
         assert guidance in session["description"], guidance
     session_schema = json.dumps(session["inputSchema"])
@@ -256,6 +271,22 @@ def test_initializes_and_lists_tools(binary: Path) -> Transcript:
     assert "evaluated code cannot configure that host resolver" in (
         requirements_description
     )
+    assert (
+        "Successfully activated automatic R additions also persist across restart"
+        in (requirements_description)
+    )
+    r_requirements_description = " ".join(
+        session["inputSchema"]["properties"]["requirements"]["properties"]["r"][
+            "description"
+        ].split()
+    )
+    for guidance in (
+        "stage packages ahead of evaluation",
+        "explicit supported remote IR reference",
+        "Automatic R discovery accepts only plain package names",
+        "Local package sources are rejected",
+    ):
+        assert guidance in r_requirements_description, guidance
     python_requirements_description = " ".join(
         session["inputSchema"]["properties"]["requirements"]["properties"]["python"][
             "description"

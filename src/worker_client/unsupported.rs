@@ -27,6 +27,12 @@ impl WorkerRuntime {
 }
 
 impl Worker {
+    pub(super) fn reserve_environment_preparation(
+        &self,
+    ) -> Result<(), super::EnvironmentPreparationAdmissionFailure> {
+        unreachable!("unsupported workers cannot start")
+    }
+
     pub(super) fn prepare_r(
         &mut self,
         _library: &std::path::Path,
@@ -38,9 +44,10 @@ impl Worker {
     pub(super) fn prepare_python(
         &mut self,
         packages: Vec<String>,
+        continue_environment_preparation: bool,
         _commit: super::PythonPreparationCommit,
     ) -> Result<super::PreparationOutcome, String> {
-        let _ = packages;
+        let _ = (packages, continue_environment_preparation);
         unreachable!("unsupported workers cannot start")
     }
 

@@ -701,6 +701,25 @@ def main() -> None:
             receive_resolver_response("python_resolution_failed")
             continue
 
+        if source == "report runtime R resolution failure":
+            send(
+                writer,
+                {
+                    "kind": "resolve_r",
+                    "packages": ["blockedresolver"],
+                },
+            )
+            response = receive_resolver_response("r_resolution_failed")
+            send_output(
+                writer,
+                (
+                    "zod R resolution failure: "
+                    f"{response['failure']}: {response['message']}\n"
+                ),
+            )
+            send(writer, {"kind": "completed"})
+            continue
+
         if source == "report process group":
             send_output(writer, f"zod process group: {os.getpgrp()}\n")
             send(writer, {"kind": "completed"})

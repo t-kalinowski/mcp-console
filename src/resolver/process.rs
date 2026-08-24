@@ -3,15 +3,27 @@ use std::mem::MaybeUninit;
 use std::os::unix::process::CommandExt as _;
 use std::path::Path;
 use std::process::{Child, ChildStdin, Command, ExitStatus};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 
 #[derive(Clone)]
-pub(crate) struct ResolverStopHandle(Sender<ResolverEvent>);
+pub(crate) struct ResolverStopHandle {
+    events: Sender<ResolverEvent>,
+    control: Arc<AtomicU8>,
+}
+
+const CONTROL_NONE: u8 = 0;
+const CONTROL_INTERRUPTED: u8 = 1;
+const CONTROL_CANCELLED: u8 = 2;
 
 enum ResolverEvent {
     Cancel,
-    Interrupt(Sender<Result<(), String>>),
+    Interrupt {
+        reply: Sender<Result<(), String>>,
+        clear_marker: Option<Arc<AtomicU8>>,
+    },
     Exited(io::Result<()>),
 }
 
@@ -30,6 +42,7 @@ pub(super) struct ResolverOutput {
 pub(super) struct ResolverProcess {
     events: Sender<ResolverEvent>,
     event_receiver: Receiver<ResolverEvent>,
+    control: Arc<AtomicU8>,
 }
 
 impl ResolverProcess {
@@ -38,11 +51,15 @@ impl ResolverProcess {
         Self {
             events,
             event_receiver,
+            control: Arc::new(AtomicU8::new(CONTROL_NONE)),
         }
     }
 
     pub(super) fn stop_handle(&self) -> ResolverStopHandle {
-        ResolverStopHandle(self.events.clone())
+        ResolverStopHandle {
+            events: self.events.clone(),
+            control: self.control.clone(),
+        }
     }
 
     pub(super) fn watch_exit(&self, pid: u32) {
@@ -72,13 +89,26 @@ impl ResolverProcess {
 
 impl ResolverStopHandle {
     pub(crate) fn stop(&self) -> Result<(), String> {
-        let _ = self.0.send(ResolverEvent::Cancel);
+        let marked = self.mark_control(CONTROL_CANCELLED);
+        if self.events.send(ResolverEvent::Cancel).is_err() {
+            self.clear_control(CONTROL_CANCELLED, marked);
+        }
         Ok(())
     }
 
     pub(crate) fn interrupt(&self) -> Result<bool, String> {
         let (reply, response) = mpsc::channel();
-        if self.0.send(ResolverEvent::Interrupt(reply)).is_err() {
+        let marked = self.mark_control(CONTROL_INTERRUPTED);
+        let clear_marker = marked.then(|| self.control.clone());
+        if self
+            .events
+            .send(ResolverEvent::Interrupt {
+                reply,
+                clear_marker,
+            })
+            .is_err()
+        {
+            self.clear_control(CONTROL_INTERRUPTED, marked);
             return Ok(false);
         }
         match response.recv() {
@@ -88,6 +118,31 @@ impl ResolverStopHandle {
             // rather than falling through to a different worker target.
             Err(_) => Ok(true),
         }
+    }
+
+    pub(crate) fn control_outcome(&self) -> Option<super::ResolverControlOutcome> {
+        match self.control.load(Ordering::SeqCst) {
+            CONTROL_INTERRUPTED => Some(super::ResolverControlOutcome::Interrupted),
+            CONTROL_CANCELLED => Some(super::ResolverControlOutcome::Cancelled),
+            CONTROL_NONE => None,
+            _ => unreachable!("resolver control state is invalid"),
+        }
+    }
+
+    fn mark_control(&self, control: u8) -> bool {
+        self.control
+            .compare_exchange(CONTROL_NONE, control, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok()
+    }
+
+    fn clear_control(&self, control: u8, marked: bool) {
+        clear_control(self.control.as_ref(), control, marked);
+    }
+}
+
+fn clear_control(state: &AtomicU8, control: u8, marked: bool) {
+    if marked {
+        let _ = state.compare_exchange(control, CONTROL_NONE, Ordering::SeqCst, Ordering::SeqCst);
     }
 }
 
@@ -191,7 +246,10 @@ fn wait_for_resolver_exit(
                 stop_resolver(child, program, kind)?;
                 return Err(format!("{kind} resolution cancelled"));
             }
-            Ok(ResolverEvent::Interrupt(reply)) => match interrupt_resolver(child) {
+            Ok(ResolverEvent::Interrupt {
+                reply,
+                clear_marker,
+            }) => match interrupt_resolver(child) {
                 Ok(ResolverInterrupt::Signaled) => {
                     let _ = reply.send(Ok(()));
                 }
@@ -199,6 +257,9 @@ fn wait_for_resolver_exit(
                     let _ = reply.send(Ok(()));
                 }
                 Err(error) => {
+                    if let Some(control) = clear_marker {
+                        clear_control(control.as_ref(), CONTROL_INTERRUPTED, true);
+                    }
                     let message = format!(
                         "failed to interrupt {kind} resolver `{}`: {error}",
                         program.display()

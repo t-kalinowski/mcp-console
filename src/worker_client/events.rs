@@ -1,4 +1,4 @@
-use std::sync::{Arc, Mutex, mpsc};
+use std::sync::{Arc, Condvar, Mutex, mpsc};
 use std::thread;
 
 use crate::relay_protocol::{RelayCommand, RelayEvent};
@@ -9,7 +9,7 @@ use super::{
 };
 
 #[derive(Clone)]
-pub(super) struct WorkerOperationState(Arc<Mutex<OperationState>>);
+pub(super) struct WorkerOperationState(Arc<OperationStateCell>);
 
 pub(super) enum WorkerEvent {
     Relay(RelayEvent),
@@ -35,7 +35,24 @@ struct OperationState {
     operation: Option<Operation>,
     failure: Option<String>,
     idle_input: Option<String>,
+    runtime_r_callback: Option<RuntimeRCallbackPhase>,
+    environment_preparation_reserved: bool,
     retiring: bool,
+}
+
+struct OperationStateCell {
+    state: Mutex<OperationState>,
+    runtime_r_reply: Condvar,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RuntimeRCallbackPhase {
+    Resolving,
+    AwaitingActivation,
+}
+
+pub(super) struct EnvironmentPreparationReservation {
+    operation: WorkerOperationState,
 }
 
 struct Operation {
@@ -51,6 +68,7 @@ enum OperationKind {
     },
     PreparePython {
         commit: PythonPreparationCommit,
+        continue_environment_preparation: bool,
     },
 }
 
@@ -58,6 +76,11 @@ enum Route {
     Cell(Arc<Evaluation>),
     Preparation,
     Idle,
+}
+
+enum RuntimeRCallbackAdmission {
+    Admitted,
+    Busy,
 }
 
 pub(super) enum OperationResult {
@@ -68,12 +91,42 @@ pub(super) enum OperationResult {
 
 impl WorkerOperationState {
     pub(super) fn new() -> Self {
-        Self(Arc::new(Mutex::new(OperationState {
-            operation: None,
-            failure: None,
-            idle_input: None,
-            retiring: false,
-        })))
+        Self(Arc::new(OperationStateCell {
+            state: Mutex::new(OperationState {
+                operation: None,
+                failure: None,
+                idle_input: None,
+                runtime_r_callback: None,
+                environment_preparation_reserved: false,
+                retiring: false,
+            }),
+            runtime_r_reply: Condvar::new(),
+        }))
+    }
+
+    pub(super) fn reserve_environment_preparation(
+        &self,
+    ) -> Result<EnvironmentPreparationReservation, super::EnvironmentPreparationAdmissionFailure>
+    {
+        use super::EnvironmentPreparationAdmissionFailure::{Busy, Infrastructure};
+
+        let mut state = self.lock().map_err(Infrastructure)?;
+        state.ensure_available().map_err(Infrastructure)?;
+        if state.runtime_r_callback.is_some() {
+            return Err(Busy(
+                "requirements were not prepared because an idle runtime R callback owns environment changes"
+                    .to_string(),
+            ));
+        }
+        if state.environment_preparation_reserved {
+            return Err(Infrastructure(
+                "worker environment preparation is already reserved".to_string(),
+            ));
+        }
+        state.environment_preparation_reserved = true;
+        Ok(EnvironmentPreparationReservation {
+            operation: self.clone(),
+        })
     }
 
     pub(super) fn begin_cell(
@@ -83,7 +136,17 @@ impl WorkerOperationState {
     ) -> Result<mpsc::Receiver<Result<OperationResult, String>>, String> {
         let (result, receiver) = mpsc::channel();
         let mut state = self.lock()?;
-        state.ensure_available()?;
+        loop {
+            state.ensure_available()?;
+            if state.runtime_r_callback != Some(RuntimeRCallbackPhase::Resolving) {
+                break;
+            }
+            state = self
+                .0
+                .runtime_r_reply
+                .wait(state)
+                .map_err(|_| "worker operation state lock poisoned".to_string())?;
+        }
         if state.idle_input.take().is_some() {
             evaluation.resume_input_request()?;
         }
@@ -110,8 +173,12 @@ impl WorkerOperationState {
     pub(super) fn begin_python_preparation(
         &self,
         commit: PythonPreparationCommit,
+        continue_environment_preparation: bool,
     ) -> Result<mpsc::Receiver<Result<OperationResult, String>>, String> {
-        self.begin_preparation(OperationKind::PreparePython { commit })
+        self.begin_preparation(OperationKind::PreparePython {
+            commit,
+            continue_environment_preparation,
+        })
     }
 
     fn begin_preparation(
@@ -121,28 +188,44 @@ impl WorkerOperationState {
         let (result, receiver) = mpsc::channel();
         let mut state = self.lock()?;
         state.ensure_available()?;
+        if !state.environment_preparation_reserved {
+            return Err("worker environment preparation was not reserved".to_string());
+        }
         if let Some(prompt) = state.idle_input.as_ref() {
             return Err(format!(
                 "idle R callback requested input {prompt} during requirement preparation; collect callback input with send before preparing requirements"
             ));
         }
+        let continue_environment_preparation = matches!(
+            kind,
+            OperationKind::PreparePython {
+                continue_environment_preparation: true,
+                ..
+            }
+        );
         state.operation = Some(Operation {
             kind,
             result: Some(result),
         });
+        if !continue_environment_preparation {
+            state.environment_preparation_reserved = false;
+        }
         Ok(receiver)
     }
 
     pub(super) fn fail(&self, error: String) {
         let operation = {
-            let Ok(mut state) = self.0.lock() else {
+            let Ok(mut state) = self.0.state.lock() else {
                 return;
             };
             if state.failure.is_none() {
                 state.failure = Some(error.clone());
             }
+            state.runtime_r_callback = None;
+            state.environment_preparation_reserved = false;
             state.operation.take()
         };
+        self.0.runtime_r_reply.notify_all();
         if let Some(result) = operation.and_then(|operation| operation.result) {
             let _ = result.send(Err(error));
         }
@@ -150,15 +233,18 @@ impl WorkerOperationState {
 
     pub(super) fn retire_operation(&self, error: String) {
         let result = {
-            let Ok(mut state) = self.0.lock() else {
+            let Ok(mut state) = self.0.state.lock() else {
                 return;
             };
             state.retiring = true;
+            state.runtime_r_callback = None;
+            state.environment_preparation_reserved = false;
             state
                 .operation
                 .as_mut()
                 .and_then(|operation| operation.result.take())
         };
+        self.0.runtime_r_reply.notify_all();
         if let Some(result) = result {
             let _ = result.send(Err(error));
         }
@@ -190,6 +276,77 @@ impl WorkerOperationState {
             None => Route::Idle,
         };
         publish(route)
+    }
+
+    fn begin_runtime_r_callback(
+        &self,
+        reject_busy: impl FnOnce() -> Result<(), String>,
+    ) -> Result<RuntimeRCallbackAdmission, String> {
+        let mut state = self.lock()?;
+        if let Some(error) = state.failure.as_ref() {
+            return Err(error.clone());
+        }
+        if state.retiring {
+            return Err("worker is retiring".to_string());
+        }
+        match state.operation.as_ref().map(|operation| &operation.kind) {
+            Some(OperationKind::PrepareR { .. } | OperationKind::PreparePython { .. }) => {
+                return Err(
+                    "worker sent a runtime R callback during requirement preparation".to_string(),
+                );
+            }
+            Some(OperationKind::Cell(_)) | None => {}
+        }
+        if state.runtime_r_callback.is_some() {
+            return Err("worker sent a second runtime R callback before activation".to_string());
+        }
+        if state.environment_preparation_reserved {
+            // Queue the rejection before preparation can turn this reservation
+            // into a live operation and enqueue its command.
+            reject_busy()?;
+            return Ok(RuntimeRCallbackAdmission::Busy);
+        }
+        state.runtime_r_callback = Some(RuntimeRCallbackPhase::Resolving);
+        Ok(RuntimeRCallbackAdmission::Admitted)
+    }
+
+    fn runtime_r_reply_sent(&self, awaiting_activation: bool) -> Result<(), String> {
+        let mut state = self.lock()?;
+        if state.runtime_r_callback != Some(RuntimeRCallbackPhase::Resolving) {
+            return Err("worker has no pending runtime R resolver reply".to_string());
+        }
+        state.runtime_r_callback =
+            awaiting_activation.then_some(RuntimeRCallbackPhase::AwaitingActivation);
+        drop(state);
+        self.0.runtime_r_reply.notify_all();
+        Ok(())
+    }
+
+    fn ensure_runtime_r_activation_phase(&self) -> Result<(), String> {
+        let state = self.lock()?;
+        match state.operation.as_ref().map(|operation| &operation.kind) {
+            Some(OperationKind::PrepareR { .. } | OperationKind::PreparePython { .. }) => {
+                return Err(
+                    "worker sent a runtime R callback during requirement preparation".to_string(),
+                );
+            }
+            Some(OperationKind::Cell(_)) | None => {}
+        }
+        if state.runtime_r_callback != Some(RuntimeRCallbackPhase::AwaitingActivation) {
+            return Err(
+                "worker sent R activation without an active runtime R callback".to_string(),
+            );
+        }
+        Ok(())
+    }
+
+    fn finish_runtime_r_callback(&self) -> Result<(), String> {
+        let mut state = self.lock()?;
+        if state.runtime_r_callback != Some(RuntimeRCallbackPhase::AwaitingActivation) {
+            return Err("worker has no active runtime R callback".to_string());
+        }
+        state.runtime_r_callback = None;
+        Ok(())
     }
 
     fn input_requested(
@@ -239,24 +396,40 @@ impl WorkerOperationState {
     fn complete(
         &self,
         event: RelayEvent,
+        r_candidates: &mut Vec<crate::resolver::ManagedR>,
         python_candidates: &mut Vec<crate::resolver::ManagedPython>,
     ) -> Result<(), String> {
         let Operation { kind, result } = {
             let mut state = self.lock()?;
+            if state.runtime_r_callback.is_some() {
+                return Err(
+                    "worker sent an operation result before completing runtime R activation"
+                        .to_string(),
+                );
+            }
             state.operation.take().ok_or_else(|| {
                 "worker sent an operation result without an active operation".to_string()
             })?
         };
 
         if result.is_none() && kind.matches_result(&event) {
+            r_candidates.clear();
             python_candidates.clear();
             return Ok(());
         }
 
+        let continue_environment_preparation = matches!(
+            kind,
+            OperationKind::PreparePython {
+                continue_environment_preparation: true,
+                ..
+            }
+        );
         let committed = match (kind, event) {
             (OperationKind::Cell(evaluation), RelayEvent::Completed) => {
                 match evaluation.input_complete() {
                     Ok(()) => {
+                        r_candidates.clear();
                         python_candidates.clear();
                         evaluation.complete_cell_after_grace();
                         Ok(OperationResult::Completed)
@@ -271,6 +444,7 @@ impl WorkerOperationState {
                 },
                 RelayEvent::RPrepared { library },
             ) if library == expected => {
+                r_candidates.clear();
                 python_candidates.clear();
                 commit(Ok(())).map(OperationResult::RPrepared)
             }
@@ -278,18 +452,21 @@ impl WorkerOperationState {
                 OperationKind::PrepareR { commit, .. },
                 RelayEvent::RPreparationFailed { message },
             ) => {
+                r_candidates.clear();
                 python_candidates.clear();
                 commit(Err(message)).map(OperationResult::RPrepared)
             }
-            (OperationKind::PreparePython { commit }, RelayEvent::PythonPrepared) => {
+            (OperationKind::PreparePython { commit, .. }, RelayEvent::PythonPrepared) => {
                 let candidate = python_candidates.pop();
+                r_candidates.clear();
                 python_candidates.clear();
                 commit(Ok(candidate)).map(OperationResult::PythonPrepared)
             }
             (
-                OperationKind::PreparePython { commit },
+                OperationKind::PreparePython { commit, .. },
                 RelayEvent::PythonPreparationFailed { message },
             ) => {
+                r_candidates.clear();
                 python_candidates.clear();
                 commit(Err(message)).map(OperationResult::PythonPrepared)
             }
@@ -307,6 +484,17 @@ impl WorkerOperationState {
             }
         };
 
+        if continue_environment_preparation
+            && !matches!(
+                &committed,
+                Ok(OperationResult::PythonPrepared(
+                    super::PreparationOutcome::Completed(Ok(()))
+                ))
+            )
+        {
+            self.release_environment_preparation()?;
+        }
+
         match (result, committed) {
             (Some(result), Ok(committed)) => result
                 .send(Ok(committed))
@@ -322,8 +510,23 @@ impl WorkerOperationState {
 
     fn lock(&self) -> Result<std::sync::MutexGuard<'_, OperationState>, String> {
         self.0
+            .state
             .lock()
             .map_err(|_| "worker operation state lock poisoned".to_string())
+    }
+
+    fn release_environment_preparation(&self) -> Result<(), String> {
+        let mut state = self.lock()?;
+        state.environment_preparation_reserved = false;
+        Ok(())
+    }
+}
+
+impl Drop for EnvironmentPreparationReservation {
+    fn drop(&mut self) {
+        if let Ok(mut state) = self.operation.0.state.lock() {
+            state.environment_preparation_reserved = false;
+        }
     }
 }
 
@@ -413,6 +616,7 @@ fn dispatch_worker_events(
     let mut startup = Some(startup);
     let stdout = output.direct_stdout();
     let stderr = output.direct_stderr();
+    let mut r_candidates = Vec::new();
     let mut python_candidates = Vec::new();
     let mut runtime_started = false;
     let mut semantic_failure = false;
@@ -577,16 +781,21 @@ fn dispatch_worker_events(
                         &commands,
                         &output,
                         &callbacks,
+                        &mut r_candidates,
                         &mut python_candidates,
                     ),
                 };
                 if let Err(error) = result {
+                    r_candidates.clear();
+                    python_candidates.clear();
                     fail_dispatch(&operation, &mut startup, &interrupts, error);
                     semantic_failure = true;
                 }
             }
             WorkerEvent::TransportFailure(error) => {
                 if !retiring {
+                    r_candidates.clear();
+                    python_candidates.clear();
                     fail_dispatch(&operation, &mut startup, &interrupts, error);
                     semantic_failure = true;
                 }
@@ -597,6 +806,8 @@ fn dispatch_worker_events(
                 }
                 interrupts.fail(error.clone());
                 operation.retire_operation(error);
+                r_candidates.clear();
+                python_candidates.clear();
                 retiring = true;
                 let _ = reached.send(());
                 if relay_closed {
@@ -651,6 +862,9 @@ fn ignored_during_retirement(event: &RelayEvent) -> bool {
             | RelayEvent::InputRequested { .. }
             | RelayEvent::InputReceived
             | RelayEvent::InputCancelled
+            | RelayEvent::ResolveR { .. }
+            | RelayEvent::RActivated { .. }
+            | RelayEvent::RActivationFailed { .. }
             | RelayEvent::ResolvePython { .. }
             | RelayEvent::ResolvePythonVersion { .. }
             | RelayEvent::PythonActivated { .. }
@@ -686,6 +900,7 @@ fn handle_semantic_event(
     commands: &super::platform::RelayCommandSender,
     output: &OutputTape,
     callbacks: &WorkerCallbacks,
+    r_candidates: &mut Vec<crate::resolver::ManagedR>,
     python_candidates: &mut Vec<crate::resolver::ManagedPython>,
 ) -> Result<(), String> {
     use crate::worker_protocol::ConsoleChannel::{Diagnostic, Output};
@@ -719,6 +934,68 @@ fn handle_semantic_event(
             operation.input_requested(prompt, rendered, output)
         }
         RelayEvent::InputReceived | RelayEvent::InputCancelled => operation.input_received(),
+        RelayEvent::ResolveR { packages } => {
+            use crate::worker_client::environment::RuntimeRResolutionFailure;
+            use crate::worker_protocol::RResolutionFailureKind;
+
+            if matches!(
+                operation.begin_runtime_r_callback(|| {
+                    commands.send(RelayCommand::RResolutionFailed {
+                        failure: RResolutionFailureKind::Host,
+                        message:
+                            "R package resolution is unavailable during requirement preparation"
+                                .to_string(),
+                    })
+                })?,
+                RuntimeRCallbackAdmission::Busy
+            ) {
+                return Ok(());
+            }
+            let (response, awaiting_activation) = match callbacks.resolve_r(packages) {
+                Ok(managed) => {
+                    let library = managed
+                        .library()
+                        .to_str()
+                        .ok_or_else(|| "resolved R library path is not UTF-8".to_string())?
+                        .to_string();
+                    r_candidates.push(managed);
+                    (RelayCommand::RResolved { library }, true)
+                }
+                Err(failure) => {
+                    let (failure, message) = match failure {
+                        RuntimeRResolutionFailure::Ordinary(message) => {
+                            (RResolutionFailureKind::Host, message)
+                        }
+                        RuntimeRResolutionFailure::Interrupted => (
+                            RResolutionFailureKind::Interrupted,
+                            "R package resolution interrupted".to_string(),
+                        ),
+                        RuntimeRResolutionFailure::Cancelled(message) => {
+                            (RResolutionFailureKind::Operation, message)
+                        }
+                        RuntimeRResolutionFailure::Infrastructure(message) => {
+                            return Err(message);
+                        }
+                    };
+                    (RelayCommand::RResolutionFailed { failure, message }, false)
+                }
+            };
+            commands.send(response)?;
+            operation.runtime_r_reply_sent(awaiting_activation)
+        }
+        RelayEvent::RActivated { library } => {
+            operation.ensure_runtime_r_activation_phase()?;
+            callbacks.activate_r(library, r_candidates)?;
+            operation.finish_runtime_r_callback()
+        }
+        RelayEvent::RActivationFailed {
+            library,
+            message: _,
+        } => {
+            operation.ensure_runtime_r_activation_phase()?;
+            callbacks.fail_r_activation(library, r_candidates)?;
+            operation.finish_runtime_r_callback()
+        }
         RelayEvent::ResolvePython { request } => {
             let response = match callbacks.resolve_python(request) {
                 Ok(managed) => {
@@ -745,7 +1022,7 @@ fn handle_semantic_event(
         | RelayEvent::RPreparationFailed { .. }
         | RelayEvent::PythonPrepared
         | RelayEvent::PythonPreparationFailed { .. }) => {
-            operation.complete(event, python_candidates)
+            operation.complete(event, r_candidates, python_candidates)
         }
         RelayEvent::Ready
         | RelayEvent::Stdout { .. }
@@ -802,7 +1079,7 @@ mod tests {
         let (contending, contending_rx) = mpsc::sync_channel(0);
         let admission = thread::spawn(move || {
             assert!(matches!(
-                admitting_operation.0.try_lock(),
+                admitting_operation.0.state.try_lock(),
                 Err(std::sync::TryLockError::WouldBlock)
             ));
             contending.send(()).unwrap();

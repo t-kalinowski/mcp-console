@@ -863,6 +863,28 @@ mod platform {
                                     return;
                                 }
                             }
+                            RelayCommand::RResolved { library } => {
+                                if sideband
+                                    .send(SidebandWrite::Message(ServerMessage::RResolved {
+                                        library,
+                                    }))
+                                    .is_err()
+                                {
+                                    failures.report("worker sideband writer stopped".to_string());
+                                    return;
+                                }
+                            }
+                            RelayCommand::RResolutionFailed { failure, message } => {
+                                if sideband
+                                    .send(SidebandWrite::Message(
+                                        ServerMessage::RResolutionFailed { failure, message },
+                                    ))
+                                    .is_err()
+                                {
+                                    failures.report("worker sideband writer stopped".to_string());
+                                    return;
+                                }
+                            }
                             RelayCommand::PreparePython { packages } => {
                                 if sideband
                                     .send(SidebandWrite::Message(ServerMessage::PreparePython {

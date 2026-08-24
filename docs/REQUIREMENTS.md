@@ -19,7 +19,7 @@ MCP Console retains one environment configuration in server memory:
 - a set of prepared DuckDB extension names.
 
 The sets are additive.
-Repeating an accepted requirement is idempotent, and a restart reuses everything retained so far.
+Repeating an accepted requirement is idempotent, and a restart reuses everything retained so far, including R packages resolved automatically during earlier cells.
 The current API has no operation to remove a requirement, replace a manifest, select a named environment, or persist the retained configuration across server processes.
 
 The built-in server prepares these defaults before accepting MCP input:
@@ -77,8 +77,55 @@ Preparation happens first; after the cell is dispatched, the existing stdin-befo
 `timeout_ms` begins applying only after dispatch, so preparation can make the complete call take longer than the selected evaluation wait timeout.
 `session(action = "interrupt")` still targets an active host resolver, and explicit restart or closing MCP input retains its existing resolver-cancellation behavior.
 
-MCP Console does not discover requirements from `library()`, `require()`, `::`, Python imports, SQL, or `install.packages()`, and it does not retry a cell after a missing-package error.
+The built-in worker can resolve missing plain R package names while a cell runs, as described below.
+Python imports, SQL, and `install.packages()` are not scanned, and MCP Console does not replay a cell after a missing-package error.
 Prepared packages and extensions still must be attached, imported, or loaded by code when their runtime requires it.
+
+## Automatic R package resolution
+
+The built-in R worker resolves a missing plain package name when evaluated code reaches `library()`, `require()`, `requireNamespace()`, `loadNamespace()`, `::`, or `:::`.
+It installs thin wrappers around `base::library` and `base::loadNamespace`, preserves the original base functions, and delegates to them after making the package available.
+Both wrappers are needed because `library()` calls `find.package()` and can report a missing package before it reaches `loadNamespace()`.
+`require()` delegates to `library()`, `requireNamespace()` delegates to `loadNamespace()`, and the namespace operators use `loadNamespace()` when needed.
+
+The wrappers do not replace `find.package()` or `install.packages()`.
+They skip resolution when the package is already attached, loaded, or findable, and preserve base behavior for `library()` help and listing calls.
+An explicit non-NULL `lib.loc` and a partial namespace load also bypass automatic resolution because adding a managed library would not satisfy those requests.
+
+Worker-originated requests accept at most 64 plain package names.
+Each name must start with an ASCII letter, end with an ASCII letter or digit, and contain only ASCII letters, digits, and dots.
+The server validates these names again before invoking IR, so paths, URLs, source prefixes, version selectors, whitespace, and arbitrary IR references from evaluated code are rejected.
+Use explicit `requirements.r` for an IR reference such as `github::owner/repository` or for staging packages before evaluation.
+
+For a changed request, the server merges the names with the complete retained R requirement set and resolves that complete set through the existing host-side IR resolver.
+It also prepares the complete retained DuckDB extension set for the candidate library.
+The candidate remains uncommitted while the worker normalizes it and applies it through the same `.libPaths()` transition used by explicit live R preparation.
+Only after the worker reports `RActivated` does the server match the exact candidate, retain it, and add it to the DuckDB R-library history.
+The original base operation then continues, so `library()` or `require()` attaches the package and `::` or `:::` loads only its namespace as usual.
+Successful automatic resolution emits no preparation marker.
+
+An idle automatic request owns environment changes until the worker reports activation or failure.
+Explicit preparation that arrives before that report fails without resolving a second candidate or stopping the worker.
+If explicit preparation reserved the transition first, an otherwise idle automatic request receives an ordinary unavailable response instead.
+A cell without changed requirements can still queue while an idle automatic request is pending; the worker processes it after the synchronous callback finishes.
+
+This transition does not restart the worker.
+Its R process, PID, globals, loaded namespaces, Python state, DuckDB catalog, and stdin state remain in place.
+The server commits after `.libPaths()` accepts the candidate but before the original package operation resumes, so the environment remains retained if a later `.onLoad`, namespace operation, or expression in the cell fails.
+
+The worker does not inspect R source before evaluation.
+Each missing package is resolved only when execution reaches one of these operations, so unreachable or quoted code does not invoke IR.
+Several new package loads in one cell can therefore cause several incremental IR calls in execution order.
+
+An automatic request is part of the active R evaluation.
+If `timeout_ms` expires, `send` can return `[running]` while its resolver continues; the resolver is not cancelled by that wait timeout.
+`session(action = "interrupt")` targets the active resolver, while an unchanged restart or shutdown cancels it.
+A restart that also adds requirements serializes behind the active environment resolution before it prepares those additions and replaces the worker.
+An interrupted or lifecycle-cancelled request is reported to its operation, and a candidate from a replaced generation cannot commit into its replacement.
+
+If IR cannot resolve a package requested at runtime, `library()` and namespace loads surface their normal R errors, while `require()` may return `FALSE` according to `logical.return`; the worker remains available.
+If applying the candidate library fails, the worker reports `RActivationFailed`, the server discards the candidate, and further requirement changes in that generation require restart; the worker remains available so its in-memory state can be saved.
+Transport, sideband, protocol, and bridge-infrastructure failures retain the existing worker-failure behavior.
 
 ## Staging requirements ahead of time
 
@@ -193,9 +240,12 @@ The [implemented architecture](ARCHITECTURE.md) owns the replacement lifecycle; 
 
 ### R
 
-R requirements are IR package references.
+Explicit R requirements are IR package references.
 MCP Console owns only the framing checks: each request may contain at most 64 nonempty strings, and a string may not contain NUL, carriage return, or newline.
 IR owns the accepted package reference syntax and dependency resolution.
+
+Automatic runtime R requests use the narrower plain-name syntax described under [Automatic R package resolution](#automatic-r-package-resolution).
+That validator is separate from explicit `requirements.r`, so restricting runtime discovery does not remove supported remote IR references from explicit preparation or restart.
 
 The built-in server uses `$R_HOME/bin/Rscript` when `R_HOME` is set.
 Otherwise it runs `R RHOME` using `R` from `PATH` and uses the reported home's `bin/Rscript`.
@@ -251,11 +301,13 @@ A custom worker always rejects managed Python requirements, regardless of `RETIC
 ## Custom workers
 
 Custom workers start without the built-in R library, managed Python environment, or default DuckDB extensions.
-They can use explicit R requirements and DuckDB extensions, but managed Python requirements are unavailable for send, prepare, and restart.
+They can use explicit R requirements and DuckDB extensions, and may opt into the worker-protocol runtime R resolution callbacks.
+Managed Python requirements remain unavailable for send, prepare, and restart.
 
-Every explicitly resolved custom-worker R candidate includes DBI, DuckDB, and jsonlite so the host can prepare later DuckDB extensions with the same library.
+Every custom-worker R candidate, whether explicitly or at runtime, includes DBI, DuckDB, and jsonlite so the host can prepare later DuckDB extensions with the same library.
 The server supplies the retained library through `R_LIBS` at worker launch.
-A running custom worker must implement live R preparation and confirm the applied library as specified by the [worker protocol](WORKER_PROTOCOL.md).
+A running custom worker must implement live R preparation for explicit additions.
+If it opts into runtime resolution, it must confirm or reject each provisional library as specified by the [worker protocol](WORKER_PROTOCOL.md).
 
 Prepared extensions remain in DuckDB's native default cache.
 A custom worker must use that cache when it loads them.
@@ -274,10 +326,13 @@ Use only trusted requirements and trusted resolver configuration.
 
 Resolver inputs do not contain submitted cells or `send` stdin:
 
-- R requirements are individual process arguments to IR, which receives a constant R program.
+- Explicit R requirements and validated automatic package names become individual process arguments to IR, which receives a constant R program.
 - Python manifests and version constraints are JSON data on resolver standard input.
 - DuckDB extension names are validated JSON data and are not submitted SQL.
 
+Evaluated R code can trigger managed R resolution through the built-in `library()` and `loadNamespace()` bridge.
+Only validated plain names cross that worker-to-server boundary, and every automatic IR invocation still sets `IR_NO_LOCAL_SOURCES=1`.
+A plain name restricts resolver syntax, but the selected package's installation or build code still runs with server permissions; use only packages you trust.
 Evaluated code can trigger managed Python resolution through reticulate, but the same named-registry and version-constraint validation applies before a host resolver starts.
 
 ### Server-owned uv configuration
@@ -299,8 +354,10 @@ IR, uv, reticulate, and DuckDB may download, build, or install files before a la
 For example, an earlier extension in a failed multi-extension request can remain in DuckDB's native cache without entering the retained extension set.
 A future request may reuse such cache entries.
 
-Live preparation has one additional commit boundary: a Python activation is retained as soon as the worker reports it.
+Live preparation has worker-confirmed commit boundaries.
+A Python activation is retained as soon as the worker reports it.
 It is not rolled back if a later R step in the same request fails.
-R and DuckDB changes commit only after their complete live operation succeeds.
-For a combined `send`, any such failure returns through that send and prevents its cell from running, while retaining or discarding candidates according to these existing live-preparation boundaries.
+An automatic R candidate is retained only after the worker reports that `.libPaths()` accepted its exact library, and it is not rolled back if later namespace loading or cell code fails.
+Explicit R and DuckDB changes commit only after their complete live operation succeeds.
+For a `send` with explicit requirements, any preparation failure returns through that send and prevents its cell from running, while retaining or discarding candidates according to these existing live-preparation boundaries.
 The earlier sections describe how ordinary Python failure, recoverable R failure, and infrastructure failure affect the current worker.
