@@ -4,7 +4,6 @@ import ast as _ast
 import base64 as _base64
 import builtins as _builtins
 import importlib as _importlib
-import importlib.machinery as _machinery
 import importlib.util as _importlib_util
 import io as _io
 import json as _json
@@ -62,7 +61,6 @@ class _McpConsoleImportFinder:
         self,
         importlib,
         importlib_util,
-        machinery,
         json,
         os,
         sys,
@@ -75,7 +73,6 @@ class _McpConsoleImportFinder:
     ):
         self._importlib = importlib
         self._importlib_util = importlib_util
-        self._machinery = machinery
         self._json = json
         self._os = os
         self._sys = sys
@@ -98,6 +95,27 @@ class _McpConsoleImportFinder:
         self._thread = self._threading.get_ident()
         return None
 
+    def _find_spec(self, finders, fullname, path, target):
+        for finder in tuple(finders):
+            if finder is self:
+                continue
+            if hasattr(finder, "find_spec"):
+                specification = finder.find_spec(fullname, path, target)
+            elif self._sys.version_info < (3, 12):
+                find_module = getattr(finder, "find_module", None)
+                loader = None if find_module is None else find_module(fullname, path)
+                specification = (
+                    None
+                    if loader is None
+                    else self._importlib_util.spec_from_loader(fullname, loader)
+                )
+            else:
+                # Python 3.12 and later ignore legacy-only meta-path finders.
+                specification = None
+            if specification is not None:
+                return specification
+        return None
+
     def find_spec(self, fullname, path=None, target=None):
         root = fullname.partition(".")[0]
         if getattr(self._state, "resolving", False):
@@ -115,22 +133,14 @@ class _McpConsoleImportFinder:
         # that later suffix its ordinary chance before acting as the last finder.
         finders = self._sys.meta_path
         position = finders.index(self)
-        for finder in tuple(finders[position + 1 :]):
-            if hasattr(finder, "find_spec"):
-                specification = finder.find_spec(fullname, path, target)
-            elif self._sys.version_info < (3, 12):
-                find_module = getattr(finder, "find_module", None)
-                loader = None if find_module is None else find_module(fullname, path)
-                specification = (
-                    None
-                    if loader is None
-                    else self._importlib_util.spec_from_loader(fullname, loader)
-                )
-            else:
-                # Python 3.12 and later ignore legacy-only meta-path finders.
-                specification = None
-            if specification is not None:
-                return specification
+        specification = self._find_spec(
+            finders[position + 1 :],
+            fullname,
+            path,
+            target,
+        )
+        if specification is not None:
+            return specification
         if self._callback is None:
             self._missing_module(
                 fullname,
@@ -193,29 +203,35 @@ class _McpConsoleImportFinder:
                 response = self._json.loads(self._callback(distribution))
             except Exception as error:
                 self._raise_resolution_failure(fullname, root, distribution, str(error))
+
+            kind = response.get("kind") if isinstance(response, dict) else None
+            if kind == "failed" and isinstance(response.get("message"), str):
+                self._raise_resolution_failure(
+                    fullname,
+                    root,
+                    distribution,
+                    response["message"],
+                )
+            if kind == "disabled" and isinstance(response.get("message"), str):
+                self._missing_module(
+                    fullname,
+                    f"No module named {fullname!r}.\n\n{response['message']}",
+                )
+            if kind != "ready":
+                raise RuntimeError("invalid automatic Python package resolver response")
+
+            self._importlib.invalidate_caches()
+            specification = self._find_spec(
+                self._sys.meta_path,
+                fullname,
+                path,
+                target,
+            )
+            if specification is not None:
+                return specification
         finally:
             self._state.resolving = False
 
-        kind = response.get("kind") if isinstance(response, dict) else None
-        if kind == "failed" and isinstance(response.get("message"), str):
-            self._raise_resolution_failure(
-                fullname,
-                root,
-                distribution,
-                response["message"],
-            )
-        if kind == "disabled" and isinstance(response.get("message"), str):
-            self._missing_module(
-                fullname,
-                f"No module named {fullname!r}.\n\n{response['message']}",
-            )
-        if kind != "ready":
-            raise RuntimeError("invalid automatic Python package resolver response")
-
-        self._importlib.invalidate_caches()
-        specification = self._machinery.PathFinder.find_spec(fullname, path, target)
-        if specification is not None:
-            return specification
         self._missing_module(
             fullname,
             f"No module named {fullname!r}.\n\n"
@@ -280,7 +296,6 @@ if _mcp_console_import_finder is None:
     _mcp_console_import_finder = _McpConsoleImportFinder(
         _importlib,
         _importlib_util,
-        _machinery,
         _json,
         _os,
         _sys,

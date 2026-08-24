@@ -19,7 +19,7 @@ result:
     - type: text
       text: |
         Traceback (most recent call last):
-          File "<string>", line 389, in _mcp_console_eval_cell
+          File "<string>", line 404, in _mcp_console_eval_cell
           File "<mcp-console:python:e2>", line 3, in <module>
         RuntimeError: after automatic Python activation
   isError: false

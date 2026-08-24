@@ -181,7 +181,7 @@ The worker then uses the existing synchronous `ResolvePython` request; the relay
 The server resolves a complete managed-Python candidate on the host and returns it provisionally.
 Reticulate checks compatibility with the live interpreter and activates the environment without replacing Python or the worker.
 Its active manifest binding reports `PythonActivated`, and the server commits only a matching candidate owned by the current generation.
-The worker emits that report before it invalidates import caches and resumes the original import through Python's path finder.
+The worker emits that report before it invalidates import caches and resumes the original import through Python's current meta-path finders.
 No cell replay or new worker-protocol variant is involved.
 
 A successful activation remains retained if the inferred distribution does not contain the requested module or later cell code fails.

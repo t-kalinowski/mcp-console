@@ -154,7 +154,7 @@ After reticulate activates a compatible environment, the worker reports `PythonA
 The worker emits that report before the original Python import resumes.
 The server matches and commits the candidate when it processes the report; sideband order places it before any later evaluation outcome.
 
-The finder then invalidates Python's import caches and asks the standard path finder for the requested module.
+The finder then invalidates Python's import caches and retries the current meta-path finders for the requested module.
 If the module is present, the original import continues in place.
 The cell is not replayed, and successful resolution emits no preparation marker.
 The worker process, Python interpreter, Python objects, R globals, DuckDB catalog, stdin state, and PID remain in place.

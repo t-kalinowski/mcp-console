@@ -166,6 +166,89 @@ def test_resolves_missing_python_import_without_replaying_cell(
     return client._finish()
 
 
+def test_retries_new_meta_path_finders_after_automatic_resolution(
+    binary: Path,
+) -> Transcript:
+    module = "mcp_console_activated_finder"
+    with tempfile.TemporaryDirectory() as temporary:
+        directory = Path(temporary)
+        environment, record = recording_uv_environment(
+            directory,
+            substitute_requirement=(module, "pydash"),
+        )
+        client = McpClient(binary, ("serve",), environment)
+        client._initialize_and_list_tools()
+        baseline = initialize_python_and_record_baseline(client, record)
+
+        # fmt: python
+        python = code(rf"""
+            import importlib.util
+
+
+            class AutomaticMetaLoader:
+                def create_module(self, specification):
+                    return None
+
+                def exec_module(self, module):
+                    module.answer = 42
+
+
+            class AutomaticMetaFinder:
+                def find_spec(self, fullname, path=None, target=None):
+                    if fullname == "{module}":
+                        return importlib.util.spec_from_loader(
+                            fullname,
+                            AutomaticMetaLoader(),
+                        )
+                    return None
+
+
+            automatic_meta_finder = AutomaticMetaFinder()
+            """)
+        client.send(python=python)
+        assert last_tool_text(client) == "[done]"
+
+        # Register the finder only after reticulate activates the inferred
+        # environment, while the original import is waiting in this runtime.
+        # fmt: r
+        r = code(r"""
+            reticulate_namespace <- asNamespace("reticulate")
+            original_py_require <- get("py_require", envir = reticulate_namespace)
+            automatic_meta_finder_registered <- FALSE
+            unlockBinding("py_require", reticulate_namespace)
+            assign(
+              "py_require",
+              function(...) {
+                result <- original_py_require(...)
+                if (!automatic_meta_finder_registered) {
+                  reticulate::py_run_string(
+                    paste0(
+                      "import sys, __main__; ",
+                      "sys.meta_path.insert(0, __main__.automatic_meta_finder)"
+                    ),
+                    local = TRUE
+                  )
+                  automatic_meta_finder_registered <<- TRUE
+                }
+                result
+              },
+              envir = reticulate_namespace
+            )
+            lockBinding("py_require", reticulate_namespace)
+            """)
+        client.send(r=r)
+        assert last_tool_text(client) == "[done]"
+
+        output = send_and_collect_runtime_python_resolution(
+            client,
+            python=f"import {module}; {module}.answer",
+        )
+        assert output == "42\n", repr(output)
+        runs = uv_tool_run_requirements(record)[baseline:]
+        assert len(runs) == 1 and module in runs[0], runs
+        return client._finish()
+
+
 def test_infers_python_distributions_for_normal_import_forms(
     binary: Path,
 ) -> Transcript:
