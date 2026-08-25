@@ -399,7 +399,7 @@ R plots created through Python's `r` bridge follow the R graphics rules.
 
 Console output, diagnostics, captured stdout and stderr, input-request records, images, and server lifecycle notices are assembled in one server-owned output stream for delivery.
 The server preserves each producer's order but cannot reconstruct chronology across independent pipes.
-It does not normalize carriage returns, ANSI sequences, or ordinary whitespace.
+Outside the terminal redraw projection described below, it does not normalize ordinary whitespace or reinterpret output based on its source.
 Invalid UTF-8 from raw standard streams is replaced when projected to MCP text; the private relay transport still preserves the bytes.
 
 When one controlled `send` stops or completes an earlier operation and then runs a new cell, the response keeps the prior output before lifecycle notices and new-cell output, followed by the final combined state marker.
@@ -437,6 +437,7 @@ For terminal-style output that redraws one line with carriage returns, backspace
 A response returns only the latest version changed since the preceding response boundary.
 A newline, cell completion, or worker-generation boundary returns the final visible version and clears that stream's volatile state.
 ANSI styling is retained on the visible line, and CRLF remains an ordinary newline.
+Other terminal controls are not interpreted, and their payloads are not retained as volatile line state.
 This compaction happens before pending-output limits are applied.
 
 Each undrained output segment is limited to:

@@ -1,0 +1,28 @@
+---
+relay:
+  kind: ready
+---
+server:
+  kind: evaluate
+  language: r
+  source: "42"
+---
+relay:
+  kind: stdout_bytes
+  data: /wpvbGQ=
+---
+relay:
+  kind: stdout_bytes
+  data: DRtbMksK
+---
+relay:
+  kind: stdout
+  data: <output filling the raw text-byte budget>
+transcript_normalization:
+  target: relay.data
+  replacements:
+    budget_filler: <output filling the raw text-byte budget>
+---
+relay:
+  kind: completed
+...

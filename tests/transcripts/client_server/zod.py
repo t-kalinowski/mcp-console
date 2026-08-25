@@ -1362,6 +1362,53 @@ def test_compacts_stdout_and_stderr_independently(binary: Path) -> Transcript:
     return client._finish()
 
 
+def test_finalization_preserves_volatile_output_order(binary: Path) -> Transcript:
+    zod = Path(__file__).resolve().parents[2] / "fixtures" / "zod"
+    client = McpClient(
+        binary,
+        ("serve", "--worker", str(zod)),
+    )
+    client._initialize_and_list_tools()
+
+    client.send(r="finalize ordered redraw")
+    assert last_tool_text(client) == "progresserror\n"
+    return client._finish()
+
+
+def test_compacts_zero_width_terminal_text(binary: Path) -> Transcript:
+    zod = Path(__file__).resolve().parents[2] / "fixtures" / "zod"
+    client = McpClient(
+        binary,
+        ("serve", "--worker", str(zod)),
+    )
+    client._initialize_and_list_tools()
+
+    client.send(r="redraw decomposed accent")
+    assert last_tool_text(client) == "decomposed x\n"
+    return client._finish()
+
+
+def test_fragmented_volatile_line_remains_responsive(binary: Path) -> Transcript:
+    zod = Path(__file__).resolve().parents[2] / "fixtures" / "zod"
+    client = McpClient(
+        binary,
+        ("serve", "--worker", str(zod)),
+    )
+    client._initialize_and_list_tools()
+
+    client.send(r="fragmented redraw line")
+    output = last_tool_text(client)
+    assert output == ("x" * (64 * 1024)) + "\n"
+    client.transcript[-1]["result"]["content"][0]["text"] = (
+        "<fragmented 64 KiB volatile line>\n"
+    )
+    client.transcript[-1]["transcript_normalization"] = {
+        "target": "result.content[0].text",
+        "replacements": {"volatile_line": "<fragmented 64 KiB volatile line>"},
+    }
+    return client._finish()
+
+
 def test_compacts_independent_streams_across_polls_and_completion(
     binary: Path,
 ) -> Transcript:
@@ -1434,6 +1481,33 @@ def test_restart_flushes_and_resets_volatile_output(binary: Path) -> Transcript:
         assert last_tool_text(client) == (
             "latest restart progress\n"
             "[active evaluation stopped by session restart request]\n"
+            "[worker stopped: in-memory state lost]\n"
+            "[starting new worker]\n"
+            "[idle]"
+        )
+
+        client.send(r="echo fresh")
+        assert last_tool_text(client) == "zod: fresh\n"
+        return client._finish()
+
+
+def test_restart_resets_idle_volatile_output(binary: Path) -> Transcript:
+    zod = Path(__file__).resolve().parents[2] / "fixtures" / "zod"
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        temporary_path = Path(temporary_directory)
+        environment = os.environ.copy()
+        environment["TMPDIR"] = temporary_directory
+        client = McpClient(
+            binary,
+            ("serve", "--worker", str(zod)),
+            environment,
+        )
+        client._initialize_and_list_tools()
+        expose_idle_sideband_output(client, temporary_path, "idle-redraw")
+
+        client.session(action="restart")
+        assert last_tool_text(client) == (
+            "idle redraw final\n"
             "[worker stopped: in-memory state lost]\n"
             "[starting new worker]\n"
             "[idle]"

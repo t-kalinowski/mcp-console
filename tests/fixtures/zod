@@ -457,6 +457,40 @@ def main() -> None:
             send(writer, {"kind": "completed"})
             continue
 
+        if source == "finalize ordered redraw":
+            send_batch(
+                writer,
+                [
+                    {"kind": ConsoleKind.OUTPUT, "data": "\rprogress"},
+                    {
+                        "kind": ConsoleKind.DIAGNOSTIC,
+                        "data": "error\n",
+                    },
+                    {"kind": "completed"},
+                ],
+            )
+            continue
+
+        if source == "redraw decomposed accent":
+            send_output(writer, "\rdecomposed e\u0301\x08x\n")
+            send(writer, {"kind": "completed"})
+            continue
+
+        if source == "fragmented redraw line":
+            send_batch(
+                writer,
+                [
+                    {"kind": ConsoleKind.OUTPUT, "data": "\r"},
+                    *[
+                        {"kind": ConsoleKind.OUTPUT, "data": "xxxx"}
+                        for _ in range((64 * 1024) // 4)
+                    ],
+                    {"kind": ConsoleKind.OUTPUT, "data": "\n"},
+                    {"kind": "completed"},
+                ],
+            )
+            continue
+
         if source == "redraw across polls":
             send_output(writer, "\r\x1b[2Koutput 10%")
             send_output(
@@ -570,6 +604,9 @@ def main() -> None:
                         },
                     )
                     send_output(writer, "idle after failure image\n")
+                elif marker == "idle-redraw":
+                    send_output(writer, "\ridle redraw old")
+                    send_output(writer, "\ridle redraw final")
                 else:
                     send_output(writer, "zod background sideband\n")
                 wait_for_server_to_process_sideband(reader, writer)

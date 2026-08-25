@@ -716,7 +716,9 @@ impl EvaluationReservation {
     }
 
     pub(super) fn take_output(&mut self, output: &OutputTape) -> (Response, Response) {
-        let cut = self.completion_cut.unwrap_or_else(|| output.cut());
+        let cut = self
+            .completion_cut
+            .unwrap_or_else(|| output.completion_cut());
         let mut state = self
             .evaluation
             .state
@@ -725,7 +727,7 @@ impl EvaluationReservation {
         let current_output = take_owned_response(&mut state, output, cut);
         drop(state);
         let post_completion = if self.completion_cut.is_some() {
-            output.take()
+            output.take_generation()
         } else {
             Response::default()
         };

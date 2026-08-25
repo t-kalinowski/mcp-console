@@ -327,6 +327,30 @@ def test_forwards_raw_stdout_and_stderr(binary: Path) -> Transcript:
     return transcript
 
 
+def test_redraw_releases_invalid_raw_output_budget(binary: Path) -> Transcript:
+    client = ServerRelayClient(binary, "raw_redraw_budget")
+    output = _tool_text(client.send(r="42"))
+    assert "[output truncated:" not in output
+    assert output.startswith("�\n\n")
+    assert output.endswith("useful output\n")
+    assert len(output.encode()) == PENDING_TEXT_BUDGET + 2
+
+    transcript = client.finish_active()
+    large_output = next(
+        entry
+        for entry in transcript
+        if entry.keys() == {"relay"} and entry["relay"].get("kind") == "stdout"
+    )
+    large_output["relay"]["data"] = "<output filling the raw text-byte budget>"
+    large_output["transcript_normalization"] = {
+        "target": "relay.data",
+        "replacements": {
+            "budget_filler": "<output filling the raw text-byte budget>",
+        },
+    }
+    return transcript
+
+
 def test_forwards_stdin(binary: Path) -> Transcript:
     client = ServerRelayClient(binary, "stdin")
     assert _tool_text(client.send(r="42", stdin="answer\n")) == "[done]"

@@ -271,6 +271,32 @@ def run_raw_output(relay: ScriptedRelay) -> None:
     relay.retire()
 
 
+def run_raw_redraw_budget(relay: ScriptedRelay) -> None:
+    relay.ready()
+    relay.expect(EVALUATION)
+    relay.send(
+        {
+            "kind": "stdout_bytes",
+            "data": base64.b64encode(b"\xff\nold").decode("ascii"),
+        }
+    )
+    relay.send(
+        {
+            "kind": "stdout_bytes",
+            "data": base64.b64encode(b"\r\x1b[2K\n").decode("ascii"),
+        }
+    )
+    trailer = "useful output\n"
+    relay.send(
+        {
+            "kind": "stdout",
+            "data": ("x" * (PENDING_TEXT_BUDGET - 3 - len(trailer))) + trailer,
+        }
+    )
+    relay.complete()
+    relay.retire()
+
+
 def run_stdin(relay: ScriptedRelay) -> None:
     relay.ready()
     relay.expect({"kind": "stdin", "data": "answer\n"})
@@ -982,6 +1008,7 @@ def main() -> None:
         "ready": run_ready,
         "evaluate": run_evaluate,
         "raw_output": run_raw_output,
+        "raw_redraw_budget": run_raw_redraw_budget,
         "stdin": run_stdin,
         "initial_requirements_stdin_idempotent": (
             run_initial_requirements_stdin_idempotent

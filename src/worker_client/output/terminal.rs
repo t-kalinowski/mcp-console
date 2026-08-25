@@ -3,6 +3,8 @@
 //! It recognizes CR, backspace, SGR styling, and erase-line CSI sequences.
 //! Other controls are discarded without retaining their payloads.
 
+use unicode_width::UnicodeWidthChar;
+
 const MAX_CONTROL_BYTES: usize = 64;
 const MAX_STYLE_BYTES: usize = 256;
 const MAX_STYLES: usize = 128;
@@ -28,6 +30,7 @@ pub(super) struct Stream {
     parser: Parser,
     pending_carriage_return: bool,
     volatile: bool,
+    dirty: bool,
     projection: String,
     active_events: Vec<u64>,
     last_observation: Option<u64>,
@@ -35,16 +38,23 @@ pub(super) struct Stream {
 
 #[derive(Default)]
 struct Line {
-    cells: Vec<Cell>,
+    columns: Vec<Column>,
     cursor: usize,
     styles: Vec<String>,
     current_style: usize,
 }
 
-#[derive(Clone, Copy)]
+enum Column {
+    Empty,
+    Glyph(Cell),
+    Continuation,
+}
+
 struct Cell {
     character: char,
+    combining: Option<Box<str>>,
     style: usize,
+    width: usize,
 }
 
 #[derive(Default)]
@@ -65,20 +75,16 @@ struct Collector<'a> {
     prior_open: bool,
     stable: String,
     ordinary_active: String,
-    baseline: Option<String>,
-    became_volatile: bool,
 }
 
 impl Stream {
     pub(super) fn ingest(&mut self, text: &str) -> Update {
         let mut collector = Collector {
-            baseline: self.volatile.then(|| self.projection.clone()),
             stream: self,
             prior: PriorLine::Continue,
             prior_open: true,
             stable: String::new(),
             ordinary_active: String::new(),
-            became_volatile: false,
         };
 
         for character in text.chars() {
@@ -87,15 +93,39 @@ impl Stream {
         collector.finish_update()
     }
 
+    pub(super) fn snapshot(&mut self) -> Update {
+        if !self.volatile || !self.dirty {
+            return Update {
+                prior: PriorLine::Continue,
+                text: String::new(),
+                active_suffix: None,
+            };
+        }
+
+        let rendered = self.line.render();
+        self.dirty = false;
+        if rendered == self.projection {
+            return Update {
+                prior: PriorLine::Continue,
+                text: String::new(),
+                active_suffix: None,
+            };
+        }
+        self.projection.clone_from(&rendered);
+        Update {
+            prior: PriorLine::Replace,
+            active_suffix: (!rendered.is_empty()).then_some(0),
+            text: rendered,
+        }
+    }
+
     pub(super) fn finish(&mut self) -> Update {
         let mut collector = Collector {
-            baseline: self.volatile.then(|| self.projection.clone()),
             stream: self,
             prior: PriorLine::Continue,
             prior_open: true,
             stable: String::new(),
             ordinary_active: String::new(),
-            became_volatile: false,
         };
         if collector.stream.pending_carriage_return {
             collector.stream.pending_carriage_return = false;
@@ -107,8 +137,15 @@ impl Stream {
         }
 
         let text = if collector.stream.volatile {
-            collector.prior = PriorLine::Replace;
-            collector.stream.line.render()
+            let rendered = collector.stream.line.render();
+            if !collector.stream.active_events.is_empty() && rendered == collector.stream.projection
+            {
+                collector.prior = PriorLine::Finalized;
+                String::new()
+            } else {
+                collector.prior = PriorLine::Replace;
+                rendered
+            }
         } else {
             collector.prior = PriorLine::Finalized;
             String::new()
@@ -141,6 +178,7 @@ impl Stream {
         self.line.clear();
         self.pending_carriage_return = false;
         self.volatile = false;
+        self.dirty = false;
         self.projection.clear();
     }
 
@@ -229,7 +267,9 @@ impl Collector<'_> {
 
     fn write(&mut self, character: char) {
         self.stream.line.write(character);
-        if !self.stream.volatile {
+        if self.stream.volatile {
+            self.stream.dirty = true;
+        } else {
             self.ordinary_active.push(character);
         }
     }
@@ -250,6 +290,7 @@ impl Collector<'_> {
             "2" => self.stream.line.erase_all(),
             _ => {}
         }
+        self.stream.dirty = true;
     }
 
     fn carriage_return(&mut self) {
@@ -264,7 +305,7 @@ impl Collector<'_> {
     fn begin_volatile(&mut self) {
         if !self.stream.volatile {
             self.stream.volatile = true;
-            self.became_volatile = true;
+            self.stream.dirty = true;
             self.ordinary_active.clear();
             if self.prior_open {
                 self.prior = PriorLine::Replace;
@@ -288,19 +329,20 @@ impl Collector<'_> {
         self.stream.reset_line();
         self.prior_open = false;
         self.ordinary_active.clear();
-        self.baseline = None;
-        self.became_volatile = false;
     }
 
     fn finish_update(mut self) -> Update {
-        let active = if self.stream.volatile {
+        let active = if self.stream.volatile && !self.stable.is_empty() {
             let rendered = self.stream.line.render();
-            let changed = self.became_volatile || self.baseline.as_ref() != Some(&rendered);
+            let changed = self.stream.dirty || rendered != self.stream.projection;
             if changed && self.prior_open {
                 self.prior = PriorLine::Replace;
             }
-            self.stream.projection = rendered.clone();
+            self.stream.projection.clone_from(&rendered);
+            self.stream.dirty = false;
             if changed { rendered } else { String::new() }
+        } else if self.stream.volatile {
+            String::new()
         } else {
             std::mem::take(&mut self.ordinary_active)
         };
@@ -316,29 +358,83 @@ impl Collector<'_> {
 
 impl Line {
     fn clear(&mut self) {
-        self.cells.clear();
+        self.columns.clear();
         self.cursor = 0;
     }
 
     fn write(&mut self, character: char) {
-        if self.cursor < MAX_VISIBLE_CELLS {
-            while self.cells.len() < self.cursor {
-                self.cells.push(Cell {
-                    character: ' ',
-                    style: 0,
-                });
+        let width = if character == '\t' {
+            1
+        } else {
+            character.width().unwrap_or(0)
+        };
+        if width == 0 {
+            self.append_combining(character);
+            return;
+        }
+
+        if self.cursor.saturating_add(width) <= MAX_VISIBLE_CELLS {
+            self.clear_glyph_at(self.cursor);
+            if width > 1 {
+                self.clear_glyph_at(self.cursor + width - 1);
             }
-            let cell = Cell {
+            while self.columns.len() < self.cursor.saturating_add(width) {
+                self.columns.push(Column::Empty);
+            }
+            self.columns[self.cursor] = Column::Glyph(Cell {
                 character,
+                combining: None,
                 style: self.current_style,
-            };
-            if self.cursor < self.cells.len() {
-                self.cells[self.cursor] = cell;
-            } else {
-                self.cells.push(cell);
+                width,
+            });
+            for column in &mut self.columns[self.cursor + 1..self.cursor + width] {
+                *column = Column::Continuation;
             }
         }
-        self.cursor = self.cursor.saturating_add(1);
+        self.cursor = self.cursor.saturating_add(width);
+    }
+
+    fn append_combining(&mut self, character: char) {
+        let Some(mut index) = self.cursor.checked_sub(1) else {
+            return;
+        };
+        while matches!(self.columns.get(index), Some(Column::Continuation)) {
+            let Some(previous) = index.checked_sub(1) else {
+                return;
+            };
+            index = previous;
+        }
+        let Some(Column::Glyph(cell)) = self.columns.get_mut(index) else {
+            return;
+        };
+        let mut combining = cell.combining.take().map_or_else(String::new, String::from);
+        combining.push(character);
+        cell.combining = Some(combining.into_boxed_str());
+    }
+
+    fn clear_glyph_at(&mut self, index: usize) {
+        let Some(column) = self.columns.get(index) else {
+            return;
+        };
+        let start = match column {
+            Column::Empty => return,
+            Column::Glyph(_) => index,
+            Column::Continuation => {
+                let mut start = index;
+                while start > 0 && matches!(self.columns[start], Column::Continuation) {
+                    start -= 1;
+                }
+                start
+            }
+        };
+        let width = match &self.columns[start] {
+            Column::Glyph(cell) => cell.width,
+            Column::Empty | Column::Continuation => return,
+        };
+        let end = (start + width).min(self.columns.len());
+        for column in &mut self.columns[start..end] {
+            *column = Column::Empty;
+        }
     }
 
     fn style(&mut self, sequence: &str) {
@@ -374,35 +470,60 @@ impl Line {
     }
 
     fn erase_to_end(&mut self) {
-        self.cells.truncate(self.cursor.min(self.cells.len()));
+        let mut end = self.cursor.min(self.columns.len());
+        while end > 0
+            && end < self.columns.len()
+            && matches!(self.columns[end], Column::Continuation)
+        {
+            end -= 1;
+        }
+        self.columns.truncate(end);
     }
 
     fn erase_to_start(&mut self) {
-        if self.cells.is_empty() {
+        if self.columns.is_empty() {
             return;
         }
-        let end = self.cursor.min(self.cells.len() - 1);
-        for cell in &mut self.cells[..=end] {
-            *cell = Cell {
-                character: ' ',
-                style: 0,
-            };
+        let cursor = self.cursor.min(self.columns.len() - 1);
+        let mut end = cursor + 1;
+        if let Some(Column::Glyph(cell)) = self.columns.get(cursor) {
+            end = (cursor + cell.width).min(self.columns.len());
+        }
+        for column in &mut self.columns[..end] {
+            *column = Column::Empty;
         }
     }
 
     fn erase_all(&mut self) {
-        self.cells.clear();
+        self.columns.clear();
     }
 
     fn render(&self) -> String {
         let length = self
-            .cells
+            .columns
             .iter()
-            .rposition(|cell| cell.character != ' ' || cell.style != 0)
+            .rposition(|column| match column {
+                Column::Glyph(cell) => {
+                    cell.character != ' ' || cell.combining.is_some() || cell.style != 0
+                }
+                Column::Empty | Column::Continuation => false,
+            })
             .map_or(0, |index| index + 1);
         let mut rendered = String::new();
         let mut style = 0;
-        for cell in &self.cells[..length] {
+        for column in &self.columns[..length] {
+            let cell = match column {
+                Column::Empty => {
+                    if style != 0 {
+                        rendered.push_str("\x1b[0m");
+                        style = 0;
+                    }
+                    rendered.push(' ');
+                    continue;
+                }
+                Column::Glyph(cell) => cell,
+                Column::Continuation => continue,
+            };
             if cell.style != style {
                 if style != 0 {
                     rendered.push_str("\x1b[0m");
@@ -413,6 +534,9 @@ impl Line {
                 style = cell.style;
             }
             rendered.push(cell.character);
+            if let Some(combining) = &cell.combining {
+                rendered.push_str(combining);
+            }
         }
         if style != 0 {
             rendered.push_str("\x1b[0m");
@@ -438,16 +562,19 @@ mod tests {
         assert_eq!(second.prior, PriorLine::Finalized);
         assert_eq!(second.text, "\r\nold");
         let third = stream.ingest("2K\x1b[31mnewx\x08!\x1b[0m");
-        assert_eq!(third.prior, PriorLine::Replace);
-        assert_eq!(third.text, "\x1b[31mnew!\x1b[0m");
+        assert_eq!(third.prior, PriorLine::Continue);
+        assert_eq!(third.text, "");
+        assert_eq!(stream.snapshot().text, "\x1b[31mnew!\x1b[0m");
     }
 
     #[test]
     fn leaves_unchanged_volatile_state_out_of_later_updates() {
         let mut stream = Stream::default();
         assert_eq!(stream.ingest("value\r").text, "value");
-        assert_eq!(stream.ingest("value").text, "value");
+        assert_eq!(stream.ingest("value").text, "");
+        assert_eq!(stream.snapshot().text, "value");
         assert_eq!(stream.ingest("\rvalue").text, "");
+        assert_eq!(stream.snapshot().text, "");
         assert_eq!(stream.finish().text, "value");
     }
 
@@ -455,9 +582,27 @@ mod tests {
     fn discards_unsupported_controls_without_buffering_their_payloads() {
         let mut stream = Stream::default();
         let output = stream.ingest(&format!("before\x1b]{}\x07\rvisible", "x".repeat(100_000)));
-        assert_eq!(output.text, "visible");
+        assert_eq!(output.text, "");
+        assert_eq!(stream.snapshot().text, "visible");
 
         let output = stream.ingest(&format!("\x1b[{}zafter", "1".repeat(100_000)));
-        assert_eq!(output.text, "visibleafter");
+        assert_eq!(output.text, "");
+        assert_eq!(stream.snapshot().text, "visibleafter");
+    }
+
+    #[test]
+    fn uses_display_columns_for_combining_marks_and_wide_characters() {
+        let mut stream = Stream::default();
+        assert_eq!(stream.ingest("\re\u{301}\x08x界\x08\x08!\n").text, "x!\n");
+    }
+
+    #[test]
+    fn defers_fragmented_volatile_projection_until_snapshot() {
+        let mut stream = Stream::default();
+        assert_eq!(stream.ingest("\r").text, "");
+        for _ in 0..MAX_VISIBLE_CELLS {
+            assert_eq!(stream.ingest("x").text, "");
+        }
+        assert_eq!(stream.snapshot().text.len(), MAX_VISIBLE_CELLS);
     }
 }

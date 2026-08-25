@@ -95,7 +95,7 @@ enum OutputEvent {
         text: Box<str>,
         text_bytes: usize,
         /// The suffix that may still be replaced by a redraw before the next cut.
-        active_suffix: Option<usize>,
+        active_suffix: Option<ActiveSuffix>,
     },
     /// An image from a worker `image` sideband frame, already persisted when enabled.
     WorkerImage {
@@ -113,6 +113,18 @@ enum OutputEvent {
     ServerFailure(SendFailure),
     /// One bounded summary for ordinary payload discarded in this cut segment.
     Truncated(Truncation),
+}
+
+#[derive(Clone, Copy)]
+struct ActiveSuffix {
+    text_offset: usize,
+    source_offset: usize,
+}
+
+#[derive(Clone, Copy)]
+struct SourceText {
+    bytes: usize,
+    active_suffix: Option<usize>,
 }
 
 impl OutputEvent {
@@ -681,6 +693,7 @@ impl OutputTape {
 
     pub(super) fn cut(&self) -> OutputCut {
         let mut state = self.lock();
+        state.snapshot_streams();
         state.seal_streams();
         state.seal_truncation();
         OutputCut(state.next_event)
@@ -697,6 +710,18 @@ impl OutputTape {
 
     pub(super) fn take(&self) -> Response {
         let mut state = self.lock();
+        state.snapshot_streams();
+        state.seal_streams();
+        state.seal_truncation();
+        let cut = OutputCut(state.next_event);
+        drain_through(&mut state, cut)
+    }
+
+    /// Drains output from a retiring worker and clears all per-generation state.
+    pub(super) fn take_generation(&self) -> Response {
+        let mut state = self.lock();
+        state.flush_direct_decoders();
+        state.finish_streams();
         state.seal_streams();
         state.seal_truncation();
         let cut = OutputCut(state.next_event);
@@ -819,6 +844,7 @@ impl OutputTapeState {
         F: FnOnce(&str, &str) -> Result<Option<crate::transcript::Artifact>, String>,
     {
         self.flush_direct_decoders();
+        self.snapshot_streams();
         let length = data.len();
         let metadata_length = mime_type.len();
         let fits = !self.budget.dropping_ordinary_output
@@ -879,7 +905,7 @@ impl OutputTapeState {
             self.push_stream_text(
                 logical,
                 &String::from_utf8_lossy(&complete),
-                Some(complete.len()),
+                Some(&complete),
             );
         }
         self.recompute_budget();
@@ -892,12 +918,24 @@ impl OutputTapeState {
         self.allocate_position();
     }
 
-    fn push_stream_text(&mut self, stream: LogicalStream, text: &str, source_bytes: Option<usize>) {
+    fn push_stream_text(&mut self, stream: LogicalStream, text: &str, source_bytes: Option<&[u8]>) {
+        self.snapshot_other_streams(stream);
         let mut terminal = self.take_terminal_stream(stream);
         let update = terminal.ingest(text);
+        let source = source_bytes
+            .filter(|_| update.text == text)
+            .and_then(|bytes| {
+                let active_suffix = match update.active_suffix {
+                    Some(offset) => Some(lossy_source_prefix_length(bytes, offset)?),
+                    None => None,
+                };
+                Some(SourceText {
+                    bytes: bytes.len(),
+                    active_suffix,
+                })
+            });
         let before = self.next_event;
-        let text_bytes = source_bytes.filter(|_| update.text == text);
-        self.apply_stream_update(&mut terminal, update, text_bytes);
+        self.apply_stream_update(&mut terminal, update, source, None);
         let observation = if self.next_event == before {
             self.allocate_position()
         } else {
@@ -909,9 +947,9 @@ impl OutputTapeState {
 
     fn finish_stream(&mut self, stream: LogicalStream) {
         let mut terminal = self.take_terminal_stream(stream);
-        if terminal.last_observation().is_some() {
+        if let Some(observation) = terminal.last_observation() {
             let update = terminal.finish();
-            self.apply_stream_update(&mut terminal, update, None);
+            self.apply_stream_update(&mut terminal, update, None, Some(observation));
         }
         self.put_terminal_stream(stream, terminal);
     }
@@ -929,11 +967,51 @@ impl OutputTapeState {
         }
     }
 
+    fn snapshot_stream(&mut self, stream: LogicalStream) {
+        let mut terminal = self.take_terminal_stream(stream);
+        if let Some(observation) = terminal.last_observation() {
+            let update = terminal.snapshot();
+            self.apply_stream_update(&mut terminal, update, None, Some(observation));
+        }
+        self.put_terminal_stream(stream, terminal);
+    }
+
+    fn snapshot_streams(&mut self) {
+        let mut streams = [
+            LogicalStream::ConsoleOutput,
+            LogicalStream::ConsoleDiagnostic,
+            LogicalStream::DirectStdout,
+            LogicalStream::DirectStderr,
+        ];
+        streams.sort_by_key(|stream| self.terminal_stream(*stream).last_observation());
+        for stream in streams {
+            self.snapshot_stream(stream);
+        }
+    }
+
+    fn snapshot_other_streams(&mut self, current: LogicalStream) {
+        // Keep same-stream fragments cheap, but publish an earlier stream before
+        // later-stream output can consume its event or byte budget.
+        let mut streams = [
+            LogicalStream::ConsoleOutput,
+            LogicalStream::ConsoleDiagnostic,
+            LogicalStream::DirectStdout,
+            LogicalStream::DirectStderr,
+        ];
+        streams.sort_by_key(|stream| self.terminal_stream(*stream).last_observation());
+        for stream in streams {
+            if stream != current {
+                self.snapshot_stream(stream);
+            }
+        }
+    }
+
     fn apply_stream_update(
         &mut self,
         terminal: &mut terminal::Stream,
         update: terminal::Update,
-        source_bytes: Option<usize>,
+        source: Option<SourceText>,
+        observation: Option<u64>,
     ) {
         match update.prior {
             terminal::PriorLine::Continue => {}
@@ -945,7 +1023,7 @@ impl OutputTapeState {
         }
 
         let original_length = update.text.len();
-        let original_bytes = source_bytes.unwrap_or(original_length);
+        let original_bytes = source.map_or(original_length, |source| source.bytes);
         if self.budget.dropping_ordinary_output {
             self.omit(original_bytes, 0, 0, 1);
             return;
@@ -968,23 +1046,32 @@ impl OutputTapeState {
         } else {
             retained
         };
-        let active_suffix = update.active_suffix.filter(|_| retained == original_length);
+        let active_suffix = update
+            .active_suffix
+            .filter(|_| retained == original_length)
+            .map(|text_offset| ActiveSuffix {
+                text_offset,
+                source_offset: source
+                    .and_then(|source| source.active_suffix)
+                    .unwrap_or(text_offset),
+            });
         if retained > 0 {
             let retained_text = if retained == original_length {
                 update.text.into_boxed_str()
             } else {
                 Box::<str>::from(&update.text[..retained])
             };
-            let sequence = self.retain_ordinary(
-                OutputEvent::Text {
-                    text: retained_text,
-                    text_bytes: retained_bytes,
-                    active_suffix,
-                },
-                retained_bytes,
-                0,
-                0,
-            );
+            let event = OutputEvent::Text {
+                text: retained_text,
+                text_bytes: retained_bytes,
+                active_suffix,
+            };
+            let sequence = match observation {
+                Some(observation) => {
+                    self.retain_ordinary_at(observation, event, retained_bytes, 0, 0)
+                }
+                None => self.retain_ordinary(event, retained_bytes, 0, 0),
+            };
             if active_suffix.is_some() {
                 terminal.push_active_event(sequence);
             }
@@ -1011,14 +1098,14 @@ impl OutputTapeState {
             else {
                 continue;
             };
-            let retained_bytes = (*text_bytes).min(*active_suffix);
+            let retained_bytes = (*text_bytes).min(active_suffix.source_offset);
             let removed = *text_bytes - retained_bytes;
             self.budget.text_bytes = self.budget.text_bytes.saturating_sub(removed);
-            if *active_suffix == 0 {
+            if active_suffix.text_offset == 0 {
                 self.events.remove(index);
                 self.budget.events = self.budget.events.saturating_sub(1);
             } else {
-                *text = Box::from(&text[..*active_suffix]);
+                *text = Box::from(&text[..active_suffix.text_offset]);
                 *text_bytes = retained_bytes;
                 self.events[index].1.clear_active_suffix();
             }
@@ -1091,7 +1178,7 @@ impl OutputTapeState {
         decoder.origin = None;
         if !bytes.is_empty() {
             self.recompute_budget();
-            self.push_stream_text(stream, &String::from_utf8_lossy(&bytes), Some(bytes.len()));
+            self.push_stream_text(stream, &String::from_utf8_lossy(&bytes), Some(&bytes));
         }
     }
 
@@ -1130,6 +1217,31 @@ impl OutputTapeState {
             .saturating_add(image_metadata_bytes);
         self.budget.events = self.budget.events.saturating_add(1);
         self.push_event(event)
+    }
+
+    fn retain_ordinary_at(
+        &mut self,
+        sequence: u64,
+        event: OutputEvent,
+        text_bytes: usize,
+        image_bytes: usize,
+        image_metadata_bytes: usize,
+    ) -> u64 {
+        self.budget.text_bytes = self.budget.text_bytes.saturating_add(text_bytes);
+        self.budget.image_bytes = self.budget.image_bytes.saturating_add(image_bytes);
+        self.budget.image_metadata_bytes = self
+            .budget
+            .image_metadata_bytes
+            .saturating_add(image_metadata_bytes);
+        self.budget.events = self.budget.events.saturating_add(1);
+        // Deferred volatile projections reuse their ingestion position so a cut
+        // cannot move them behind output observed from another stream.
+        let index = self
+            .events
+            .binary_search_by_key(&sequence, |(candidate, _)| *candidate)
+            .expect_err("an observation position can retain only one event");
+        self.events.insert(index, (sequence, event));
+        sequence
     }
 
     fn push_control(&mut self, event: OutputEvent) {
@@ -1321,6 +1433,37 @@ fn complete_utf8_prefix(bytes: &[u8]) -> usize {
                 Some(length) => offset += error.valid_up_to() + length,
                 None => return offset + error.valid_up_to(),
             },
+        }
+    }
+}
+
+fn lossy_source_prefix_length(bytes: &[u8], projected_prefix: usize) -> Option<usize> {
+    let mut source = 0;
+    let mut projected = 0;
+    loop {
+        match std::str::from_utf8(&bytes[source..]) {
+            Ok(valid) => {
+                let suffix = projected_prefix.checked_sub(projected)?;
+                return (suffix <= valid.len()).then_some(source + suffix);
+            }
+            Err(error) => {
+                let valid = error.valid_up_to();
+                if projected_prefix <= projected.saturating_add(valid) {
+                    return Some(source + projected_prefix - projected);
+                }
+                source += valid;
+                projected += valid;
+
+                let invalid = error.error_len().unwrap_or(bytes.len() - source);
+                source += invalid;
+                projected += '\u{fffd}'.len_utf8();
+                if projected_prefix == projected {
+                    return Some(source);
+                }
+                if projected_prefix < projected {
+                    return None;
+                }
+            }
         }
     }
 }
