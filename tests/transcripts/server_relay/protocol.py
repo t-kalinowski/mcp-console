@@ -331,7 +331,7 @@ def test_redraw_releases_invalid_raw_output_budget(binary: Path) -> Transcript:
     client = ServerRelayClient(binary, "raw_redraw_budget")
     output = _tool_text(client.send(r="42"))
     assert "[output truncated:" not in output
-    assert output.startswith("�\n\n")
+    assert output.startswith("�\r\n\n")
     assert output.endswith("useful output\n")
     assert len(output.encode()) == PENDING_TEXT_BUDGET + 2
 

@@ -277,7 +277,13 @@ def run_raw_redraw_budget(relay: ScriptedRelay) -> None:
     relay.send(
         {
             "kind": "stdout_bytes",
-            "data": base64.b64encode(b"\xff\nold").decode("ascii"),
+            "data": base64.b64encode(b"\xff\r").decode("ascii"),
+        }
+    )
+    relay.send(
+        {
+            "kind": "stdout_bytes",
+            "data": base64.b64encode(b"\nold").decode("ascii"),
         }
     )
     relay.send(
@@ -290,7 +296,7 @@ def run_raw_redraw_budget(relay: ScriptedRelay) -> None:
     relay.send(
         {
             "kind": "stdout",
-            "data": ("x" * (PENDING_TEXT_BUDGET - 3 - len(trailer))) + trailer,
+            "data": ("x" * (PENDING_TEXT_BUDGET - 4 - len(trailer))) + trailer,
         }
     )
     relay.complete()

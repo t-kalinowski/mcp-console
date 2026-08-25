@@ -1388,7 +1388,7 @@ def test_compacts_zero_width_terminal_text(binary: Path) -> Transcript:
     return client._finish()
 
 
-def test_fragmented_volatile_line_remains_responsive(binary: Path) -> Transcript:
+def test_oversized_progress_line_falls_back_without_loss(binary: Path) -> Transcript:
     zod = Path(__file__).resolve().parents[2] / "fixtures" / "zod"
     client = McpClient(
         binary,
@@ -1396,15 +1396,39 @@ def test_fragmented_volatile_line_remains_responsive(binary: Path) -> Transcript
     )
     client._initialize_and_list_tools()
 
-    client.send(r="fragmented redraw line")
+    client.send(r="oversized progress line")
     output = last_tool_text(client)
-    assert output == ("x" * (64 * 1024)) + "\n"
+    assert output == ("x" * ((64 * 1024) + 7)) + "\r"
     client.transcript[-1]["result"]["content"][0]["text"] = (
-        "<fragmented 64 KiB volatile line>\n"
+        "<oversized progress line>\r"
     )
     client.transcript[-1]["transcript_normalization"] = {
         "target": "result.content[0].text",
-        "replacements": {"volatile_line": "<fragmented 64 KiB volatile line>"},
+        "replacements": {"progress_line": "<oversized progress line>"},
+    }
+    return client._finish()
+
+
+def test_bounds_combining_data_in_progress_frames(binary: Path) -> Transcript:
+    zod = Path(__file__).resolve().parents[2] / "fixtures" / "zod"
+    client = McpClient(
+        binary,
+        ("serve", "--worker", str(zod)),
+    )
+    client._initialize_and_list_tools()
+
+    client.send(r="oversized combining progress frame")
+    output = last_tool_text(client)
+    combining = "a" + ("\u0301" * (((16 * 1024) // 2) + 1))
+    assert output == combining + "\rfinal\n"
+    client.transcript[-1]["result"]["content"][0]["text"] = (
+        "<bounded combining progress frame>\rfinal\n"
+    )
+    client.transcript[-1]["transcript_normalization"] = {
+        "target": "result.content[0].text",
+        "replacements": {
+            "progress_line": "<bounded combining progress frame>",
+        },
     }
     return client._finish()
 
@@ -1433,9 +1457,7 @@ def test_compacts_independent_streams_across_polls_and_completion(
         )
 
         client.send(timeout_ms=0)
-        assert last_tool_text(client) == (
-            "output 10%diagnostic 10%\n[running; poll with an empty send]"
-        )
+        assert last_tool_text(client) == "\n[running; poll with an empty send]"
         client.send(timeout_ms=0)
         assert last_tool_text(client) == "\n[running; poll with an empty send]"
 
@@ -1446,9 +1468,7 @@ def test_compacts_independent_streams_across_polls_and_completion(
             client,
         )
         client.send(timeout_ms=0)
-        assert last_tool_text(client) == (
-            "output 20%diagnostic 20%\n[running; poll with an empty send]"
-        )
+        assert last_tool_text(client) == "\n[running; poll with an empty send]"
 
         (stage_2.parent / "zod-release-redraw-completion").touch()
         client.send(timeout_ms=3_000)

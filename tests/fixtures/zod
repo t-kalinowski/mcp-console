@@ -476,19 +476,16 @@ def main() -> None:
             send(writer, {"kind": "completed"})
             continue
 
-        if source == "fragmented redraw line":
-            send_batch(
-                writer,
-                [
-                    {"kind": ConsoleKind.OUTPUT, "data": "\r"},
-                    *[
-                        {"kind": ConsoleKind.OUTPUT, "data": "xxxx"}
-                        for _ in range((64 * 1024) // 4)
-                    ],
-                    {"kind": ConsoleKind.OUTPUT, "data": "\n"},
-                    {"kind": "completed"},
-                ],
-            )
+        if source == "oversized progress line":
+            send_output(writer, "x" * ((64 * 1024) + 7))
+            send_output(writer, "\r")
+            send(writer, {"kind": "completed"})
+            continue
+
+        if source == "oversized combining progress frame":
+            send_output(writer, "\ra" + ("\u0301" * (((16 * 1024) // 2) + 1)))
+            send_output(writer, "\rfinal\n")
+            send(writer, {"kind": "completed"})
             continue
 
         if source == "redraw across polls":
