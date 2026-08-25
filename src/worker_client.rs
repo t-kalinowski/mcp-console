@@ -244,6 +244,11 @@ enum PriorEvaluation {
     Failed(Response),
 }
 
+enum ControlledStdinFailure {
+    ActiveEvaluation(String),
+    IdleWorker(SendFailure),
+}
+
 fn send_response_from_wait(wait: EvaluationWait) -> SendResponse {
     match wait {
         EvaluationWait::Running(output) => SendResponse::Running(output),
@@ -383,7 +388,11 @@ impl Client {
             .await
         {
             Ok(response) => output::render_response(response),
-            Err(failure) => output::direct_failure(failure.message),
+            Err(failure) => {
+                let mut response = Response::default();
+                response.push_failure(failure);
+                response
+            }
         }
     }
 
@@ -416,7 +425,17 @@ impl Client {
                 evaluation,
                 wait_claim,
                 cell_not_run,
-            } => match evaluation.wait(wait_claim, Duration::ZERO).await {
+            } => match evaluation
+                .wait(
+                    wait_claim,
+                    if cell_not_run {
+                        Duration::ZERO
+                    } else {
+                        timeout
+                    },
+                )
+                .await
+            {
                 Ok(wait) if cell_not_run => interrupted_cell_not_run_response(wait),
                 Ok(wait) => output::render_response(send_response_from_wait(wait)),
                 Err(error) => output::direct_failure(error),
@@ -464,6 +483,16 @@ impl Client {
         ControlledEvaluation::Returned(response)
     }
 
+    fn return_controlled_failure(
+        &self,
+        mut response: Response,
+        failure: SendFailure,
+    ) -> ControlledEvaluation {
+        response.extend_logical_region(self.0.output.take());
+        response.push_failure(failure);
+        self.return_controlled_response(response)
+    }
+
     fn observe_interrupted_evaluation(
         &self,
         evaluation: Arc<Evaluation>,
@@ -501,27 +530,35 @@ impl Client {
         let generation = control.generation();
         self.interrupt_blocking()?;
         self.ensure_controlled_generation(control, &generation)?;
-        self.submit_controlled_stdin(stdin, &generation, control)?;
+        match self.submit_controlled_stdin(stdin, &generation, control) {
+            Ok(()) => {}
+            Err(ControlledStdinFailure::ActiveEvaluation(error)) => return Err(error),
+            Err(ControlledStdinFailure::IdleWorker(failure)) => {
+                return Ok(self.return_controlled_failure(Response::default(), failure));
+            }
+        }
         std::thread::sleep(INTERRUPT_GRACE);
         self.ensure_controlled_generation(control, &generation)?;
 
         let _operation = self.admit_controlled_operation();
-        let prior = self.prior_evaluation_after_interrupt(&generation, control)?;
+        let prior = self.prior_evaluation_after_interrupt(&generation, control, cell.is_some())?;
         if cell.is_none() {
             return match prior {
                 PriorEvaluation::Active(evaluation) => {
                     Ok(self.observe_interrupted_evaluation(evaluation, false))
                 }
-                PriorEvaluation::Completed(response) => Ok(self.return_controlled_response(
-                    output::render_response(SendResponse::Completed(response)),
-                )),
-                PriorEvaluation::Failed(response) => Ok(self.return_controlled_response(response)),
-                PriorEvaluation::None => {
-                    Ok(self.return_controlled_response(output::render_response(
-                        self.take_idle_response(&generation)
-                            .map_err(|failure| failure.message)?,
-                    )))
+                PriorEvaluation::Completed(response) => {
+                    Ok(self.return_controlled_response(response))
                 }
+                PriorEvaluation::Failed(response) => Ok(self.return_controlled_response(response)),
+                PriorEvaluation::None => match self.take_idle_response(&generation) {
+                    Ok(response) => {
+                        Ok(self.return_controlled_response(output::render_response(response)))
+                    }
+                    Err(failure) => {
+                        Ok(self.return_controlled_failure(Response::default(), failure))
+                    }
+                },
             };
         }
         let mut control_prelude = match prior {
@@ -615,10 +652,11 @@ impl Client {
                 r: Vec::new(),
             },
         };
+        let stdin_follows = stdin.as_ref().is_some_and(|stdin| !stdin.is_empty());
         let restart = self.restart_blocking(
             requirements,
             WORKER_SHUTDOWN_GRACE,
-            cell.is_some(),
+            cell.is_some() || stdin_follows,
             Some(control),
         )?;
         let _operation = self.admit_controlled_operation();
@@ -631,11 +669,14 @@ impl Client {
         };
         self.ensure_controlled_generation(control, &generation)?;
         let Some(cell) = cell else {
-            let mut response = restart.response;
-            if let Some(stdin) = stdin.filter(|stdin| !stdin.is_empty())
-                && let Err(failure) = self.write_idle_stdin_blocking(stdin, generation.clone())
-            {
-                response.push_tool_error(failure.message);
+            let response = restart.response;
+            if let Some(stdin) = stdin.filter(|stdin| !stdin.is_empty()) {
+                if let Err(failure) = self.write_idle_stdin_blocking(stdin, generation.clone()) {
+                    return Ok(self.return_controlled_failure(response, failure));
+                }
+                return Ok(self.return_controlled_response(output::render_response(
+                    SendResponse::ReplacementReady(response),
+                )));
             }
             return Ok(self.return_controlled_response(response));
         };
@@ -664,19 +705,28 @@ impl Client {
         stdin: Option<String>,
         generation: &WorkerGeneration,
         control: &ControlledSendAdmission,
-    ) -> Result<(), String> {
+    ) -> Result<(), ControlledStdinFailure> {
         let Some(stdin) = stdin.filter(|stdin| !stdin.is_empty()) else {
             return Ok(());
         };
-        self.ensure_controlled_generation(control, generation)?;
-        if let Some(active) = self.current_evaluation()? {
+        self.ensure_controlled_generation(control, generation)
+            .map_err(ControlledStdinFailure::ActiveEvaluation)?;
+        if let Some(active) = self
+            .current_evaluation()
+            .map_err(ControlledStdinFailure::ActiveEvaluation)?
+        {
             if !active.generation.is(generation) {
-                return Err("session restarted before stdin was queued".to_string());
+                return Err(ControlledStdinFailure::ActiveEvaluation(
+                    "session restarted before stdin was queued".to_string(),
+                ));
             }
-            active.evaluation.submit_stdin(stdin)
+            active
+                .evaluation
+                .submit_stdin(stdin)
+                .map_err(ControlledStdinFailure::ActiveEvaluation)
         } else {
             self.write_idle_stdin_blocking(stdin, generation.clone())
-                .map_err(|failure| failure.message)
+                .map_err(ControlledStdinFailure::IdleWorker)
         }
     }
 
@@ -684,6 +734,7 @@ impl Client {
         &self,
         generation: &WorkerGeneration,
         control: &ControlledSendAdmission,
+        cell_follows: bool,
     ) -> Result<PriorEvaluation, String> {
         let mut active = self.evaluation()?;
         let Some(current) = active.as_ref() else {
@@ -694,7 +745,12 @@ impl Client {
             return Err("session restarted before the interrupted evaluation settled".to_string());
         }
         let evaluation = current.evaluation.clone();
-        let Some(reservation) = evaluation.reserve_completed_for_handoff()? else {
+        let reservation = if cell_follows {
+            evaluation.reserve_completed_for_handoff()?
+        } else {
+            evaluation.reserve_completed_for_delivery()?
+        };
+        let Some(reservation) = reservation else {
             return Ok(PriorEvaluation::Active(evaluation));
         };
         *active = None;

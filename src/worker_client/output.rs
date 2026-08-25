@@ -327,6 +327,10 @@ impl Response {
         self.with_builder(|builder| builder.tool_error(message));
     }
 
+    pub(super) fn push_failure(&mut self, failure: SendFailure) {
+        self.with_builder(|builder| builder.send_failure(failure));
+    }
+
     pub(super) fn mark_error(&mut self) {
         self.with_builder(ResponseBuilder::mark_error);
     }
@@ -425,6 +429,16 @@ impl ResponseBuilder {
     pub(super) fn server_failure(&mut self, message: impl Into<String>) {
         self.notice(message);
         self.mark_error();
+    }
+
+    fn send_failure(&mut self, failure: SendFailure) {
+        self.server_failure(failure.message);
+        if let Some(outcome) = failure.worker_outcome {
+            self.notice(outcome.diagnostic());
+        }
+        if failure.worker_stopped {
+            self.notice(WORKER_STOPPED_NOTICE);
+        }
     }
 
     pub(super) fn tool_error(&mut self, message: impl Into<String>) {
@@ -1047,20 +1061,7 @@ fn drain_through(state: &mut OutputTapeState, cut: OutputCut) -> Response {
             } => output.image(data.into_string(), mime_type.into_string(), artifact),
             OutputEvent::ServerNotice(message) => output.notice_line(message),
             OutputEvent::BoundedServerNotice(message) => output.notice_line(message.into_string()),
-            OutputEvent::ServerFailure(SendFailure {
-                message,
-                worker_stopped,
-                worker_outcome,
-                ..
-            }) => {
-                output.server_failure(message);
-                if let Some(outcome) = worker_outcome {
-                    output.notice(outcome.diagnostic());
-                }
-                if worker_stopped {
-                    output.notice(WORKER_STOPPED_NOTICE);
-                }
-            }
+            OutputEvent::ServerFailure(failure) => output.send_failure(failure),
             OutputEvent::Truncated(truncated) => output.truncation(truncated),
         }
     }

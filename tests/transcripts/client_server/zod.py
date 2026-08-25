@@ -17,6 +17,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from _support import (
+    FifoCheckpoint,
     McpClient,
     Transcript,
     TranscriptWithCompanion,
@@ -2562,6 +2563,90 @@ def test_controlled_restart_runs_cell_once_in_fresh_worker(
         assert last_tool_text(client) == "\n[idle]"
         assert evaluations.read_text(encoding="utf-8").splitlines() == records
         return client._finish()
+
+
+def test_controlled_interrupt_preserves_idle_worker_startup_failure(
+    binary: Path,
+) -> Transcript:
+    zod = Path(__file__).resolve().parents[2] / "fixtures" / "zod"
+    ordered_ir = (
+        Path(__file__).resolve().parents[2] / "fixtures" / "ordered_retirement_ir"
+    )
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        temporary_path = Path(temporary_directory)
+        startup_control = temporary_path / "zod-startup-control"
+        startup_control.write_text("fail with stderr", encoding="utf-8")
+        library = temporary_path / "resolved-library"
+        library.mkdir()
+        fake_bin = temporary_path / "bin"
+        fake_bin.mkdir()
+        (fake_bin / "ir").symlink_to(ordered_ir)
+        resolver_started = FifoCheckpoint(temporary_path / "resolver-started")
+        resolver_release = FifoCheckpoint(temporary_path / "resolver-release")
+        resolver_interrupted = FifoCheckpoint(temporary_path / "resolver-interrupted")
+
+        environment, _ = r_test_environment()
+        path = environment.get("PATH")
+        assert path is not None, "PATH is required"
+        environment["PATH"] = os.pathsep.join((str(fake_bin), path))
+        environment["TMPDIR"] = temporary_directory
+        environment["ZOD_STARTUP_CONTROL"] = str(startup_control)
+        environment["MCP_CONSOLE_TEST_IR_COUNTER"] = str(temporary_path / "ir-counter")
+        environment["MCP_CONSOLE_TEST_IR_LIBRARIES"] = str(library)
+        environment["MCP_CONSOLE_TEST_IR_STARTED"] = str(resolver_started.path)
+        environment["MCP_CONSOLE_TEST_IR_RELEASE"] = str(resolver_release.path)
+        environment["MCP_CONSOLE_TEST_IR_INTERRUPTED"] = str(resolver_interrupted.path)
+
+        client = McpClient(
+            binary,
+            ("serve", "--worker", str(zod)),
+            environment,
+        )
+        finished = False
+        try:
+            client._initialize_and_list_tools()
+            preparation = client._start_session(
+                action="prepare",
+                requirements={"r": ["blocked-resolver"]},
+            )
+            resolver_started.wait("controlled interrupt R resolver")
+
+            controlled = client._start_send(
+                control="interrupt",
+                stdin="unused input\n",
+            )
+            resolver_interrupted.wait("controlled interrupt signal delivery")
+            client._receive_many([preparation, controlled])
+
+            assert preparation["result"].get("isError") is True, preparation
+            result = controlled["result"]
+            assert result == {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": (
+                            "zod replacement startup failed\n"
+                            "[worker sideband read failed: worker sideband closed]\n"
+                            "[worker exited with status 86]"
+                        ),
+                    }
+                ],
+                "isError": True,
+            }, result
+
+            startup_control.write_text("ready", encoding="utf-8")
+            client.send(r="echo echo")
+            assert last_tool_text(client) == "zod: echo\n"
+            transcript = client._finish()
+            finished = True
+            return transcript
+        finally:
+            resolver_release.release()
+            resolver_started.close()
+            resolver_release.close()
+            resolver_interrupted.close()
+            if not finished:
+                stop_client(client)
 
 
 def test_cancelled_controlled_restart_response_is_reclaimed_once(

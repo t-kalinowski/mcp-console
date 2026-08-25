@@ -51,6 +51,7 @@ EXPLICIT_R_PREPARATION_CALLBACK_REPLY_NAME = (
 )
 INTERRUPT_ACTIVE_RELEASE_NAME = "mcp-console-interrupt-active-release"
 INTERRUPT_ACK_RELEASE_NAME = "mcp-console-interrupt-ack-release"
+INTERRUPT_ACKNOWLEDGED_NAME = "mcp-console-interrupt-acknowledged"
 INTERRUPT_RECEIVED_NAME = "mcp-console-interrupt-received"
 CONTROLLED_INTERRUPT_FIRST_RECEIVED_NAME = (
     "mcp-console-controlled-interrupt-first-received"
@@ -61,6 +62,8 @@ CONTROLLED_INTERRUPT_SECOND_RECEIVED_NAME = (
 CONTROLLED_INTERRUPT_EVALUATION_RELEASE_NAME = (
     "mcp-console-controlled-interrupt-evaluation-release"
 )
+CONTROLLED_COMPLETION_RELEASE_NAME = "mcp-console-controlled-completion-release"
+CONTROLLED_COMPLETION_SENT_NAME = "mcp-console-controlled-completion-sent"
 RESTART_REQUIREMENTS_CHECK_NAME = "mcp-console-restart-requirements-check"
 RESTART_REQUIREMENTS_CHECKED_NAME = "mcp-console-restart-requirements-checked"
 RESTART_REQUIREMENTS_RESOLVED_NAME = "mcp-console-restart-requirements-resolved"
@@ -579,6 +582,66 @@ def test_controlled_restart_routes_stdin_and_cell_to_replacement(
     ], replacement_commands
     assert len(_normalize_shutdown_grace(old_transcript)) == 1
     return old_transcript + replacement_transcript
+
+
+def test_controlled_restart_with_stdin_only_reports_replacement_idle(
+    binary: Path,
+) -> Transcript:
+    client = ServerRelayClient(binary, "controlled_restart_stdin_only")
+    result = client.send(control="restart", stdin="replacement input\n")
+    assert _tool_text(result) == "[starting new worker]\n[idle]", result
+    transcript = client.finish_active()
+
+    commands = [entry["server"] for entry in transcript if entry.keys() == {"server"}]
+    assert commands == [{"kind": "stdin", "data": "replacement input\n"}], commands
+    return transcript
+
+
+def test_control_only_interrupt_preserves_controlled_completion_marker(
+    binary: Path,
+) -> Transcript:
+    client = ServerRelayClient(binary, "controlled_completion_then_interrupt")
+    result = client.send(
+        control="restart",
+        r="controlled cell completed before later interrupt",
+        timeout_ms=0,
+    )
+    assert _tool_text(result).endswith("[running; poll with an empty send]"), result
+
+    relay_root = client.relay_root()
+    completion_release = FifoCheckpoint(relay_root / CONTROLLED_COMPLETION_RELEASE_NAME)
+    completion_sent = FifoCheckpoint(relay_root / CONTROLLED_COMPLETION_SENT_NAME)
+    finished = False
+    released = False
+    try:
+        completion_release.release()
+        released = True
+        completion_sent.wait()
+
+        result = client.send(control="interrupt", timeout_ms=3_000)
+        assert _tool_text(result) == (
+            "controlled cell completed before later interrupt\n[done]"
+        )
+        transcript = client.finish_active()
+        finished = True
+    finally:
+        if not released:
+            completion_release.release()
+        completion_release.close()
+        completion_sent.close()
+        if not finished:
+            stop_client(client.client)
+            client._temporary.cleanup()
+
+    commands = [entry["server"] for entry in transcript if entry.keys() == {"server"}]
+    assert commands[0] == {
+        "kind": "evaluate",
+        "language": "r",
+        "source": "controlled cell completed before later interrupt",
+    }, commands
+    assert commands[1] == {"kind": "interrupt", "request_id": 0}, commands
+    assert len(commands) == 2, commands
+    return transcript
 
 
 def test_controlled_restart_resolves_requirements_before_replacement_and_timeout(
@@ -1126,6 +1189,58 @@ def test_controlled_interrupt_does_not_run_cell_while_evaluation_remains_active(
     finally:
         if not released:
             release.release()
+        release.close()
+        if not finished:
+            stop_client(client.client)
+            client._temporary.cleanup()
+
+    commands = [entry["server"] for entry in transcript if entry.keys() == {"server"}]
+    assert commands == [
+        {
+            "kind": "evaluate",
+            "language": "r",
+            "source": "old evaluation",
+        },
+        {"kind": "interrupt", "request_id": 0},
+    ], commands
+    return transcript
+
+
+def test_control_only_interrupt_honors_timeout_after_attachment(
+    binary: Path,
+) -> Transcript:
+    client = ServerRelayClient(binary, "controlled_interrupt_still_active")
+    client.send(r="old evaluation", timeout_ms=0)
+    assert _tool_text(client.client.transcript[-1]["result"]) == (
+        "\n[running; poll with an empty send]"
+    )
+    client._wait_for(EVALUATING_NAME)
+    relay_root = client.relay_root()
+    acknowledged = FifoCheckpoint(relay_root / INTERRUPT_ACKNOWLEDGED_NAME)
+    release = FifoCheckpoint(relay_root / INTERRUPT_ACTIVE_RELEASE_NAME)
+    finished = False
+    released = False
+    try:
+        controlled = client.client._start_send(
+            control="interrupt",
+            timeout_ms=5_000,
+        )
+        acknowledged.wait()
+        readable, _, _ = select.select([client.client.stdout], [], [], 0.25)
+        assert not readable, "controlled interrupt ignored its attachment timeout"
+
+        release.release()
+        released = True
+        client.client._receive(controlled)
+        assert _tool_text(controlled["result"]) == (
+            "old evaluation remains active\nold evaluation eventually finished\n"
+        )
+        transcript = client.finish_active()
+        finished = True
+    finally:
+        if not released:
+            release.release()
+        acknowledged.close()
         release.close()
         if not finished:
             stop_client(client.client)

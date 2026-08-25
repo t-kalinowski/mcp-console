@@ -226,6 +226,7 @@ An interrupt targets the active host resolver when one is registered; otherwise 
 It stays associated with that resolver or worker and is not retried against a replacement.
 Standalone `session(action = "interrupt")` reports delivery acknowledgement rather than waiting for the resolver or evaluated code to stop.
 Inline `send(control = "interrupt")` uses the same routing, then applies its stdin enqueue and 100-millisecond settling grace before it returns the current state or considers a new cell.
+A control-only call that attaches to an evaluation after the grace uses its requested wait timeout; a call whose supplied cell was rejected observes the active evaluation without another wait.
 Resolver interruption and lifecycle cancellation are tracked as typed outcomes for the affected operation.
 
 ### Explicit restart

@@ -215,6 +215,20 @@ impl Evaluation {
     pub(super) fn reserve_completed_for_handoff(
         self: &Arc<Self>,
     ) -> Result<Option<EvaluationReservation>, String> {
+        self.reserve_completed(false)
+    }
+
+    /// Reserves a completed response for direct delivery with its original terminal marker.
+    pub(super) fn reserve_completed_for_delivery(
+        self: &Arc<Self>,
+    ) -> Result<Option<EvaluationReservation>, String> {
+        self.reserve_completed(true)
+    }
+
+    fn reserve_completed(
+        self: &Arc<Self>,
+        project_completion: bool,
+    ) -> Result<Option<EvaluationReservation>, String> {
         let mut state = self
             .state
             .lock()
@@ -236,7 +250,7 @@ impl Evaluation {
         Ok(Some(EvaluationReservation {
             evaluation: self.clone(),
             unfinished: false,
-            project_completion: false,
+            project_completion,
             controlled_completion: state.controlled_completion,
             completion,
             completion_cut: completion.and(state.completion_cut),

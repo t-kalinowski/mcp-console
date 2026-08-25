@@ -37,6 +37,7 @@ EXPLICIT_R_PREPARATION_CALLBACK_REPLY_NAME = (
 )
 INTERRUPT_ACTIVE_RELEASE_NAME = "mcp-console-interrupt-active-release"
 INTERRUPT_ACK_RELEASE_NAME = "mcp-console-interrupt-ack-release"
+INTERRUPT_ACKNOWLEDGED_NAME = "mcp-console-interrupt-acknowledged"
 INTERRUPT_RECEIVED_NAME = "mcp-console-interrupt-received"
 CONTROLLED_INTERRUPT_FIRST_RECEIVED_NAME = (
     "mcp-console-controlled-interrupt-first-received"
@@ -47,6 +48,8 @@ CONTROLLED_INTERRUPT_SECOND_RECEIVED_NAME = (
 CONTROLLED_INTERRUPT_EVALUATION_RELEASE_NAME = (
     "mcp-console-controlled-interrupt-evaluation-release"
 )
+CONTROLLED_COMPLETION_RELEASE_NAME = "mcp-console-controlled-completion-release"
+CONTROLLED_COMPLETION_SENT_NAME = "mcp-console-controlled-completion-sent"
 RESTART_REQUIREMENTS_CHECK_NAME = "mcp-console-restart-requirements-check"
 RESTART_REQUIREMENTS_CHECKED_NAME = "mcp-console-restart-requirements-checked"
 RESTART_REQUIREMENTS_RESOLVED_NAME = "mcp-console-restart-requirements-resolved"
@@ -376,6 +379,13 @@ def run_controlled_restart_stdin(relay: ScriptedRelay) -> None:
     relay.retire()
 
 
+def run_controlled_restart_stdin_only(relay: ScriptedRelay) -> None:
+    relay.ready()
+    relay.expect({"kind": "stdin", "data": "replacement input\n"})
+    relay.mark_done()
+    relay.retire()
+
+
 def run_controlled_restart_requirements(relay: ScriptedRelay) -> None:
     counter = Path(os.environ["MCP_CONSOLE_TEST_IR_COUNTER"])
     if not counter.exists():
@@ -550,6 +560,7 @@ def run_controlled_and_standalone_interrupts(relay: ScriptedRelay) -> None:
 
 def run_controlled_interrupt_still_active(relay: ScriptedRelay) -> None:
     relay.make_checkpoint(INTERRUPT_ACTIVE_RELEASE_NAME)
+    relay.make_checkpoint(INTERRUPT_ACKNOWLEDGED_NAME)
     relay.ready()
     relay.expect(
         {
@@ -567,6 +578,7 @@ def run_controlled_interrupt_still_active(relay: ScriptedRelay) -> None:
         }
     )
     relay.send({"kind": "interrupt_result", "request_id": 0})
+    relay.notify_checkpoint(INTERRUPT_ACKNOWLEDGED_NAME)
     relay.wait_for_checkpoint(INTERRUPT_ACTIVE_RELEASE_NAME)
     relay.send(
         {
@@ -575,6 +587,32 @@ def run_controlled_interrupt_still_active(relay: ScriptedRelay) -> None:
         }
     )
     relay.complete()
+    relay.retire()
+
+
+def run_controlled_completion_then_interrupt(relay: ScriptedRelay) -> None:
+    relay.make_checkpoint(CONTROLLED_COMPLETION_RELEASE_NAME)
+    relay.make_checkpoint(CONTROLLED_COMPLETION_SENT_NAME)
+    relay.ready()
+    relay.expect(
+        {
+            "kind": "evaluate",
+            "language": "r",
+            "source": "controlled cell completed before later interrupt",
+        }
+    )
+    relay.wait_for_checkpoint(CONTROLLED_COMPLETION_RELEASE_NAME)
+    relay.send(
+        {
+            "kind": "console_output",
+            "data": "controlled cell completed before later interrupt\n",
+        }
+    )
+    relay.send(COMPLETED)
+    relay.notify_checkpoint(CONTROLLED_COMPLETION_SENT_NAME)
+    relay.expect({"kind": "interrupt", "request_id": 0})
+    relay.send({"kind": "interrupt_result", "request_id": 0})
+    relay.mark_done()
     relay.retire()
 
 
@@ -952,6 +990,7 @@ def main() -> None:
         "stdin_forwarding_failure": run_stdin_forwarding_failure,
         "interrupt": run_interrupt,
         "controlled_restart_stdin": run_controlled_restart_stdin,
+        "controlled_restart_stdin_only": run_controlled_restart_stdin_only,
         "controlled_restart_requirements": run_controlled_restart_requirements,
         "controlled_interrupt_stdin_evaluate": (
             run_controlled_interrupt_stdin_evaluate
@@ -966,6 +1005,9 @@ def main() -> None:
             run_controlled_and_standalone_interrupts
         ),
         "controlled_interrupt_still_active": run_controlled_interrupt_still_active,
+        "controlled_completion_then_interrupt": (
+            run_controlled_completion_then_interrupt
+        ),
         "controlled_interrupt_with_waiting_poll": (
             run_controlled_interrupt_with_waiting_poll
         ),

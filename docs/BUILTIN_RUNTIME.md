@@ -68,7 +68,7 @@ If explicit requirement validation, pre-dispatch resolution, or live preparation
 Calls without `requirements` skip that pre-dispatch preparation path; R package loads and managed Python imports can still resolve packages while the cell runs.
 
 The optional `timeout_ms` defaults to 60,000 milliseconds.
-Inline control, interrupt grace, restart, requirement resolution, and live preparation finish before the cell is dispatched and before this deadline begins applying, so the complete MCP call can take longer than `timeout_ms`.
+Inline control, interrupt grace, restart, requirement resolution, and live preparation finish before a cell is dispatched or a control-only interrupt attaches to an evaluation, so the complete MCP call can take longer than `timeout_ms`.
 The deadline then limits only how long a call waits after starting or attaching to an evaluation, including its worker startup and one automatic replacement attempt.
 A stdin-only call with no active evaluation instead waits without that deadline if it must start an initial or stopped worker.
 The deadline does not stop worker startup, dependency resolution, or evaluation.

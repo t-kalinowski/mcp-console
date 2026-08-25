@@ -85,7 +85,8 @@ Without inline control, the preparation behavior depends on worker state:
 A call may also include `stdin`.
 Nonempty stdin is queued before the evaluation command once the ordering above reaches that step.
 This guarantees transport order, not which runtime read consumes the bytes.
-`timeout_ms` begins applying only after dispatch, so control delivery, the interrupt grace, restart, and explicit preparation can make the complete call longer than the selected evaluation wait timeout.
+For a code-bearing call, `timeout_ms` begins applying only after dispatch, so control delivery, the interrupt grace, restart, and explicit preparation can make the complete call longer than the selected evaluation wait timeout.
+A control-only interrupt instead begins its requested wait after the grace if it attaches to the active evaluation.
 Both interrupt surfaces still target an active host resolver first, and restart or closing MCP input retains its existing resolver-cancellation behavior.
 
 The built-in worker can resolve missing plain R package names and managed Python imports while a cell runs, as described below.

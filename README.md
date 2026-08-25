@@ -33,7 +33,7 @@ Calls to `send` are sequential.
 Without inline control, a call prepares requirements, queues nonempty standard input, and then evaluates its cell.
 Inline interrupt preserves in-memory state and orders signal delivery, same-call input, a 100-millisecond grace period, requirements, and evaluation; the new cell is not run if the interrupted evaluation remains active.
 Inline restart resolves requirements before replacing the worker, then queues same-call input and runs the cell only in the replacement.
-Control, interrupt grace, and explicit requirement preparation do not consume the cell's wait timeout, which starts after dispatch.
+Control, interrupt grace, and explicit requirement preparation do not consume the wait timeout, which starts after cell dispatch or attachment to an active evaluation.
 R and Python global state and the in-memory DuckDB catalog remain available until the worker is restarted, replaced after failure, or the server exits.
 Prepared requirements remain available across worker restarts, but in-memory language, database, debugger, and unread-input state does not.
 Requirements declared on `send` are prepared before its cell runs and remain available to later cells.

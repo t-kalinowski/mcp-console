@@ -320,11 +320,12 @@ impl Client {
         Ok(restart.response)
     }
 
+    /// Defers the replacement-ready marker when this admission owns a follow-up operation.
     pub(super) fn restart_blocking(
         &self,
         requirements: super::Requirements,
         grace: Duration,
-        cell_follows: bool,
+        defer_idle: bool,
         control: Option<&ControlledSendAdmission>,
     ) -> Result<RestartAttempt, String> {
         let mut restart = if requirements.duckdb.is_empty()
@@ -379,7 +380,7 @@ impl Client {
         match self.replace_worker(
             &mut restart.evaluation,
             restart.generation.clone(),
-            !cell_follows,
+            !defer_idle,
         ) {
             Ok(replacement) => {
                 let transition = self.finish_restart(&restart.generation);
