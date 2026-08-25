@@ -1336,10 +1336,44 @@ def test_compacts_split_terminal_redraws(binary: Path) -> Transcript:
 
     client.send(r="emit terminal redraws")
     assert last_tool_text(client) == (
-        "ordinary stdout\r\npreserved malformed CSI\x1b[\n"
+        "ordinary stdout\r\nol\npreserved malformed CSI\x1b[\n"
         "\x1b[32mstdout café 100%\x1b[0m"
     )
     return client._finish()
+
+
+def test_preserves_polled_partial_line_when_crlf_arrives(
+    binary: Path,
+) -> Transcript:
+    zod = Path(__file__).resolve().parents[2] / "fixtures" / "zod"
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        temporary_path = Path(temporary_directory)
+        environment = os.environ.copy()
+        environment["TMPDIR"] = temporary_directory
+        client = McpClient(
+            binary,
+            ("serve", "--worker", str(zod)),
+            environment,
+        )
+        client._initialize_and_list_tools()
+
+        client.send(r="partial line across polls", timeout_ms=0)
+        assert last_tool_text(client) == "\n[running; poll with an empty send]"
+        marker = wait_for_marker(
+            temporary_path,
+            "zod-partial-line-ready",
+            client,
+        )
+
+        client.send(timeout_ms=0)
+        assert last_tool_text(client) == (
+            "ordinary partial\n[running; poll with an empty send]"
+        )
+
+        (marker.parent / "zod-release-partial-line").touch()
+        client.send(timeout_ms=3_000)
+        assert last_tool_text(client) == "\r\n"
+        return client._finish()
 
 
 def test_compacts_stdout_and_stderr_independently(binary: Path) -> Transcript:

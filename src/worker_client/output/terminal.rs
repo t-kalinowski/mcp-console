@@ -93,6 +93,12 @@ impl Stream {
         self.passthrough = true;
     }
 
+    pub(super) fn seal_published_line(&mut self) {
+        if !self.volatile {
+            self.line.clear();
+        }
+    }
+
     pub(super) fn take_active_events(&mut self) -> Vec<u64> {
         std::mem::take(&mut self.active_events)
     }
@@ -260,10 +266,6 @@ impl<'a> Collector<'a> {
             return;
         }
         self.begin_volatile();
-        if self.stream.replace_on_write {
-            self.stream.line.clear();
-            self.stream.replace_on_write = false;
-        }
         self.stream.line.pop();
     }
 

@@ -441,6 +441,7 @@ def main() -> None:
 
         if source == "emit terminal redraws":
             write_all(1, b"ordinary stdout\r\n")
+            write_all(1, b"old\r\x08\n")
             write_all(1, b"preserved malformed CSI\x1b[")
             write_all(1, b"\nold")
             write_all(1, b"\r\x1b[")
@@ -448,6 +449,17 @@ def main() -> None:
             write_all(1, b"\xa9 10%\x1b[0m")
             write_all(1, b"\r\x1b[2K\x1b[32mstdout caf\xc3")
             write_all(1, b"\xa9 100x\b%\x1b[0m")
+            send(writer, {"kind": "completed"})
+            continue
+
+        if source == "partial line across polls":
+            send_output(writer, "ordinary partial")
+            wait_for_server_to_process_sideband(reader, writer)
+            (temporary / "zod-partial-line-ready").touch()
+            while not (temporary / "zod-release-partial-line").exists():
+                time.sleep(0.01)
+
+            send_output(writer, "\r\n")
             send(writer, {"kind": "completed"})
             continue
 

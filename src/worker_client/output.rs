@@ -1201,6 +1201,7 @@ impl OutputTapeState {
         ] {
             let mut terminal = self.take_terminal_stream(stream);
             self.detach_active_events(&mut terminal);
+            terminal.seal_published_line();
             self.put_terminal_stream(stream, terminal);
         }
     }
