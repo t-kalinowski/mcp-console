@@ -1148,6 +1148,15 @@ pub(super) fn project_completed(output: Response) -> Response {
     project_terminal(output, TerminalState::Completed)
 }
 
+pub(super) fn project_controlled_completed(output: Response) -> Response {
+    if output.is_error() {
+        return output;
+    }
+    let mut builder = ResponseBuilder::from_response(output);
+    builder.notice("done");
+    builder.finish()
+}
+
 pub(super) fn project_replacement_ready(output: Response) -> Response {
     project_terminal(output, TerminalState::ReplacementReady)
 }

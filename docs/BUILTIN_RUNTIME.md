@@ -23,10 +23,13 @@ Prepared requirements are server-owned and survive restart as described in [Requ
 
 Only one cell can run at a time.
 Call `send` sequentially and collect a running cell before submitting another.
+The same call may first interrupt or restart the session through its optional `control` field.
+The separate `session` tool remains available for standalone preparation and lifecycle operations.
 
 ## Cells and polling
 
-A `send` call accepts exactly one complete `r`, `python`, or `sql` cell.
+A code-bearing `send` call accepts exactly one complete `r`, `python`, or `sql` cell.
+It may instead contain only control or stdin, or contain none of those fields as an ordinary poll.
 The source is not an interactive fragment assembled across calls.
 R uses its native top-level evaluation behavior; Python parses the entire submitted source before executing it; SQL passes the complete string to DuckDB.
 
@@ -65,7 +68,7 @@ If explicit requirement validation, pre-dispatch resolution, or live preparation
 Calls without `requirements` skip that pre-dispatch preparation path; R package loads and managed Python imports can still resolve packages while the cell runs.
 
 The optional `timeout_ms` defaults to 60,000 milliseconds.
-For a combined call, requirement resolution and live preparation finish before the cell is dispatched and before this deadline begins applying, so the complete MCP call can take longer than `timeout_ms`.
+Inline control, interrupt grace, restart, requirement resolution, and live preparation finish before the cell is dispatched and before this deadline begins applying, so the complete MCP call can take longer than `timeout_ms`.
 The deadline then limits only how long a call waits after starting or attaching to an evaluation, including its worker startup and one automatic replacement attempt.
 A stdin-only call with no active evaluation instead waits without that deadline if it must start an initial or stopped worker.
 The deadline does not stop worker startup, dependency resolution, or evaluation.
@@ -99,10 +102,17 @@ Only a later managed console callback can replay the preserved prefix.
 To complete that line, the next reader must therefore be managed; Python `sys.stdin`, direct fd-0 reads, and descendants cannot consume the prefix.
 All unread input and managed-console pushback are discarded when the worker generation ends.
 
-When one call contains requirements, nonempty `stdin`, and a cell, requirement preparation completes first.
-The bytes are then queued before the evaluation command.
-That is a transport-order guarantee, not a consumption guarantee.
-An already waiting idle read can consume the bytes before the new cell begins.
+Without inline control, a call containing requirements, nonempty `stdin`, and a cell first prepares requirements, then queues the bytes, then sends the evaluation command.
+
+With `control = "interrupt"`, the server sends and acknowledges the interrupt, queues nonempty same-call stdin immediately, waits 100 milliseconds, validates and prepares requirements, and then sends the evaluation command only if the earlier evaluation has stopped.
+The bytes may be consumed while that operation unwinds.
+
+With `control = "restart"`, the server resolves declared requirements before replacing the worker.
+Only after the replacement is ready does it queue same-call stdin and send the evaluation command.
+The retiring worker loses its unread stdin and cannot consume the new bytes.
+
+These are transport-order guarantees, not general consumption guarantees.
+Without restart, an already waiting read can consume queued bytes before the new cell begins.
 A stdin-only call can queue bytes while an evaluation is running or while the worker is idle; it starts the worker lazily when necessary.
 
 The built-in worker reports managed reads from:
@@ -137,26 +147,47 @@ They cannot consume a partial line that the built-in worker has preserved for th
 
 ## Interruption
 
-`session(action = "interrupt")` first targets an active host dependency resolver; otherwise it requests `SIGINT` for the live worker.
-The call returns after the request or signal is sent, not after user code stops.
+Both interrupt surfaces first target an active host dependency resolver; otherwise they request `SIGINT` for the live worker.
+Standalone `session(action = "interrupt")` returns after delivery is acknowledged, not after user code stops.
 If neither a resolver nor a worker is running, the call does not start a worker and returns the tool error `worker is not running`.
 A resolver signal error is returned by both the interrupt and resolution calls, and the server stops that resolver during cleanup.
 An interrupted automatic R or Python resolver reports an interrupted outcome to the running cell.
-A live but idle built-in worker still receives `SIGINT` and the call returns `[interrupt sent]`.
-R may consume that signal while idle or at the next managed boundary, so the following cell can execute while its response contains a bare interrupt newline attributable to the earlier interrupt.
+A standalone interrupt still sends `SIGINT` to a live but idle built-in worker and returns `[interrupt sent]`.
+R may consume that signal while idle or at the next managed boundary, so a later cell can include a bare interrupt newline attributable to the standalone interrupt.
+
+`send(control = "interrupt")` uses the same routing but keeps the rest of the call under one admission boundary.
+After delivery is acknowledged, it queues nonempty same-call stdin without waiting for consumption, waits the full 100-millisecond grace period, and observes the previous evaluation.
+If no cell was supplied, it returns the available output and current evaluation state through the normal `send` conventions.
+If a cell was supplied but the previous evaluation remains active, the response is a tool error that says the cell was not run, and no later evaluation is queued.
+If the evaluation has stopped, the new cell runs in the same worker generation and can use state established before interruption.
+The grace prevents a just-delivered interrupt from spilling into the new cell and gives queued input an opportunity to be consumed while the previous operation unwinds.
+If interrupt delivery itself fails, the call does not enqueue stdin, prepare requirements, or dispatch the cell.
+If later requirement validation or preparation fails, the cell is not run, but the completed interrupt and stdin enqueue are not rolled back.
+Interrupt delivery, stdin enqueue, grace, and explicit preparation occur before dispatch and do not consume the new cell's `timeout_ms` wait.
 
 R, Python, and DuckDB observe interruption through their normal console/runtime mechanisms.
 Managed console reads are cancelled when the active runtime accepts the interrupt.
 User code can catch, delay, replace, or block `SIGINT`, so interruption is cooperative rather than a termination guarantee.
-Use restart when the worker must be replaced.
+Use inline or standalone restart when the worker must be replaced.
 
 ## Explicit restart
 
-`session(action = "restart")` retires the current worker, discards its in-memory state, and starts a replacement from the retained environment.
-The restart call waits for retirement and replacement startup.
-On success after a worker was ready, its response ends with `[worker stopped: in-memory state lost]`, `[starting new worker]`, replacement-startup output, and `[idle]`.
+Both `session(action = "restart")` and `send(control = "restart")` retire the current worker, discard its in-memory state, and start a replacement from the retained environment.
+The operation waits for retirement and replacement startup.
+On success after a worker was ready, restart output begins with `[worker stopped: in-memory state lost]`, `[starting new worker]`, and any replacement-startup output.
+A standalone restart, or inline restart without a cell, then ends with `[idle]`; an inline cell instead contributes its output and ends a successful combined response with `[done]`.
 Restarting a session that has not established a worker omits the worker-stopped notice.
 Requirements supplied with restart are resolved before retirement as described in [Requirements and environments](REQUIREMENTS.md).
+If resolution fails, the existing worker remains current and same-call stdin and code are not sent.
+
+For `send(control = "restart")`, successful replacement continues directly into the optional stdin and cell under the same admission boundary.
+Same-call stdin is queued only after the replacement is ready, and the cell is dispatched exactly once to that replacement after the stdin command.
+The cell therefore starts with fresh R globals, Python state, DuckDB catalog, and debugger state while retaining the successfully prepared server-owned environment.
+Old unread stdin is absent; only same-call bytes may be pending in the replacement.
+The cell's wait timeout begins only after dispatch.
+
+One controlled-send response preserves old-generation output, restart lifecycle notices, new-cell output when present, and the terminal state marker in that order; a successfully completed controlled cell ends with `[done]`.
+The server keeps that complete response under one delivery owner so cancellation or write failure can return it for delivery exactly once.
 
 Without a waiting `send`, restart owns pending output from the old worker.
 If it stops an unfinished evaluation, that output is followed by `[active evaluation stopped by session restart request]` before the worker and replacement notices.
@@ -284,7 +315,7 @@ A nonempty user-selected `RETICULATE_PYTHON` disables both automatic managed res
 Its missing-import error directs the user to install the distribution into that environment or restart MCP Console with managed Python enabled.
 
 Automatic import resolution counts toward the active evaluation's `timeout_ms` wait.
-A short wait can therefore return `[running; poll with an empty send]`; poll with an empty `send`, interrupt the active resolver with `session(action = "interrupt")`, or restart according to the normal generation lifecycle.
+A short wait can therefore return `[running; poll with an empty send]`; poll with an empty `send`, interrupt the active resolver through inline control or standalone `session`, or restart according to the normal generation lifecycle.
 
 ## R and Python interoperability
 
@@ -370,6 +401,9 @@ Console output, diagnostics, captured stdout and stderr, input-request records, 
 The server preserves each producer's order but cannot reconstruct chronology across independent pipes.
 It does not normalize carriage returns, ANSI sequences, or ordinary whitespace.
 Invalid UTF-8 from raw standard streams is replaced when projected to MCP text; the private relay transport still preserves the bytes.
+
+When one controlled `send` stops or completes an earlier operation and then runs a new cell, the response keeps the prior output before lifecycle notices and new-cell output, followed by the final combined state marker.
+The server transfers ownership between those logical regions instead of delivering the earlier response separately.
 
 Bracketed records such as `[running; poll with an empty send]`, `[waiting for stdin]`, `[idle]`, mapped Python import resolutions, and worker-replacement notices are server state, not language output.
 R errors, Python exceptions, and DuckDB errors are ordinary console text and normally leave the worker reusable.

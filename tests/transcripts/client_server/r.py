@@ -876,6 +876,22 @@ def test_reports_r_worker_restart_with_idle_stdin(binary: Path) -> Transcript:
     return client._finish()
 
 
+def test_restarts_and_evaluates_r_cell_in_one_send(binary: Path) -> Transcript:
+    client = McpClient(binary, ("serve",))
+    client._initialize_and_list_tools()
+    client.send(r="inline_restart_marker <- TRUE")
+
+    client.send(
+        control="restart",
+        r='exists("inline_restart_marker", inherits = FALSE)',
+    )
+    assert last_tool_text(client) == (
+        "[worker stopped: in-memory state lost]\n[starting new worker]\n"
+        "[1] FALSE\n[done]"
+    )
+    return client._finish()
+
+
 def test_restart_while_r_waits_for_input(binary: Path) -> Transcript:
     client = McpClient(binary, ("serve",))
     client._initialize_and_list_tools()
@@ -1100,14 +1116,12 @@ def test_interrupts_running_r_evaluation(binary: Path) -> Transcript:
                 client,
             )
 
-            client.session(action="interrupt")
-            assert last_tool_text(client) == "[interrupt sent]"
-            client.send(timeout_ms=3_000)
-            output = last_tool_text(client)
-            assert output == "\n", repr(output)
-
-            client.send(r="interrupt_state + 1L")
-            assert last_tool_text(client) == "[1] 42\n"
+            client.send(
+                control="interrupt",
+                r="interrupt_state + 1L",
+                timeout_ms=3_000,
+            )
+            assert last_tool_text(client) == "\n[1] 42\n[done]"
 
             # fmt: r
             r = code(r"""

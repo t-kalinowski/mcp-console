@@ -1,0 +1,30 @@
+---
+relay:
+  kind: ready
+---
+server:
+  kind: evaluate
+  language: r
+  source: waiter-owned evaluation
+---
+server:
+  kind: interrupt
+  request_id: 0
+---
+relay:
+  kind: console_output
+  data: |
+    output owned by original waiter
+---
+relay:
+  kind: interrupt_result
+  request_id: 0
+---
+relay:
+  kind: console_output
+  data: |
+    original waiter evaluation finished
+---
+relay:
+  kind: completed
+...

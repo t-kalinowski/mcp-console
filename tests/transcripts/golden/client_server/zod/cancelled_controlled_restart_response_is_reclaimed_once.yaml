@@ -1,0 +1,52 @@
+---
+!same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
+---
+send:
+  r: wait for stdin close
+  timeout_ms: 0
+result:
+  content:
+    - type: text
+      text: |-
+
+        [running; poll with an empty send]
+  isError: false
+---
+send:
+  control: restart
+  r: inspect controlled restart state
+---
+input:
+  method: notifications/cancelled
+  params:
+    requestId: <request ID>
+    reason: acceptance test cancelled the controlled send
+---
+input:
+  method: notifications/acceptance-test-barrier
+  params:
+    padding: "<input barrier: 4194304 bytes>"
+---
+send: {}
+result:
+  content:
+    - type: text
+      text: |-
+        zod stdin closed
+        <large output>
+        [active evaluation stopped by session restart request]
+        [worker stopped: in-memory state lost]
+        [starting new worker]
+        zod controlled state: fresh; evaluation=1
+        [done]
+  isError: false
+---
+send: {}
+result:
+  content:
+    - type: text
+      text: |-
+
+        [idle]
+  isError: false
+...

@@ -67,12 +67,23 @@ The server can send these flat frames:
 
 The relay translates semantic commands to the unchanged worker-sideband messages where applicable.
 There is no nested `worker_message` envelope and no operation-result acknowledgment command.
+Inline `send.control` uses these existing interrupt, shutdown, stdin, preparation, and evaluation frames; it adds no relay command or event kind.
 Accepted `stdin` payloads contribute bytes to one unbuffered, generation-long worker fd-0 stream; they are not records.
 The relay writes them in command order without adding bytes or applying line buffering.
-For one `send` containing a cell and nonempty stdin, the server first reserves the active evaluation and registers its worker operation, then queues `stdin`, then queues `evaluate` through the same ordered command sender.
+Without inline control, the server completes any host and live requirement preparation, reserves the active evaluation, registers its worker operation, then queues `stdin` and `evaluate` through the same ordered command sender.
 Empty stdin queues no relay command.
 The resulting `stdin`-then-`evaluate` wire order is guaranteed, but consumption timing is runtime-dependent: an already outstanding idle fd-0 read may consume some or all of those bytes before the cell begins.
 Line-oriented reads generally require an explicit newline, payload end is not EOF, and fd 0 remains open until its closure retires the worker generation.
+
+For a worker-targeted inline interrupt, the server queues `interrupt` and waits for its matching successful `interrupt_result` before it queues nonempty same-call `stdin`.
+The server then waits the 100-millisecond grace outside the relay.
+If the earlier evaluation settles and the generation remains current, any live requirement-preparation commands follow stdin, and `evaluate` follows successful preparation.
+If the evaluation remains active or interrupt delivery fails, no new `evaluate` command is sent.
+Resolver-targeted interruption does not emit a relay `interrupt` frame, but the server preserves the same control, stdin, grace, requirements, and evaluation admission order.
+
+For inline restart, the server resolves declared requirements before it closes the old generation.
+The retiring relay receives the existing `shutdown` command and closes its worker stdin, discarding unread bytes with that generation.
+After the replacement relay reports readiness, same-call `stdin` and `evaluate` are queued only to that replacement in their normal order.
 
 ## Relay events
 
@@ -144,12 +155,15 @@ When the server sends an `interrupt` command, the relay calls `kill(worker_pid, 
 Success means that the operating system accepted signal delivery, not that the worker has already handled the signal or stopped its current operation.
 Host-resolver interruption requests do not cross this boundary as relay `interrupt` commands.
 The server can still classify the resulting runtime R reply as `r_resolution_failed` with `failure` set to `interrupted`.
+Standalone session interruption returns after this delivery acknowledgement.
+Inline send interruption adds the server-owned stdin enqueue and 100-millisecond grace before it observes the earlier evaluation or considers a new cell; the relay does not implement that grace or decide whether evaluation can proceed.
 
 For restart or server shutdown, the server registers one relay-shutdown request and queues one `shutdown` command against the existing absolute one-second worker deadline.
 The sole relay-command writer computes `grace_millis` from the time remaining when it serializes that command, so earlier queued writes cannot extend the worker deadline.
 The server then enqueues an ordered retirement marker in its event dispatcher.
 Events ahead of that marker remain subject to normal validation and dispatch; events after it cannot extend the old generation's ownership into its replacement.
 The marker is server state and is not a relay frame or acknowledgment.
+For inline restart, replacement stdin and evaluation admission occur only after this retirement boundary and replacement readiness, so no old-generation relay can receive them.
 
 After parsing the command, the relay supervision producer flushes `shutdown_started` before it begins worker shutdown.
 It has no request ID because each generation permits only the one shutdown request that the server registers before enqueueing the command.

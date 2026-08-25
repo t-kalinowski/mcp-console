@@ -3,7 +3,7 @@ use std::time::{Duration, Instant};
 
 use super::output::{
     OutputCut, OutputTape, Response, ResponseAcknowledgment, SendFailure, project_completed,
-    project_replacement_ready,
+    project_controlled_completed, project_replacement_ready,
 };
 
 const INPUT_REQUEST_GRACE: Duration = Duration::from_millis(10);
@@ -21,14 +21,18 @@ pub(super) struct Evaluation {
 struct EvaluationState {
     phase: EvaluationPhase,
     completion_cut: Option<OutputCut>,
+    /// Prior operation and lifecycle output transferred into this cell's response.
+    control_prelude: Option<Response>,
     /// Idle output captured immediately before this cell was admitted.
-    prelude: Option<Response>,
+    idle_prelude: Option<Response>,
     /// A response returned by the server but not claimed by its MCP transport.
     reclaimed: Option<Response>,
     /// Delivery of the most recently assembled response, until one owner settles it.
     delivery: Option<mpsc::Receiver<ResponseAcknowledgment>>,
     /// Whether a waiter already drained the response for a completion phase.
     completion_collected: bool,
+    /// Whether successful cell completion must end with an explicit final marker.
+    controlled_completion: bool,
     input_report_at: Option<Instant>,
     /// Whether one `send` currently owns the right to drain this evaluation's response.
     waiting: bool,
@@ -70,9 +74,11 @@ enum EvaluationStatus {
     Report(EvaluationWait),
 }
 
-pub(super) struct RestartReservation {
+pub(super) struct EvaluationReservation {
     evaluation: Arc<Evaluation>,
     unfinished: bool,
+    project_completion: bool,
+    controlled_completion: bool,
     completion: Option<CompletionKind>,
     completion_cut: Option<OutputCut>,
     reclaimed: Option<Response>,
@@ -100,16 +106,20 @@ impl Evaluation {
         transcript: crate::transcript::Transcript,
         call_id: Option<u64>,
         output: OutputTape,
-        prelude: Response,
+        control_prelude: Response,
+        idle_prelude: Response,
+        controlled_completion: bool,
     ) -> Self {
         Self {
             state: Mutex::new(EvaluationState {
                 phase: EvaluationPhase::Evaluating,
                 completion_cut: None,
-                prelude: Some(prelude),
+                control_prelude: Some(control_prelude),
+                idle_prelude: Some(idle_prelude),
                 reclaimed: None,
                 delivery: None,
                 completion_collected: false,
+                controlled_completion,
                 input_report_at: None,
                 waiting: false,
                 restart_reserved: false,
@@ -134,6 +144,9 @@ impl Evaluation {
         if !state.settle_delivery()? {
             return Err("previous send response delivery is still pending".to_string());
         }
+        if state.completion_collected && state.reclaimed.is_none() {
+            return Err("evaluation response was already delivered".to_string());
+        }
         if state.restart_reserved {
             return Err("session restart began before this send could wait".to_string());
         }
@@ -146,13 +159,23 @@ impl Evaluation {
         })
     }
 
+    pub(super) fn is_interruptible(&self) -> Result<bool, String> {
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| "worker evaluation state lock poisoned".to_string())?;
+        Ok(matches!(
+            state.phase,
+            EvaluationPhase::Evaluating | EvaluationPhase::ReplacementStarting
+        ))
+    }
+
     /// Reserves an open response until restart finishes retiring the worker.
-    pub(super) fn reserve_for_restart(self: &Arc<Self>) -> Result<RestartReservation, String> {
+    pub(super) fn reserve_for_restart(self: &Arc<Self>) -> Result<EvaluationReservation, String> {
         let mut state = self
             .state
             .lock()
             .map_err(|_| "worker evaluation state lock poisoned".to_string())?;
-        state.restart_reserved = true;
         if let EvaluationPhase::CellCompletionGrace(deadline) = state.phase {
             drop(state);
             std::thread::sleep(deadline.saturating_duration_since(Instant::now()));
@@ -162,6 +185,7 @@ impl Evaluation {
                 .lock()
                 .map_err(|_| "worker evaluation state lock poisoned".to_string())?;
         }
+        state.restart_reserved = true;
         let waiting = state.waiting;
         let unfinished = !matches!(state.phase, EvaluationPhase::Complete(_));
         let completion = match state.phase {
@@ -174,15 +198,52 @@ impl Evaluation {
                 unreachable!("completion grace is handled before restart reservation")
             }
         };
-        Ok(RestartReservation {
+        Ok(EvaluationReservation {
             evaluation: self.clone(),
             unfinished,
+            project_completion: true,
+            controlled_completion: state.controlled_completion,
             completion,
             completion_cut: completion.and(state.completion_cut),
             reclaimed: state.reclaimed.take(),
             delivery: state.delivery.take(),
             waiting,
         })
+    }
+
+    /// Reserves a completed response for a following cell without adding a terminal marker.
+    pub(super) fn reserve_completed_for_handoff(
+        self: &Arc<Self>,
+    ) -> Result<Option<EvaluationReservation>, String> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| "worker evaluation state lock poisoned".to_string())?;
+        if let EvaluationPhase::CellCompletionGrace(deadline) = state.phase {
+            drop(state);
+            std::thread::sleep(deadline.saturating_duration_since(Instant::now()));
+            self.finish_cell_completion_grace();
+            state = self
+                .state
+                .lock()
+                .map_err(|_| "worker evaluation state lock poisoned".to_string())?;
+        }
+        let EvaluationPhase::Complete(completion_kind) = state.phase else {
+            return Ok(None);
+        };
+        state.restart_reserved = true;
+        let completion = (!state.completion_collected).then_some(completion_kind);
+        Ok(Some(EvaluationReservation {
+            evaluation: self.clone(),
+            unfinished: false,
+            project_completion: false,
+            controlled_completion: state.controlled_completion,
+            completion,
+            completion_cut: completion.and(state.completion_cut),
+            reclaimed: state.reclaimed.take(),
+            delivery: state.delivery.take(),
+            waiting: state.waiting,
+        }))
     }
 
     /// Reaps a completed evaluation only after its assembled response was delivered.
@@ -209,10 +270,10 @@ impl Evaluation {
             .lock()
             .map_err(|_| "worker evaluation state lock poisoned".to_string())?;
         let additional = self.output.take_prelude_before(boundary);
-        if let Some(prelude) = state.prelude.as_mut() {
+        if let Some(prelude) = state.idle_prelude.as_mut() {
             prelude.extend(additional);
         } else {
-            state.prelude = Some(additional);
+            state.idle_prelude = Some(additional);
         }
         Ok(())
     }
@@ -511,14 +572,18 @@ impl Evaluation {
             )));
         }
         match state.phase {
-            EvaluationPhase::Complete(CompletionKind::Cell)
-            | EvaluationPhase::Complete(CompletionKind::ReplacementFailed) => {
+            EvaluationPhase::Complete(
+                completion @ (CompletionKind::Cell | CompletionKind::ReplacementFailed),
+            ) => {
                 state.completion_collected = true;
                 let cut = state
                     .completion_cut
                     .take()
                     .expect("a completed evaluation must retain its output cut");
                 let mut output = take_owned_response(&mut state, &self.output, cut);
+                if matches!(completion, CompletionKind::Cell) && state.controlled_completion {
+                    output = project_controlled_completed(output);
+                }
                 state.track_delivery(&mut output);
                 return Ok(EvaluationStatus::Report(EvaluationWait::Completed(output)));
             }
@@ -607,16 +672,24 @@ impl EvaluationState {
     }
 }
 
-impl RestartReservation {
+impl EvaluationReservation {
     pub(super) fn unfinished(&self) -> bool {
         self.unfinished
     }
 
     fn project_response(&self, response: Response) -> Response {
+        if !self.project_completion {
+            return response;
+        }
         match self.completion {
-            Some(CompletionKind::Cell | CompletionKind::ReplacementFailed) => {
-                project_completed(response)
+            Some(CompletionKind::Cell) => {
+                if self.controlled_completion {
+                    project_controlled_completed(response)
+                } else {
+                    project_completed(response)
+                }
             }
+            Some(CompletionKind::ReplacementFailed) => project_completed(response),
             Some(CompletionKind::ReplacementReady) => project_replacement_ready(response),
             None => response,
         }
@@ -687,15 +760,19 @@ fn take_owned_response(
     output: &OutputTape,
     cut: OutputCut,
 ) -> Response {
-    let cell = output.drain_through(cut);
-    let Some(mut prelude) = state.prelude.take() else {
+    let mut cell = output.drain_through(cut);
+    if let Some(mut idle) = state.idle_prelude.take() {
+        idle.extend_cell_after_idle_prelude(cell);
+        cell = idle;
+    }
+    let Some(mut control) = state.control_prelude.take() else {
         return cell;
     };
-    prelude.extend_cell_after_idle_prelude(cell);
-    prelude
+    control.extend_logical_region(cell);
+    control
 }
 
-impl Drop for RestartReservation {
+impl Drop for EvaluationReservation {
     fn drop(&mut self) {
         let Ok(mut state) = self.evaluation.state.lock() else {
             return;
@@ -732,6 +809,8 @@ mod tests {
             None,
             output,
             Response::default(),
+            Response::default(),
+            false,
         ));
         evaluation.complete_cell(Ok(()));
         let claim = evaluation.claim().unwrap();

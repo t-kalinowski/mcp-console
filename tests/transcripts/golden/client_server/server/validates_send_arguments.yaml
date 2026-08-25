@@ -10,13 +10,15 @@ result:
     - type: text
       text: >-
         failed to deserialize parameters: unknown field `wait_ms`, expected one
-        of `r`, `python`, `sql`, `requirements`, `stdin`, `timeout_ms`
+        of `r`, `python`, `sql`, `control`, `requirements`, `stdin`,
+        `timeout_ms`
   isError: true
 ---
 send:
   r: "1"
   python: "1"
   sql: SELECT 1
+  control: restart
   requirements:
     r:
       - praise
@@ -24,6 +26,27 @@ result:
   content:
     - type: text
       text: only one of `r`, `python`, or `sql` may be supplied
+  isError: true
+---
+send:
+  control: prepare
+result:
+  content:
+    - type: text
+      text: >-
+        failed to deserialize parameters: unknown variant `prepare`, expected
+        `interrupt` or `restart`
+  isError: true
+---
+send:
+  control: restart
+  requirements:
+    python:
+      - polars>=1
+result:
+  content:
+    - type: text
+      text: "`requirements` requires a code cell"
   isError: true
 ---
 send:

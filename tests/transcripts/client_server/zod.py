@@ -2511,6 +2511,162 @@ def test_orders_explicit_restart_output(binary: Path) -> Transcript:
         return client._finish()
 
 
+def test_controlled_restart_runs_cell_once_in_fresh_worker(
+    binary: Path,
+) -> Transcript:
+    zod = Path(__file__).resolve().parents[2] / "fixtures" / "zod"
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        temporary_path = Path(temporary_directory)
+        environment = os.environ.copy()
+        environment["TMPDIR"] = temporary_directory
+        client = McpClient(
+            binary,
+            ("serve", "--worker", str(zod)),
+            environment,
+        )
+        client._initialize_and_list_tools()
+
+        client.send(r="set controlled restart state")
+        assert last_tool_text(client) == "zod controlled state: old\n"
+        old_worker = wait_for_marker(
+            temporary_path,
+            "zod-controlled-restart-old-worker",
+            client,
+        )
+        old_pid = int(old_worker.read_text(encoding="utf-8"))
+
+        client.send(
+            control="restart",
+            r="inspect controlled restart state",
+        )
+        assert last_tool_text(client) == (
+            "[worker stopped: in-memory state lost]\n"
+            "[starting new worker]\n"
+            "zod controlled state: fresh; evaluation=1\n"
+            "[done]"
+        )
+
+        evaluations = wait_for_marker(
+            temporary_path,
+            "zod-controlled-restart-cell-evaluations",
+            client,
+        )
+        records = evaluations.read_text(encoding="utf-8").splitlines()
+        assert len(records) == 1, records
+        new_pid, state, count = records[0].split()
+        assert int(new_pid) != old_pid, records
+        assert (state, count) == ("fresh", "1"), records
+        assert not process_exists(old_pid), old_pid
+
+        client.send()
+        assert last_tool_text(client) == "\n[idle]"
+        assert evaluations.read_text(encoding="utf-8").splitlines() == records
+        return client._finish()
+
+
+def test_cancelled_controlled_restart_response_is_reclaimed_once(
+    binary: Path,
+) -> Transcript:
+    zod = Path(__file__).resolve().parents[2] / "fixtures" / "zod"
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        temporary_path = Path(temporary_directory)
+        environment = os.environ.copy()
+        environment["TMPDIR"] = temporary_directory
+        client = McpClient(
+            binary,
+            ("serve", "--worker", str(zod)),
+            environment,
+        )
+        finished = False
+        try:
+            client._initialize_and_list_tools()
+
+            client.send(r="wait for stdin close", timeout_ms=0)
+            assert last_tool_text(client) == "\n[running; poll with an empty send]"
+            wait_for_marker(
+                temporary_path,
+                "zod-waiting-for-stdin-close",
+                client,
+            )
+
+            combined = client._start_send(
+                control="restart",
+                r="inspect controlled restart state",
+            )
+            # The response is larger than the stdout pipe. Once its first bytes
+            # are readable, cancellation can overtake the blocked write.
+            readable, _, _ = select.select([client.stdout], [], [], 10)
+            assert readable, "controlled restart did not reach MCP output"
+            client._notify(
+                "notifications/cancelled",
+                requestId=combined["id"],
+                reason="acceptance test cancelled the controlled send",
+            )
+            cancellation = client.transcript[-1]["input"]["params"]
+            assert cancellation["requestId"] == combined["id"], cancellation
+            cancellation["requestId"] = "<request ID>"
+
+            # Flushing a second oversized message proves the ordered input
+            # transport has observed cancellation before the reclaiming poll.
+            barrier_size = 2 * LARGE_OUTPUT_SIZE
+            client._notify(
+                "notifications/acceptance-test-barrier",
+                padding="b" * barrier_size,
+            )
+            barrier = client.transcript[-1]["input"]["params"]
+            assert len(barrier["padding"]) == barrier_size, barrier
+            barrier["padding"] = f"<input barrier: {barrier_size} bytes>"
+            reclaimed = client._start_send()
+
+            discarded = json.loads(client.stdout.readline())
+            assert discarded.pop("jsonrpc", None) == "2.0", discarded
+            assert discarded.pop("id", None) == combined["id"], discarded
+            assert discarded["result"]["isError"] is False, discarded
+            assert combined.keys() == {"id", "send"}, combined
+
+            client._receive(reclaimed)
+            result = reclaimed["result"]
+            expected = large_output("zod stdin closed\n") + (
+                "\n[active evaluation stopped by session restart request]"
+                "\n[worker stopped: in-memory state lost]"
+                "\n[starting new worker]"
+                "\nzod controlled state: fresh; evaluation=1\n"
+                "[done]"
+            )
+            assert result == {
+                "content": [{"type": "text", "text": expected}],
+                "isError": False,
+            }, result
+            result["content"][0]["text"] = (
+                "zod stdin closed\n<large output>\n"
+                "[active evaluation stopped by session restart request]\n"
+                "[worker stopped: in-memory state lost]\n"
+                "[starting new worker]\n"
+                "zod controlled state: fresh; evaluation=1\n"
+                "[done]"
+            )
+
+            evaluations = wait_for_marker(
+                temporary_path,
+                "zod-controlled-restart-cell-evaluations",
+                client,
+            )
+            records = evaluations.read_text(encoding="utf-8").splitlines()
+            assert len(records) == 1, records
+            _, state, count = records[0].split()
+            assert (state, count) == ("fresh", "1"), records
+
+            client.send()
+            assert last_tool_text(client) == "\n[idle]"
+            assert evaluations.read_text(encoding="utf-8").splitlines() == records
+            transcript = client._finish()
+            finished = True
+            return transcript
+        finally:
+            if not finished:
+                stop_client(client)
+
+
 def test_restart_preserves_pending_sideband_output(binary: Path) -> Transcript:
     zod = Path(__file__).resolve().parents[2] / "fixtures" / "zod"
     with tempfile.TemporaryDirectory() as temporary_directory:

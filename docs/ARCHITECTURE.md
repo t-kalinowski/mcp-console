@@ -47,6 +47,7 @@ Resolver inputs are restricted and may execute trusted installation or build cod
 
 The client and server exchange MCP JSON-RPC over the server's standard input and output.
 The server registers the `send` and `session` tools, validates calls, and turns server-owned responses into MCP text and image content.
+`send` can apply an inline interrupt or restart before optional stdin and a cell, while `session` remains the standalone dependency-preparation and lifecycle surface.
 [`TOOL_DESCRIPTIONS.md`](TOOL_DESCRIPTIONS.md) is a human-readable mirror of the registered descriptions; `src/server.rs` and the actual `tools/list` result are authoritative.
 
 This is the only public protocol boundary.
@@ -76,7 +77,7 @@ The server owns the logical console session and all state that must survive a wo
 - worker lifecycle and generation ownership;
 - retained R, Python, and DuckDB requirements;
 - host resolver launch, interruption, cancellation, and result commits;
-- evaluation, preparation, stdin, restart, and replacement admission;
+- evaluation, preparation, stdin, inline control, restart, and replacement admission;
 - the pending output tape, output budgets, response boundaries, and MCP response assembly;
 - response-delivery ownership; and
 - transcript recording and image artifacts.
@@ -115,6 +116,11 @@ An explicit restart advances admission to a new generation before the old relay 
 Work still completing for the retiring generation is either settled for that generation or discarded according to its existing lifecycle contract; it cannot be forwarded to the replacement or commit state on its behalf.
 The replacement receives new worker pipes and fresh language-runtime state, while the server supplies the retained environment selected for it.
 
+A controlled `send` keeps one admission boundary from control through reservation of its optional new cell.
+After restart, same-call stdin and code belong only to the replacement generation.
+After interrupt, the server verifies that the interrupted generation is still current before it reserves the new cell.
+Another lifecycle transition cannot enter between successful replacement or interruption and that reservation.
+
 An unexpected worker or transport failure also retires that relay and worker before replacement.
 The server reports the failed operation and does not replay its cell or stdin against the new worker.
 
@@ -140,6 +146,27 @@ When a code-bearing `send` declares requirements, the server treats them as prec
 One exclusive environment transition covers requirement-delta calculation, host resolution, live preparation or a pre-start retained-environment commit, and reservation and launch of the evaluation in the same generation.
 No other send or environment-changing operation can enter that boundary, and a failed or superseded transition cannot dispatch the cell.
 The server releases the environment transition after launch; the active evaluation continues to own stdin, waiting, output cuts, response delivery, and restart handoff.
+
+Without inline control, the externally observable order is requirement preparation, nonempty stdin enqueue, then evaluation.
+The wait timeout begins only after the cell is dispatched.
+
+### Controlled send
+
+Inline control, stdin, interrupt grace, requirement preparation, and reservation of the optional new cell form one lifecycle operation.
+The server does not compose a public `session` call with a later ordinary `send`.
+
+For inline interrupt, the server first uses the existing resolver-first, otherwise-worker routing and waits for delivery acknowledgement.
+It then enqueues nonempty stdin immediately, waits the full 100-millisecond grace period, and settles the previous evaluation's response ownership.
+Only after the previous evaluation has stopped does it validate and prepare requirements and reserve the new cell against the still-current generation.
+If delivery fails, no later step runs; if the evaluation remains active after the grace, a supplied cell is not dispatched.
+A validation or explicit preparation failure also prevents the cell from running, but does not undo the completed interrupt or stdin enqueue.
+
+For inline restart, declared requirements enter the existing restart transaction.
+The server resolves and retains them before it closes the old generation; a failure leaves the worker in place and sends neither stdin nor code.
+After successful replacement startup, the server queues nonempty same-call stdin and reserves the cell against that exact replacement before it releases admission.
+The old generation's unread stdin is discarded and cannot consume the new bytes.
+
+Control delivery, interrupt grace, restart, and explicit requirement preparation happen before dispatch and do not consume the new cell's wait timeout.
 
 ### Worker-originated R resolution
 
@@ -197,7 +224,8 @@ These checks keep R callbacks on the embedded-R thread and prevent nested resolv
 
 An interrupt targets the active host resolver when one is registered; otherwise it targets the live worker through its relay.
 It stays associated with that resolver or worker and is not retried against a replacement.
-The call reports signal delivery rather than waiting for the resolver or evaluated code to stop.
+Standalone `session(action = "interrupt")` reports delivery acknowledgement rather than waiting for the resolver or evaluated code to stop.
+Inline `send(control = "interrupt")` uses the same routing, then applies its stdin enqueue and 100-millisecond settling grace before it returns the current state or considers a new cell.
 Resolver interruption and lifecycle cancellation are tracked as typed outcomes for the affected operation.
 
 ### Explicit restart
@@ -205,6 +233,7 @@ Resolver interruption and lifecycle cancellation are tracked as typed outcomes f
 When restart includes requirements, the server first resolves the candidate retained environment outside the sandbox.
 A resolution failure leaves the existing worker generation in place.
 After resolution succeeds, or immediately for an unchanged restart, the server closes admission to the old generation, settles any active response ownership, retires and reaps the relay and worker, then starts the replacement from the retained environment.
+For `send(control = "restart")`, that transaction continues under the same admission boundary through same-call stdin enqueue and reservation of the optional cell against the ready replacement.
 Exact requirement commit behavior is documented in [requirements and environments](REQUIREMENTS.md).
 
 ### Failure replacement
@@ -223,7 +252,12 @@ The protocol documents define the exact closure and retirement order.
 
 The server owns one ordered pending-output tape across worker lifetimes.
 The relay publishes observations to it, but neither the relay nor worker decides which MCP call receives them.
-The server assigns output to an evaluation, poll, restart, or later idle response; applies pending-output limits; preserves image order; adds lifecycle notices; and assembles MCP content.
+The server assigns output to an evaluation, poll, restart, controlled send, or later idle response; applies pending-output limits; preserves image order; adds lifecycle notices; and assembles MCP content.
+
+A controlled send produces one MCP response.
+When a completed or interrupted evaluation precedes a new cell, the server transfers the prior response region into the new evaluation's prelude instead of acknowledging it separately.
+The resulting delivery owner covers prior-operation output, restart lifecycle notices when present, new-cell output, and the final combined state marker in that order.
+If MCP response delivery is cancelled or its write fails, the complete combined response returns to its delivery owner and can be delivered exactly once.
 
 Each relay producer preserves its own order.
 The serialized event stream gives the server one observation order, but it does not establish chronology between independent worker sideband, stdout, and stderr pipes.

@@ -204,6 +204,8 @@ def main() -> None:
     fail_next_r_preparation = False
     emit_output_before_r_preparation_failure = False
     emit_large_output_before_r_preparation_failure = False
+    controlled_restart_state = "fresh"
+    controlled_restart_evaluations = 0
     queued_message: dict[str, Any] | None = None
 
     def receive_resolver_response(expected_kind: str) -> dict[str, Any]:
@@ -584,6 +586,34 @@ def main() -> None:
             (temporary / "zod-waiting-for-stdin-close").touch()
             assert os.read(0, 1) == b"", "Zod received input instead of stdin EOF"
             emit_large_output(1, b"zod stdin closed\n")
+            send(writer, {"kind": "completed"})
+            continue
+
+        if source == "set controlled restart state":
+            controlled_restart_state = "old"
+            (temporary / "zod-controlled-restart-old-worker").write_text(
+                str(os.getpid()),
+                encoding="utf-8",
+            )
+            send_output(writer, "zod controlled state: old\n")
+            send(writer, {"kind": "completed"})
+            continue
+
+        if source == "inspect controlled restart state":
+            controlled_restart_evaluations += 1
+            with (temporary / "zod-controlled-restart-cell-evaluations").open(
+                "a",
+                encoding="utf-8",
+            ) as evaluations:
+                evaluations.write(
+                    f"{os.getpid()} {controlled_restart_state} "
+                    f"{controlled_restart_evaluations}\n"
+                )
+            send_output(
+                writer,
+                f"zod controlled state: {controlled_restart_state}; "
+                f"evaluation={controlled_restart_evaluations}\n",
+            )
             send(writer, {"kind": "completed"})
             continue
 

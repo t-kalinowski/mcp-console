@@ -113,15 +113,21 @@ def test_initializes_and_lists_tools(binary: Path) -> Transcript:
         "R and Python display a final visible top-level expression",
         "SQL returns a bounded preview",
         "Cells are not transactional",
+        "Use `control` alone or before same-call stdin and code",
+        "Interrupt preserves in-memory state and waits 100 milliseconds",
+        "the cell is not run if the interrupted evaluation remains active",
+        "Restart discards in-memory R, Python, DuckDB, debugger, and unread-stdin state",
+        "same-call stdin and code only at the replacement",
+        "The `session` tool remains available for standalone preparation and lifecycle operations",
         "`timeout_ms` limits how long the call waits",
         "after dispatch or attachment",
-        "explicit requirement preparation can make the complete call take longer",
+        "Inline control, interrupt grace, restart, and explicit requirement preparation can make the complete call take longer",
+        "do not consume the cell wait timeout",
         "does not cancel startup, dependency resolution, or evaluation",
         "[running; poll with an empty send]",
         "call `send` again without code or stdin",
         "do not resubmit the cell",
         "Send `stdin` without code to answer an active prompt or debugger",
-        '`session(action = "interrupt")` to request interruption',
         "`r.name`",
         "`py$name`",
         "SQL can query R data frames by name",
@@ -210,9 +216,29 @@ def test_initializes_and_lists_tools(binary: Path) -> Transcript:
     send_requirements_description = " ".join(
         send["inputSchema"]["properties"]["requirements"]["description"].split()
     )
+    control = send["inputSchema"]["properties"]["control"]
+    assert control["type"] == "string", control
+    assert control["enum"] == ["interrupt", "restart"], control
+    control_description = " ".join(control["description"].split())
+    for guidance in (
+        "optional session control alone or before same-call stdin and code",
+        "preserves in-memory state",
+        "stdin is queued",
+        "waits a short grace",
+        "the cell is not run if the interrupted evaluation remains active",
+        "resolves same-call requirements before replacement",
+        "discards R, Python, DuckDB, debugger, and unread-stdin state",
+        "same-call stdin and code only to the replacement",
+    ):
+        assert guidance in control_description, guidance
     for guidance in (
         "additive and persist for the session",
         "prepare before this cell and retain for later cells",
+        "Without control, preparation completes before same-call stdin is queued",
+        "With `restart`, requirements are resolved in the restart transaction before replacement",
+        "failure leaves the current worker unchanged and sends neither stdin nor code",
+        "With `interrupt`, signal delivery and stdin enqueue happen before requirements are validated or prepared",
+        "are not rolled back if that later work fails",
         "Ordinary CRAN packages used by the built-in R worker need not be declared here",
         "use `requirements.r` to stage packages ahead of evaluation",
         "missing imports normally resolve at runtime",
@@ -233,7 +259,10 @@ def test_initializes_and_lists_tools(binary: Path) -> Transcript:
         "Its UTF-8 encoding is queued exactly",
         "no newline is added",
         "trailing `\\n`",
-        "If requirements are also supplied, preparation completes first",
+        "Without control, requirements are prepared before nonempty stdin is queued",
+        "After `interrupt`, nonempty stdin is queued before the 100-millisecond grace",
+        "may be consumed while the earlier operation unwinds",
+        "After `restart`, same-call stdin is sent only to the replacement",
         "When sent with a cell, nonempty text is queued before the code is run",
         "an already waiting interactive read may consume it before the new cell begins",
         "[waiting for stdin]",
@@ -250,7 +279,7 @@ def test_initializes_and_lists_tools(binary: Path) -> Transcript:
         "does not cancel evaluation",
         "poll with an empty `send` call",
         "once a cell has been dispatched or the call has attached",
-        "Requirement preparation happens first",
+        "Inline control, interrupt grace, restart, and explicit requirement preparation happen before dispatch",
         "may make the complete call take longer",
         "Automatic R and Python import resolution are part of the running evaluation",
         "do not resubmit the cell",
@@ -263,12 +292,13 @@ def test_initializes_and_lists_tools(binary: Path) -> Transcript:
     session = tools["session"]
     session_description = " ".join(session["description"].split())
     for guidance in (
-        "Manage dependencies and the lifecycle of the persistent worker",
+        "Manage dependencies and standalone lifecycle operations for the persistent worker",
         "`prepare` makes additional R or Python requirements or DuckDB extensions available without evaluating a cell",
-        "`interrupt` requests SIGINT for the active host resolver or live worker and returns after sending the request",
+        "`interrupt` requests SIGINT for the active host resolver or live worker and returns after delivery is acknowledged without waiting for the operation to stop",
         "interruption is cooperative",
-        "if an evaluation remains active, use an empty `send` afterward to observe whether it stopped",
-        "`restart` optionally prepares requirements, replaces the worker, and discards all in-memory R, Python, SQL, debugger, and unread-stdin state",
+        "use an empty `send` afterward to observe whether it stopped",
+        "`restart` optionally prepares requirements, replaces the worker, and discards all in-memory R, Python, DuckDB, debugger, and unread-stdin state",
+        "Use inline `send.control` when stdin or a cell should follow the lifecycle operation in the same call",
         "Requirements are additive, idempotent, and persist across restart",
         "Preparation does not import, attach, or load packages or extensions",
         "Use `restart` only when clean state or a restart-required dependency change is needed",
@@ -317,6 +347,9 @@ def test_initializes_and_lists_tools(binary: Path) -> Transcript:
     assert "`restart` can add any of the same requirements" in action_description, (
         action_description
     )
+    assert (
+        "returns after delivery is acknowledged without waiting" in action_description
+    ), action_description
     requirements_description = " ".join(
         session["inputSchema"]["properties"]["requirements"]["description"].split()
     )
@@ -387,6 +420,7 @@ def assert_limits_send_languages_from_environment(binary: Path) -> None:
     assert send_properties.keys() == {
         "r",
         "sql",
+        "control",
         "requirements",
         "stdin",
         "timeout_ms",
@@ -419,12 +453,24 @@ def test_validates_send_arguments(binary: Path) -> Transcript:
         r="1",
         python="1",
         sql="SELECT 1",
+        control="restart",
         requirements={"r": ["praise"]},
     )
     assert result["isError"] is True, result
     assert result["content"][0]["text"] == (
         "only one of `r`, `python`, or `sql` may be supplied"
     ), result
+
+    result = client.send(control="prepare")
+    assert result["isError"] is True, result
+    assert "prepare" in result["content"][0]["text"], result
+
+    result = client.send(
+        control="restart",
+        requirements={"python": ["polars>=1"]},
+    )
+    assert result["isError"] is True, result
+    assert result["content"][0]["text"] == "`requirements` requires a code cell", result
 
     result = client.send(requirements={"r": ["praise"]})
     assert result["isError"] is True, result
