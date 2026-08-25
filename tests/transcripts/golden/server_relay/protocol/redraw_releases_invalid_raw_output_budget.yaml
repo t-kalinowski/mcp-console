@@ -20,6 +20,10 @@ relay:
   data: DRtbMksK
 ---
 relay:
+  kind: stdout_bytes
+  data: Df8K
+---
+relay:
   kind: stdout
   data: <output filling the raw text-byte budget>
 transcript_normalization:

@@ -292,11 +292,19 @@ def run_raw_redraw_budget(relay: ScriptedRelay) -> None:
             "data": base64.b64encode(b"\r\x1b[2K\n").decode("ascii"),
         }
     )
+    invalid_suffix = b"\xff\n"
+    relay.send(
+        {
+            "kind": "stdout_bytes",
+            "data": base64.b64encode(b"\r" + invalid_suffix).decode("ascii"),
+        }
+    )
     trailer = "useful output\n"
     relay.send(
         {
             "kind": "stdout",
-            "data": ("x" * (PENDING_TEXT_BUDGET - 4 - len(trailer))) + trailer,
+            "data": ("x" * (PENDING_TEXT_BUDGET - 4 - len(invalid_suffix) - len(trailer)))
+            + trailer,
         }
     )
     relay.complete()

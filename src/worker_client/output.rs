@@ -918,11 +918,7 @@ impl OutputTapeState {
         };
         if !complete.is_empty() {
             self.recompute_budget();
-            self.push_stream_text(
-                logical,
-                &String::from_utf8_lossy(&complete),
-                Some(&complete),
-            );
+            self.push_direct_text(logical, &complete);
         }
         let origin = (!deferred.is_empty()).then(|| self.allocate_position());
         let decoder = match stream {
@@ -946,15 +942,9 @@ impl OutputTapeState {
         let update = terminal.ingest(text);
         let source = source_bytes
             .filter(|_| update.text == text)
-            .and_then(|bytes| {
-                let active_suffix = match update.active_suffix {
-                    Some(offset) => Some(lossy_source_prefix_length(bytes, offset)?),
-                    None => None,
-                };
-                Some(SourceText {
-                    bytes: bytes.len(),
-                    active_suffix,
-                })
+            .map(|bytes| SourceText {
+                bytes: bytes.len(),
+                active_suffix: update.active_suffix,
             });
         self.apply_stream_update(&mut terminal, update, source, None);
         // Keep a vacant position for output that remains buffered until this
@@ -963,6 +953,38 @@ impl OutputTapeState {
         let observation = self.allocate_position();
         terminal.observe(observation);
         self.put_terminal_stream(stream, terminal);
+    }
+
+    fn push_direct_text(&mut self, stream: LogicalStream, bytes: &[u8]) {
+        if let Ok(text) = std::str::from_utf8(bytes) {
+            self.push_stream_text(stream, text, Some(bytes));
+            return;
+        }
+
+        for line in bytes.split_inclusive(|byte| *byte == b'\n') {
+            let error = match std::str::from_utf8(line) {
+                Ok(text) => {
+                    self.push_stream_text(stream, text, Some(line));
+                    continue;
+                }
+                Err(error) => error,
+            };
+            let (valid, invalid) = line.split_at(error.valid_up_to());
+            if !valid.is_empty() {
+                self.push_stream_text(
+                    stream,
+                    std::str::from_utf8(valid).expect("validated UTF-8 prefix"),
+                    Some(valid),
+                );
+            }
+            // Past the first malformed byte, preserving the raw line keeps
+            // source-byte accounting exact without terminal-offset mapping.
+            self.finish_stream(stream);
+            let mut terminal = self.take_terminal_stream(stream);
+            terminal.pass_through_line();
+            self.put_terminal_stream(stream, terminal);
+            self.push_stream_text(stream, &String::from_utf8_lossy(invalid), Some(invalid));
+        }
     }
 
     fn finish_stream(&mut self, stream: LogicalStream) {
@@ -1224,7 +1246,7 @@ impl OutputTapeState {
         decoder.origin = None;
         if !bytes.is_empty() {
             self.recompute_budget();
-            self.push_stream_text(stream, &String::from_utf8_lossy(&bytes), Some(&bytes));
+            self.push_direct_text(stream, &bytes);
         }
     }
 
@@ -1491,37 +1513,6 @@ fn complete_utf8_prefix(bytes: &[u8]) -> usize {
                 Some(length) => offset += error.valid_up_to() + length,
                 None => return offset + error.valid_up_to(),
             },
-        }
-    }
-}
-
-fn lossy_source_prefix_length(bytes: &[u8], projected_prefix: usize) -> Option<usize> {
-    let mut source = 0;
-    let mut projected = 0;
-    loop {
-        match std::str::from_utf8(&bytes[source..]) {
-            Ok(valid) => {
-                let suffix = projected_prefix.checked_sub(projected)?;
-                return (suffix <= valid.len()).then_some(source + suffix);
-            }
-            Err(error) => {
-                let valid = error.valid_up_to();
-                if projected_prefix <= projected.saturating_add(valid) {
-                    return Some(source + projected_prefix - projected);
-                }
-                source += valid;
-                projected += valid;
-
-                let invalid = error.error_len().unwrap_or(bytes.len() - source);
-                source += invalid;
-                projected += '\u{fffd}'.len_utf8();
-                if projected_prefix == projected {
-                    return Some(source);
-                }
-                if projected_prefix < projected {
-                    return None;
-                }
-            }
         }
     }
 }

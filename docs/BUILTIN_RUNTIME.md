@@ -401,6 +401,7 @@ Console output, diagnostics, captured stdout and stderr, input-request records, 
 The server preserves each producer's order but cannot reconstruct chronology across independent pipes.
 Outside the progress-frame compaction described below, it does not normalize ordinary whitespace or reinterpret output based on its source.
 Invalid UTF-8 from raw standard streams is replaced when projected to MCP text; the private relay transport still preserves the bytes.
+After invalid UTF-8 is encountered, progress compaction stops for the rest of that line and later controls remain literal.
 
 When one controlled `send` stops or completes an earlier operation and then runs a new cell, the response keeps the prior output before lifecycle notices and new-cell output, followed by the final combined state marker.
 The server transfers ownership between those logical regions instead of delivering the earlier response separately.

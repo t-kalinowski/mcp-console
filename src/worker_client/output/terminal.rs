@@ -89,6 +89,10 @@ impl Stream {
         }
     }
 
+    pub(super) fn pass_through_line(&mut self) {
+        self.passthrough = true;
+    }
+
     pub(super) fn take_active_events(&mut self) -> Vec<u64> {
         std::mem::take(&mut self.active_events)
     }
@@ -182,6 +186,15 @@ impl<'a> Collector<'a> {
     }
 
     fn ground(&mut self, character: char) {
+        if self.stream.passthrough {
+            if character == '\n' {
+                self.newline("\n");
+            } else {
+                self.ordinary_active.push(character);
+            }
+            return;
+        }
+
         if self.stream.pending_carriage_return {
             self.stream.pending_carriage_return = false;
             if character == '\n' {
@@ -200,7 +213,7 @@ impl<'a> Collector<'a> {
             }
             '\n' => self.newline("\n"),
             '\x08' => self.backspace(),
-            '\x1b' if !self.stream.passthrough => {
+            '\x1b' => {
                 self.stream.parser = Parser::Escape("\x1b".to_string());
             }
             _ => self.write(character),
