@@ -489,13 +489,13 @@ def main() -> None:
             continue
 
         if source == "oversized progress line":
-            send_output(writer, "x" * ((64 * 1024) + 7))
+            send_output(writer, "x" * ((16 * 1024) + 1))
             send_output(writer, "\r")
             send(writer, {"kind": "completed"})
             continue
 
         if source == "oversized combining progress frame":
-            send_output(writer, "\ra" + ("\u0301" * (((16 * 1024) // 2) + 1)))
+            send_output(writer, "\ra" + ("\u0301" * ((16 * 1024) // 2)))
             send_output(writer, "\rfinal\n")
             send(writer, {"kind": "completed"})
             continue

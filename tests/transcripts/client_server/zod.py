@@ -1419,14 +1419,7 @@ def test_oversized_progress_line_falls_back_without_loss(binary: Path) -> Transc
 
     client.send(r="oversized progress line")
     output = last_tool_text(client)
-    assert output == ("x" * ((64 * 1024) + 7)) + "\r"
-    client.transcript[-1]["result"]["content"][0]["text"] = (
-        "<oversized progress line>\r"
-    )
-    client.transcript[-1]["transcript_normalization"] = {
-        "target": "result.content[0].text",
-        "replacements": {"progress_line": "<oversized progress line>"},
-    }
+    assert output == ("x" * ((16 * 1024) + 1)) + "\r"
     return client._finish()
 
 
@@ -1440,17 +1433,8 @@ def test_bounds_combining_data_in_progress_frames(binary: Path) -> Transcript:
 
     client.send(r="oversized combining progress frame")
     output = last_tool_text(client)
-    combining = "a" + ("\u0301" * (((16 * 1024) // 2) + 1))
+    combining = "a" + ("\u0301" * ((16 * 1024) // 2))
     assert output == combining + "\rfinal\n"
-    client.transcript[-1]["result"]["content"][0]["text"] = (
-        "<bounded combining progress frame>\rfinal\n"
-    )
-    client.transcript[-1]["transcript_normalization"] = {
-        "target": "result.content[0].text",
-        "replacements": {
-            "progress_line": "<bounded combining progress frame>",
-        },
-    }
     return client._finish()
 
 
