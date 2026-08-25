@@ -107,7 +107,7 @@ fn stdio_console_orders_requests_and_cancellation_during_response_writes() {
         .expect("SIGINT checkpoint should open");
 
     // The public interrupt must not reach the worker through that interval.
-    client.send_tool(3, "session", json!({"action": "interrupt"}));
+    client.send_tool(3, "send", json!({"control": "interrupt", "timeout_ms": 0}));
     assert!(
         !readable_within(checkpoint.as_raw_fd(), Duration::from_secs(1)),
         "later request reached the worker before the first response write settled"
@@ -131,7 +131,7 @@ fn stdio_console_orders_requests_and_cancellation_during_response_writes() {
     let second = read_message(&mut client.output);
     assert_eq!(second["id"], 3, "{second}");
     assert_eq!(second["result"]["isError"], false, "{second}");
-    assert_eq!(response_text(&second), "[interrupt sent]");
+    assert_eq!(response_text(&second), "\n[idle]");
 
     client.send_console(4, json!({"r": "emit stdout"}));
     wait_for_readable(
@@ -139,7 +139,7 @@ fn stdio_console_orders_requests_and_cancellation_during_response_writes() {
         Duration::from_secs(5),
         "third response",
     );
-    client.send_tool(5, "session", json!({"action": "interrupt"}));
+    client.send_tool(5, "send", json!({"control": "interrupt", "timeout_ms": 0}));
     write_message(
         client.input.as_mut().expect("stdin should be open"),
         &json!({
@@ -173,7 +173,7 @@ fn stdio_console_orders_requests_and_cancellation_during_response_writes() {
         "fifth response",
     );
     client.send_console(8, json!({"r": "emit stdout"}));
-    client.send_tool(9, "session", json!({"action": "interrupt"}));
+    client.send_tool(9, "send", json!({"control": "interrupt", "timeout_ms": 0}));
     write_message(
         client.input.as_mut().expect("stdin should be open"),
         &json!({
@@ -182,7 +182,7 @@ fn stdio_console_orders_requests_and_cancellation_during_response_writes() {
             "params": {"requestId": 9}
         }),
     );
-    client.send_tool(10, "session", json!({"action": "interrupt"}));
+    client.send_tool(10, "send", json!({"control": "interrupt", "timeout_ms": 0}));
 
     let fifth = read_message(&mut client.output);
     assert_eq!(fifth["id"], 7, "{fifth}");
@@ -210,7 +210,7 @@ fn stdio_console_orders_requests_and_cancellation_during_response_writes() {
 
     let seventh = read_message(&mut client.output);
     assert_eq!(seventh["id"], 10, "{seventh}");
-    assert_eq!(response_text(&seventh), "[interrupt sent]");
+    assert_eq!(response_text(&seventh), "\n[idle]");
 }
 
 #[cfg(target_os = "macos")]
@@ -248,7 +248,7 @@ fn stdio_console_releases_calls_received_after_response_gate_settles() {
         .open(checkpoint_path)
         .expect("SIGINT checkpoint should open");
 
-    client.send_tool(4, "session", json!({"action": "interrupt"}));
+    client.send_tool(4, "send", json!({"control": "interrupt", "timeout_ms": 0}));
     wait_for_readable(
         checkpoint.as_raw_fd(),
         Duration::from_secs(5),
@@ -262,7 +262,11 @@ fn stdio_console_releases_calls_received_after_response_gate_settles() {
 
     let interrupt = read_message(&mut client.output);
     assert_eq!(interrupt["id"], 4, "{interrupt}");
-    assert_eq!(response_text(&interrupt), "[interrupt sent]");
+    assert_eq!(interrupt["result"]["isError"], true, "{interrupt}");
+    assert_eq!(
+        response_text(&interrupt),
+        "worker evaluation is already being polled"
+    );
 }
 
 #[cfg(target_os = "macos")]
@@ -286,7 +290,7 @@ fn stdio_console_keeps_later_calls_behind_an_existing_gated_cohort() {
         "blocked response",
     );
     client.send_console(3, json!({"r": "complete after release"}));
-    client.send_tool(4, "session", json!({"action": "interrupt"}));
+    client.send_tool(4, "send", json!({"control": "interrupt", "timeout_ms": 0}));
     // Flushing this 4 MiB input message cannot finish until the server's ordered
     // input transport consumes the preceding calls. Keep stdout blocked until
     // this proves requests 3 and 4 were reserved behind response 2.
@@ -316,7 +320,7 @@ fn stdio_console_keeps_later_calls_behind_an_existing_gated_cohort() {
         .open(checkpoint_path)
         .expect("SIGINT checkpoint should open");
 
-    client.send_tool(5, "session", json!({"action": "interrupt"}));
+    client.send_tool(5, "send", json!({"control": "interrupt", "timeout_ms": 0}));
     assert!(
         !readable_within(checkpoint.as_raw_fd(), Duration::from_secs(1)),
         "a later call overtook the existing gated cohort"
@@ -328,10 +332,10 @@ fn stdio_console_keeps_later_calls_behind_an_existing_gated_cohort() {
     assert_eq!(evaluation["id"], 3, "{evaluation}");
     let first_interrupt = read_message(&mut client.output);
     assert_eq!(first_interrupt["id"], 4, "{first_interrupt}");
-    assert_eq!(response_text(&first_interrupt), "[interrupt sent]");
+    assert_eq!(response_text(&first_interrupt), "\n[idle]");
     let second_interrupt = read_message(&mut client.output);
     assert_eq!(second_interrupt["id"], 5, "{second_interrupt}");
-    assert_eq!(response_text(&second_interrupt), "[interrupt sent]");
+    assert_eq!(response_text(&second_interrupt), "\n[idle]");
 
     wait_for_readable(
         checkpoint.as_raw_fd(),
@@ -413,7 +417,7 @@ fn stdio_console_keeps_cancelled_gated_operation_ordered_until_it_stops() {
     let ping = read_message(&mut client.output);
     assert_eq!(ping["id"], 4, "{ping}");
 
-    client.send_tool(5, "session", json!({"action": "interrupt"}));
+    client.send_tool(5, "send", json!({"control": "interrupt", "timeout_ms": 0}));
 
     assert!(
         !readable_within(checkpoint.as_raw_fd(), Duration::from_secs(1)),
@@ -434,7 +438,7 @@ fn stdio_console_keeps_cancelled_gated_operation_ordered_until_it_stops() {
 
     let interrupt = read_message(&mut client.output);
     assert_eq!(interrupt["id"], 5, "{interrupt}");
-    assert_eq!(response_text(&interrupt), "[interrupt sent]");
+    assert_eq!(response_text(&interrupt), "zod: complete after release\n");
 }
 
 #[cfg(target_os = "macos")]
@@ -452,7 +456,7 @@ fn stdio_console_bounds_response_gated_calls() {
         "blocked response",
     );
     for id in 3..=67 {
-        client.send_tool(id, "session", json!({"action": "interrupt"}));
+        client.send_tool(id, "send", json!({"control": "interrupt", "timeout_ms": 0}));
     }
 
     client.wait_for_exit_within(Duration::from_secs(2));
@@ -473,7 +477,7 @@ fn stdio_console_shutdown_observes_eof_behind_response_gate() {
         "first response",
     );
 
-    client.send_tool(3, "session", json!({"action": "interrupt"}));
+    client.send_tool(3, "send", json!({"control": "interrupt", "timeout_ms": 0}));
     client.close_within(Duration::from_secs(2));
 }
 
@@ -611,9 +615,8 @@ exit 99
         2,
         "tools/call",
         Some(json!({
-            "name": "session",
+            "name": "send",
             "arguments": {
-                "action": "prepare",
                 "requirements": {"r": ["praise"]}
             }
         })),
@@ -692,9 +695,8 @@ exec /bin/sleep 4
     let mut client = McpClient::spawn(command);
     client.send_tool(
         2,
-        "session",
+        "send",
         json!({
-            "action": "prepare",
             "requirements": {"r": ["praise"]}
         }),
     );
@@ -858,9 +860,8 @@ exit 0
     let mut client = McpClient::spawn(command);
     client.send_tool(
         2,
-        "session",
+        "send",
         json!({
-            "action": "prepare",
             "requirements": {"python": ["py-yaml12"]}
         }),
     );
@@ -977,9 +978,8 @@ exec /bin/sleep 3
     let mut client = McpClient::spawn(command);
     client.send_tool(
         2,
-        "session",
+        "send",
         json!({
-            "action": "prepare",
             "requirements": {"python": ["py-yaml12"]}
         }),
     );
@@ -999,14 +999,13 @@ exec /bin/sleep 3
         .expect("resolver process group should be numeric");
     client.send_tool(
         3,
-        "session",
+        "send",
         json!({
-            "action": "prepare",
             "requirements": {"python": ["scipy"]}
         }),
     );
     let tools = client.request(4, "tools/list", None);
-    assert_eq!(tools["result"]["tools"].as_array().unwrap().len(), 2);
+    assert_eq!(tools["result"]["tools"].as_array().unwrap().len(), 1);
 
     let elapsed = client.close_within(Duration::from_secs(2));
     assert!(
@@ -1231,6 +1230,64 @@ fn stdio_console_does_not_start_an_unsandboxed_r_session() {
     assert_eq!(
         client.call_console_error(2, json!({"r": "1 + 1"})),
         "workers are supported only on macOS"
+    );
+}
+
+#[cfg(not(target_os = "macos"))]
+#[test]
+fn stdio_console_exposes_one_tool_on_unsupported_platforms() {
+    let working_directory = TestDirectory::new("unsupported-public-interface");
+    let mut command = Command::new(env!("CARGO_BIN_EXE_mcp-console"));
+    command
+        .arg("serve")
+        .current_dir(working_directory.path())
+        .env_remove("MCP_CONSOLE_LANGUAGES");
+    let mut client = McpClient::spawn(command);
+
+    let response = client.request(2, "tools/list", None);
+    let tools = response["result"]["tools"]
+        .as_array()
+        .expect("tools/list should return an array");
+    assert_eq!(tools.len(), 1, "{response}");
+    assert_eq!(tools[0]["name"], "send", "{response}");
+    let properties = tools[0]["inputSchema"]["properties"]
+        .as_object()
+        .expect("send properties should be an object");
+    assert_eq!(properties.len(), 7, "{properties:?}");
+    for field in [
+        "r",
+        "python",
+        "sql",
+        "control",
+        "requirements",
+        "stdin",
+        "timeout_ms",
+    ] {
+        assert!(
+            properties.contains_key(field),
+            "missing send field `{field}`"
+        );
+    }
+
+    assert!(!working_directory.path().join(".mcp-console").exists());
+    let removed = client.request(
+        3,
+        "tools/call",
+        Some(json!({
+            "name": "session",
+            "arguments": {"action": "restart"}
+        })),
+    );
+    assert_eq!(
+        removed["error"],
+        json!({"code": -32602, "message": "tool not found"}),
+        "{removed}"
+    );
+    assert!(!working_directory.path().join(".mcp-console").exists());
+
+    assert_eq!(
+        client.call_console_error(4, json!({"control": "restart"})),
+        "[starting new worker]\n[workers are supported only on macOS]"
     );
 }
 

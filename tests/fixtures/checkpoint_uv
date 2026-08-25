@@ -1,7 +1,25 @@
 #!/usr/bin/env python3
 
 import os
+import signal
 import sys
+
+
+def notify(path: str) -> None:
+    descriptor = os.open(path, os.O_WRONLY | os.O_NONBLOCK)
+    with os.fdopen(descriptor, "wb", buffering=0) as stream:
+        stream.write(b"1")
+
+
+def wait(path: str) -> None:
+    with open(path, "rb", buffering=0) as stream:
+        assert stream.read(1) == b"1"
+
+
+def report_interrupt(signum: int, _frame: object) -> None:
+    notify(os.environ["MCP_CONSOLE_TEST_UV_INTERRUPTED"])
+    wait(os.environ["MCP_CONSOLE_TEST_UV_INTERRUPT_RELEASE"])
+    raise SystemExit(128 + signum)
 
 
 def checkpoint() -> None:
@@ -16,14 +34,12 @@ def checkpoint() -> None:
         return
     os.close(descriptor)
 
-    started = os.environ["MCP_CONSOLE_TEST_UV_STARTED"]
-    descriptor = os.open(started, os.O_WRONLY | os.O_NONBLOCK)
-    with os.fdopen(descriptor, "wb", buffering=0) as stream:
-        stream.write(b"1")
+    if "MCP_CONSOLE_TEST_UV_INTERRUPTED" in os.environ:
+        signal.signal(signal.SIGINT, report_interrupt)
 
-    release = os.environ["MCP_CONSOLE_TEST_UV_RELEASE"]
-    with open(release, "rb", buffering=0) as stream:
-        assert stream.read(1) == b"1"
+    notify(os.environ["MCP_CONSOLE_TEST_UV_STARTED"])
+
+    wait(os.environ["MCP_CONSOLE_TEST_UV_RELEASE"])
 
 
 def main() -> None:

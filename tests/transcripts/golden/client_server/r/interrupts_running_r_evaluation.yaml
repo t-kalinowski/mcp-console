@@ -62,16 +62,9 @@ result:
         [running; poll with an empty send]
   isError: false
 ---
-session:
-  action: interrupt
-result:
-  content:
-    - type: text
-      text: "[interrupt sent]"
-  isError: false
----
 send:
-  timeout_ms: 3000
+  control: interrupt
+  timeout_ms: 0
 result:
   content:
     - type: text
@@ -87,12 +80,16 @@ result:
         [1] 42  1
   isError: false
 ---
-session:
-  action: interrupt
+send:
+  control: interrupt
+  timeout_ms: 0
 result:
   content:
     - type: text
-      text: "[interrupt sent]"
+      text: |-
+
+
+        [idle]
   isError: false
 ---
 send:
@@ -100,7 +97,7 @@ send:
 result:
   content:
     - type: text
-      text: "\n"
+      text: "[done]"
   isError: false
 ---
 send:
@@ -131,4 +128,3 @@ result:
       text: |
         [1] "idle time does not consume a cell limit"
   isError: false
-...

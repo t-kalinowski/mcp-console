@@ -10,6 +10,18 @@ send:
     automatic_interrupt_pid = os.getpid()
     importlib.import_module("mcp_console_blocked_automatic_import")
     automatic_interrupt_cell_ran = True
+  timeout_ms: 0
+result:
+  content:
+    - type: text
+      text: |-
+
+        [running; poll with an empty send]
+  isError: false
+---
+send:
+  control: interrupt
+  timeout_ms: 30000
 result:
   content:
     - type: text
@@ -55,7 +67,7 @@ result:
         }
         uv output:
         Traceback (most recent call last):
-          File "<workspace>/tests/fixtures/checkpoint_uv", line 39, in <module>
+          File "<workspace>/tests/fixtures/checkpoint_uv", line 55, in <module>
             raise KeyboardInterrupt from None
         KeyboardInterrupt
 
@@ -64,23 +76,13 @@ result:
         requirements: {"python": ["mcp_console_blocked_automatic_import"]}
   isError: false
 ---
-session:
-  action: interrupt
-result:
-  content:
-    - type: text
-      text: "[interrupt sent]"
-  isError: false
----
 send:
   python: >-
     automatic_interrupt_state + int('automatic_interrupt_cell_ran' not in
-    globals()) + int(__import__('os').getpid() == automatic_interrupt_pid) -
-    1
+    globals()) + int(__import__('os').getpid() == automatic_interrupt_pid) - 1
 result:
   content:
     - type: text
       text: |
         42
   isError: false
-...

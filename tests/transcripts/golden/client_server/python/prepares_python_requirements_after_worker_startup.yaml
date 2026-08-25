@@ -13,8 +13,7 @@ result:
         True
   isError: false
 ---
-session:
-  action: prepare
+send:
   requirements:
     python:
       - not a valid requirement !!!
@@ -27,8 +26,9 @@ result:
   isError: true
 ---
 send:
-  python: |
-    sentinel, os.getpid() == worker_pid, importlib.util.find_spec("yaml12") is None
+  python: >
+    sentinel, os.getpid() == worker_pid, importlib.util.find_spec("yaml12")
+    is None
 result:
   content:
     - type: text
@@ -50,8 +50,8 @@ result:
         (42, True, True, 'yaml12')
   isError: false
 ---
-session:
-  action: restart
+send:
+  control: restart
 result:
   content:
     - type: text
@@ -81,4 +81,3 @@ result:
       text: |
         (False, 'yaml12')
   isError: false
-...

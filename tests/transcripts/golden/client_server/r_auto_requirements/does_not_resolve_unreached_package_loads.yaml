@@ -15,8 +15,9 @@ send:
 result:
   content:
     - type: text
-      text: |
-        Error: R package resolution failed with exit status: 1: synthetic IR failure for mcpconsolenotarealpackage
+      text: >
+        Error: R package resolution failed with exit status: 1: synthetic IR
+        failure for mcpconsolenotarealpackage
   isError: false
 ---
 send:
@@ -33,7 +34,7 @@ send:
 result:
   content:
     - type: text
-      text: |
-        Error: R package resolution failed with exit status: 1: synthetic IR failure for mcpconsolenotarealpackage
+      text: >
+        Error: R package resolution failed with exit status: 1: synthetic IR
+        failure for mcpconsolenotarealpackage
   isError: false
-...

@@ -11,16 +11,17 @@ result:
         zod: echo
   isError: false
 ---
-session:
-  action: interrupt
+send:
+  control: interrupt
+  timeout_ms: 0
 result:
   content:
     - type: text
-      text: "[interrupt sent]"
-  isError: false
+      text: worker evaluation is already being polled
+  isError: true
 ---
-session:
-  action: restart
+send:
+  control: restart
 result:
   content:
     - type: text
@@ -38,4 +39,3 @@ result:
       text: |
         zod: echo
   isError: false
-...

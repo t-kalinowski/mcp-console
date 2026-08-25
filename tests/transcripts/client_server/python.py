@@ -2,6 +2,7 @@
 
 import json
 import os
+import select
 import shutil
 import signal
 import subprocess
@@ -104,9 +105,9 @@ def test_preserves_configured_python_environment(binary: Path) -> Transcript:
         "managed Python requirements are disabled because the session uses a "
         "user-selected Python environment"
     )
-    for action in ("prepare", "restart"):
-        client.session(
-            action=action,
+    for call_shape in ({}, {"control": "restart"}):
+        client.send(
+            **call_shape,
             requirements={"python": ["numpy"]},
         )
         result = client.transcript[-1]["result"]
@@ -494,7 +495,7 @@ def test_retains_environment_when_optional_psutil_setup_fails(
     client.send(r='"psutil" %in% reticulate::py_require()$packages')
     assert last_tool_text(client) == "[1] TRUE\n"
 
-    client.session(action="restart")
+    client.send(control="restart")
     assert last_tool_text(client) == (
         "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
     )
@@ -800,7 +801,7 @@ def test_uses_current_r_library_for_managed_python_resolution(
             first_libraries = [record.split(os.pathsep, 1)[0] for record in records]
             assert first_libraries == [library] * len(records), first_libraries
 
-        client.session(action="prepare", requirements={"r": ["zeallot"]})
+        client.send(requirements={"r": ["zeallot"]})
         assert last_tool_text(client) == "[prepared]"
         prepared_r_library = current_r_library()
         uv_record.write_text("", encoding="utf-8")
@@ -816,8 +817,8 @@ def test_uses_current_r_library_for_managed_python_resolution(
 
         uv_record.write_text("", encoding="utf-8")
         r_libs_record.write_text("", encoding="utf-8")
-        client.session(
-            action="restart",
+        client.send(
+            control="restart",
             requirements={"r": ["praise"], "python": ["six"]},
         )
         assert last_tool_text(client) == (
@@ -865,9 +866,9 @@ def test_validates_registry_only_python_requirements(binary: Path) -> Transcript
             "package.tar.gz",
         ]
         for index, requirement in enumerate(rejected):
-            action = "prepare" if index % 2 == 0 else "restart"
-            client.session(
-                action=action,
+            call_shape = {} if index % 2 == 0 else {"control": "restart"}
+            client.send(
+                **call_shape,
                 requirements={
                     "r": ["praise"],
                     "python": [requirement],
@@ -879,8 +880,7 @@ def test_validates_registry_only_python_requirements(binary: Path) -> Transcript
             assert last_tool_text(client) == named_requirement_error(requirement)
         assert uv_record.read_text(encoding="utf-8") == ""
 
-        client.session(
-            action="prepare",
+        client.send(
             requirements={"duckdb": [duckdb_extension]},
         )
         result = client.transcript[-1]["result"]
@@ -890,15 +890,14 @@ def test_validates_registry_only_python_requirements(binary: Path) -> Transcript
         )
 
         prepared = "requests[socks]>=2,<3; python_version < '0'"
-        client.session(
-            action="prepare",
+        client.send(
             requirements={"python": [prepared]},
         )
         assert last_tool_text(client) == "[prepared]"
         assert uv_record.read_text(encoding="utf-8") != ""
         restarted = "urllib3!=2.0.0; python_version < '0'"
-        client.session(
-            action="restart",
+        client.send(
+            control="restart",
             requirements={"python": [restarted]},
         )
         assert last_tool_text(client) == "[starting new worker]\n[idle]"
@@ -1137,30 +1136,26 @@ def test_prepares_initial_python_requirements(binary: Path) -> Transcript:
     environment.pop("RETICULATE_PYTHON", None)
     client = McpClient(binary, ("serve",), environment)
     client._initialize_and_list_tools()
-    client.session(
-        action="prepare",
+    client.send(
         requirements={"python": ["py-yaml12"]},
     )
     assert last_tool_text(client) == "[prepared]"
     invalid = "not a valid requirement !!!"
 
-    client.session(
-        action="prepare",
+    client.send(
         requirements={"python": [invalid]},
     )
     result = client.transcript[-1]["result"]
     assert result["isError"] is True, result
     recorded_error = named_requirement_error(invalid)
     assert result["content"][0]["text"] == recorded_error
-    client.session(
-        action="prepare",
+    client.send(
         requirements={"python": [invalid]},
     )
     result = client.transcript[-1]["result"]
     assert result["isError"] is True, result
     assert result["content"][0]["text"] == recorded_error
-    client.session(
-        action="prepare",
+    client.send(
         requirements={"python": ["numpy\npandas"]},
     )
     result = client.transcript[-1]["result"]
@@ -1188,8 +1183,7 @@ def test_prepares_initial_python_requirements(binary: Path) -> Transcript:
         """)
     client.send(python=python)
     assert last_tool_text(client) == "'yaml12'\n"
-    client.session(
-        action="prepare",
+    client.send(
         requirements={"python": ["py-yaml12"]},
     )
     assert last_tool_text(client) == "[prepared]"
@@ -1201,8 +1195,7 @@ def test_prepares_explicit_numpy_requirement(binary: Path) -> Transcript:
     environment.pop("RETICULATE_PYTHON", None)
     client = McpClient(binary, ("serve",), environment)
     client._initialize_and_list_tools()
-    client.session(
-        action="prepare",
+    client.send(
         requirements={"python": ["numpy"]},
     )
     assert last_tool_text(client) == "[prepared]"
@@ -1231,8 +1224,7 @@ def test_does_not_fail_resolution_when_matplotlib_cache_cannot_be_written(
             current_directory=temporary,
         )
         client._initialize_and_list_tools()
-        client.session(
-            action="prepare",
+        client.send(
             requirements={"python": ["matplotlib"]},
         )
         assert last_tool_text(client) == "[prepared]"
@@ -1241,8 +1233,7 @@ def test_does_not_fail_resolution_when_matplotlib_cache_cannot_be_written(
         caches[0].unlink()
         caches[0].mkdir()
 
-        client.session(
-            action="prepare",
+        client.send(
             requirements={"python": ["py-yaml12"]},
         )
         assert last_tool_text(client) == "[prepared]", client.transcript[-1]
@@ -1262,15 +1253,14 @@ def test_restart_loses_state_and_retains_python_requirements(
 ) -> Transcript:
     client = McpClient(binary, ("serve",))
     client._initialize_and_list_tools()
-    client.session(
-        action="prepare",
+    client.send(
         requirements={"python": ["py-yaml12"]},
     )
     assert last_tool_text(client) == "[prepared]"
     client.send(python="restart_marker = 42")
     assert last_tool_text(client) == "[done]"
 
-    client.session(action="restart")
+    client.send(control="restart")
     assert last_tool_text(client) == (
         "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
     )
@@ -1360,8 +1350,8 @@ def test_restart_discards_pre_marker_python_activation(binary: Path) -> Transcri
             evaluation = client._start_send(r=r)
             activation_ready.wait("managed Python activation")
 
-            restart = client._start_session(
-                action="restart",
+            restart = client._start_send(
+                control="restart",
                 requirements={"python": ["matplotlib"]},
             )
             uv_started.wait("restart Python resolution")
@@ -1428,8 +1418,7 @@ def test_prepares_python_requirements_after_worker_startup(binary: Path) -> Tran
     assert last_tool_text(client) == "True\n"
 
     invalid = "not a valid requirement !!!"
-    client.session(
-        action="prepare",
+    client.send(
         requirements={"python": [invalid]},
     )
     result = client.transcript[-1]["result"]
@@ -1452,7 +1441,7 @@ def test_prepares_python_requirements_after_worker_startup(binary: Path) -> Tran
     )
     assert last_tool_text(client) == "(42, True, True, 'yaml12')\n"
 
-    client.session(action="restart")
+    client.send(control="restart")
     assert last_tool_text(client) == (
         "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
     )
@@ -1534,7 +1523,7 @@ def test_failed_live_python_requirements_do_not_run_cell(binary: Path) -> Transc
 def test_prepares_after_idle_python_resolution(binary: Path) -> Transcript:
     client = McpClient(binary, ("serve",))
     client._initialize_and_list_tools()
-    client.session(action="prepare", requirements={"r": ["later"]})
+    client.send(requirements={"r": ["later"]})
 
     # fmt: r
     r = code(r"""
@@ -1556,8 +1545,7 @@ def test_prepares_after_idle_python_resolution(binary: Path) -> Transcript:
     client.send(r=r)
     release_worker_callback_gate(client, "idle Python callback")
 
-    client.session(
-        action="prepare",
+    client.send(
         requirements={"python": ["py-yaml12"]},
     )
     assert last_tool_text(client) == "[prepared]"
@@ -1572,7 +1560,7 @@ def test_retains_idle_python_activation_during_continuous_collection(
 ) -> Transcript:
     client = McpClient(binary, ("serve",))
     client._initialize_and_list_tools()
-    client.session(action="prepare", requirements={"r": ["later"]})
+    client.send(requirements={"r": ["later"]})
     client.send(r="invisible(reticulate::py_config())")
     assert last_tool_text(client) == "[done]"
 
@@ -1614,7 +1602,7 @@ def test_retains_idle_python_activation_during_continuous_collection(
         "idle Python activation output",
     )
 
-    client.session(action="restart")
+    client.send(control="restart")
     assert last_tool_text(client) == (
         "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
     )
@@ -1655,12 +1643,11 @@ def test_does_not_retain_stale_python_materialization(binary: Path) -> Transcrip
     client.send(r=r)
     assert last_tool_text(client) == "[done]"
 
-    client.session(
-        action="prepare",
+    client.send(
         requirements={"python": ["py-yaml12"]},
     )
     assert last_tool_text(client) == "[prepared]"
-    client.session(action="restart")
+    client.send(control="restart")
     assert last_tool_text(client) == (
         "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
     )
@@ -1676,8 +1663,8 @@ def test_failed_restart_requirements_preserve_worker(binary: Path) -> Transcript
     assert last_tool_text(client) == "[done]"
     invalid = "not a valid requirement !!!"
 
-    client.session(
-        action="restart",
+    client.send(
+        control="restart",
         requirements={"python": [invalid]},
     )
     result = client.transcript[-1]["result"]
@@ -1754,7 +1741,7 @@ def test_layers_python_requirements_declared_by_r_packages(
         output = last_tool_text(client)
         assert output == "(42, 'yaml12', True)\n", repr(output)
 
-        client.session(action="restart")
+        client.send(control="restart")
         assert last_tool_text(client) == (
             "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
         )
@@ -1768,8 +1755,7 @@ def test_layers_python_requirements_declared_by_r_packages(
         client.send(python=python)
         assert last_tool_text(client) == "(False, 'yaml12')\n"
 
-        client.session(
-            action="prepare",
+        client.send(
             requirements={"python": ["py-yaml12"]},
         )
         assert last_tool_text(client) == "[prepared]"
@@ -1921,23 +1907,24 @@ def test_rejects_python_preparation_while_evaluation_is_running(
         release = running.parent / "release-python"
         uv_record.write_text("", encoding="utf-8")
 
-        session_returned = threading.Event()
+        preparation_returned = threading.Event()
         forced_release = threading.Event()
 
         def release_blocked_evaluation() -> None:
-            if not session_returned.wait(2):
+            if not preparation_returned.wait(2):
                 forced_release.set()
                 release.touch()
 
         watchdog = threading.Thread(target=release_blocked_evaluation)
         watchdog.start()
-        client.session(
-            action="prepare",
+        client.send(
             requirements={"python": ["py-yaml12"]},
         )
-        session_returned.set()
+        preparation_returned.set()
         watchdog.join()
-        assert not forced_release.is_set(), "session waited for the running evaluation"
+        assert not forced_release.is_set(), (
+            "standalone preparation waited for the running evaluation"
+        )
         result = client.transcript[-1]["result"]
         assert result["isError"] is True, result
         assert result["content"][0]["text"] == (
@@ -2001,9 +1988,7 @@ def test_interrupts_running_python_evaluation(binary: Path) -> Transcript:
                 client,
             )
 
-            client.session(action="interrupt")
-            assert last_tool_text(client) == "[interrupt sent]"
-            client.send(timeout_ms=3_000)
+            client.send(control="interrupt", timeout_ms=0)
             result = client.transcript[-1]["result"]
             assert result["isError"] is False, result
             output = last_tool_text(client)
@@ -2058,9 +2043,7 @@ def test_interrupts_running_python_evaluation(binary: Path) -> Transcript:
                 client,
             )
 
-            client.session(action="interrupt")
-            assert last_tool_text(client) == "[interrupt sent]"
-            client.send(timeout_ms=3_000)
+            client.send(control="interrupt", timeout_ms=0)
             assert "KeyboardInterrupt" in last_tool_text(client)
 
             client.send(python="python_interrupt_state + 1")
@@ -2137,9 +2120,7 @@ def test_retries_python_runtime_initialization_after_interrupt(
                 client,
             )
 
-            client.session(action="interrupt")
-            assert last_tool_text(client) == "[interrupt sent]"
-            client.send(timeout_ms=3_000)
+            client.send(control="interrupt", timeout_ms=0)
             result = client.transcript[-1]["result"]
             assert result["isError"] is False, result
             output = last_tool_text(client)
@@ -2234,6 +2215,12 @@ def test_interrupts_live_python_resolver(binary: Path) -> Transcript:
         environment, uv_started, uv_release = checkpoint_uv_environment(
             temporary, "mcp-console-blocked-live-preparation"
         )
+        uv_interrupted = FifoCheckpoint(temporary / "uv-interrupted")
+        uv_interrupt_release = FifoCheckpoint(temporary / "uv-interrupt-release")
+        environment["MCP_CONSOLE_TEST_UV_INTERRUPTED"] = str(uv_interrupted.path)
+        environment["MCP_CONSOLE_TEST_UV_INTERRUPT_RELEASE"] = str(
+            uv_interrupt_release.path
+        )
         environment["RUST_LOG"] = "error"
         previous_handler = signal.signal(signal.SIGINT, signal.SIG_IGN)
         previous_mask = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT})
@@ -2243,6 +2230,7 @@ def test_interrupts_live_python_resolver(binary: Path) -> Transcript:
             signal.signal(signal.SIGINT, previous_handler)
             signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
         passed = False
+        interrupt_released = False
         try:
             client._initialize_and_list_tools()
             client.send(r="resolver_interrupt_state <- 41L")
@@ -2254,33 +2242,35 @@ def test_interrupts_live_python_resolver(binary: Path) -> Transcript:
             )
             uv_started.wait("live Python preparation")
 
-            interrupt = client._start_session(action="interrupt")
-            preparation_returned = threading.Event()
-            forced_release = threading.Event()
-
-            def release_if_preparation_blocks() -> None:
-                if not preparation_returned.wait(2):
-                    forced_release.set()
-                    uv_release.release()
-
-            watchdog = threading.Thread(target=release_if_preparation_blocks)
-            watchdog.start()
-            client._receive_many([preparation, interrupt])
-            preparation_returned.set()
-            watchdog.join()
-            assert not forced_release.is_set(), (
-                "interrupt did not stop the Python resolver"
+            interrupt = client._start_send(control="interrupt", timeout_ms=0)
+            uv_interrupted.wait("live Python resolver interrupt")
+            readable, _, _ = select.select([client.stdout], [], [], 10)
+            assert client.stdout in readable, (
+                "control-only interrupt waited for Python preparation to settle"
             )
+            client._receive(interrupt)
             assert interrupt["result"] == {
-                "content": [{"type": "text", "text": "[interrupt sent]"}],
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "\n[running; poll with an empty send]",
+                    }
+                ],
                 "isError": False,
             }, interrupt
+
+            uv_interrupt_release.release()
+            interrupt_released = True
+            client._receive(preparation)
             assert preparation["result"]["isError"] is True, preparation
             error = preparation["result"]["content"][0]["text"]
             assert "managed Python resolution" in error, error
             preparation["result"]["content"][0]["text"] = (
                 "managed Python resolution cancelled by interrupt"
             )
+
+            client.send()
+            assert last_tool_text(client) == "\n[idle]"
 
             client.send(
                 r=(
@@ -2293,9 +2283,13 @@ def test_interrupts_live_python_resolver(binary: Path) -> Transcript:
             passed = True
             return transcript
         finally:
+            if not interrupt_released:
+                uv_interrupt_release.release()
             uv_release.release()
             uv_started.close()
             uv_release.close()
+            uv_interrupted.close()
+            uv_interrupt_release.close()
             if not passed:
                 stop_client(client)
 
@@ -2330,8 +2324,7 @@ def test_restart_cancels_live_python_preparation(binary: Path) -> Transcript:
             watchdog = threading.Thread(target=release_if_calls_block)
             watchdog.start()
             poll = client._start_send()
-            second_prepare = client._start_session(
-                action="prepare",
+            second_prepare = client._start_send(
                 requirements={"python": ["py-yaml12"]},
             )
             client._receive_many([poll, second_prepare])
@@ -2353,7 +2346,7 @@ def test_restart_cancels_live_python_preparation(binary: Path) -> Transcript:
                 "isError": True,
             }, second_prepare
 
-            restart = client._start_session(action="restart")
+            restart = client._start_send(control="restart")
             client._receive_many([preparation, restart])
 
             preparation_result = preparation["result"]
@@ -2408,8 +2401,7 @@ def test_does_not_parse_requirements_as_rscript_options(binary: Path) -> Transcr
         environment["MCP_CONSOLE_HOST_MARKER"] = str(marker)
         client = McpClient(binary, ("serve",), environment)
         client._initialize_and_list_tools()
-        client.session(
-            action="prepare",
+        client.send(
             requirements={"python": ["-e", expression]},
         )
         result = client.transcript[-1]["result"]
@@ -2856,7 +2848,7 @@ def test_returns_matplotlib_plots(binary: Path) -> Transcript:
         client.send(python="(cache_link_replaced, __import__('yaml12').__name__)")
         assert last_tool_text(client) == "(True, 'yaml12')\n"
 
-        client.session(action="restart")
+        client.send(control="restart")
         assert last_tool_text(client) == (
             "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
         )
@@ -2954,8 +2946,7 @@ def test_inherits_explicit_matplotlib_config(binary: Path) -> Transcript:
         environment["MCP_CONSOLE_TEST_MATPLOTLIBRC"] = str(explicit_rc)
         client = McpClient(binary, ("serve",), environment)
         client._initialize_and_list_tools()
-        client.session(
-            action="prepare",
+        client.send(
             requirements={"python": ["matplotlib"]},
         )
         assert last_tool_text(client) == "[prepared]"
@@ -3048,8 +3039,7 @@ def test_inherits_default_matplotlib_config(binary: Path) -> Transcript:
         environment.pop("MPLCONFIGDIR", None)
         client = McpClient(binary, ("serve",), environment)
         client._initialize_and_list_tools()
-        client.session(
-            action="prepare",
+        client.send(
             requirements={"python": ["matplotlib"]},
         )
         assert last_tool_text(client) == "[prepared]"

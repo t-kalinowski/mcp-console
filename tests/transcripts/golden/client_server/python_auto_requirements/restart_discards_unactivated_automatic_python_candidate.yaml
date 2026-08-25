@@ -53,8 +53,8 @@ result:
         [worker stopped: in-memory state lost]
   isError: true
 ---
-session:
-  action: restart
+send:
+  control: restart
   requirements:
     python:
       - matplotlib
@@ -78,4 +78,3 @@ result:
       text: |
         [1]  TRUE FALSE
   isError: false
-...

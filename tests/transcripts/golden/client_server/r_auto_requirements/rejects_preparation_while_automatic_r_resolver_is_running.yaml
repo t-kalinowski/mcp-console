@@ -10,8 +10,7 @@ result:
         [1] 42
   isError: false
 ---
-session:
-  action: prepare
+send:
   requirements:
     r:
       - english
@@ -22,4 +21,3 @@ result:
         worker is already evaluating a cell; poll it before preparing
         requirements
   isError: true
-...

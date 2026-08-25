@@ -205,7 +205,7 @@ def without_request_ids(transcript: Transcript) -> Transcript:
     rendered = []
     for entry in transcript:
         entry = entry.copy()
-        if entry.keys() & {"input", "send", "session"}:
+        if entry.keys() & {"input", "send"}:
             entry.pop("id", None)
         rendered.append(entry)
     return rendered

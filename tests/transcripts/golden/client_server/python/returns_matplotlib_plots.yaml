@@ -196,8 +196,8 @@ result:
         (True, 'yaml12')
   isError: false
 ---
-session:
-  action: restart
+send:
+  control: restart
 result:
   content:
     - type: text
@@ -263,4 +263,3 @@ result:
       text: |
         (True, 7.25, True, True, True, True, False, False)
   isError: false
-...

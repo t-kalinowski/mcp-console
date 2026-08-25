@@ -223,15 +223,7 @@ impl Drop for ControlledSendAdmission {
 }
 
 impl Client {
-    /// Sends SIGINT to the active resolver or live worker process.
-    pub(crate) async fn interrupt(&self) -> Result<(), String> {
-        let client = self.clone();
-        tokio::task::spawn_blocking(move || client.interrupt_standalone_blocking())
-            .await
-            .map_err(|error| format!("worker interrupt task failed: {error}"))?
-    }
-
-    fn interrupt_standalone_blocking(&self) -> Result<(), String> {
+    pub(super) fn interrupt_standalone_blocking(&self) -> Result<(), String> {
         let resolver = {
             let lifecycle = self
                 .0
@@ -302,22 +294,6 @@ impl Client {
             .worker
             .ok_or_else(|| "worker is not running".to_string())?
             .interrupt()
-    }
-
-    /// Replaces the current worker, optionally adding requirements first.
-    pub(crate) async fn restart(
-        &self,
-        requirements: super::Requirements,
-        grace: Duration,
-    ) -> Result<Response, String> {
-        let client = self.clone();
-        let restart = tokio::task::spawn_blocking(move || {
-            let _operation = client.admit_operation()?;
-            client.restart_blocking(requirements, grace, false, None)
-        })
-        .await
-        .map_err(|error| format!("worker restart task failed: {error}"))??;
-        Ok(restart.response)
     }
 
     /// Defers the replacement-ready marker when this admission owns a follow-up operation.

@@ -10,8 +10,8 @@ result:
         zod: echo
   isError: false
 ---
-session:
-  action: restart
+send:
+  control: restart
 result:
   content:
     - type: text
@@ -30,5 +30,5 @@ error:
   code: -32602
   message: tool not found
 ---
-server stderr: "mcp-console: transcript recording disabled: <run record creation failed>"
-...
+server stderr: >-
+  mcp-console: transcript recording disabled: <run record creation failed>

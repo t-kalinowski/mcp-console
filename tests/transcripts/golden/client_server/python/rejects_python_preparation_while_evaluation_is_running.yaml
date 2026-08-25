@@ -16,8 +16,7 @@ result:
       text: <running>
   isError: false
 ---
-session:
-  action: prepare
+send:
   requirements:
     python:
       - py-yaml12
@@ -57,4 +56,3 @@ result:
       text: |
         ('original runtime retained', True)
   isError: false
-...

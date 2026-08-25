@@ -358,7 +358,7 @@ impl Client {
     }
 
     /// Starts one cell, supplies stdin, or collects an idle response.
-    pub(crate) async fn send(&self, request: SendRequest) -> Response {
+    pub(crate) async fn send(&self, request: SendRequest) -> Result<Response, String> {
         if let Some(control) = request.control {
             return self.send_controlled(control, request).await;
         }
@@ -373,33 +373,51 @@ impl Client {
         } = request;
         if let Some(requirements) = requirements {
             let Some(cell) = cell else {
-                return output::direct_failure("`requirements` requires a code cell");
+                return Ok(output::direct_failure(
+                    "`requirements` requires a code cell",
+                ));
             };
             let requirements = match requirements {
                 RequirementSubmission::Valid(requirements) => requirements,
-                RequirementSubmission::Invalid(error) => return output::direct_failure(error),
+                RequirementSubmission::Invalid(error) => {
+                    return Ok(output::direct_failure(error));
+                }
             };
-            return self
+            return Ok(self
                 .send_with_requirements(cell, stdin, requirements, timeout, transcript, call_id)
-                .await;
+                .await);
         }
-        match self
-            .send_inner(cell, stdin, timeout, transcript, call_id)
-            .await
-        {
-            Ok(response) => output::render_response(response),
-            Err(failure) => {
-                let mut response = Response::default();
-                response.push_failure(failure);
-                response
-            }
-        }
+        Ok(
+            match self
+                .send_inner(cell, stdin, timeout, transcript, call_id)
+                .await
+            {
+                Ok(response) => output::render_response(response),
+                Err(failure) => {
+                    let mut response = Response::default();
+                    response.push_failure(failure);
+                    response
+                }
+            },
+        )
     }
 
-    async fn send_controlled(&self, control: SendControl, request: SendRequest) -> Response {
+    async fn send_controlled(
+        &self,
+        control: SendControl,
+        request: SendRequest,
+    ) -> Result<Response, String> {
         let timeout = request.timeout;
-        if request.requirements.is_some() && request.cell.is_none() {
-            return output::direct_failure("`requirements` requires a code cell");
+        let direct_restart_error = matches!(control, SendControl::Restart)
+            && request.requirements.is_some()
+            && request.cell.is_none();
+        if matches!(control, SendControl::Interrupt)
+            && request.requirements.is_some()
+            && request.cell.is_none()
+        {
+            return Ok(output::direct_failure(
+                "`requirements` with `control = \"interrupt\"` requires a code cell",
+            ));
         }
         let client = self.clone();
         let admission = tokio::task::spawn_blocking(move || {
@@ -408,12 +426,15 @@ impl Client {
         .await;
         let admission = match admission {
             Ok(Ok(admission)) => admission,
-            Ok(Err(error)) => return output::direct_failure(error),
+            Ok(Err(error)) if direct_restart_error => return Err(error),
+            Ok(Err(error)) => return Ok(output::direct_failure(error)),
             Err(error) => {
-                return output::direct_failure(format!("session control task failed: {error}"));
+                return Ok(output::direct_failure(format!(
+                    "session control task failed: {error}"
+                )));
             }
         };
-        match admission {
+        Ok(match admission {
             ControlledEvaluation::Started(evaluation, wait_claim) => {
                 match evaluation.wait(wait_claim, timeout).await {
                     Ok(wait) => output::render_response(send_response_from_wait(wait)),
@@ -440,7 +461,7 @@ impl Client {
                 Ok(wait) => output::render_response(send_response_from_wait(wait)),
                 Err(error) => output::direct_failure(error),
             },
-        }
+        })
     }
 
     fn control_and_start_evaluation(
@@ -457,7 +478,38 @@ impl Client {
             transcript,
             call_id,
         } = request;
-        let control = self.begin_controlled_send()?;
+        let standalone_interrupt = matches!(requested, SendControl::Interrupt)
+            && cell.is_none()
+            && requirements.is_none()
+            && stdin.as_ref().is_none_or(String::is_empty);
+        let control = match self.begin_controlled_send() {
+            Ok(control) => control,
+            Err(_) if standalone_interrupt => {
+                // A controlled restart owns admission while its resolver is live.
+                // Preserve resolver-first signaling for an empty interrupt.
+                self.interrupt_standalone_blocking()?;
+                std::thread::sleep(INTERRUPT_GRACE);
+                let control = match self.begin_controlled_send() {
+                    Ok(control) => control,
+                    Err(_) => {
+                        // The interrupted control retains output recovery ownership.
+                        return Ok(ControlledEvaluation::Returned(output::render_response(
+                            SendResponse::Running(Response::default()),
+                        )));
+                    }
+                };
+                let generation = control.generation();
+                return self.continue_after_interrupt(
+                    &control,
+                    generation,
+                    cell,
+                    requirements,
+                    transcript,
+                    call_id,
+                );
+            }
+            Err(error) => return Err(error),
+        };
         match requested {
             SendControl::Interrupt => self.interrupt_and_start_evaluation(
                 &control,
@@ -538,9 +590,35 @@ impl Client {
             }
         }
         std::thread::sleep(INTERRUPT_GRACE);
+        self.continue_after_interrupt(control, generation, cell, requirements, transcript, call_id)
+    }
+
+    fn continue_after_interrupt(
+        &self,
+        control: &ControlledSendAdmission,
+        generation: WorkerGeneration,
+        cell: Option<crate::cell::Cell>,
+        requirements: Option<RequirementSubmission>,
+        transcript: crate::transcript::Transcript,
+        call_id: Option<u64>,
+    ) -> Result<ControlledEvaluation, String> {
         self.ensure_controlled_generation(control, &generation)?;
 
-        let _operation = self.admit_controlled_operation();
+        // An interrupted preparation retains read admission until its resolver
+        // settles. A code-free interrupt must still answer after the grace.
+        let _operation = if cell.is_none() {
+            match self.0.admission.try_write() {
+                Ok(operation) => operation,
+                Err(_) => {
+                    // The preparation retains output recovery ownership.
+                    return Ok(ControlledEvaluation::Returned(output::render_response(
+                        SendResponse::Running(Response::default()),
+                    )));
+                }
+            }
+        } else {
+            self.admit_controlled_operation()
+        };
         let prior = self.prior_evaluation_after_interrupt(&generation, control, cell.is_some())?;
         if cell.is_none() {
             return match prior {

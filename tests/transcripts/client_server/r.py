@@ -129,7 +129,7 @@ def test_services_r_input_handlers_at_cell_boundaries(binary: Path) -> Transcrip
 def test_services_later_callbacks_while_idle(binary: Path) -> Transcript:
     client = McpClient(binary, ("serve",))
     client._initialize_and_list_tools()
-    client.session(action="prepare", requirements={"r": ["later"]})
+    client.send(requirements={"r": ["later"]})
 
     # fmt: r
     r = code(r"""
@@ -159,7 +159,7 @@ def test_services_later_callbacks_while_idle(binary: Path) -> Transcript:
 def test_collects_idle_later_callbacks_with_empty_send(binary: Path) -> Transcript:
     client = McpClient(binary, ("serve",))
     client._initialize_and_list_tools()
-    client.session(action="prepare", requirements={"r": ["later"]})
+    client.send(requirements={"r": ["later"]})
     client.send()
     assert last_tool_text(client) == "\n[idle]"
 
@@ -194,7 +194,7 @@ def test_collects_idle_later_callbacks_with_empty_send(binary: Path) -> Transcri
 def test_snapshots_output_while_idle_later_callback_runs(binary: Path) -> Transcript:
     client = McpClient(binary, ("serve",))
     client._initialize_and_list_tools()
-    client.session(action="prepare", requirements={"r": ["later"]})
+    client.send(requirements={"r": ["later"]})
 
     # fmt: r
     r = code(r"""
@@ -242,7 +242,7 @@ def test_snapshots_output_while_idle_later_callback_runs(binary: Path) -> Transc
 def test_restarts_while_idle_callback_runs(binary: Path) -> Transcript:
     client = McpClient(binary, ("serve",))
     client._initialize_and_list_tools()
-    client.session(action="prepare", requirements={"r": ["later"]})
+    client.send(requirements={"r": ["later"]})
 
     # fmt: r
     r = code(r"""
@@ -270,7 +270,7 @@ def test_restarts_while_idle_callback_runs(binary: Path) -> Transcript:
         "idle callback output",
         timeout_ms=10,
     )
-    client.session(action="restart")
+    client.send(control="restart")
     assert last_tool_text(client) == (
         "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
     )
@@ -281,7 +281,7 @@ def test_returns_plots_from_idle_later_callbacks(binary: Path) -> Transcript:
     environment, rscript = r_test_environment()
     client = McpClient(binary, ("serve",), environment)
     client._initialize_and_list_tools()
-    client.session(action="prepare", requirements={"r": ["later"]})
+    client.send(requirements={"r": ["later"]})
 
     # fmt: r
     r = code(r"""
@@ -413,7 +413,7 @@ def test_skips_final_boundary_callbacks_after_cell_failure(binary: Path) -> Tran
 def test_routes_input_to_idle_later_callbacks_before_a_cell(binary: Path) -> Transcript:
     client = McpClient(binary, ("serve",))
     client._initialize_and_list_tools()
-    client.session(action="prepare", requirements={"r": ["later"]})
+    client.send(requirements={"r": ["later"]})
 
     # fmt: r
     r = code(r"""
@@ -447,7 +447,7 @@ def test_routes_input_to_idle_later_callback(
 ) -> Transcript:
     client = McpClient(binary, ("serve",))
     client._initialize_and_list_tools()
-    client.session(action="prepare", requirements={"r": ["later"]})
+    client.send(requirements={"r": ["later"]})
 
     # fmt: r
     r = code(r"""
@@ -905,7 +905,7 @@ def test_restart_while_r_waits_for_input(binary: Path) -> Transcript:
         '[input requested: "restart> "]\n[waiting for stdin]'
     )
 
-    client.session(action="restart")
+    client.send(control="restart")
     output = last_tool_text(client)
     assert output == (
         '[1] ""\n[active evaluation stopped by session restart request]\n'
@@ -943,7 +943,7 @@ def test_restart_skips_cell_boundary_callbacks(binary: Path) -> Transcript:
         assert last_tool_text(client) == (
             '[input requested: "callback> "]\n[waiting for stdin]'
         )
-        client.session(action="restart")
+        client.send(control="restart")
         assert "cell body ran" not in last_tool_text(client)
 
         # Make the next callback ready before the cell blocks, then restart
@@ -966,7 +966,7 @@ def test_restart_skips_cell_boundary_callbacks(binary: Path) -> Transcript:
         assert last_tool_text(client) == (
             '[input requested: "cell> "]\n[waiting for stdin]'
         )
-        client.session(action="restart")
+        client.send(control="restart")
         assert "post-cell callback ran" not in last_tool_text(client)
         return client._finish()
 
@@ -1015,7 +1015,7 @@ def test_restart_skips_direct_stdin_boundary_callback(binary: Path) -> Transcrip
             client,
         )
 
-        restarted = client._start_session(action="restart")
+        restarted = client._start_send(control="restart")
         client._receive(waiting)
         client._receive(restarted)
         assert "direct callback released" in waiting["result"]["content"][0]["text"]
@@ -1154,22 +1154,18 @@ def test_interrupts_running_r_evaluation(binary: Path) -> Transcript:
                 client,
             )
 
-            client.session(action="interrupt")
-            assert last_tool_text(client) == "[interrupt sent]"
-            client.send(timeout_ms=3_000)
+            client.send(control="interrupt", timeout_ms=0)
             output = last_tool_text(client)
             assert output == "\n", repr(output)
             client.send(r="c(boundary_interrupt_state, boundary_interrupt_cleanup)")
             assert last_tool_text(client) == "[1] 42  1\n"
 
-            client.session(action="interrupt")
-            assert last_tool_text(client) == "[interrupt sent]"
-            # Signal delivery does not determine whether R writes its
-            # interrupt newline while idle or at the next cell boundary. A
-            # silent cell renders the same response under either ownership,
-            # and the following call verifies that the source ran.
+            client.send(control="interrupt", timeout_ms=0)
+            assert last_tool_text(client) == "\n\n[idle]"
+            # The controlled send reports idle state after the interrupt
+            # grace. The following calls verify that later source still runs.
             client.send(r="idle_interrupt_state <- 42L")
-            assert last_tool_text(client) == "\n"
+            assert last_tool_text(client) == "[done]"
             client.send(r="idle_interrupt_state")
             assert last_tool_text(client) == "[1] 42\n"
 
@@ -1214,14 +1210,8 @@ def test_interrupts_managed_console_input(binary: Path) -> Transcript:
         assert last_tool_text(client) == (
             '[input requested: "R interrupt> "]\n[waiting for stdin]'
         )
-        client.session(action="interrupt")
-        assert last_tool_text(client) == "[interrupt sent]"
-        wait_for_evaluation_output(
-            client,
-            "R input interrupted\n",
-            "R console input interrupt",
-            timeout_ms=3_000,
-        )
+        client.send(control="interrupt", timeout_ms=0)
+        assert last_tool_text(client) == "R input interrupted\n"
         client.send(r='readline("R replay> ")', stdin="!\n")
         assert last_tool_text(client) == (
             '[input requested: "R replay> "]\n[1] "R partial!"\n'
@@ -1239,8 +1229,8 @@ def test_interrupts_managed_console_input(binary: Path) -> Transcript:
         assert last_tool_text(client) == (
             '[input requested: "R suspended> "]\n[waiting for stdin]'
         )
-        client.session(action="interrupt")
-        assert last_tool_text(client) == "[interrupt sent]"
+        client.send(control="interrupt", timeout_ms=0)
+        assert last_tool_text(client) == "\n[waiting for stdin]"
         wait_for_evaluation_output(
             client,
             "suspended input accepted\n",
@@ -1263,14 +1253,8 @@ def test_interrupts_managed_console_input(binary: Path) -> Transcript:
         assert last_tool_text(client) == (
             '[input requested: "Python interrupt> "]\n[waiting for stdin]'
         )
-        client.session(action="interrupt")
-        assert last_tool_text(client) == "[interrupt sent]"
-        wait_for_evaluation_output(
-            client,
-            "Python input interrupted\n",
-            "Python console input interrupt",
-            timeout_ms=3_000,
-        )
+        client.send(control="interrupt", timeout_ms=0)
+        assert last_tool_text(client) == "Python input interrupted\n"
         client.send(python='input("Python replay> ")', stdin="!\n")
         assert last_tool_text(client) == (
             "[input requested: \"Python replay> \"]\n'Python partial!'\n"
@@ -1316,22 +1300,8 @@ def test_replays_console_prefix_after_operation_boundary_interrupt(
             "[waiting for stdin]"
         )
 
-        client.session(action="interrupt")
-        assert last_tool_text(client) == "[interrupt sent]"
-        deadline = time.monotonic() + 3
-        poll_start = len(client.transcript)
-        while True:
-            client.send(timeout_ms=3_000)
-            output = last_tool_text(client)
-            if output == "caught later-callback interrupt\n":
-                break
-            assert output == "\n[waiting for stdin]", repr(output)
-            assert time.monotonic() < deadline, (
-                "later console callback did not handle the interrupt"
-            )
-        polls = client.transcript[poll_start:]
-        final_poll = polls[-1]
-        client.transcript[poll_start:] = [final_poll]
+        client.send(control="interrupt", timeout_ms=0)
+        assert last_tool_text(client) == "caught later-callback interrupt\n"
 
         client.send(r='readline("after later callback> ")', stdin="!\n")
         assert last_tool_text(client) == (
@@ -1372,9 +1342,7 @@ def test_replays_console_prefix_after_operation_boundary_interrupt(
             client,
         )
 
-        client.session(action="interrupt")
-        assert last_tool_text(client) == "[interrupt sent]"
-        client.send(timeout_ms=3_000)
+        client.send(control="interrupt", timeout_ms=0)
         assert last_tool_text(client) == "caught between-callback interrupt\n"
 
         client.send(

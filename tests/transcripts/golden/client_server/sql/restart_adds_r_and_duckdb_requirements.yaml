@@ -9,8 +9,8 @@ result:
       text: "[done]"
   isError: false
 ---
-session:
-  action: restart
+send:
+  control: restart
   requirements:
     r:
       - praise
@@ -33,8 +33,8 @@ result:
         [1] TRUE
   isError: false
 ---
-session:
-  action: restart
+send:
+  control: restart
   requirements:
     r:
       - praise
@@ -90,4 +90,3 @@ result:
           <int64>
         1       1
   isError: false
-...

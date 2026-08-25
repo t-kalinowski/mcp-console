@@ -1,8 +1,8 @@
 ---
 !same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
 ---
-session:
-  action: restart
+send:
+  control: restart
 result:
   content:
     - type: text
@@ -27,4 +27,3 @@ result:
       text: |
         zod: echo
   isError: false
-...

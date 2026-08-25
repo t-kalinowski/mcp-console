@@ -1,8 +1,8 @@
 ---
 !same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
 ---
-session:
-  action: restart
+send:
+  control: restart
 result:
   content:
     - type: text
@@ -15,8 +15,8 @@ send:
   r: "42"
   timeout_ms: 30000
 ---
-session:
-  action: restart
+send:
+  control: restart
 result:
   content:
     - type: text
@@ -58,4 +58,3 @@ result:
 
         [idle]
   isError: false
-...

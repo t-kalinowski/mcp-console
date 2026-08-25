@@ -15,8 +15,7 @@ result:
       text: "[done]"
   isError: false
 ---
-session:
-  action: prepare
+send:
   requirements:
     duckdb:
       - json
@@ -26,8 +25,7 @@ result:
       text: "[prepared]"
   isError: false
 ---
-session:
-  action: prepare
+send:
   requirements:
     r:
       - praise
@@ -76,8 +74,7 @@ result:
       text: "[done]"
   isError: false
 ---
-session:
-  action: prepare
+send:
   requirements:
     duckdb:
       - fts
@@ -110,8 +107,8 @@ result:
         1 "loaded"
   isError: false
 ---
-session:
-  action: restart
+send:
+  control: restart
 result:
   content:
     - type: text
@@ -170,4 +167,3 @@ result:
           <string>
         1 "loaded"
   isError: false
-...

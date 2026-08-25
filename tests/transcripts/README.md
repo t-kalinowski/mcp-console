@@ -44,7 +44,7 @@ The crash-recovery case does the same across an unexpected worker exit and recor
 The suite asserts the public `send` result and records relay-to-worker and worker-to-relay frames under `relay` and `worker` direction labels in approximate order.
 Pending standard-output and standard-error chunks are grouped into one event without defining their relative order.
 The `client_server/r`, `client_server/python`, and `client_server/sql` suites exercise the built-in worker through the public `send` tool.
-The Zod materialization case verifies that initialization and unknown tool calls create no run, while a first `send` or `session` call does.
+The Zod materialization case verifies that initialization and unknown tool calls create no run, while a first `send` call does.
 The recording-failure cases verify that recording disables itself with one standard-error diagnostic while console calls and images continue normally.
 The Zod recording case projects `events.jsonl` into a readable YAML sequence in `records_tool_calls_and_images.events.yaml`, followed by the produced session root and file list.
 
@@ -75,7 +75,7 @@ A suite may set `PLATFORMS = {"darwin"}` to restrict execution and snapshot upda
 Restricted cases remain visible under `scripts/test --list` and are skipped on other platforms.
 A suite may set `REQUIRED_COMMANDS = {"ir"}` to skip when a required executable is not on `PATH`.
 
-Server cases create an `McpClient`, perform the session, and return `client._finish()`.
+Server cases create an `McpClient`, perform their `send` interactions, and return `client._finish()`.
 Other cases may invoke the binary directly and return their transcript entries.
 
 Each suite is also directly runnable:

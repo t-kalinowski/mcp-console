@@ -80,9 +80,8 @@
   call_id: 3
   request_id: <request ID>
   request:
-    name: session
+    name: send
     arguments:
-      action: prepare
       requirements:
         python:
           - transcript-fixture
@@ -107,4 +106,3 @@ produced session:
   files:
     - internal/events.jsonl
     - artifacts/call-000001-image-000001.png
-...

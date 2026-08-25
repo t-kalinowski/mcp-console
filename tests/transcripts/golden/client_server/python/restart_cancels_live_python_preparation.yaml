@@ -27,8 +27,7 @@ result:
       text: "[session is preparing requirements]"
   isError: true
 ---
-session:
-  action: prepare
+send:
   requirements:
     python:
       - py-yaml12
@@ -38,8 +37,8 @@ result:
       text: session is preparing requirements
   isError: true
 ---
-session:
-  action: restart
+send:
+  control: restart
 result:
   content:
     - type: text
@@ -61,4 +60,3 @@ result:
     - type: text
       text: "[done]"
   isError: false
-...

@@ -4,21 +4,17 @@
 input:
   method: tools/call
   params:
-    name: missing
-    arguments: {}
+    name: session
+    arguments:
+      action: restart
 error:
   code: -32602
   message: tool not found
 ---
 recording:
-  initialization and unknown tool only: absent
+  initialization and removed session tool only: absent
   materialized by:
     send:
       - session_started
       - tool_call
       - tool_result
-    session:
-      - session_started
-      - tool_call
-      - tool_result
-...

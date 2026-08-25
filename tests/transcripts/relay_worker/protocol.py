@@ -55,9 +55,6 @@ class RelayWorkerClient:
     def send(self, **arguments: object) -> ToolResult:
         return self._client.send(**arguments)
 
-    def session(self, **arguments: object) -> ToolResult:
-        return self._client.session(**arguments)
-
     def _open_capture(self) -> tuple[Path, TextIO]:
         capture = self._capture_path()
         return capture, capture.open(encoding="utf-8")
@@ -128,7 +125,7 @@ def test_restarts_session(binary: Path) -> Transcript:
     assert _tool_text(client.send(r=before_restart)) == "before restart\n"
     old_path, old_capture = client._open_capture()
 
-    assert _tool_text(client.session(action="restart")) == (
+    assert _tool_text(client.send(control="restart")) == (
         "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
     )
     # fmt: r

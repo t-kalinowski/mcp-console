@@ -1,16 +1,7 @@
 ---
 !same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
 ---
-session:
-  action: prepare
-result:
-  content:
-    - type: text
-      text: "`requirements` is required with `prepare`"
-  isError: true
----
-session:
-  action: prepare
+send:
   requirements: {}
 result:
   content:
@@ -20,8 +11,7 @@ result:
         `requirements.duckdb` is required
   isError: true
 ---
-session:
-  action: prepare
+send:
   requirements:
     duckdb:
       - spatial FROM community
@@ -33,8 +23,7 @@ result:
         contain only lowercase ASCII letters, digits, and underscores
   isError: true
 ---
-session:
-  action: prepare
+send:
   requirements:
     r:
       - ""
@@ -44,8 +33,7 @@ result:
       text: R requirement strings must not be empty
   isError: true
 ---
-session:
-  action: prepare
+send:
   requirements:
     r:
       - |-
@@ -57,19 +45,19 @@ result:
       text: R requirement strings must not contain NUL or line breaks
   isError: true
 ---
-session:
-  action: interrupt
+send:
+  control: interrupt
   requirements:
     python:
       - py-yaml12
 result:
   content:
     - type: text
-      text: "`requirements` is not supported with `interrupt`"
+      text: '`requirements` with `control = "interrupt"` requires a code cell'
   isError: true
 ---
-session:
-  action: restart
+send:
+  control: restart
   requirements: {}
 result:
   content:
@@ -79,8 +67,8 @@ result:
         `requirements.duckdb` is required
   isError: true
 ---
-session:
-  action: restart
+send:
+  control: restart
   requirements:
     r:
       - |-
@@ -92,8 +80,8 @@ result:
       text: R requirement strings must not contain NUL or line breaks
   isError: true
 ---
-session:
-  action: restart
+send:
+  control: restart
   requirements:
     duckdb:
       - spatial FROM community
@@ -104,4 +92,3 @@ result:
         DuckDB extension names must start with a lowercase ASCII letter and
         contain only lowercase ASCII letters, digits, and underscores
   isError: true
-...

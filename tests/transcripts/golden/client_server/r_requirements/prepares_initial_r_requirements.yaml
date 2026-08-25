@@ -1,8 +1,7 @@
 ---
 !same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
 ---
-session:
-  action: prepare
+send:
   requirements:
     r:
       - praise
@@ -12,8 +11,7 @@ result:
       text: "[prepared]"
   isError: false
 ---
-session:
-  action: prepare
+send:
   requirements:
     r:
       - not a valid requirement !!!
@@ -53,8 +51,7 @@ result:
         ir: dependency resolution failed
   isError: true
 ---
-session:
-  action: prepare
+send:
   requirements:
     r:
       - zeallot
@@ -87,8 +84,7 @@ result:
         [1] 42
   isError: false
 ---
-session:
-  action: prepare
+send:
   requirements:
     r:
       - praise
@@ -98,8 +94,7 @@ result:
       text: "[prepared]"
   isError: false
 ---
-session:
-  action: prepare
+send:
   requirements:
     r:
       - zeallot
@@ -134,8 +129,8 @@ result:
         [1] 42
   isError: false
 ---
-session:
-  action: restart
+send:
+  control: restart
 result:
   content:
     - type: text
@@ -167,4 +162,3 @@ result:
       text: |
         [1] 42
   isError: false
-...

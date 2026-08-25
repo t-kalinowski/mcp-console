@@ -798,7 +798,7 @@ where
         match &mut message {
             Some(JsonRpcMessage::Request(request)) => {
                 if let ClientRequest::CallToolRequest(call) = &mut request.request
-                    && matches!(call.params.name.as_ref(), "send" | "session")
+                    && call.params.name.as_ref() == "send"
                 {
                     let Some(admission) = self.deliveries.reserve(request.id.clone()) else {
                         // Under stdout backpressure another response is not reliable,

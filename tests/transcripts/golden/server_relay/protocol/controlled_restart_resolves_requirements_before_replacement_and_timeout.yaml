@@ -26,6 +26,11 @@ relay:
   kind: ready
 ---
 server:
+  kind: stdin
+  data: |
+    replacement requirement input
+---
+server:
   kind: evaluate
   language: r
   source: replacement requirement cell
@@ -37,4 +42,3 @@ relay:
 ---
 relay:
   kind: completed
-...

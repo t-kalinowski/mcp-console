@@ -9,8 +9,8 @@ result:
       text: "[done]"
   isError: false
 ---
-session:
-  action: restart
+send:
+  control: restart
 result:
   content:
     - type: text
@@ -20,8 +20,8 @@ result:
         [idle]
   isError: false
 ---
-session:
-  action: restart
+send:
+  control: restart
 result:
   content:
     - type: text
@@ -39,4 +39,3 @@ result:
       text: |
         zod: echo
   isError: false
-...

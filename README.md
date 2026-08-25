@@ -24,15 +24,16 @@ An agent can load data once, build useful objects, inspect an intermediate resul
 
 ## Working with the console
 
-The MCP interface has two tools:
+The MCP interface exposes one tool: `send`.
+It runs one complete R, Python, or SQL cell, supplies interactive input, prepares additive requirements, applies an optional interrupt or restart, or collects pending output.
 
-- `send` runs one complete R, Python, or SQL cell, can prepare additive requirements needed by that cell, applies an optional inline interrupt or restart, supplies interactive input, or collects pending output.
-- `session` remains available for standalone requirement preparation, interruption, and restart.
-
-Calls to `send` are sequential.
-Without inline control, a call prepares requirements, queues nonempty standard input, and then evaluates its cell.
-Inline interrupt preserves in-memory state and orders signal delivery, same-call input, a 100-millisecond grace period, requirements, and evaluation; the new cell is not run if the interrupted evaluation remains active.
-Inline restart resolves requirements before replacing the worker, then queues same-call input and runs the cell only in the replacement.
+Code-bearing calls to `send` are sequential.
+A control-only interrupt may overlap a pending `send` while that call resolves or prepares requirements, including for restart.
+Requirements alone perform standalone preparation without starting an initial worker.
+With a cell, requirements are its preconditions; without control, preparation precedes nonempty standard input and evaluation.
+`control = "interrupt"` preserves in-memory state and orders signal delivery, same-call input, and a 100-millisecond grace period; when a cell follows, its requirements are then prepared before evaluation, and the cell is not run if the interrupted evaluation remains active.
+`control = "restart"` resolves requirements before replacing the worker, then queues same-call input and runs an optional cell only in the replacement.
+Polling and stdin remain code-free `send` calls.
 Control, interrupt grace, and explicit requirement preparation do not consume the wait timeout, which starts after cell dispatch or attachment to an active evaluation.
 R and Python global state and the in-memory DuckDB catalog remain available until the worker is restarted, replaced after failure, or the server exits.
 Prepared requirements remain available across worker restarts, but in-memory language, database, debugger, and unread-input state does not.
@@ -84,7 +85,7 @@ The data, model, Python imports, and DuckDB catalog remain available for later c
 ## Current status
 
 The repository contains a working Rust MCP server, sandboxed worker relay, built-in mixed-language worker, host dependency resolvers, session recording, and public process-boundary transcript tests.
-The registered MCP surface is intentionally limited to `send` and `session`.
+The registered MCP surface contains only `send`.
 
 The core console currently runs only on macOS.
 Linux and Windows support is not implemented, the package is not published, and this repository does not yet document an installation route.
@@ -96,7 +97,7 @@ The generated Quarto transcript and human-facing tools for following and inspect
 Other current limitations include:
 
 - there is one implicit session and no named-session management;
-- cells run sequentially, and concurrent `send` calls are unsupported; and
+- cells run sequentially, while lifecycle control may overlap the operation it interrupts or replaces; and
 - restart and worker replacement discard R, Python, DuckDB, debugger, and unread-input state.
 
 ## Security boundary

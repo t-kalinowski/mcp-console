@@ -35,8 +35,7 @@ result:
       text: "[done]"
   isError: false
 ---
-session:
-  action: prepare
+send:
   requirements:
     python:
       - py-yaml12
@@ -46,8 +45,8 @@ result:
       text: "[prepared]"
   isError: false
 ---
-session:
-  action: restart
+send:
+  control: restart
 result:
   content:
     - type: text
@@ -65,4 +64,3 @@ result:
       text: |
         'yaml12'
   isError: false
-...

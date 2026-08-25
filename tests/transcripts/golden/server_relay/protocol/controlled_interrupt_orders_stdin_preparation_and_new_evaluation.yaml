@@ -1,0 +1,50 @@
+---
+relay:
+  kind: ready
+---
+server:
+  kind: evaluate
+  language: r
+  source: old evaluation before successful requirements
+---
+server:
+  kind: interrupt
+  request_id: 0
+---
+relay:
+  kind: interrupt_result
+  request_id: 0
+---
+server:
+  kind: stdin
+  data: |
+    finish old before successful preparation
+---
+relay:
+  kind: console_output
+  data: |
+    old evaluation settled before successful preparation
+---
+relay:
+  kind: completed
+---
+server:
+  kind: prepare_r
+  library: <interrupt-success-candidate>
+---
+relay:
+  kind: r_prepared
+  library: <interrupt-success-candidate>
+---
+server:
+  kind: evaluate
+  language: r
+  source: new evaluation after successful preparation
+---
+relay:
+  kind: console_output
+  data: |
+    new evaluation ran after successful preparation
+---
+relay:
+  kind: completed

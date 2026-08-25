@@ -1,8 +1,7 @@
 ---
 !same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
 ---
-session:
-  action: prepare
+send:
   requirements:
     r:
       - blocked-resolver
@@ -33,4 +32,3 @@ result:
       text: |
         zod: echo
   isError: false
-...

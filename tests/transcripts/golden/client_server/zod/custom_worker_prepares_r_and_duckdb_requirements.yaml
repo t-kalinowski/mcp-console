@@ -10,8 +10,7 @@ result:
         zod: echo
   isError: false
 ---
-session:
-  action: prepare
+send:
   requirements:
     r:
       - praise
@@ -21,8 +20,7 @@ result:
       text: "[prepared]"
   isError: false
 ---
-session:
-  action: prepare
+send:
   requirements:
     duckdb:
       - json
@@ -149,4 +147,3 @@ result:
         [starting new worker]
         [idle]
   isError: true
-...

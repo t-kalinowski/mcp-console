@@ -10,8 +10,7 @@ result:
         [input requested: "idle> "]
   isError: false
 ---
-session:
-  action: prepare
+send:
   requirements:
     r:
       - praise
@@ -23,4 +22,13 @@ result:
         [worker terminated by signal 9]
         [worker stopped: in-memory state lost]
   isError: true
-...
+---
+send:
+  requirements:
+    r:
+      - zeallot
+result:
+  content:
+    - type: text
+      text: "[restart required]"
+  isError: false
