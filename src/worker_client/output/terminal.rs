@@ -22,6 +22,9 @@ impl Stream {
 
     fn character(&mut self, character: char, stable: &mut String) {
         if self.pending_carriage_return {
+            if character == '\r' {
+                return;
+            }
             self.pending_carriage_return = false;
             if character == '\n' {
                 self.newline("\r\n", stable);

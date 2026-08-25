@@ -1179,7 +1179,9 @@ fn append_direct_output(
         }
         DirectOutputEvent::Closed => {
             flush_direct_decoder_compacted(output, compactor, pending, stream);
-            compactor.flush(output);
+            if compactor.stream == Some(stream) {
+                compactor.flush(output);
+            }
         }
     }
 }

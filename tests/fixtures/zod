@@ -440,7 +440,7 @@ def main() -> None:
             continue
 
         if source == "emit terminal redraws":
-            write_all(1, b"ordinary stdout\r\n")
+            write_all(1, b"ordinary stdout\r\r\n")
             write_all(1, b"old\r")
             write_all(1, b"newx\b\n")
             write_all(1, b"old\x1b[")
