@@ -271,68 +271,19 @@ def run_raw_output(relay: ScriptedRelay) -> None:
     relay.retire()
 
 
-def run_raw_redraw_budget(relay: ScriptedRelay) -> None:
+def run_raw_malformed_redraw(relay: ScriptedRelay) -> None:
     relay.ready()
     relay.expect(EVALUATION)
     relay.send(
         {
             "kind": "stdout_bytes",
-            "data": base64.b64encode(b"\xff\r").decode("ascii"),
+            "data": base64.b64encode(b"old\r").decode("ascii"),
         }
     )
     relay.send(
         {
             "kind": "stdout_bytes",
-            "data": base64.b64encode(b"\nold").decode("ascii"),
-        }
-    )
-    relay.send(
-        {
-            "kind": "stdout_bytes",
-            "data": base64.b64encode(b"\r\x1b[2K\n").decode("ascii"),
-        }
-    )
-    invalid_suffix = b"\xff\n"
-    relay.send(
-        {
-            "kind": "stdout_bytes",
-            "data": base64.b64encode(b"\r" + invalid_suffix).decode("ascii"),
-        }
-    )
-    trailer = "useful output\n"
-    relay.send(
-        {
-            "kind": "stdout",
-            "data": ("x" * (PENDING_TEXT_BUDGET - 4 - len(invalid_suffix) - len(trailer)))
-            + trailer,
-        }
-    )
-    relay.complete()
-    relay.retire()
-
-
-def run_truncation_drops_deferred_raw(relay: ScriptedRelay) -> None:
-    relay.ready()
-    relay.expect(EVALUATION)
-    relay.send(
-        {
-            "kind": "stdout",
-            "data": "x" * PENDING_TEXT_BUDGET,
-        }
-    )
-    relay.send(
-        {
-            "kind": "stdout_bytes",
-            "data": base64.b64encode(b"x\xe2").decode("ascii"),
-        }
-    )
-    relay.send(RESOLVE_PYTHON_VERSION)
-    relay.expect(PYTHON_VERSION_RESOLUTION_FAILED)
-    relay.wait_for_release()
-    relay.send(
-        {
-            "kind": "stdout_bytes",
-            "data": base64.b64encode(b"\x82\xac").decode("ascii"),
+            "data": base64.b64encode(b"\xff\n").decode("ascii"),
         }
     )
     relay.complete()
@@ -1050,8 +1001,7 @@ def main() -> None:
         "ready": run_ready,
         "evaluate": run_evaluate,
         "raw_output": run_raw_output,
-        "raw_redraw_budget": run_raw_redraw_budget,
-        "truncation_drops_deferred_raw": run_truncation_drops_deferred_raw,
+        "raw_malformed_redraw": run_raw_malformed_redraw,
         "stdin": run_stdin,
         "initial_requirements_stdin_idempotent": (
             run_initial_requirements_stdin_idempotent

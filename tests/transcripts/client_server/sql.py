@@ -22,24 +22,6 @@ from _support import (
 PLATFORMS = {"darwin"}
 
 
-def test_disables_managed_connection_progress_bar(binary: Path) -> Transcript:
-    environment, _ = r_test_environment()
-    environment["RETICULATE_PYTHON"] = ""
-    with tempfile.TemporaryDirectory() as temporary:
-        client = McpClient(
-            binary,
-            ("serve",),
-            environment,
-            current_directory=Path(temporary),
-        )
-        client._initialize_and_list_tools()
-
-        client.send(sql="SELECT current_setting('enable_progress_bar') AS enabled")
-        preview = last_tool_text(client)
-        assert preview.splitlines()[-1].split() == ["1", "false"]
-        return client._finish()
-
-
 def test_uses_default_duckdb_extensions(binary: Path) -> Transcript:
     environment, _ = r_test_environment()
     environment["RETICULATE_PYTHON"] = ""

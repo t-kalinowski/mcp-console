@@ -1,0 +1,20 @@
+---
+relay:
+  kind: ready
+---
+server:
+  kind: evaluate
+  language: r
+  source: "42"
+---
+relay:
+  kind: stdout_bytes
+  data: b2xkDQ==
+---
+relay:
+  kind: stdout_bytes
+  data: /wo=
+---
+relay:
+  kind: completed
+...

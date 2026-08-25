@@ -455,7 +455,7 @@ impl Evaluation {
             return;
         }
         state.phase = EvaluationPhase::Complete(CompletionKind::Cell);
-        state.completion_cut = Some(self.output.completion_cut());
+        state.completion_cut = Some(self.output.cut());
         state.completion_collected = false;
         self.changed.notify_one();
     }
@@ -504,13 +504,7 @@ impl Evaluation {
             self.output.push_failure(failure);
         }
         state.phase = EvaluationPhase::Complete(completion);
-        state.completion_cut = Some(cut.unwrap_or_else(|| {
-            if matches!(completion, CompletionKind::Cell) {
-                self.output.completion_cut()
-            } else {
-                self.output.cut()
-            }
-        }));
+        state.completion_cut = Some(cut.unwrap_or_else(|| self.output.cut()));
         state.completion_collected = false;
         self.changed.notify_one();
     }
@@ -716,9 +710,7 @@ impl EvaluationReservation {
     }
 
     pub(super) fn take_output(&mut self, output: &OutputTape) -> (Response, Response) {
-        let cut = self
-            .completion_cut
-            .unwrap_or_else(|| output.completion_cut());
+        let cut = self.completion_cut.unwrap_or_else(|| output.cut());
         let mut state = self
             .evaluation
             .state
@@ -727,7 +719,7 @@ impl EvaluationReservation {
         let current_output = take_owned_response(&mut state, output, cut);
         drop(state);
         let post_completion = if self.completion_cut.is_some() {
-            output.take_generation()
+            output.take()
         } else {
             Response::default()
         };

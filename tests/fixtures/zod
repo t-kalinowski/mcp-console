@@ -441,104 +441,31 @@ def main() -> None:
 
         if source == "emit terminal redraws":
             write_all(1, b"ordinary stdout\r\n")
-            write_all(1, b"old\r\x08\n")
-            write_all(1, b"preserved malformed CSI\x1b[")
-            write_all(1, b"\nold")
-            write_all(1, b"\r\x1b[")
-            write_all(1, b"2K\x1b[31mstdout caf\xc3")
-            write_all(1, b"\xa9 10%\x1b[0m")
-            write_all(1, b"\r\x1b[2K\x1b[32mstdout caf\xc3")
-            write_all(1, b"\xa9 100x\b%\x1b[0m")
-            send(writer, {"kind": "completed"})
-            continue
-
-        if source == "partial line across polls":
-            send_output(writer, "ordinary partial")
-            wait_for_server_to_process_sideband(reader, writer)
-            (temporary / "zod-partial-line-ready").touch()
-            while not (temporary / "zod-release-partial-line").exists():
-                time.sleep(0.01)
-
-            send_output(writer, "\r\n")
+            write_all(1, b"old\r")
+            write_all(1, b"newx\b\n")
+            write_all(1, b"old\x1b[")
+            write_all(1, b"2Knew\n")
             send(writer, {"kind": "completed"})
             continue
 
         if source == "emit independent stdout stderr redraws":
             write_all(1, b"\rstdout old")
+            write_all(1, b"\rstdout final\n")
             write_all(2, b"\rstderr old")
-            write_all(1, b"\r\x1b[2Kstdout final\n")
-            write_all(2, b"\r\x1b[2Kstderr final\n")
-            send(writer, {"kind": "completed"})
-            continue
-
-        if source == "finalize ordered redraw":
-            send_batch(
-                writer,
-                [
-                    {
-                        "kind": ConsoleKind.OUTPUT,
-                        "data": "ordinary\n\rprogress",
-                    },
-                    {
-                        "kind": ConsoleKind.DIAGNOSTIC,
-                        "data": "error\n",
-                    },
-                    {"kind": "completed"},
-                ],
-            )
-            continue
-
-        if source == "oversized progress line":
-            send_output(writer, "x" * ((16 * 1024) + 1))
-            send_output(writer, "\r")
-            send(writer, {"kind": "completed"})
-            continue
-
-        if source == "oversized combining progress frame":
-            send_output(writer, "\ra" + ("\u0301" * ((16 * 1024) // 2)))
-            send_output(writer, "\rfinal\n")
+            write_all(2, b"\rstderr final\n")
             send(writer, {"kind": "completed"})
             continue
 
         if source == "redraw across polls":
             send_output(writer, "output 10%\r")
-            send_output(
-                writer,
-                "diagnostic 10%\r",
-                ConsoleKind.DIAGNOSTIC,
-            )
             wait_for_server_to_process_sideband(reader, writer)
-            (temporary / "zod-redraw-stage-1").touch()
-            while not (temporary / "zod-release-redraw-stage-2").exists():
-                time.sleep(0.01)
-
-            send_output(writer, "output 20x\b%\r")
-            send_output(
-                writer,
-                "diagnostic 20%\r",
-                ConsoleKind.DIAGNOSTIC,
-            )
-            wait_for_server_to_process_sideband(reader, writer)
-            (temporary / "zod-redraw-stage-2").touch()
-            while not (temporary / "zod-release-redraw-completion").exists():
+            (temporary / "zod-redraw-ready").touch()
+            while not (temporary / "zod-release-redraw").exists():
                 time.sleep(0.01)
 
             send_output(writer, "output 100%\n")
-            send_output(
-                writer,
-                "diagnostic done\n",
-                ConsoleKind.DIAGNOSTIC,
-            )
             send(writer, {"kind": "completed"})
             continue
-
-        if source == "redraw until restart":
-            send_output(writer, "\r\x1b[2Kold restart progress")
-            send_output(writer, "\r\x1b[2Klatest restart progress")
-            wait_for_server_to_process_sideband(reader, writer)
-            (temporary / "zod-redraw-ready-for-restart").touch()
-            while True:
-                time.sleep(60)
 
         if source == "stress redraws":
             payload = "x" * 2048
@@ -547,12 +474,12 @@ def main() -> None:
                 [
                     {
                         "kind": ConsoleKind.OUTPUT,
-                        "data": f"\r\x1b[2Kstress {index}: {payload}",
+                        "data": f"\rstress {index}: {payload}",
                     }
-                    for index in range(5_000)
+                    for index in range(100)
                 ],
             )
-            send_output(writer, "\r\x1b[2Kstress final\nuseful output\n")
+            send_output(writer, "\rstress final\nuseful output\n")
             send(writer, {"kind": "completed"})
             continue
 
@@ -613,9 +540,6 @@ def main() -> None:
                         },
                     )
                     send_output(writer, "idle after failure image\n")
-                elif marker == "idle-redraw":
-                    send_output(writer, "\ridle redraw old")
-                    send_output(writer, "\ridle redraw final")
                 else:
                     send_output(writer, "zod background sideband\n")
                 wait_for_server_to_process_sideband(reader, writer)

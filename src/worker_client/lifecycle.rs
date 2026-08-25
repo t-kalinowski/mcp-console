@@ -594,7 +594,7 @@ impl Client {
         retired_worker: bool,
     ) -> Result<Response, RestartFailure> {
         let (old_output, post_completion_output) = evaluation.as_mut().map_or_else(
-            || (self.0.output.take_generation(), Response::default()),
+            || (self.0.output.take(), Response::default()),
             |evaluation| evaluation.take_output(&self.0.output),
         );
 

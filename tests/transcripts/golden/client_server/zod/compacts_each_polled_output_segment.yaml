@@ -2,7 +2,7 @@
 !same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
 ---
 send:
-  r: redraw until restart
+  r: redraw across polls
   timeout_ms: 0
 result:
   content:
@@ -12,25 +12,32 @@ result:
         [running; poll with an empty send]
   isError: false
 ---
-session:
-  action: restart
+send:
+  timeout_ms: 0
 result:
   content:
     - type: text
       text: |-
-        latest restart progress
-        [active evaluation stopped by session restart request]
-        [worker stopped: in-memory state lost]
-        [starting new worker]
-        [idle]
+        output 10%
+        [running; poll with an empty send]
   isError: false
 ---
 send:
-  r: echo fresh
+  timeout_ms: 0
+result:
+  content:
+    - type: text
+      text: |-
+
+        [running; poll with an empty send]
+  isError: false
+---
+send:
+  timeout_ms: 3000
 result:
   content:
     - type: text
       text: |
-        zod: fresh
+        output 100%
   isError: false
 ...

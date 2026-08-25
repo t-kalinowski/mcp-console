@@ -401,7 +401,6 @@ Console output, diagnostics, captured stdout and stderr, input-request records, 
 The server preserves each producer's order but cannot reconstruct chronology across independent pipes.
 Outside the progress-frame compaction described below, it does not normalize ordinary whitespace or reinterpret output based on its source.
 Invalid UTF-8 from raw standard streams is replaced when projected to MCP text; the private relay transport still preserves the bytes.
-After invalid UTF-8 is encountered, progress compaction stops for the rest of that line and later controls remain literal.
 
 When one controlled `send` stops or completes an earlier operation and then runs a new cell, the response keeps the prior output before lifecycle notices and new-cell output, followed by the final combined state marker.
 The server transfers ownership between those logical regions instead of delivering the earlier response separately.
@@ -434,15 +433,12 @@ Do not submit another cell while replacement startup is still active.
 The failing call does not repeat a failed startup attempt; after that failure is collected, a later code-bearing `send` makes a fresh startup attempt and, if it succeeds, runs only the new cell.
 
 Ordinary newline-terminated output is preserved exactly.
-For single-line progress output, the server retains one unfinished frame per worker output stream instead of retaining every redraw.
-A bare carriage return makes following text replace the whole frame, backspace removes one Unicode scalar, and an ANSI CSI `K` sequence clears the frame.
+Within each delivered output segment, the server compacts single-line progress redraws in consecutive text from the same worker output stream.
+A bare carriage return makes following text replace the whole frame, and backspace removes one Unicode scalar.
 CRLF remains an ordinary newline.
-Ordinary polls do not return an unfinished progress frame.
-A newline, cell completion, or worker-generation boundary returns only the final frame and clears that stream's progress state.
-Other control sequences are preserved without terminal emulation; the server does not model tab stops, display columns, grapheme clusters, or ANSI style state.
-Compaction happens before pending-output limits are applied.
-Unfinished frames do not reserve pending-output capacity; if later output exhausts a limit first, finalization may omit the frame and report it in the truncation notice.
-If a frame exceeds the internal compaction bound, the server stops compacting it, preserves its visible text and subsequent controls until the next newline, and applies the ordinary output limits.
+Other controls and escape sequences are preserved literally.
+Compaction does not cross response boundaries, so a long-running cell may return one current progress frame in each poll.
+Pending-output limits are applied before compaction; if a segment is truncated, its final redraw may not have been retained.
 
 Each undrained output segment is limited to:
 
