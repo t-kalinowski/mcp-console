@@ -461,7 +461,10 @@ def main() -> None:
             send_batch(
                 writer,
                 [
-                    {"kind": ConsoleKind.OUTPUT, "data": "\rprogress"},
+                    {
+                        "kind": ConsoleKind.OUTPUT,
+                        "data": "ordinary\n\rprogress",
+                    },
                     {
                         "kind": ConsoleKind.DIAGNOSTIC,
                         "data": "error\n",
@@ -489,10 +492,10 @@ def main() -> None:
             continue
 
         if source == "redraw across polls":
-            send_output(writer, "\r\x1b[2Koutput 10%")
+            send_output(writer, "output 10%\r")
             send_output(
                 writer,
-                "\r\x1b[2Kdiagnostic 10%",
+                "diagnostic 10%\r",
                 ConsoleKind.DIAGNOSTIC,
             )
             wait_for_server_to_process_sideband(reader, writer)
@@ -500,10 +503,10 @@ def main() -> None:
             while not (temporary / "zod-release-redraw-stage-2").exists():
                 time.sleep(0.01)
 
-            send_output(writer, "\r\x1b[2Koutput 20x\b%")
+            send_output(writer, "output 20x\b%\r")
             send_output(
                 writer,
-                "\r\x1b[2Kdiagnostic 20%",
+                "diagnostic 20%\r",
                 ConsoleKind.DIAGNOSTIC,
             )
             wait_for_server_to_process_sideband(reader, writer)
@@ -511,10 +514,10 @@ def main() -> None:
             while not (temporary / "zod-release-redraw-completion").exists():
                 time.sleep(0.01)
 
-            send_output(writer, "\r\x1b[2Koutput 100%\n")
+            send_output(writer, "output 100%\n")
             send_output(
                 writer,
-                "\r\x1b[2Kdiagnostic done\n",
+                "diagnostic done\n",
                 ConsoleKind.DIAGNOSTIC,
             )
             send(writer, {"kind": "completed"})

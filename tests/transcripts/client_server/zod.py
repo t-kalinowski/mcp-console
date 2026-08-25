@@ -1371,7 +1371,7 @@ def test_finalization_preserves_volatile_output_order(binary: Path) -> Transcrip
     client._initialize_and_list_tools()
 
     client.send(r="finalize ordered redraw")
-    assert last_tool_text(client) == "progresserror\n"
+    assert last_tool_text(client) == "ordinary\nprogresserror\n"
     return client._finish()
 
 
