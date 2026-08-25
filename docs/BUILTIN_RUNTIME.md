@@ -441,6 +441,7 @@ Ordinary polls do not return an unfinished progress frame.
 A newline, cell completion, or worker-generation boundary returns only the final frame and clears that stream's progress state.
 Other control sequences are preserved without terminal emulation; the server does not model tab stops, display columns, grapheme clusters, or ANSI style state.
 Compaction happens before pending-output limits are applied.
+Unfinished frames do not reserve pending-output capacity; if later output exhausts a limit first, finalization may omit the frame and report it in the truncation notice.
 If a frame exceeds the internal compaction bound, the server stops compacting it, preserves its visible text and subsequent controls until the next newline, and applies the ordinary output limits.
 
 Each undrained output segment is limited to:

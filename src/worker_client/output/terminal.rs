@@ -160,6 +160,12 @@ impl<'a> Collector<'a> {
         let parser = std::mem::take(&mut self.stream.parser);
         match parser {
             Parser::Ground => self.ground(character),
+            Parser::Escape(sequence) | Parser::Csi(sequence)
+                if matches!(character, '\r' | '\n') =>
+            {
+                self.write_literal(&sequence);
+                self.ground(character);
+            }
             Parser::Escape(mut sequence) => {
                 sequence.push(character);
                 if character == '[' {

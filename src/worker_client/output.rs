@@ -949,7 +949,8 @@ impl OutputTapeState {
         self.apply_stream_update(&mut terminal, update, source, None);
         // Keep a vacant position for output that remains buffered until this
         // ingestion is finalized. Published text from the same ingestion must
-        // stay before that deferred output.
+        // stay before that deferred output. The position reserves observation
+        // order, not pending-output capacity for an unknown final frame.
         let observation = self.allocate_position();
         terminal.observe(observation);
         self.put_terminal_stream(stream, terminal);

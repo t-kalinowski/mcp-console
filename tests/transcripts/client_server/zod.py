@@ -1335,8 +1335,9 @@ def test_compacts_split_terminal_redraws(binary: Path) -> Transcript:
     client._initialize_and_list_tools()
 
     client.send(r="emit terminal redraws")
-    assert (
-        last_tool_text(client) == "ordinary stdout\r\n\x1b[32mstdout café 100%\x1b[0m"
+    assert last_tool_text(client) == (
+        "ordinary stdout\r\npreserved malformed CSI\x1b[\n"
+        "\x1b[32mstdout café 100%\x1b[0m"
     )
     return client._finish()
 
@@ -1351,10 +1352,9 @@ def test_compacts_stdout_and_stderr_independently(binary: Path) -> Transcript:
 
     client.send(r="emit independent stdout stderr redraws")
     output = last_tool_text(client)
-    assert sorted(output.splitlines()) == ["stderr final", "stdout final"], output
-    client.transcript[-1]["result"]["content"][0]["text"] = (
-        "<stdout and stderr final lines>\n"
-    )
+    lines = sorted(output.splitlines(keepends=True))
+    assert lines == ["stderr final\n", "stdout final\n"], output
+    client.transcript[-1]["result"]["content"][0]["text"] = "".join(lines)
     client.transcript[-1]["transcript_normalization"] = {
         "target": "result.content[0].text",
         "cross_source_position": "omitted",

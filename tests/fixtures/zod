@@ -441,6 +441,8 @@ def main() -> None:
 
         if source == "emit terminal redraws":
             write_all(1, b"ordinary stdout\r\n")
+            write_all(1, b"preserved malformed CSI\x1b[")
+            write_all(1, b"\nold")
             write_all(1, b"\r\x1b[")
             write_all(1, b"2K\x1b[31mstdout caf\xc3")
             write_all(1, b"\xa9 10%\x1b[0m")

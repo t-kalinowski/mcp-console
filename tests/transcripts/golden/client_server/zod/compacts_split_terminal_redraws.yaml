@@ -6,6 +6,6 @@ send:
 result:
   content:
     - type: text
-      text: "ordinary stdout\r\n\e[32mstdout café 100%\e[0m"
+      text: "ordinary stdout\r\npreserved malformed CSI\e[\n\e[32mstdout café 100%\e[0m"
   isError: false
 ...
