@@ -474,11 +474,6 @@ def main() -> None:
             )
             continue
 
-        if source == "redraw decomposed accent":
-            send_output(writer, "\rdecomposed e\u0301\x08x\n")
-            send(writer, {"kind": "completed"})
-            continue
-
         if source == "oversized progress line":
             send_output(writer, "x" * ((64 * 1024) + 7))
             send_output(writer, "\r")
@@ -544,37 +539,6 @@ def main() -> None:
                 ],
             )
             send_output(writer, "\r\x1b[2Kstress final\nuseful output\n")
-            send(writer, {"kind": "completed"})
-            continue
-
-        if source == "replace oversized redraw":
-            send_output(writer, "x" * (PENDING_TEXT_BUDGET + 1))
-            send_output(writer, "\r\x1b[2Kfinal redraw\n")
-            send(writer, {"kind": "completed"})
-            continue
-
-        if source == "preserve style after redraw newline":
-            send_output(writer, "\x1b[31mold\rnew\nlater\n")
-            send(writer, {"kind": "completed"})
-            continue
-
-        if source == "recycle redraw styles":
-            send_batch(
-                writer,
-                [
-                    {
-                        "kind": ConsoleKind.OUTPUT,
-                        "data": f"\x1b[0;38;5;{index}mold\rstyle {index}\n",
-                    }
-                    for index in range(140)
-                ]
-                + [{"kind": "completed"}],
-            )
-            continue
-
-        if source == "terminate string control with c1 st":
-            send_output(writer, "before\x1b]title")
-            send_output(writer, "\u009cafter\n")
             send(writer, {"kind": "completed"})
             continue
 

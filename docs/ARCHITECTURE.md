@@ -254,8 +254,9 @@ The protocol documents define the exact closure and retirement order.
 The server owns one ordered pending-output tape across worker lifetimes.
 The relay publishes observations to it, but neither the relay nor worker decides which MCP call receives them.
 The server assigns output to an evaluation, poll, restart, controlled send, or later idle response; applies pending-output limits; preserves image order; adds lifecycle notices; and assembles MCP content.
-Before charging those limits, it compacts terminal-style single-line redraws independently for each logical worker output stream.
-Response cuts seal the latest changed volatile-line snapshot, while newline, cell completion, and generation boundaries finalize and reset it.
+Before charging those limits, it compacts bounded single-line progress redraws independently for each logical worker output stream.
+Ordinary polls leave an unfinished progress frame pending.
+A newline, cell completion, or generation boundary publishes only the final frame and resets that stream's progress state.
 
 A controlled send produces one MCP response.
 When a completed or interrupted evaluation precedes a new cell, the server transfers the prior response region into the new evaluation's prelude instead of acknowledging it separately.

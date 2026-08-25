@@ -399,7 +399,7 @@ R plots created through Python's `r` bridge follow the R graphics rules.
 
 Console output, diagnostics, captured stdout and stderr, input-request records, images, and server lifecycle notices are assembled in one server-owned output stream for delivery.
 The server preserves each producer's order but cannot reconstruct chronology across independent pipes.
-Outside the terminal redraw projection described below, it does not normalize ordinary whitespace or reinterpret output based on its source.
+Outside the progress-frame compaction described below, it does not normalize ordinary whitespace or reinterpret output based on its source.
 Invalid UTF-8 from raw standard streams is replaced when projected to MCP text; the private relay transport still preserves the bytes.
 
 When one controlled `send` stops or completes an earlier operation and then runs a new cell, the response keeps the prior output before lifecycle notices and new-cell output, followed by the final combined state marker.
@@ -433,12 +433,14 @@ Do not submit another cell while replacement startup is still active.
 The failing call does not repeat a failed startup attempt; after that failure is collected, a later code-bearing `send` makes a fresh startup attempt and, if it succeeds, runs only the new cell.
 
 Ordinary newline-terminated output is preserved exactly.
-For terminal-style output that redraws one line with carriage returns, backspaces, or ANSI erase-line controls, the server retains one volatile visible line per worker output stream instead of retaining every intermediate version.
-A response returns only the latest version changed since the preceding response boundary.
-A newline, cell completion, or worker-generation boundary returns the final visible version and clears that stream's volatile state.
-ANSI styling is retained on the visible line, and CRLF remains an ordinary newline.
-Other terminal controls are not interpreted, and their payloads are not retained as volatile line state.
-This compaction happens before pending-output limits are applied.
+For single-line progress output, the server retains one unfinished frame per worker output stream instead of retaining every redraw.
+A bare carriage return makes following text replace the whole frame, backspace removes one Unicode scalar, and an ANSI CSI `K` sequence clears the frame.
+CRLF remains an ordinary newline.
+Ordinary polls do not return an unfinished progress frame.
+A newline, cell completion, or worker-generation boundary returns only the final frame and clears that stream's progress state.
+Other control sequences are preserved without terminal emulation; the server does not model tab stops, display columns, grapheme clusters, or ANSI style state.
+Compaction happens before pending-output limits are applied.
+If a frame exceeds the internal compaction bound, the server stops compacting it, preserves its visible text and subsequent controls until the next newline, and applies the ordinary output limits.
 
 Each undrained output segment is limited to:
 

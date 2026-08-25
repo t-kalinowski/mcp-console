@@ -1375,19 +1375,6 @@ def test_finalization_preserves_volatile_output_order(binary: Path) -> Transcrip
     return client._finish()
 
 
-def test_compacts_zero_width_terminal_text(binary: Path) -> Transcript:
-    zod = Path(__file__).resolve().parents[2] / "fixtures" / "zod"
-    client = McpClient(
-        binary,
-        ("serve", "--worker", str(zod)),
-    )
-    client._initialize_and_list_tools()
-
-    client.send(r="redraw decomposed accent")
-    assert last_tool_text(client) == "decomposed x\n"
-    return client._finish()
-
-
 def test_oversized_progress_line_falls_back_without_loss(binary: Path) -> Transcript:
     zod = Path(__file__).resolve().parents[2] / "fixtures" / "zod"
     client = McpClient(
@@ -1550,61 +1537,6 @@ def test_many_redraws_do_not_consume_pending_output_limits(
 
     client.send(r="stress redraws")
     assert last_tool_text(client) == "stress final\nuseful output\n"
-    return client._finish()
-
-
-def test_superseded_open_line_releases_truncation_state(
-    binary: Path,
-) -> Transcript:
-    zod = Path(__file__).resolve().parents[2] / "fixtures" / "zod"
-    client = McpClient(
-        binary,
-        ("serve", "--worker", str(zod)),
-    )
-    client._initialize_and_list_tools()
-
-    client.send(r="replace oversized redraw")
-    assert last_tool_text(client) == "final redraw\n"
-    return client._finish()
-
-
-def test_reapplies_style_after_volatile_newline(binary: Path) -> Transcript:
-    zod = Path(__file__).resolve().parents[2] / "fixtures" / "zod"
-    client = McpClient(
-        binary,
-        ("serve", "--worker", str(zod)),
-    )
-    client._initialize_and_list_tools()
-
-    client.send(r="preserve style after redraw newline")
-    assert last_tool_text(client) == ("\x1b[31mnew\x1b[0m\n\x1b[31mlater\n")
-    return client._finish()
-
-
-def test_recycles_styles_between_volatile_lines(binary: Path) -> Transcript:
-    zod = Path(__file__).resolve().parents[2] / "fixtures" / "zod"
-    client = McpClient(
-        binary,
-        ("serve", "--worker", str(zod)),
-    )
-    client._initialize_and_list_tools()
-
-    client.send(r="recycle redraw styles")
-    output = last_tool_text(client)
-    assert output.endswith("\x1b[0;38;5;139mstyle 139\x1b[0m\n"), output[-200:]
-    return client._finish()
-
-
-def test_terminates_string_control_with_c1_st(binary: Path) -> Transcript:
-    zod = Path(__file__).resolve().parents[2] / "fixtures" / "zod"
-    client = McpClient(
-        binary,
-        ("serve", "--worker", str(zod)),
-    )
-    client._initialize_and_list_tools()
-
-    client.send(r="terminate string control with c1 st")
-    assert last_tool_text(client) == "beforeafter\n"
     return client._finish()
 
 

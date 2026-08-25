@@ -1,0 +1,15 @@
+---
+!same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
+---
+send:
+  r: oversized progress line
+result:
+  content:
+    - type: text
+      text: "<oversized progress line>\r"
+  isError: false
+transcript_normalization:
+  target: result.content[0].text
+  replacements:
+    progress_line: <oversized progress line>
+...

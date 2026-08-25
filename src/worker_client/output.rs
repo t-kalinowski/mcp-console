@@ -75,7 +75,7 @@ struct PendingOutputBudget {
 #[derive(Default)]
 struct DirectDecoder {
     bytes: Vec<u8>,
-    /// Position of the first event contributing to the incomplete scalar.
+    /// Position of the first event contributing to the deferred suffix.
     origin: Option<u64>,
 }
 
@@ -96,7 +96,7 @@ enum OutputEvent {
     Text {
         text: Box<str>,
         text_bytes: usize,
-        /// The suffix that may still be replaced by a redraw before the next cut.
+        /// The current-line suffix that may still be replaced by a later redraw.
         active_suffix: Option<ActiveSuffix>,
     },
     /// An image from a worker `image` sideband frame, already persisted when enabled.
@@ -704,7 +704,6 @@ impl OutputTape {
 
     pub(super) fn cut(&self) -> OutputCut {
         let mut state = self.lock();
-        state.snapshot_streams();
         state.seal_streams();
         state.seal_truncation();
         OutputCut(state.next_event)
@@ -721,7 +720,6 @@ impl OutputTape {
 
     pub(super) fn take(&self) -> Response {
         let mut state = self.lock();
-        state.snapshot_streams();
         state.seal_streams();
         state.seal_truncation();
         let cut = OutputCut(state.next_event);
@@ -856,7 +854,6 @@ impl OutputTapeState {
         F: FnOnce(&str, &str) -> Result<Option<crate::transcript::Artifact>, String>,
     {
         self.flush_direct_decoders();
-        self.snapshot_streams();
         let length = data.len();
         let metadata_length = mime_type.len();
         let fits = !self.budget.dropping_ordinary_output
@@ -896,22 +893,29 @@ impl OutputTapeState {
         }
         self.flush_other_direct_decoder(stream);
         let logical = stream.logical();
-        let (complete, has_incomplete) = {
+        let (complete, deferred) = {
             let decoder = match stream {
                 DirectOutputStream::Stdout => &mut self.direct_stdout,
                 DirectOutputStream::Stderr => &mut self.direct_stderr,
             };
             decoder.bytes.extend_from_slice(bytes);
-            let complete = complete_utf8_prefix(&decoder.bytes);
-            let incomplete = decoder.bytes.split_off(complete);
-            let complete = std::mem::replace(&mut decoder.bytes, incomplete);
-            (complete, !decoder.bytes.is_empty())
+            let mut complete = complete_utf8_prefix(&decoder.bytes);
+            // Keep a bounded trailing CR frame intact until its next byte or
+            // finalization distinguishes CRLF from a progress redraw.
+            if complete > 0 && decoder.bytes[complete - 1] == b'\r' {
+                let line_start = decoder.bytes[..complete - 1]
+                    .iter()
+                    .rposition(|byte| *byte == b'\n')
+                    .map_or(0, |newline| newline + 1);
+                if decoder.bytes.len() - line_start <= terminal::MAX_COMPACT_LINE_BYTES {
+                    complete = line_start;
+                }
+            }
+            let deferred = decoder.bytes.split_off(complete);
+            let complete = std::mem::take(&mut decoder.bytes);
+            decoder.origin = None;
+            (complete, deferred)
         };
-        let origin = has_incomplete.then(|| self.allocate_position());
-        match stream {
-            DirectOutputStream::Stdout => self.direct_stdout.origin = origin,
-            DirectOutputStream::Stderr => self.direct_stderr.origin = origin,
-        }
         if !complete.is_empty() {
             self.recompute_budget();
             self.push_stream_text(
@@ -920,6 +924,13 @@ impl OutputTapeState {
                 Some(&complete),
             );
         }
+        let origin = (!deferred.is_empty()).then(|| self.allocate_position());
+        let decoder = match stream {
+            DirectOutputStream::Stdout => &mut self.direct_stdout,
+            DirectOutputStream::Stderr => &mut self.direct_stderr,
+        };
+        decoder.bytes = deferred;
+        decoder.origin = origin;
         self.recompute_budget();
     }
 
@@ -931,7 +942,6 @@ impl OutputTapeState {
     }
 
     fn push_stream_text(&mut self, stream: LogicalStream, text: &str, source_bytes: Option<&[u8]>) {
-        self.snapshot_other_streams(stream);
         let mut terminal = self.take_terminal_stream(stream);
         let update = terminal.ingest(text);
         let source = source_bytes
@@ -946,13 +956,11 @@ impl OutputTapeState {
                     active_suffix,
                 })
             });
-        let before = self.next_event;
         self.apply_stream_update(&mut terminal, update, source, None);
-        let observation = if self.next_event == before {
-            self.allocate_position()
-        } else {
-            self.next_event - 1
-        };
+        // Keep a vacant position for output that remains buffered until this
+        // ingestion is finalized. Published text from the same ingestion must
+        // stay before that deferred output.
+        let observation = self.allocate_position();
         terminal.observe(observation);
         self.put_terminal_stream(stream, terminal);
     }
@@ -976,45 +984,6 @@ impl OutputTapeState {
         streams.sort_by_key(|stream| self.terminal_stream(*stream).last_observation());
         for stream in streams {
             self.finish_stream(stream);
-        }
-    }
-
-    fn snapshot_stream(&mut self, stream: LogicalStream) {
-        let mut terminal = self.take_terminal_stream(stream);
-        if let Some(observation) = terminal.last_observation() {
-            let update = terminal.snapshot();
-            self.apply_stream_update(&mut terminal, update, None, Some(observation));
-        }
-        self.put_terminal_stream(stream, terminal);
-    }
-
-    fn snapshot_streams(&mut self) {
-        let mut streams = [
-            LogicalStream::ConsoleOutput,
-            LogicalStream::ConsoleDiagnostic,
-            LogicalStream::DirectStdout,
-            LogicalStream::DirectStderr,
-        ];
-        streams.sort_by_key(|stream| self.terminal_stream(*stream).last_observation());
-        for stream in streams {
-            self.snapshot_stream(stream);
-        }
-    }
-
-    fn snapshot_other_streams(&mut self, current: LogicalStream) {
-        // Keep same-stream fragments cheap, but publish an earlier stream before
-        // later-stream output can consume its event or byte budget.
-        let mut streams = [
-            LogicalStream::ConsoleOutput,
-            LogicalStream::ConsoleDiagnostic,
-            LogicalStream::DirectStdout,
-            LogicalStream::DirectStderr,
-        ];
-        streams.sort_by_key(|stream| self.terminal_stream(*stream).last_observation());
-        for stream in streams {
-            if stream != current {
-                self.snapshot_stream(stream);
-            }
         }
     }
 
@@ -1184,8 +1153,7 @@ impl OutputTapeState {
             }
         }
         if released {
-            self.drop_truncation = None;
-            self.budget.dropping_ordinary_output = false;
+            self.recompute_budget();
         }
     }
 
@@ -1312,8 +1280,8 @@ impl OutputTapeState {
             .image_metadata_bytes
             .saturating_add(image_metadata_bytes);
         self.budget.events = self.budget.events.saturating_add(1);
-        // Deferred volatile projections reuse their ingestion position so a cut
-        // cannot move them behind output observed from another stream.
+        // Deferred progress frames reuse their ingestion position so later
+        // output cannot move ahead of them when the frame is finalized.
         let index = self
             .events
             .binary_search_by_key(&sequence, |(candidate, _)| *candidate)

@@ -9,7 +9,11 @@ server:
 ---
 relay:
   kind: stdout_bytes
-  data: /wpvbGQ=
+  data: /w0=
+---
+relay:
+  kind: stdout_bytes
+  data: Cm9sZA==
 ---
 relay:
   kind: stdout_bytes

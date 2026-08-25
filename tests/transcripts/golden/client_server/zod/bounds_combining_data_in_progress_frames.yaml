@@ -2,15 +2,14 @@
 !same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
 ---
 send:
-  r: fragmented redraw line
+  r: oversized combining progress frame
 result:
   content:
     - type: text
-      text: |
-        <fragmented 64 KiB volatile line>
+      text: "<bounded combining progress frame>\rfinal\n"
   isError: false
 transcript_normalization:
   target: result.content[0].text
   replacements:
-    volatile_line: <fragmented 64 KiB volatile line>
+    progress_line: <bounded combining progress frame>
 ...

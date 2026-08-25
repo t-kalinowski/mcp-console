@@ -18,7 +18,7 @@ result:
   content:
     - type: text
       text: |-
-        output 10%diagnostic 10%
+
         [running; poll with an empty send]
   isError: false
 ---
@@ -38,7 +38,7 @@ result:
   content:
     - type: text
       text: |-
-        output 20%diagnostic 20%
+
         [running; poll with an empty send]
   isError: false
 ---
