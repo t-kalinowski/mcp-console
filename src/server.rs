@@ -19,7 +19,8 @@ use serde::Deserialize;
 use tokio::io::{AsyncRead, ReadBuf};
 use tokio::sync::oneshot;
 
-const WORKER_SHUTDOWN_GRACE: Duration = Duration::from_secs(1);
+use crate::worker_client::WORKER_SHUTDOWN_GRACE;
+
 const DEFAULT_TIMEOUT_MS: u64 = 60_000;
 // Internal eval configuration; intentionally not exposed through the CLI.
 const LANGUAGES_ENV: &str = "MCP_CONSOLE_LANGUAGES";
@@ -130,35 +131,58 @@ struct SendArguments {
     /// paths. Use `SHOW TABLES`, `DESCRIBE`, `SUMMARIZE`, and `EXPLAIN` for discovery. DuckDB CLI dot
     /// commands are not supported. Omit this field for polling or stdin-only calls.
     sql: Option<String>,
+    /// Applies optional session control alone or before same-call stdin and code. `interrupt`
+    /// requests SIGINT from the active host resolver or live worker and preserves in-memory state.
+    /// After successful delivery, stdin is queued and `send` waits a short grace before attempting a
+    /// same-call cell; the cell is not run if the interrupted evaluation remains active. `restart`
+    /// resolves same-call requirements before replacement, discards R, Python, DuckDB, debugger, and
+    /// unread-stdin state, then sends same-call stdin and code only to the replacement.
+    control: Option<SendControl>,
     /// Additive R packages, Python packages, or DuckDB extensions to prepare before this cell and
     /// retain for later cells. Requirements are additive and persist for the session. Preparation does
-    /// not import, attach, or load them. Ordinary CRAN packages used by the built-in R worker need not
-    /// be declared here; use `requirements.r` to stage packages ahead of evaluation or provide explicit
-    /// IR references. In the built-in managed Python environment, missing imports normally resolve at
-    /// runtime. Use `requirements.python` to stage a distribution before the cell, provide a version,
-    /// extra, or marker, or correct automatic inference. Python source is not pre-scanned, and SQL does
-    /// not trigger package discovery. The cell is not run if explicit preparation fails or further
-    /// changes require restart. Resolution runs outside the worker sandbox and may download packages
-    /// or extensions or execute installation or build code on the host. Use only trusted requirements.
-    /// This field requires one `r`, `python`, or `sql` cell.
+    /// not import, attach, or load them. Without control, preparation completes before same-call stdin
+    /// is queued. With `restart`, requirements are resolved in the restart transaction before
+    /// replacement; failure leaves the current worker unchanged and sends neither stdin nor code. With
+    /// `interrupt`, signal delivery and stdin enqueue happen before requirements are validated or
+    /// prepared and are not rolled back if that later work fails. Ordinary CRAN packages used by the
+    /// built-in R worker need not be declared here; use `requirements.r` to stage packages ahead of
+    /// evaluation or provide explicit IR references. In the built-in managed Python environment,
+    /// missing imports normally resolve at runtime. Use `requirements.python` to stage a distribution
+    /// before the cell, provide a version, extra, or marker, or correct automatic inference. Python
+    /// source is not pre-scanned, and SQL does not trigger package discovery. The cell is not run if
+    /// explicit preparation fails or further changes require restart. Resolution runs outside the
+    /// worker sandbox and may download packages or extensions or execute installation or build code
+    /// on the host. Use only trusted requirements. This field requires one `r`, `python`, or `sql`
+    /// cell.
     requirements: Option<Requirements>,
     /// Input for an active read, prompt, or debugger. When responding to active input, omit R, Python,
     /// and SQL code and send stdin on its own. Its UTF-8 encoding is queued exactly; no newline is added.
-    /// Line-oriented input therefore normally needs a trailing `\n`. If requirements are also supplied,
-    /// preparation completes first. When sent with a cell, nonempty text is queued before the code is run;
-    /// an already waiting interactive read may consume it before the new cell begins. Empty text queues
-    /// nothing. If output ends in `[waiting for stdin]`, send the requested input here. Unread text can
-    /// satisfy later reads and is discarded by restart.
+    /// Line-oriented input therefore normally needs a trailing `\n`. Without control, requirements are
+    /// prepared before nonempty stdin is queued. After `interrupt`, nonempty stdin is queued before the
+    /// 100-millisecond grace and may be consumed while the earlier operation unwinds. After `restart`,
+    /// same-call stdin is sent only to the replacement. When sent with a cell, nonempty text is queued
+    /// before the code is run; an already waiting interactive read may consume it before the new cell
+    /// begins. Empty text queues nothing. If output ends in `[waiting for stdin]`, send the requested
+    /// input here. Unread text can satisfy later reads and is discarded by restart.
     stdin: Option<String>,
     /// Maximum time this call waits once a cell has been dispatched or the call has attached to an
     /// active evaluation, including one automatic worker replacement attempt. Reaching the timeout
-    /// does not cancel evaluation, resolution, or startup. Requirement preparation happens first and
-    /// may make the complete call take longer. Automatic R and Python import resolution are part of
-    /// the running evaluation and count toward this wait. On expiry, the call returns available output
-    /// and a state marker, such as `[running; poll with an empty send]` or `[worker starting]`. If
-    /// evaluation remains active, poll with an empty `send` call; do not resubmit the cell.
+    /// does not cancel evaluation, resolution, or startup. Inline control, interrupt grace, restart,
+    /// and explicit requirement preparation happen before dispatch and may make the complete call take
+    /// longer. Automatic R and Python import resolution are part of the running evaluation and count
+    /// toward this wait. On expiry, the call returns available output and a state marker, such as
+    /// `[running; poll with an empty send]` or `[worker starting]`. If evaluation remains active, poll
+    /// with an empty `send` call; do not resubmit the cell.
     #[serde(default = "default_timeout_ms")]
     timeout_ms: u64,
+}
+
+#[derive(Clone, Copy, Deserialize, schemars::JsonSchema)]
+#[schemars(inline)]
+#[serde(rename_all = "snake_case")]
+enum SendControl {
+    Interrupt,
+    Restart,
 }
 
 #[derive(Deserialize, schemars::JsonSchema)]
@@ -211,8 +235,9 @@ struct SessionArguments {
     /// `prepare` adds R or Python requirements or DuckDB extensions before a worker starts.
     /// After startup, it can add R requirements or DuckDB extensions while the worker is idle;
     /// compatible Python additions require a server-managed worker. `interrupt` requests SIGINT for
-    /// an active host resolver, or otherwise sends it to the live worker. `restart` can add any of
-    /// the same requirements before it replaces the worker and starts it if needed.
+    /// an active host resolver, or otherwise sends it to the live worker, and returns after delivery is
+    /// acknowledged without waiting for the operation to stop. `restart` can add any of the same
+    /// requirements before it replaces the worker and starts it if needed.
     action: SessionAction,
     /// Additive packages or DuckDB extensions to make available. `prepare` requires at least one R,
     /// Python, or DuckDB entry. `interrupt` accepts no requirements. `restart` accepts the same
@@ -263,6 +288,20 @@ impl ConsoleServer {
             .get_mut("properties")
             .and_then(serde_json::Value::as_object_mut)
             .expect("send schema must have object properties");
+        let control = properties
+            .get_mut("control")
+            .and_then(serde_json::Value::as_object_mut)
+            .expect("send control schema must be an object");
+        control.insert(
+            "type".to_string(),
+            serde_json::Value::String("string".to_string()),
+        );
+        if let Some(values) = control
+            .get_mut("enum")
+            .and_then(serde_json::Value::as_array_mut)
+        {
+            values.retain(|value| !value.is_null());
+        }
         // Keep the normal tool prose and nested requirements unchanged; evals
         // only need to project which direct code fields the client can call.
         for (field, enabled) in [
@@ -285,7 +324,9 @@ impl ConsoleServer {
 
 Send one complete `r`, `python`, or `sql` cell per call. Calls must be sequential because only one evaluation can be active. When an intermediate result affects the next step, inspect it before sending another cell. R and Python display a final visible top-level expression, and SQL returns a bounded preview, so leave the primary result last and print only when additional output is needed. Cells are not transactional; changes made before an error may remain.
 
-`timeout_ms` limits how long the call waits after dispatch or attachment; explicit requirement preparation can make the complete call take longer. It does not cancel startup, dependency resolution, or evaluation. If a response ends in `[running; poll with an empty send]`, call `send` again without code or stdin; do not resubmit the cell. Send `stdin` without code to answer an active prompt or debugger. Use `session(action = "interrupt")` to request interruption.
+Use `control` alone or before same-call stdin and code to interrupt or restart. Interrupt preserves in-memory state and waits 100 milliseconds before it attempts a same-call cell; the cell is not run if the interrupted evaluation remains active. Restart discards in-memory R, Python, DuckDB, debugger, and unread-stdin state, then targets same-call stdin and code only at the replacement. The `session` tool remains available for standalone preparation and lifecycle operations.
+
+`timeout_ms` limits how long the call waits after dispatch or attachment. Inline control, interrupt grace, restart, and explicit requirement preparation can make the complete call take longer and do not consume the cell wait timeout. The timeout does not cancel startup, dependency resolution, or evaluation. If a response ends in `[running; poll with an empty send]`, call `send` again without code or stdin; do not resubmit the cell. Send `stdin` without code to answer an active prompt or debugger.
 
 The built-in worker resolves ordinary CRAN packages and missing imports in its managed Python environment on demand. Use `requirements` for explicit R references, exact Python distribution metadata, or DuckDB extensions; preparation makes dependencies available but does not import, attach, or load them. R default-device plots and open `matplotlib.pyplot` figures return as PNG images. Evaluated code can read host files, cannot directly access the network, and can write only in the worker's private temporary directory. Dependency resolution runs outside the sandbox and may execute package installation or build code; use only trusted dependencies."#
     )]
@@ -297,6 +338,7 @@ The built-in worker resolves ordinary CRAN packages and missing imports in its m
             r,
             python,
             sql,
+            control,
             requirements,
             stdin,
             timeout_ms,
@@ -331,22 +373,36 @@ The built-in worker resolves ordinary CRAN packages and missing imports in its m
         if requirements.is_some() && cell.is_none() {
             return Err("`requirements` requires a code cell".to_string());
         }
-        if let Some(requirements) = requirements.as_ref() {
-            validate_environment_requirements(requirements)?;
-        }
+        let validation = requirements
+            .as_ref()
+            .map(validate_environment_requirements)
+            .transpose();
+        let deferred_validation_error = match validation {
+            Err(error) if matches!(control, Some(SendControl::Interrupt)) => Some(error),
+            Err(error) => return Err(error),
+            Ok(_) => None,
+        };
         let requirements = requirements.map(|Requirements { duckdb, r, python }| {
-            crate::worker_client::Requirements { duckdb, r, python }
+            let requirements = crate::worker_client::Requirements { duckdb, r, python };
+            match deferred_validation_error {
+                Some(error) => crate::worker_client::RequirementSubmission::Invalid(error),
+                None => crate::worker_client::RequirementSubmission::Valid(requirements),
+            }
         });
         let response = self
             .worker
-            .send(
+            .send(crate::worker_client::SendRequest {
                 cell,
                 stdin,
                 requirements,
-                Duration::from_millis(timeout_ms),
-                self.transcript.clone(),
-                call.id(),
-            )
+                control: control.map(|control| match control {
+                    SendControl::Interrupt => crate::worker_client::SendControl::Interrupt,
+                    SendControl::Restart => crate::worker_client::SendControl::Restart,
+                }),
+                timeout: Duration::from_millis(timeout_ms),
+                transcript: self.transcript.clone(),
+                call_id: call.id(),
+            })
             .await;
         Ok(response_to_tool_result(
             response,
@@ -358,7 +414,7 @@ The built-in worker resolves ordinary CRAN packages and missing imports in its m
     }
 
     #[tool(
-        description = r#"Manage dependencies and the lifecycle of the persistent worker. `prepare` makes additional R or Python requirements or DuckDB extensions available without evaluating a cell. `interrupt` requests SIGINT for the active host resolver or live worker and returns after sending the request; interruption is cooperative, so if an evaluation remains active, use an empty `send` afterward to observe whether it stopped. `restart` optionally prepares requirements, replaces the worker, and discards all in-memory R, Python, SQL, debugger, and unread-stdin state.
+        description = r#"Manage dependencies and standalone lifecycle operations for the persistent worker. `prepare` makes additional R or Python requirements or DuckDB extensions available without evaluating a cell. `interrupt` requests SIGINT for the active host resolver or live worker and returns after delivery is acknowledged without waiting for the operation to stop; interruption is cooperative, so use an empty `send` afterward to observe whether it stopped. `restart` optionally prepares requirements, replaces the worker, and discards all in-memory R, Python, DuckDB, debugger, and unread-stdin state. Use inline `send.control` when stdin or a cell should follow the lifecycle operation in the same call.
 
 Requirements are additive, idempotent, and persist across restart. Preparation does not import, attach, or load packages or extensions. Use `restart` only when clean state or a restart-required dependency change is needed; ordinary language errors normally leave the worker reusable. Dependency resolution runs outside the sandbox and may execute installation or build code; use only trusted requirements."#
     )]

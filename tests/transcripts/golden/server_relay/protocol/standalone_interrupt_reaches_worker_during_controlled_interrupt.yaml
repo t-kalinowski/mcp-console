@@ -1,0 +1,33 @@
+---
+relay:
+  kind: ready
+---
+server:
+  kind: evaluate
+  language: r
+  source: old evaluation for overlapping interrupts
+---
+server:
+  kind: interrupt
+  request_id: 0
+---
+server:
+  kind: interrupt
+  request_id: 1
+---
+relay:
+  kind: interrupt_result
+  request_id: 0
+---
+relay:
+  kind: interrupt_result
+  request_id: 1
+---
+relay:
+  kind: console_output
+  data: |
+    old evaluation finished after both interrupts
+---
+relay:
+  kind: completed
+...

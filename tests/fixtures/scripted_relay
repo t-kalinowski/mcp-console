@@ -35,6 +35,30 @@ EXPLICIT_R_PREPARATION_CALLBACK_NAME = "mcp-console-explicit-r-preparation-callb
 EXPLICIT_R_PREPARATION_CALLBACK_REPLY_NAME = (
     "mcp-console-explicit-r-preparation-callback-reply"
 )
+INTERRUPT_ACTIVE_RELEASE_NAME = "mcp-console-interrupt-active-release"
+INTERRUPT_ACK_RELEASE_NAME = "mcp-console-interrupt-ack-release"
+INTERRUPT_ACKNOWLEDGED_NAME = "mcp-console-interrupt-acknowledged"
+INTERRUPT_RECEIVED_NAME = "mcp-console-interrupt-received"
+CONTROLLED_INTERRUPT_FIRST_RECEIVED_NAME = (
+    "mcp-console-controlled-interrupt-first-received"
+)
+CONTROLLED_INTERRUPT_SECOND_RECEIVED_NAME = (
+    "mcp-console-controlled-interrupt-second-received"
+)
+CONTROLLED_INTERRUPT_EVALUATION_RELEASE_NAME = (
+    "mcp-console-controlled-interrupt-evaluation-release"
+)
+CONTROLLED_COMPLETION_RELEASE_NAME = "mcp-console-controlled-completion-release"
+CONTROLLED_COMPLETION_SENT_NAME = "mcp-console-controlled-completion-sent"
+RESTART_REQUIREMENTS_CHECK_NAME = "mcp-console-restart-requirements-check"
+RESTART_REQUIREMENTS_CHECKED_NAME = "mcp-console-restart-requirements-checked"
+RESTART_REQUIREMENTS_RESOLVED_NAME = "mcp-console-restart-requirements-resolved"
+RESTART_REQUIREMENTS_EVALUATION_RECEIVED_NAME = (
+    "mcp-console-restart-requirements-evaluation-received"
+)
+RESTART_REQUIREMENTS_EVALUATION_RELEASE_NAME = (
+    "mcp-console-restart-requirements-evaluation-release"
+)
 WAIT_SECONDS = 10
 
 EVALUATION = {
@@ -325,6 +349,303 @@ def run_interrupt(relay: ScriptedRelay) -> None:
     (relay.root / EVALUATING_NAME).touch()
     relay.expect({"kind": "interrupt", "request_id": 0})
     relay.send({"kind": "interrupt_result", "request_id": 0})
+    relay.complete()
+    relay.retire()
+
+
+def run_controlled_restart_stdin(relay: ScriptedRelay) -> None:
+    relay.ready()
+    command = relay.receive()
+    if command == {"kind": "stdin", "data": "stale\n"}:
+        relay.retire()
+        return
+
+    assert command == {"kind": "stdin", "data": "fresh\n"}, command
+    captured_stdin = command["data"]
+    relay.expect(
+        {
+            "kind": "evaluate",
+            "language": "r",
+            "source": "replacement cell",
+        }
+    )
+    relay.send(
+        {
+            "kind": "console_output",
+            "data": f"replacement cell consumed stdin: {captured_stdin}",
+        }
+    )
+    relay.complete()
+    relay.retire()
+
+
+def run_controlled_restart_stdin_only(relay: ScriptedRelay) -> None:
+    relay.ready()
+    relay.expect({"kind": "stdin", "data": "replacement input\n"})
+    relay.mark_done()
+    relay.retire()
+
+
+def run_controlled_restart_requirements(relay: ScriptedRelay) -> None:
+    counter = Path(os.environ["MCP_CONSOLE_TEST_IR_COUNTER"])
+    if not counter.exists():
+        relay.make_checkpoint(RESTART_REQUIREMENTS_CHECK_NAME)
+        relay.make_checkpoint(RESTART_REQUIREMENTS_CHECKED_NAME)
+        relay.make_checkpoint(RESTART_REQUIREMENTS_RESOLVED_NAME)
+        relay.ready()
+        relay.wait_for_checkpoint(RESTART_REQUIREMENTS_CHECK_NAME)
+        relay.expect_no_command()
+        relay.notify_checkpoint(RESTART_REQUIREMENTS_CHECKED_NAME)
+        readable, _, _ = select.select(
+            [
+                relay.checkpoints[RESTART_REQUIREMENTS_RESOLVED_NAME],
+                sys.stdin.buffer,
+            ],
+            [],
+            [],
+            WAIT_SECONDS,
+        )
+        assert relay.checkpoints[RESTART_REQUIREMENTS_RESOLVED_NAME] in readable, (
+            "old worker received shutdown before restart requirements resolved"
+        )
+        relay.wait_for_checkpoint(RESTART_REQUIREMENTS_RESOLVED_NAME)
+        relay.retire()
+        return
+
+    relay.make_checkpoint(RESTART_REQUIREMENTS_EVALUATION_RECEIVED_NAME)
+    relay.make_checkpoint(RESTART_REQUIREMENTS_EVALUATION_RELEASE_NAME)
+    relay.ready()
+    relay.expect(
+        {
+            "kind": "evaluate",
+            "language": "r",
+            "source": "replacement requirement cell",
+        }
+    )
+    relay.notify_checkpoint(RESTART_REQUIREMENTS_EVALUATION_RECEIVED_NAME)
+    relay.wait_for_checkpoint(RESTART_REQUIREMENTS_EVALUATION_RELEASE_NAME)
+    relay.send(
+        {
+            "kind": "console_output",
+            "data": "replacement requirement cell ran\n",
+        }
+    )
+    relay.complete()
+    relay.retire()
+
+
+def run_controlled_interrupt_stdin_evaluate(relay: ScriptedRelay) -> None:
+    relay.ready()
+    relay.expect(
+        {
+            "kind": "evaluate",
+            "language": "r",
+            "source": "old evaluation",
+        }
+    )
+    (relay.root / EVALUATING_NAME).touch()
+    relay.expect({"kind": "interrupt", "request_id": 0})
+    relay.send({"kind": "interrupt_result", "request_id": 0})
+    relay.expect({"kind": "stdin", "data": "finish old\n"})
+    relay.send(
+        {
+            "kind": "console_output",
+            "data": "old evaluation finished from stdin\n",
+        }
+    )
+    relay.send(COMPLETED)
+    relay.expect(
+        {
+            "kind": "evaluate",
+            "language": "r",
+            "source": "new evaluation",
+        }
+    )
+    relay.send({"kind": "console_output", "data": "new evaluation ran\n"})
+    relay.complete()
+    relay.retire()
+
+
+def run_controlled_interrupt_stdin_requirement_failure(
+    relay: ScriptedRelay,
+) -> None:
+    relay.ready()
+    relay.expect(
+        {
+            "kind": "evaluate",
+            "language": "r",
+            "source": "old evaluation before failing requirements",
+        }
+    )
+    (relay.root / EVALUATING_NAME).touch()
+    relay.expect({"kind": "interrupt", "request_id": 0})
+    relay.send({"kind": "interrupt_result", "request_id": 0})
+    relay.expect({"kind": "stdin", "data": "finish old before preparation\n"})
+    relay.send(
+        {
+            "kind": "console_output",
+            "data": "old evaluation finished before preparation\n",
+        }
+    )
+    relay.send(COMPLETED)
+    command = relay.receive()
+    assert command.get("kind") == "prepare_r", command
+    relay.send(
+        {
+            "kind": "r_preparation_failed",
+            "message": "scripted controlled interrupt R preparation failed",
+        }
+    )
+    relay.mark_done()
+    relay.retire()
+
+
+def run_controlled_interrupt_stdin_invalid_requirements(
+    relay: ScriptedRelay,
+) -> None:
+    relay.ready()
+    relay.expect(
+        {
+            "kind": "evaluate",
+            "language": "r",
+            "source": "old evaluation before invalid requirements",
+        }
+    )
+    (relay.root / EVALUATING_NAME).touch()
+    relay.expect({"kind": "interrupt", "request_id": 0})
+    relay.send({"kind": "interrupt_result", "request_id": 0})
+    relay.expect({"kind": "stdin", "data": "finish old before validation\n"})
+    relay.send(
+        {
+            "kind": "console_output",
+            "data": "old evaluation finished before validation\n",
+        }
+    )
+    relay.send(COMPLETED)
+    relay.mark_done()
+    relay.retire()
+
+
+def run_controlled_and_standalone_interrupts(relay: ScriptedRelay) -> None:
+    relay.make_checkpoint(CONTROLLED_INTERRUPT_FIRST_RECEIVED_NAME)
+    relay.make_checkpoint(CONTROLLED_INTERRUPT_SECOND_RECEIVED_NAME)
+    relay.make_checkpoint(CONTROLLED_INTERRUPT_EVALUATION_RELEASE_NAME)
+    relay.ready()
+    relay.expect(
+        {
+            "kind": "evaluate",
+            "language": "r",
+            "source": "old evaluation for overlapping interrupts",
+        }
+    )
+    (relay.root / EVALUATING_NAME).touch()
+
+    relay.expect({"kind": "interrupt", "request_id": 0})
+    relay.notify_checkpoint(CONTROLLED_INTERRUPT_FIRST_RECEIVED_NAME)
+    relay.expect({"kind": "interrupt", "request_id": 1})
+    relay.notify_checkpoint(CONTROLLED_INTERRUPT_SECOND_RECEIVED_NAME)
+    relay.send({"kind": "interrupt_result", "request_id": 0})
+    relay.send({"kind": "interrupt_result", "request_id": 1})
+
+    relay.wait_for_checkpoint(CONTROLLED_INTERRUPT_EVALUATION_RELEASE_NAME)
+    relay.send(
+        {
+            "kind": "console_output",
+            "data": "old evaluation finished after both interrupts\n",
+        }
+    )
+    relay.complete()
+    relay.retire()
+
+
+def run_controlled_interrupt_still_active(relay: ScriptedRelay) -> None:
+    relay.make_checkpoint(INTERRUPT_ACTIVE_RELEASE_NAME)
+    relay.make_checkpoint(INTERRUPT_ACKNOWLEDGED_NAME)
+    relay.ready()
+    relay.expect(
+        {
+            "kind": "evaluate",
+            "language": "r",
+            "source": "old evaluation",
+        }
+    )
+    (relay.root / EVALUATING_NAME).touch()
+    relay.expect({"kind": "interrupt", "request_id": 0})
+    relay.send(
+        {
+            "kind": "console_output",
+            "data": "old evaluation remains active\n",
+        }
+    )
+    relay.send({"kind": "interrupt_result", "request_id": 0})
+    relay.notify_checkpoint(INTERRUPT_ACKNOWLEDGED_NAME)
+    relay.wait_for_checkpoint(INTERRUPT_ACTIVE_RELEASE_NAME)
+    relay.send(
+        {
+            "kind": "console_output",
+            "data": "old evaluation eventually finished\n",
+        }
+    )
+    relay.complete()
+    relay.retire()
+
+
+def run_controlled_completion_then_interrupt(relay: ScriptedRelay) -> None:
+    relay.make_checkpoint(CONTROLLED_COMPLETION_RELEASE_NAME)
+    relay.make_checkpoint(CONTROLLED_COMPLETION_SENT_NAME)
+    relay.ready()
+    relay.expect(
+        {
+            "kind": "evaluate",
+            "language": "r",
+            "source": "controlled cell completed before later interrupt",
+        }
+    )
+    relay.wait_for_checkpoint(CONTROLLED_COMPLETION_RELEASE_NAME)
+    relay.send(
+        {
+            "kind": "console_output",
+            "data": "controlled cell completed before later interrupt\n",
+        }
+    )
+    relay.send(COMPLETED)
+    relay.notify_checkpoint(CONTROLLED_COMPLETION_SENT_NAME)
+    relay.expect({"kind": "interrupt", "request_id": 0})
+    relay.send({"kind": "interrupt_result", "request_id": 0})
+    relay.mark_done()
+    relay.retire()
+
+
+def run_controlled_interrupt_with_waiting_poll(relay: ScriptedRelay) -> None:
+    relay.make_checkpoint(INTERRUPT_RECEIVED_NAME)
+    relay.make_checkpoint(INTERRUPT_ACK_RELEASE_NAME)
+    relay.make_checkpoint(INTERRUPT_ACTIVE_RELEASE_NAME)
+    relay.ready()
+    relay.expect(
+        {
+            "kind": "evaluate",
+            "language": "r",
+            "source": "waiter-owned evaluation",
+        }
+    )
+    (relay.root / EVALUATING_NAME).touch()
+    relay.expect({"kind": "interrupt", "request_id": 0})
+    relay.notify_checkpoint(INTERRUPT_RECEIVED_NAME)
+    relay.wait_for_checkpoint(INTERRUPT_ACK_RELEASE_NAME)
+    relay.send(
+        {
+            "kind": "console_output",
+            "data": "output owned by original waiter\n",
+        }
+    )
+    relay.send({"kind": "interrupt_result", "request_id": 0})
+    relay.wait_for_checkpoint(INTERRUPT_ACTIVE_RELEASE_NAME)
+    relay.send(
+        {
+            "kind": "console_output",
+            "data": "original waiter evaluation finished\n",
+        }
+    )
     relay.complete()
     relay.retire()
 
@@ -668,6 +989,28 @@ def main() -> None:
         "live_r_requirements_then_evaluate": run_live_r_requirements_then_evaluate,
         "stdin_forwarding_failure": run_stdin_forwarding_failure,
         "interrupt": run_interrupt,
+        "controlled_restart_stdin": run_controlled_restart_stdin,
+        "controlled_restart_stdin_only": run_controlled_restart_stdin_only,
+        "controlled_restart_requirements": run_controlled_restart_requirements,
+        "controlled_interrupt_stdin_evaluate": (
+            run_controlled_interrupt_stdin_evaluate
+        ),
+        "controlled_interrupt_stdin_requirement_failure": (
+            run_controlled_interrupt_stdin_requirement_failure
+        ),
+        "controlled_interrupt_stdin_invalid_requirements": (
+            run_controlled_interrupt_stdin_invalid_requirements
+        ),
+        "controlled_and_standalone_interrupts": (
+            run_controlled_and_standalone_interrupts
+        ),
+        "controlled_interrupt_still_active": run_controlled_interrupt_still_active,
+        "controlled_completion_then_interrupt": (
+            run_controlled_completion_then_interrupt
+        ),
+        "controlled_interrupt_with_waiting_poll": (
+            run_controlled_interrupt_with_waiting_poll
+        ),
         "serialized_cross_source_order": run_serialized_cross_source_order,
         "shutdown": run_shutdown,
         "blocked_live_r_resolver_shutdown": run_blocked_live_r_resolver_shutdown,

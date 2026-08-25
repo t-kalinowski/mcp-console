@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use super::environment::{Environment, RequirementDelta, ResolvedEnvironment};
-use super::evaluation::{RestartDelivery, RestartReservation};
+use super::evaluation::{EvaluationReservation, RestartDelivery};
 use super::output::{Response, ResponseAcknowledgment, SendFailure};
 use super::{Client, WorkerRetirement, WorkerRetirementFailure, WorkerState, platform};
 
@@ -24,6 +24,7 @@ impl WorkerGeneration {
 pub(super) struct LifecycleControl {
     pub(super) state: LifecycleState,
     pub(super) generation: WorkerGeneration,
+    controlled_send: Option<Arc<()>>,
     retiring_generation: Option<RetiringGeneration>,
     pub(super) requirement_changes: RequirementChangeState,
     pub(super) processes: ProcessStopHandles,
@@ -45,6 +46,7 @@ impl LifecycleControl {
         Self {
             state: LifecycleState::Ready,
             generation: WorkerGeneration::new(),
+            controlled_send: None,
             retiring_generation: None,
             requirement_changes: RequirementChangeState::Available,
             processes: ProcessStopHandles::default(),
@@ -119,12 +121,35 @@ struct RestartContext {
     processes: ProcessStopHandles,
     deadline: Instant,
     generation: WorkerGeneration,
-    evaluation: Option<RestartReservation>,
+    evaluation: Option<EvaluationReservation>,
 }
 
-struct RestartFailure {
-    message: String,
+/// Reserves lifecycle admission for one inline-control `send` call.
+pub(super) struct ControlledSendAdmission {
+    client: Client,
+    token: Arc<()>,
+    generation: WorkerGeneration,
+}
+
+impl ControlledSendAdmission {
+    pub(super) fn generation(&self) -> WorkerGeneration {
+        self.generation.clone()
+    }
+}
+
+pub(super) struct RestartFailure {
+    pub(super) message: String,
+    pub(super) response: Response,
+}
+
+pub(super) struct RestartAttempt {
+    pub(super) response: Response,
+    pub(super) generation: Option<WorkerGeneration>,
+}
+
+struct WorkerReplacement {
     response: Response,
+    ready: bool,
 }
 
 impl RestartFailure {
@@ -182,16 +207,80 @@ impl ProcessStopHandles {
     }
 }
 
+impl Drop for ControlledSendAdmission {
+    fn drop(&mut self) {
+        let Ok(mut lifecycle) = self.client.0.lifecycle.lock() else {
+            return;
+        };
+        if lifecycle
+            .controlled_send
+            .as_ref()
+            .is_some_and(|token| Arc::ptr_eq(token, &self.token))
+        {
+            lifecycle.controlled_send = None;
+        }
+    }
+}
+
 impl Client {
     /// Sends SIGINT to the active resolver or live worker process.
     pub(crate) async fn interrupt(&self) -> Result<(), String> {
         let client = self.clone();
-        tokio::task::spawn_blocking(move || client.interrupt_blocking())
+        tokio::task::spawn_blocking(move || client.interrupt_standalone_blocking())
             .await
             .map_err(|error| format!("worker interrupt task failed: {error}"))?
     }
 
-    fn interrupt_blocking(&self) -> Result<(), String> {
+    fn interrupt_standalone_blocking(&self) -> Result<(), String> {
+        let resolver = {
+            let lifecycle = self
+                .0
+                .lifecycle
+                .lock()
+                .map_err(|_| "worker lifecycle lock poisoned".to_string())?;
+            lifecycle.processes.resolver.clone()
+        };
+        if let Some(resolver) = resolver
+            && resolver.interrupt()?
+        {
+            return Ok(());
+        }
+
+        let active = self.evaluation()?;
+        let (processes, worker_allowed) = {
+            let lifecycle = self
+                .0
+                .lifecycle
+                .lock()
+                .map_err(|_| "worker lifecycle lock poisoned".to_string())?;
+            let active_is_interruptible = active
+                .as_ref()
+                .map(|active| active.evaluation.is_interruptible())
+                .transpose()?
+                .unwrap_or(false);
+            let worker_allowed = lifecycle.controlled_send.is_none()
+                || (lifecycle.state == LifecycleState::Ready
+                    && active_is_interruptible
+                    && active
+                        .as_ref()
+                        .is_some_and(|active| active.generation.is(&lifecycle.generation)));
+            (lifecycle.processes.clone(), worker_allowed)
+        };
+        if let Some(resolver) = processes.resolver
+            && resolver.interrupt()?
+        {
+            return Ok(());
+        }
+        if worker_allowed {
+            return processes
+                .worker
+                .ok_or_else(|| "worker is not running".to_string())?
+                .interrupt();
+        }
+        Err("session control is in progress".to_string())
+    }
+
+    pub(super) fn interrupt_blocking(&self) -> Result<(), String> {
         let processes = {
             let lifecycle = self
                 .0
@@ -200,6 +289,10 @@ impl Client {
                 .map_err(|_| "worker lifecycle lock poisoned".to_string())?;
             lifecycle.processes.clone()
         };
+        Self::interrupt_processes(processes)
+    }
+
+    fn interrupt_processes(processes: ProcessStopHandles) -> Result<(), String> {
         if let Some(resolver) = processes.resolver
             && resolver.interrupt()?
         {
@@ -218,25 +311,30 @@ impl Client {
         grace: Duration,
     ) -> Result<Response, String> {
         let client = self.clone();
-        let response =
-            tokio::task::spawn_blocking(move || client.restart_blocking(requirements, grace))
-                .await
-                .map_err(|error| format!("worker restart task failed: {error}"))??;
-        Ok(response)
+        let restart = tokio::task::spawn_blocking(move || {
+            let _operation = client.admit_operation()?;
+            client.restart_blocking(requirements, grace, false, None)
+        })
+        .await
+        .map_err(|error| format!("worker restart task failed: {error}"))??;
+        Ok(restart.response)
     }
 
-    fn restart_blocking(
+    /// Defers the replacement-ready marker when this admission owns a follow-up operation.
+    pub(super) fn restart_blocking(
         &self,
         requirements: super::Requirements,
         grace: Duration,
-    ) -> Result<Response, String> {
+        defer_idle: bool,
+        control: Option<&ControlledSendAdmission>,
+    ) -> Result<RestartAttempt, String> {
         let mut restart = if requirements.duckdb.is_empty()
             && requirements.python.is_empty()
             && requirements.r.is_empty()
         {
-            self.begin_restart(grace)?
+            self.begin_restart(grace, control)?
         } else {
-            self.resolve_and_begin_restart(requirements, grace)?
+            self.resolve_and_begin_restart(requirements, grace, control)?
         };
         if let Err(mut error) = restart.processes.shutdown(restart.deadline) {
             let retirement = self.finish_worker_retirement();
@@ -259,7 +357,7 @@ impl Client {
                 }
             };
             let mut response =
-                match self.settle_restart_evaluation(restart.evaluation.take(), retired_worker) {
+                match self.settle_reserved_evaluation(restart.evaluation.take(), retired_worker) {
                     Ok(response) => response,
                     Err(settlement) => {
                         error.push_str(&format!(
@@ -274,16 +372,27 @@ impl Client {
                 .output
                 .push_failure(SendFailure::from(error).worker_outcome(outcome));
             response.extend(self.0.output.take());
-            return Ok(self.retain_transition_result(transition, response));
+            return Ok(RestartAttempt {
+                response: self.retain_transition_result(transition, response),
+                generation: None,
+            });
         }
-        match self.replace_worker(&mut restart.evaluation, restart.generation.clone()) {
-            Ok(response) => {
+        match self.replace_worker(
+            &mut restart.evaluation,
+            restart.generation.clone(),
+            !defer_idle,
+        ) {
+            Ok(replacement) => {
                 let transition = self.finish_restart(&restart.generation);
-                Ok(self.retain_transition_result(transition, response))
+                let ready = replacement.ready && transition.is_ok();
+                Ok(RestartAttempt {
+                    response: self.retain_transition_result(transition, replacement.response),
+                    generation: ready.then_some(restart.generation),
+                })
             }
             Err(mut failure) => {
                 if restart.evaluation.is_some() {
-                    match self.settle_restart_evaluation(restart.evaluation.take(), false) {
+                    match self.settle_reserved_evaluation(restart.evaluation.take(), false) {
                         Ok(response) => failure.response.extend(response),
                         Err(settlement) => {
                             failure.message.push_str(&format!(
@@ -299,7 +408,10 @@ impl Client {
                     .output
                     .push_failure(SendFailure::from(failure.message));
                 failure.response.extend(self.0.output.take());
-                Ok(self.retain_transition_result(transition, failure.response))
+                Ok(RestartAttempt {
+                    response: self.retain_transition_result(transition, failure.response),
+                    generation: None,
+                })
             }
         }
     }
@@ -308,8 +420,12 @@ impl Client {
         &self,
         requirements: super::Requirements,
         grace: Duration,
+        control: Option<&ControlledSendAdmission>,
     ) -> Result<RestartContext, String> {
-        let generation = self.admit()?;
+        let generation = match control {
+            Some(control) => control.generation(),
+            None => self.admit()?,
+        };
         let environment = self
             .0
             .environment
@@ -322,13 +438,19 @@ impl Client {
         let delta = RequirementDelta::calculate(&environment, requirements)?;
         if delta.is_empty() {
             drop(environment);
-            return self.begin_restart(grace);
+            return self.begin_restart(grace, control);
         }
         let resolved = self
             .resolve_prestart_environment(&generation, &environment, delta)
             .map_err(|failure| failure.into_message())?;
 
-        self.commit_environment_and_begin_restart(&generation, grace, &mut environment, resolved)
+        self.commit_environment_and_begin_restart(
+            &generation,
+            grace,
+            &mut environment,
+            resolved,
+            control,
+        )
     }
 
     fn commit_environment_and_begin_restart(
@@ -337,6 +459,7 @@ impl Client {
         grace: Duration,
         environment: &mut Environment,
         resolved: ResolvedEnvironment,
+        control: Option<&ControlledSendAdmission>,
     ) -> Result<RestartContext, String> {
         let mut evaluation = self.evaluation()?;
         let mut lifecycle = self
@@ -344,8 +467,15 @@ impl Client {
             .lifecycle
             .lock()
             .map_err(|_| "worker lifecycle lock poisoned".to_string())?;
+        let owns_control = match control {
+            Some(control) => lifecycle
+                .controlled_send
+                .as_ref()
+                .is_some_and(|token| Arc::ptr_eq(token, &control.token)),
+            None => lifecycle.controlled_send.is_none(),
+        };
         match lifecycle.state {
-            LifecycleState::Ready if lifecycle.generation.is(expected) => {}
+            LifecycleState::Ready if lifecycle.generation.is(expected) && owns_control => {}
             LifecycleState::Ready => {
                 return Err("session restarted before the operation began".to_string());
             }
@@ -387,9 +517,10 @@ impl Client {
     /// can be published after the stopped notice below.
     fn replace_worker(
         &self,
-        evaluation: &mut Option<RestartReservation>,
+        evaluation: &mut Option<EvaluationReservation>,
         generation: WorkerGeneration,
-    ) -> Result<Response, RestartFailure> {
+        report_idle: bool,
+    ) -> Result<WorkerReplacement, RestartFailure> {
         let mut worker = self
             .0
             .worker
@@ -410,7 +541,7 @@ impl Client {
         }
         drop(worker);
 
-        let mut response = self.settle_restart_evaluation(evaluation.take(), retired_worker)?;
+        let mut response = self.settle_reserved_evaluation(evaluation.take(), retired_worker)?;
 
         let mut worker = match self.0.worker.lock() {
             Ok(worker) => worker,
@@ -441,17 +572,25 @@ impl Client {
             }
             self.0.output.push_failure(failure);
             response.extend(self.0.output.take());
-            return Ok(response);
+            return Ok(WorkerReplacement {
+                response,
+                ready: false,
+            });
         }
         response.extend(self.0.output.take());
-        response.push_notice(super::output::WORKER_IDLE_NOTICE);
-        Ok(response)
+        if report_idle {
+            response.push_notice(super::output::WORKER_IDLE_NOTICE);
+        }
+        Ok(WorkerReplacement {
+            response,
+            ready: true,
+        })
     }
 
     /// Settles one reserved evaluation before restart publishes its own response.
-    fn settle_restart_evaluation(
+    pub(super) fn settle_reserved_evaluation(
         &self,
-        mut evaluation: Option<RestartReservation>,
+        mut evaluation: Option<EvaluationReservation>,
         retired_worker: bool,
     ) -> Result<Response, RestartFailure> {
         let (old_output, post_completion_output) = evaluation.as_mut().map_or_else(
@@ -557,10 +696,40 @@ impl Client {
             .lock()
             .map_err(|_| "worker lifecycle lock poisoned".to_string())?;
         match lifecycle.state {
-            LifecycleState::Ready => Ok(lifecycle.generation.clone()),
+            LifecycleState::Ready if lifecycle.controlled_send.is_none() => {
+                Ok(lifecycle.generation.clone())
+            }
+            LifecycleState::Ready => Err("session control is in progress".to_string()),
             LifecycleState::Restarting { .. } => Err("worker is restarting".to_string()),
             LifecycleState::ShuttingDown { .. } => Err("worker is shutting down".to_string()),
         }
+    }
+
+    pub(super) fn begin_controlled_send(&self) -> Result<ControlledSendAdmission, String> {
+        let mut lifecycle = self
+            .0
+            .lifecycle
+            .lock()
+            .map_err(|_| "worker lifecycle lock poisoned".to_string())?;
+        match lifecycle.state {
+            LifecycleState::Ready if lifecycle.controlled_send.is_none() => {}
+            LifecycleState::Ready => {
+                return Err("session control is already in progress".to_string());
+            }
+            LifecycleState::Restarting { .. } => {
+                return Err("worker is restarting".to_string());
+            }
+            LifecycleState::ShuttingDown { .. } => {
+                return Err("worker is shutting down".to_string());
+            }
+        }
+        let token = Arc::new(());
+        lifecycle.controlled_send = Some(token.clone());
+        Ok(ControlledSendAdmission {
+            client: self.clone(),
+            token,
+            generation: lifecycle.generation.clone(),
+        })
     }
 
     pub(super) fn generation_status(
@@ -582,11 +751,68 @@ impl Client {
     }
 
     pub(super) fn ensure_generation(&self, expected: &WorkerGeneration) -> Result<(), String> {
-        let generation = self.admit()?;
-        if !generation.is(expected) {
-            return Err("session restarted before the operation began".to_string());
+        let lifecycle = self
+            .0
+            .lifecycle
+            .lock()
+            .map_err(|_| "worker lifecycle lock poisoned".to_string())?;
+        match lifecycle.state {
+            LifecycleState::Ready if lifecycle.generation.is(expected) => Ok(()),
+            LifecycleState::Ready => {
+                Err("session restarted before the operation began".to_string())
+            }
+            LifecycleState::Restarting { .. } => Err("worker is restarting".to_string()),
+            LifecycleState::ShuttingDown { .. } => Err("worker is shutting down".to_string()),
         }
-        Ok(())
+    }
+
+    pub(super) fn ensure_ordinary_generation(
+        &self,
+        expected: &WorkerGeneration,
+    ) -> Result<(), String> {
+        let lifecycle = self
+            .0
+            .lifecycle
+            .lock()
+            .map_err(|_| "worker lifecycle lock poisoned".to_string())?;
+        match lifecycle.state {
+            LifecycleState::Ready
+                if lifecycle.generation.is(expected) && lifecycle.controlled_send.is_none() =>
+            {
+                Ok(())
+            }
+            LifecycleState::Ready if !lifecycle.generation.is(expected) => {
+                Err("session restarted before the operation began".to_string())
+            }
+            LifecycleState::Ready => Err("session control is in progress".to_string()),
+            LifecycleState::Restarting { .. } => Err("worker is restarting".to_string()),
+            LifecycleState::ShuttingDown { .. } => Err("worker is shutting down".to_string()),
+        }
+    }
+
+    pub(super) fn ensure_controlled_generation(
+        &self,
+        admission: &ControlledSendAdmission,
+        expected: &WorkerGeneration,
+    ) -> Result<(), String> {
+        let lifecycle = self
+            .0
+            .lifecycle
+            .lock()
+            .map_err(|_| "worker lifecycle lock poisoned".to_string())?;
+        let owns_control = lifecycle
+            .controlled_send
+            .as_ref()
+            .is_some_and(|token| Arc::ptr_eq(token, &admission.token));
+        match lifecycle.state {
+            LifecycleState::Ready if owns_control && lifecycle.generation.is(expected) => Ok(()),
+            LifecycleState::Ready if !lifecycle.generation.is(expected) => {
+                Err("session restarted before the operation began".to_string())
+            }
+            LifecycleState::Ready => Err("session control admission changed".to_string()),
+            LifecycleState::Restarting { .. } => Err("worker is restarting".to_string()),
+            LifecycleState::ShuttingDown { .. } => Err("worker is shutting down".to_string()),
+        }
     }
 
     fn ensure_restarting(&self) -> Result<(), String> {
@@ -602,7 +828,11 @@ impl Client {
         }
     }
 
-    fn begin_restart(&self, grace: Duration) -> Result<RestartContext, String> {
+    fn begin_restart(
+        &self,
+        grace: Duration,
+        control: Option<&ControlledSendAdmission>,
+    ) -> Result<RestartContext, String> {
         let mut evaluation = self.evaluation()?;
         let mut lifecycle = self
             .0
@@ -623,6 +853,16 @@ impl Client {
                 return Err("requirement preparation is still running".to_string());
             }
             LifecycleState::Ready => {}
+        }
+        let owns_control = match control {
+            Some(control) => lifecycle
+                .controlled_send
+                .as_ref()
+                .is_some_and(|token| Arc::ptr_eq(token, &control.token)),
+            None => lifecycle.controlled_send.is_none(),
+        };
+        if !owns_control {
+            return Err("session control is in progress".to_string());
         }
         let evaluation = evaluation
             .take()
@@ -883,6 +1123,8 @@ mod tests {
             None,
             client.0.output.clone(),
             Response::default(),
+            Response::default(),
+            false,
         ));
         evaluation.complete_cell(Ok(()));
         let claim = evaluation.claim().unwrap();
@@ -893,7 +1135,7 @@ mod tests {
         };
         let response = render_response(SendResponse::Completed(response));
         let mut reservation = Some(evaluation.reserve_for_restart().unwrap());
-        let failure = match client.replace_worker(&mut reservation, WorkerGeneration::new()) {
+        let failure = match client.replace_worker(&mut reservation, WorkerGeneration::new(), true) {
             Ok(_) => panic!("replacement unexpectedly succeeded outside a restart"),
             Err(failure) => failure,
         };
@@ -903,7 +1145,7 @@ mod tests {
         delivery.unwrap().unclaimed();
 
         let recovered = client
-            .settle_restart_evaluation(reservation.take(), false)
+            .settle_reserved_evaluation(reservation.take(), false)
             .unwrap_or_else(|failure| panic!("{}", failure.message));
         let (content, is_error, delivery) = recovered.into_parts();
 
@@ -929,6 +1171,8 @@ mod tests {
             None,
             client.0.output.clone(),
             Response::default(),
+            Response::default(),
+            false,
         ));
         evaluation.complete_cell(Ok(()));
         let claim = evaluation.claim().unwrap();
@@ -947,7 +1191,7 @@ mod tests {
         delivery.unwrap().delivered();
 
         let recovered = client
-            .settle_restart_evaluation(Some(reservation), false)
+            .settle_reserved_evaluation(Some(reservation), false)
             .unwrap_or_else(|failure| panic!("{}", failure.message));
         let (content, is_error, delivery) = recovered.into_parts();
 

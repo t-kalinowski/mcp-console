@@ -1,0 +1,9 @@
+---
+relay:
+  kind: ready
+---
+server:
+  kind: stdin
+  data: |
+    replacement input
+...

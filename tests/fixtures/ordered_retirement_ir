@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import os
+import signal
 import sys
 from pathlib import Path
 
@@ -15,7 +16,18 @@ def wait(path: str) -> None:
         assert checkpoint.read(1) == b"1"
 
 
+def report_interrupt(signum: int, _frame: object) -> None:
+    notify(os.environ["MCP_CONSOLE_TEST_IR_INTERRUPTED"])
+    raise SystemExit(128 + signum)
+
+
 def resolve() -> None:
+    if os.environ.get("MCP_CONSOLE_TEST_IR_INTERRUPTED"):
+        signal.signal(signal.SIGINT, report_interrupt)
+    if failure := os.environ.get("MCP_CONSOLE_TEST_IR_FAILURE"):
+        print(failure, file=sys.stderr)
+        raise SystemExit(1)
+
     libraries = os.environ["MCP_CONSOLE_TEST_IR_LIBRARIES"].split(os.pathsep)
     counter = Path(os.environ["MCP_CONSOLE_TEST_IR_COUNTER"])
     index = int(counter.read_text(encoding="utf-8")) if counter.exists() else 0
@@ -27,6 +39,10 @@ def resolve() -> None:
         if release := os.environ.get("MCP_CONSOLE_TEST_IR_RELEASE"):
             wait(release)
     counter.write_text(str(index + 1), encoding="utf-8")
+    if finished := os.environ.get("MCP_CONSOLE_TEST_IR_FINISHED"):
+        notify(finished)
+    if finish_release := os.environ.get("MCP_CONSOLE_TEST_IR_FINISH_RELEASE"):
+        wait(finish_release)
     print(libraries[index], end="")
 
 

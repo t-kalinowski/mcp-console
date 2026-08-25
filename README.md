@@ -26,10 +26,14 @@ An agent can load data once, build useful objects, inspect an intermediate resul
 
 The MCP interface has two tools:
 
-- `send` runs one complete R, Python, or SQL cell, can prepare additive requirements needed by that cell, supplies interactive input, or collects pending output.
-- `session` stages R or Python packages and DuckDB extensions ahead of time, interrupts work, or restarts the runtime.
+- `send` runs one complete R, Python, or SQL cell, can prepare additive requirements needed by that cell, applies an optional inline interrupt or restart, supplies interactive input, or collects pending output.
+- `session` remains available for standalone requirement preparation, interruption, and restart.
 
 Calls to `send` are sequential.
+Without inline control, a call prepares requirements, queues nonempty standard input, and then evaluates its cell.
+Inline interrupt preserves in-memory state and orders signal delivery, same-call input, a 100-millisecond grace period, requirements, and evaluation; the new cell is not run if the interrupted evaluation remains active.
+Inline restart resolves requirements before replacing the worker, then queues same-call input and runs the cell only in the replacement.
+Control, interrupt grace, and explicit requirement preparation do not consume the wait timeout, which starts after cell dispatch or attachment to an active evaluation.
 R and Python global state and the in-memory DuckDB catalog remain available until the worker is restarted, replaced after failure, or the server exits.
 Prepared requirements remain available across worker restarts, but in-memory language, database, debugger, and unread-input state does not.
 Requirements declared on `send` are prepared before its cell runs and remain available to later cells.
@@ -93,7 +97,7 @@ Other current limitations include:
 
 - there is one implicit session and no named-session management;
 - cells run sequentially, and concurrent `send` calls are unsupported; and
-- restart and worker replacement discard R, Python, SQL, debugger, and unread-input state.
+- restart and worker replacement discard R, Python, DuckDB, debugger, and unread-input state.
 
 ## Security boundary
 

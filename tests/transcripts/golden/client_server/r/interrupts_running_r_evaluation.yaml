@@ -18,29 +18,17 @@ result:
         [running; poll with an empty send]
   isError: false
 ---
-session:
-  action: interrupt
-result:
-  content:
-    - type: text
-      text: "[interrupt sent]"
-  isError: false
----
 send:
+  control: interrupt
+  r: interrupt_state + 1L
   timeout_ms: 3000
 result:
   content:
     - type: text
-      text: "\n"
-  isError: false
----
-send:
-  r: interrupt_state + 1L
-result:
-  content:
-    - type: text
-      text: |
+      text: |-
+
         [1] 42
+        [done]
   isError: false
 ---
 send:

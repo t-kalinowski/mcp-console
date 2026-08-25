@@ -22,7 +22,9 @@ mod platform;
 use environment::{Environment, PreparationIntent, PythonEnvironment, RuntimeRResolutionFailure};
 pub(crate) use environment::{PrepareResult, Requirements};
 use evaluation::{Evaluation, EvaluationWait};
-use lifecycle::{LifecycleControl, OldGenerationCommitDisposition, WorkerGeneration};
+use lifecycle::{
+    ControlledSendAdmission, LifecycleControl, OldGenerationCommitDisposition, WorkerGeneration,
+};
 pub(crate) use output::{Content, Response, ResponseDelivery};
 use output::{OutputTape, SendFailure, SendResponse};
 
@@ -40,6 +42,29 @@ const DEFAULT_R_REQUIREMENTS: &[&str] = &[
 const DEFAULT_DUCKDB_EXTENSIONS: &[&str] = &["icu", "json"];
 
 const CUSTOM_DUCKDB_R_REQUIREMENTS: &[&str] = &["DBI", "duckdb", "jsonlite"];
+pub(crate) const WORKER_SHUTDOWN_GRACE: Duration = Duration::from_secs(1);
+const INTERRUPT_GRACE: Duration = Duration::from_millis(100);
+
+#[derive(Clone, Copy)]
+pub(crate) enum SendControl {
+    Interrupt,
+    Restart,
+}
+
+pub(crate) enum RequirementSubmission {
+    Valid(Requirements),
+    Invalid(String),
+}
+
+pub(crate) struct SendRequest {
+    pub(crate) cell: Option<crate::cell::Cell>,
+    pub(crate) stdin: Option<String>,
+    pub(crate) requirements: Option<RequirementSubmission>,
+    pub(crate) control: Option<SendControl>,
+    pub(crate) timeout: Duration,
+    pub(crate) transcript: crate::transcript::Transcript,
+    pub(crate) call_id: Option<u64>,
+}
 
 /// A cloneable handle to one lazily started worker.
 #[derive(Clone)]
@@ -53,6 +78,8 @@ struct ClientInner {
     worker: Mutex<WorkerState>,
     /// The one evaluation occupying this session, independently of who is polling it.
     evaluation: Mutex<Option<ActiveEvaluation>>,
+    /// Settles operations admitted before inline control reserves its optional new cell.
+    admission: tokio::sync::RwLock<()>,
     preparation: tokio::sync::RwLock<()>,
     output: OutputTape,
     lifecycle: Mutex<LifecycleControl>,
@@ -200,6 +227,58 @@ enum PreparedEvaluation {
     Failed(Response),
 }
 
+enum ControlledEvaluation {
+    Started(Arc<Evaluation>, evaluation::WaitClaim),
+    Returned(Response),
+    Observe {
+        evaluation: Arc<Evaluation>,
+        wait_claim: evaluation::WaitClaim,
+        cell_not_run: bool,
+    },
+}
+
+enum PriorEvaluation {
+    None,
+    Completed(Response),
+    Active(Arc<Evaluation>),
+    Failed(Response),
+}
+
+enum ControlledStdinFailure {
+    ActiveEvaluation(String),
+    IdleWorker(SendFailure),
+}
+
+fn send_response_from_wait(wait: EvaluationWait) -> SendResponse {
+    match wait {
+        EvaluationWait::Running(output) => SendResponse::Running(output),
+        EvaluationWait::InputRequested(output) => SendResponse::InputRequested(output),
+        EvaluationWait::ReplacementStarting(output) => SendResponse::ReplacementStarting(output),
+        EvaluationWait::ReplacementReady(output) => SendResponse::ReplacementReady(output),
+        EvaluationWait::Completed(output) => SendResponse::Completed(output),
+        EvaluationWait::Reclaimed(output) | EvaluationWait::Restarted(output) => {
+            SendResponse::Restarted(output)
+        }
+    }
+}
+
+fn interrupted_cell_not_run_response(wait: EvaluationWait) -> Response {
+    let mut response = send_response_from_wait(wait);
+    match &mut response {
+        SendResponse::Idle(output)
+        | SendResponse::Failed(output)
+        | SendResponse::Running(output)
+        | SendResponse::InputRequested(output)
+        | SendResponse::Completed(output)
+        | SendResponse::ReplacementStarting(output)
+        | SendResponse::ReplacementReady(output)
+        | SendResponse::Restarted(output) => {
+            output.push_tool_error("interrupted evaluation is still active; cell was not run");
+        }
+    }
+    output::render_response(response)
+}
+
 impl Client {
     pub(crate) fn new(program: PathBuf, relay: Option<PathBuf>) -> Result<Self, String> {
         Ok(Self::with_arguments(
@@ -270,6 +349,7 @@ impl Client {
             relay,
             worker: Mutex::new(WorkerState::Initial),
             evaluation: Mutex::new(None),
+            admission: tokio::sync::RwLock::new(()),
             preparation: tokio::sync::RwLock::new(()),
             output: OutputTape::new(),
             lifecycle: Mutex::new(LifecycleControl::new()),
@@ -278,18 +358,26 @@ impl Client {
     }
 
     /// Starts one cell, supplies stdin, or collects an idle response.
-    pub(crate) async fn send(
-        &self,
-        cell: Option<crate::cell::Cell>,
-        stdin: Option<String>,
-        requirements: Option<Requirements>,
-        timeout: Duration,
-        transcript: crate::transcript::Transcript,
-        call_id: Option<u64>,
-    ) -> Response {
+    pub(crate) async fn send(&self, request: SendRequest) -> Response {
+        if let Some(control) = request.control {
+            return self.send_controlled(control, request).await;
+        }
+        let SendRequest {
+            cell,
+            stdin,
+            requirements,
+            control: _,
+            timeout,
+            transcript,
+            call_id,
+        } = request;
         if let Some(requirements) = requirements {
             let Some(cell) = cell else {
                 return output::direct_failure("`requirements` requires a code cell");
+            };
+            let requirements = match requirements {
+                RequirementSubmission::Valid(requirements) => requirements,
+                RequirementSubmission::Invalid(error) => return output::direct_failure(error),
             };
             return self
                 .send_with_requirements(cell, stdin, requirements, timeout, transcript, call_id)
@@ -300,7 +388,379 @@ impl Client {
             .await
         {
             Ok(response) => output::render_response(response),
-            Err(failure) => output::direct_failure(failure.message),
+            Err(failure) => {
+                let mut response = Response::default();
+                response.push_failure(failure);
+                response
+            }
+        }
+    }
+
+    async fn send_controlled(&self, control: SendControl, request: SendRequest) -> Response {
+        let timeout = request.timeout;
+        if request.requirements.is_some() && request.cell.is_none() {
+            return output::direct_failure("`requirements` requires a code cell");
+        }
+        let client = self.clone();
+        let admission = tokio::task::spawn_blocking(move || {
+            client.control_and_start_evaluation(control, request)
+        })
+        .await;
+        let admission = match admission {
+            Ok(Ok(admission)) => admission,
+            Ok(Err(error)) => return output::direct_failure(error),
+            Err(error) => {
+                return output::direct_failure(format!("session control task failed: {error}"));
+            }
+        };
+        match admission {
+            ControlledEvaluation::Started(evaluation, wait_claim) => {
+                match evaluation.wait(wait_claim, timeout).await {
+                    Ok(wait) => output::render_response(send_response_from_wait(wait)),
+                    Err(error) => output::direct_failure(error),
+                }
+            }
+            ControlledEvaluation::Returned(response) => response,
+            ControlledEvaluation::Observe {
+                evaluation,
+                wait_claim,
+                cell_not_run,
+            } => match evaluation
+                .wait(
+                    wait_claim,
+                    if cell_not_run {
+                        Duration::ZERO
+                    } else {
+                        timeout
+                    },
+                )
+                .await
+            {
+                Ok(wait) if cell_not_run => interrupted_cell_not_run_response(wait),
+                Ok(wait) => output::render_response(send_response_from_wait(wait)),
+                Err(error) => output::direct_failure(error),
+            },
+        }
+    }
+
+    fn control_and_start_evaluation(
+        &self,
+        requested: SendControl,
+        request: SendRequest,
+    ) -> Result<ControlledEvaluation, String> {
+        let SendRequest {
+            cell,
+            stdin,
+            requirements,
+            control: _,
+            timeout: _,
+            transcript,
+            call_id,
+        } = request;
+        let control = self.begin_controlled_send()?;
+        match requested {
+            SendControl::Interrupt => self.interrupt_and_start_evaluation(
+                &control,
+                cell,
+                stdin,
+                requirements,
+                transcript,
+                call_id,
+            ),
+            SendControl::Restart => self.restart_and_start_evaluation(
+                &control,
+                cell,
+                stdin,
+                requirements,
+                transcript,
+                call_id,
+            ),
+        }
+    }
+
+    fn return_controlled_response(&self, mut response: Response) -> ControlledEvaluation {
+        response.recover_to(self.0.output.clone());
+        ControlledEvaluation::Returned(response)
+    }
+
+    fn return_controlled_failure(
+        &self,
+        mut response: Response,
+        failure: SendFailure,
+    ) -> ControlledEvaluation {
+        response.extend_logical_region(self.0.output.take());
+        response.push_failure(failure);
+        self.return_controlled_response(response)
+    }
+
+    fn observe_interrupted_evaluation(
+        &self,
+        evaluation: Arc<Evaluation>,
+        cell_not_run: bool,
+    ) -> ControlledEvaluation {
+        match evaluation.claim() {
+            Ok(wait_claim) => ControlledEvaluation::Observe {
+                evaluation,
+                wait_claim,
+                cell_not_run,
+            },
+            Err(error) => {
+                let mut response = Response::default();
+                if cell_not_run {
+                    response.push_tool_error(
+                        "interrupted evaluation is still active; cell was not run",
+                    );
+                } else {
+                    response.push_tool_error(error);
+                }
+                self.return_controlled_response(response)
+            }
+        }
+    }
+
+    fn interrupt_and_start_evaluation(
+        &self,
+        control: &ControlledSendAdmission,
+        cell: Option<crate::cell::Cell>,
+        stdin: Option<String>,
+        requirements: Option<RequirementSubmission>,
+        transcript: crate::transcript::Transcript,
+        call_id: Option<u64>,
+    ) -> Result<ControlledEvaluation, String> {
+        let generation = control.generation();
+        self.interrupt_blocking()?;
+        self.ensure_controlled_generation(control, &generation)?;
+        match self.submit_controlled_stdin(stdin, &generation, control) {
+            Ok(()) => {}
+            Err(ControlledStdinFailure::ActiveEvaluation(error)) => return Err(error),
+            Err(ControlledStdinFailure::IdleWorker(failure)) => {
+                return Ok(self.return_controlled_failure(Response::default(), failure));
+            }
+        }
+        std::thread::sleep(INTERRUPT_GRACE);
+        self.ensure_controlled_generation(control, &generation)?;
+
+        let _operation = self.admit_controlled_operation();
+        let prior = self.prior_evaluation_after_interrupt(&generation, control, cell.is_some())?;
+        if cell.is_none() {
+            return match prior {
+                PriorEvaluation::Active(evaluation) => {
+                    Ok(self.observe_interrupted_evaluation(evaluation, false))
+                }
+                PriorEvaluation::Completed(response) => {
+                    Ok(self.return_controlled_response(response))
+                }
+                PriorEvaluation::Failed(response) => Ok(self.return_controlled_response(response)),
+                PriorEvaluation::None => match self.take_idle_response(&generation) {
+                    Ok(response) => {
+                        Ok(self.return_controlled_response(output::render_response(response)))
+                    }
+                    Err(failure) => {
+                        Ok(self.return_controlled_failure(Response::default(), failure))
+                    }
+                },
+            };
+        }
+        let mut control_prelude = match prior {
+            PriorEvaluation::Active(evaluation) => {
+                return Ok(self.observe_interrupted_evaluation(evaluation, true));
+            }
+            PriorEvaluation::Completed(response) => response,
+            PriorEvaluation::None => Response::default(),
+            PriorEvaluation::Failed(mut response) => {
+                response.push_tool_error(
+                    "interrupted evaluation could not be settled; cell was not run",
+                );
+                return Ok(self.return_controlled_response(response));
+            }
+        };
+        if let Some(requirements) = requirements {
+            let requirements = match requirements {
+                RequirementSubmission::Valid(requirements) => requirements,
+                RequirementSubmission::Invalid(error) => {
+                    control_prelude.push_tool_error(error);
+                    return Ok(self.return_controlled_response(control_prelude));
+                }
+            };
+            let preparation = match self.admit_preparation() {
+                Ok(preparation) => preparation,
+                Err(error) => {
+                    control_prelude.push_tool_error(error);
+                    return Ok(self.return_controlled_response(control_prelude));
+                }
+            };
+            let prepared = self.prepare_admitted(
+                requirements,
+                &generation,
+                &preparation,
+                PreparationIntent::BeforeEvaluation,
+            );
+            drop(preparation);
+            match prepared {
+                Err(error) => {
+                    control_prelude.push_tool_error(error);
+                    return Ok(self.return_controlled_response(control_prelude));
+                }
+                Ok(PrepareResult::Prepared) => {}
+                Ok(PrepareResult::RestartRequired) => {
+                    control_prelude
+                        .push_tool_error("requirements require session restart; cell was not run");
+                    return Ok(self.return_controlled_response(control_prelude));
+                }
+                Ok(PrepareResult::Failed(response) | PrepareResult::WorkerStopped(response)) => {
+                    control_prelude.extend_logical_region(response);
+                    return Ok(self.return_controlled_response(control_prelude));
+                }
+            }
+        }
+        self.ensure_controlled_generation(control, &generation)?;
+        let mut prelude = Some(control_prelude);
+        let (evaluation, wait_claim) = match self.start_evaluation_admitted(
+            cell.expect("controlled cell presence was checked"),
+            None,
+            generation,
+            transcript,
+            call_id,
+            Some(control),
+            &mut prelude,
+        ) {
+            Ok(started) => started,
+            Err(error) => {
+                let mut response = prelude.take().unwrap_or_default();
+                response.push_tool_error(format!("{error}; cell was not run"));
+                return Ok(self.return_controlled_response(response));
+            }
+        };
+        Ok(ControlledEvaluation::Started(evaluation, wait_claim))
+    }
+
+    fn restart_and_start_evaluation(
+        &self,
+        control: &ControlledSendAdmission,
+        cell: Option<crate::cell::Cell>,
+        stdin: Option<String>,
+        requirements: Option<RequirementSubmission>,
+        transcript: crate::transcript::Transcript,
+        call_id: Option<u64>,
+    ) -> Result<ControlledEvaluation, String> {
+        let requirements = match requirements {
+            Some(RequirementSubmission::Valid(requirements)) => requirements,
+            Some(RequirementSubmission::Invalid(error)) => return Err(error),
+            None => Requirements {
+                duckdb: Vec::new(),
+                python: Vec::new(),
+                r: Vec::new(),
+            },
+        };
+        let stdin_follows = stdin.as_ref().is_some_and(|stdin| !stdin.is_empty());
+        let restart = self.restart_blocking(
+            requirements,
+            WORKER_SHUTDOWN_GRACE,
+            cell.is_some() || stdin_follows,
+            Some(control),
+        )?;
+        let _operation = self.admit_controlled_operation();
+        let Some(generation) = restart.generation else {
+            let mut response = restart.response;
+            if cell.is_some() {
+                response.push_tool_error("session restart did not complete; cell was not run");
+            }
+            return Ok(self.return_controlled_response(response));
+        };
+        self.ensure_controlled_generation(control, &generation)?;
+        let Some(cell) = cell else {
+            let response = restart.response;
+            if let Some(stdin) = stdin.filter(|stdin| !stdin.is_empty()) {
+                if let Err(failure) = self.write_idle_stdin_blocking(stdin, generation.clone()) {
+                    return Ok(self.return_controlled_failure(response, failure));
+                }
+                return Ok(self.return_controlled_response(output::render_response(
+                    SendResponse::ReplacementReady(response),
+                )));
+            }
+            return Ok(self.return_controlled_response(response));
+        };
+        let mut prelude = Some(restart.response);
+        let (evaluation, wait_claim) = match self.start_evaluation_admitted(
+            cell,
+            stdin,
+            generation,
+            transcript,
+            call_id,
+            Some(control),
+            &mut prelude,
+        ) {
+            Ok(started) => started,
+            Err(error) => {
+                let mut response = prelude.take().unwrap_or_default();
+                response.push_tool_error(format!("{error}; cell was not run"));
+                return Ok(self.return_controlled_response(response));
+            }
+        };
+        Ok(ControlledEvaluation::Started(evaluation, wait_claim))
+    }
+
+    fn submit_controlled_stdin(
+        &self,
+        stdin: Option<String>,
+        generation: &WorkerGeneration,
+        control: &ControlledSendAdmission,
+    ) -> Result<(), ControlledStdinFailure> {
+        let Some(stdin) = stdin.filter(|stdin| !stdin.is_empty()) else {
+            return Ok(());
+        };
+        self.ensure_controlled_generation(control, generation)
+            .map_err(ControlledStdinFailure::ActiveEvaluation)?;
+        if let Some(active) = self
+            .current_evaluation()
+            .map_err(ControlledStdinFailure::ActiveEvaluation)?
+        {
+            if !active.generation.is(generation) {
+                return Err(ControlledStdinFailure::ActiveEvaluation(
+                    "session restarted before stdin was queued".to_string(),
+                ));
+            }
+            active
+                .evaluation
+                .submit_stdin(stdin)
+                .map_err(ControlledStdinFailure::ActiveEvaluation)
+        } else {
+            self.write_idle_stdin_blocking(stdin, generation.clone())
+                .map_err(ControlledStdinFailure::IdleWorker)
+        }
+    }
+
+    fn prior_evaluation_after_interrupt(
+        &self,
+        generation: &WorkerGeneration,
+        control: &ControlledSendAdmission,
+        cell_follows: bool,
+    ) -> Result<PriorEvaluation, String> {
+        let mut active = self.evaluation()?;
+        let Some(current) = active.as_ref() else {
+            return Ok(PriorEvaluation::None);
+        };
+        self.ensure_controlled_generation(control, generation)?;
+        if !current.generation.is(generation) {
+            return Err("session restarted before the interrupted evaluation settled".to_string());
+        }
+        let evaluation = current.evaluation.clone();
+        let reservation = if cell_follows {
+            evaluation.reserve_completed_for_handoff()?
+        } else {
+            evaluation.reserve_completed_for_delivery()?
+        };
+        let Some(reservation) = reservation else {
+            return Ok(PriorEvaluation::Active(evaluation));
+        };
+        *active = None;
+        drop(active);
+        match self.settle_reserved_evaluation(Some(reservation), false) {
+            Ok(response) => Ok(PriorEvaluation::Completed(response)),
+            Err(mut failure) => {
+                failure.response.push_tool_error(failure.message);
+                Ok(PriorEvaluation::Failed(failure.response))
+            }
         }
     }
 
@@ -354,6 +814,7 @@ impl Client {
         transcript: crate::transcript::Transcript,
         call_id: Option<u64>,
     ) -> Result<PreparedEvaluation, String> {
+        let _operation = self.admit_operation()?;
         let generation = self.admit()?;
         let preparation = match self.admit_preparation() {
             Ok(preparation) => preparation,
@@ -408,13 +869,14 @@ impl Client {
         transcript: crate::transcript::Transcript,
         call_id: Option<u64>,
     ) -> Result<SendResponse, SendFailure> {
+        let operation = self.admit_operation()?;
         let generation = self.admit()?;
         let preparation = self.admit_send()?;
         let (evaluation, wait_claim) = match cell {
             Some(cell) => self.start_evaluation(cell, stdin, generation, transcript, call_id)?,
             None => match self.current_evaluation()? {
                 Some(active) => {
-                    self.ensure_generation(&generation)?;
+                    self.ensure_ordinary_generation(&generation)?;
                     if !active.generation.is(&generation) {
                         return Err("session restarted before the operation began"
                             .to_string()
@@ -427,6 +889,7 @@ impl Client {
                     (active.evaluation, wait_claim)
                 }
                 None => {
+                    self.ensure_ordinary_generation(&generation)?;
                     if let Some(stdin) = stdin
                         && let Err(failure) = self.write_idle_stdin(stdin, generation.clone()).await
                     {
@@ -445,6 +908,7 @@ impl Client {
             },
         };
         drop(preparation);
+        drop(operation);
 
         match evaluation.wait(wait_claim, timeout).await? {
             EvaluationWait::Running(output) => Ok(SendResponse::Running(output)),
@@ -467,23 +931,52 @@ impl Client {
         transcript: crate::transcript::Transcript,
         call_id: Option<u64>,
     ) -> Result<(Arc<Evaluation>, evaluation::WaitClaim), String> {
-        self.ensure_generation(&generation)?;
+        let mut control_prelude = None;
+        self.start_evaluation_admitted(
+            cell,
+            stdin,
+            generation,
+            transcript,
+            call_id,
+            None,
+            &mut control_prelude,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn start_evaluation_admitted(
+        &self,
+        cell: crate::cell::Cell,
+        stdin: Option<String>,
+        generation: WorkerGeneration,
+        transcript: crate::transcript::Transcript,
+        call_id: Option<u64>,
+        control: Option<&ControlledSendAdmission>,
+        control_prelude: &mut Option<Response>,
+    ) -> Result<(Arc<Evaluation>, evaluation::WaitClaim), String> {
+        self.ensure_evaluation_admission(&generation, control)?;
 
         let mut active = self.evaluation()?;
         if let Some(active) = active.as_ref() {
             return Err(active.evaluation.reject_new_cell_message().to_string());
         }
-        self.ensure_generation(&generation)?;
-        let prelude = self.0.output.take_prelude();
+        self.ensure_evaluation_admission(&generation, control)?;
+        let idle_prelude = self.0.output.take_prelude();
         let evaluation = Arc::new(Evaluation::new(
             transcript,
             call_id,
             self.0.output.clone(),
-            prelude,
+            control_prelude.take().unwrap_or_default(),
+            idle_prelude,
+            control.is_some(),
         ));
-        let wait_claim = evaluation.claim()?;
+        let wait_claim = evaluation
+            .claim()
+            .expect("a new evaluation must accept its first wait claim");
         if let Some(stdin) = stdin {
-            evaluation.submit_stdin(stdin)?;
+            evaluation
+                .submit_stdin(stdin)
+                .expect("a new evaluation must accept initial stdin");
         }
         *active = Some(ActiveEvaluation {
             generation: generation.clone(),
@@ -505,6 +998,17 @@ impl Client {
             }
         });
         Ok((evaluation, wait_claim))
+    }
+
+    fn ensure_evaluation_admission(
+        &self,
+        generation: &WorkerGeneration,
+        control: Option<&ControlledSendAdmission>,
+    ) -> Result<(), String> {
+        match control {
+            Some(control) => self.ensure_controlled_generation(control, generation),
+            None => self.ensure_ordinary_generation(generation),
+        }
     }
 
     fn current_evaluation(&self) -> Result<Option<ActiveEvaluation>, String> {
@@ -533,6 +1037,20 @@ impl Client {
             .preparation
             .try_read()
             .map_err(|_| "session is preparing requirements".to_string())
+    }
+
+    fn admit_operation(&self) -> Result<tokio::sync::RwLockReadGuard<'_, ()>, String> {
+        let operation = self
+            .0
+            .admission
+            .try_read()
+            .map_err(|_| "session control is in progress".to_string())?;
+        self.admit()?;
+        Ok(operation)
+    }
+
+    fn admit_controlled_operation(&self) -> tokio::sync::RwLockWriteGuard<'_, ()> {
+        self.0.admission.blocking_write()
     }
 
     fn admit_preparation(&self) -> Result<tokio::sync::RwLockWriteGuard<'_, ()>, String> {

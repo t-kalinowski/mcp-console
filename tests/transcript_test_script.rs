@@ -8,6 +8,7 @@ use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 #[cfg(unix)]
 use std::process::Child;
+#[cfg(unix)]
 use std::process::Command;
 #[cfg(unix)]
 use std::process::{ExitStatus, Stdio};
@@ -24,6 +25,27 @@ struct TestDirectory(PathBuf);
 
 #[cfg(unix)]
 struct ChildProcess(Child);
+
+#[cfg(unix)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum OutputStream {
+    Stdout,
+    Stderr,
+}
+
+#[cfg(unix)]
+#[derive(Debug)]
+struct OutputLine {
+    stream: OutputStream,
+    text: String,
+}
+
+#[cfg(unix)]
+struct RunnerOutput {
+    receiver: mpsc::Receiver<OutputLine>,
+    readers: Vec<thread::JoinHandle<()>>,
+    lines: Vec<OutputLine>,
+}
 
 impl TestDirectory {
     fn new(name: &str) -> Self {
@@ -64,7 +86,85 @@ impl Drop for ChildProcess {
 }
 
 #[cfg(unix)]
-fn runner_fixture(name: &str) -> (TestDirectory, PathBuf, File) {
+impl RunnerOutput {
+    fn start(child: &mut ChildProcess) -> Self {
+        let (sender, receiver) = mpsc::channel();
+        let readers = vec![
+            spawn_output_reader(
+                child.0.stdout.take().unwrap(),
+                OutputStream::Stdout,
+                sender.clone(),
+            ),
+            spawn_output_reader(child.0.stderr.take().unwrap(), OutputStream::Stderr, sender),
+        ];
+        Self {
+            receiver,
+            readers,
+            lines: Vec::new(),
+        }
+    }
+
+    fn wait_for(&mut self, description: &str, matches: impl Fn(&OutputLine) -> bool) {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !self.lines.iter().any(&matches) {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            match self.receiver.recv_timeout(remaining) {
+                Ok(line) => self.lines.push(line),
+                Err(error) => {
+                    panic!(
+                        "did not observe {description}: {error}; output: {:?}",
+                        self.lines
+                    );
+                }
+            }
+        }
+    }
+
+    fn finish(&mut self) {
+        for reader in self.readers.drain(..) {
+            reader.join().unwrap();
+        }
+        self.drain();
+    }
+
+    fn drain(&mut self) {
+        self.lines.extend(self.receiver.try_iter());
+    }
+
+    fn into_streams(mut self) -> (Vec<String>, Vec<String>) {
+        self.finish();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        for line in self.lines {
+            match line.stream {
+                OutputStream::Stdout => stdout.push(line.text),
+                OutputStream::Stderr => stderr.push(line.text),
+            }
+        }
+        (stdout, stderr)
+    }
+}
+
+#[cfg(unix)]
+fn spawn_output_reader(
+    stream: impl Read + Send + 'static,
+    output_stream: OutputStream,
+    sender: mpsc::Sender<OutputLine>,
+) -> thread::JoinHandle<()> {
+    thread::spawn(move || {
+        for line in BufReader::new(stream).lines() {
+            sender
+                .send(OutputLine {
+                    stream: output_stream,
+                    text: line.unwrap(),
+                })
+                .unwrap();
+        }
+    })
+}
+
+#[cfg(unix)]
+fn runner_fixture(name: &str, slow_test_seconds: &str) -> (TestDirectory, PathBuf, File) {
     let repository = Path::new(env!("CARGO_MANIFEST_DIR"));
     let temporary = TestDirectory::new(name);
     let transcripts = temporary.path().join("tests/transcripts");
@@ -82,9 +182,10 @@ fn runner_fixture(name: &str) -> (TestDirectory, PathBuf, File) {
     fs::copy(repository.join("tests/transcripts/_run.py"), &runner).unwrap();
     let source = fs::read_to_string(&runner).unwrap();
     assert_eq!(source.matches("SLOW_TEST_SECONDS = 5.0").count(), 1);
+    let slow_test_seconds = format!("SLOW_TEST_SECONDS = {slow_test_seconds}");
     fs::write(
         &runner,
-        source.replace("SLOW_TEST_SECONDS = 5.0", "SLOW_TEST_SECONDS = 0.1"),
+        source.replace("SLOW_TEST_SECONDS = 5.0", &slow_test_seconds),
     )
     .unwrap();
     fs::copy(
@@ -151,14 +252,8 @@ fn spawn_runner(
 }
 
 #[cfg(unix)]
-fn wait_for_runner(mut child: ChildProcess) -> (ExitStatus, String) {
+fn wait_for_runner(mut child: ChildProcess, output: &mut RunnerOutput) -> ExitStatus {
     let process_group = child.0.id() as libc::pid_t;
-    let mut child_stderr = child.0.stderr.take().unwrap();
-    let stderr_reader = thread::spawn(move || {
-        let mut stderr = String::new();
-        child_stderr.read_to_string(&mut stderr).unwrap();
-        stderr
-    });
     let (sender, receiver) = mpsc::channel();
     let waiter = thread::spawn(move || {
         sender.send(child.0.wait()).unwrap();
@@ -167,82 +262,81 @@ fn wait_for_runner(mut child: ChildProcess) -> (ExitStatus, String) {
     match receiver.recv_timeout(Duration::from_secs(10)) {
         Ok(status) => {
             waiter.join().unwrap();
-            (status.unwrap(), stderr_reader.join().unwrap())
+            status.unwrap()
         }
         Err(error) => {
             // SAFETY: `process_group(0)` made the child PID its process-group ID.
             let _ = unsafe { libc::killpg(process_group, libc::SIGKILL) };
-            let _ = receiver.recv_timeout(Duration::from_secs(5));
-            waiter.join().unwrap();
-            let stderr = stderr_reader.join().unwrap();
-            panic!("transcript test script did not exit: {error}; stderr: {stderr}");
+            match receiver.recv_timeout(Duration::from_secs(5)) {
+                Ok(_) => {
+                    waiter.join().unwrap();
+                    output.finish();
+                    panic!(
+                        "transcript test script did not exit: {error}; output: {:?}",
+                        output.lines
+                    );
+                }
+                Err(stop_error) => {
+                    output.drain();
+                    panic!(
+                        "transcript test script did not stop after SIGKILL: {stop_error}; \
+                         output: {:?}",
+                        output.lines
+                    );
+                }
+            }
         }
     }
 }
 
+#[cfg(unix)]
 #[test]
 fn transcript_test_script_reports_one_dot_per_fast_case() {
-    let root = env!("CARGO_MANIFEST_DIR");
-    let runner = format!("{root}/tests/transcripts/_run.py");
-    let output = Command::new("uv")
-        .args(["run", "--script", &runner, "--jobs", "1", "cli/help"])
-        .current_dir(root)
-        .output()
-        .expect("transcript test script should run");
+    let (temporary, transcripts, mut release_gate) = runner_fixture("fast-cases", "30.0");
+    release_gate.write_all(b"11").unwrap();
+    let mut child = spawn_runner(
+        &temporary,
+        &transcripts,
+        1,
+        &[
+            "client_server/server::initializes_and_lists_tools",
+            "client_server/server::blocks_before_queued_case",
+        ],
+    );
+    let mut output = RunnerOutput::start(&mut child);
+    let status = wait_for_runner(child, &mut output);
+    let (stdout, stderr) = output.into_streams();
 
     assert!(
-        output.status.success(),
-        "transcript test script failed: {}",
-        String::from_utf8_lossy(&output.stderr)
+        status.success(),
+        "transcript test script failed: {stderr:?}"
     );
-    assert_eq!(String::from_utf8(output.stdout).unwrap(), "..\n");
+    assert_eq!(stdout, [".."]);
 }
 
 #[cfg(unix)]
 #[test]
 fn transcript_test_script_reports_a_blocked_case_until_it_finishes() {
-    let (temporary, transcripts, mut release_gate) = runner_fixture("slow-case");
+    let (temporary, transcripts, mut release_gate) = runner_fixture("slow-case", "0.0");
     let mut child = spawn_runner(
         &temporary,
         &transcripts,
         1,
         &["client_server/server::initializes_and_lists_tools"],
     );
-    let stdout = child.0.stdout.take().unwrap();
-    let (sender, receiver) = mpsc::channel();
-    let reader = thread::spawn(move || {
-        for line in BufReader::new(stdout).lines() {
-            sender.send(line.unwrap()).unwrap();
-        }
-    });
+    let mut output = RunnerOutput::start(&mut child);
 
     let selector = "client_server/server::initializes_and_lists_tools";
     let running_prefix = format!("{selector}: running for ");
-    let deadline = Instant::now() + Duration::from_secs(10);
-    let mut lines = Vec::new();
-    let observed = loop {
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        match receiver.recv_timeout(remaining) {
-            Ok(line) => {
-                let matched = line.starts_with(&running_prefix);
-                lines.push(line);
-                if matched {
-                    break true;
-                }
-            }
-            Err(_) => break false,
-        }
-    };
-    if !observed {
-        panic!("slow status was not reported; stdout lines: {lines:?}");
-    }
+    output.wait_for("slow-case running status", |line| {
+        line.stream == OutputStream::Stdout && line.text.starts_with(&running_prefix)
+    });
 
     release_gate.write_all(b"1").unwrap();
-    let (status, stderr) = wait_for_runner(child);
-    reader.join().unwrap();
-    lines.extend(receiver.try_iter());
+    let status = wait_for_runner(child, &mut output);
+    let (lines, stderr) = output.into_streams();
 
-    assert!(status.success(), "transcript test failed: {stderr}");
+    assert!(status.success(), "transcript test failed: {stderr:?}");
     assert!(
         lines[0].starts_with(&running_prefix),
         "unexpected stdout: {lines:?}"
@@ -259,7 +353,7 @@ fn transcript_test_script_reports_a_blocked_case_until_it_finishes() {
 #[cfg(unix)]
 #[test]
 fn transcript_test_script_does_not_time_cases_waiting_for_a_worker() {
-    let (temporary, transcripts, mut release_gate) = runner_fixture("queued-case");
+    let (temporary, transcripts, mut release_gate) = runner_fixture("queued-case", "0.0");
     let mut child = spawn_runner(
         &temporary,
         &transcripts,
@@ -269,66 +363,32 @@ fn transcript_test_script_does_not_time_cases_waiting_for_a_worker() {
             "client_server/server::runs_after_blocked_case",
         ],
     );
-    let stdout = child.0.stdout.take().unwrap();
-    let (sender, receiver) = mpsc::channel();
-    let reader = thread::spawn(move || {
-        for line in BufReader::new(stdout).lines() {
-            sender.send(line.unwrap()).unwrap();
-        }
-    });
+    let mut output = RunnerOutput::start(&mut child);
 
     let running_prefix = "client_server/server::blocks_before_queued_case: running for ";
     let queued_running_prefix = "client_server/server::runs_after_blocked_case: running for ";
-    let deadline = Instant::now() + Duration::from_secs(10);
-    let mut lines = Vec::new();
-    let observed = loop {
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        match receiver.recv_timeout(remaining) {
-            Ok(line) => {
-                let matched = line.starts_with(running_prefix);
-                lines.push(line);
-                if matched {
-                    break true;
-                }
-            }
-            Err(_) => break false,
-        }
-    };
-    if !observed {
-        panic!("running case was not reported: {lines:?}");
-    }
+    output.wait_for("blocked-case running status", |line| {
+        line.stream == OutputStream::Stdout && line.text.starts_with(running_prefix)
+    });
     assert!(
-        lines
+        output
+            .lines
             .iter()
-            .all(|line| !line.contains("runs_after_blocked_case")),
-        "queued case was reported as running: {lines:?}"
+            .all(|line| !line.text.contains("runs_after_blocked_case")),
+        "queued case was reported as running: {:?}",
+        output.lines
     );
 
     release_gate.write_all(b"1").unwrap();
-    let deadline = Instant::now() + Duration::from_secs(10);
-    let observed = loop {
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        match receiver.recv_timeout(remaining) {
-            Ok(line) => {
-                let matched = line.starts_with(queued_running_prefix);
-                lines.push(line);
-                if matched {
-                    break true;
-                }
-            }
-            Err(_) => break false,
-        }
-    };
-    if !observed {
-        panic!("queued case was not reported after starting: {lines:?}");
-    }
+    output.wait_for("queued-case running status", |line| {
+        line.stream == OutputStream::Stdout && line.text.starts_with(queued_running_prefix)
+    });
 
     release_gate.write_all(b"1").unwrap();
-    let (status, stderr) = wait_for_runner(child);
-    reader.join().unwrap();
-    lines.extend(receiver.try_iter());
+    let status = wait_for_runner(child, &mut output);
+    let (lines, stderr) = output.into_streams();
 
-    assert!(status.success(), "transcript test failed: {stderr}");
+    assert!(status.success(), "transcript test failed: {stderr:?}");
     let prefixes = [
         running_prefix,
         "client_server/server::blocks_before_queued_case: finished in ",
@@ -363,7 +423,7 @@ fn transcript_test_script_does_not_time_cases_waiting_for_a_worker() {
 #[cfg(unix)]
 #[test]
 fn transcript_test_script_keeps_reporting_running_cases_after_a_failure() {
-    let (temporary, transcripts, mut release_gate) = runner_fixture("failed-sibling");
+    let (temporary, transcripts, mut release_gate) = runner_fixture("failed-sibling", "0.0");
     let mut child = spawn_runner(
         &temporary,
         &transcripts,
@@ -373,38 +433,23 @@ fn transcript_test_script_keeps_reporting_running_cases_after_a_failure() {
             "client_server/server::fails_after_sibling_starts",
         ],
     );
-    let stdout = child.0.stdout.take().unwrap();
-    let (sender, receiver) = mpsc::channel();
-    let reader = thread::spawn(move || {
-        for line in BufReader::new(stdout).lines() {
-            sender.send(line.unwrap()).unwrap();
-        }
-    });
+    let mut output = RunnerOutput::start(&mut child);
 
     let running_prefix = "client_server/server::blocks_while_sibling_fails: running for ";
-    let deadline = Instant::now() + Duration::from_secs(10);
-    let mut lines = Vec::new();
-    let observed = loop {
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        match receiver.recv_timeout(remaining) {
-            Ok(line) => {
-                let matched = line.starts_with(running_prefix);
-                lines.push(line);
-                if matched {
-                    break true;
-                }
-            }
-            Err(_) => break false,
-        }
-    };
-    if !observed {
-        panic!("running sibling was not reported after failure: {lines:?}");
-    }
+    let failure_prefix = "client_server/server::fails_after_sibling_starts: failed";
+    // Require both causal events without imposing an order across stdout and stderr.
+    // A running line alone does not prove that the runner has entered failure cleanup.
+    output.wait_for("intentional sibling failure", |line| {
+        line.stream == OutputStream::Stderr && line.text.starts_with(failure_prefix)
+    });
+    output.wait_for("running sibling status after failure", |line| {
+        line.stream == OutputStream::Stdout && line.text.starts_with(running_prefix)
+    });
 
     release_gate.write_all(b"1").unwrap();
-    let (status, stderr) = wait_for_runner(child);
-    reader.join().unwrap();
-    lines.extend(receiver.try_iter());
+    let status = wait_for_runner(child, &mut output);
+    let (lines, stderr) = output.into_streams();
+    let stderr = stderr.join("\n");
 
     assert!(!status.success(), "fixture failure unexpectedly passed");
     assert_eq!(lines.len(), 2, "unexpected stdout: {lines:?}");
