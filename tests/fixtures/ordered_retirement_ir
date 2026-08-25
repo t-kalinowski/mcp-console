@@ -18,6 +18,8 @@ def wait(path: str) -> None:
 
 def report_interrupt(signum: int, _frame: object) -> None:
     notify(os.environ["MCP_CONSOLE_TEST_IR_INTERRUPTED"])
+    if release := os.environ.get("MCP_CONSOLE_TEST_IR_INTERRUPT_RELEASE"):
+        wait(release)
     raise SystemExit(128 + signum)
 
 

@@ -22,7 +22,8 @@ Restart, worker replacement, or server exit discards all in-memory state.
 Prepared requirements are server-owned and survive restart as described in [Requirements and environments](REQUIREMENTS.md).
 
 Only one cell can run at a time.
-Call `send` sequentially and collect a running cell before submitting another.
+Submit code-bearing `send` calls sequentially and collect a running cell before submitting another.
+A control-only interrupt may overlap a pending `send` while that call resolves or prepares requirements, including for restart.
 The same call may first interrupt or restart the session through its optional `control` field.
 Code-free `send` calls poll, supply stdin, prepare requirements, interrupt, or restart the same implicit session.
 
@@ -148,7 +149,7 @@ They cannot consume a partial line that the built-in worker has preserved for th
 ## Interruption
 
 `send(control = "interrupt")` first targets an active host dependency resolver; otherwise it requests `SIGINT` for the live worker.
-If neither a resolver nor a worker is running, the call does not start a worker and returns the tool error `worker is not running`.
+If neither a resolver nor a worker is running, the call does not start a worker and returns the tool error `[worker is not running]`.
 A resolver signal error is returned by both the interrupt and resolution calls, and the server stops that resolver during cleanup.
 An interrupted automatic R or Python resolver reports an interrupted outcome to the running cell.
 
@@ -460,7 +461,7 @@ The [implemented architecture](ARCHITECTURE.md) describes the session record and
 ## Current limitations
 
 - There is one implicit session and no named-session interface.
-- `send` calls are sequential; concurrent calls are unsupported.
+- Cells run sequentially; lifecycle control may overlap the operation it interrupts or replaces.
 - Restart and failure replacement discard every in-memory language, database, debugger, graphics, and unread-input state.
 - No general worker-frame or stdin-queue size limit is defined.
 - Direct fd-0 readers do not participate in managed input notifications.

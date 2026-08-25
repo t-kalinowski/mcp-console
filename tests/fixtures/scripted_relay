@@ -741,6 +741,33 @@ def run_controlled_interrupt_with_waiting_poll(relay: ScriptedRelay) -> None:
     relay.retire()
 
 
+def run_cancelled_interrupt_during_live_r_preparation(
+    relay: ScriptedRelay,
+) -> None:
+    relay.make_checkpoint(PREPARATION_RECEIVED_NAME)
+    relay.make_checkpoint(PREPARATION_RESULT_RELEASE_NAME)
+    relay.make_checkpoint(PREPARATION_RESULT_SENT_NAME)
+    relay.make_checkpoint(INTERRUPT_RECEIVED_NAME)
+    relay.make_checkpoint(INTERRUPT_ACK_RELEASE_NAME)
+    relay.ready()
+
+    command = relay.receive()
+    assert command.get("kind") == "prepare_r", command
+    library = command["library"]
+    relay.notify_checkpoint(PREPARATION_RECEIVED_NAME)
+
+    relay.expect({"kind": "interrupt", "request_id": 0})
+    relay.notify_checkpoint(INTERRUPT_RECEIVED_NAME)
+    relay.wait_for_checkpoint(INTERRUPT_ACK_RELEASE_NAME)
+    relay.send({"kind": "interrupt_result", "request_id": 0})
+
+    relay.wait_for_checkpoint(PREPARATION_RESULT_RELEASE_NAME)
+    relay.send({"kind": "r_prepared", "library": library})
+    relay.notify_checkpoint(PREPARATION_RESULT_SENT_NAME)
+    relay.mark_done()
+    relay.retire()
+
+
 def run_serialized_cross_source_order(relay: ScriptedRelay) -> None:
     relay.ready()
     relay.expect(EVALUATION)
@@ -1106,6 +1133,9 @@ def main() -> None:
         ),
         "controlled_interrupt_with_waiting_poll": (
             run_controlled_interrupt_with_waiting_poll
+        ),
+        "cancelled_interrupt_during_live_r_preparation": (
+            run_cancelled_interrupt_during_live_r_preparation
         ),
         "serialized_cross_source_order": run_serialized_cross_source_order,
         "shutdown": run_shutdown,

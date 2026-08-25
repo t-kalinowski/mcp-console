@@ -270,6 +270,63 @@ def _receive_checkpointed(
     client._receive(entry)
 
 
+def _wait_for_recorded_tool_result(
+    client: McpClient,
+    entry: dict[str, Any],
+) -> dict[str, Any]:
+    assert client.temporary_directory is not None
+    workspace = Path(client.temporary_directory.name)
+    session = next((workspace / ".mcp-console" / "sessions").iterdir())
+    journal = session / "internal" / "events.jsonl"
+    with journal.open(encoding="utf-8") as journal_stream:
+        journal_events = select.kqueue()
+        journal_events.control(
+            [
+                select.kevent(
+                    journal_stream.fileno(),
+                    filter=select.KQ_FILTER_VNODE,
+                    flags=select.KQ_EV_ADD | select.KQ_EV_CLEAR,
+                    fflags=select.KQ_NOTE_WRITE,
+                )
+            ],
+            0,
+            0,
+        )
+        try:
+            while True:
+                journal_stream.seek(0)
+                events = [json.loads(line) for line in journal_stream]
+                call = next(
+                    (
+                        event
+                        for event in events
+                        if event["event"] == "tool_call"
+                        and event["request_id"] == entry["id"]
+                    ),
+                    None,
+                )
+                result = next(
+                    (
+                        event["result"]
+                        for event in events
+                        if call is not None
+                        and event["event"] == "tool_result"
+                        and event["call_id"] == call["call_id"]
+                    ),
+                    None,
+                )
+                if result is not None:
+                    return result
+                assert client.process.poll() is None, (
+                    "mcp-console stopped before recording the tool result"
+                )
+                assert journal_events.control(None, 1, 10), (
+                    "mcp-console did not record the tool result"
+                )
+        finally:
+            journal_events.close()
+
+
 def test_starts_and_reports_ready(binary: Path) -> Transcript:
     client = ServerRelayClient(binary, "ready")
     assert _tool_text(client.send(control="restart")) == (
@@ -652,13 +709,20 @@ def test_control_only_interrupt_targets_blocked_controlled_restart_resolver(
         resolver_interrupted = FifoCheckpoint(
             root / "resolver-interrupted", create=True
         )
+        resolver_interrupt_release = FifoCheckpoint(
+            root / "resolver-interrupt-release", create=True
+        )
         environment["MCP_CONSOLE_TEST_IR_STARTED"] = str(resolver_started.path)
         environment["MCP_CONSOLE_TEST_IR_RELEASE"] = str(resolver_release.path)
         environment["MCP_CONSOLE_TEST_IR_INTERRUPTED"] = str(resolver_interrupted.path)
+        environment["MCP_CONSOLE_TEST_IR_INTERRUPT_RELEASE"] = str(
+            resolver_interrupt_release.path
+        )
         client = ServerRelayClient(binary, "ready", environment)
         client.start_worker()
         capture = (client.relay_root() / CAPTURE_NAME).open(encoding="utf-8")
         resolver_released = False
+        resolver_interrupt_released = False
         finished = False
         try:
             controlled = client.client._start_send(
@@ -672,9 +736,31 @@ def test_control_only_interrupt_targets_blocked_controlled_restart_resolver(
                 timeout_ms=0,
             )
             resolver_interrupted.wait()
-            client.client._receive_many([controlled, interrupt])
+            client.client._notify(
+                "notifications/cancelled",
+                requestId=interrupt["id"],
+                reason="acceptance test cancelled the interrupt",
+            )
+            client.client._notify(
+                "notifications/acceptance-test-barrier",
+                padding="b" * (4 * 1024 * 1024),
+            )
+            recorded = _wait_for_recorded_tool_result(client.client, interrupt)
+            assert recorded == {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "\n[running; poll with an empty send]",
+                    }
+                ],
+                "isError": False,
+            }, recorded
+            assert interrupt.keys() == {"id", "send"}, interrupt
 
-            assert _tool_text(interrupt["result"]) == "\n[idle]", interrupt
+            resolver_interrupt_release.release()
+            resolver_interrupt_released = True
+            client.client._receive(controlled)
+
             result = controlled["result"]
             assert result.get("isError") is True, result
             error = "".join(
@@ -692,6 +778,8 @@ def test_control_only_interrupt_targets_blocked_controlled_restart_resolver(
             transcript = client.finish_active()
             finished = True
         finally:
+            if not resolver_interrupt_released:
+                resolver_interrupt_release.release()
             if not resolver_released:
                 resolver_release.release()
                 resolver_released = True
@@ -702,6 +790,7 @@ def test_control_only_interrupt_targets_blocked_controlled_restart_resolver(
             resolver_started.close()
             resolver_release.close()
             resolver_interrupted.close()
+            resolver_interrupt_release.close()
 
         assert not (root / "ir-counter").exists()
 
@@ -1407,6 +1496,114 @@ def test_controlled_interrupt_does_not_wait_for_an_existing_poll(
         },
         {"kind": "interrupt", "request_id": 0},
     ], commands
+    return transcript
+
+
+def test_cancelled_interrupt_during_live_preparation_does_not_recover_running(
+    binary: Path,
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        library = root / "cancelled-interrupt-candidate"
+        library.mkdir()
+        environment = _fake_ir_environment(root, [library])
+        client = ServerRelayClient(
+            binary,
+            "cancelled_interrupt_during_live_r_preparation",
+            environment,
+        )
+        client.start_worker()
+        relay_root = client.relay_root()
+        preparation_received = FifoCheckpoint(relay_root / PREPARATION_RECEIVED_NAME)
+        preparation_release = FifoCheckpoint(
+            relay_root / PREPARATION_RESULT_RELEASE_NAME
+        )
+        preparation_sent = FifoCheckpoint(relay_root / PREPARATION_RESULT_SENT_NAME)
+        interrupt_received = FifoCheckpoint(relay_root / INTERRUPT_RECEIVED_NAME)
+        interrupt_ack_release = FifoCheckpoint(relay_root / INTERRUPT_ACK_RELEASE_NAME)
+        preparation_released = False
+        interrupt_ack_released = False
+        finished = False
+        try:
+            preparation = client.client._start_send(
+                requirements={"r": ["cancelled-interrupt"]},
+            )
+            preparation_received.wait()
+
+            interrupt = client.client._start_send(
+                control="interrupt",
+                timeout_ms=0,
+            )
+            interrupt_received.wait()
+            client.client._notify(
+                "notifications/cancelled",
+                requestId=interrupt["id"],
+                reason="acceptance test cancelled the interrupt",
+            )
+            cancellation = client.client.transcript[-1]["input"]["params"]
+            assert cancellation["requestId"] == interrupt["id"], cancellation
+            cancellation["requestId"] = "<request ID>"
+
+            barrier_size = 4 * 1024 * 1024
+            client.client._notify(
+                "notifications/acceptance-test-barrier",
+                padding="b" * barrier_size,
+            )
+            barrier = client.client.transcript[-1]["input"]["params"]
+            assert len(barrier["padding"]) == barrier_size, barrier
+            barrier["padding"] = f"<input barrier: {barrier_size} bytes>"
+
+            interrupt_ack_release.release()
+            interrupt_ack_released = True
+            recorded = _wait_for_recorded_tool_result(client.client, interrupt)
+            assert recorded == {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "\n[running; poll with an empty send]",
+                    }
+                ],
+                "isError": False,
+            }, recorded
+            assert interrupt.keys() == {"id", "send"}, interrupt
+
+            preparation_release.release()
+            preparation_released = True
+            preparation_sent.wait()
+            client.client._receive(preparation)
+            assert _tool_text(preparation["result"]) == "[prepared]"
+            assert _tool_text(client.send()) == "\n[idle]"
+            transcript = client.finish_active()
+            finished = True
+        finally:
+            if not interrupt_ack_released:
+                interrupt_ack_release.release()
+            if not preparation_released:
+                preparation_release.release()
+            preparation_received.close()
+            preparation_release.close()
+            preparation_sent.close()
+            interrupt_received.close()
+            interrupt_ack_release.close()
+            if not finished:
+                stop_client(client.client)
+                client._temporary.cleanup()
+
+        assert (root / "ir-counter").read_text(encoding="utf-8") == "1"
+
+    commands = [entry["server"] for entry in transcript if entry.keys() == {"server"}]
+    assert commands == [
+        {"kind": "prepare_r", "library": str(library)},
+        {"kind": "interrupt", "request_id": 0},
+    ], commands
+    commands[0]["library"] = "<cancelled-interrupt-candidate>"
+    prepared = [
+        entry["relay"]
+        for entry in transcript
+        if entry.keys() == {"relay"} and entry["relay"].get("kind") == "r_prepared"
+    ]
+    assert prepared == [{"kind": "r_prepared", "library": str(library)}], prepared
+    prepared[0]["library"] = "<cancelled-interrupt-candidate>"
     return transcript
 
 

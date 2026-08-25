@@ -28,6 +28,15 @@ result:
     - type: text
       text: |-
 
+        [running; poll with an empty send]
+  isError: false
+---
+send: {}
+result:
+  content:
+    - type: text
+      text: |-
+
         [idle]
   isError: false
 ---

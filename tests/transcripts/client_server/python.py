@@ -2,6 +2,7 @@
 
 import json
 import os
+import select
 import shutil
 import signal
 import subprocess
@@ -2214,6 +2215,12 @@ def test_interrupts_live_python_resolver(binary: Path) -> Transcript:
         environment, uv_started, uv_release = checkpoint_uv_environment(
             temporary, "mcp-console-blocked-live-preparation"
         )
+        uv_interrupted = FifoCheckpoint(temporary / "uv-interrupted")
+        uv_interrupt_release = FifoCheckpoint(temporary / "uv-interrupt-release")
+        environment["MCP_CONSOLE_TEST_UV_INTERRUPTED"] = str(uv_interrupted.path)
+        environment["MCP_CONSOLE_TEST_UV_INTERRUPT_RELEASE"] = str(
+            uv_interrupt_release.path
+        )
         environment["RUST_LOG"] = "error"
         previous_handler = signal.signal(signal.SIGINT, signal.SIG_IGN)
         previous_mask = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT})
@@ -2223,6 +2230,7 @@ def test_interrupts_live_python_resolver(binary: Path) -> Transcript:
             signal.signal(signal.SIGINT, previous_handler)
             signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
         passed = False
+        interrupt_released = False
         try:
             client._initialize_and_list_tools()
             client.send(r="resolver_interrupt_state <- 41L")
@@ -2235,32 +2243,34 @@ def test_interrupts_live_python_resolver(binary: Path) -> Transcript:
             uv_started.wait("live Python preparation")
 
             interrupt = client._start_send(control="interrupt", timeout_ms=0)
-            preparation_returned = threading.Event()
-            forced_release = threading.Event()
-
-            def release_if_preparation_blocks() -> None:
-                if not preparation_returned.wait(2):
-                    forced_release.set()
-                    uv_release.release()
-
-            watchdog = threading.Thread(target=release_if_preparation_blocks)
-            watchdog.start()
-            client._receive_many([preparation, interrupt])
-            preparation_returned.set()
-            watchdog.join()
-            assert not forced_release.is_set(), (
-                "interrupt did not stop the Python resolver"
+            uv_interrupted.wait("live Python resolver interrupt")
+            readable, _, _ = select.select([client.stdout], [], [], 10)
+            assert client.stdout in readable, (
+                "control-only interrupt waited for Python preparation to settle"
             )
+            client._receive(interrupt)
             assert interrupt["result"] == {
-                "content": [{"type": "text", "text": "\n[idle]"}],
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "\n[running; poll with an empty send]",
+                    }
+                ],
                 "isError": False,
             }, interrupt
+
+            uv_interrupt_release.release()
+            interrupt_released = True
+            client._receive(preparation)
             assert preparation["result"]["isError"] is True, preparation
             error = preparation["result"]["content"][0]["text"]
             assert "managed Python resolution" in error, error
             preparation["result"]["content"][0]["text"] = (
                 "managed Python resolution cancelled by interrupt"
             )
+
+            client.send()
+            assert last_tool_text(client) == "\n[idle]"
 
             client.send(
                 r=(
@@ -2273,9 +2283,13 @@ def test_interrupts_live_python_resolver(binary: Path) -> Transcript:
             passed = True
             return transcript
         finally:
+            if not interrupt_released:
+                uv_interrupt_release.release()
             uv_release.release()
             uv_started.close()
             uv_release.close()
+            uv_interrupted.close()
+            uv_interrupt_release.close()
             if not passed:
                 stop_client(client)
 

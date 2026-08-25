@@ -27,7 +27,8 @@ An agent can load data once, build useful objects, inspect an intermediate resul
 The MCP interface exposes one tool: `send`.
 It runs one complete R, Python, or SQL cell, supplies interactive input, prepares additive requirements, applies an optional interrupt or restart, or collects pending output.
 
-Calls to `send` are sequential.
+Code-bearing calls to `send` are sequential.
+A control-only interrupt may overlap a pending `send` while that call resolves or prepares requirements, including for restart.
 Requirements alone perform standalone preparation without starting an initial worker.
 With a cell, requirements are its preconditions; without control, preparation precedes nonempty standard input and evaluation.
 `control = "interrupt"` preserves in-memory state and orders signal delivery, same-call input, and a 100-millisecond grace period; when a cell follows, its requirements are then prepared before evaluation, and the cell is not run if the interrupted evaluation remains active.
@@ -96,7 +97,7 @@ The generated Quarto transcript and human-facing tools for following and inspect
 Other current limitations include:
 
 - there is one implicit session and no named-session management;
-- cells run sequentially, and concurrent `send` calls are unsupported; and
+- cells run sequentially, while lifecycle control may overlap the operation it interrupts or replaces; and
 - restart and worker replacement discard R, Python, DuckDB, debugger, and unread-input state.
 
 ## Security boundary

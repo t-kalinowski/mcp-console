@@ -492,8 +492,8 @@ impl Client {
                 let control = match self.begin_controlled_send() {
                     Ok(control) => control,
                     Err(_) => {
-                        // The interrupted control still owns its response.
-                        return Ok(self.return_controlled_response(output::render_response(
+                        // The interrupted control retains output recovery ownership.
+                        return Ok(ControlledEvaluation::Returned(output::render_response(
                             SendResponse::Running(Response::default()),
                         )));
                     }
@@ -604,7 +604,21 @@ impl Client {
     ) -> Result<ControlledEvaluation, String> {
         self.ensure_controlled_generation(control, &generation)?;
 
-        let _operation = self.admit_controlled_operation();
+        // An interrupted preparation retains read admission until its resolver
+        // settles. A code-free interrupt must still answer after the grace.
+        let _operation = if cell.is_none() {
+            match self.0.admission.try_write() {
+                Ok(operation) => operation,
+                Err(_) => {
+                    // The preparation retains output recovery ownership.
+                    return Ok(ControlledEvaluation::Returned(output::render_response(
+                        SendResponse::Running(Response::default()),
+                    )));
+                }
+            }
+        } else {
+            self.admit_controlled_operation()
+        };
         let prior = self.prior_evaluation_after_interrupt(&generation, control, cell.is_some())?;
         if cell.is_none() {
             return match prior {

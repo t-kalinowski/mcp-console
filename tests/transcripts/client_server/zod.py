@@ -2867,6 +2867,124 @@ def test_controlled_interrupt_preserves_idle_worker_startup_failure(
                 stop_client(client)
 
 
+def test_control_only_interrupt_returns_while_explicit_preparation_settles(
+    binary: Path,
+) -> Transcript:
+    zod = Path(__file__).resolve().parents[2] / "fixtures" / "zod"
+    ordered_ir = (
+        Path(__file__).resolve().parents[2] / "fixtures" / "ordered_retirement_ir"
+    )
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        temporary_path = Path(temporary_directory)
+        library = temporary_path / "resolved-library"
+        library.mkdir()
+        fake_bin = temporary_path / "bin"
+        fake_bin.mkdir()
+        (fake_bin / "ir").symlink_to(ordered_ir)
+        resolver_started = FifoCheckpoint(temporary_path / "resolver-started")
+        resolver_release = FifoCheckpoint(temporary_path / "resolver-release")
+        resolver_interrupted = FifoCheckpoint(temporary_path / "resolver-interrupted")
+        interrupt_release = FifoCheckpoint(temporary_path / "interrupt-release")
+
+        environment, _ = r_test_environment()
+        path = environment.get("PATH")
+        assert path is not None, "PATH is required"
+        environment["PATH"] = os.pathsep.join((str(fake_bin), path))
+        environment["TMPDIR"] = temporary_directory
+        environment["MCP_CONSOLE_TEST_IR_COUNTER"] = str(temporary_path / "ir-counter")
+        environment["MCP_CONSOLE_TEST_IR_LIBRARIES"] = str(library)
+        environment["MCP_CONSOLE_TEST_IR_STARTED"] = str(resolver_started.path)
+        environment["MCP_CONSOLE_TEST_IR_RELEASE"] = str(resolver_release.path)
+        environment["MCP_CONSOLE_TEST_IR_INTERRUPTED"] = str(resolver_interrupted.path)
+        environment["MCP_CONSOLE_TEST_IR_INTERRUPT_RELEASE"] = str(
+            interrupt_release.path
+        )
+
+        client = McpClient(
+            binary,
+            ("serve", "--worker", str(zod)),
+            environment,
+        )
+        finished = False
+        interrupt_waiting = False
+        try:
+            client._initialize_and_list_tools()
+
+            def interrupt_preparation(
+                preparation_arguments: dict[str, object],
+                description: str,
+            ) -> None:
+                nonlocal interrupt_waiting
+                preparation = client._start_send(**preparation_arguments)
+                resolver_started.wait(description)
+
+                interrupt = client._start_send(
+                    control="interrupt",
+                    timeout_ms=0,
+                )
+                resolver_interrupted.wait(f"{description} interrupt")
+                interrupt_waiting = True
+                readable, _, _ = select.select([client.stdout], [], [], 3)
+                assert client.stdout in readable, (
+                    "control-only interrupt waited for explicit preparation to settle"
+                )
+                client._receive(interrupt)
+                assert interrupt["result"] == {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "\n[running; poll with an empty send]",
+                        }
+                    ],
+                    "isError": False,
+                }, interrupt
+
+                interrupt_release.release()
+                interrupt_waiting = False
+                client._receive(preparation)
+                assert preparation["result"] == {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "R package resolution failed with exit status: 130: ",
+                        }
+                    ],
+                    "isError": True,
+                }, preparation
+
+            interrupt_preparation(
+                {"requirements": {"r": ["blocked-standalone-resolver"]}},
+                "standalone preparation resolver",
+            )
+
+            client.send(r="echo worker ready")
+            assert last_tool_text(client) == "zod: worker ready\n"
+
+            interrupt_preparation(
+                {
+                    "r": "echo interrupted preparation cell ran",
+                    "requirements": {"r": ["blocked-cell-resolver"]},
+                },
+                "cell preparation resolver",
+            )
+
+            client.send(r="echo worker remains usable")
+            assert last_tool_text(client) == "zod: worker remains usable\n"
+            transcript = client._finish()
+            finished = True
+            return transcript
+        finally:
+            if interrupt_waiting:
+                interrupt_release.release()
+            resolver_release.release()
+            resolver_started.close()
+            resolver_release.close()
+            resolver_interrupted.close()
+            interrupt_release.close()
+            if not finished:
+                stop_client(client)
+
+
 def test_cancelled_controlled_restart_response_is_reclaimed_once(
     binary: Path,
 ) -> Transcript:
