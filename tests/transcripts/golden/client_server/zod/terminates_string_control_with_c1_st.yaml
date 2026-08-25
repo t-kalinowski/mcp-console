@@ -1,0 +1,12 @@
+---
+!same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
+---
+send:
+  r: terminate string control with c1 st
+result:
+  content:
+    - type: text
+      text: |
+        beforeafter
+  isError: false
+...

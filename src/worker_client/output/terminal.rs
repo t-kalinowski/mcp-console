@@ -7,8 +7,10 @@ use unicode_width::UnicodeWidthChar;
 
 const MAX_CONTROL_BYTES: usize = 64;
 const MAX_STYLE_BYTES: usize = 256;
-const MAX_STYLES: usize = 128;
+const STYLE_RECLAIM_THRESHOLD: usize = 128;
 const MAX_VISIBLE_CELLS: usize = 64 * 1024;
+// One style per visible glyph, plus the default and an unpainted current style.
+const MAX_LIVE_STYLES: usize = MAX_VISIBLE_CELLS + 2;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(super) enum PriorLine {
@@ -24,6 +26,12 @@ pub(super) struct Update {
     pub(super) active_suffix: Option<usize>,
 }
 
+pub(super) struct ActiveOmission {
+    pub(super) sequence: u64,
+    pub(super) text_bytes: usize,
+    pub(super) events: usize,
+}
+
 #[derive(Default)]
 pub(super) struct Stream {
     line: Line,
@@ -33,6 +41,8 @@ pub(super) struct Stream {
     dirty: bool,
     projection: String,
     active_events: Vec<u64>,
+    active_omissions: Vec<ActiveOmission>,
+    style_needs_reapply: bool,
     last_observation: Option<u64>,
 }
 
@@ -166,6 +176,27 @@ impl Stream {
         self.active_events.push(sequence);
     }
 
+    pub(super) fn take_active_omissions(&mut self) -> Vec<ActiveOmission> {
+        std::mem::take(&mut self.active_omissions)
+    }
+
+    pub(super) fn push_active_omission(&mut self, sequence: u64, text_bytes: usize, events: usize) {
+        if let Some(omission) = self
+            .active_omissions
+            .iter_mut()
+            .find(|omission| omission.sequence == sequence)
+        {
+            omission.text_bytes = omission.text_bytes.saturating_add(text_bytes);
+            omission.events = omission.events.saturating_add(events);
+        } else {
+            self.active_omissions.push(ActiveOmission {
+                sequence,
+                text_bytes,
+                events,
+            });
+        }
+    }
+
     pub(super) fn observe(&mut self, sequence: u64) {
         self.last_observation = Some(sequence);
     }
@@ -187,6 +218,7 @@ impl Stream {
         self.parser = Parser::Ground;
         self.line.styles.clear();
         self.line.current_style = 0;
+        self.style_needs_reapply = false;
         self.last_observation = None;
     }
 }
@@ -231,7 +263,8 @@ impl Collector<'_> {
                 }
             }
             Parser::StringControl { escaped } => {
-                if character == '\x07' || (escaped && character == '\\') {
+                if character == '\x07' || character == '\u{009c}' || (escaped && character == '\\')
+                {
                     return;
                 }
                 self.stream.parser = Parser::StringControl {
@@ -266,6 +299,9 @@ impl Collector<'_> {
     }
 
     fn write(&mut self, character: char) {
+        if !self.stream.volatile {
+            self.reapply_style();
+        }
         self.stream.line.write(character);
         if self.stream.volatile {
             self.stream.dirty = true;
@@ -275,9 +311,20 @@ impl Collector<'_> {
     }
 
     fn style(&mut self, sequence: String) {
+        if !self.stream.volatile {
+            self.reapply_style();
+        }
         self.stream.line.style(&sequence);
         if !self.stream.volatile {
             self.ordinary_active.push_str(&sequence);
+        }
+    }
+
+    fn reapply_style(&mut self) {
+        if self.stream.style_needs_reapply {
+            self.ordinary_active
+                .push_str(self.stream.line.current_style());
+            self.stream.style_needs_reapply = false;
         }
     }
 
@@ -314,7 +361,8 @@ impl Collector<'_> {
     }
 
     fn newline(&mut self, delimiter: &str) {
-        if self.stream.volatile {
+        let was_volatile = self.stream.volatile;
+        if was_volatile {
             if self.prior_open {
                 self.prior = PriorLine::Replace;
             }
@@ -326,7 +374,11 @@ impl Collector<'_> {
             self.stable.push_str(&self.ordinary_active);
         }
         self.stable.push_str(delimiter);
+        let style_needs_reapply = was_volatile && self.stream.line.current_style != 0;
         self.stream.reset_line();
+        if was_volatile {
+            self.stream.style_needs_reapply = style_needs_reapply;
+        }
         self.prior_open = false;
         self.ordinary_active.clear();
     }
@@ -360,6 +412,21 @@ impl Line {
     fn clear(&mut self) {
         self.columns.clear();
         self.cursor = 0;
+        if self.current_style == 0 {
+            self.styles.truncate(1);
+        } else {
+            let current = std::mem::take(&mut self.styles[self.current_style]);
+            self.styles.clear();
+            self.styles.push(String::new());
+            self.styles.push(current);
+            self.current_style = 1;
+        }
+    }
+
+    fn current_style(&self) -> &str {
+        self.styles
+            .get(self.current_style)
+            .map_or("", String::as_str)
     }
 
     fn write(&mut self, character: char) {
@@ -462,9 +529,19 @@ impl Line {
         if let Some(index) = self.styles.iter().position(|candidate| candidate == &style) {
             return index;
         }
-        if self.styles.len() == MAX_STYLES {
-            return 0;
+        if self.styles.len() >= STYLE_RECLAIM_THRESHOLD {
+            let mut referenced = vec![false; self.styles.len()];
+            for column in &self.columns {
+                if let Column::Glyph(cell) = column {
+                    referenced[cell.style] = true;
+                }
+            }
+            if let Some(index) = (1..self.styles.len()).find(|index| !referenced[*index]) {
+                self.styles[index] = style;
+                return index;
+            }
         }
+        assert!(self.styles.len() < MAX_LIVE_STYLES);
         self.styles.push(style);
         self.styles.len() - 1
     }

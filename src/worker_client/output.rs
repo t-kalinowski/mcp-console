@@ -40,6 +40,8 @@ struct OutputTapeState {
     budget: PendingOutputBudget,
     /// The truncation summary still open for observations before the next cut.
     active_truncation: Option<u64>,
+    /// The truncation event that currently blocks later ordinary output.
+    drop_truncation: Option<u64>,
 }
 
 #[derive(Clone, Copy)]
@@ -141,6 +143,15 @@ struct Truncation {
     image_bytes: usize,
     image_metadata_bytes: usize,
     events: usize,
+}
+
+impl Truncation {
+    fn is_empty(&self) -> bool {
+        self.text_bytes == 0
+            && self.image_bytes == 0
+            && self.image_metadata_bytes == 0
+            && self.events == 0
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -799,6 +810,7 @@ impl OutputTapeState {
             limits,
             budget: PendingOutputBudget::default(),
             active_truncation: None,
+            drop_truncation: None,
         }
     }
 
@@ -1024,8 +1036,14 @@ impl OutputTapeState {
 
         let original_length = update.text.len();
         let original_bytes = source.map_or(original_length, |source| source.bytes);
+        let active_source_offset = update.active_suffix.map(|text_offset| {
+            source
+                .and_then(|source| source.active_suffix)
+                .unwrap_or(text_offset)
+                .min(original_bytes)
+        });
         if self.budget.dropping_ordinary_output {
-            self.omit(original_bytes, 0, 0, 1);
+            self.omit_stream_text(terminal, original_bytes, active_source_offset, 0);
             return;
         }
         let remaining = self
@@ -1048,12 +1066,12 @@ impl OutputTapeState {
         };
         let active_suffix = update
             .active_suffix
-            .filter(|_| retained == original_length)
+            .filter(|text_offset| *text_offset < retained)
             .map(|text_offset| ActiveSuffix {
                 text_offset,
-                source_offset: source
-                    .and_then(|source| source.active_suffix)
-                    .unwrap_or(text_offset),
+                source_offset: active_source_offset
+                    .unwrap_or(text_offset)
+                    .min(retained_bytes),
             });
         if retained > 0 {
             let retained_text = if retained == original_length {
@@ -1077,11 +1095,42 @@ impl OutputTapeState {
             }
         }
         if retained_bytes < original_bytes {
-            self.omit(original_bytes - retained_bytes, 0, 0, 1);
+            self.omit_stream_text(
+                terminal,
+                original_bytes,
+                active_source_offset,
+                retained_bytes,
+            );
+        }
+    }
+
+    fn omit_stream_text(
+        &mut self,
+        terminal: &mut terminal::Stream,
+        original_bytes: usize,
+        active_source_offset: Option<usize>,
+        retained_bytes: usize,
+    ) {
+        let stable_bytes = active_source_offset.unwrap_or(original_bytes);
+        let retained_stable = retained_bytes.min(stable_bytes);
+        let retained_active = retained_bytes.saturating_sub(retained_stable);
+        let omitted_stable = stable_bytes.saturating_sub(retained_stable);
+        let omitted_active = original_bytes
+            .saturating_sub(stable_bytes)
+            .saturating_sub(retained_active);
+
+        if omitted_stable > 0 {
+            self.omit(omitted_stable, 0, 0, 1);
+        }
+        if omitted_active > 0 {
+            let omitted_events = usize::from(omitted_stable == 0);
+            let sequence = self.omit(omitted_active, 0, 0, omitted_events);
+            terminal.push_active_omission(sequence, omitted_active, omitted_events);
         }
     }
 
     fn remove_active_events(&mut self, terminal: &mut terminal::Stream) {
+        let mut released = false;
         for sequence in terminal.take_active_events() {
             let Ok(index) = self
                 .events
@@ -1100,6 +1149,7 @@ impl OutputTapeState {
             };
             let retained_bytes = (*text_bytes).min(active_suffix.source_offset);
             let removed = *text_bytes - retained_bytes;
+            released |= removed > 0;
             self.budget.text_bytes = self.budget.text_bytes.saturating_sub(removed);
             if active_suffix.text_offset == 0 {
                 self.events.remove(index);
@@ -1109,6 +1159,33 @@ impl OutputTapeState {
                 *text_bytes = retained_bytes;
                 self.events[index].1.clear_active_suffix();
             }
+        }
+        for omission in terminal.take_active_omissions() {
+            let Ok(index) = self
+                .events
+                .binary_search_by_key(&omission.sequence, |(sequence, _)| *sequence)
+            else {
+                continue;
+            };
+            let remove = {
+                let OutputEvent::Truncated(truncation) = &mut self.events[index].1 else {
+                    continue;
+                };
+                truncation.text_bytes = truncation.text_bytes.saturating_sub(omission.text_bytes);
+                truncation.events = truncation.events.saturating_sub(omission.events);
+                truncation.is_empty()
+            };
+            released = true;
+            if remove {
+                self.events.remove(index);
+                if self.active_truncation == Some(omission.sequence) {
+                    self.active_truncation = None;
+                }
+            }
+        }
+        if released {
+            self.drop_truncation = None;
+            self.budget.dropping_ordinary_output = false;
         }
     }
 
@@ -1121,6 +1198,7 @@ impl OutputTapeState {
                 self.events[index].1.clear_active_suffix();
             }
         }
+        terminal.take_active_omissions();
     }
 
     fn seal_streams(&mut self) {
@@ -1261,9 +1339,9 @@ impl OutputTapeState {
         image_bytes: usize,
         image_metadata_bytes: usize,
         events: usize,
-    ) {
+    ) -> u64 {
         self.budget.dropping_ordinary_output = true;
-        if let Some(sequence) = self.active_truncation {
+        let sequence = if let Some(sequence) = self.active_truncation {
             let index = self
                 .events
                 .binary_search_by_key(&sequence, |(sequence, _)| *sequence)
@@ -1280,6 +1358,7 @@ impl OutputTapeState {
             // Omitted publications still occupy observation-order positions, so a
             // later cut can seal counts without retaining one event per chunk.
             self.allocate_position();
+            sequence
         } else {
             let sequence = self.push_event(OutputEvent::Truncated(Truncation {
                 text_bytes,
@@ -1288,7 +1367,10 @@ impl OutputTapeState {
                 events,
             }));
             self.active_truncation = Some(sequence);
-        }
+            sequence
+        };
+        self.drop_truncation = Some(sequence);
+        sequence
     }
 
     fn allocate_position(&mut self) -> u64 {
@@ -1333,7 +1415,7 @@ impl OutputTapeState {
                         budget.image_metadata_bytes.saturating_add(mime_type.len());
                     budget.events = budget.events.saturating_add(1);
                 }
-                OutputEvent::Truncated(_) => budget.dropping_ordinary_output = true,
+                OutputEvent::Truncated(_) => {}
                 OutputEvent::ServerNotice(_) | OutputEvent::ServerFailure(_) => {}
             }
         }
@@ -1344,6 +1426,14 @@ impl OutputTapeState {
         }) {
             self.active_truncation = None;
         }
+        if self.drop_truncation.is_some_and(|sequence| {
+            self.events
+                .binary_search_by_key(&sequence, |(sequence, _)| *sequence)
+                .is_err()
+        }) {
+            self.drop_truncation = None;
+        }
+        budget.dropping_ordinary_output = self.drop_truncation.is_some();
         self.budget = budget;
     }
 }
