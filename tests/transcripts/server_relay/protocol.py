@@ -351,6 +351,38 @@ def test_redraw_releases_invalid_raw_output_budget(binary: Path) -> Transcript:
     return transcript
 
 
+def test_truncation_discards_deferred_raw_bytes(binary: Path) -> Transcript:
+    client = ServerRelayClient(binary, "truncation_drops_deferred_raw")
+    assert _tool_text(client.send(r="42", timeout_ms=0)) == (
+        "\n[running; poll with an empty send]"
+    )
+    checkpoint = client._wait_for(CHECKPOINT_NAME)
+
+    output = _tool_text(client.send(timeout_ms=0))
+    assert (
+        "[output truncated: omitted 2 text bytes and 0 encoded image bytes "
+        "across 2 events]" in output
+    )
+
+    checkpoint.with_name(RELEASE_NAME).touch()
+    assert _tool_text(client.send(timeout_ms=3_000)) == "��"
+
+    transcript = client.finish_active()
+    large_output = next(
+        entry
+        for entry in transcript
+        if entry.keys() == {"relay"} and entry["relay"].get("kind") == "stdout"
+    )
+    large_output["relay"]["data"] = "<output overflowing the raw text-byte budget>"
+    large_output["transcript_normalization"] = {
+        "target": "relay.data",
+        "replacements": {
+            "budget_filler": "<output overflowing the raw text-byte budget>",
+        },
+    }
+    return transcript
+
+
 def test_forwards_stdin(binary: Path) -> Transcript:
     client = ServerRelayClient(binary, "stdin")
     assert _tool_text(client.send(r="42", stdin="answer\n")) == "[done]"

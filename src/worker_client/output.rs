@@ -893,7 +893,7 @@ impl OutputTapeState {
         }
         self.flush_other_direct_decoder(stream);
         let logical = stream.logical();
-        let (complete, deferred) = {
+        let (complete, mut deferred) = {
             let decoder = match stream {
                 DirectOutputStream::Stdout => &mut self.direct_stdout,
                 DirectOutputStream::Stderr => &mut self.direct_stderr,
@@ -916,11 +916,25 @@ impl OutputTapeState {
             decoder.origin = None;
             (complete, deferred)
         };
+        self.recompute_budget();
         if !complete.is_empty() {
-            self.recompute_budget();
             self.push_direct_text(logical, &complete);
         }
-        let origin = (!deferred.is_empty()).then(|| self.allocate_position());
+        let deferred_fits = !self.budget.dropping_ordinary_output
+            && deferred.len()
+                <= self
+                    .limits
+                    .text_bytes
+                    .saturating_sub(self.budget.text_bytes);
+        let origin = if deferred.is_empty() {
+            None
+        } else if deferred_fits {
+            Some(self.allocate_position())
+        } else {
+            self.omit(deferred.len(), 0, 0, 1);
+            deferred.clear();
+            None
+        };
         let decoder = match stream {
             DirectOutputStream::Stdout => &mut self.direct_stdout,
             DirectOutputStream::Stderr => &mut self.direct_stderr,
@@ -962,6 +976,8 @@ impl OutputTapeState {
             return;
         }
 
+        // Split lines remain separate retained events: the event limit bounds
+        // post-compaction tape entries, not private relay read frames.
         for line in bytes.split_inclusive(|byte| *byte == b'\n') {
             let error = match std::str::from_utf8(line) {
                 Ok(text) => {

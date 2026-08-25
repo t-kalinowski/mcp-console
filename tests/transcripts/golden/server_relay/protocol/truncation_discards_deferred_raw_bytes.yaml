@@ -1,0 +1,38 @@
+---
+relay:
+  kind: ready
+---
+server:
+  kind: evaluate
+  language: r
+  source: "42"
+---
+relay:
+  kind: stdout
+  data: <output overflowing the raw text-byte budget>
+transcript_normalization:
+  target: relay.data
+  replacements:
+    budget_filler: <output overflowing the raw text-byte budget>
+---
+relay:
+  kind: stdout_bytes
+  data: eOI=
+---
+relay:
+  kind: resolve_python_version
+  request:
+    constraints:
+      - ">=3.11"
+---
+server:
+  kind: python_version_resolution_failed
+  message: Python requirements are unavailable with a custom worker
+---
+relay:
+  kind: stdout_bytes
+  data: gqw=
+---
+relay:
+  kind: completed
+...
