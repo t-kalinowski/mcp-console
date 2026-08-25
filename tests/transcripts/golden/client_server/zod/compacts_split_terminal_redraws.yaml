@@ -1,0 +1,11 @@
+---
+!same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
+---
+send:
+  r: emit terminal redraws
+result:
+  content:
+    - type: text
+      text: "ordinary stdout\r\n\e[32mstdout café 100%\e[0m"
+  isError: false
+...

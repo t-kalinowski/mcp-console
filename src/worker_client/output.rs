@@ -1,6 +1,8 @@
 use std::sync::mpsc::SyncSender;
 use std::sync::{Arc, Mutex};
 
+mod terminal;
+
 /// Maximum UTF-8 text and raw direct-output bytes retained between drains.
 const MAX_PENDING_TEXT_BYTES: usize = 8 * 1024 * 1024;
 /// Maximum encoded image payload bytes retained between drains.
@@ -26,6 +28,10 @@ pub(super) struct OutputTape(Arc<Mutex<OutputTapeState>>);
 struct OutputTapeState {
     direct_stdout: DirectDecoder,
     direct_stderr: DirectDecoder,
+    console_output: terminal::Stream,
+    console_diagnostic: terminal::Stream,
+    terminal_stdout: terminal::Stream,
+    terminal_stderr: terminal::Stream,
     next_event: u64,
     events: Vec<(u64, OutputEvent)>,
     /// A failed pre-evaluation response reclaimed after unsuccessful MCP delivery.
@@ -75,25 +81,21 @@ struct DirectDecoder {
 #[derive(Clone, Copy)]
 pub(super) struct OutputCut(u64);
 
-/// One publication from a directly captured worker file descriptor.
-///
-/// These paths capture output that bypasses worker console-text frames, including
-/// Python `.buffer` writes, native fd writes, forked or execed descendants, and
-/// custom workers.
-enum DirectOutputEvent {
-    Bytes(Vec<u8>),
-    Closed,
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum LogicalStream {
+    ConsoleOutput,
+    ConsoleDiagnostic,
+    DirectStdout,
+    DirectStderr,
 }
 
 enum OutputEvent {
-    /// Raw bytes or closure from the worker's directly captured stdout (fd 1).
-    DirectStdout(DirectOutputEvent),
-    /// Raw bytes or closure from the worker's directly captured stderr (fd 2).
-    DirectStderr(DirectOutputEvent),
-    /// Text from a worker console-text sideband frame.
-    WorkerConsoleText {
-        channel: crate::worker_protocol::ConsoleChannel,
+    /// Text from one worker console channel or directly captured file descriptor.
+    Text {
         text: Box<str>,
+        text_bytes: usize,
+        /// The suffix that may still be replaced by a redraw before the next cut.
+        active_suffix: Option<usize>,
     },
     /// An image from a worker `image` sideband frame, already persisted when enabled.
     WorkerImage {
@@ -111,6 +113,14 @@ enum OutputEvent {
     ServerFailure(SendFailure),
     /// One bounded summary for ordinary payload discarded in this cut segment.
     Truncated(Truncation),
+}
+
+impl OutputEvent {
+    fn clear_active_suffix(&mut self) {
+        if let Self::Text { active_suffix, .. } = self {
+            *active_suffix = None;
+        }
+    }
 }
 
 #[derive(Default)]
@@ -671,12 +681,23 @@ impl OutputTape {
 
     pub(super) fn cut(&self) -> OutputCut {
         let mut state = self.lock();
+        state.seal_streams();
+        state.seal_truncation();
+        OutputCut(state.next_event)
+    }
+
+    pub(super) fn completion_cut(&self) -> OutputCut {
+        let mut state = self.lock();
+        state.flush_direct_decoders();
+        state.finish_streams();
+        state.seal_streams();
         state.seal_truncation();
         OutputCut(state.next_event)
     }
 
     pub(super) fn take(&self) -> Response {
         let mut state = self.lock();
+        state.seal_streams();
         state.seal_truncation();
         let cut = OutputCut(state.next_event);
         drain_through(&mut state, cut)
@@ -694,19 +715,15 @@ impl OutputTape {
     /// tape remains locked.
     pub(super) fn take_prelude_before(&self, boundary: impl FnOnce()) -> Response {
         let mut state = self.lock();
+        state.flush_direct_decoders();
+        state.finish_streams();
+        state.seal_streams();
         state.seal_truncation();
         let cut = OutputCut(state.next_event);
-        let mut response = drain_through(&mut state, cut);
-        let mut builder = ResponseBuilder::from_response(std::mem::take(&mut response));
-        let OutputTapeState {
-            direct_stdout,
-            direct_stderr,
-            ..
-        } = &mut *state;
-        flush_direct_decoders(&mut builder, direct_stdout, direct_stderr);
+        let response = drain_through(&mut state, cut);
         boundary();
         state.recompute_budget();
-        builder.finish()
+        response
     }
 
     pub(super) fn drain_through(&self, cut: OutputCut) -> Response {
@@ -728,18 +745,16 @@ impl DirectOutput {
     }
 
     pub(super) fn close(&self) {
-        self.output
-            .lock()
-            .push_control(self.stream.event(DirectOutputEvent::Closed));
+        self.output.lock().close_direct_output(self.stream);
     }
 }
 
 #[cfg(target_os = "macos")]
 impl DirectOutputStream {
-    fn event(self, event: DirectOutputEvent) -> OutputEvent {
+    fn logical(self) -> LogicalStream {
         match self {
-            Self::Stdout => OutputEvent::DirectStdout(event),
-            Self::Stderr => OutputEvent::DirectStderr(event),
+            Self::Stdout => LogicalStream::DirectStdout,
+            Self::Stderr => LogicalStream::DirectStderr,
         }
     }
 }
@@ -749,6 +764,10 @@ impl OutputTapeState {
         Self {
             direct_stdout: DirectDecoder::default(),
             direct_stderr: DirectDecoder::default(),
+            console_output: terminal::Stream::default(),
+            console_diagnostic: terminal::Stream::default(),
+            terminal_stdout: terminal::Stream::default(),
+            terminal_stderr: terminal::Stream::default(),
             next_event: 0,
             events: Vec::new(),
             recovered: None,
@@ -759,43 +778,16 @@ impl OutputTapeState {
     }
 
     fn push_console_text(&mut self, channel: crate::worker_protocol::ConsoleChannel, text: String) {
-        let original_length = text.len();
-        if self.budget.dropping_ordinary_output {
-            self.omit(original_length, 0, 0, 1);
-            return;
-        }
-
-        let remaining = self
-            .limits
-            .text_bytes
-            .saturating_sub(self.budget.text_bytes);
-        let retained = if self.budget.events < self.limits.events {
-            utf8_prefix_length(&text, remaining)
-        } else {
-            0
+        self.flush_direct_decoders();
+        let stream = match channel {
+            crate::worker_protocol::ConsoleChannel::Output => LogicalStream::ConsoleOutput,
+            crate::worker_protocol::ConsoleChannel::Diagnostic => LogicalStream::ConsoleDiagnostic,
         };
-        if retained > 0 {
-            let retained_text = if retained == original_length {
-                text.into_boxed_str()
-            } else {
-                Box::<str>::from(&text[..retained])
-            };
-            self.retain_ordinary(
-                OutputEvent::WorkerConsoleText {
-                    channel,
-                    text: retained_text,
-                },
-                retained,
-                0,
-                0,
-            );
-        }
-        if retained < original_length {
-            self.omit(original_length - retained, 0, 0, 1);
-        }
+        self.push_stream_text(stream, &text, None);
     }
 
     fn push_bounded_notice_line(&mut self, message: String) {
+        self.prepare_control_output();
         // Include brackets, the trailing newline, and a possible leading delimiter.
         let rendered_length = message.len().saturating_add(4);
         let fits = !self.budget.dropping_ordinary_output
@@ -826,6 +818,7 @@ impl OutputTapeState {
     where
         F: FnOnce(&str, &str) -> Result<Option<crate::transcript::Artifact>, String>,
     {
+        self.flush_direct_decoders();
         let length = data.len();
         let metadata_length = mime_type.len();
         let fits = !self.budget.dropping_ordinary_output
@@ -863,30 +856,262 @@ impl OutputTapeState {
         if bytes.is_empty() {
             return;
         }
-        if self.budget.dropping_ordinary_output {
-            self.omit(bytes.len(), 0, 0, 1);
+        self.flush_other_direct_decoder(stream);
+        let logical = stream.logical();
+        let (complete, has_incomplete) = {
+            let decoder = match stream {
+                DirectOutputStream::Stdout => &mut self.direct_stdout,
+                DirectOutputStream::Stderr => &mut self.direct_stderr,
+            };
+            decoder.bytes.extend_from_slice(bytes);
+            let complete = complete_utf8_prefix(&decoder.bytes);
+            let incomplete = decoder.bytes.split_off(complete);
+            let complete = std::mem::replace(&mut decoder.bytes, incomplete);
+            (complete, !decoder.bytes.is_empty())
+        };
+        let origin = has_incomplete.then(|| self.allocate_position());
+        match stream {
+            DirectOutputStream::Stdout => self.direct_stdout.origin = origin,
+            DirectOutputStream::Stderr => self.direct_stderr.origin = origin,
+        }
+        if !complete.is_empty() {
+            self.recompute_budget();
+            self.push_stream_text(
+                logical,
+                &String::from_utf8_lossy(&complete),
+                Some(complete.len()),
+            );
+        }
+        self.recompute_budget();
+    }
+
+    #[cfg(target_os = "macos")]
+    fn close_direct_output(&mut self, stream: DirectOutputStream) {
+        self.flush_direct_decoder(stream.logical());
+        self.finish_stream(stream.logical());
+        self.allocate_position();
+    }
+
+    fn push_stream_text(&mut self, stream: LogicalStream, text: &str, source_bytes: Option<usize>) {
+        let mut terminal = self.take_terminal_stream(stream);
+        let update = terminal.ingest(text);
+        let before = self.next_event;
+        let text_bytes = source_bytes.filter(|_| update.text == text);
+        self.apply_stream_update(&mut terminal, update, text_bytes);
+        let observation = if self.next_event == before {
+            self.allocate_position()
+        } else {
+            self.next_event - 1
+        };
+        terminal.observe(observation);
+        self.put_terminal_stream(stream, terminal);
+    }
+
+    fn finish_stream(&mut self, stream: LogicalStream) {
+        let mut terminal = self.take_terminal_stream(stream);
+        if terminal.last_observation().is_some() {
+            let update = terminal.finish();
+            self.apply_stream_update(&mut terminal, update, None);
+        }
+        self.put_terminal_stream(stream, terminal);
+    }
+
+    fn finish_streams(&mut self) {
+        let mut streams = [
+            LogicalStream::ConsoleOutput,
+            LogicalStream::ConsoleDiagnostic,
+            LogicalStream::DirectStdout,
+            LogicalStream::DirectStderr,
+        ];
+        streams.sort_by_key(|stream| self.terminal_stream(*stream).last_observation());
+        for stream in streams {
+            self.finish_stream(stream);
+        }
+    }
+
+    fn apply_stream_update(
+        &mut self,
+        terminal: &mut terminal::Stream,
+        update: terminal::Update,
+        source_bytes: Option<usize>,
+    ) {
+        match update.prior {
+            terminal::PriorLine::Continue => {}
+            terminal::PriorLine::Finalized => self.detach_active_events(terminal),
+            terminal::PriorLine::Replace => self.remove_active_events(terminal),
+        }
+        if update.text.is_empty() {
             return;
         }
 
-        let retained = if self.budget.events < self.limits.events {
-            bytes.len().min(
-                self.limits
-                    .text_bytes
-                    .saturating_sub(self.budget.text_bytes),
-            )
+        let original_length = update.text.len();
+        let original_bytes = source_bytes.unwrap_or(original_length);
+        if self.budget.dropping_ordinary_output {
+            self.omit(original_bytes, 0, 0, 1);
+            return;
+        }
+        let remaining = self
+            .limits
+            .text_bytes
+            .saturating_sub(self.budget.text_bytes);
+        let retained = if self.budget.events >= self.limits.events {
+            0
+        } else if original_bytes <= remaining {
+            original_length
+        } else if original_bytes == original_length {
+            utf8_prefix_length(&update.text, remaining)
         } else {
             0
         };
+        let retained_bytes = if retained == original_length {
+            original_bytes
+        } else {
+            retained
+        };
+        let active_suffix = update.active_suffix.filter(|_| retained == original_length);
         if retained > 0 {
-            self.retain_ordinary(
-                stream.event(DirectOutputEvent::Bytes(bytes[..retained].to_vec())),
-                retained,
+            let retained_text = if retained == original_length {
+                update.text.into_boxed_str()
+            } else {
+                Box::<str>::from(&update.text[..retained])
+            };
+            let sequence = self.retain_ordinary(
+                OutputEvent::Text {
+                    text: retained_text,
+                    text_bytes: retained_bytes,
+                    active_suffix,
+                },
+                retained_bytes,
                 0,
                 0,
             );
+            if active_suffix.is_some() {
+                terminal.push_active_event(sequence);
+            }
         }
-        if retained < bytes.len() {
-            self.omit(bytes.len() - retained, 0, 0, 1);
+        if retained_bytes < original_bytes {
+            self.omit(original_bytes - retained_bytes, 0, 0, 1);
+        }
+    }
+
+    fn remove_active_events(&mut self, terminal: &mut terminal::Stream) {
+        for sequence in terminal.take_active_events() {
+            let Ok(index) = self
+                .events
+                .binary_search_by_key(&sequence, |(sequence, _)| *sequence)
+            else {
+                continue;
+            };
+            let OutputEvent::Text {
+                text,
+                text_bytes,
+                active_suffix: Some(active_suffix),
+                ..
+            } = &mut self.events[index].1
+            else {
+                continue;
+            };
+            let retained_bytes = (*text_bytes).min(*active_suffix);
+            let removed = *text_bytes - retained_bytes;
+            self.budget.text_bytes = self.budget.text_bytes.saturating_sub(removed);
+            if *active_suffix == 0 {
+                self.events.remove(index);
+                self.budget.events = self.budget.events.saturating_sub(1);
+            } else {
+                *text = Box::from(&text[..*active_suffix]);
+                *text_bytes = retained_bytes;
+                self.events[index].1.clear_active_suffix();
+            }
+        }
+    }
+
+    fn detach_active_events(&mut self, terminal: &mut terminal::Stream) {
+        for sequence in terminal.take_active_events() {
+            if let Ok(index) = self
+                .events
+                .binary_search_by_key(&sequence, |(sequence, _)| *sequence)
+            {
+                self.events[index].1.clear_active_suffix();
+            }
+        }
+    }
+
+    fn seal_streams(&mut self) {
+        for stream in [
+            LogicalStream::ConsoleOutput,
+            LogicalStream::ConsoleDiagnostic,
+            LogicalStream::DirectStdout,
+            LogicalStream::DirectStderr,
+        ] {
+            let mut terminal = self.take_terminal_stream(stream);
+            self.detach_active_events(&mut terminal);
+            self.put_terminal_stream(stream, terminal);
+        }
+    }
+
+    fn prepare_control_output(&mut self) {
+        self.flush_direct_decoders();
+        self.finish_streams();
+    }
+
+    fn terminal_stream(&self, stream: LogicalStream) -> &terminal::Stream {
+        match stream {
+            LogicalStream::ConsoleOutput => &self.console_output,
+            LogicalStream::ConsoleDiagnostic => &self.console_diagnostic,
+            LogicalStream::DirectStdout => &self.terminal_stdout,
+            LogicalStream::DirectStderr => &self.terminal_stderr,
+        }
+    }
+
+    fn take_terminal_stream(&mut self, stream: LogicalStream) -> terminal::Stream {
+        match stream {
+            LogicalStream::ConsoleOutput => std::mem::take(&mut self.console_output),
+            LogicalStream::ConsoleDiagnostic => std::mem::take(&mut self.console_diagnostic),
+            LogicalStream::DirectStdout => std::mem::take(&mut self.terminal_stdout),
+            LogicalStream::DirectStderr => std::mem::take(&mut self.terminal_stderr),
+        }
+    }
+
+    fn put_terminal_stream(&mut self, stream: LogicalStream, terminal: terminal::Stream) {
+        match stream {
+            LogicalStream::ConsoleOutput => self.console_output = terminal,
+            LogicalStream::ConsoleDiagnostic => self.console_diagnostic = terminal,
+            LogicalStream::DirectStdout => self.terminal_stdout = terminal,
+            LogicalStream::DirectStderr => self.terminal_stderr = terminal,
+        }
+    }
+
+    fn flush_direct_decoder(&mut self, stream: LogicalStream) {
+        let decoder = match stream {
+            LogicalStream::DirectStdout => &mut self.direct_stdout,
+            LogicalStream::DirectStderr => &mut self.direct_stderr,
+            LogicalStream::ConsoleOutput | LogicalStream::ConsoleDiagnostic => return,
+        };
+        let bytes = std::mem::take(&mut decoder.bytes);
+        decoder.origin = None;
+        if !bytes.is_empty() {
+            self.recompute_budget();
+            self.push_stream_text(stream, &String::from_utf8_lossy(&bytes), Some(bytes.len()));
+        }
+    }
+
+    fn flush_direct_decoders(&mut self) {
+        let stdout = self.direct_stdout.origin;
+        let stderr = self.direct_stderr.origin;
+        if stdout <= stderr {
+            self.flush_direct_decoder(LogicalStream::DirectStdout);
+            self.flush_direct_decoder(LogicalStream::DirectStderr);
+        } else {
+            self.flush_direct_decoder(LogicalStream::DirectStderr);
+            self.flush_direct_decoder(LogicalStream::DirectStdout);
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    fn flush_other_direct_decoder(&mut self, stream: DirectOutputStream) {
+        match stream {
+            DirectOutputStream::Stdout => self.flush_direct_decoder(LogicalStream::DirectStderr),
+            DirectOutputStream::Stderr => self.flush_direct_decoder(LogicalStream::DirectStdout),
         }
     }
 
@@ -896,7 +1121,7 @@ impl OutputTapeState {
         text_bytes: usize,
         image_bytes: usize,
         image_metadata_bytes: usize,
-    ) {
+    ) -> u64 {
         self.budget.text_bytes = self.budget.text_bytes.saturating_add(text_bytes);
         self.budget.image_bytes = self.budget.image_bytes.saturating_add(image_bytes);
         self.budget.image_metadata_bytes = self
@@ -904,10 +1129,11 @@ impl OutputTapeState {
             .image_metadata_bytes
             .saturating_add(image_metadata_bytes);
         self.budget.events = self.budget.events.saturating_add(1);
-        self.push_event(event);
+        self.push_event(event)
     }
 
     fn push_control(&mut self, event: OutputEvent) {
+        self.prepare_control_output();
         self.push_event(event);
     }
 
@@ -977,13 +1203,8 @@ impl OutputTapeState {
         };
         for (_, event) in &self.events {
             match event {
-                OutputEvent::DirectStdout(DirectOutputEvent::Bytes(bytes))
-                | OutputEvent::DirectStderr(DirectOutputEvent::Bytes(bytes)) => {
-                    budget.text_bytes = budget.text_bytes.saturating_add(bytes.len());
-                    budget.events = budget.events.saturating_add(1);
-                }
-                OutputEvent::WorkerConsoleText { text, .. } => {
-                    budget.text_bytes = budget.text_bytes.saturating_add(text.len());
+                OutputEvent::Text { text_bytes, .. } => {
+                    budget.text_bytes = budget.text_bytes.saturating_add(*text_bytes);
                     budget.events = budget.events.saturating_add(1);
                 }
                 OutputEvent::BoundedServerNotice(message) => {
@@ -1001,10 +1222,7 @@ impl OutputTapeState {
                     budget.events = budget.events.saturating_add(1);
                 }
                 OutputEvent::Truncated(_) => budget.dropping_ordinary_output = true,
-                OutputEvent::DirectStdout(DirectOutputEvent::Closed)
-                | OutputEvent::DirectStderr(DirectOutputEvent::Closed)
-                | OutputEvent::ServerNotice(_)
-                | OutputEvent::ServerFailure(_) => {}
+                OutputEvent::ServerNotice(_) | OutputEvent::ServerFailure(_) => {}
             }
         }
         if self.active_truncation.is_some_and(|sequence| {
@@ -1026,34 +1244,9 @@ fn drain_through(state: &mut OutputTapeState, cut: OutputCut) -> Response {
     let events = std::mem::replace(&mut state.events, remaining);
     let mut output = ResponseBuilder::from_response(state.recovered.take().unwrap_or_default());
 
-    for (sequence, event) in events {
-        match &event {
-            OutputEvent::DirectStdout(DirectOutputEvent::Bytes(_)) => {
-                flush_direct_decoder_before(&mut output, &mut state.direct_stderr, sequence);
-            }
-            OutputEvent::DirectStderr(DirectOutputEvent::Bytes(_)) => {
-                flush_direct_decoder_before(&mut output, &mut state.direct_stdout, sequence);
-            }
-            _ => flush_direct_decoders_before(
-                &mut output,
-                &mut state.direct_stdout,
-                &mut state.direct_stderr,
-                sequence,
-            ),
-        }
+    for (_, event) in events {
         match event {
-            OutputEvent::DirectStdout(event) => {
-                append_direct_output(&mut output, &mut state.direct_stdout, sequence, event);
-            }
-            OutputEvent::DirectStderr(event) => {
-                append_direct_output(&mut output, &mut state.direct_stderr, sequence, event);
-            }
-            OutputEvent::WorkerConsoleText { channel, text } => match channel {
-                crate::worker_protocol::ConsoleChannel::Output
-                | crate::worker_protocol::ConsoleChannel::Diagnostic => {
-                    output.text(text.into_string())
-                }
-            },
+            OutputEvent::Text { text, .. } => output.text(text.into_string()),
             OutputEvent::WorkerImage {
                 data,
                 mime_type,
@@ -1068,81 +1261,6 @@ fn drain_through(state: &mut OutputTapeState, cut: OutputCut) -> Response {
 
     state.recompute_budget();
     output.finish()
-}
-
-fn append_direct_output(
-    output: &mut ResponseBuilder,
-    pending: &mut DirectDecoder,
-    sequence: u64,
-    event: DirectOutputEvent,
-) {
-    match event {
-        DirectOutputEvent::Bytes(bytes) => {
-            let prior_origin = pending.origin.unwrap_or(sequence);
-            pending.bytes.extend_from_slice(&bytes);
-            let complete = complete_utf8_prefix(&pending.bytes);
-            let incomplete = pending.bytes.split_off(complete);
-            let complete = std::mem::replace(&mut pending.bytes, incomplete);
-            output.text(String::from_utf8_lossy(&complete));
-            pending.origin = if pending.bytes.is_empty() {
-                None
-            } else if complete.is_empty() {
-                Some(prior_origin)
-            } else {
-                Some(sequence)
-            };
-        }
-        DirectOutputEvent::Closed => {
-            flush_direct_decoder(output, pending);
-        }
-    }
-}
-
-fn flush_direct_decoder(output: &mut ResponseBuilder, pending: &mut DirectDecoder) {
-    output.text(String::from_utf8_lossy(&pending.bytes));
-    pending.bytes.clear();
-    pending.origin = None;
-}
-
-fn flush_direct_decoder_before(
-    output: &mut ResponseBuilder,
-    pending: &mut DirectDecoder,
-    sequence: u64,
-) {
-    if pending.origin.is_some_and(|origin| origin < sequence) {
-        flush_direct_decoder(output, pending);
-    }
-}
-
-fn flush_direct_decoders_before(
-    output: &mut ResponseBuilder,
-    stdout: &mut DirectDecoder,
-    stderr: &mut DirectDecoder,
-    sequence: u64,
-) {
-    let stdout_origin = stdout.origin.filter(|origin| *origin < sequence);
-    let stderr_origin = stderr.origin.filter(|origin| *origin < sequence);
-    if stdout_origin <= stderr_origin {
-        flush_direct_decoder_before(output, stdout, sequence);
-        flush_direct_decoder_before(output, stderr, sequence);
-    } else {
-        flush_direct_decoder_before(output, stderr, sequence);
-        flush_direct_decoder_before(output, stdout, sequence);
-    }
-}
-
-fn flush_direct_decoders(
-    output: &mut ResponseBuilder,
-    stdout: &mut DirectDecoder,
-    stderr: &mut DirectDecoder,
-) {
-    if stdout.origin <= stderr.origin {
-        flush_direct_decoder(output, stdout);
-        flush_direct_decoder(output, stderr);
-    } else {
-        flush_direct_decoder(output, stderr);
-        flush_direct_decoder(output, stdout);
-    }
 }
 
 pub(super) fn project_completed(output: Response) -> Response {
@@ -1303,7 +1421,7 @@ mod tests {
 
         {
             let state = output.lock();
-            let OutputEvent::WorkerConsoleText { text, .. } = &state.events[0].1 else {
+            let OutputEvent::Text { text, .. } = &state.events[0].1 else {
                 panic!("the retained prefix must be stored as console text")
             };
             assert_eq!(text.len(), 5);
@@ -1442,13 +1560,13 @@ mod tests {
 
     #[cfg(target_os = "macos")]
     #[test]
-    fn direct_utf8_obeys_truncation_and_stream_order() {
+    fn direct_utf8_truncates_at_scalar_boundaries_and_keeps_stream_order() {
         let output = OutputTape::with_limits(limits(2, 100, 100));
         let stdout = output.direct_stdout();
         stdout.push(&[0xe2, 0x82, 0xac]);
         assert_text(
             output.take(),
-            "�\n[output truncated: omitted 1 text bytes and 0 encoded image bytes across 1 event]",
+            "[output truncated: omitted 3 text bytes and 0 encoded image bytes across 1 event]",
         );
         stdout.push(&[0xac, 0xff]);
         assert_text(output.take(), "��");

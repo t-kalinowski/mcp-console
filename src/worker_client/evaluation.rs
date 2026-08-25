@@ -455,7 +455,7 @@ impl Evaluation {
             return;
         }
         state.phase = EvaluationPhase::Complete(CompletionKind::Cell);
-        state.completion_cut = Some(self.output.cut());
+        state.completion_cut = Some(self.output.completion_cut());
         state.completion_collected = false;
         self.changed.notify_one();
     }
@@ -504,7 +504,13 @@ impl Evaluation {
             self.output.push_failure(failure);
         }
         state.phase = EvaluationPhase::Complete(completion);
-        state.completion_cut = Some(cut.unwrap_or_else(|| self.output.cut()));
+        state.completion_cut = Some(cut.unwrap_or_else(|| {
+            if matches!(completion, CompletionKind::Cell) {
+                self.output.completion_cut()
+            } else {
+                self.output.cut()
+            }
+        }));
         state.completion_collected = false;
         self.changed.notify_one();
     }

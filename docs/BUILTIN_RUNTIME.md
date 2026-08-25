@@ -432,6 +432,13 @@ After `[worker starting]`, poll with `send` without code or stdin until the repl
 Do not submit another cell while replacement startup is still active.
 The failing call does not repeat a failed startup attempt; after that failure is collected, a later code-bearing `send` makes a fresh startup attempt and, if it succeeds, runs only the new cell.
 
+Ordinary newline-terminated output is preserved exactly.
+For terminal-style output that redraws one line with carriage returns, backspaces, or ANSI erase-line controls, the server retains one volatile visible line per worker output stream instead of retaining every intermediate version.
+A response returns only the latest version changed since the preceding response boundary.
+A newline, cell completion, or worker-generation boundary returns the final visible version and clears that stream's volatile state.
+ANSI styling is retained on the visible line, and CRLF remains an ordinary newline.
+This compaction happens before pending-output limits are applied.
+
 Each undrained output segment is limited to:
 
 - 8 MiB of console text and raw standard-stream bytes;

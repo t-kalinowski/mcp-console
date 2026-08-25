@@ -1326,6 +1326,139 @@ def test_captures_worker_stdout(binary: Path) -> Transcript:
     return client._finish()
 
 
+def test_compacts_split_terminal_redraws(binary: Path) -> Transcript:
+    zod = Path(__file__).resolve().parents[2] / "fixtures" / "zod"
+    client = McpClient(
+        binary,
+        ("serve", "--worker", str(zod)),
+    )
+    client._initialize_and_list_tools()
+
+    client.send(r="emit terminal redraws")
+    assert (
+        last_tool_text(client) == "ordinary stdout\r\n\x1b[32mstdout café 100%\x1b[0m"
+    )
+    return client._finish()
+
+
+def test_compacts_stdout_and_stderr_independently(binary: Path) -> Transcript:
+    zod = Path(__file__).resolve().parents[2] / "fixtures" / "zod"
+    client = McpClient(
+        binary,
+        ("serve", "--worker", str(zod)),
+    )
+    client._initialize_and_list_tools()
+
+    client.send(r="emit independent stdout stderr redraws")
+    output = last_tool_text(client)
+    assert sorted(output.splitlines()) == ["stderr final", "stdout final"], output
+    client.transcript[-1]["result"]["content"][0]["text"] = (
+        "<stdout and stderr final lines>\n"
+    )
+    client.transcript[-1]["transcript_normalization"] = {
+        "target": "result.content[0].text",
+        "cross_source_position": "omitted",
+    }
+    return client._finish()
+
+
+def test_compacts_independent_streams_across_polls_and_completion(
+    binary: Path,
+) -> Transcript:
+    zod = Path(__file__).resolve().parents[2] / "fixtures" / "zod"
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        temporary_path = Path(temporary_directory)
+        environment = os.environ.copy()
+        environment["TMPDIR"] = temporary_directory
+        client = McpClient(
+            binary,
+            ("serve", "--worker", str(zod)),
+            environment,
+        )
+        client._initialize_and_list_tools()
+
+        client.send(r="redraw across polls", timeout_ms=0)
+        assert last_tool_text(client) == "\n[running; poll with an empty send]"
+        stage_1 = wait_for_marker(
+            temporary_path,
+            "zod-redraw-stage-1",
+            client,
+        )
+
+        client.send(timeout_ms=0)
+        assert last_tool_text(client) == (
+            "output 10%diagnostic 10%\n[running; poll with an empty send]"
+        )
+        client.send(timeout_ms=0)
+        assert last_tool_text(client) == "\n[running; poll with an empty send]"
+
+        (stage_1.parent / "zod-release-redraw-stage-2").touch()
+        stage_2 = wait_for_marker(
+            temporary_path,
+            "zod-redraw-stage-2",
+            client,
+        )
+        client.send(timeout_ms=0)
+        assert last_tool_text(client) == (
+            "output 20%diagnostic 20%\n[running; poll with an empty send]"
+        )
+
+        (stage_2.parent / "zod-release-redraw-completion").touch()
+        client.send(timeout_ms=3_000)
+        assert last_tool_text(client) == "output 100%\ndiagnostic done\n"
+        return client._finish()
+
+
+def test_restart_flushes_and_resets_volatile_output(binary: Path) -> Transcript:
+    zod = Path(__file__).resolve().parents[2] / "fixtures" / "zod"
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        temporary_path = Path(temporary_directory)
+        environment = os.environ.copy()
+        environment["TMPDIR"] = temporary_directory
+        client = McpClient(
+            binary,
+            ("serve", "--worker", str(zod)),
+            environment,
+        )
+        client._initialize_and_list_tools()
+
+        client.send(r="redraw until restart", timeout_ms=0)
+        assert last_tool_text(client) == "\n[running; poll with an empty send]"
+        wait_for_marker(
+            temporary_path,
+            "zod-redraw-ready-for-restart",
+            client,
+        )
+
+        client.session(action="restart")
+        assert last_tool_text(client) == (
+            "latest restart progress\n"
+            "[active evaluation stopped by session restart request]\n"
+            "[worker stopped: in-memory state lost]\n"
+            "[starting new worker]\n"
+            "[idle]"
+        )
+
+        client.send(r="echo fresh")
+        assert last_tool_text(client) == "zod: fresh\n"
+        return client._finish()
+
+
+def test_many_redraws_do_not_consume_pending_output_limits(
+    binary: Path,
+) -> Transcript:
+    zod = Path(__file__).resolve().parents[2] / "fixtures" / "zod"
+    client = McpClient(
+        binary,
+        ("serve", "--worker", str(zod)),
+    )
+    client._initialize_and_list_tools()
+
+    client.send(r="stress redraws")
+    assert last_tool_text(client) == "stress final\nuseful output\n"
+    return client._finish()
+
+
 def test_preserves_invalid_raw_output_when_worker_exits(binary: Path) -> Transcript:
     zod = Path(__file__).resolve().parents[2] / "fixtures" / "zod"
     client = McpClient(
