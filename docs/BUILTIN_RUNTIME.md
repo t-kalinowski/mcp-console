@@ -399,7 +399,7 @@ R plots created through Python's `r` bridge follow the R graphics rules.
 
 Console output, diagnostics, captured stdout and stderr, input-request records, images, and server lifecycle notices are assembled in one server-owned output stream for delivery.
 The server preserves each producer's order but cannot reconstruct chronology across independent pipes.
-It does not normalize carriage returns, ANSI sequences, or ordinary whitespace.
+Outside the progress-frame compaction described below, it does not normalize ordinary whitespace or reinterpret output based on its source.
 Invalid UTF-8 from raw standard streams is replaced when projected to MCP text; the private relay transport still preserves the bytes.
 
 When one controlled `send` stops or completes an earlier operation and then runs a new cell, the response keeps the prior output before lifecycle notices and new-cell output, followed by the final combined state marker.
@@ -431,6 +431,14 @@ The original `send` remains an MCP tool error even when it ends in `[idle]`; tha
 After `[worker starting]`, poll with `send` without code or stdin until the replacement reaches `[idle]` or reports startup failure.
 Do not submit another cell while replacement startup is still active.
 The failing call does not repeat a failed startup attempt; after that failure is collected, a later code-bearing `send` makes a fresh startup attempt and, if it succeeds, runs only the new cell.
+
+Ordinary newline-terminated output is preserved exactly.
+Within each delivered output segment, the server compacts single-line progress redraws in consecutive text from the same worker output stream.
+A bare carriage return makes following text replace the whole frame, and backspace removes one Unicode scalar.
+CRLF remains an ordinary newline.
+Other controls and escape sequences are preserved literally.
+Compaction does not cross response boundaries, so a long-running cell may return one current progress frame in each poll.
+Pending-output limits are applied before compaction; if a segment is truncated, its final redraw may not have been retained.
 
 Each undrained output segment is limited to:
 

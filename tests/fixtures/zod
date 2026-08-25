@@ -439,6 +439,51 @@ def main() -> None:
             send(writer, {"kind": "completed"})
             continue
 
+        if source == "emit terminal redraws":
+            write_all(1, b"ordinary stdout\r\r\n")
+            write_all(1, b"old\r\b\n")
+            write_all(1, b"old\r\b")
+            write_all(1, b"newx\b\n")
+            write_all(1, b"old\x1b[")
+            write_all(1, b"2Knew\n")
+            send(writer, {"kind": "completed"})
+            continue
+
+        if source == "emit independent stdout stderr redraws":
+            write_all(1, b"\rstdout old")
+            write_all(1, b"\rstdout final\n")
+            write_all(2, b"\rstderr old")
+            write_all(2, b"\rstderr final\n")
+            send(writer, {"kind": "completed"})
+            continue
+
+        if source == "redraw across polls":
+            send_output(writer, "output 10%\r")
+            wait_for_server_to_process_sideband(reader, writer)
+            (temporary / "zod-redraw-ready").touch()
+            while not (temporary / "zod-release-redraw").exists():
+                time.sleep(0.01)
+
+            send_output(writer, "output 100%\n")
+            send(writer, {"kind": "completed"})
+            continue
+
+        if source == "stress redraws":
+            payload = "x" * 2048
+            send_batch(
+                writer,
+                [
+                    {
+                        "kind": ConsoleKind.OUTPUT,
+                        "data": f"\rstress {index}: {payload}",
+                    }
+                    for index in range(100)
+                ],
+            )
+            send_output(writer, "\rstress final\nuseful output\n")
+            send(writer, {"kind": "completed"})
+            continue
+
         if source in {"exit after invalid stdout", "exit after invalid stderr"}:
             stream = source.removeprefix("exit after invalid ")
             descriptor = 1 if stream == "stdout" else 2

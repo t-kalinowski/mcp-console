@@ -271,6 +271,49 @@ def run_raw_output(relay: ScriptedRelay) -> None:
     relay.retire()
 
 
+def run_raw_malformed_redraw(relay: ScriptedRelay) -> None:
+    relay.ready()
+    relay.expect(EVALUATION)
+    relay.send(
+        {
+            "kind": "stdout_bytes",
+            "data": base64.b64encode(b"old\r").decode("ascii"),
+        }
+    )
+    relay.send(
+        {
+            "kind": "stdout_bytes",
+            "data": base64.b64encode(b"\xff\n").decode("ascii"),
+        }
+    )
+    relay.complete()
+    relay.retire()
+
+
+def run_empty_raw_close_between_redraws(relay: ScriptedRelay) -> None:
+    relay.ready()
+    relay.expect(EVALUATION)
+    relay.send_batch(
+        [
+            {"kind": "console_output", "data": "old\r"},
+            {"kind": "stdout_closed"},
+            {"kind": "console_output", "data": "new\n"},
+        ]
+    )
+    relay.complete()
+
+    command = relay.receive()
+    assert command.get("kind") == "shutdown", command
+    relay.send_batch(
+        [
+            {"kind": "shutdown_started"},
+            {"kind": "stderr_closed"},
+            {"kind": "worker_sideband_closed"},
+            {"kind": "worker_exited", "code": 0},
+        ]
+    )
+
+
 def run_stdin(relay: ScriptedRelay) -> None:
     relay.ready()
     relay.expect({"kind": "stdin", "data": "answer\n"})
@@ -982,6 +1025,8 @@ def main() -> None:
         "ready": run_ready,
         "evaluate": run_evaluate,
         "raw_output": run_raw_output,
+        "raw_malformed_redraw": run_raw_malformed_redraw,
+        "empty_raw_close_between_redraws": run_empty_raw_close_between_redraws,
         "stdin": run_stdin,
         "initial_requirements_stdin_idempotent": (
             run_initial_requirements_stdin_idempotent

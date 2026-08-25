@@ -1,6 +1,8 @@
 use std::sync::mpsc::SyncSender;
 use std::sync::{Arc, Mutex};
 
+mod terminal;
+
 /// Maximum UTF-8 text and raw direct-output bytes retained between drains.
 const MAX_PENDING_TEXT_BYTES: usize = 8 * 1024 * 1024;
 /// Maximum encoded image payload bytes retained between drains.
@@ -679,7 +681,7 @@ impl OutputTape {
         let mut state = self.lock();
         state.seal_truncation();
         let cut = OutputCut(state.next_event);
-        drain_through(&mut state, cut)
+        drain_through(&mut state, cut, false)
     }
 
     /// Transfers all currently pending output into an evaluation-owned prelude.
@@ -696,22 +698,14 @@ impl OutputTape {
         let mut state = self.lock();
         state.seal_truncation();
         let cut = OutputCut(state.next_event);
-        let mut response = drain_through(&mut state, cut);
-        let mut builder = ResponseBuilder::from_response(std::mem::take(&mut response));
-        let OutputTapeState {
-            direct_stdout,
-            direct_stderr,
-            ..
-        } = &mut *state;
-        flush_direct_decoders(&mut builder, direct_stdout, direct_stderr);
+        let response = drain_through(&mut state, cut, true);
         boundary();
-        state.recompute_budget();
-        builder.finish()
+        response
     }
 
     pub(super) fn drain_through(&self, cut: OutputCut) -> Response {
         let mut state = self.lock();
-        drain_through(&mut state, cut)
+        drain_through(&mut state, cut, false)
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, OutputTapeState> {
@@ -1018,61 +1012,152 @@ impl OutputTapeState {
     }
 }
 
-fn drain_through(state: &mut OutputTapeState, cut: OutputCut) -> Response {
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum LogicalStream {
+    ConsoleOutput,
+    ConsoleDiagnostic,
+    DirectStdout,
+    DirectStderr,
+}
+
+#[derive(Default)]
+struct SegmentCompactor {
+    stream: Option<LogicalStream>,
+    terminal: terminal::Stream,
+}
+
+impl SegmentCompactor {
+    fn text(&mut self, output: &mut ResponseBuilder, stream: LogicalStream, text: &str) {
+        if text.is_empty() {
+            return;
+        }
+        if self.stream != Some(stream) {
+            self.flush(output);
+            self.stream = Some(stream);
+        }
+        output.text(self.terminal.ingest(text));
+    }
+
+    fn flush(&mut self, output: &mut ResponseBuilder) {
+        if self.stream.take().is_some() {
+            output.text(self.terminal.finish());
+        }
+    }
+}
+
+fn drain_through(
+    state: &mut OutputTapeState,
+    cut: OutputCut,
+    flush_direct_decoders: bool,
+) -> Response {
     let boundary = state
         .events
         .partition_point(|(sequence, _)| *sequence < cut.0);
     let remaining = state.events.split_off(boundary);
     let events = std::mem::replace(&mut state.events, remaining);
     let mut output = ResponseBuilder::from_response(state.recovered.take().unwrap_or_default());
+    let mut compactor = SegmentCompactor::default();
 
     for (sequence, event) in events {
         match &event {
             OutputEvent::DirectStdout(DirectOutputEvent::Bytes(_)) => {
-                flush_direct_decoder_before(&mut output, &mut state.direct_stderr, sequence);
+                flush_direct_decoder_before(
+                    &mut output,
+                    &mut compactor,
+                    &mut state.direct_stderr,
+                    LogicalStream::DirectStderr,
+                    sequence,
+                );
             }
             OutputEvent::DirectStderr(DirectOutputEvent::Bytes(_)) => {
-                flush_direct_decoder_before(&mut output, &mut state.direct_stdout, sequence);
+                flush_direct_decoder_before(
+                    &mut output,
+                    &mut compactor,
+                    &mut state.direct_stdout,
+                    LogicalStream::DirectStdout,
+                    sequence,
+                );
             }
             _ => flush_direct_decoders_before(
                 &mut output,
+                &mut compactor,
                 &mut state.direct_stdout,
                 &mut state.direct_stderr,
                 sequence,
             ),
         }
         match event {
-            OutputEvent::DirectStdout(event) => {
-                append_direct_output(&mut output, &mut state.direct_stdout, sequence, event);
+            OutputEvent::DirectStdout(event) => append_direct_output(
+                &mut output,
+                &mut compactor,
+                &mut state.direct_stdout,
+                LogicalStream::DirectStdout,
+                sequence,
+                event,
+            ),
+            OutputEvent::DirectStderr(event) => append_direct_output(
+                &mut output,
+                &mut compactor,
+                &mut state.direct_stderr,
+                LogicalStream::DirectStderr,
+                sequence,
+                event,
+            ),
+            OutputEvent::WorkerConsoleText { channel, text } => {
+                let stream = match channel {
+                    crate::worker_protocol::ConsoleChannel::Output => LogicalStream::ConsoleOutput,
+                    crate::worker_protocol::ConsoleChannel::Diagnostic => {
+                        LogicalStream::ConsoleDiagnostic
+                    }
+                };
+                compactor.text(&mut output, stream, &text);
             }
-            OutputEvent::DirectStderr(event) => {
-                append_direct_output(&mut output, &mut state.direct_stderr, sequence, event);
-            }
-            OutputEvent::WorkerConsoleText { channel, text } => match channel {
-                crate::worker_protocol::ConsoleChannel::Output
-                | crate::worker_protocol::ConsoleChannel::Diagnostic => {
-                    output.text(text.into_string())
-                }
-            },
             OutputEvent::WorkerImage {
                 data,
                 mime_type,
                 artifact,
-            } => output.image(data.into_string(), mime_type.into_string(), artifact),
-            OutputEvent::ServerNotice(message) => output.notice_line(message),
-            OutputEvent::BoundedServerNotice(message) => output.notice_line(message.into_string()),
-            OutputEvent::ServerFailure(failure) => output.send_failure(failure),
-            OutputEvent::Truncated(truncated) => output.truncation(truncated),
+            } => {
+                compactor.flush(&mut output);
+                output.image(data.into_string(), mime_type.into_string(), artifact);
+            }
+            OutputEvent::ServerNotice(message) => {
+                compactor.flush(&mut output);
+                output.notice_line(message);
+            }
+            OutputEvent::BoundedServerNotice(message) => {
+                compactor.flush(&mut output);
+                output.notice_line(message.into_string());
+            }
+            OutputEvent::ServerFailure(failure) => {
+                compactor.flush(&mut output);
+                output.send_failure(failure);
+            }
+            OutputEvent::Truncated(truncated) => {
+                compactor.flush(&mut output);
+                output.truncation(truncated);
+            }
         }
     }
 
+    if flush_direct_decoders {
+        flush_direct_decoders_before(
+            &mut output,
+            &mut compactor,
+            &mut state.direct_stdout,
+            &mut state.direct_stderr,
+            cut.0,
+        );
+    }
+    compactor.flush(&mut output);
     state.recompute_budget();
     output.finish()
 }
 
 fn append_direct_output(
     output: &mut ResponseBuilder,
+    compactor: &mut SegmentCompactor,
     pending: &mut DirectDecoder,
+    stream: LogicalStream,
     sequence: u64,
     event: DirectOutputEvent,
 ) {
@@ -1083,7 +1168,7 @@ fn append_direct_output(
             let complete = complete_utf8_prefix(&pending.bytes);
             let incomplete = pending.bytes.split_off(complete);
             let complete = std::mem::replace(&mut pending.bytes, incomplete);
-            output.text(String::from_utf8_lossy(&complete));
+            compactor.text(output, stream, &String::from_utf8_lossy(&complete));
             pending.origin = if pending.bytes.is_empty() {
                 None
             } else if complete.is_empty() {
@@ -1093,29 +1178,40 @@ fn append_direct_output(
             };
         }
         DirectOutputEvent::Closed => {
-            flush_direct_decoder(output, pending);
+            flush_direct_decoder_compacted(output, compactor, pending, stream);
+            if compactor.stream == Some(stream) {
+                compactor.flush(output);
+            }
         }
     }
 }
 
-fn flush_direct_decoder(output: &mut ResponseBuilder, pending: &mut DirectDecoder) {
-    output.text(String::from_utf8_lossy(&pending.bytes));
+fn flush_direct_decoder_compacted(
+    output: &mut ResponseBuilder,
+    compactor: &mut SegmentCompactor,
+    pending: &mut DirectDecoder,
+    stream: LogicalStream,
+) {
+    compactor.text(output, stream, &String::from_utf8_lossy(&pending.bytes));
     pending.bytes.clear();
     pending.origin = None;
 }
 
 fn flush_direct_decoder_before(
     output: &mut ResponseBuilder,
+    compactor: &mut SegmentCompactor,
     pending: &mut DirectDecoder,
+    stream: LogicalStream,
     sequence: u64,
 ) {
     if pending.origin.is_some_and(|origin| origin < sequence) {
-        flush_direct_decoder(output, pending);
+        flush_direct_decoder_compacted(output, compactor, pending, stream);
     }
 }
 
 fn flush_direct_decoders_before(
     output: &mut ResponseBuilder,
+    compactor: &mut SegmentCompactor,
     stdout: &mut DirectDecoder,
     stderr: &mut DirectDecoder,
     sequence: u64,
@@ -1123,25 +1219,35 @@ fn flush_direct_decoders_before(
     let stdout_origin = stdout.origin.filter(|origin| *origin < sequence);
     let stderr_origin = stderr.origin.filter(|origin| *origin < sequence);
     if stdout_origin <= stderr_origin {
-        flush_direct_decoder_before(output, stdout, sequence);
-        flush_direct_decoder_before(output, stderr, sequence);
+        flush_direct_decoder_before(
+            output,
+            compactor,
+            stdout,
+            LogicalStream::DirectStdout,
+            sequence,
+        );
+        flush_direct_decoder_before(
+            output,
+            compactor,
+            stderr,
+            LogicalStream::DirectStderr,
+            sequence,
+        );
     } else {
-        flush_direct_decoder_before(output, stderr, sequence);
-        flush_direct_decoder_before(output, stdout, sequence);
-    }
-}
-
-fn flush_direct_decoders(
-    output: &mut ResponseBuilder,
-    stdout: &mut DirectDecoder,
-    stderr: &mut DirectDecoder,
-) {
-    if stdout.origin <= stderr.origin {
-        flush_direct_decoder(output, stdout);
-        flush_direct_decoder(output, stderr);
-    } else {
-        flush_direct_decoder(output, stderr);
-        flush_direct_decoder(output, stdout);
+        flush_direct_decoder_before(
+            output,
+            compactor,
+            stderr,
+            LogicalStream::DirectStderr,
+            sequence,
+        );
+        flush_direct_decoder_before(
+            output,
+            compactor,
+            stdout,
+            LogicalStream::DirectStdout,
+            sequence,
+        );
     }
 }
 

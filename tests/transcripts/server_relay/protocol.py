@@ -327,6 +327,18 @@ def test_forwards_raw_stdout_and_stderr(binary: Path) -> Transcript:
     return transcript
 
 
+def test_malformed_byte_completes_pending_redraw(binary: Path) -> Transcript:
+    client = ServerRelayClient(binary, "raw_malformed_redraw")
+    assert _tool_text(client.send(r="42")) == "�\n"
+    return client.finish_active()
+
+
+def test_empty_raw_close_does_not_split_console_redraw(binary: Path) -> Transcript:
+    client = ServerRelayClient(binary, "empty_raw_close_between_redraws")
+    assert _tool_text(client.send(r="42")) == "new\n"
+    return client.finish_active()
+
+
 def test_forwards_stdin(binary: Path) -> Transcript:
     client = ServerRelayClient(binary, "stdin")
     assert _tool_text(client.send(r="42", stdin="answer\n")) == "[done]"
