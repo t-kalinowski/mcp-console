@@ -84,8 +84,7 @@ def test_rejects_unsupported_ir_version(binary: Path) -> Transcript:
             current_directory=workspace,
         )
         client._initialize_and_list_tools()
-        client.session(
-            action="prepare",
+        client.send(
             requirements={"r": ["local::package"]},
         )
         result = client.transcript[-1]["result"]
@@ -121,7 +120,7 @@ def test_rejects_local_r_installation(binary: Path) -> Transcript:
         )
         client._initialize_and_list_tools()
         reference = f"local::{package}?reinstall&nocache"
-        client.session(action="prepare", requirements={"r": [reference]})
+        client.send(requirements={"r": [reference]})
         result = client.transcript[-1]["result"]
         assert not install_marker.exists(), (
             "local package configure ran with server permissions"
@@ -142,7 +141,7 @@ def test_rejects_local_r_installation(binary: Path) -> Transcript:
             f"{failure_prefix}<cache-dependent IR progress>\n"
             f"{diagnostic_start}{diagnostic}"
         )
-        client.transcript[-1]["session"]["requirements"]["r"] = [
+        client.transcript[-1]["send"]["requirements"]["r"] = [
             reference.replace(str(package), "<absolute package path>")
         ]
         result["content"][0]["text"] = error.replace(
@@ -162,8 +161,7 @@ def test_prepares_and_uses_cran_packages(binary: Path) -> Transcript:
     environment["RETICULATE_PYTHON"] = ""
     client = McpClient(binary, ("serve",), environment)
     client._initialize_and_list_tools()
-    client.session(
-        action="prepare",
+    client.send(
         requirements={"r": ["praise, zeallot"]},
     )
     assert last_tool_text(client) == "[prepared]", client.transcript[-1]
@@ -210,7 +208,7 @@ def test_prepares_r_requirements_after_worker_startup(binary: Path) -> Transcrip
     environment["RETICULATE_PYTHON"] = ""
     client = McpClient(binary, ("serve",), environment)
     client._initialize_and_list_tools()
-    client.session(action="prepare", requirements={"r": ["praise"]})
+    client.send(requirements={"r": ["praise"]})
     assert last_tool_text(client) == "[prepared]"
 
     # fmt: r
@@ -240,7 +238,7 @@ def test_prepares_r_requirements_after_worker_startup(binary: Path) -> Transcrip
 def test_stops_live_preparation_for_idle_callback_input(binary: Path) -> Transcript:
     client = McpClient(binary, ("serve",))
     client._initialize_and_list_tools()
-    client.session(action="prepare", requirements={"r": ["later"]})
+    client.send(requirements={"r": ["later"]})
 
     # fmt: r
     r = code(r"""
@@ -282,8 +280,7 @@ def test_stops_live_preparation_for_idle_callback_input(binary: Path) -> Transcr
     )
     # Keep this distinct from the callback's retained requirement so activation
     # cannot turn the preparation into an idempotent server-side no-op.
-    result = client.session(
-        action="prepare",
+    result = client.send(
         requirements={"python": ["py-yaml12>=0"]},
     )
     assert result["isError"] is True, result
@@ -345,8 +342,7 @@ def test_failed_mixed_preparation_retains_live_python_activation(
                     target_is_directory=package.is_dir(),
                 )
 
-            preparation = client._start_session(
-                action="prepare",
+            preparation = client._start_send(
                 requirements={"r": [requirement], "python": ["py-yaml12"]},
             )
             uv_started.wait("mixed live requirement preparation")
@@ -363,7 +359,7 @@ def test_failed_mixed_preparation_retains_live_python_activation(
                 "requirement changes are unavailable until session restart"
             )
 
-            client.session(action="restart")
+            client.send(control="restart")
             assert last_tool_text(client) == (
                 "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
             )
@@ -390,7 +386,7 @@ def test_failed_late_mixed_preparation_preserves_worker(binary: Path) -> Transcr
     environment, _ = r_test_environment()
     client = McpClient(binary, ("serve",), environment)
     client._initialize_and_list_tools()
-    client.session(action="prepare", requirements={"r": ["praise"]})
+    client.send(requirements={"r": ["praise"]})
     assert last_tool_text(client) == "[prepared]"
 
     # fmt: r
@@ -403,8 +399,7 @@ def test_failed_late_mixed_preparation_preserves_worker(binary: Path) -> Transcr
     assert last_tool_text(client) == "[done]", client.transcript[-1]
 
     invalid_python = "example @ https://example.invalid/example.whl"
-    client.session(
-        action="prepare",
+    client.send(
         requirements={
             "r": ["zeallot"],
             "python": [invalid_python],
@@ -472,8 +467,7 @@ def test_evaluates_with_default_managed_r(binary: Path) -> Transcript:
             """)
         client.send(r=r)
         assert last_tool_text(client) == "[1] 42\n", client.transcript[-1]
-        client.session(
-            action="prepare",
+        client.send(
             requirements={"r": ["DBI", "duckdb", "arrow", "nanoarrow"]},
         )
         assert last_tool_text(client) == "[prepared]", client.transcript[-1]
@@ -500,15 +494,13 @@ def test_prepares_initial_r_requirements(binary: Path) -> Transcript:
             current_directory=workspace,
         )
         client._initialize_and_list_tools()
-        client.session(
-            action="prepare",
+        client.send(
             requirements={"r": [initial_r]},
         )
         assert last_tool_text(client) == "[prepared]"
 
         invalid_r = "not a valid requirement !!!"
-        client.session(
-            action="prepare",
+        client.send(
             requirements={"r": [invalid_r]},
         )
         result = client.transcript[-1]["result"]
@@ -523,8 +515,7 @@ def test_prepares_initial_r_requirements(binary: Path) -> Transcript:
         )
 
         invalid_python = "example @ https://example.invalid/example.whl"
-        client.session(
-            action="prepare",
+        client.send(
             requirements={
                 "r": [candidate_r],
                 "python": [invalid_python],
@@ -549,13 +540,11 @@ def test_prepares_initial_r_requirements(binary: Path) -> Transcript:
         client.send(r=r)
         assert last_tool_text(client) == "[1] 42\n"
 
-        client.session(
-            action="prepare",
+        client.send(
             requirements={"r": [initial_r]},
         )
         assert last_tool_text(client) == "[prepared]"
-        client.session(
-            action="prepare",
+        client.send(
             requirements={
                 "r": [candidate_r],
                 "python": ["py-yaml12"],
@@ -583,7 +572,7 @@ def test_prepares_initial_r_requirements(binary: Path) -> Transcript:
         client.send(r=prepared_r)
         assert last_tool_text(client) == "[1] 42\n"
 
-        client.session(action="restart")
+        client.send(control="restart")
         assert last_tool_text(client) == (
             "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
         )

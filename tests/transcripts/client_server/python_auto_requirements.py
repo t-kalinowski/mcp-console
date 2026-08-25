@@ -506,7 +506,7 @@ def test_retains_automatic_python_requirement_after_error_and_restart(
         assert last_tool_text(client) == "'yaml12'\n"
         assert len(uv_tool_run_requirements(record)) == resolved
 
-        client.session(action="restart")
+        client.send(control="restart")
         assert last_tool_text(client) == (
             "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
         )
@@ -594,7 +594,7 @@ def test_retains_inferred_distribution_that_does_not_provide_import(
         assert last_tool_text(client) == "'yaml12'\n"
         assert len(uv_tool_run_requirements(record)) == resolved
 
-        client.session(action="restart")
+        client.send(control="restart")
         assert last_tool_text(client) == (
             "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
         )
@@ -967,28 +967,28 @@ def test_interrupts_automatic_python_resolver_and_preserves_worker(
                 importlib.import_module("{requirement}")
                 automatic_interrupt_cell_ran = True
                 """)
-            evaluation = client._start_send(python=python)
+            client.send(python=python, timeout_ms=0)
+            assert last_tool_text(client) == "\n[running; poll with an empty send]"
             started.wait("automatic Python resolver")
 
-            interrupt = client._start_session(action="interrupt")
-            evaluation_returned = threading.Event()
+            interrupt = client._start_send(control="interrupt", timeout_ms=30_000)
+            interrupt_returned = threading.Event()
             forced_release = threading.Event()
 
-            def release_if_evaluation_blocks() -> None:
-                if not evaluation_returned.wait(2):
+            def release_if_interrupt_blocks() -> None:
+                if not interrupt_returned.wait(2):
                     forced_release.set()
                     release.release()
 
-            watchdog = threading.Thread(target=release_if_evaluation_blocks)
+            watchdog = threading.Thread(target=release_if_interrupt_blocks)
             watchdog.start()
-            client._receive_many([evaluation, interrupt])
-            evaluation_returned.set()
+            client._receive(interrupt)
+            interrupt_returned.set()
             watchdog.join()
             assert not forced_release.is_set(), (
                 "interrupt did not stop the automatic Python resolver"
             )
-            assert last_tool_text_from_entry(interrupt) == "[interrupt sent]"
-            error = last_tool_text_from_entry(evaluation)
+            error = last_tool_text_from_entry(interrupt)
             for expected in (
                 "ModuleNotFoundError",
                 requirement,
@@ -997,7 +997,7 @@ def test_interrupts_automatic_python_resolver_and_preserves_worker(
                 "requirements.python",
             ):
                 assert expected in error, (expected, error)
-            evaluation["result"]["content"][0]["text"] = (
+            interrupt["result"]["content"][0]["text"] = (
                 normalize_python_resolution_error(error)
             )
 
@@ -1086,8 +1086,8 @@ def test_restart_discards_unactivated_automatic_python_candidate(
             evaluation = client._start_send(python="import yaml12")
             activation_ready.wait("automatic managed Python activation")
 
-            restart = client._start_session(
-                action="restart",
+            restart = client._start_send(
+                control="restart",
                 requirements={"python": ["matplotlib"]},
             )
             uv_started.wait("restart Python resolution")

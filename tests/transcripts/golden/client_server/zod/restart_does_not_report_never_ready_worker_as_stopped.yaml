@@ -10,8 +10,8 @@ result:
       text: "[stopped by session restart request before evaluation finished]"
   isError: true
 ---
-session:
-  action: restart
+send:
+  control: restart
 result:
   content:
     - type: text
@@ -29,4 +29,3 @@ result:
       text: |
         zod: echo
   isError: false
-...

@@ -47,8 +47,8 @@ result:
         [running; poll with an empty send]
   isError: false
 ---
-session:
-  action: restart
+send:
+  control: restart
 result:
   content:
     - type: text
@@ -69,4 +69,3 @@ result:
       text: |
         [1] 42
   isError: false
-...

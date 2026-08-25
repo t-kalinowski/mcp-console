@@ -46,8 +46,8 @@ Resolver inputs are restricted and may execute trusted installation or build cod
 ### MCP client and server
 
 The client and server exchange MCP JSON-RPC over the server's standard input and output.
-The server registers the `send` and `session` tools, validates calls, and turns server-owned responses into MCP text and image content.
-`send` can apply an inline interrupt or restart before optional stdin and a cell, while `session` remains the standalone dependency-preparation and lifecycle surface.
+The server registers only the `send` tool, validates calls, and turns server-owned responses into MCP text and image content.
+One `send` can poll, provide stdin, prepare requirements, evaluate a cell, interrupt, restart, or combine compatible parts under one ordered operation.
 [`TOOL_DESCRIPTIONS.md`](TOOL_DESCRIPTIONS.md) is a human-readable mirror of the registered descriptions; `src/server.rs` and the actual `tools/list` result are authoritative.
 
 This is the only public protocol boundary.
@@ -152,16 +152,15 @@ The wait timeout begins only after the cell is dispatched.
 
 ### Controlled send
 
-Inline control, stdin, interrupt grace, requirement preparation, and reservation of the optional new cell form one lifecycle operation.
-The server does not compose a public `session` call with a later ordinary `send`.
+Control, stdin, interrupt grace, requirement preparation, and reservation of the optional new cell form one lifecycle operation.
 
-For inline interrupt, the server first uses the existing resolver-first, otherwise-worker routing and waits for delivery acknowledgement.
+For interrupt, the server first uses the existing resolver-first, otherwise-worker routing and waits for delivery acknowledgement.
 It then enqueues nonempty stdin immediately, waits the full 100-millisecond grace period, and settles the previous evaluation's response ownership.
 Only after the previous evaluation has stopped does it validate and prepare requirements and reserve the new cell against the still-current generation.
 If delivery fails, no later step runs; if the evaluation remains active after the grace, a supplied cell is not dispatched.
 A validation or explicit preparation failure also prevents the cell from running, but does not undo the completed interrupt or stdin enqueue.
 
-For inline restart, declared requirements enter the existing restart transaction.
+For restart, declared requirements enter the existing restart transaction.
 The server resolves and retains them before it closes the old generation; a failure leaves the worker in place and sends neither stdin nor code.
 After successful replacement startup, the server queues nonempty same-call stdin and reserves the cell against that exact replacement before it releases admission.
 The old generation's unread stdin is discarded and cannot consume the new bytes.
@@ -224,9 +223,9 @@ These checks keep R callbacks on the embedded-R thread and prevent nested resolv
 
 An interrupt targets the active host resolver when one is registered; otherwise it targets the live worker through its relay.
 It stays associated with that resolver or worker and is not retried against a replacement.
-Standalone `session(action = "interrupt")` reports delivery acknowledgement rather than waiting for the resolver or evaluated code to stop.
-Inline `send(control = "interrupt")` uses the same routing, then applies its stdin enqueue and 100-millisecond settling grace before it returns the current state or considers a new cell.
+A control-only `send(control = "interrupt")` uses the same routing as an interrupt followed by a cell, then applies its stdin enqueue and 100-millisecond settling grace before it returns the current state.
 A control-only call that attaches to an evaluation after the grace uses its requested wait timeout; a call whose supplied cell was rejected observes the active evaluation without another wait.
+With `timeout_ms = 0`, the call returns the state and output visible immediately after the grace.
 Resolver interruption and lifecycle cancellation are tracked as typed outcomes for the affected operation.
 
 ### Explicit restart
@@ -268,7 +267,7 @@ The [relay protocol](RELAY_PROTOCOL.md) owns that ordering guarantee, and the [b
 ## Recording and image artifacts
 
 Recording is a server responsibility and does not add messages to either private protocol.
-On the first ordinary `send` or `session` call, the server creates a private run directory under `.mcp-console/sessions/` in its working directory.
+On the first `send` call, the server creates a private run directory under `.mcp-console/sessions/` in its working directory.
 It appends tool calls and assembled results to `internal/events.jsonl`.
 Each `tool_result` is appended before the MCP transport attempts the corresponding response write.
 It records server assembly, not whether the transport write succeeded or the client received the response.

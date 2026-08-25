@@ -13,8 +13,8 @@ result:
         [waiting for stdin]
   isError: false
 ---
-session:
-  action: restart
+send:
+  control: restart
 result:
   content:
     - type: text
@@ -34,4 +34,3 @@ result:
       text: |
         [1] FALSE
   isError: false
-...

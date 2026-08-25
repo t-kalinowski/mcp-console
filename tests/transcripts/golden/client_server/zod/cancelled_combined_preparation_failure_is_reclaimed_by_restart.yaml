@@ -35,8 +35,8 @@ input:
   params:
     padding: "<input barrier: 4194304 bytes>"
 ---
-session:
-  action: restart
+send:
+  control: restart
 result:
   content:
     - type: text
@@ -63,4 +63,3 @@ result:
 
         [idle]
   isError: false
-...

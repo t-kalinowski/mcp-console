@@ -1,8 +1,7 @@
 ---
 !same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
 ---
-session:
-  action: prepare
+send:
   requirements:
     python:
       - py-yaml12
@@ -12,8 +11,7 @@ result:
       text: "[prepared]"
   isError: false
 ---
-session:
-  action: prepare
+send:
   requirements:
     python:
       - not a valid requirement !!!
@@ -25,8 +23,7 @@ result:
         host-side managed resolution accepts named package requirements only
   isError: true
 ---
-session:
-  action: prepare
+send:
   requirements:
     python:
       - not a valid requirement !!!
@@ -38,8 +35,7 @@ result:
         host-side managed resolution accepts named package requirements only
   isError: true
 ---
-session:
-  action: prepare
+send:
   requirements:
     python:
       - |-
@@ -82,8 +78,7 @@ result:
         'yaml12'
   isError: false
 ---
-session:
-  action: prepare
+send:
   requirements:
     python:
       - py-yaml12
@@ -92,4 +87,3 @@ result:
     - type: text
       text: "[prepared]"
   isError: false
-...

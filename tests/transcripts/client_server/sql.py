@@ -83,8 +83,8 @@ def test_restart_adds_r_and_duckdb_requirements(binary: Path) -> Transcript:
         client.send(r="restart_marker <- 42L")
         assert last_tool_text(client) == "[done]"
 
-        client.session(
-            action="restart",
+        client.send(
+            control="restart",
             requirements={
                 "r": ["praise"],
                 "duckdb": ["not_a_real_duckdb_extension"],
@@ -101,8 +101,8 @@ def test_restart_adds_r_and_duckdb_requirements(binary: Path) -> Transcript:
         client.send(r="identical(restart_marker, 42L)")
         assert last_tool_text(client) == "[1] TRUE\n"
 
-        client.session(
-            action="restart",
+        client.send(
+            control="restart",
             requirements={"r": ["praise"], "duckdb": ["fts"]},
         )
         assert last_tool_text(client) == (
@@ -160,14 +160,12 @@ def test_prepares_and_loads_duckdb_extensions(binary: Path) -> Transcript:
         client.send(sql=sql)
         assert last_tool_text(client) == "[done]"
 
-        client.session(
-            action="prepare",
+        client.send(
             requirements={"duckdb": ["json"]},
         )
         assert last_tool_text(client) == "[prepared]"
 
-        client.session(
-            action="prepare",
+        client.send(
             requirements={"r": ["praise"]},
         )
         assert last_tool_text(client) == "[prepared]"
@@ -200,8 +198,7 @@ def test_prepares_and_loads_duckdb_extensions(binary: Path) -> Transcript:
         client.send(sql=sql, requirements={"duckdb": ["fts"]})
         assert last_tool_text(client) == "[done]"
 
-        client.session(
-            action="prepare",
+        client.send(
             requirements={"duckdb": ["fts"]},
         )
         assert last_tool_text(client) == "[prepared]"
@@ -223,7 +220,7 @@ def test_prepares_and_loads_duckdb_extensions(binary: Path) -> Transcript:
         preview = last_tool_text(client)
         assert preview.splitlines()[-1].split() == ["1", '"loaded"']
 
-        client.session(action="restart")
+        client.send(control="restart")
         assert last_tool_text(client) == (
             "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
         )
@@ -297,8 +294,7 @@ def test_queries_a_ragnar_store_created_in_r(binary: Path) -> Transcript:
     client.send(sql=sql)
     assert last_tool_text(client) == "[done]"
 
-    client.session(
-        action="prepare",
+    client.send(
         requirements={"r": ["ragnar"], "duckdb": ["fts", "vss"]},
     )
     assert last_tool_text(client) == "[prepared]"
@@ -426,7 +422,7 @@ def test_uses_ragnar_like_the_guide_and_adapts_to_the_console(
     client.send(sql=sql)
     assert last_tool_text(client) == "[done]"
 
-    client.session(action="prepare", requirements={"r": ["ragnar"]})
+    client.send(requirements={"r": ["ragnar"]})
     assert last_tool_text(client) == "[prepared]"
 
     r = code(r"""
@@ -476,8 +472,7 @@ def test_uses_ragnar_like_the_guide_and_adapts_to_the_console(
         "created store under the worker tempdir\n"
     )
 
-    client.session(
-        action="prepare",
+    client.send(
         requirements={"duckdb": ["fts", "vss"]},
     )
     assert last_tool_text(client) == "[prepared]"
@@ -748,15 +743,17 @@ def test_interrupts_running_sql_query(binary: Path) -> Transcript:
             )
             finished_fifo.write_bytes(b"x")
 
-            client.session(action="interrupt")
-            assert last_tool_text(client) == "[interrupt sent]"
+            interrupt = client._start_send(
+                control="interrupt",
+                timeout_ms=30_000,
+            )
             wait_for_worker_file(
                 temporary_path,
                 "sql-interrupt-finished",
                 client,
             )
-            client.send(timeout_ms=1_000)
-            result = client.transcript[-1]["result"]
+            client._receive(interrupt)
+            result = interrupt["result"]
             assert result["isError"] is False, result
             output = last_tool_text(client)
             assert output in {"\n", "\n\n"}, repr(output)

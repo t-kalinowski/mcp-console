@@ -1,8 +1,7 @@
 ---
 !same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
 ---
-session:
-  action: prepare
+send:
   requirements:
     python:
       - py-yaml12
@@ -20,8 +19,8 @@ result:
       text: "[done]"
   isError: false
 ---
-session:
-  action: restart
+send:
+  control: restart
 result:
   content:
     - type: text
@@ -42,4 +41,3 @@ result:
       text: |
         (False, 'yaml12')
   isError: false
-...

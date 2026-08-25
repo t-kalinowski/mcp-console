@@ -1,0 +1,38 @@
+---
+!same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
+---
+send:
+  requirements:
+    r:
+      - must-not-resolve
+  stdin: |
+    must not queue
+result:
+  content:
+    - type: text
+      text: >-
+        requirements-only `send` performs standalone preparation and cannot also
+        queue stdin
+  isError: true
+---
+send:
+  requirements:
+    r:
+      - standalone-requirement
+  timeout_ms: 0
+result:
+  content:
+    - type: text
+      text: "[prepared]"
+  isError: false
+---
+send:
+  requirements:
+    r:
+      - standalone-requirement
+  timeout_ms: 0
+result:
+  content:
+    - type: text
+      text: "[prepared]"
+  isError: false

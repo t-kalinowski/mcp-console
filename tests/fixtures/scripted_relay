@@ -458,6 +458,7 @@ def run_controlled_restart_requirements(relay: ScriptedRelay) -> None:
     relay.make_checkpoint(RESTART_REQUIREMENTS_EVALUATION_RECEIVED_NAME)
     relay.make_checkpoint(RESTART_REQUIREMENTS_EVALUATION_RELEASE_NAME)
     relay.ready()
+    relay.expect({"kind": "stdin", "data": "replacement requirement input\n"})
     relay.expect(
         {
             "kind": "evaluate",
@@ -471,6 +472,53 @@ def run_controlled_restart_requirements(relay: ScriptedRelay) -> None:
         {
             "kind": "console_output",
             "data": "replacement requirement cell ran\n",
+        }
+    )
+    relay.complete()
+    relay.retire()
+
+
+def run_controlled_interrupt_stdin_requirements_evaluate(
+    relay: ScriptedRelay,
+) -> None:
+    relay.ready()
+    relay.expect(
+        {
+            "kind": "evaluate",
+            "language": "r",
+            "source": "old evaluation before successful requirements",
+        }
+    )
+    (relay.root / EVALUATING_NAME).touch()
+    relay.expect({"kind": "interrupt", "request_id": 0})
+    relay.send({"kind": "interrupt_result", "request_id": 0})
+    relay.expect(
+        {
+            "kind": "stdin",
+            "data": "finish old before successful preparation\n",
+        }
+    )
+    relay.send(
+        {
+            "kind": "console_output",
+            "data": "old evaluation settled before successful preparation\n",
+        }
+    )
+    relay.send(COMPLETED)
+    command = relay.receive()
+    assert command.get("kind") == "prepare_r", command
+    relay.send({"kind": "r_prepared", "library": command["library"]})
+    relay.expect(
+        {
+            "kind": "evaluate",
+            "language": "r",
+            "source": "new evaluation after successful preparation",
+        }
+    )
+    relay.send(
+        {
+            "kind": "console_output",
+            "data": "new evaluation ran after successful preparation\n",
         }
     )
     relay.complete()
@@ -1039,6 +1087,9 @@ def main() -> None:
         "controlled_restart_requirements": run_controlled_restart_requirements,
         "controlled_interrupt_stdin_evaluate": (
             run_controlled_interrupt_stdin_evaluate
+        ),
+        "controlled_interrupt_stdin_requirements_evaluate": (
+            run_controlled_interrupt_stdin_requirements_evaluate
         ),
         "controlled_interrupt_stdin_requirement_failure": (
             run_controlled_interrupt_stdin_requirement_failure

@@ -36,8 +36,7 @@ result:
       text: only one of `r`, `python`, or `sql` may be supplied
   isError: true
 ---
-session:
-  action: prepare
+send:
   requirements:
     python:
       - transcript-fixture
@@ -55,4 +54,3 @@ input:
 error:
   code: -32602
   message: tool not found
-...

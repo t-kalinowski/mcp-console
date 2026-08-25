@@ -24,7 +24,7 @@ Prepared requirements are server-owned and survive restart as described in [Requ
 Only one cell can run at a time.
 Call `send` sequentially and collect a running cell before submitting another.
 The same call may first interrupt or restart the session through its optional `control` field.
-The separate `session` tool remains available for standalone preparation and lifecycle operations.
+Code-free `send` calls poll, supply stdin, prepare requirements, interrupt, or restart the same implicit session.
 
 ## Cells and polling
 
@@ -147,17 +147,15 @@ They cannot consume a partial line that the built-in worker has preserved for th
 
 ## Interruption
 
-Both interrupt surfaces first target an active host dependency resolver; otherwise they request `SIGINT` for the live worker.
-Standalone `session(action = "interrupt")` returns after delivery is acknowledged, not after user code stops.
+`send(control = "interrupt")` first targets an active host dependency resolver; otherwise it requests `SIGINT` for the live worker.
 If neither a resolver nor a worker is running, the call does not start a worker and returns the tool error `worker is not running`.
 A resolver signal error is returned by both the interrupt and resolution calls, and the server stops that resolver during cleanup.
 An interrupted automatic R or Python resolver reports an interrupted outcome to the running cell.
-A standalone interrupt still sends `SIGINT` to a live but idle built-in worker and returns `[interrupt sent]`.
-R may consume that signal while idle or at the next managed boundary, so a later cell can include a bare interrupt newline attributable to the standalone interrupt.
 
-`send(control = "interrupt")` uses the same routing but keeps the rest of the call under one admission boundary.
+The interrupt and the rest of the call stay under one admission boundary.
 After delivery is acknowledged, it queues nonempty same-call stdin without waiting for consumption, waits the full 100-millisecond grace period, and observes the previous evaluation.
-If no cell was supplied, it returns the available output and current evaluation state through the normal `send` conventions.
+If no cell was supplied, it returns the available output and current state through the normal `send` conventions, commonly ending in `[running; poll with an empty send]`, `[waiting for stdin]`, `[idle]`, or the completed evaluation result.
+`timeout_ms = 0` returns that state immediately after the grace; a later empty `send` can collect unfinished work.
 If a cell was supplied but the previous evaluation remains active, the response is a tool error that says the cell was not run, and no later evaluation is queued.
 If the evaluation has stopped, the new cell runs in the same worker generation and can use state established before interruption.
 The grace prevents a just-delivered interrupt from spilling into the new cell and gives queued input an opportunity to be consumed while the previous operation unwinds.
@@ -168,14 +166,14 @@ Interrupt delivery, stdin enqueue, grace, and explicit preparation occur before 
 R, Python, and DuckDB observe interruption through their normal console/runtime mechanisms.
 Managed console reads are cancelled when the active runtime accepts the interrupt.
 User code can catch, delay, replace, or block `SIGINT`, so interruption is cooperative rather than a termination guarantee.
-Use inline or standalone restart when the worker must be replaced.
+Use `control = "restart"` when the worker must be replaced.
 
 ## Explicit restart
 
-Both `session(action = "restart")` and `send(control = "restart")` retire the current worker, discard its in-memory state, and start a replacement from the retained environment.
+`send(control = "restart")` retires the current worker, discards its in-memory state, and starts a replacement from the retained environment.
 The operation waits for retirement and replacement startup.
 On success after a worker was ready, restart output begins with `[worker stopped: in-memory state lost]`, `[starting new worker]`, and any replacement-startup output.
-A standalone restart, or inline restart without a cell, then ends with `[idle]`; an inline cell instead contributes its output and ends a successful combined response with `[done]`.
+A restart without a cell ends with `[idle]`; a following cell instead contributes its output and ends a successful combined response with `[done]`.
 Restarting a session that has not established a worker omits the worker-stopped notice.
 Requirements supplied with restart are resolved before retirement as described in [Requirements and environments](REQUIREMENTS.md).
 If resolution fails, the existing worker remains current and same-call stdin and code are not sent.
@@ -315,7 +313,7 @@ A nonempty user-selected `RETICULATE_PYTHON` disables both automatic managed res
 Its missing-import error directs the user to install the distribution into that environment or restart MCP Console with managed Python enabled.
 
 Automatic import resolution counts toward the active evaluation's `timeout_ms` wait.
-A short wait can therefore return `[running; poll with an empty send]`; poll with an empty `send`, interrupt the active resolver through inline control or standalone `session`, or restart according to the normal generation lifecycle.
+A short wait can therefore return `[running; poll with an empty send]`; poll with an empty `send`, interrupt the active resolver with `control = "interrupt"`, or restart according to the normal generation lifecycle.
 
 ## R and Python interoperability
 

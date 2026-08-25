@@ -20,12 +20,15 @@ result:
       text: managed Python resolution cancelled by interrupt
   isError: true
 ---
-session:
-  action: interrupt
+send:
+  control: interrupt
+  timeout_ms: 0
 result:
   content:
     - type: text
-      text: "[interrupt sent]"
+      text: |-
+
+        [idle]
   isError: false
 ---
 send:
@@ -38,4 +41,3 @@ result:
       text: |
         [1] 42
   isError: false
-...

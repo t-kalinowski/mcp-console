@@ -39,37 +39,63 @@ result:
   isError: true
 ---
 send:
-  control: restart
-  requirements:
-    python:
-      - polars>=1
-result:
-  content:
-    - type: text
-      text: "`requirements` requires a code cell"
-  isError: true
----
-send:
   requirements:
     r:
-      - praise
+      - tidyverse
 result:
   content:
     - type: text
-      text: "`requirements` requires a code cell"
-  isError: true
+      text: "[prepared]"
+  isError: false
+---
+send:
+  stdin: ""
+  requirements:
+    r:
+      - tidyverse
+result:
+  content:
+    - type: text
+      text: "[prepared]"
+  isError: false
 ---
 send:
   stdin: |
     answer
   requirements:
     r:
-      - praise
+      - tidyverse
 result:
   content:
     - type: text
-      text: "`requirements` requires a code cell"
+      text: >-
+        requirements-only `send` performs standalone preparation and cannot also
+        queue stdin
   isError: true
+---
+send:
+  control: interrupt
+  requirements:
+    r:
+      - tidyverse
+result:
+  content:
+    - type: text
+      text: '`requirements` with `control = "interrupt"` requires a code cell'
+  isError: true
+---
+send:
+  control: restart
+  requirements:
+    r:
+      - tidyverse
+result:
+  content:
+    - type: text
+      text: |-
+        [starting new worker]
+        [idle]
+  isError: false
 ---
 send:
   r: stop('cell was run')
@@ -129,4 +155,3 @@ result:
 
         [idle]
   isError: false
-...

@@ -5,29 +5,25 @@ relay:
 server:
   kind: evaluate
   language: r
-  source: old evaluation for overlapping interrupts
+  source: old evaluation
 ---
 server:
   kind: interrupt
   request_id: 0
----
-server:
-  kind: interrupt
-  request_id: 1
----
-relay:
-  kind: interrupt_result
-  request_id: 0
----
-relay:
-  kind: interrupt_result
-  request_id: 1
 ---
 relay:
   kind: console_output
   data: |
-    old evaluation finished after both interrupts
+    old evaluation remains active
+---
+relay:
+  kind: interrupt_result
+  request_id: 0
+---
+relay:
+  kind: console_output
+  data: |
+    old evaluation eventually finished
 ---
 relay:
   kind: completed
-...

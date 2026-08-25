@@ -29,8 +29,8 @@ result:
         [worker stopped: in-memory state lost]
   isError: true
 ---
-session:
-  action: restart
+send:
+  control: restart
 result:
   content:
     - type: text
@@ -40,4 +40,3 @@ result:
         [starting new worker]
         [idle]
   isError: false
-...

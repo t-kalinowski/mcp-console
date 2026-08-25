@@ -53,15 +53,6 @@ INTERRUPT_ACTIVE_RELEASE_NAME = "mcp-console-interrupt-active-release"
 INTERRUPT_ACK_RELEASE_NAME = "mcp-console-interrupt-ack-release"
 INTERRUPT_ACKNOWLEDGED_NAME = "mcp-console-interrupt-acknowledged"
 INTERRUPT_RECEIVED_NAME = "mcp-console-interrupt-received"
-CONTROLLED_INTERRUPT_FIRST_RECEIVED_NAME = (
-    "mcp-console-controlled-interrupt-first-received"
-)
-CONTROLLED_INTERRUPT_SECOND_RECEIVED_NAME = (
-    "mcp-console-controlled-interrupt-second-received"
-)
-CONTROLLED_INTERRUPT_EVALUATION_RELEASE_NAME = (
-    "mcp-console-controlled-interrupt-evaluation-release"
-)
 CONTROLLED_COMPLETION_RELEASE_NAME = "mcp-console-controlled-completion-release"
 CONTROLLED_COMPLETION_SENT_NAME = "mcp-console-controlled-completion-sent"
 RESTART_REQUIREMENTS_CHECK_NAME = "mcp-console-restart-requirements-check"
@@ -126,15 +117,12 @@ class ServerRelayClient:
         self.client._initialize_and_list_tools()
 
     def start_worker(self) -> None:
-        assert _tool_text(self.session(action="restart")) == (
+        assert _tool_text(self.send(control="restart")) == (
             "[starting new worker]\n[idle]"
         )
 
     def send(self, **arguments: object) -> ToolResult:
         return self.client.send(**arguments)
-
-    def session(self, **arguments: object) -> ToolResult:
-        return self.client.session(**arguments)
 
     def finish_active(self) -> Transcript:
         self._wait_for(DONE_NAME)
@@ -284,7 +272,7 @@ def _receive_checkpointed(
 
 def test_starts_and_reports_ready(binary: Path) -> Transcript:
     client = ServerRelayClient(binary, "ready")
-    assert _tool_text(client.session(action="restart")) == (
+    assert _tool_text(client.send(control="restart")) == (
         "[starting new worker]\n[idle]"
     )
     return client.finish_active()
@@ -528,12 +516,12 @@ def test_stdin_forwarding_failure_does_not_execute_cell(
 
 def test_interrupts_and_reports_result(binary: Path) -> Transcript:
     client = ServerRelayClient(binary, "interrupt")
-    evaluation = client.client._start_send(r="42")
+    assert _tool_text(client.send(r="42", timeout_ms=0)) == (
+        "\n[running; poll with an empty send]"
+    )
     client._wait_for(EVALUATING_NAME)
-    interrupt = client.client._start_session(action="interrupt")
-    client.client._receive_many([evaluation, interrupt])
-    assert _tool_text(evaluation["result"]) == "[done]"
-    assert _tool_text(interrupt["result"]) == "[interrupt sent]"
+    assert _tool_text(client.send(control="interrupt", timeout_ms=0)) == "[done]"
+    assert _tool_text(client.send()) == "\n[idle]"
     return client.finish_active()
 
 
@@ -596,16 +584,58 @@ def test_controlled_restart_routes_stdin_and_cell_to_replacement(
     return old_transcript + replacement_transcript
 
 
-def test_controlled_restart_with_stdin_only_reports_replacement_idle(
+def test_controlled_restart_with_requirements_and_stdin_only_reports_replacement_idle(
     binary: Path,
 ) -> Transcript:
-    client = ServerRelayClient(binary, "controlled_restart_stdin_only")
-    result = client.send(control="restart", stdin="replacement input\n")
-    assert _tool_text(result) == "[starting new worker]\n[idle]", result
-    transcript = client.finish_active()
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        library = root / "restart-stdin-candidate"
+        library.mkdir()
+        environment = _fake_ir_environment(root, [library])
+        client = ServerRelayClient(
+            binary,
+            "controlled_restart_stdin_only",
+            environment,
+        )
+        result = client.send(
+            control="restart",
+            requirements={"r": ["restart-stdin-requirement"]},
+            stdin="replacement input\n",
+        )
+        assert _tool_text(result) == "[starting new worker]\n[idle]", result
+        transcript = client.finish_active()
+        assert (root / "ir-counter").read_text(encoding="utf-8") == "1"
 
     commands = [entry["server"] for entry in transcript if entry.keys() == {"server"}]
     assert commands == [{"kind": "stdin", "data": "replacement input\n"}], commands
+    return transcript
+
+
+def test_interrupt_requirements_without_cell_is_rejected_before_signal(
+    binary: Path,
+) -> Transcript:
+    client = ServerRelayClient(binary, "ready")
+    client.start_worker()
+
+    result = client.send(
+        control="interrupt",
+        requirements={"r": ["must-not-resolve"]},
+    )
+    assert result == {
+        "content": [
+            {
+                "type": "text",
+                "text": (
+                    '`requirements` with `control = "interrupt"` requires a code cell'
+                ),
+            }
+        ],
+        "isError": True,
+    }, result
+
+    transcript = client.finish_active()
+    commands = [entry["server"] for entry in transcript if entry.keys() == {"server"}]
+    assert commands == [], commands
     return transcript
 
 
@@ -703,6 +733,7 @@ def test_controlled_restart_resolves_requirements_before_replacement_and_timeout
                 control="restart",
                 r="replacement requirement cell",
                 requirements={"r": ["restart-requirement"]},
+                stdin="replacement requirement input\n",
                 timeout_ms=1_000,
             )
             resolver_started.wait()
@@ -794,11 +825,12 @@ def test_controlled_restart_resolves_requirements_before_replacement_and_timeout
         if entry.keys() == {"server"}
     ]
     assert replacement_commands == [
+        {"kind": "stdin", "data": "replacement requirement input\n"},
         {
             "kind": "evaluate",
             "language": "r",
             "source": "replacement requirement cell",
-        }
+        },
     ], replacement_commands
     assert not any(
         command["kind"] == "prepare_r"
@@ -903,6 +935,69 @@ def test_controlled_interrupt_orders_stdin_before_new_evaluation(
             "source": "new evaluation",
         },
     ], commands
+    return transcript
+
+
+def test_controlled_interrupt_orders_stdin_preparation_and_new_evaluation(
+    binary: Path,
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        library = root / "interrupt-success-candidate"
+        library.mkdir()
+        environment = _fake_ir_environment(root, [library])
+        client = ServerRelayClient(
+            binary,
+            "controlled_interrupt_stdin_requirements_evaluate",
+            environment,
+        )
+        client.send(
+            r="old evaluation before successful requirements",
+            timeout_ms=0,
+        )
+        assert _tool_text(client.client.transcript[-1]["result"]) == (
+            "\n[running; poll with an empty send]"
+        )
+        client._wait_for(EVALUATING_NAME)
+
+        result = client.send(
+            control="interrupt",
+            stdin="finish old before successful preparation\n",
+            r="new evaluation after successful preparation",
+            requirements={"r": ["successful-after-interrupt"]},
+        )
+        assert _tool_text(result) == (
+            "old evaluation settled before successful preparation\n"
+            "new evaluation ran after successful preparation\n"
+            "[done]"
+        )
+        transcript = client.finish_active()
+        assert (root / "ir-counter").read_text(encoding="utf-8") == "1"
+
+    commands = [entry["server"] for entry in transcript if entry.keys() == {"server"}]
+    assert commands == [
+        {
+            "kind": "evaluate",
+            "language": "r",
+            "source": "old evaluation before successful requirements",
+        },
+        {"kind": "interrupt", "request_id": 0},
+        {"kind": "stdin", "data": "finish old before successful preparation\n"},
+        {"kind": "prepare_r", "library": str(library)},
+        {
+            "kind": "evaluate",
+            "language": "r",
+            "source": "new evaluation after successful preparation",
+        },
+    ], commands
+    commands[-2]["library"] = "<interrupt-success-candidate>"
+    prepared = [
+        entry["relay"]
+        for entry in transcript
+        if entry.keys() == {"relay"} and entry["relay"].get("kind") == "r_prepared"
+    ]
+    assert prepared == [{"kind": "r_prepared", "library": str(library)}]
+    prepared[0]["library"] = "<interrupt-success-candidate>"
     return transcript
 
 
@@ -1012,157 +1107,6 @@ def test_controlled_interrupt_stdin_precedes_invalid_requirements_without_new_ce
     return transcript
 
 
-def test_standalone_interrupt_targets_blocked_controlled_restart_resolver(
-    binary: Path,
-) -> Transcript:
-    with tempfile.TemporaryDirectory() as temporary:
-        root = Path(temporary)
-        library = root / "unused-interrupted-candidate"
-        library.mkdir()
-        environment = _fake_ir_environment(root, [library])
-        resolver_started = FifoCheckpoint(root / "resolver-started", create=True)
-        resolver_release = FifoCheckpoint(root / "resolver-release", create=True)
-        resolver_interrupted = FifoCheckpoint(
-            root / "resolver-interrupted", create=True
-        )
-        environment["MCP_CONSOLE_TEST_IR_STARTED"] = str(resolver_started.path)
-        environment["MCP_CONSOLE_TEST_IR_RELEASE"] = str(resolver_release.path)
-        environment["MCP_CONSOLE_TEST_IR_INTERRUPTED"] = str(resolver_interrupted.path)
-        client = ServerRelayClient(binary, "ready", environment)
-        client.start_worker()
-        capture = (client.relay_root() / CAPTURE_NAME).open(encoding="utf-8")
-        resolver_released = False
-        finished = False
-        try:
-            controlled = client.client._start_send(
-                control="restart",
-                r="cell must not run after resolver interrupt",
-                requirements={"r": ["blocked-controlled-restart"]},
-            )
-            resolver_started.wait()
-            interrupt = client.client._start_session(action="interrupt")
-            resolver_interrupted.wait()
-            client.client._receive_many([controlled, interrupt])
-
-            assert interrupt["result"] == {
-                "content": [{"type": "text", "text": "[interrupt sent]"}],
-                "isError": False,
-            }, interrupt
-            result = controlled["result"]
-            assert result.get("isError") is True, result
-            error = "".join(
-                content["text"]
-                for content in result["content"]
-                if content["type"] == "text"
-            )
-            assert "R package resolution failed with exit status: 130" in error, error
-            assert _tool_text(client.send()) == "\n[idle]"
-
-            before_cleanup = client._read_open_capture(capture)
-            assert not any(entry.keys() == {"server"} for entry in before_cleanup), (
-                before_cleanup
-            )
-            transcript = client.finish_active()
-            finished = True
-        finally:
-            if not resolver_released:
-                resolver_release.release()
-                resolver_released = True
-            if not finished:
-                stop_client(client.client)
-                client._temporary.cleanup()
-            capture.close()
-            resolver_started.close()
-            resolver_release.close()
-            resolver_interrupted.close()
-
-        assert not (root / "ir-counter").exists()
-
-    commands = [entry["server"] for entry in transcript if entry.keys() == {"server"}]
-    assert commands == [], commands
-    return transcript
-
-
-def test_standalone_interrupt_reaches_worker_during_controlled_interrupt(
-    binary: Path,
-) -> Transcript:
-    client = ServerRelayClient(binary, "controlled_and_standalone_interrupts")
-    client.send(
-        r="old evaluation for overlapping interrupts",
-        timeout_ms=0,
-    )
-    assert _tool_text(client.client.transcript[-1]["result"]) == (
-        "\n[running; poll with an empty send]"
-    )
-    client._wait_for(EVALUATING_NAME)
-    relay_root = client.relay_root()
-    first_received = FifoCheckpoint(
-        relay_root / CONTROLLED_INTERRUPT_FIRST_RECEIVED_NAME
-    )
-    second_received = FifoCheckpoint(
-        relay_root / CONTROLLED_INTERRUPT_SECOND_RECEIVED_NAME
-    )
-    evaluation_release = FifoCheckpoint(
-        relay_root / CONTROLLED_INTERRUPT_EVALUATION_RELEASE_NAME
-    )
-    released = False
-    finished = False
-    try:
-        controlled = client.client._start_send(
-            control="interrupt",
-            r="new evaluation must not run while old evaluation is active",
-        )
-        first_received.wait()
-        standalone = client.client._start_session(action="interrupt")
-        second_received.wait()
-        client.client._receive_many([controlled, standalone])
-
-        controlled_result = controlled["result"]
-        assert controlled_result.get("isError") is True, controlled_result
-        controlled_text = "".join(
-            content["text"]
-            for content in controlled_result["content"]
-            if content["type"] == "text"
-        )
-        assert "interrupted evaluation is still active" in controlled_text, (
-            controlled_text
-        )
-        assert "cell was not run" in controlled_text, controlled_text
-        assert standalone["result"] == {
-            "content": [{"type": "text", "text": "[interrupt sent]"}],
-            "isError": False,
-        }, standalone
-
-        evaluation_release.release()
-        released = True
-        assert _tool_text(client.send(timeout_ms=3_000)) == (
-            "old evaluation finished after both interrupts\n"
-        )
-        transcript = client.finish_active()
-        finished = True
-    finally:
-        if not released:
-            evaluation_release.release()
-        first_received.close()
-        second_received.close()
-        evaluation_release.close()
-        if not finished:
-            stop_client(client.client)
-            client._temporary.cleanup()
-
-    commands = [entry["server"] for entry in transcript if entry.keys() == {"server"}]
-    assert commands == [
-        {
-            "kind": "evaluate",
-            "language": "r",
-            "source": "old evaluation for overlapping interrupts",
-        },
-        {"kind": "interrupt", "request_id": 0},
-        {"kind": "interrupt", "request_id": 1},
-    ], commands
-    return transcript
-
-
 def test_controlled_interrupt_does_not_run_cell_while_evaluation_remains_active(
     binary: Path,
 ) -> Transcript:
@@ -1190,6 +1134,51 @@ def test_controlled_interrupt_does_not_run_cell_while_evaluation_remains_active(
         assert "old evaluation remains active\n" in text, text
         assert "interrupted evaluation is still active" in text, text
         assert "cell was not run" in text, text
+
+        release.release()
+        released = True
+        assert _tool_text(client.send(timeout_ms=3_000)) == (
+            "old evaluation eventually finished\n"
+        )
+        transcript = client.finish_active()
+        finished = True
+    finally:
+        if not released:
+            release.release()
+        release.close()
+        if not finished:
+            stop_client(client.client)
+            client._temporary.cleanup()
+
+    commands = [entry["server"] for entry in transcript if entry.keys() == {"server"}]
+    assert commands == [
+        {
+            "kind": "evaluate",
+            "language": "r",
+            "source": "old evaluation",
+        },
+        {"kind": "interrupt", "request_id": 0},
+    ], commands
+    return transcript
+
+
+def test_control_only_interrupt_timeout_zero_returns_after_grace_then_poll_collects(
+    binary: Path,
+) -> Transcript:
+    client = ServerRelayClient(binary, "controlled_interrupt_still_active")
+    client.send(r="old evaluation", timeout_ms=0)
+    assert _tool_text(client.client.transcript[-1]["result"]) == (
+        "\n[running; poll with an empty send]"
+    )
+    client._wait_for(EVALUATING_NAME)
+    release = FifoCheckpoint(client.relay_root() / INTERRUPT_ACTIVE_RELEASE_NAME)
+    finished = False
+    released = False
+    try:
+        result = client.send(control="interrupt", timeout_ms=0)
+        assert _tool_text(result) == (
+            "old evaluation remains active\n\n[running; poll with an empty send]"
+        ), result
 
         release.release()
         released = True
@@ -1407,7 +1396,7 @@ def test_orders_cross_source_output_by_serialized_observation(
 
 def test_gracefully_shuts_down(binary: Path) -> Transcript:
     client = ServerRelayClient(binary, "shutdown")
-    assert _tool_text(client.session(action="restart")) == (
+    assert _tool_text(client.send(control="restart")) == (
         "[starting new worker]\n[idle]"
     )
     return client.finish_shutdown()
@@ -1495,7 +1484,7 @@ def test_cancelled_send_returns_owned_output_to_restart(binary: Path) -> Transcr
 
         waiting = client.client._start_send(r="42", timeout_ms=30_000)
         output_ready.wait()
-        restart = client.client._start_session(action="restart")
+        restart = client.client._start_send(control="restart")
         shutdown_received.wait()
         client.client._notify(
             "notifications/cancelled",
@@ -1605,7 +1594,7 @@ def test_restart_consumes_late_r_preparation_retirement_events(
                 requirements={"r": ["ordered-retirement"]},
             )
             preparation_received.wait()
-            restart = client.client._start_session(action="restart")
+            restart = client.client._start_send(control="restart")
             shutdown_received.wait()
             # The preparation response is released by the ordered retirement
             # marker, so the old relay result below is necessarily late.
@@ -1643,12 +1632,7 @@ def test_restart_consumes_late_r_preparation_retirement_events(
             )
             try:
                 assert (
-                    _tool_text(
-                        client.session(
-                            action="prepare",
-                            requirements={"r": ["ordered-retirement"]},
-                        )
-                    )
+                    _tool_text(client.send(requirements={"r": ["ordered-retirement"]}))
                     == "[prepared]"
                 )
                 client.client._finish()
@@ -1726,13 +1710,12 @@ def test_restart_discards_pre_marker_r_preparation_result(
         shutdown_received = FifoCheckpoint(old_root / SHUTDOWN_RECEIVED_NAME)
         finished = False
         try:
-            preparation = client.client._start_session(
-                action="prepare",
+            preparation = client.client._start_send(
                 requirements={"r": ["old-generation"]},
             )
             preparation_received.wait()
-            restart = client.client._start_session(
-                action="restart",
+            restart = client.client._start_send(
+                control="restart",
                 requirements={"r": ["replacement-generation"]},
             )
             resolver_started.wait()
@@ -1770,21 +1753,13 @@ def test_restart_discards_pre_marker_r_preparation_result(
             try:
                 assert (
                     _tool_text(
-                        client.session(
-                            action="prepare",
-                            requirements={"r": ["replacement-generation"]},
-                        )
+                        client.send(requirements={"r": ["replacement-generation"]})
                     )
                     == "[prepared]"
                 )
                 # The old result did not enter the replacement requirement set.
                 assert (
-                    _tool_text(
-                        client.session(
-                            action="prepare",
-                            requirements={"r": ["old-generation"]},
-                        )
-                    )
+                    _tool_text(client.send(requirements={"r": ["old-generation"]}))
                     == "[prepared]"
                 )
                 client.client._finish()
@@ -1998,8 +1973,7 @@ def test_idle_runtime_r_resolution_owns_environment_until_activation(
         finished = False
         try:
             resolver_started.wait()
-            preparation = client.client._start_session(
-                action="prepare",
+            preparation = client.client._start_send(
                 requirements={"r": ["english"]},
             )
             _receive_checkpointed(
@@ -2081,8 +2055,7 @@ def test_explicit_r_preparation_owns_environment_before_host_resolution(
         resolver_released = False
         finished = False
         try:
-            preparation = client.client._start_session(
-                action="prepare",
+            preparation = client.client._start_send(
                 requirements={"r": ["english"]},
             )
             resolver_started.wait()

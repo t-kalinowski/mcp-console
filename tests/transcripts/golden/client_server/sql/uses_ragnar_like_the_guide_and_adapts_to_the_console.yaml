@@ -11,8 +11,7 @@ result:
       text: "[done]"
   isError: false
 ---
-session:
-  action: prepare
+send:
   requirements:
     r:
       - ragnar
@@ -71,8 +70,7 @@ result:
         created store under the worker tempdir
   isError: false
 ---
-session:
-  action: prepare
+send:
   requirements:
     duckdb:
       - fts
@@ -269,4 +267,3 @@ result:
           <string>  <string>
         1 "beta.md" "worker catalog"
   isError: false
-...

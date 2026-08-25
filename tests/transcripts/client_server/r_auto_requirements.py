@@ -254,7 +254,7 @@ def test_retains_automatic_r_package_after_error_and_restart(
         assert last_tool_text(client) == "[1] 42\n"
         assert len(ir_run_records(record)) == baseline + 1
 
-        client.session(action="restart")
+        client.send(control="restart")
         assert last_tool_text(client) == (
             "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
         )
@@ -493,10 +493,10 @@ def test_r_activation_failure_requires_restart_without_stopping_worker(
             r=("activation_state + as.integer(identical(Sys.getpid(), activation_pid))")
         )
         assert last_tool_text(client) == "[1] 42\n"
-        client.session(action="prepare", requirements={"r": ["english"]})
+        client.send(requirements={"r": ["english"]})
         assert last_tool_text(client) == "[restart required]"
 
-        client.session(action="restart")
+        client.send(control="restart")
         assert last_tool_text(client) == (
             "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
         )
@@ -570,7 +570,7 @@ def test_restart_discards_unactivated_r_candidate(binary: Path) -> Transcript:
             wait_for_worker_file(directory, checkpoint_name, client)
             assert len(ir_run_records(record)) == baseline + 1
 
-            restart = client._start_session(action="restart")
+            restart = client._start_send(control="restart")
             client._receive_many([evaluation, restart])
             assert (
                 last_tool_text_from_entry(evaluation)
@@ -624,8 +624,7 @@ def test_rejects_preparation_while_automatic_r_resolver_is_running(
                 r=(f'invisible(base::loadNamespace("{package}")); 42L')
             )
             started.wait("automatic R resolver")
-            preparation = client._start_session(
-                action="prepare",
+            preparation = client._start_send(
                 requirements={"r": ["english"]},
             )
             readable, _, _ = select.select([client.stdout], [], [], 10)
@@ -691,7 +690,7 @@ def test_interrupts_automatic_r_resolver_and_preserves_worker(
                 """)
             evaluation = client._start_send(r=r)
             started.wait("automatic R resolver")
-            interrupt = client._start_session(action="interrupt")
+            interrupt = client._start_send(control="interrupt", timeout_ms=0)
             calls_returned = threading.Event()
             forced_release = threading.Event()
 
@@ -706,7 +705,7 @@ def test_interrupts_automatic_r_resolver_and_preserves_worker(
             calls_returned.set()
             watchdog.join()
             assert not forced_release.is_set(), "interrupt did not stop the R resolver"
-            assert last_tool_text_from_entry(interrupt) == "[interrupt sent]"
+            assert last_tool_text_from_entry(interrupt) == "\n[idle]"
             error = last_tool_text_from_entry(evaluation)
             assert error == "Error: R package resolution interrupted\n", repr(error)
             assert len(ir_run_records(record)) == baseline + 1

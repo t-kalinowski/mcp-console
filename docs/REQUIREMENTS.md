@@ -3,7 +3,7 @@
 **Status:** Implemented current behavior
 
 This document describes how MCP Console prepares and retains R packages, Python packages, and DuckDB extensions.
-The first sections are operational: they explain requirements declared for a `send` cell, including inline control, and what standalone `session(action = "prepare")` and `session(action = "restart")` do.
+The first sections are operational: they explain standalone preparation, requirements declared for a `send` cell, and requirements included in `send(control = "restart")`.
 [Host resolution and trust](#host-resolution-and-trust) explains why requirement input is restricted and which work runs with server permissions.
 
 Prepared requirements configure the built-in worker; they do not attach an R package, import a Python package, or load a DuckDB extension.
@@ -31,9 +31,9 @@ The built-in server prepares these defaults before accepting MCP input:
 | DuckDB | ICU and JSON extensions |
 
 MCP Console applies no deadline to these startup preflights, which run before the MCP transport starts.
-Neither interrupt surface nor closing MCP input can cancel them because the server is not yet accepting MCP requests; if a resolver does not finish, the server does not begin accepting them.
-Host resolution for changed requirements started by `send`, explicit `prepare`, or `restart` also has no deadline.
-The call remains pending until the resolver exits; while MCP input is open, either interrupt surface sends `SIGINT` to the active resolver, and closing MCP input cancels it during server shutdown.
+Neither interruption nor closing MCP input can cancel them because the server is not yet accepting MCP requests; if a resolver does not finish, the server does not begin accepting them.
+Host resolution for changed requirements submitted through `send` also has no deadline.
+The call remains pending until the resolver exits; while MCP input is open, `send(control = "interrupt")` sends `SIGINT` to the active resolver, and closing MCP input cancels it during server shutdown.
 
 Packages supplied by these environments are available but are not attached or imported automatically.
 The default DuckDB extensions are installed in DuckDB's native cache but are loaded only when DuckDB needs them inside the sandbox.
@@ -54,9 +54,11 @@ Use the optional `requirements` field on a code-bearing `send` when a cell needs
 }
 ```
 
-The field has the same R, Python, and DuckDB arrays as `session` requirements and requires at least one entry across them.
+The field contains R, Python, and DuckDB arrays and requires at least one entry across them.
 It may accompany any cell language because the built-in languages share one worker environment: an R requirement can accompany a Python cell, for example.
-It is not accepted on an empty poll or a follow-up stdin call.
+Without a cell, requirements perform standalone preparation or participate in a restart transaction.
+Nonempty stdin cannot accompany standalone preparation; send it separately or include compatible control or code.
+Requirements are not accepted with interrupt unless a cell follows.
 
 Requirements are preconditions of the cell.
 The server validates the complete declaration, prepares all changed candidates, and reserves the cell as one operation.
@@ -87,7 +89,7 @@ Nonempty stdin is queued before the evaluation command once the ordering above r
 This guarantees transport order, not which runtime read consumes the bytes.
 For a code-bearing call, `timeout_ms` begins applying only after dispatch, so control delivery, the interrupt grace, restart, and explicit preparation can make the complete call longer than the selected evaluation wait timeout.
 A control-only interrupt instead begins its requested wait after the grace if it attaches to the active evaluation.
-Both interrupt surfaces still target an active host resolver first, and restart or closing MCP input retains its existing resolver-cancellation behavior.
+Interrupt still targets an active host resolver first, and restart or closing MCP input retains its existing resolver-cancellation behavior.
 
 The built-in worker can resolve missing plain R package names and managed Python imports while a cell runs, as described below.
 Neither R nor Python source is scanned in advance.
@@ -132,7 +134,7 @@ Several new package loads in one cell can therefore cause several incremental IR
 
 An automatic request is part of the active R evaluation.
 If `timeout_ms` expires, `send` can return `[running; poll with an empty send]` while its resolver continues; the resolver is not cancelled by that wait timeout.
-Either interrupt surface targets the active resolver, while restart or shutdown cancels it.
+Interrupt targets the active resolver, while restart or shutdown cancels it.
 A restart that also adds requirements serializes behind the active environment resolution before it prepares those additions and replaces the worker.
 An interrupted or lifecycle-cancelled request is reported to its operation, and a candidate from a replaced generation cannot commit into its replacement.
 
@@ -184,7 +186,7 @@ Resolver diagnostics name the import and inferred distribution and show the `req
 Resolution occurs only when execution reaches a missing import.
 Unreachable branches and uncalled functions do not invoke uv, and several new imports in one cell resolve incrementally in execution order.
 An automatic request belongs to the active Python evaluation, so `timeout_ms` can return `[running; poll with an empty send]` while its resolver and cell continue.
-An empty `send` polls that evaluation, and either interrupt surface targets its active host resolver.
+An empty `send` polls that evaluation, and interrupt targets its active host resolver.
 Restart, shutdown, and generation checks cancel or discard unactivated candidates from an old worker; an earlier `PythonActivated` commit remains retained.
 
 The finder prevents a second automatic resolution while its R callback is active.
@@ -200,11 +202,10 @@ Explicit requirements make a distribution available but do not import it.
 
 ## Staging requirements ahead of time
 
-Use `session` with `action = "prepare"` to add exact requirements without replacing the worker:
+Use a requirements-only `send` to add exact requirements without replacing the worker:
 
 ```json
 {
-  "action": "prepare",
   "requirements": {
     "r": ["data.table"],
     "python": ["polars>=1"],
@@ -213,9 +214,11 @@ Use `session` with `action = "prepare"` to add exact requirements without replac
 }
 ```
 
-`prepare` requires at least one entry across the three arrays.
+Standalone preparation requires at least one entry across the three arrays.
 Each array accepts at most 64 entries.
 Successful preparation returns `[prepared]`.
+An explicitly empty `stdin` queues nothing and preserves this call shape; nonempty `stdin` is rejected so it can be sent separately.
+`timeout_ms` does not impose a deadline on standalone preparation.
 
 Before a worker starts, the server resolves every changed candidate on the host, commits the retained configuration only after the complete request succeeds, and does not start the worker.
 Exact repeats return `[prepared]` without resolving them again.
@@ -235,7 +238,7 @@ If a request with new additions overlaps worker startup, it returns `[requiremen
 If the worker is stopped, new additions return `[restart required]`; use restart to prepare them and start a replacement.
 
 An explicit restart can cancel an in-flight live R or Python preparation.
-The `prepare` call then fails with `R preparation cancelled by restart` or `Python preparation cancelled by restart`, and the restart continues.
+The preparation call then fails with `R preparation cancelled by restart` or `Python preparation cancelled by restart`, and the restart continues.
 The cancelled call does not retain pending candidates; a Python environment already committed by an earlier step remains retained.
 
 ### Live R preparation
@@ -288,11 +291,11 @@ Its success and failure semantics therefore follow the R rules above.
 
 ## Restarting with requirements
 
-Standalone `session(action = "restart")` can add requirements while replacing the worker:
+`send(control = "restart")` can add requirements while replacing the worker, with or without a cell:
 
 ```json
 {
-  "action": "restart",
+  "control": "restart",
   "requirements": {
     "r": ["praise"],
     "python": ["py-yaml12"],
@@ -301,7 +304,7 @@ Standalone `session(action = "restart")` can add requirements while replacing th
 }
 ```
 
-Inline `send(control = "restart")` uses the same environment transaction and can continue with a cell:
+A restart can continue with a cell in the same call:
 
 ```json
 {
@@ -318,10 +321,10 @@ If additions are present, the server merges them into the complete retained sets
 The R library, Python environment, and DuckDB extension set commit together only after all required host resolution succeeds.
 
 A resolution failure leaves the current worker, its in-memory state, and its retained configuration unchanged.
-For inline restart it also prevents same-call stdin from being queued and prevents the cell from running.
+It also prevents same-call stdin from being queued and prevents any cell from running.
 After successful resolution, restart retires the worker and starts a replacement from the new retained environment.
 Restart always loses the old worker's R, Python, DuckDB catalog, debugger, and unread-stdin state.
-Inline restart queues same-call stdin only after the replacement is ready and dispatches the cell only to that exact replacement generation.
+Restart queues same-call stdin only after the replacement is ready and dispatches any cell only to that exact replacement generation.
 The [implemented architecture](ARCHITECTURE.md) owns the replacement lifecycle; [Explicit restart](BUILTIN_RUNTIME.md#explicit-restart) describes its user-visible response ownership and notices.
 
 ## Accepted requirement input
@@ -383,7 +386,7 @@ The built-in server reads inherited `RETICULATE_PYTHON` when it starts:
 - any other nonempty value selects that existing Python environment.
 
 A user-selected environment is preserved for the worker.
-The server skips its managed-Python preflight and rejects Python additions from `send`, `prepare`, `restart`, automatic imports, or other worker-originated managed-resolution requests.
+The server skips its managed-Python preflight and rejects Python additions from every `send` call shape, automatic imports, or other worker-originated managed-resolution requests.
 R requirements and DuckDB extensions remain available.
 The selected interpreter must still satisfy the [built-in runtime](BUILTIN_RUNTIME.md) requirement for Python 3.10 or later and must initialize under the worker's offline policy.
 Imports already available in the selected environment work normally.
@@ -396,7 +399,7 @@ A custom worker always rejects managed Python requirements, regardless of `RETIC
 
 Custom workers start without the built-in R library, managed Python environment, or default DuckDB extensions.
 They can use explicit R requirements and DuckDB extensions, and may opt into the worker-protocol runtime R resolution callbacks.
-Managed Python requirements remain unavailable for send, prepare, and restart.
+Managed Python requirements remain unavailable for standalone preparation, cell preconditions, and restart.
 
 Every custom-worker R candidate, whether explicitly or at runtime, includes DBI, DuckDB, and jsonlite so the host can prepare later DuckDB extensions with the same library.
 The server supplies the retained library through `R_LIBS` at worker launch.

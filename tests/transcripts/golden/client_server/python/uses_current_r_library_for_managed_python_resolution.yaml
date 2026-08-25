@@ -9,8 +9,7 @@ result:
       text: "[done]"
   isError: false
 ---
-session:
-  action: prepare
+send:
   requirements:
     r:
       - zeallot
@@ -39,8 +38,8 @@ result:
       text: "[done]"
   isError: false
 ---
-session:
-  action: restart
+send:
+  control: restart
   requirements:
     r:
       - praise
@@ -63,4 +62,3 @@ result:
     - type: text
       text: '"<current managed R library>"'
   isError: false
-...

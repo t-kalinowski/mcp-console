@@ -98,7 +98,9 @@ def test_initializes_and_lists_tools(binary: Path) -> Transcript:
     assert client.temporary_directory is not None
     workspace = Path(client.temporary_directory.name)
     client._initialize_and_list_tools()
-    tools = {tool["name"]: tool for tool in client.transcript[-1]["result"]["tools"]}
+    listed_tools = client.transcript[-1]["result"]["tools"]
+    assert [tool["name"] for tool in listed_tools] == ["send"], listed_tools
+    tools = {tool["name"]: tool for tool in listed_tools}
     send = tools["send"]
     send_description = " ".join(send["description"].split())
     for guidance in (
@@ -113,12 +115,15 @@ def test_initializes_and_lists_tools(binary: Path) -> Transcript:
         "R and Python display a final visible top-level expression",
         "SQL returns a bounded preview",
         "Cells are not transactional",
-        "Use `control` alone or before same-call stdin and code",
         "Interrupt preserves in-memory state and waits 100 milliseconds",
         "the cell is not run if the interrupted evaluation remains active",
         "Restart discards in-memory R, Python, DuckDB, debugger, and unread-stdin state",
         "same-call stdin and code only at the replacement",
-        "The `session` tool remains available for standalone preparation and lifecycle operations",
+        "sole interaction with the persistent console",
+        "Omit code to poll, provide stdin, prepare requirements, interrupt, or restart",
+        "Requirements alone stage dependencies",
+        "requirements with a cell prepare its preconditions",
+        "`timeout_ms = 0` gives the shortest post-grace observation after interrupt",
         "`timeout_ms` limits how long the call waits",
         "after dispatch or attachment",
         "Inline control, interrupt grace, restart, and explicit requirement preparation can make the complete call take longer",
@@ -221,7 +226,7 @@ def test_initializes_and_lists_tools(binary: Path) -> Transcript:
     assert control["enum"] == ["interrupt", "restart"], control
     control_description = " ".join(control["description"].split())
     for guidance in (
-        "optional session control alone or before same-call stdin and code",
+        "lifecycle control alone or before compatible same-call fields",
         "preserves in-memory state",
         "stdin is queued",
         "waits a short grace",
@@ -232,22 +237,23 @@ def test_initializes_and_lists_tools(binary: Path) -> Transcript:
     ):
         assert guidance in control_description, guidance
     for guidance in (
-        "additive and persist for the session",
-        "prepare before this cell and retain for later cells",
-        "Without control, preparation completes before same-call stdin is queued",
-        "With `restart`, requirements are resolved in the restart transaction before replacement",
+        "Requirements alone perform standalone preparation",
+        "With one cell, they are preconditions of that cell",
+        'With `control = "restart"`, they are part of the restart transaction, with or without a cell',
+        "Requirements are not accepted with interrupt unless a cell follows",
+        "On a code-bearing call without control, preparation completes before same-call nonempty stdin is queued",
+        "Standalone preparation cannot queue nonempty stdin",
         "failure leaves the current worker unchanged and sends neither stdin nor code",
-        "With `interrupt`, signal delivery and stdin enqueue happen before requirements are validated or prepared",
+        "With interrupt and a following cell, signal delivery and stdin enqueue happen before requirements are validated or prepared",
         "are not rolled back if that later work fails",
         "Ordinary CRAN packages used by the built-in R worker need not be declared here",
         "use `requirements.r` to stage packages ahead of evaluation",
         "missing imports normally resolve at runtime",
         "Use `requirements.python` to stage a distribution before the cell",
         "SQL does not trigger package discovery",
-        "The cell is not run if explicit preparation fails or further changes require restart",
+        "A cell is not run if explicit preparation fails or further changes require restart",
         "Resolution runs outside the worker sandbox",
         "Use only trusted requirements",
-        "This field requires one `r`, `python`, or `sql` cell",
     ):
         assert guidance in send_requirements_description, guidance
     stdin_description = " ".join(
@@ -259,7 +265,8 @@ def test_initializes_and_lists_tools(binary: Path) -> Transcript:
         "Its UTF-8 encoding is queued exactly",
         "no newline is added",
         "trailing `\\n`",
-        "Without control, requirements are prepared before nonempty stdin is queued",
+        "On a code-bearing call without control, requirements are prepared before nonempty stdin is queued",
+        "Standalone preparation cannot queue nonempty stdin",
         "After `interrupt`, nonempty stdin is queued before the 100-millisecond grace",
         "may be consumed while the earlier operation unwinds",
         "After `restart`, same-call stdin is sent only to the replacement",
@@ -281,6 +288,7 @@ def test_initializes_and_lists_tools(binary: Path) -> Transcript:
         "once a cell has been dispatched or the call has attached",
         "Inline control, interrupt grace, restart, and explicit requirement preparation happen before dispatch",
         "may make the complete call take longer",
+        "does not limit standalone preparation",
         "Automatic R and Python import resolution are part of the running evaluation",
         "do not resubmit the cell",
     ):
@@ -289,42 +297,7 @@ def test_initializes_and_lists_tools(binary: Path) -> Transcript:
     assert '"$defs"' not in send_schema, send["inputSchema"]
     assert '"$ref"' not in send_schema, send["inputSchema"]
 
-    session = tools["session"]
-    session_description = " ".join(session["description"].split())
-    for guidance in (
-        "Manage dependencies and standalone lifecycle operations for the persistent worker",
-        "`prepare` makes additional R or Python requirements or DuckDB extensions available without evaluating a cell",
-        "`interrupt` requests SIGINT for the active host resolver or live worker and returns after delivery is acknowledged without waiting for the operation to stop",
-        "interruption is cooperative",
-        "use an empty `send` afterward to observe whether it stopped",
-        "`restart` optionally prepares requirements, replaces the worker, and discards all in-memory R, Python, DuckDB, debugger, and unread-stdin state",
-        "Use inline `send.control` when stdin or a cell should follow the lifecycle operation in the same call",
-        "Requirements are additive, idempotent, and persist across restart",
-        "Preparation does not import, attach, or load packages or extensions",
-        "Use `restart` only when clean state or a restart-required dependency change is needed",
-        "ordinary language errors normally leave the worker reusable",
-        "Dependency resolution runs outside the sandbox",
-        "use only trusted requirements",
-    ):
-        assert guidance in session_description, guidance
-    assert "Inspect partial state before retrying" not in session_description
-    session_schema = json.dumps(session["inputSchema"])
-    assert '"$defs"' not in session_schema, session["inputSchema"]
-    assert '"$ref"' not in session_schema, session["inputSchema"]
     send_requirements = send["inputSchema"]["properties"]["requirements"]
-    session_requirements = session["inputSchema"]["properties"]["requirements"]
-    send_requirements_shape = {
-        key: value for key, value in send_requirements.items() if key != "description"
-    }
-    session_requirements_shape = {
-        key: value
-        for key, value in session_requirements.items()
-        if key != "description"
-    }
-    assert send_requirements_shape == session_requirements_shape, (
-        send_requirements,
-        session_requirements,
-    )
     assert send_requirements["type"] == ["object", "null"], send_requirements
     assert send_requirements["additionalProperties"] is False, send_requirements
     requirement_properties = send_requirements["properties"]
@@ -336,35 +309,8 @@ def test_initializes_and_lists_tools(binary: Path) -> Transcript:
         assert requirement["items"]["type"] == "string", requirement
         assert requirement["items"]["minLength"] == 1, requirement
     assert requirement_properties["duckdb"]["items"]["maxLength"] == 64
-    action_description = " ".join(
-        session["inputSchema"]["properties"]["action"]["description"].split()
-    )
-    assert "before a worker starts" in action_description, action_description
-    assert (
-        "After startup, it can add R requirements or DuckDB extensions while the worker is idle"
-        in action_description
-    ), action_description
-    assert "`restart` can add any of the same requirements" in action_description, (
-        action_description
-    )
-    assert (
-        "returns after delivery is acknowledged without waiting" in action_description
-    ), action_description
-    requirements_description = " ".join(
-        session["inputSchema"]["properties"]["requirements"]["description"].split()
-    )
-    assert "return `[restart required]` until restart" in requirements_description, (
-        requirements_description
-    )
-    assert "evaluated code cannot configure that host resolver" in (
-        requirements_description
-    )
-    assert (
-        "Successfully activated automatic R and Python additions also persist across restart"
-        in (requirements_description)
-    )
     r_requirements_description = " ".join(
-        session["inputSchema"]["properties"]["requirements"]["properties"]["r"][
+        send["inputSchema"]["properties"]["requirements"]["properties"]["r"][
             "description"
         ].split()
     )
@@ -376,7 +322,7 @@ def test_initializes_and_lists_tools(binary: Path) -> Transcript:
     ):
         assert guidance in r_requirements_description, guidance
     python_requirements_description = " ".join(
-        session["inputSchema"]["properties"]["requirements"]["properties"]["python"][
+        send["inputSchema"]["properties"]["requirements"]["properties"]["python"][
             "description"
         ].split()
     )
@@ -390,9 +336,11 @@ def test_initializes_and_lists_tools(binary: Path) -> Transcript:
         "nonempty user-selected `RETICULATE_PYTHON` disables automatic resolution and managed Python requirements",
     ):
         assert guidance in python_requirements_description, guidance
-    duckdb_description = session["inputSchema"]["properties"]["requirements"][
-        "properties"
-    ]["duckdb"]["description"]
+    duckdb_description = " ".join(
+        send["inputSchema"]["properties"]["requirements"]["properties"]["duckdb"][
+            "description"
+        ].split()
+    )
     assert (
         "JSON and ICU are already prepared for built-in workers" in duckdb_description
     )
@@ -465,20 +413,39 @@ def test_validates_send_arguments(binary: Path) -> Transcript:
     assert result["isError"] is True, result
     assert "prepare" in result["content"][0]["text"], result
 
+    result = client.send(requirements={"r": ["tidyverse"]})
+    assert result == {
+        "content": [{"type": "text", "text": "[prepared]"}],
+        "isError": False,
+    }, result
+
+    result = client.send(stdin="", requirements={"r": ["tidyverse"]})
+    assert result == {
+        "content": [{"type": "text", "text": "[prepared]"}],
+        "isError": False,
+    }, result
+
+    result = client.send(stdin="answer\n", requirements={"r": ["tidyverse"]})
+    assert result["isError"] is True, result
+    assert result["content"][0]["text"] == (
+        "requirements-only `send` performs standalone preparation and cannot also "
+        "queue stdin"
+    ), result
+
     result = client.send(
-        control="restart",
-        requirements={"python": ["polars>=1"]},
+        control="interrupt",
+        requirements={"r": ["tidyverse"]},
     )
     assert result["isError"] is True, result
-    assert result["content"][0]["text"] == "`requirements` requires a code cell", result
+    assert result["content"][0]["text"] == (
+        '`requirements` with `control = "interrupt"` requires a code cell'
+    ), result
 
-    result = client.send(requirements={"r": ["praise"]})
-    assert result["isError"] is True, result
-    assert result["content"][0]["text"] == "`requirements` requires a code cell", result
-
-    result = client.send(stdin="answer\n", requirements={"r": ["praise"]})
-    assert result["isError"] is True, result
-    assert result["content"][0]["text"] == "`requirements` requires a code cell", result
+    result = client.send(
+        control="restart",
+        requirements={"r": ["tidyverse"]},
+    )
+    assert result.get("isError") is not True, result
 
     result = client.send(r="stop('cell was run')", requirements={})
     assert result["isError"] is True, result
@@ -523,15 +490,10 @@ def test_validates_send_arguments(binary: Path) -> Transcript:
     return client._finish()
 
 
-def test_validates_session_arguments(binary: Path) -> Transcript:
+def test_validates_standalone_requirement_arguments(binary: Path) -> Transcript:
     client = McpClient(binary, ("serve",))
     client._initialize_and_list_tools()
-    client.session(action="prepare")
-    result = client.transcript[-1]["result"]
-    assert result["isError"] is True
-    assert result["content"][0]["text"] == ("`requirements` is required with `prepare`")
-
-    client.session(action="prepare", requirements={})
+    client.send(requirements={})
     result = client.transcript[-1]["result"]
     assert result["isError"] is True
     assert result["content"][0]["text"] == (
@@ -539,10 +501,7 @@ def test_validates_session_arguments(binary: Path) -> Transcript:
         "`requirements.duckdb` is required"
     )
 
-    client.session(
-        action="prepare",
-        requirements={"duckdb": ["spatial FROM community"]},
-    )
+    client.send(requirements={"duckdb": ["spatial FROM community"]})
     result = client.transcript[-1]["result"]
     assert result["isError"] is True
     assert result["content"][0]["text"] == (
@@ -550,33 +509,30 @@ def test_validates_session_arguments(binary: Path) -> Transcript:
         "contain only lowercase ASCII letters, digits, and underscores"
     )
 
-    client.session(action="prepare", requirements={"r": [""]})
+    client.send(requirements={"r": [""]})
     result = client.transcript[-1]["result"]
     assert result["isError"] is True
     assert result["content"][0]["text"] == "R requirement strings must not be empty"
 
-    client.session(
-        action="prepare",
-        requirements={"r": ["cli\ndplyr"]},
-    )
+    client.send(requirements={"r": ["cli\ndplyr"]})
     result = client.transcript[-1]["result"]
     assert result["isError"] is True
     assert result["content"][0]["text"] == (
         "R requirement strings must not contain NUL or line breaks"
     )
 
-    client.session(
-        action="interrupt",
+    client.send(
+        control="interrupt",
         requirements={"python": ["py-yaml12"]},
     )
     result = client.transcript[-1]["result"]
     assert result["isError"] is True
     assert result["content"][0]["text"] == (
-        "`requirements` is not supported with `interrupt`"
+        '`requirements` with `control = "interrupt"` requires a code cell'
     )
 
-    client.session(
-        action="restart",
+    client.send(
+        control="restart",
         requirements={},
     )
     result = client.transcript[-1]["result"]
@@ -586,8 +542,8 @@ def test_validates_session_arguments(binary: Path) -> Transcript:
         "`requirements.duckdb` is required"
     )
 
-    client.session(
-        action="restart",
+    client.send(
+        control="restart",
         requirements={"r": ["cli\ndplyr"]},
     )
     result = client.transcript[-1]["result"]
@@ -596,8 +552,8 @@ def test_validates_session_arguments(binary: Path) -> Transcript:
         "R requirement strings must not contain NUL or line breaks"
     )
 
-    client.session(
-        action="restart",
+    client.send(
+        control="restart",
         requirements={"duckdb": ["spatial FROM community"]},
     )
     result = client.transcript[-1]["result"]
@@ -612,10 +568,10 @@ def test_validates_session_arguments(binary: Path) -> Transcript:
 def test_rejects_interrupt_without_worker(binary: Path) -> Transcript:
     client = McpClient(binary, ("serve",))
     client._initialize_and_list_tools()
-    client.session(action="interrupt")
+    client.send(control="interrupt", timeout_ms=0)
     result = client.transcript[-1]["result"]
     assert result["isError"] is True
-    assert result["content"][0]["text"] == "worker is not running"
+    assert result["content"][0]["text"] == "[worker is not running]"
     return client._finish()
 
 

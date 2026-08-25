@@ -375,9 +375,6 @@ class McpClient:
     def send(self, **arguments: Any) -> ToolResult:
         return self._call_tool("send", **arguments)
 
-    def session(self, **arguments: Any) -> ToolResult:
-        return self._call_tool("session", **arguments)
-
     def _send_message(self, message: dict[str, Any]) -> TranscriptEntry:
         recorded_message = message.copy()
         assert recorded_message.pop("jsonrpc", None) == "2.0", message
@@ -397,7 +394,7 @@ class McpClient:
             and recorded_message["method"] == "tools/call"
             and isinstance(params, dict)
             and params.keys() == {"name", "arguments"}
-            and params["name"] in {"send", "session"}
+            and params["name"] == "send"
             and isinstance(params["arguments"], dict)
         ):
             entry[params["name"]] = params["arguments"]
@@ -489,9 +486,6 @@ class McpClient:
 
     def _start_send(self, **arguments: Any) -> TranscriptEntry:
         return self._start_tool_call("send", **arguments)
-
-    def _start_session(self, **arguments: Any) -> TranscriptEntry:
-        return self._start_tool_call("session", **arguments)
 
     def _finish(self) -> Transcript:
         transcript, standard_error = self._finish_with_standard_error()

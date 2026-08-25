@@ -6,4 +6,3 @@ server:
   kind: stdin
   data: |
     replacement input
-...

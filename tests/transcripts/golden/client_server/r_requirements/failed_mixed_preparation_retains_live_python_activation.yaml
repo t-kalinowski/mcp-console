@@ -11,8 +11,7 @@ result:
       text: <initial managed R library>
   isError: false
 ---
-session:
-  action: prepare
+send:
   requirements:
     r:
       - mcpconsolepreparationfixture
@@ -26,8 +25,8 @@ result:
         changes are unavailable until session restart
   isError: true
 ---
-session:
-  action: restart
+send:
+  control: restart
 result:
   content:
     - type: text
@@ -48,4 +47,3 @@ result:
       text: |
         'answer: 42'
   isError: false
-...

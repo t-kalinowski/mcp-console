@@ -11,8 +11,7 @@ result:
       text: "[done]"
   isError: false
 ---
-session:
-  action: prepare
+send:
   requirements:
     r:
       - ragnar
@@ -122,4 +121,3 @@ result:
           <string>    <float> <string>    <int32>
         1 "beta.md"       0.0 "beta.md"        42
   isError: false
-...

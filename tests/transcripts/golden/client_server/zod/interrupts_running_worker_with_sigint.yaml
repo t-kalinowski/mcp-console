@@ -12,12 +12,15 @@ result:
         [running; poll with an empty send]
   isError: false
 ---
-session:
-  action: interrupt
+send:
+  control: interrupt
+  timeout_ms: 0
 result:
   content:
     - type: text
-      text: "[interrupt sent]"
+      text: |-
+
+        [running; poll with an empty send]
   isError: false
 ---
 send:
@@ -37,4 +40,3 @@ result:
       text: |
         zod: echo
   isError: false
-...

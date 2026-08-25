@@ -84,8 +84,8 @@ result:
         [1] TRUE
   isError: false
 ---
-session:
-  action: restart
+send:
+  control: restart
 result:
   content:
     - type: text
@@ -112,4 +112,3 @@ result:
       text: |
         'psutil'
   isError: false
-...

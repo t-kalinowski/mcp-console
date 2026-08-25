@@ -19,8 +19,7 @@ result:
         [1] "configured-by-user"
   isError: false
 ---
-session:
-  action: prepare
+send:
   requirements:
     python:
       - numpy
@@ -32,8 +31,8 @@ result:
         user-selected Python environment
   isError: true
 ---
-session:
-  action: restart
+send:
+  control: restart
   requirements:
     python:
       - numpy
@@ -102,4 +101,3 @@ result:
       text: |
         [1] 42
   isError: false
-...

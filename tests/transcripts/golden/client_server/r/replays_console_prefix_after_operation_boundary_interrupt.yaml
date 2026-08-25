@@ -23,16 +23,9 @@ result:
         [waiting for stdin]
   isError: false
 ---
-session:
-  action: interrupt
-result:
-  content:
-    - type: text
-      text: "[interrupt sent]"
-  isError: false
----
 send:
-  timeout_ms: 3000
+  control: interrupt
+  timeout_ms: 0
 result:
   content:
     - type: text
@@ -90,16 +83,9 @@ result:
         [running; poll with an empty send]
   isError: false
 ---
-session:
-  action: interrupt
-result:
-  content:
-    - type: text
-      text: "[interrupt sent]"
-  isError: false
----
 send:
-  timeout_ms: 3000
+  control: interrupt
+  timeout_ms: 0
 result:
   content:
     - type: text
@@ -118,4 +104,3 @@ result:
         [input requested: "after boundary> "]
         [1] TRUE
   isError: false
-...

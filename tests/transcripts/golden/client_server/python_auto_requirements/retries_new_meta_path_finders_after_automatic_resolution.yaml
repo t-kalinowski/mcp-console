@@ -71,11 +71,11 @@ result:
   isError: false
 ---
 send:
-  python: import mcp_console_activated_finder; mcp_console_activated_finder.answer
+  python: >-
+    import mcp_console_activated_finder; mcp_console_activated_finder.answer
 result:
   content:
     - type: text
       text: |
         42
   isError: false
-...

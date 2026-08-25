@@ -1,8 +1,7 @@
 ---
 !same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
 ---
-session:
-  action: prepare
+send:
   requirements:
     r:
       - local::<absolute package path>?reinstall&nocache
@@ -21,4 +20,3 @@ transcript_normalization:
   target: result.content[0].text
   replacements:
     cache_dependent_ir_progress: <cache-dependent IR progress>
-...

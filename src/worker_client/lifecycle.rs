@@ -223,63 +223,6 @@ impl Drop for ControlledSendAdmission {
 }
 
 impl Client {
-    /// Sends SIGINT to the active resolver or live worker process.
-    pub(crate) async fn interrupt(&self) -> Result<(), String> {
-        let client = self.clone();
-        tokio::task::spawn_blocking(move || client.interrupt_standalone_blocking())
-            .await
-            .map_err(|error| format!("worker interrupt task failed: {error}"))?
-    }
-
-    fn interrupt_standalone_blocking(&self) -> Result<(), String> {
-        let resolver = {
-            let lifecycle = self
-                .0
-                .lifecycle
-                .lock()
-                .map_err(|_| "worker lifecycle lock poisoned".to_string())?;
-            lifecycle.processes.resolver.clone()
-        };
-        if let Some(resolver) = resolver
-            && resolver.interrupt()?
-        {
-            return Ok(());
-        }
-
-        let active = self.evaluation()?;
-        let (processes, worker_allowed) = {
-            let lifecycle = self
-                .0
-                .lifecycle
-                .lock()
-                .map_err(|_| "worker lifecycle lock poisoned".to_string())?;
-            let active_is_interruptible = active
-                .as_ref()
-                .map(|active| active.evaluation.is_interruptible())
-                .transpose()?
-                .unwrap_or(false);
-            let worker_allowed = lifecycle.controlled_send.is_none()
-                || (lifecycle.state == LifecycleState::Ready
-                    && active_is_interruptible
-                    && active
-                        .as_ref()
-                        .is_some_and(|active| active.generation.is(&lifecycle.generation)));
-            (lifecycle.processes.clone(), worker_allowed)
-        };
-        if let Some(resolver) = processes.resolver
-            && resolver.interrupt()?
-        {
-            return Ok(());
-        }
-        if worker_allowed {
-            return processes
-                .worker
-                .ok_or_else(|| "worker is not running".to_string())?
-                .interrupt();
-        }
-        Err("session control is in progress".to_string())
-    }
-
     pub(super) fn interrupt_blocking(&self) -> Result<(), String> {
         let processes = {
             let lifecycle = self
@@ -302,22 +245,6 @@ impl Client {
             .worker
             .ok_or_else(|| "worker is not running".to_string())?
             .interrupt()
-    }
-
-    /// Replaces the current worker, optionally adding requirements first.
-    pub(crate) async fn restart(
-        &self,
-        requirements: super::Requirements,
-        grace: Duration,
-    ) -> Result<Response, String> {
-        let client = self.clone();
-        let restart = tokio::task::spawn_blocking(move || {
-            let _operation = client.admit_operation()?;
-            client.restart_blocking(requirements, grace, false, None)
-        })
-        .await
-        .map_err(|error| format!("worker restart task failed: {error}"))??;
-        Ok(restart.response)
     }
 
     /// Defers the replacement-ready marker when this admission owns a follow-up operation.

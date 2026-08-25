@@ -1,8 +1,7 @@
 ---
 !same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
 ---
-session:
-  action: prepare
+send:
   requirements:
     r:
       - praise
@@ -18,8 +17,8 @@ result:
         managed resolution accepts named package requirements only
   isError: true
 ---
-session:
-  action: restart
+send:
+  control: restart
   requirements:
     r:
       - praise
@@ -35,8 +34,7 @@ result:
         resolution accepts named package requirements only
   isError: true
 ---
-session:
-  action: prepare
+send:
   requirements:
     r:
       - praise
@@ -52,8 +50,8 @@ result:
         resolution accepts named package requirements only
   isError: true
 ---
-session:
-  action: restart
+send:
+  control: restart
   requirements:
     r:
       - praise
@@ -69,8 +67,7 @@ result:
         host-side managed resolution accepts named package requirements only
   isError: true
 ---
-session:
-  action: prepare
+send:
   requirements:
     r:
       - praise
@@ -86,8 +83,8 @@ result:
         resolution accepts named package requirements only
   isError: true
 ---
-session:
-  action: restart
+send:
+  control: restart
   requirements:
     r:
       - praise
@@ -104,8 +101,7 @@ result:
         requirements only
   isError: true
 ---
-session:
-  action: prepare
+send:
   requirements:
     r:
       - praise
@@ -121,8 +117,8 @@ result:
         managed resolution accepts named package requirements only
   isError: true
 ---
-session:
-  action: restart
+send:
+  control: restart
   requirements:
     r:
       - praise
@@ -138,8 +134,7 @@ result:
         resolution accepts named package requirements only
   isError: true
 ---
-session:
-  action: prepare
+send:
   requirements:
     r:
       - praise
@@ -155,8 +150,8 @@ result:
         resolution accepts named package requirements only
   isError: true
 ---
-session:
-  action: restart
+send:
+  control: restart
   requirements:
     r:
       - praise
@@ -172,8 +167,7 @@ result:
         resolution accepts named package requirements only
   isError: true
 ---
-session:
-  action: prepare
+send:
   requirements:
     duckdb:
       - not_a_real_duckdb_extension
@@ -185,8 +179,7 @@ result:
         "not_a_real_duckdb_extension"
   isError: true
 ---
-session:
-  action: prepare
+send:
   requirements:
     python:
       - requests[socks]>=2,<3; python_version < '0'
@@ -196,8 +189,8 @@ result:
       text: "[prepared]"
   isError: false
 ---
-session:
-  action: restart
+send:
+  control: restart
   requirements:
     python:
       - urllib3!=2.0.0; python_version < '0'
@@ -347,4 +340,3 @@ result:
         Python requirement `./runtime-project` is not accepted: host-side
         managed resolution accepts named package requirements only
   isError: false
-...

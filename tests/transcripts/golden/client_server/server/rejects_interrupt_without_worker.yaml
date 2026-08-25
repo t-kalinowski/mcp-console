@@ -1,11 +1,11 @@
 ---
 !same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
 ---
-session:
-  action: interrupt
+send:
+  control: interrupt
+  timeout_ms: 0
 result:
   content:
     - type: text
-      text: worker is not running
+      text: "[worker is not running]"
   isError: true
-...

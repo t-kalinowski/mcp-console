@@ -320,53 +320,57 @@ def test_materializes_records_only_for_console_use(binary: Path) -> Transcript:
         client = McpClient(
             binary,
             ("serve", "--worker", str(zod)),
+            {**os.environ, "TMPDIR": str(unused_workspace)},
             current_directory=unused_workspace,
         )
         client._initialize_and_list_tools()
         assert not (unused_workspace / ".mcp-console").exists(), unused_workspace
-        client._request("tools/call", name="missing", arguments={})
+        removed = client._request(
+            "tools/call",
+            name="session",
+            arguments={"action": "restart"},
+        )
+        assert removed["error"] == {
+            "code": -32602,
+            "message": "tool not found",
+        }, removed
         assert not (unused_workspace / ".mcp-console").exists(), unused_workspace
+        assert not list(unused_workspace.glob("mcp-console-tmp-*")), unused_workspace
         transcript = client._finish()
         assert not (unused_workspace / ".mcp-console").exists(), unused_workspace
 
-        materialized_by = {}
-        for tool in ("send", "session"):
-            workspace = temporary / tool
-            workspace.mkdir()
-            client = McpClient(
-                binary,
-                ("serve", "--worker", str(zod)),
-                current_directory=workspace,
-            )
-            client._initialize_and_list_tools()
-            assert not (workspace / ".mcp-console").exists(), workspace
-            if tool == "send":
-                client.send(r="echo echo")
-            else:
-                client.session(action="restart")
+        workspace = temporary / "send"
+        workspace.mkdir()
+        client = McpClient(
+            binary,
+            ("serve", "--worker", str(zod)),
+            current_directory=workspace,
+        )
+        client._initialize_and_list_tools()
+        assert not (workspace / ".mcp-console").exists(), workspace
+        client.send(r="echo echo")
 
-            sessions = list((workspace / ".mcp-console" / "sessions").iterdir())
-            assert len(sessions) == 1, sessions
-            events = [
-                json.loads(line)
-                for line in (sessions[0] / "internal" / "events.jsonl")
-                .read_text(encoding="utf-8")
-                .splitlines()
-            ]
-            assert [event["event"] for event in events] == [
-                "session_started",
-                "tool_call",
-                "tool_result",
-            ], events
-            assert events[1]["request"]["name"] == tool, events[1]
-            materialized_by[tool] = [event["event"] for event in events]
-            client._finish()
+        sessions = list((workspace / ".mcp-console" / "sessions").iterdir())
+        assert len(sessions) == 1, sessions
+        events = [
+            json.loads(line)
+            for line in (sessions[0] / "internal" / "events.jsonl")
+            .read_text(encoding="utf-8")
+            .splitlines()
+        ]
+        assert [event["event"] for event in events] == [
+            "session_started",
+            "tool_call",
+            "tool_result",
+        ], events
+        assert events[1]["request"]["name"] == "send", events[1]
+        client._finish()
 
         transcript.append(
             {
                 "recording": {
-                    "initialization and unknown tool only": "absent",
-                    "materialized by": materialized_by,
+                    "initialization and removed session tool only": "absent",
+                    "materialized by": {"send": [event["event"] for event in events]},
                 }
             }
         )
@@ -388,7 +392,7 @@ def test_continues_without_record_when_record_cannot_be_created(
         client._initialize_and_list_tools()
 
         client.send(r="echo echo")
-        client.session(action="restart")
+        client.send(control="restart")
 
         client._request("tools/call", name="missing", arguments={})
         assert client.transcript[-1]["error"] == {
@@ -440,12 +444,9 @@ def test_records_tool_calls_and_images(binary: Path) -> TranscriptWithCompanion:
             arguments={"r": "1", "python": "1"},
             _meta={"progressToken": "record-me"},
         )
-        client.session(
-            action="prepare",
-            requirements={"python": ["transcript-fixture"]},
-        )
+        client.send(requirements={"python": ["transcript-fixture"]})
         preparation_request_id = client.transcript[-1]["id"]
-        session_result = client.transcript[-1]["result"]
+        preparation_result = client.transcript[-1]["result"]
         client._request("tools/call", name="missing", arguments={})
 
         sessions = list((workspace / ".mcp-console" / "sessions").iterdir())
@@ -526,17 +527,16 @@ def test_records_tool_calls_and_images(binary: Path) -> TranscriptWithCompanion:
         assert events[6]["call_id"] == events[7]["call_id"] == 3, events
         assert events[6]["request_id"] == preparation_request_id, events[6]
         assert events[6]["request"] == {
-            "name": "session",
+            "name": "send",
             "arguments": {
-                "action": "prepare",
                 "requirements": {"python": ["transcript-fixture"]},
             },
         }, events[6]
-        assert events[7]["result"] == session_result, events[7]
+        assert events[7]["result"] == preparation_result, events[7]
         assert [event["request"]["name"] for event in events if "request" in event] == [
             "send",
             "send",
-            "session",
+            "send",
         ], events
         assert all(
             event.get("request", {}).get("name") != "missing" for event in events
@@ -813,22 +813,19 @@ def test_custom_worker_skips_managed_python_preflight(binary: Path) -> Transcrip
         echo echo
         """).removesuffix("\n")
     client.send(python=python)
-    result = client.session(
-        action="prepare",
+    result = client.send(requirements={"python": ["py-yaml12"]})
+    assert result["isError"] is True, result
+    assert result["content"][0]["text"] == (
+        "Python requirements are unavailable with a custom worker"
+    ), result
+    result = client.send(
+        control="restart",
         requirements={"python": ["py-yaml12"]},
     )
     assert result["isError"] is True, result
     assert result["content"][0]["text"] == (
         "Python requirements are unavailable with a custom worker"
-    )
-    result = client.session(
-        action="restart",
-        requirements={"python": ["py-yaml12"]},
-    )
-    assert result["isError"] is True, result
-    assert result["content"][0]["text"] == (
-        "Python requirements are unavailable with a custom worker"
-    )
+    ), result
     result = client.send(
         r="echo must not run",
         requirements={"python": ["py-yaml12"]},
@@ -842,6 +839,134 @@ def test_custom_worker_skips_managed_python_preflight(binary: Path) -> Transcrip
     client.send()
     assert last_tool_text(client) == "\n[idle]"
     return client._finish()
+
+
+def test_standalone_preparation_before_worker_startup_is_causal_and_idempotent(
+    binary: Path,
+) -> Transcript:
+    zod = Path(__file__).resolve().parents[2] / "fixtures" / "zod"
+    relay = Path(__file__).resolve().parents[2] / "fixtures" / "scripted_relay"
+    ir = Path(__file__).resolve().parents[2] / "fixtures" / "ordered_retirement_ir"
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        temporary = Path(temporary_directory)
+        library = temporary / "standalone-candidate"
+        library.mkdir()
+        fake_bin = temporary / "bin"
+        fake_bin.mkdir()
+        (fake_bin / "ir").symlink_to(ir)
+        resolver_started = FifoCheckpoint(temporary / "resolver-started")
+        resolver_release = FifoCheckpoint(temporary / "resolver-release")
+        worker_started = temporary / "zod-started"
+        resolver_counter = temporary / "ir-counter"
+        environment, _ = r_test_environment()
+        path = environment.get("PATH")
+        assert path is not None, "PATH is required"
+        environment["PATH"] = os.pathsep.join((str(fake_bin), path))
+        environment["TMPDIR"] = temporary_directory
+        environment["MCP_CONSOLE_TEST_IR_COUNTER"] = str(resolver_counter)
+        environment["MCP_CONSOLE_TEST_IR_LIBRARIES"] = str(library)
+        environment["MCP_CONSOLE_TEST_IR_STARTED"] = str(resolver_started.path)
+        environment["MCP_CONSOLE_TEST_IR_RELEASE"] = str(resolver_release.path)
+        environment["MCP_CONSOLE_TEST_RELAY_SCENARIO"] = "ready"
+        environment["MCP_CONSOLE_TEST_ZOD_STARTED"] = str(worker_started)
+        client = McpClient(
+            binary,
+            (
+                "serve",
+                "--worker",
+                str(zod),
+                "--relay",
+                str(relay),
+            ),
+            environment,
+        )
+        finished = False
+        released = False
+        try:
+            client._initialize_and_list_tools()
+            invalid = client._start_send(
+                requirements={"r": ["must-not-resolve"]},
+                stdin="must not queue\n",
+            )
+            readable, _, _ = select.select(
+                [client.stdout, resolver_started.descriptor],
+                [],
+                [],
+                10,
+            )
+            assert client.stdout in readable, (
+                "requirements with standalone stdin did not return validation"
+            )
+            assert resolver_started.descriptor not in readable, (
+                "requirements with standalone stdin started a resolver"
+            )
+            client._receive(invalid)
+            assert invalid["result"] == {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": (
+                            "requirements-only `send` performs standalone "
+                            "preparation and cannot also queue stdin"
+                        ),
+                    }
+                ],
+                "isError": True,
+            }, invalid
+            assert not resolver_counter.exists(), resolver_counter
+            assert not worker_started.exists(), worker_started
+            assert not list(
+                temporary.glob("mcp-console-tmp-*/mcp-console-server-relay-wire.jsonl")
+            )
+
+            preparation = client._start_send(
+                requirements={"r": ["standalone-requirement"]},
+                timeout_ms=0,
+            )
+            resolver_started.wait("standalone requirement resolver")
+            assert not worker_started.exists(), worker_started
+            assert not list(
+                temporary.glob("mcp-console-tmp-*/mcp-console-server-relay-wire.jsonl")
+            )
+            readable, _, _ = select.select([client.stdout], [], [], 0.25)
+            assert not readable, "timeout_ms applied to standalone preparation"
+
+            resolver_release.release()
+            released = True
+            client._receive(preparation)
+            assert preparation["result"] == {
+                "content": [{"type": "text", "text": "[prepared]"}],
+                "isError": False,
+            }, preparation
+            assert resolver_counter.read_text(encoding="utf-8") == "1"
+            assert not worker_started.exists(), worker_started
+            assert not list(
+                temporary.glob("mcp-console-tmp-*/mcp-console-server-relay-wire.jsonl")
+            )
+
+            repeated = client.send(
+                requirements={"r": ["standalone-requirement"]},
+                timeout_ms=0,
+            )
+            assert repeated == {
+                "content": [{"type": "text", "text": "[prepared]"}],
+                "isError": False,
+            }, repeated
+            assert resolver_counter.read_text(encoding="utf-8") == "1"
+            assert not worker_started.exists(), worker_started
+            assert not list(
+                temporary.glob("mcp-console-tmp-*/mcp-console-server-relay-wire.jsonl")
+            )
+            transcript = client._finish()
+            finished = True
+            return transcript
+        finally:
+            if not released:
+                resolver_release.release()
+            resolver_started.close()
+            resolver_release.close()
+            if not finished:
+                stop_client(client)
 
 
 def test_custom_worker_starts_without_home(binary: Path) -> Transcript:
@@ -884,16 +1009,10 @@ def test_custom_worker_prepares_r_and_duckdb_requirements(binary: Path) -> Trans
         client._initialize_and_list_tools()
         client.send(r="echo echo")
 
-        client.session(
-            action="prepare",
-            requirements={"r": ["praise"]},
-        )
+        client.send(requirements={"r": ["praise"]})
         assert last_tool_text(client) == "[prepared]"
 
-        client.session(
-            action="prepare",
-            requirements={"duckdb": ["json"]},
-        )
+        client.send(requirements={"duckdb": ["json"]})
         assert last_tool_text(client) == "[prepared]"
 
         client.send(r="report managed R requirement")
@@ -1070,7 +1189,7 @@ def test_cancelled_combined_preparation_failure_is_reclaimed_by_restart(
             barrier = client.transcript[-1]["input"]["params"]
             assert len(barrier["padding"]) == barrier_size, barrier
             barrier["padding"] = f"<input barrier: {barrier_size} bytes>"
-            restart = client._start_session(action="restart")
+            restart = client._start_send(control="restart")
 
             discarded = json.loads(client.stdout.readline())
             assert discarded.pop("jsonrpc", None) == "2.0", discarded
@@ -1142,10 +1261,7 @@ def test_custom_worker_reports_idle_input_before_preparation_failure(
         output = last_tool_text(client)
         assert output == '[input requested: "idle> "]\n', repr(output)
 
-        result = client.session(
-            action="prepare",
-            requirements={"r": ["praise"]},
-        )
+        result = client.send(requirements={"r": ["praise"]})
         assert result["isError"] is True, result
         assert result["content"][0]["text"] == (
             '[idle R callback requested input "idle> " during requirement '
@@ -1153,6 +1269,11 @@ def test_custom_worker_reports_idle_input_before_preparation_failure(
             "[worker terminated by signal 9]\n"
             "[worker stopped: in-memory state lost]"
         ), result
+        result = client.send(requirements={"r": ["zeallot"]})
+        assert result == {
+            "content": [{"type": "text", "text": "[restart required]"}],
+            "isError": False,
+        }, result
         return client._finish()
 
 
@@ -1179,10 +1300,7 @@ def test_custom_worker_resolves_idle_activity_before_preparation(
         client.send(r="resolve python while idle")
         assert last_tool_text(client) == "[done]"
 
-        client.session(
-            action="prepare",
-            requirements={"r": ["praise"]},
-        )
+        client.send(requirements={"r": ["praise"]})
         assert last_tool_text(client) == "[prepared]"
         client.send(r="report managed R requirement")
         assert last_tool_text(client) == "zod R requirement: prepared=true\n"
@@ -1299,8 +1417,8 @@ def test_custom_worker_restart_prepares_r_and_duckdb_requirements(
         )
         client._initialize_and_list_tools()
 
-        client.session(
-            action="restart",
+        client.send(
+            control="restart",
             requirements={"r": ["praise"], "duckdb": ["json"]},
         )
         assert last_tool_text(client) == "[starting new worker]\n[idle]"
@@ -1679,8 +1797,8 @@ def test_interrupts_running_worker_with_sigint(binary: Path) -> Transcript:
                 client,
             )
 
-            client.session(action="interrupt")
-            assert last_tool_text(client) == "[interrupt sent]"
+            client.send(control="interrupt", timeout_ms=0)
+            assert last_tool_text(client) == "\n[running; poll with an empty send]"
             wait_for_marker(temporary_path, "zod-sigint-received", client)
 
             client.send(timeout_ms=3_000)
@@ -1718,13 +1836,18 @@ def test_supervises_stopped_and_continued_workers(binary: Path) -> Transcript:
                 client,
             )
 
-            interrupt = client._start_session(action="interrupt")
+            interrupt = client._start_send(control="interrupt", timeout_ms=0)
             readable, _, _ = select.select([client.stdout], [], [], 3)
             assert readable, "relay supervision did not answer the interrupt request"
             client._receive(interrupt)
             assert interrupt["result"] == {
-                "content": [{"type": "text", "text": "[interrupt sent]"}],
-                "isError": False,
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "worker evaluation is already being polled",
+                    }
+                ],
+                "isError": True,
             }, interrupt
 
             continue_stopped_worker(worker_pid, worker_group)
@@ -1739,7 +1862,7 @@ def test_supervises_stopped_and_continued_workers(binary: Path) -> Transcript:
                 "isError": False,
             }, evaluation
 
-            restarted = client._start_session(action="restart")
+            restarted = client._start_send(control="restart")
             replacement_marker, replacement_pid, replacement_group = (
                 wait_for_stopped_worker(
                     temporary_path,
@@ -1843,8 +1966,7 @@ def test_reports_resolver_interrupt_permission_error(binary: Path) -> Transcript
         passed = False
         try:
             client._initialize_and_list_tools()
-            preparation = client._start_session(
-                action="prepare",
+            preparation = client._start_send(
                 requirements={"r": ["blocked-resolver"]},
             )
             resolver_group = int(
@@ -1858,7 +1980,7 @@ def test_reports_resolver_interrupt_permission_error(binary: Path) -> Transcript
                 "resolver did not enter a dedicated process group"
             )
 
-            interrupt = client._start_session(action="interrupt")
+            interrupt = client._start_send(control="interrupt", timeout_ms=0)
             responses_returned = threading.Event()
             forced_stop = threading.Event()
 
@@ -1903,7 +2025,16 @@ def test_reports_resolver_interrupt_permission_error(binary: Path) -> Transcript
                 "isError": True,
             }
             assert preparation["result"] == expected, preparation
-            assert interrupt["result"] == expected, interrupt
+            interrupt_expected = {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": f"[{expected['content'][0]['text']}]",
+                    }
+                ],
+                "isError": True,
+            }
+            assert interrupt["result"] == interrupt_expected, interrupt
 
             client.send(r="echo echo")
             assert last_tool_text(client) == "zod: echo\n"
@@ -1948,7 +2079,7 @@ def test_reports_runtime_r_resolver_interrupt_permission_error(
                 "resolver did not enter a dedicated process group"
             )
 
-            interrupt = client._start_session(action="interrupt")
+            interrupt = client._start_send(control="interrupt", timeout_ms=0)
             responses_returned = threading.Event()
             forced_stop = threading.Event()
 
@@ -1994,7 +2125,7 @@ def test_reports_runtime_r_resolver_interrupt_permission_error(
                 "isError": False,
             }, evaluation
             assert interrupt["result"] == {
-                "content": [{"type": "text", "text": message}],
+                "content": [{"type": "text", "text": f"[{message}]"}],
                 "isError": True,
             }, interrupt
 
@@ -2055,8 +2186,7 @@ def test_idle_stdin_startup_blocks_preparation(binary: Path) -> Transcript:
                 client,
             )
 
-            preparation = client._start_session(
-                action="prepare",
+            preparation = client._start_send(
                 requirements={"python": ["py-yaml12"]},
             )
             client._receive(preparation)
@@ -2507,10 +2637,7 @@ def test_polls_replacement_startup_after_send_timeout(binary: Path) -> Transcrip
                 "isError": True,
             }, failed
 
-            client.session(
-                action="prepare",
-                requirements={"python": ["py-yaml12"]},
-            )
+            client.send(requirements={"python": ["py-yaml12"]})
             assert client.transcript[-1]["result"] == {
                 "content": [
                     {
@@ -2573,7 +2700,7 @@ def test_orders_explicit_restart_output(binary: Path) -> Transcript:
         )
 
         startup_control.write_text("ready", encoding="utf-8")
-        client.session(action="restart")
+        client.send(control="restart")
         result = client.transcript[-1]["result"]
         assert result["isError"] is False, result
         expected = large_output("zod stdin closed\n") + (
@@ -2689,8 +2816,7 @@ def test_controlled_interrupt_preserves_idle_worker_startup_failure(
         finished = False
         try:
             client._initialize_and_list_tools()
-            preparation = client._start_session(
-                action="prepare",
+            preparation = client._start_send(
                 requirements={"r": ["blocked-resolver"]},
             )
             resolver_started.wait("controlled interrupt R resolver")
@@ -2859,7 +2985,7 @@ def test_restart_preserves_pending_sideband_output(binary: Path) -> Transcript:
         (image_started.parent / "zod-release-image").touch()
         wait_for_marker(temporary_path, "zod-image-processed", client)
 
-        client.session(action="restart")
+        client.send(control="restart")
         result = client.transcript[-1]["result"]
         assert result == {
             "content": [
@@ -2910,7 +3036,7 @@ def test_restart_preserves_completion_boundary_before_idle_output(
             client,
         )
 
-        client.session(action="restart")
+        client.send(control="restart")
         assert last_tool_text(client) == (
             "[done]\n"
             "zod background sideband\n"
@@ -2947,7 +3073,7 @@ def test_restart_interrupts_waiting_send(binary: Path) -> Transcript:
         (image_started.parent / "zod-release-image").touch()
         wait_for_marker(temporary_path, "zod-image-processed", client)
 
-        restarted = client._start_session(action="restart")
+        restarted = client._start_send(control="restart")
         responses_returned = threading.Event()
         forced_stop = threading.Event()
 
@@ -3221,7 +3347,7 @@ def test_restart_closes_worker_stdin(binary: Path) -> Transcript:
             client,
         )
 
-        client.session(action="restart")
+        client.send(control="restart")
         output = last_tool_text(client)
         prefix = "zod stdin closed\n" + ("x" * LARGE_OUTPUT_SIZE)
         suffix = "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
@@ -3269,7 +3395,7 @@ def test_restart_force_stops_stalled_worker(binary: Path) -> Transcript:
             worker_group = read_worker_group(group_marker)
             wait_for_marker(temporary_path, "zod-stalled", client)
 
-            restart_call = client._start_session(action="restart")
+            restart_call = client._start_send(control="restart")
             wait_for_process_group_exit(worker_group, client)
             client._receive(restart_call)
             assert last_tool_text(client) == (
@@ -3316,7 +3442,7 @@ def test_restart_allows_accepted_relay_shutdown_to_finish(
             )
             helper_pid = int(helper_marker.read_text(encoding="utf-8"))
 
-            restarted = client._start_session(action="restart")
+            restarted = client._start_send(control="restart")
             wait_for_marker(
                 temporary_path,
                 "zod-relay-stopped-after-shutdown",
@@ -3403,7 +3529,7 @@ def test_restart_outer_force_stops_unresponsive_relay(binary: Path) -> Transcrip
                 "Zod launcher did not inherit the relay process group"
             )
 
-            restarted = client._start_session(action="restart")
+            restarted = client._start_send(control="restart")
             received = threading.Event()
             errors: list[BaseException] = []
 
@@ -3483,7 +3609,7 @@ def test_restart_starts_first_worker_and_waits_until_ready(
         passed = False
         try:
             client._initialize_and_list_tools()
-            restarted = client._start_session(action="restart")
+            restarted = client._start_send(control="restart")
             wait_for_marker(
                 temporary_path,
                 "zod-replacement-waiting-ready",
@@ -3556,7 +3682,7 @@ def test_restart_does_not_report_never_ready_worker_as_stopped(
             descendant_group = int(marker.read_text(encoding="utf-8"))
 
             startup_control.write_text("ready", encoding="utf-8")
-            restarted = client._start_session(action="restart")
+            restarted = client._start_send(control="restart")
             responses_returned = threading.Event()
             forced_stop = threading.Event()
 
@@ -3634,7 +3760,7 @@ def test_restart_commits_lifecycle_before_replacement_callbacks(
         assert last_tool_text(client) == "[done]"
 
         startup_control.write_text("ready with callback", encoding="utf-8")
-        client.session(action="restart")
+        client.send(control="restart")
         assert last_tool_text(client) == (
             "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
         )
@@ -3648,7 +3774,7 @@ def test_restart_commits_lifecycle_before_replacement_callbacks(
         )
         callback.unlink()
 
-        client.session(action="restart")
+        client.send(control="restart")
         assert last_tool_text(client) == (
             "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
         )
@@ -3676,7 +3802,7 @@ def test_restart_discards_unread_stdin(binary: Path) -> Transcript:
     client.send(stdin="stale\n")
     assert last_tool_text(client) == "\n[idle]"
 
-    client.session(action="restart")
+    client.send(control="restart")
     assert last_tool_text(client) == (
         "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
     )
@@ -3927,7 +4053,7 @@ def test_restart_cancels_partial_sideband_frame(binary: Path) -> Transcript:
             descendant_group = int(marker.read_text(encoding="utf-8"))
             release_partial_sideband(marker)
 
-            restarted = client._start_session(action="restart")
+            restarted = client._start_send(control="restart")
             received = threading.Event()
             errors: list[BaseException] = []
 
@@ -3991,7 +4117,7 @@ def test_restart_cancels_reader_after_operation_result(
             )
             descendant_group = int(marker.read_text(encoding="utf-8"))
 
-            restarted = client._start_session(action="restart")
+            restarted = client._start_send(control="restart")
             received = threading.Event()
             errors: list[BaseException] = []
 

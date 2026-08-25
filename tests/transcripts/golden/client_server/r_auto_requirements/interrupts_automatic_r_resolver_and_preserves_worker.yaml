@@ -21,12 +21,15 @@ result:
         Error: R package resolution interrupted
   isError: false
 ---
-session:
-  action: interrupt
+send:
+  control: interrupt
+  timeout_ms: 0
 result:
   content:
     - type: text
-      text: "[interrupt sent]"
+      text: |-
+
+        [idle]
   isError: false
 ---
 send:
@@ -40,4 +43,3 @@ result:
       text: |
         [1] 42
   isError: false
-...

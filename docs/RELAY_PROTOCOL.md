@@ -155,8 +155,9 @@ When the server sends an `interrupt` command, the relay calls `kill(worker_pid, 
 Success means that the operating system accepted signal delivery, not that the worker has already handled the signal or stopped its current operation.
 Host-resolver interruption requests do not cross this boundary as relay `interrupt` commands.
 The server can still classify the resulting runtime R reply as `r_resolution_failed` with `failure` set to `interrupted`.
-Standalone session interruption returns after this delivery acknowledgement.
-Inline send interruption adds the server-owned stdin enqueue and 100-millisecond grace before it observes the earlier evaluation or considers a new cell; the relay does not implement that grace or decide whether evaluation can proceed.
+The server then performs the `send`-owned stdin enqueue and 100-millisecond grace before it observes the earlier evaluation or considers a new cell.
+A control-only call returns the state and output visible after that grace.
+The relay does not implement the grace or decide whether evaluation can proceed.
 
 For restart or server shutdown, the server registers one relay-shutdown request and queues one `shutdown` command against the existing absolute one-second worker deadline.
 The sole relay-command writer computes `grace_millis` from the time remaining when it serializes that command, so earlier queued writes cannot extend the worker deadline.
