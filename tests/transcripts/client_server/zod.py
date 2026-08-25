@@ -1335,7 +1335,7 @@ def test_compacts_split_terminal_redraws(binary: Path) -> Transcript:
     client._initialize_and_list_tools()
 
     client.send(r="emit terminal redraws")
-    assert last_tool_text(client) == "ordinary stdout\r\nnew\nold\x1b[2Knew\n"
+    assert last_tool_text(client) == "ordinary stdout\r\nol\nnew\nold\x1b[2Knew\n"
     return client._finish()
 
 

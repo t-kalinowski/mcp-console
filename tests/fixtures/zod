@@ -441,7 +441,8 @@ def main() -> None:
 
         if source == "emit terminal redraws":
             write_all(1, b"ordinary stdout\r\r\n")
-            write_all(1, b"old\r")
+            write_all(1, b"old\r\b\n")
+            write_all(1, b"old\r\b")
             write_all(1, b"newx\b\n")
             write_all(1, b"old\x1b[")
             write_all(1, b"2Knew\n")

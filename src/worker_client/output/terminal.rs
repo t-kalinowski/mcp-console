@@ -4,6 +4,7 @@
 pub(super) struct Stream {
     line: String,
     pending_carriage_return: bool,
+    replace_on_write: bool,
 }
 
 impl Stream {
@@ -17,12 +18,19 @@ impl Stream {
 
     pub(super) fn finish(&mut self) -> String {
         self.pending_carriage_return = false;
+        self.replace_on_write = false;
         std::mem::take(&mut self.line)
     }
 
     fn character(&mut self, character: char, stable: &mut String) {
         if self.pending_carriage_return {
             if character == '\r' {
+                return;
+            }
+            if character == '\x08' {
+                self.pending_carriage_return = false;
+                self.line.pop();
+                self.replace_on_write = true;
                 return;
             }
             self.pending_carriage_return = false;
@@ -39,7 +47,13 @@ impl Stream {
             '\x08' => {
                 self.line.pop();
             }
-            _ => self.line.push(character),
+            _ => {
+                if self.replace_on_write {
+                    self.line.clear();
+                    self.replace_on_write = false;
+                }
+                self.line.push(character);
+            }
         }
     }
 
@@ -48,5 +62,6 @@ impl Stream {
         stable.push_str(delimiter);
         self.line.clear();
         self.pending_carriage_return = false;
+        self.replace_on_write = false;
     }
 }

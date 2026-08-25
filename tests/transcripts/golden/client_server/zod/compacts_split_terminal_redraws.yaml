@@ -6,6 +6,6 @@ send:
 result:
   content:
     - type: text
-      text: "ordinary stdout\r\nnew\nold\e[2Knew\n"
+      text: "ordinary stdout\r\nol\nnew\nold\e[2Knew\n"
   isError: false
 ...
