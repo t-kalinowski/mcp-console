@@ -159,6 +159,17 @@ impl Evaluation {
         })
     }
 
+    pub(super) fn is_interruptible(&self) -> Result<bool, String> {
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| "worker evaluation state lock poisoned".to_string())?;
+        Ok(matches!(
+            state.phase,
+            EvaluationPhase::Evaluating | EvaluationPhase::ReplacementStarting
+        ))
+    }
+
     /// Reserves an open response until restart finishes retiring the worker.
     pub(super) fn reserve_for_restart(self: &Arc<Self>) -> Result<EvaluationReservation, String> {
         let mut state = self

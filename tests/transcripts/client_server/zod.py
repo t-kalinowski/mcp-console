@@ -1779,14 +1779,17 @@ def test_interrupts_running_worker_with_sigint(binary: Path) -> Transcript:
     zod = Path(__file__).resolve().parents[2] / "fixtures" / "zod"
     with tempfile.TemporaryDirectory() as temporary_directory:
         temporary_path = Path(temporary_directory)
+        interrupt_release = FifoCheckpoint(temporary_path / "zod-interrupt-release")
         environment = os.environ.copy()
         environment["TMPDIR"] = temporary_directory
+        environment["MCP_CONSOLE_TEST_INTERRUPT_RELEASE"] = str(interrupt_release.path)
         client = McpClient(
             binary,
             ("serve", "--worker", str(zod)),
             environment,
         )
         passed = False
+        released = False
         try:
             client._initialize_and_list_tools()
             client.send(r="interrupt", timeout_ms=0)
@@ -1801,6 +1804,8 @@ def test_interrupts_running_worker_with_sigint(binary: Path) -> Transcript:
             assert last_tool_text(client) == "\n[running; poll with an empty send]"
             wait_for_marker(temporary_path, "zod-sigint-received", client)
 
+            interrupt_release.release()
+            released = True
             client.send(timeout_ms=3_000)
             assert last_tool_text(client) == "zod interrupted\n"
             client.send(r="echo echo")
@@ -1809,6 +1814,9 @@ def test_interrupts_running_worker_with_sigint(binary: Path) -> Transcript:
             passed = True
             return transcript
         finally:
+            if not released:
+                interrupt_release.release()
+            interrupt_release.close()
             if not passed:
                 stop_client(client)
 

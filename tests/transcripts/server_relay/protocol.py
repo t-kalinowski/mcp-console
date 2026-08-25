@@ -639,6 +639,77 @@ def test_interrupt_requirements_without_cell_is_rejected_before_signal(
     return transcript
 
 
+def test_control_only_interrupt_targets_blocked_controlled_restart_resolver(
+    binary: Path,
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        library = root / "unused-interrupted-candidate"
+        library.mkdir()
+        environment = _fake_ir_environment(root, [library])
+        resolver_started = FifoCheckpoint(root / "resolver-started", create=True)
+        resolver_release = FifoCheckpoint(root / "resolver-release", create=True)
+        resolver_interrupted = FifoCheckpoint(
+            root / "resolver-interrupted", create=True
+        )
+        environment["MCP_CONSOLE_TEST_IR_STARTED"] = str(resolver_started.path)
+        environment["MCP_CONSOLE_TEST_IR_RELEASE"] = str(resolver_release.path)
+        environment["MCP_CONSOLE_TEST_IR_INTERRUPTED"] = str(resolver_interrupted.path)
+        client = ServerRelayClient(binary, "ready", environment)
+        client.start_worker()
+        capture = (client.relay_root() / CAPTURE_NAME).open(encoding="utf-8")
+        resolver_released = False
+        finished = False
+        try:
+            controlled = client.client._start_send(
+                control="restart",
+                r="cell must not run after resolver interrupt",
+                requirements={"r": ["blocked-controlled-restart"]},
+            )
+            resolver_started.wait()
+            interrupt = client.client._start_send(
+                control="interrupt",
+                timeout_ms=0,
+            )
+            resolver_interrupted.wait()
+            client.client._receive_many([controlled, interrupt])
+
+            assert _tool_text(interrupt["result"]) == "\n[idle]", interrupt
+            result = controlled["result"]
+            assert result.get("isError") is True, result
+            error = "".join(
+                content["text"]
+                for content in result["content"]
+                if content["type"] == "text"
+            )
+            assert "R package resolution failed with exit status: 130" in error, error
+            assert _tool_text(client.send()) == "\n[idle]"
+
+            before_cleanup = client._read_open_capture(capture)
+            assert not any(entry.keys() == {"server"} for entry in before_cleanup), (
+                before_cleanup
+            )
+            transcript = client.finish_active()
+            finished = True
+        finally:
+            if not resolver_released:
+                resolver_release.release()
+                resolver_released = True
+            if not finished:
+                stop_client(client.client)
+                client._temporary.cleanup()
+            capture.close()
+            resolver_started.close()
+            resolver_release.close()
+            resolver_interrupted.close()
+
+        assert not (root / "ir-counter").exists()
+
+    commands = [entry["server"] for entry in transcript if entry.keys() == {"server"}]
+    assert commands == [], commands
+    return transcript
+
+
 def test_control_only_interrupt_preserves_controlled_completion_marker(
     binary: Path,
 ) -> Transcript:

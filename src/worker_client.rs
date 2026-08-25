@@ -478,7 +478,38 @@ impl Client {
             transcript,
             call_id,
         } = request;
-        let control = self.begin_controlled_send()?;
+        let standalone_interrupt = matches!(requested, SendControl::Interrupt)
+            && cell.is_none()
+            && requirements.is_none()
+            && stdin.as_ref().is_none_or(String::is_empty);
+        let control = match self.begin_controlled_send() {
+            Ok(control) => control,
+            Err(_) if standalone_interrupt => {
+                // A controlled restart owns admission while its resolver is live.
+                // Preserve resolver-first signaling for an empty interrupt.
+                self.interrupt_standalone_blocking()?;
+                std::thread::sleep(INTERRUPT_GRACE);
+                let control = match self.begin_controlled_send() {
+                    Ok(control) => control,
+                    Err(_) => {
+                        // The interrupted control still owns its response.
+                        return Ok(self.return_controlled_response(output::render_response(
+                            SendResponse::Running(Response::default()),
+                        )));
+                    }
+                };
+                let generation = control.generation();
+                return self.continue_after_interrupt(
+                    &control,
+                    generation,
+                    cell,
+                    requirements,
+                    transcript,
+                    call_id,
+                );
+            }
+            Err(error) => return Err(error),
+        };
         match requested {
             SendControl::Interrupt => self.interrupt_and_start_evaluation(
                 &control,
@@ -559,6 +590,18 @@ impl Client {
             }
         }
         std::thread::sleep(INTERRUPT_GRACE);
+        self.continue_after_interrupt(control, generation, cell, requirements, transcript, call_id)
+    }
+
+    fn continue_after_interrupt(
+        &self,
+        control: &ControlledSendAdmission,
+        generation: WorkerGeneration,
+        cell: Option<crate::cell::Cell>,
+        requirements: Option<RequirementSubmission>,
+        transcript: crate::transcript::Transcript,
+        call_id: Option<u64>,
+    ) -> Result<ControlledEvaluation, String> {
         self.ensure_controlled_generation(control, &generation)?;
 
         let _operation = self.admit_controlled_operation();

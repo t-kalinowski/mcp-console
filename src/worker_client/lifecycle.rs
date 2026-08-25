@@ -223,6 +223,55 @@ impl Drop for ControlledSendAdmission {
 }
 
 impl Client {
+    pub(super) fn interrupt_standalone_blocking(&self) -> Result<(), String> {
+        let resolver = {
+            let lifecycle = self
+                .0
+                .lifecycle
+                .lock()
+                .map_err(|_| "worker lifecycle lock poisoned".to_string())?;
+            lifecycle.processes.resolver.clone()
+        };
+        if let Some(resolver) = resolver
+            && resolver.interrupt()?
+        {
+            return Ok(());
+        }
+
+        let active = self.evaluation()?;
+        let (processes, worker_allowed) = {
+            let lifecycle = self
+                .0
+                .lifecycle
+                .lock()
+                .map_err(|_| "worker lifecycle lock poisoned".to_string())?;
+            let active_is_interruptible = active
+                .as_ref()
+                .map(|active| active.evaluation.is_interruptible())
+                .transpose()?
+                .unwrap_or(false);
+            let worker_allowed = lifecycle.controlled_send.is_none()
+                || (lifecycle.state == LifecycleState::Ready
+                    && active_is_interruptible
+                    && active
+                        .as_ref()
+                        .is_some_and(|active| active.generation.is(&lifecycle.generation)));
+            (lifecycle.processes.clone(), worker_allowed)
+        };
+        if let Some(resolver) = processes.resolver
+            && resolver.interrupt()?
+        {
+            return Ok(());
+        }
+        if worker_allowed {
+            return processes
+                .worker
+                .ok_or_else(|| "worker is not running".to_string())?
+                .interrupt();
+        }
+        Err("session control is in progress".to_string())
+    }
+
     pub(super) fn interrupt_blocking(&self) -> Result<(), String> {
         let processes = {
             let lifecycle = self
