@@ -559,6 +559,78 @@ def test_sends_python_cell_with_initial_requirements(binary: Path) -> Transcript
     return client._finish()
 
 
+def test_compacts_native_duckdb_progress_bar(binary: Path) -> Transcript:
+    client = McpClient(binary, ("serve",))
+    client._initialize_and_list_tools()
+    # fmt: python
+    python = code(r"""
+        import os
+        import tempfile
+
+        import duckdb
+
+        connection = duckdb.connect()
+        assert connection.execute(
+            "SELECT "
+            "current_setting('enable_progress_bar'), "
+            "current_setting('enable_progress_bar_print'), "
+            "current_setting('progress_bar_time')"
+        ).fetchone() == (True, True, 2000)
+        connection.execute("SET progress_bar_time = 1000000")
+        connection.execute("SET threads = 1")
+        row_count = 15_000_000
+        # DuckDB 1.5.5 emits at least 100 native progress redraws while
+        # processing this single-threaded physical table scan.
+        connection.execute(
+            "CREATE TABLE progress_rows AS "
+            "SELECT CAST(value AS INTEGER) AS value "
+            f"FROM range({row_count}) AS values(value)"
+        )
+
+        saved_stdout = os.dup(1)
+        try:
+            with tempfile.TemporaryFile() as capture:
+                os.dup2(capture.fileno(), 1)
+                connection.execute("SET progress_bar_time = 0")
+                result = connection.execute(
+                    "SELECT sum(hash(value)) FROM progress_rows"
+                ).fetchone()
+                capture.seek(0)
+                progress = capture.read()
+        finally:
+            os.dup2(saved_stdout, 1)
+            os.close(saved_stdout)
+
+        assert result[0] is not None
+        assert progress.count(b"\r") >= 100
+        with os.fdopen(os.dup(1), "wb") as stdout:
+            stdout.write(progress)
+        """)
+    client.send(
+        python=python,
+        requirements={"python": ["duckdb==1.5.5"]},
+        timeout_ms=0,
+    )
+    assert last_tool_text(client) == "\n[running; poll with an empty send]"
+
+    client.send(timeout_ms=10_000)
+    output = last_tool_text(client)
+    assert "\r" not in output, repr(output)
+    assert output.count("% ▕") == 1, repr(output)
+    final = output.rstrip()
+    graphic, separator, elapsed = final.rpartition(" (")
+    assert graphic.startswith("100% ▕"), repr(final)
+    assert graphic.endswith("▏"), repr(final)
+    assert separator and elapsed.endswith(" elapsed)"), repr(final)
+    client.transcript[-1]["result"]["content"][0]["text"] = f"{graphic} (<elapsed>)\n"
+    client.transcript[-1]["transcript_normalization"] = {
+        "target": "result.content[0].text",
+        "elapsed": "omitted",
+        "trailing_progress_padding": "omitted",
+    }
+    return client._finish()
+
+
 def test_uses_200_column_default(binary: Path) -> Transcript:
     client = McpClient(binary, ("serve",))
     client._initialize_and_list_tools()
