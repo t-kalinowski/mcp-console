@@ -232,6 +232,9 @@ impl ActiveTranscript {
             .map(BufWriter::new)
             .map_err(|error| format!("failed to create {}: {error}", journal.display()))?;
         let projections = (|| {
+            let working_directory = working_directory.to_str().ok_or_else(|| {
+                "Quarto execution root requires a UTF-8 working directory".to_string()
+            })?;
             let markdown_path = directory.join("transcript.md");
             let markdown = create_private_file(&markdown_path).map_err(|error| {
                 format!("failed to create {}: {error}", markdown_path.display())
@@ -240,7 +243,11 @@ impl ActiveTranscript {
             let quarto = create_private_file(&quarto_path)
                 .map_err(|error| format!("failed to create {}: {error}", quarto_path.display()))?;
             drop(quarto);
-            Ok(markdown::Writers::new(markdown, quarto_path))
+            Ok(markdown::Writers::new(
+                markdown,
+                quarto_path,
+                working_directory,
+            ))
         })();
         let (projections, pending_projection_failure) = match projections {
             Ok(projections) => (Some(projections), None),

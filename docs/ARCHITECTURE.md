@@ -295,6 +295,7 @@ For recording, the server decodes retained image data into files under the run's
 Artifact events appear as links in the live Markdown projection as soon as their files are recorded, even when no later poll collects them; result image blocks remain inline in result-content order.
 A journal or artifact failure disables further recording and reports a server diagnostic without stopping the console or worker.
 A Markdown or Quarto creation, append, or regeneration failure disables both derived projections; the journal and artifacts continue, and the server reports the failure once.
+This includes a server working directory that cannot be represented as UTF-8 because its exact path cannot be emitted as the QMD execution root.
 
 ## Platform support
 
