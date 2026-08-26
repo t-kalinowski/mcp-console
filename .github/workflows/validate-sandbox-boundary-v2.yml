@@ -1,0 +1,245 @@
+name: Validate sandbox boundary v2
+
+on:
+  push:
+    branches:
+      - sandbox-boundary-validation-v2
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CODEX_REVISION: 855e8f9ef5b4211408791252e02e38b4757218cc
+
+jobs:
+  validate:
+    name: macOS sandbox boundary
+    runs-on: macos-15
+    timeout-minutes: 180
+    env:
+      GITHUB_PAT: ${{ github.token }}
+      UV_NO_CONFIG: "1"
+      UV_PYTHON_DOWNLOADS: never
+
+    steps:
+      - name: Check out validation inputs
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Check out pinned Codex sandbox patch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: t-kalinowski/codex
+          ref: ${{ env.CODEX_REVISION }}
+          path: codex-source
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+
+      - name: Apply reconstructed changes
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import base64
+          import gzip
+          from pathlib import Path
+
+          root = Path.cwd()
+          codex_data = (root / ".validation-v2/codex.patch.gz.b64").read_text().strip()
+          (root / "codex.patch").write_bytes(gzip.decompress(base64.b64decode(codex_data)))
+          mcp_data = "".join(
+              path.read_text().strip()
+              for path in sorted((root / ".validation-v2").glob("mcp.patch.gz.b64.*"))
+          )
+          (root / "mcp.patch").write_bytes(gzip.decompress(base64.b64decode(mcp_data)))
+          PY
+          git -C codex-source apply --index --binary "$GITHUB_WORKSPACE/codex.patch"
+          git apply --index --binary "$GITHUB_WORKSPACE/mcp.patch"
+          git -C codex-source diff --cached --check
+          git diff --cached --check
+
+      - name: Set up Rust 1.95
+        uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+        with:
+          components: clippy, rustfmt
+
+      - name: Install just
+        uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532 # v2.62.49
+        with:
+          tool: just@1.51.0
+
+      - name: Install nextest
+        uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532 # v2.62.49
+        with:
+          tool: nextest
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          version: "0.12.4"
+
+      - name: Install DotSlash
+        uses: facebook/install-dotslash@1e4e7b3e07eaca387acb98f1d4720e0bee8dbb6a # v2
+
+      - name: Set up Bazel
+        uses: bazel-contrib/setup-bazel@c5acdfb288317d0b5c0bbd7a396a3dc868bb0f86 # 0.19.0
+        with:
+          bazelisk-version: 1.28.1
+          bazelisk-cache: true
+          disk-cache: ${{ runner.temp }}/bazel-disk-cache
+          repository-cache: true
+
+      - name: Validate Codex runner
+        shell: bash
+        working-directory: codex-source
+        run: |
+          set -euo pipefail
+          cargo check --manifest-path codex-rs/Cargo.toml -p codex-sandbox-api --bin mcp-console-sandbox
+          just fmt
+          just test -p codex-sandbox-api
+          just test -p codex-sandboxing
+          just fix -p codex-sandbox-api
+          just fix -p codex-sandboxing
+          just fmt
+          just bazel-lock-update
+          just bazel-lock-check
+          bazel build //codex-rs/sandbox-api/...
+          git diff --check
+          cargo build \
+            --manifest-path codex-rs/Cargo.toml \
+            --release \
+            --locked \
+            -p codex-sandbox-api \
+            --bin mcp-console-sandbox
+
+      - name: Install R
+        uses: r-lib/actions/setup-r@d3c5be51b12e724e68f33216ca3c148b66d5f0b6 # v2.12.1
+
+      - name: Install gettext for R source packages
+        shell: bash
+        run: |
+          sudo Rscript --vanilla -e \
+            'source("https://mac.R-project.org/bin/install.R"); install.libs("gettext"); stopifnot(file.exists(file.path("/opt/R", Sys.info()[["machine"]], "include", "libintl.h")))'
+
+      - name: Install R dependencies
+        uses: r-lib/actions/setup-r-dependencies@v2
+        with:
+          packages: |
+            any::arrow
+            any::DBI
+            any::dbplyr
+            any::dplyr
+            any::duckdb
+            any::nanoarrow
+            any::pillar
+            any::processx
+            any::tibble
+            github::rstudio/reticulate
+
+      - name: Install Quarto
+        uses: quarto-dev/quarto-actions/setup@v2
+
+      - name: Install MCP Console development tools
+        shell: bash
+        run: |
+          uv tool install r-lib-ir
+          uv tool install yamark
+          uv tool dir --bin >> "$GITHUB_PATH"
+
+      - name: Prewarm default R environment
+        env:
+          IR_NO_LOCAL_SOURCES: "1"
+        shell: bash
+        run: |
+          ir run \
+            --with tidyverse \
+            --with github::rstudio/reticulate \
+            --with DBI \
+            --with duckdb \
+            --with arrow \
+            --with nanoarrow \
+            --isolated \
+            --vanilla \
+            -e 'invisible(NULL)'
+
+      - name: Validate MCP Console
+        shell: bash
+        env:
+          MCP_CONSOLE_SANDBOX_RUNNER: ${{ github.workspace }}/codex-source/codex-rs/target/release/mcp-console-sandbox
+        run: |
+          set -euo pipefail
+          scripts/format
+          scripts/check
+          git diff --exit-code -- tests/transcripts/golden
+          cargo tree > "$RUNNER_TEMP/mcp-console-cargo-tree.txt"
+          if grep -Eq '(^| )codex-' "$RUNNER_TEMP/mcp-console-cargo-tree.txt"; then
+            echo "mcp-console dependency tree unexpectedly contains Codex crates" >&2
+            cat "$RUNNER_TEMP/mcp-console-cargo-tree.txt" >&2
+            exit 1
+          fi
+
+      - name: Build and smoke-test bundled wheel
+        shell: bash
+        env:
+          UV_TOOL_DIR: ${{ runner.temp }}/mcp-console-tool
+          UV_TOOL_BIN_DIR: ${{ runner.temp }}/mcp-console-bin
+          UV_CACHE_DIR: ${{ runner.temp }}/mcp-console-cache
+        run: |
+          set -euo pipefail
+          rm -rf dist
+          cargo build --locked --release --bin mcp-console
+          uvx --from 'maturin==1.14.1' \
+            maturin build \
+            --release \
+            --locked \
+            --compatibility pypi \
+            --out dist
+          python3 scripts/release.py bundle-sandbox-runner \
+            dist/*.whl \
+            codex-source/codex-rs/target/release/mcp-console-sandbox
+          python3 scripts/release.py smoke-wheel \
+            dist/*.whl \
+            target/release/mcp-console \
+            --target aarch64-apple-darwin
+
+      - name: Export validated changes
+        if: always() && !cancelled()
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/sandbox-boundary-validation-v2"
+          printf '%s\n' "${{ job.status }}" > "$RUNNER_TEMP/sandbox-boundary-validation-v2/job-status.txt"
+
+          git restore --source=HEAD --staged --worktree -- \
+            .validation-v2 \
+            .github/workflows/validate-sandbox-boundary-v2.yml
+          rm -f codex.patch mcp.patch
+          git add -A
+          git diff --cached --check
+          git diff --cached --binary > "$RUNNER_TEMP/sandbox-boundary-validation-v2/mcp-validated.patch"
+
+          git -C codex-source add -A
+          git -C codex-source diff --cached --check
+          git -C codex-source diff --cached --binary > "$RUNNER_TEMP/sandbox-boundary-validation-v2/codex-validated.patch"
+
+          if [[ -f "$RUNNER_TEMP/mcp-console-cargo-tree.txt" ]]; then
+            cp "$RUNNER_TEMP/mcp-console-cargo-tree.txt" "$RUNNER_TEMP/sandbox-boundary-validation-v2/"
+          fi
+          if compgen -G 'dist/*.whl' >/dev/null; then
+            cp dist/*.whl "$RUNNER_TEMP/sandbox-boundary-validation-v2/"
+          fi
+
+      - name: Upload validation results
+        if: always() && !cancelled()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sandbox-boundary-validation-v2
+          path: ${{ runner.temp }}/sandbox-boundary-validation-v2
+          if-no-files-found: error
