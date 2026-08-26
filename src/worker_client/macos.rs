@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 use std::io::BufReader;
-use std::process::Stdio;
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -25,7 +24,9 @@ pub(super) enum RelayRetirementAllowance {
 }
 
 /// Spawns workers through the platform's runtime boundary.
-pub(super) struct WorkerRuntime;
+pub(super) struct WorkerRuntime {
+    sandbox: crate::sandbox::SandboxRuntime,
+}
 
 pub(super) struct Worker {
     stdin: StdinSender,
@@ -44,11 +45,15 @@ pub(super) struct WorkerShutdownHandle {
     interrupts: InterruptRequests,
     shutdown_started: ShutdownAcceptance,
     ready_commit: ReadyCommit,
-    child: Arc<Mutex<crate::sandbox::SandboxedChild>>,
+    process: crate::sandbox::SandboxedProcess,
+    stdin_cancellation: crate::sandbox::SandboxIoCancellation,
+    stdout_cancellation: crate::sandbox::SandboxIoCancellation,
 }
 
 struct RelayConnection {
-    child: Arc<Mutex<crate::sandbox::SandboxedChild>>,
+    process: crate::sandbox::SandboxedProcess,
+    stdin_cancellation: crate::sandbox::SandboxIoCancellation,
+    stdout_cancellation: crate::sandbox::SandboxIoCancellation,
     commands: RelayCommandSender,
     tasks: Option<Box<RelayTasks>>,
 }
@@ -106,6 +111,12 @@ struct ReadyCommit(Arc<Mutex<Option<ReadyCommitSender>>>);
 type ReadyCommitSender = mpsc::Sender<ReadyCommitOutcome>;
 
 impl WorkerRuntime {
+    pub(super) fn new() -> Result<Self, String> {
+        Ok(Self {
+            sandbox: crate::sandbox::SandboxRuntime::new()?,
+        })
+    }
+
     /// Starts a relay in the sandbox and waits for its worker's ready message.
     pub(super) fn spawn(
         &self,
@@ -130,8 +141,9 @@ impl WorkerRuntime {
                 format!("failed to locate the worker relay executable: {error}")
             })?,
         };
-        let mut command = crate::sandbox::SandboxedCommand::new(relay_executable.as_os_str())
-            .map_err(|error| format!("failed to prepare worker sandbox: {error}"))?;
+        let mut command =
+            crate::sandbox::SandboxedCommand::new(&self.sandbox, relay_executable.as_os_str())
+                .map_err(|error| format!("failed to prepare worker sandbox: {error}"))?;
         if let Some(python) = python {
             python.configure_worker(&mut command);
         }
@@ -144,10 +156,10 @@ impl WorkerRuntime {
         command
             .arg(executable.as_os_str())
             .args(arguments)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::inherit())
-            .new_process_group();
+            .stdin(crate::sandbox::SandboxStdioMode::Pipe)
+            .stdout(crate::sandbox::SandboxStdioMode::Pipe)
+            .stderr(crate::sandbox::SandboxStdioMode::Inherit)
+            .supervised_process_tree();
 
         let (worker_events, worker_event_receiver) = mpsc::channel();
 
@@ -160,7 +172,9 @@ impl WorkerRuntime {
         let relay_stdout = child
             .take_stdout()
             .expect("piped worker relay stdout should be available");
-        let child = Arc::new(Mutex::new(child));
+        let stdin_cancellation = relay_stdin.cancellation();
+        let stdout_cancellation = relay_stdout.cancellation();
+        let process = child.process();
 
         let operation = WorkerOperationState::new();
         let interrupts = InterruptRequests::new();
@@ -185,7 +199,9 @@ impl WorkerRuntime {
         );
 
         let relay = RelayConnection {
-            child,
+            process,
+            stdin_cancellation,
+            stdout_cancellation,
             commands: commands.clone(),
             tasks: Some(Box::new(RelayTasks {
                 dispatcher,
@@ -358,7 +374,9 @@ impl Worker {
             interrupts: self.interrupts.clone(),
             shutdown_started: self.shutdown_started.clone(),
             ready_commit: self.ready_commit.clone(),
-            child: self.relay.child.clone(),
+            process: self.relay.process.clone(),
+            stdin_cancellation: self.relay.stdin_cancellation.clone(),
+            stdout_cancellation: self.relay.stdout_cancellation.clone(),
         }
     }
 
@@ -387,7 +405,7 @@ fn receive_operation(
 }
 
 fn start_relay_command_writer(
-    relay_stdin: std::process::ChildStdin,
+    relay_stdin: crate::sandbox::SandboxedStdin,
     events: mpsc::Sender<WorkerEvent>,
 ) -> (RelayCommandSender, RelayCommandThread) {
     let (writer, receiver) = mpsc::channel();
@@ -430,7 +448,7 @@ fn start_relay_command_writer(
 }
 
 fn start_relay_event_reader(
-    relay_stdout: std::process::ChildStdout,
+    relay_stdout: crate::sandbox::SandboxedOutput,
     events: mpsc::Sender<WorkerEvent>,
 ) -> thread::JoinHandle<()> {
     thread::spawn(move || {
@@ -702,33 +720,45 @@ impl WorkerShutdownHandle {
         retirement_deadline: Instant,
         allowance: RelayRetirementAllowance,
     ) -> Result<(), String> {
-        let mut child = self
-            .child
-            .lock()
-            .map_err(|_| "worker child lock poisoned".to_string())?;
         let remaining = deadline.saturating_duration_since(Instant::now());
-        let wait = match child.wait_timeout_without_reaping(remaining) {
-            Ok(true) => Ok(()),
+        let mut root_exited = false;
+        let wait = match self.process.wait_root_timeout(remaining) {
+            Ok(true) => {
+                root_exited = true;
+                Ok(())
+            }
             Ok(false) => match self.should_wait_for_relay_retirement(allowance) {
-                Ok(true) => child
-                    .wait_timeout_without_reaping(
-                        retirement_deadline.saturating_duration_since(Instant::now()),
-                    )
-                    .map(|_| ()),
+                Ok(true) => match self.process.wait_root_timeout(
+                    retirement_deadline.saturating_duration_since(Instant::now()),
+                ) {
+                    Ok(exited) => {
+                        root_exited = exited;
+                        Ok(())
+                    }
+                    Err(error) => Err(error),
+                },
                 Ok(false) => Ok(()),
                 Err(error) => Err(error),
             },
             Err(error) => Err(error),
         };
-        let stop = child.force_stop();
-        match (wait, stop) {
-            (Ok(()), Ok(())) => Ok(()),
-            (Err(error), Ok(())) => Err(error),
-            (Ok(()), Err(error)) => Err(error),
-            (Err(error), Err(stop_error)) => Err(format!(
-                "{error}; additionally failed to stop the worker relay: {stop_error}"
-            )),
+        let terminate = if root_exited {
+            Ok(())
+        } else {
+            self.process
+                .terminate()
+                .map_err(|error| format!("failed to stop the worker relay: {error}"))
+        };
+        let retire = self
+            .process
+            .retire()
+            .map(|_| ())
+            .map_err(|error| format!("failed to retire the worker relay: {error}"));
+        if retire.is_err() {
+            self.stdin_cancellation.cancel();
+            self.stdout_cancellation.cancel();
         }
+        combine_shutdown_results(wait, combine_shutdown_results(terminate, retire))
     }
 
     fn should_wait_for_relay_retirement(

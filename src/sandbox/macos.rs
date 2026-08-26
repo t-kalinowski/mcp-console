@@ -1,450 +1,403 @@
-use std::ffi::OsString;
-use std::fs::{self, DirBuilder};
-use std::io;
-use std::os::unix::fs::DirBuilderExt;
-use std::os::unix::process::ExitStatusExt;
-use std::path::{Path, PathBuf};
-use std::process::{Command, ExitCode, ExitStatus};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::collections::BTreeMap;
+use std::ffi::{CString, OsStr, OsString};
+use std::fs;
+use std::os::unix::ffi::OsStrExt as _;
+use std::os::unix::fs::PermissionsExt as _;
+use std::path::{Component, Path, PathBuf};
+use std::process::ExitCode;
+use std::sync::Arc;
+use std::time::Duration;
 
-pub(super) const SANDBOX_EXEC: &str = "/usr/bin/sandbox-exec";
-const POLICY: &str = include_str!("read_only_policy.sbpl");
-const CHILD_EXITED: libc::c_int = 1;
-const CHILD_KILLED: libc::c_int = 2;
-const CHILD_DUMPED: libc::c_int = 3;
-const CHILD_STOPPED: libc::c_int = 5;
-const CHILD_CONTINUED: libc::c_int = 6;
-const CHILD_EXIT_POLL_INTERVAL: Duration = Duration::from_millis(1);
-const PROCESS_GROUP_STOP_POLL_INTERVAL: Duration = Duration::from_millis(1);
-const PROCESS_GROUP_STOP_TIMEOUT: Duration = Duration::from_secs(1);
+use codex_sandbox_api::{
+    CommandSpec, SandboxBackend, SandboxExitStatus, SandboxLifetime, SandboxPolicy, SandboxRequest,
+    SandboxRuntime as ApiRuntime, SandboxRuntimeConfig, SandboxStdioMode,
+};
 
-pub(super) fn wait_for_process_exit_without_reaping(
-    process_id: u32,
-    timeout: Duration,
-) -> io::Result<bool> {
-    let process_id = valid_process_id(process_id, "process")?;
-    let wait_id = libc::id_t::try_from(process_id)
-        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "invalid process ID"))?;
-    let deadline = Instant::now() + timeout;
+use super::driver::Driver;
+pub(crate) use super::driver::{SandboxedOutput, SandboxedStdin};
 
-    loop {
-        let mut information = std::mem::MaybeUninit::<libc::siginfo_t>::zeroed();
-        // SAFETY: `information` points to writable `siginfo_t` storage and the
-        // positive PID names our direct child. `WNOWAIT` observes termination
-        // without consuming the wait status, keeping the PID unavailable for
-        // reuse until the caller finishes process-group cleanup and reaps it.
-        let result = unsafe {
-            libc::waitid(
-                libc::P_PID,
-                wait_id,
-                information.as_mut_ptr(),
-                libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
-            )
-        };
-        if result < 0 {
-            let error = io::Error::last_os_error();
-            if error.kind() == io::ErrorKind::Interrupted {
-                if Instant::now() >= deadline {
-                    return Ok(false);
-                }
-                continue;
-            }
-            return Err(error);
-        }
+const EXPECTED_SANDBOX_API_VERSION: u32 = 2;
+const DARWIN_DEFAULT_EXEC_PATH: &str = "/usr/bin:/bin";
 
-        // SAFETY: successful `waitid` initialized the supplied `siginfo_t`.
-        // Darwin leaves `si_pid` zero when `WNOHANG` finds no matching event.
-        let information = unsafe { information.assume_init() };
-        let observed_process_id = information.si_pid;
-        if observed_process_id == process_id {
-            match information.si_code {
-                CHILD_EXITED | CHILD_KILLED | CHILD_DUMPED => return Ok(true),
-                CHILD_STOPPED | CHILD_CONTINUED => {
-                    // Darwin may report a pending stop or continue notification
-                    // even though this observation requested only `WEXITED`.
-                    // Consume only non-exit notifications so a stopped relay is
-                    // not mistaken for an exited relay, while leaving any exit
-                    // status waitable to pin the process-group identity.
-                    if let Err(error) = consume_non_exit_notification(wait_id, process_id) {
-                        if error.kind() == io::ErrorKind::Interrupted {
-                            if Instant::now() >= deadline {
-                                return Ok(false);
-                            }
-                            continue;
-                        }
-                        return Err(error);
-                    }
-                    continue;
-                }
-                code => {
-                    return Err(io::Error::new(
-                        io::ErrorKind::InvalidData,
-                        format!("waitid returned unexpected child status code {code}"),
-                    ));
-                }
-            }
-        }
-        if observed_process_id != 0 {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!(
-                    "waitid returned process {observed_process_id} while waiting for {process_id}"
-                ),
+#[derive(Clone)]
+pub(crate) struct SandboxRuntime(Arc<RuntimeOwner>);
+
+struct RuntimeOwner {
+    api: Arc<ApiRuntime>,
+    driver: Driver,
+    _state_directory: PrivateDirectory,
+}
+
+struct PrivateDirectory {
+    _directory: tempfile::TempDir,
+    path: PathBuf,
+}
+
+#[derive(Clone)]
+struct SandboxLease {
+    runtime: SandboxRuntime,
+    _launch_directory: Arc<PrivateDirectory>,
+}
+
+pub(crate) struct SandboxedCommand {
+    runtime: SandboxRuntime,
+    program: OsString,
+    arguments: Vec<OsString>,
+    environment: BTreeMap<OsString, Option<OsString>>,
+    stdin: SandboxStdioMode,
+    stdout: SandboxStdioMode,
+    stderr: SandboxStdioMode,
+    lifetime: SandboxLifetime,
+    launch_directory: Arc<PrivateDirectory>,
+}
+
+#[must_use = "retain the sandboxed child until its process and streams are retired"]
+pub(crate) struct SandboxedChild {
+    process: SandboxedProcess,
+    stdin: Option<SandboxedStdin>,
+    stdout: Option<SandboxedOutput>,
+    stderr: Option<SandboxedOutput>,
+}
+
+#[derive(Clone)]
+pub(crate) struct SandboxedProcess {
+    process: codex_sandbox_api::SandboxedProcess,
+    lease: SandboxLease,
+}
+
+impl SandboxRuntime {
+    pub(crate) fn new() -> Result<Self, String> {
+        if codex_sandbox_api::SANDBOX_API_VERSION != EXPECTED_SANDBOX_API_VERSION {
+            return Err(format!(
+                "unsupported sandbox API version {}; expected {EXPECTED_SANDBOX_API_VERSION}",
+                codex_sandbox_api::SANDBOX_API_VERSION
             ));
         }
 
-        let now = Instant::now();
-        if now >= deadline {
-            return Ok(false);
-        }
-        std::thread::sleep(CHILD_EXIT_POLL_INTERVAL.min(deadline.saturating_duration_since(now)));
+        let state_directory = PrivateDirectory::new("mcp-console-sandbox-state-")?;
+        let api = ApiRuntime::new(SandboxRuntimeConfig::new(&state_directory.path))
+            .map_err(|error| format!("failed to initialize the sandbox runtime: {error}"))?;
+        validate_capabilities(api.capabilities())?;
+        let driver = Driver::new()?;
+        Ok(Self(Arc::new(RuntimeOwner {
+            api: Arc::new(api),
+            driver,
+            _state_directory: state_directory,
+        })))
     }
 }
 
-fn consume_non_exit_notification(wait_id: libc::id_t, process_id: libc::pid_t) -> io::Result<()> {
-    let mut information = std::mem::MaybeUninit::<libc::siginfo_t>::zeroed();
-    // SAFETY: `information` points to writable `siginfo_t` storage and the
-    // positive PID names our direct child. Omitting `WEXITED` and `WNOWAIT`
-    // consumes only a pending stop or continue notification, never the exit
-    // status that keeps the child's PID unavailable for reuse.
-    let result = unsafe {
-        libc::waitid(
-            libc::P_PID,
-            wait_id,
-            information.as_mut_ptr(),
-            libc::WSTOPPED | libc::WCONTINUED | libc::WNOHANG,
-        )
-    };
-    if result < 0 {
-        return Err(io::Error::last_os_error());
-    }
-
-    // SAFETY: successful `waitid` initialized the supplied `siginfo_t`.
-    let information = unsafe { information.assume_init() };
-    if information.si_pid == 0 {
-        return Ok(());
-    }
-    if information.si_pid != process_id {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!(
-                "waitid returned process {} while consuming a notification for {process_id}",
-                information.si_pid
-            ),
-        ));
-    }
-    if !matches!(information.si_code, CHILD_STOPPED | CHILD_CONTINUED) {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!(
-                "waitid consumed unexpected child status code {}",
-                information.si_code
-            ),
-        ));
-    }
-    Ok(())
-}
-
-pub(super) fn kill_process_group(process_group_id: u32) -> io::Result<()> {
-    let process_group_id = valid_process_id(process_group_id, "process group")?;
-
-    // SAFETY: the group ID is positive and identifies the group created for
-    // the sandbox child.
-    if unsafe { libc::killpg(process_group_id, libc::SIGKILL) } < 0 {
-        let group_error = io::Error::last_os_error();
-        if group_error.raw_os_error() == Some(libc::ESRCH) {
-            return Ok(());
-        }
-        if group_error.kind() != io::ErrorKind::PermissionDenied {
-            return Err(group_error);
-        }
-    }
-
-    kill_process_group_members(process_group_id, None)
-}
-
-pub(super) fn kill_process_group_members_except(
-    process_group_id: u32,
-    excluded_process_id: u32,
-) -> io::Result<()> {
-    let process_group_id = valid_process_id(process_group_id, "process group")?;
-    let excluded_process_id = valid_process_id(excluded_process_id, "excluded process")?;
-    kill_process_group_members(process_group_id, Some(excluded_process_id))
-}
-
-fn valid_process_id(process_id: u32, kind: &str) -> io::Result<libc::pid_t> {
-    libc::pid_t::try_from(process_id)
-        .ok()
-        .filter(|process_id| *process_id > 0)
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, format!("invalid {kind} ID")))
-}
-
-fn kill_process_group_members(
-    process_group_id: libc::pid_t,
-    excluded_process_id: Option<libc::pid_t>,
-) -> io::Result<()> {
-    // Group signalling and the EPERM fallback both operate on PID snapshots.
-    // The full-group caller normally keeps the direct leader unreaped while
-    // rescanning so its PID pins the process-group identity until the caller
-    // collects it. If it was already reaped, exact membership checks still
-    // prevent a stale snapshot from targeting a process that changed groups.
-    // The relay-side caller remains alive as the excluded group leader.
-    let deadline = Instant::now() + PROCESS_GROUP_STOP_TIMEOUT;
-    loop {
-        let mut members = process_group_members(process_group_id)?;
-        if excluded_process_id.is_none() && !members.contains(&process_group_id) {
-            members.push(process_group_id);
-        }
-        // Stop the leader before its descendants so it cannot fork after this
-        // snapshot. A later pass must observe the exact group as quiescent.
-        members.sort_unstable_by_key(|process_id| *process_id != process_group_id);
-
-        let mut observed_live_member = false;
-        let mut first_error = None;
-        for process_id in members {
-            if process_id <= 0 || Some(process_id) == excluded_process_id {
-                continue;
-            }
-            match process_is_live_group_member(process_id, process_group_id) {
-                Ok(false) => continue,
-                Ok(true) => observed_live_member = true,
-                Err(error) if first_error.is_none() => {
-                    first_error = Some(error);
-                    continue;
-                }
-                Err(_) => continue,
-            }
-            match process_group_of(process_id) {
-                Ok(Some(current_group)) if current_group == process_group_id => {
-                    if let Err(error) = kill_process(process_id)
-                        && first_error.is_none()
-                    {
-                        first_error = Some(error);
-                    }
-                }
-                Ok(Some(_)) | Ok(None) => {}
-                Err(error) if first_error.is_none() => first_error = Some(error),
-                Err(_) => {}
-            }
-        }
-
-        if let Some(error) = first_error {
-            return Err(error);
-        }
-        // Darwin keeps zombies in process-group snapshots. A later pass with
-        // no live exact-group member is therefore the safe stopping condition.
-        if !observed_live_member {
-            return Ok(());
-        }
-
-        let now = Instant::now();
-        if now >= deadline {
-            return Err(io::Error::new(
-                io::ErrorKind::TimedOut,
+impl PrivateDirectory {
+    fn new(prefix: &str) -> Result<Self, String> {
+        let directory = tempfile::Builder::new()
+            .prefix(prefix)
+            .tempdir()
+            .map_err(|error| format!("failed to create private directory: {error}"))?;
+        fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700)).map_err(
+            |error| {
                 format!(
-                    "process group {process_group_id} remained live after {} ms",
-                    PROCESS_GROUP_STOP_TIMEOUT.as_millis()
-                ),
-            ));
-        }
-
-        std::thread::sleep(
-            PROCESS_GROUP_STOP_POLL_INTERVAL.min(deadline.saturating_duration_since(now)),
-        );
-    }
-}
-
-fn process_group_members(process_group_id: libc::pid_t) -> io::Result<Vec<libc::pid_t>> {
-    let mut process_ids: Vec<libc::pid_t> = vec![0; 16];
-    loop {
-        let buffer_size = libc::c_int::try_from(std::mem::size_of_val(process_ids.as_slice()))
-            .map_err(|_| {
-                io::Error::new(io::ErrorKind::InvalidData, "process group is too large")
-            })?;
-        // SAFETY: the buffer is writable for `buffer_size` bytes, and the
-        // positive group ID identifies the group created for the child.
-        clear_errno();
-        let count = unsafe {
-            libc::proc_listpgrppids(
-                process_group_id,
-                process_ids.as_mut_ptr().cast(),
-                buffer_size,
-            )
-        };
-        if count == 0
-            && let Some(error) = current_errno()
-        {
-            if error.raw_os_error() == Some(libc::ESRCH) {
-                return Ok(Vec::new());
-            }
-            return Err(error);
-        }
-        if count < 0 {
-            return Err(current_errno().unwrap_or_else(|| {
-                io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    "process-group enumeration returned a negative count",
+                    "failed to make private directory `{}` user-private: {error}",
+                    directory.path().display()
                 )
-            }));
-        }
-        let count = count as usize;
-        if count < process_ids.len() {
-            process_ids.truncate(count);
-            return Ok(process_ids);
-        }
-        let capacity = process_ids.len().checked_mul(2).ok_or_else(|| {
-            io::Error::new(io::ErrorKind::InvalidData, "process group is too large")
+            },
+        )?;
+        let path = directory.path().canonicalize().map_err(|error| {
+            format!(
+                "failed to resolve private directory `{}`: {error}",
+                directory.path().display()
+            )
         })?;
-        process_ids.resize(capacity, 0);
+        Ok(Self {
+            _directory: directory,
+            path,
+        })
     }
 }
 
-fn process_is_live_group_member(
-    process_id: libc::pid_t,
-    process_group_id: libc::pid_t,
-) -> io::Result<bool> {
-    let mut information = std::mem::MaybeUninit::<libc::proc_bsdshortinfo>::zeroed();
-    let information_size = libc::c_int::try_from(std::mem::size_of_val(&information))
-        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "process info is too large"))?;
-    clear_errno();
-    // SAFETY: `information` is writable for `information_size` bytes and the
-    // positive PID came from the kernel's process-group snapshot.
-    let result = unsafe {
-        libc::proc_pidinfo(
-            process_id,
-            libc::PROC_PIDT_SHORTBSDINFO,
-            0,
-            information.as_mut_ptr().cast(),
-            information_size,
-        )
-    };
-    if result == 0 {
-        return match current_errno() {
-            Some(error) if error.raw_os_error() != Some(libc::ESRCH) => Err(error),
-            Some(_) => Ok(false),
-            None => Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "process status returned no data without an error",
-            )),
-        };
+fn validate_capabilities(
+    capabilities: codex_sandbox_api::SandboxCapabilities,
+) -> Result<(), String> {
+    let mut missing = Vec::new();
+    if capabilities.backend != SandboxBackend::MacosSeatbelt {
+        missing.push("macOS Seatbelt");
     }
-    if result != information_size {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "process status had an unexpected size",
-        ));
+    if !capabilities.denied_write_paths {
+        missing.push("write restriction");
     }
-    // SAFETY: `proc_pidinfo` reported that it initialized the complete struct.
-    let information = unsafe { information.assume_init() };
-    Ok(information.pbsi_pgid == process_group_id as u32 && information.pbsi_status != libc::SZOMB)
-}
-
-fn clear_errno() {
-    // SAFETY: `__error` returns the calling thread's valid errno pointer.
-    unsafe { *libc::__error() = 0 };
-}
-
-fn current_errno() -> Option<io::Error> {
-    // SAFETY: `__error` returns the calling thread's valid errno pointer.
-    let error = unsafe { *libc::__error() };
-    (error != 0).then(|| io::Error::from_raw_os_error(error))
-}
-
-fn process_group_of(process_id: libc::pid_t) -> io::Result<Option<libc::pid_t>> {
-    // SAFETY: callers pass a positive PID returned by the kernel or the live
-    // sandbox child PID.
-    let process_group_id = unsafe { libc::getpgid(process_id) };
-    if process_group_id < 0 {
-        let error = io::Error::last_os_error();
-        if error.raw_os_error() == Some(libc::ESRCH) {
-            return Ok(None);
-        }
-        return Err(error);
+    if !capabilities.network_denial {
+        missing.push("network denial");
     }
-    Ok(Some(process_group_id))
-}
-
-fn kill_process(process_id: libc::pid_t) -> io::Result<()> {
-    // SAFETY: callers validate that the PID is positive and still belongs to
-    // the expected process group.
-    if unsafe { libc::kill(process_id, libc::SIGKILL) } < 0 {
-        let error = io::Error::last_os_error();
-        if error.raw_os_error() == Some(libc::ESRCH) {
-            return Ok(());
-        }
-        return Err(error);
+    if !capabilities.terminal_isolation {
+        missing.push("terminal isolation");
     }
-    Ok(())
-}
-
-pub(super) fn sandboxed_command() -> Result<(Command, TemporaryDirectory), String> {
-    let temporary_directory = TemporaryDirectory::new()?;
-    let mut launcher = Command::new(SANDBOX_EXEC);
-    launcher
-        .arg("-p")
-        .arg(POLICY)
-        .arg(parameter_definition(
-            "TEMP_DIRECTORY",
-            temporary_directory.path(),
+    if !capabilities.process_tree_termination {
+        missing.push("supervised process-tree termination");
+    }
+    if missing.is_empty() {
+        Ok(())
+    } else {
+        Err(format!(
+            "selected sandbox backend lacks required capabilities: {}",
+            missing.join(", ")
         ))
-        .arg("--");
-
-    Ok((launcher, temporary_directory))
-}
-
-pub(super) struct TemporaryDirectory(PathBuf);
-
-impl TemporaryDirectory {
-    fn new() -> Result<Self, String> {
-        let unique = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_err(|error| format!("failed to read the system clock: {error}"))?
-            .as_nanos();
-        let path =
-            std::env::temp_dir().join(format!("mcp-console-tmp-{}-{unique}", std::process::id()));
-
-        DirBuilder::new()
-            .mode(0o700)
-            .create(&path)
-            .map_err(|error| {
-                format!(
-                    "failed to create temporary directory `{}`: {error}",
-                    path.display()
-                )
-            })?;
-
-        let mut directory = Self(path);
-        directory.0 = directory.0.canonicalize().map_err(|error| {
-            format!(
-                "failed to resolve temporary directory `{}`: {error}",
-                directory.0.display()
-            )
-        })?;
-        Ok(directory)
-    }
-
-    pub(super) fn path(&self) -> &Path {
-        &self.0
     }
 }
 
-impl Drop for TemporaryDirectory {
-    fn drop(&mut self) {
-        // Cleanup must not replace the child status if it changed directory modes.
-        let _ = fs::remove_dir_all(&self.0);
+impl SandboxedCommand {
+    pub(crate) fn new(runtime: &SandboxRuntime, program: &OsStr) -> Result<Self, String> {
+        Ok(Self {
+            runtime: runtime.clone(),
+            program: program.to_os_string(),
+            arguments: Vec::new(),
+            environment: BTreeMap::new(),
+            stdin: SandboxStdioMode::Inherit,
+            stdout: SandboxStdioMode::Inherit,
+            stderr: SandboxStdioMode::Inherit,
+            lifetime: SandboxLifetime::BackendDefault,
+            launch_directory: Arc::new(PrivateDirectory::new("mcp-console-tmp-")?),
+        })
+    }
+
+    pub(crate) fn arg(&mut self, argument: impl AsRef<OsStr>) -> &mut Self {
+        self.arguments.push(argument.as_ref().to_os_string());
+        self
+    }
+
+    pub(crate) fn args<I, S>(&mut self, arguments: I) -> &mut Self
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
+        self.arguments.extend(
+            arguments
+                .into_iter()
+                .map(|argument| argument.as_ref().to_os_string()),
+        );
+        self
+    }
+
+    pub(crate) fn env(&mut self, key: impl AsRef<OsStr>, value: impl AsRef<OsStr>) -> &mut Self {
+        self.environment.insert(
+            key.as_ref().to_os_string(),
+            Some(value.as_ref().to_os_string()),
+        );
+        self
+    }
+
+    pub(crate) fn env_remove(&mut self, key: impl AsRef<OsStr>) -> &mut Self {
+        self.environment.insert(key.as_ref().to_os_string(), None);
+        self
+    }
+
+    pub(crate) fn stdin(&mut self, mode: SandboxStdioMode) -> &mut Self {
+        self.stdin = mode;
+        self
+    }
+
+    pub(crate) fn stdout(&mut self, mode: SandboxStdioMode) -> &mut Self {
+        self.stdout = mode;
+        self
+    }
+
+    pub(crate) fn stderr(&mut self, mode: SandboxStdioMode) -> &mut Self {
+        self.stderr = mode;
+        self
+    }
+
+    pub(crate) fn supervised_process_tree(&mut self) -> &mut Self {
+        self.lifetime = SandboxLifetime::SupervisedProcessTree;
+        self
+    }
+
+    pub(crate) fn spawn(self) -> Result<SandboxedChild, String> {
+        let Self {
+            runtime,
+            program,
+            arguments,
+            environment,
+            stdin,
+            stdout,
+            stderr,
+            lifetime,
+            launch_directory,
+        } = self;
+        let cwd = std::env::current_dir()
+            .map_err(|error| format!("failed to read the current working directory: {error}"))?;
+        let environment = complete_environment(environment, &launch_directory.path);
+        let program = resolve_executable(&program, &cwd, &environment)?;
+        let command = CommandSpec::new(program, cwd, environment).args(arguments);
+        let policy = SandboxPolicy::host_read_only()
+            .read_write(&launch_directory.path)
+            .network_denied()
+            .terminal_inherited_or_created();
+        let request = SandboxRequest::new(command, policy)
+            .stdin(stdin)
+            .stdout(stdout)
+            .stderr(stderr)
+            .lifetime(lifetime);
+        let api = Arc::clone(&runtime.0.api);
+        let mut child = runtime
+            .0
+            .driver
+            .run(async move { api.spawn(request).await.map_err(|error| error.to_string()) })?;
+        let lease = SandboxLease {
+            runtime,
+            _launch_directory: launch_directory,
+        };
+        let process = SandboxedProcess {
+            process: child.process(),
+            lease: lease.clone(),
+        };
+        let driver = lease.runtime.0.driver.clone();
+        let stdin = child
+            .take_stdin()
+            .map(|stdin| SandboxedStdin::new(&driver, stdin, lease.clone()));
+        let stdout = child
+            .take_stdout()
+            .map(|stdout| SandboxedOutput::new(&driver, stdout, lease.clone()));
+        let stderr = child
+            .take_stderr()
+            .map(|stderr| SandboxedOutput::new(&driver, stderr, lease));
+        Ok(SandboxedChild {
+            process,
+            stdin,
+            stdout,
+            stderr,
+        })
     }
 }
 
-// `sandbox-exec -DNAME=VALUE` supplies values for `(param "NAME")` in the SBPL.
-fn parameter_definition(name: &str, path: &Path) -> OsString {
-    let mut argument = OsString::from("-D");
-    argument.push(name);
-    argument.push("=");
-    argument.push(path);
-    argument
+fn complete_environment(
+    changes: BTreeMap<OsString, Option<OsString>>,
+    temporary_directory: &Path,
+) -> BTreeMap<OsString, OsString> {
+    let mut environment = std::env::vars_os().collect::<BTreeMap<_, _>>();
+    for (key, value) in changes {
+        if let Some(value) = value {
+            environment.insert(key, value);
+        } else {
+            environment.remove(&key);
+        }
+    }
+    environment.retain(|key, _| !key.as_encoded_bytes().starts_with(b"DYLD_"));
+    environment.insert(
+        OsString::from("TMPDIR"),
+        temporary_directory.as_os_str().to_os_string(),
+    );
+    environment
 }
 
-pub(super) fn exit_code(status: ExitStatus) -> ExitCode {
+fn resolve_executable(
+    program: &OsStr,
+    cwd: &Path,
+    environment: &BTreeMap<OsString, OsString>,
+) -> Result<OsString, String> {
+    let path = Path::new(program);
+    if path.is_absolute() {
+        return Ok(program.to_os_string());
+    }
+    if !is_bare_executable(path) {
+        return Ok(cwd.join(path).into_os_string());
+    }
+
+    // Darwin's `execvp` uses `_PATH_DEFPATH` only when PATH is absent. A
+    // present empty PATH remains a search of the current directory.
+    let search_path = environment
+        .get(OsStr::new("PATH"))
+        .map(OsString::as_os_str)
+        .unwrap_or_else(|| OsStr::new(DARWIN_DEFAULT_EXEC_PATH));
+    for directory in std::env::split_paths(search_path) {
+        let directory = if directory.is_absolute() {
+            directory
+        } else {
+            cwd.join(directory)
+        };
+        let candidate = directory.join(path);
+        if is_executable_file(&candidate) {
+            return Ok(candidate.into_os_string());
+        }
+    }
+    Err(format!(
+        "failed to resolve executable `{}` through the child PATH",
+        path.display()
+    ))
+}
+
+fn is_bare_executable(path: &Path) -> bool {
+    let mut components = path.components();
+    matches!(components.next(), Some(Component::Normal(_))) && components.next().is_none()
+}
+
+fn is_executable_file(path: &Path) -> bool {
+    let Ok(path_string) = CString::new(path.as_os_str().as_bytes()) else {
+        return false;
+    };
+    fs::metadata(path).is_ok_and(|metadata| metadata.is_file())
+        // SAFETY: `path_string` is a NUL-terminated copy of the candidate path.
+        && unsafe { libc::access(path_string.as_ptr(), libc::X_OK) } == 0
+}
+
+impl SandboxedChild {
+    pub(crate) fn take_stdin(&mut self) -> Option<SandboxedStdin> {
+        self.stdin.take()
+    }
+
+    pub(crate) fn take_stdout(&mut self) -> Option<SandboxedOutput> {
+        self.stdout.take()
+    }
+
+    #[allow(dead_code, reason = "available for sandboxed callers that pipe stderr")]
+    pub(crate) fn take_stderr(&mut self) -> Option<SandboxedOutput> {
+        self.stderr.take()
+    }
+
+    pub(crate) fn process(&self) -> SandboxedProcess {
+        self.process.clone()
+    }
+}
+
+impl SandboxedProcess {
+    pub(crate) fn wait_root_timeout(&self, timeout: Duration) -> Result<bool, String> {
+        let process = self.process.clone();
+        self.lease.runtime.0.driver.run(async move {
+            match tokio::time::timeout(timeout, process.wait_root()).await {
+                Ok(result) => result.map(|_| true).map_err(|error| error.to_string()),
+                Err(_) => Ok(false),
+            }
+        })
+    }
+
+    pub(crate) fn terminate(&self) -> Result<(), String> {
+        self.process.terminate().map_err(|error| error.to_string())
+    }
+
+    pub(crate) fn retire(&self) -> Result<SandboxExitStatus, String> {
+        let process = self.process.clone();
+        self.lease
+            .runtime
+            .0
+            .driver
+            .run(async move { process.retire().await.map_err(|error| error.to_string()) })
+    }
+}
+
+pub(super) fn run(command_line: &[OsString]) -> Result<ExitCode, String> {
+    let (program, arguments) = command_line
+        .split_first()
+        .expect("sandbox command must include a program");
+    let runtime = SandboxRuntime::new()?;
+    let mut command = SandboxedCommand::new(&runtime, program)?;
+    command
+        .args(arguments)
+        .stdin(SandboxStdioMode::Inherit)
+        .stdout(SandboxStdioMode::Inherit)
+        .stderr(SandboxStdioMode::Inherit);
+    let child = command.spawn()?;
+    let status = child.process().retire()?;
+    Ok(exit_code(status))
+}
+
+fn exit_code(status: SandboxExitStatus) -> ExitCode {
     let code = status
         .code()
         .unwrap_or_else(|| 128 + status.signal().unwrap_or(1));

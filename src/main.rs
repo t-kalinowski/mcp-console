@@ -29,6 +29,7 @@ mod worker_protocol;
 mod worker_relay;
 
 fn main() -> ExitCode {
+    codex_sandbox_api::dispatch_embedded_helper();
     match cli::Cli::parse().command {
         cli::Command::Serve { worker, relay } => match run_server(worker, relay) {
             Ok(()) => ExitCode::SUCCESS,

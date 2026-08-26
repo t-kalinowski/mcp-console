@@ -1,0 +1,20 @@
+#!/bin/sh
+set -eu
+
+: "${MCP_CONSOLE_TEST_RELAY_EXECUTABLE:?}"
+
+event="$TMPDIR/zod-test-event"
+control="$TMPDIR/zod-test-control"
+cleanup="$TMPDIR/zod-test-cleanup"
+
+umask 077
+/usr/bin/mkfifo "$event" "$control" "$cleanup"
+exec 3<>"$event"
+exec 4<>"$control"
+exec 5<>"$cleanup"
+
+export ZOD_TEST_EVENT_FD=3
+export ZOD_TEST_CONTROL_FD=4
+export ZOD_TEST_FIXTURE_CLEANUP_FD=5
+
+exec "$MCP_CONSOLE_TEST_RELAY_EXECUTABLE" worker-relay "$@"

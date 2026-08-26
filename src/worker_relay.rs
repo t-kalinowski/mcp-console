@@ -377,7 +377,7 @@ mod platform {
                 None
             }
         };
-        if let Err(error) = crate::sandbox::force_stop_process_group_members_except_self() {
+        if let Err(error) = codex_sandbox_api::terminate_current_process_group_members() {
             errors.push(format!("failed to stop the worker process group: {error}"));
         }
         let error = (!errors.is_empty()).then(|| errors.join("; "));
@@ -419,7 +419,7 @@ mod platform {
         {
             errors.push(format!("failed to stop the direct worker: {error}"));
         }
-        let group_error = crate::sandbox::force_stop_process_group_members_except_self().err();
+        let group_error = codex_sandbox_api::terminate_current_process_group_members().err();
         if let Some(error) = group_error.as_ref() {
             errors.push(format!("failed to stop the worker process group: {error}"));
         }

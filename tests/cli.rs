@@ -1045,6 +1045,185 @@ fn read_message(reader: &mut impl BufRead) -> Value {
 
 #[cfg(target_os = "macos")]
 #[test]
+fn sandbox_resolves_bare_executable_from_the_effective_child_path() {
+    let test_directory = TestDirectory::new("sandbox-path-resolution");
+    let executable = test_directory.path().join("program=fixture");
+    fs::copy("/usr/bin/true", &executable).expect("fixture executable should be copied");
+    fs::set_permissions(&executable, fs::Permissions::from_mode(0o755))
+        .expect("fixture executable should be executable");
+
+    let status = Command::new(env!("CARGO_BIN_EXE_mcp-console"))
+        .env("PATH", test_directory.path())
+        .args(["sandbox", "--", "program=fixture", "unused argument"])
+        .status()
+        .expect("mcp-console sandbox should run");
+
+    assert!(status.success(), "sandboxed fixture failed with {status}");
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn sandbox_uses_the_default_exec_path_when_path_is_unset() {
+    let output = Command::new(env!("CARGO_BIN_EXE_mcp-console"))
+        .env_remove("PATH")
+        .args(["sandbox", "--", "true"])
+        .output()
+        .expect("mcp-console sandbox should run");
+    assert!(
+        output.status.success(),
+        "sandboxed fixture failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let test_directory = TestDirectory::new("sandbox-empty-path");
+    let output = Command::new(env!("CARGO_BIN_EXE_mcp-console"))
+        .current_dir(test_directory.path())
+        .env("PATH", "")
+        .args(["sandbox", "--", "true"])
+        .output()
+        .expect("mcp-console sandbox should run");
+    assert!(
+        !output.status.success(),
+        "an explicitly empty PATH should search only the working directory"
+    );
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn sandbox_skips_path_candidates_the_current_user_cannot_execute() {
+    let test_directory = TestDirectory::new("sandbox-path-permissions");
+    let denied_directory = test_directory.path().join("denied");
+    let allowed_directory = test_directory.path().join("allowed");
+    fs::create_dir(&denied_directory).expect("denied fixture directory should be created");
+    fs::create_dir(&allowed_directory).expect("allowed fixture directory should be created");
+    let name = "program=fixture";
+    let denied = denied_directory.join(name);
+    let allowed = allowed_directory.join(name);
+    fs::copy("/usr/bin/false", &denied).expect("denied fixture should be copied");
+    fs::set_permissions(&denied, fs::Permissions::from_mode(0o010))
+        .expect("denied fixture permissions should be set");
+    fs::copy("/usr/bin/true", &allowed).expect("allowed fixture should be copied");
+    fs::set_permissions(&allowed, fs::Permissions::from_mode(0o755))
+        .expect("allowed fixture should be executable");
+    let path = std::env::join_paths([denied_directory, allowed_directory])
+        .expect("fixture PATH should be valid");
+
+    let status = Command::new(env!("CARGO_BIN_EXE_mcp-console"))
+        .env("PATH", path)
+        .args(["sandbox", "--", name])
+        .status()
+        .expect("mcp-console sandbox should run");
+
+    assert!(status.success(), "sandboxed fixture failed with {status}");
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn sandbox_constructs_the_complete_filtered_child_environment() {
+    let temp_root = TestDirectory::new("sandbox-complete-environment");
+    let script = r#"
+import os
+
+print(os.environ["MCP_CONSOLE_ENV_FIXTURE"])
+print("DYLD_MCP_CONSOLE_FIXTURE" in os.environ)
+print(os.environ["TMPDIR"])
+"#;
+    let output = Command::new(env!("CARGO_BIN_EXE_mcp-console"))
+        .env_clear()
+        .env("DYLD_MCP_CONSOLE_FIXTURE", "must be removed")
+        .env("MCP_CONSOLE_ENV_FIXTURE", "preserved")
+        .env("TMPDIR", temp_root.path())
+        .args(["sandbox", "--", "/usr/bin/python3", "-c", script])
+        .output()
+        .expect("mcp-console sandbox should run");
+
+    assert!(
+        output.status.success(),
+        "sandboxed Python failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be UTF-8");
+    let mut lines = stdout.lines();
+    assert_eq!(lines.next(), Some("preserved"));
+    assert_eq!(lines.next(), Some("False"));
+    let private_tmp = PathBuf::from(lines.next().expect("TMPDIR should be reported"));
+    assert!(private_tmp.starts_with(temp_root.path()));
+    assert_ne!(private_tmp, temp_root.path());
+    assert!(!private_tmp.exists());
+    assert_eq!(lines.next(), None);
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn sandbox_inherits_native_terminal_streams() {
+    let host_script = r#"
+import errno
+import os
+import pty
+import subprocess
+import sys
+
+master, slave = pty.openpty()
+try:
+    process = subprocess.Popen(
+        [sys.argv[1], "sandbox", "--", "/usr/bin/python3", "-c", sys.argv[2]],
+        stdin=slave,
+        stdout=slave,
+        stderr=slave,
+    )
+finally:
+    os.close(slave)
+
+output = bytearray()
+while True:
+    try:
+        chunk = os.read(master, 4096)
+    except OSError as error:
+        if error.errno == errno.EIO:
+            break
+        raise
+    if not chunk:
+        break
+    output.extend(chunk)
+os.close(master)
+
+status = process.wait()
+sys.stdout.buffer.write(output)
+raise SystemExit(status)
+"#;
+    let sandboxed_script = r#"
+import os
+
+print(os.isatty(0), os.isatty(1), os.isatty(2))
+"#;
+    let output = Command::new("python")
+        .args(["-c", host_script])
+        .arg(env!("CARGO_BIN_EXE_mcp-console"))
+        .arg(sandboxed_script)
+        .output()
+        .expect("Python PTY fixture should run");
+
+    assert!(
+        output.status.success(),
+        "sandboxed Python failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(output.stdout, b"True True True\r\n");
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn sandbox_projects_signal_termination_to_a_shell_exit_code() {
+    let status = Command::new(env!("CARGO_BIN_EXE_mcp-console"))
+        .args(["sandbox", "--", "/bin/sh", "-c", "kill -TERM $$"])
+        .status()
+        .expect("mcp-console sandbox should run");
+
+    assert_eq!(status.code(), Some(128 + libc::SIGTERM));
+}
+
+#[cfg(target_os = "macos")]
+#[test]
 fn sandbox_cannot_open_a_preexisting_pseudo_terminal() {
     let host_script = r#"
 import os
