@@ -56,7 +56,7 @@ jobs:
           root = Path.cwd()
           codex_data = (root / ".validation-v2/codex.patch.gz.b64").read_text().strip()
           codex_patch = gzip.decompress(base64.b64decode(codex_data))
-          if hashlib.sha256(codex_patch).hexdigest() != "0d1af2cf7f2806d154adf5767dc6e7a20ce4839ee7efab1044351db0230d8634":
+          if hashlib.sha256(codex_patch).hexdigest() != "42fbaa21071dd07e5f72ab33bab1e80755af8ca4e30b5d66489b393dd728871c":
               raise SystemExit("Codex validation patch digest mismatch")
           (root / "codex.patch").write_bytes(codex_patch)
 
@@ -65,7 +65,7 @@ jobs:
               for path in sorted((root / ".validation-v2").glob("mcp.patch.gz.b64.*"))
           )
           mcp_patch = gzip.decompress(base64.b64decode(mcp_data))
-          if hashlib.sha256(mcp_patch).hexdigest() != "5b11feb89c78071c2c3ba8d3c3fb8e7c31d780aaf0c3a30369880f6e37564205":
+          if hashlib.sha256(mcp_patch).hexdigest() != "afe3f4d0ab545c5dcfb35da98c6d793bdf70a722636181dfcdd268c5b491fbae":
               raise SystemExit("MCP Console validation patch digest mismatch")
           (root / "mcp.patch").write_bytes(mcp_patch)
           PY
