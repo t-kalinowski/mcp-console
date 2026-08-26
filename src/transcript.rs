@@ -7,8 +7,12 @@ use std::sync::{Arc, Mutex};
 
 use base64::Engine as _;
 use chrono::{DateTime, SecondsFormat, Utc};
-use rmcp::model::{
-    CallToolRequestParams, CallToolResult, ContentBlock, ErrorData, Meta, RequestId,
+use rmcp::{
+    ErrorData,
+    model::{
+        CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, RequestId,
+        RequestMetaObject,
+    },
 };
 use serde_json::{Value, json};
 
@@ -62,7 +66,7 @@ impl Transcript {
     pub(crate) fn begin(
         &self,
         request_id: &RequestId,
-        request_meta: &Meta,
+        request_meta: &RequestMetaObject,
         request: &CallToolRequestParams,
     ) -> Call {
         self.update(|state| {
@@ -104,7 +108,7 @@ impl Transcript {
         Ok(self.update(|state| state.active()?.persist_image(call_id, &bytes, mime_type)))
     }
 
-    pub(crate) fn finish(&self, call: Call, response: &Result<CallToolResult, ErrorData>) {
+    pub(crate) fn finish(&self, call: Call, response: &Result<CallToolResponse, ErrorData>) {
         let Some(call_id) = call.id else {
             return;
         };
@@ -349,14 +353,19 @@ impl ActiveTranscript {
         &mut self,
         call_id: u64,
         result_images: Vec<Artifact>,
-        response: &Result<CallToolResult, ErrorData>,
+        response: &Result<CallToolResponse, ErrorData>,
     ) -> Result<(), String> {
         let event = match response {
-            Ok(result) => json!({
+            Ok(CallToolResponse::Complete(result)) => json!({
                 "event": "tool_result",
                 "call_id": call_id,
                 "result": self.project_result(call_id, result_images, result)?,
             }),
+            Ok(_) => {
+                return Err(
+                    "console tool unexpectedly returned a non-final MCP response".to_string(),
+                );
+            }
             Err(error) => {
                 if !result_images.is_empty() {
                     return Err("tool error unexpectedly retained result images".to_string());
@@ -412,7 +421,13 @@ impl ActiveTranscript {
     ) -> Result<Value, String> {
         let mut value = serde_json::to_value(result)
             .map_err(|error| format!("failed to serialize tool result: {error}"))?;
-        let recorded_content = value
+        let recorded_result = value
+            .as_object_mut()
+            .ok_or_else(|| "serialized tool result is not an object".to_string())?;
+        // The transcript schema records the stable tool payload rather than
+        // protocol-version-specific MCP response-envelope fields.
+        recorded_result.remove("resultType");
+        let recorded_content = recorded_result
             .get_mut("content")
             .and_then(Value::as_array_mut)
             .ok_or_else(|| "serialized tool result has no content array".to_string())?;
