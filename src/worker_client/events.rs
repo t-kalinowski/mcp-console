@@ -830,8 +830,8 @@ fn dispatch_worker_events(
             }
             WorkerEvent::RelayClosed => {
                 relay_closed = true;
-                if !retiring
-                    && !(stdout_closed
+                if !(retiring
+                    || stdout_closed
                         && stderr_closed
                         && sideband_closed
                         && process_outcome.is_some())
