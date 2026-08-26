@@ -19,6 +19,8 @@ Resolves the \code{mcp-console} executable, starts
 \code{mcp-console serve}, and returns its \code{send} tool as an ellmer tool.
 The server process and its persistent R, Python, and DuckDB state live as long
 as the returned tool remains reachable.
+Interrupting an in-progress call closes that process so a later call cannot
+consume its unread response. Construct and register a new tool to continue.
 }
 \examples{
 \dontrun{

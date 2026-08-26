@@ -33,6 +33,9 @@ The returned tool owns one persistent MCP Console process. Synchronous
 `chat$chat_async()`, set `tool_mode = "sequential"` so calls that depend on the
 live R, Python, or DuckDB state retain their intended order.
 
+Interrupting an in-progress call from R closes its server process so a later call cannot consume an unread response.
+Construct and register a new tool before continuing.
+
 Pass a Python requirement to pin the executable version:
 
 ```r

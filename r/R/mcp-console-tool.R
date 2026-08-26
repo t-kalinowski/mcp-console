@@ -4,6 +4,8 @@
 #' `mcp-console serve`, and returns its `send` tool as an [ellmer::ToolDef].
 #' The server process and its persistent R, Python, and DuckDB state live as
 #' long as the returned tool remains reachable.
+#' Interrupting an in-progress call closes that process so a later call cannot
+#' consume its unread response. Construct and register a new tool to continue.
 #'
 #' @param from A Python package requirement passed to
 #'   [reticulate::uv_run_tool()]. The default resolves the latest available
@@ -17,7 +19,9 @@
 #' }
 #' @export
 mcp_console_tool <- function(from = "mcp-console") {
-  if (!is.character(from) || length(from) != 1L || is.na(from) || !nzchar(from)) {
+  if (
+    !is.character(from) || length(from) != 1L || is.na(from) || !nzchar(from)
+  ) {
     stop("`from` must be one non-empty string.", call. = FALSE)
   }
 
@@ -46,24 +50,28 @@ mcp_console_tool <- function(from = "mcp-console") {
   }
   metadata <- tools[[which(matches)]]
 
-  send <- function(
-    r = NULL,
-    python = NULL,
-    sql = NULL,
-    control = NULL,
-    requirements = NULL,
-    stdin = NULL,
-    timeout_ms = NULL
+  language_fields <- c("r", "python", "sql")
+  stable_fields <- c("control", "requirements", "stdin", "timeout_ms")
+  properties <- metadata$inputSchema$properties
+  property_fields <- names(properties)
+  configured_languages <- language_fields[language_fields %in% property_fields]
+  fields <- c(configured_languages, stable_fields)
+  if (
+    !is.list(properties) ||
+      anyDuplicated(property_fields) ||
+      length(configured_languages) == 0L ||
+      !setequal(property_fields, fields)
   ) {
-    arguments <- list(
-      r = r,
-      python = python,
-      sql = sql,
-      control = control,
-      requirements = requirements,
-      stdin = stdin,
-      timeout_ms = timeout_ms
+    stop(
+      "The installed mcp-console `send` schema is incompatible with this package.",
+      call. = FALSE
     )
+  }
+  properties <- properties[fields]
+  properties <- lapply(properties, ellmer_argument_schema)
+
+  send <- function() {
+    arguments <- mget(fields, envir = environment(), inherits = FALSE)
     arguments <- arguments[!vapply(arguments, is.null, logical(1))]
 
     if (!is.null(arguments$requirements)) {
@@ -80,15 +88,9 @@ mcp_console_tool <- function(from = "mcp-console") {
     )
     mcp_contents(result)
   }
-
-  fields <- names(formals(send))
-  properties <- metadata$inputSchema$properties
-  if (!setequal(names(properties), fields)) {
-    stop(
-      "The installed mcp-console `send` schema is incompatible with this package.",
-      call. = FALSE
-    )
-  }
+  send_formals <- rep(list(NULL), length(fields))
+  names(send_formals) <- fields
+  formals(send) <- send_formals
 
   tool <- ellmer::tool(
     send,
@@ -101,6 +103,76 @@ mcp_console_tool <- function(from = "mcp-console") {
   )
   ready <- TRUE
   tool
+}
+
+ellmer_argument_schema <- function(schema) {
+  types <- unlist(schema$type, use.names = FALSE)
+  if (length(types) == 0L || anyNA(types) || !all(nzchar(types))) {
+    stop(
+      "The installed mcp-console `send` schema is incompatible with this package.",
+      call. = FALSE
+    )
+  }
+  types <- unique(types[types != "null"])
+  if (length(types) == 0L) {
+    stop(
+      "The installed mcp-console `send` schema is incompatible with this package.",
+      call. = FALSE
+    )
+  }
+  schema$type <- if (length(types) == 1L) types[[1L]] else as.list(types)
+
+  if (!is.null(schema$enum)) {
+    enum <- as.list(schema$enum)
+    if (!any(vapply(enum, is.null, logical(1)))) {
+      enum <- c(enum, list(NULL))
+    }
+    schema$enum <- enum
+  }
+
+  if ("object" %in% types && is.list(schema$properties)) {
+    property_names <- names(schema$properties)
+    required <- unlist(schema$required, use.names = FALSE)
+    if (
+      is.null(property_names) ||
+        anyDuplicated(property_names) ||
+        anyNA(required) ||
+        !all(required %in% property_names)
+    ) {
+      stop(
+        "The installed mcp-console `send` schema is incompatible with this package.",
+        call. = FALSE
+      )
+    }
+    optional <- !property_names %in% required
+    schema$properties[optional] <- lapply(
+      schema$properties[optional],
+      function(property) {
+        property_types <- unlist(property$type, use.names = FALSE)
+        if (
+          length(property_types) == 0L ||
+            anyNA(property_types) ||
+            !all(nzchar(property_types))
+        ) {
+          stop(
+            "The installed mcp-console `send` schema is incompatible with this package.",
+            call. = FALSE
+          )
+        }
+        property_types <- unique(c(property_types, "null"))
+        property$type <- as.list(property_types)
+        if (!is.null(property$enum)) {
+          property_enum <- as.list(property$enum)
+          if (!any(vapply(property_enum, is.null, logical(1)))) {
+            property$enum <- c(property_enum, list(NULL))
+          }
+        }
+        property
+      }
+    )
+    schema$required <- as.list(property_names)
+  }
+  schema
 }
 
 resolve_mcp_console <- function(from) {
@@ -175,12 +247,15 @@ mcp_request <- function(client, method, params = NULL) {
   if (!is.null(params)) {
     message$params <- params
   }
+  complete <- FALSE
+  on.exit(if (!complete) close_mcp_client(client), add = TRUE)
   mcp_write(client, message)
 
   response <- mcp_read(client)
-  if (is.null(response$id) || as.integer(response$id) != id) {
+  if (!identical(response$id, id)) {
     stop("mcp-console sent an unexpected JSON-RPC message.", call. = FALSE)
   }
+  complete <- TRUE
   if (!is.null(response$error)) {
     stop(
       sprintf(
@@ -199,15 +274,18 @@ mcp_write <- function(client, message) {
   if (is.null(process) || !process$is_alive()) {
     stop_with_errors("mcp-console is not running.", client$errors)
   }
-  payload <- as.character(jsonlite::toJSON(
-    message,
-    auto_unbox = TRUE,
-    null = "null",
-    na = "null",
-    digits = NA
-  ))
+  payload <- paste0(
+    as.character(jsonlite::toJSON(
+      message,
+      auto_unbox = TRUE,
+      null = "null",
+      na = "null",
+      digits = NA
+    )),
+    "\n"
+  )
 
-  remaining <- process$write_input(payload, sep = "\n")
+  remaining <- process$write_input(payload)
   while (length(remaining) > 0L) {
     mcp_pump(client, 100)
     if (!process$is_alive()) {
@@ -255,19 +333,6 @@ mcp_pump <- function(client, timeout) {
 
 mcp_contents <- function(result) {
   content <- result$content
-  if (isTRUE(result$isError)) {
-    text <- vapply(
-      content,
-      \(x) if (identical(x$type, "text")) x$text else "",
-      character(1)
-    )
-    text <- paste(text[nzchar(text)], collapse = "\n")
-    stop(
-      if (nzchar(text)) text else "mcp-console tool call failed.",
-      call. = FALSE
-    )
-  }
-
   content <- lapply(content, function(x) {
     if (identical(x$type, "text")) {
       ellmer::ContentText(x$text)
@@ -277,6 +342,12 @@ mcp_contents <- function(result) {
       stop("mcp-console returned an unsupported content type.", call. = FALSE)
     }
   })
+
+  # ellmer cannot attach images to an errored tool result. MCP Console includes
+  # the failure text in `content`, so pass the complete ordered content through.
+  if (isTRUE(result$isError) && length(content) == 0L) {
+    content <- list(ellmer::ContentText("mcp-console tool call failed."))
+  }
 
   if (length(content) == 0L) {
     ""
