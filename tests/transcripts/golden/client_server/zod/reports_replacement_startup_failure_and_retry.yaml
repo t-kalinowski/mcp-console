@@ -34,7 +34,5 @@ result:
     - type: text
       text: |
         [starting new worker]
-        zod replacement startup ready
         zod R requirement: prepared=true
   isError: false
-...

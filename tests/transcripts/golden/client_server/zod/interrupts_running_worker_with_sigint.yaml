@@ -2,7 +2,7 @@
 !same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
 ---
 send:
-  r: interrupt
+  r: "wait for interrupt: 3"
   timeout_ms: 0
 result:
   content:
@@ -14,16 +14,6 @@ result:
 ---
 send:
   control: interrupt
-  timeout_ms: 0
-result:
-  content:
-    - type: text
-      text: |-
-
-        [running; poll with an empty send]
-  isError: false
----
-send:
   timeout_ms: 3000
 result:
   content:
@@ -33,10 +23,9 @@ result:
   isError: false
 ---
 send:
-  r: echo echo
+  r: checkpoint 5
 result:
   content:
     - type: text
-      text: |
-        zod: echo
+      text: "[done]"
   isError: false
