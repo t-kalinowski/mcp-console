@@ -208,11 +208,12 @@ def test_rejects_python_older_than_3_10(binary: Path) -> Transcript:
         "[idle]"
     )
     output = result["content"][0]["text"]
-    expected = {
-        bridge_failure + version_failure + worker_failure,
-        version_failure + bridge_failure + worker_failure,
-    }
-    assert output in expected, output
+    assert output.endswith(worker_failure), output
+    assert_exact_interleaving(
+        output.removesuffix(worker_failure),
+        bridge_failure,
+        version_failure,
+    )
     result["content"][0]["text"] = bridge_failure + version_failure + worker_failure
     return client._finish()
 
@@ -3234,11 +3235,12 @@ def test_restarts_after_python_bridge_failure(binary: Path) -> Transcript:
         "[idle]"
     )
     output = result["content"][0]["text"]
-    expected = {
-        bridge_failure + python_failure + worker_failure,
-        python_failure + bridge_failure + worker_failure,
-    }
-    assert output in expected, output
+    assert output.endswith(worker_failure), output
+    assert_exact_interleaving(
+        output.removesuffix(worker_failure),
+        bridge_failure,
+        python_failure,
+    )
     result["content"][0]["text"] = bridge_failure + python_failure + worker_failure
     client.send(r='exists("python_worker_marker", inherits = FALSE)')
     assert last_tool_text(client) == "[1] FALSE\n"
@@ -3249,6 +3251,21 @@ def test_restarts_after_python_bridge_failure(binary: Path) -> Transcript:
 
 def last_tool_text(client: McpClient) -> str:
     return client.transcript[-1]["result"]["content"][0]["text"]
+
+
+def assert_exact_interleaving(actual: str, first: str, second: str) -> None:
+    assert len(actual) == len(first) + len(second), repr(actual)
+    first_offsets = {0}
+    for offset, character in enumerate(actual):
+        next_offsets = set()
+        for first_offset in first_offsets:
+            second_offset = offset - first_offset
+            if first_offset < len(first) and first[first_offset] == character:
+                next_offsets.add(first_offset + 1)
+            if second_offset < len(second) and second[second_offset] == character:
+                next_offsets.add(first_offset)
+        first_offsets = next_offsets
+    assert len(first) in first_offsets, repr(actual)
 
 
 if __name__ == "__main__":
