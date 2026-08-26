@@ -6,11 +6,11 @@ use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 
 use rmcp::{
-    RoleServer, ServerHandler, ServiceExt,
+    ErrorData, RoleServer, ServerHandler, ServiceExt,
     handler::server::{
         common::Extension, router::tool::ToolRouter, tool::ToolCallContext, wrapper::Parameters,
     },
-    model::{CallToolRequestParams, CallToolResult, ContentBlock, ErrorData},
+    model::{CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock},
     schemars,
     service::RequestContext,
     tool, tool_handler, tool_router,
@@ -540,7 +540,7 @@ impl ServerHandler for ConsoleServer {
         &self,
         request: CallToolRequestParams,
         mut context: RequestContext<RoleServer>,
-    ) -> Result<CallToolResult, ErrorData> {
+    ) -> Result<CallToolResponse, ErrorData> {
         let request_id = context.id.clone();
         if request.name.as_ref() != "send" {
             return self
