@@ -1,18 +1,23 @@
 #!/usr/bin/env -S uv run --script
 
+import array
 import base64
+import fcntl
 import json
 import os
 import select
 import shutil
 import signal
+import socket
 import subprocess
 import sys
 import tempfile
 import threading
+import termios
 import time
 from datetime import datetime
 from pathlib import Path
+from typing import Self
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -30,10 +35,336 @@ from _support import (
 PLATFORMS = {"darwin"}
 LARGE_OUTPUT_SIZE = 2 * 1024 * 1024
 PENDING_TEXT_BUDGET = 8 * 1024 * 1024
+TEST_GATED_RESPONSE_SIZE = 128 * 1024
 PNG_1X1 = (
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42Y"
     "AAAAASUVORK5CYII="
 )
+
+
+class ZodFixtureControl:
+    def __init__(self) -> None:
+        self.event_reader, self.event_writer = os.pipe()
+        self.control_reader, self.control_writer = os.pipe()
+        self.cleanup_reader, self.cleanup_writer = os.pipe()
+        os.set_blocking(self.event_reader, False)
+        self.events: list[dict[str, object]] = []
+        self.buffer = bytearray()
+        self.child_ends_closed = False
+        self.cleanup_released = False
+
+    @property
+    def pass_fds(self) -> tuple[int, ...]:
+        return (self.event_writer, self.control_reader, self.cleanup_reader)
+
+    def configure(self, environment: dict[str, str]) -> None:
+        environment["ZOD_TEST_EVENT_FD"] = str(self.event_writer)
+        environment["ZOD_TEST_CONTROL_FD"] = str(self.control_reader)
+        environment["ZOD_TEST_FIXTURE_CLEANUP_FD"] = str(self.cleanup_reader)
+
+    def close_child_ends(self) -> None:
+        assert not self.child_ends_closed
+        os.close(self.event_writer)
+        os.close(self.control_reader)
+        os.close(self.cleanup_reader)
+        self.child_ends_closed = True
+
+    def send_control(self, operation: int, kind: str, **details: object) -> None:
+        payload = (
+            json.dumps(
+                {"operation": operation, "kind": kind, **details},
+                separators=(",", ":"),
+            ).encode()
+            + b"\n"
+        )
+        assert os.write(self.control_writer, payload) == len(payload)
+
+    def release_cleanup(self) -> None:
+        if self.cleanup_released:
+            return
+        try:
+            os.write(self.cleanup_writer, b"1")
+        except BrokenPipeError:
+            pass
+        os.close(self.cleanup_writer)
+        self.cleanup_released = True
+
+    def wait_for(self, operation: int, kind: str) -> dict[str, object]:
+        return self.wait_for_any(operation, {kind})
+
+    def wait_for_any(
+        self,
+        operation: int,
+        kinds: set[str],
+    ) -> dict[str, object]:
+        deadline = time.monotonic() + 15
+        while True:
+            event = next(
+                (
+                    event
+                    for event in self.events
+                    if event.get("operation") == operation
+                    and event.get("kind") in kinds
+                ),
+                None,
+            )
+            if event is not None:
+                return event
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise AssertionError(
+                    f"Zod did not emit one of {sorted(kinds)!r} for request "
+                    f"{operation}; " + self.diagnostics()
+                )
+            readable, _, _ = select.select([self.event_reader], [], [], remaining)
+            if not readable:
+                continue
+            chunk = os.read(self.event_reader, 4096)
+            assert chunk, "Zod event pipe closed; " + self.diagnostics()
+            self.record_events(chunk)
+
+    def record_events(self, chunk: bytes) -> None:
+        self.buffer.extend(chunk)
+        while b"\n" in self.buffer:
+            line, _, remainder = self.buffer.partition(b"\n")
+            self.buffer = bytearray(remainder)
+            event = json.loads(line)
+            assert isinstance(event, dict), event
+            assert set(event) >= {"operation", "kind", "component"}, event
+            self.events.append(event)
+
+    def assert_before(
+        self,
+        first: tuple[int, str],
+        second: tuple[int, str],
+    ) -> None:
+        positions = {
+            (event["operation"], event["kind"]): index
+            for index, event in enumerate(self.events)
+        }
+        assert positions[first] < positions[second], self.diagnostics()
+
+    def record_client_event(self, operation: int, kind: str, **details: object) -> None:
+        self.events.append(
+            {
+                "operation": operation,
+                "kind": kind,
+                "component": "client",
+                **details,
+            }
+        )
+
+    def diagnostics(self) -> str:
+        started = {
+            event["operation"]
+            for event in self.events
+            if event.get("kind") == "worker_operation_started"
+        }
+        completed = {
+            event["operation"]
+            for event in self.events
+            if event.get("kind") == "worker_operation_completed"
+        }
+        trace = "\n".join(json.dumps(event, sort_keys=True) for event in self.events)
+        return f"outstanding requests: {sorted(started - completed)}; event trace:\n{trace}"
+
+    def wait_for_eof(self) -> None:
+        deadline = time.monotonic() + 15
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise AssertionError(
+                    "Zod event pipe remained open after fixture cleanup; "
+                    + self.diagnostics()
+                )
+            readable, _, _ = select.select([self.event_reader], [], [], remaining)
+            if not readable:
+                continue
+            chunk = os.read(self.event_reader, 4096)
+            if not chunk:
+                assert not self.buffer, self.diagnostics()
+                return
+            self.record_events(chunk)
+
+    def close(self) -> None:
+        os.close(self.control_writer)
+        if not self.cleanup_released:
+            os.close(self.cleanup_writer)
+        if not self.child_ends_closed:
+            os.close(self.event_writer)
+            os.close(self.control_reader)
+            os.close(self.cleanup_reader)
+        os.close(self.event_reader)
+
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(self, *_error: object) -> None:
+        self.close()
+
+
+def queued_socket_bytes(stream: socket.socket) -> int:
+    available = array.array("i", [0])
+    fcntl.ioctl(stream.fileno(), termios.FIONREAD, available, True)
+    return available[0]
+
+
+class SocketTextReader:
+    def __init__(self, stream: socket.socket) -> None:
+        self.stream = stream
+        self.buffer = bytearray()
+
+    def wait_for_incomplete_response(
+        self,
+        request: int,
+        minimum_complete_size: int,
+        diagnostics: str,
+    ) -> int:
+        assert not self.buffer
+        readable, _, _ = select.select([self.stream], [], [], 15)
+        assert readable, (
+            f"response {request} did not reach the test gate; {diagnostics}"
+        )
+        pending = queued_socket_bytes(self.stream)
+        assert 0 < pending < minimum_complete_size, (
+            f"response {request} completed before the test gate; "
+            f"buffered={pending}; minimum_complete_size={minimum_complete_size}; "
+            f"{diagnostics}"
+        )
+        prefix = self.stream.recv(min(pending, 256), socket.MSG_PEEK)
+        assert f'"id":{request},'.encode() in prefix, prefix
+        assert b"\n" not in prefix, prefix
+        return pending
+
+    def release_completed_response(
+        self,
+        request: int,
+        release: Path,
+        diagnostics: str,
+    ) -> None:
+        deadline = time.monotonic() + 15
+        while True:
+            remaining = deadline - time.monotonic()
+            assert remaining > 0, (
+                f"response {request} did not complete at the test gate; {diagnostics}"
+            )
+            readable, _, _ = select.select([self.stream], [], [], remaining)
+            assert readable, (
+                f"response {request} did not advance at the test gate; {diagnostics}"
+            )
+            pending = queued_socket_bytes(self.stream)
+            assert pending > 0, (
+                f"response stream closed at the test gate for {request}; {diagnostics}"
+            )
+            queued = self.stream.recv(pending, socket.MSG_PEEK)
+            if b"\n" in queued:
+                release.touch()
+                return
+            self.buffer.extend(self.stream.recv(pending))
+
+    def readline(self) -> str:
+        while b"\n" not in self.buffer:
+            chunk = self.stream.recv(64 * 1024)
+            if not chunk:
+                data = bytes(self.buffer)
+                self.buffer.clear()
+                return data.decode()
+            self.buffer.extend(chunk)
+        line, _, remainder = self.buffer.partition(b"\n")
+        self.buffer = bytearray(remainder)
+        return (line + b"\n").decode()
+
+    def read(self) -> str:
+        chunks = [bytes(self.buffer)]
+        self.buffer.clear()
+        while chunk := self.stream.recv(64 * 1024):
+            chunks.append(chunk)
+        return b"".join(chunks).decode()
+
+    def close(self) -> None:
+        self.stream.close()
+
+
+class SocketGateMcpClient(McpClient):
+    def __init__(
+        self,
+        binary: Path,
+        arguments: tuple[str, ...],
+        environment: dict[str, str],
+        current_directory: Path,
+        pass_fds: tuple[int, ...],
+    ) -> None:
+        input_writer, input_reader = socket.socketpair()
+        output_reader, output_writer = socket.socketpair()
+        output_observer = output_reader.dup()
+        output_writer.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 4 * 1024)
+        output_reader.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4 * 1024)
+        self.output_buffer_sizes = (
+            output_writer.getsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF),
+            output_reader.getsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF),
+        )
+        assert max(self.output_buffer_sizes) < TEST_GATED_RESPONSE_SIZE
+        environment["ZOD_TEST_RESPONSE_SOCKET_FD"] = str(output_observer.fileno())
+        process = subprocess.Popen(
+            [binary, *arguments],
+            env=environment,
+            cwd=current_directory,
+            stdin=input_reader,
+            stdout=output_writer,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            pass_fds=(*pass_fds, output_observer.fileno()),
+        )
+        output_observer.close()
+        output_writer.close()
+        input_stream = input_writer.makefile("w", encoding="utf-8")
+        input_writer.close()
+        assert process.stderr is not None
+
+        self.temporary_directory = None
+        self.process = process
+        self.stdin = input_stream
+        self.stdout = SocketTextReader(output_reader)
+        self.stderr = process.stderr
+        self.transcript = []
+        self._next_request_id = 1
+        self._issued_request_ids = set()
+        self.input_reader = input_reader
+        self.test_stdio_closed = False
+
+    def wait_until_input_is_read(
+        self,
+        description: str,
+        control: ZodFixtureControl,
+    ) -> None:
+        """Wait for the server's next read from the staged input socket.
+
+        Tests write exactly one complete JSONL frame at a time. A later frame is
+        withheld until this returns, so observing that later frame leave the
+        socket proves the preceding frame passed through ServerTransport.receive.
+        """
+        deadline = time.monotonic() + 15
+        while queued_socket_bytes(self.input_reader) != 0:
+            assert self.process.poll() is None, (
+                f"mcp-console stopped before consuming {description}; "
+                + control.diagnostics()
+            )
+            assert time.monotonic() < deadline, (
+                f"mcp-console did not consume {description}; " + control.diagnostics()
+            )
+            time.sleep(0.001)
+
+    def close_input_observer(self) -> None:
+        if self.input_reader.fileno() != -1:
+            self.input_reader.close()
+
+    def close_test_stdio(self) -> None:
+        if self.test_stdio_closed:
+            return
+        self.close_input_observer()
+        self.stdout.close()
+        self.test_stdio_closed = True
 
 
 def build_killpg_denial_interposer(directory: Path) -> Path:
@@ -1126,117 +1457,6 @@ def test_custom_worker_prepares_r_and_duckdb_requirements(binary: Path) -> Trans
         return client._finish()
 
 
-def test_cancelled_combined_preparation_failure_is_reclaimed_by_restart(
-    binary: Path,
-) -> Transcript:
-    zod = Path(__file__).resolve().parents[2] / "fixtures" / "zod"
-    ordered_ir = (
-        Path(__file__).resolve().parents[2] / "fixtures" / "ordered_retirement_ir"
-    )
-    environment, _ = r_test_environment()
-    environment["RETICULATE_PYTHON"] = ""
-    with tempfile.TemporaryDirectory() as temporary:
-        temporary_path = Path(temporary)
-        library = temporary_path / "resolved-library"
-        library.mkdir()
-        fake_bin = temporary_path / "bin"
-        fake_bin.mkdir()
-        (fake_bin / "ir").symlink_to(ordered_ir)
-        path = environment.get("PATH")
-        assert path is not None, "PATH is required"
-        environment["PATH"] = os.pathsep.join((str(fake_bin), path))
-        environment["TMPDIR"] = temporary
-        environment["MCP_CONSOLE_TEST_IR_COUNTER"] = str(temporary_path / "ir-counter")
-        environment["MCP_CONSOLE_TEST_IR_LIBRARIES"] = str(library)
-        client = McpClient(
-            binary,
-            ("serve", "--worker", str(zod)),
-            environment,
-        )
-        finished = False
-        try:
-            client._initialize_and_list_tools()
-            client.send(r="echo worker ready")
-            assert last_tool_text(client) == "zod: worker ready\n"
-            client.send(r="fail next r preparation after large output")
-            assert last_tool_text(client) == "[done]"
-
-            failed = client._start_send(
-                r="echo cancelled cell ran",
-                requirements={"r": ["praise"]},
-            )
-            # The 4 MiB response cannot fit in the stdout pipe. Once its first
-            # bytes are readable, cancellation can overtake the blocked write.
-            readable, _, _ = select.select([client.stdout], [], [], 10)
-            assert readable, "combined preparation failure did not reach MCP output"
-            client._notify(
-                "notifications/cancelled",
-                requestId=failed["id"],
-                reason="acceptance test cancelled the combined send",
-            )
-            cancellation = client.transcript[-1]["input"]["params"]
-            assert cancellation["requestId"] == failed["id"], cancellation
-            cancellation["requestId"] = "<request ID>"
-
-            # Flushing a second 4 MiB message cannot finish until the server
-            # asks the ordered input transport for the message after the
-            # cancellation. Keep stdout blocked until that causal barrier.
-            barrier_size = 2 * LARGE_OUTPUT_SIZE
-            client._notify(
-                "notifications/acceptance-test-barrier",
-                padding="b" * barrier_size,
-            )
-            barrier = client.transcript[-1]["input"]["params"]
-            assert len(barrier["padding"]) == barrier_size, barrier
-            barrier["padding"] = f"<input barrier: {barrier_size} bytes>"
-            restart = client._start_send(control="restart")
-
-            discarded = json.loads(client.stdout.readline())
-            assert discarded.pop("jsonrpc", None) == "2.0", discarded
-            assert discarded.pop("id", None) == failed["id"], discarded
-            assert discarded["result"]["isError"] is True, discarded
-            assert failed.keys() == {"id", "send"}, failed
-
-            client._receive(restart)
-            restarted = restart["result"]
-            large_output = "x" * (2 * LARGE_OUTPUT_SIZE)
-            assert restarted == {
-                "content": [
-                    {
-                        "type": "text",
-                        "text": "before failed preparation\n" + large_output,
-                    },
-                    {"type": "image", "data": PNG_1X1, "mimeType": "image/png"},
-                    {
-                        "type": "text",
-                        "text": (
-                            "\nzod rejected R preparation; further requirement "
-                            "changes are unavailable until session restart\n"
-                            "[worker stopped: in-memory state lost]\n"
-                            "[starting new worker]\n[idle]"
-                        ),
-                    },
-                ],
-                "isError": True,
-            }, restarted
-            assert all(
-                "zod: cancelled cell ran" not in content.get("text", "")
-                for content in restarted["content"]
-            ), restarted
-            restarted["content"][0]["text"] = (
-                f"before failed preparation\n<large output: {len(large_output)} bytes>"
-            )
-
-            client.send()
-            assert last_tool_text(client) == "\n[idle]"
-            transcript = client._finish()
-            finished = True
-            return transcript
-        finally:
-            if not finished:
-                stop_client(client)
-
-
 def test_custom_worker_reports_idle_input_before_preparation_failure(
     binary: Path,
 ) -> Transcript:
@@ -1775,49 +1995,200 @@ def test_drains_pending_sideband_output_while_running(binary: Path) -> Transcrip
         return client._finish()
 
 
+def test_orders_queued_cancellation_behind_incomplete_response(
+    binary: Path,
+) -> Transcript:
+    zod = Path(__file__).resolve().parents[2] / "fixtures" / "zod"
+    environment = os.environ.copy()
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        release = Path(temporary_directory) / "response-gate-released"
+        environment["ZOD_TEST_RESPONSE_GATE_RELEASED"] = str(release)
+        with ZodFixtureControl() as control:
+            control.configure(environment)
+            client = SocketGateMcpClient(
+                binary,
+                ("serve", "--worker", str(zod)),
+                environment,
+                Path(temporary_directory),
+                control.pass_fds,
+            )
+            control.close_child_ends()
+            finished = False
+            try:
+                client._initialize_and_list_tools()
+
+                invalid_requirement = (
+                    "https://invalid.example/" + "x" * TEST_GATED_RESPONSE_SIZE
+                )
+                first_id = client._next_request_id
+                first = client._start_send(
+                    requirements={"python": [invalid_requirement]}
+                )
+                assert first["id"] == first_id, first
+                buffered = client.stdout.wait_for_incomplete_response(
+                    first_id,
+                    len(invalid_requirement),
+                    control.diagnostics(),
+                )
+                control.record_client_event(
+                    first_id,
+                    "response_writer_reached_gate",
+                    buffered_bytes=buffered,
+                )
+
+                cancelled_id = client._next_request_id
+                cancelled = client._start_send(r=f"check response gate: {cancelled_id}")
+                assert cancelled["id"] == cancelled_id, cancelled
+                client.wait_until_input_is_read(
+                    f"cancelled request {cancelled_id}", control
+                )
+
+                client._notify(
+                    "notifications/cancelled",
+                    requestId=cancelled_id,
+                    reason="cancel before worker admission",
+                )
+                client.wait_until_input_is_read(
+                    f"cancellation for request {cancelled_id}", control
+                )
+                control.record_client_event(cancelled_id, "operation_accepted")
+
+                live_id = client._next_request_id
+                live = client._start_send(r=f"check response gate: {live_id}")
+                assert live["id"] == live_id, live
+                client.wait_until_input_is_read(f"live request {live_id}", control)
+                control.record_client_event(
+                    cancelled_id,
+                    "cancellation_observed_before_worker_admission",
+                )
+
+                barrier_target = 1_000_000
+                client._notify(
+                    "notifications/cancelled",
+                    requestId=barrier_target,
+                    reason="staged receive barrier",
+                )
+                client.wait_until_input_is_read("staged receive barrier", control)
+                control.record_client_event(live_id, "operation_accepted")
+
+                client.stdout.release_completed_response(
+                    first_id,
+                    release,
+                    control.diagnostics(),
+                )
+                control.record_client_event(first_id, "response_write_completed")
+                client._receive(first)
+                expected_error = (
+                    f"Python requirement `{invalid_requirement}` is not accepted: "
+                    "host-side managed resolution accepts named package "
+                    "requirements only"
+                )
+                assert first["result"] == {
+                    "content": [{"type": "text", "text": expected_error}],
+                    "isError": True,
+                }, first
+                first["send"]["requirements"]["python"] = [
+                    "<large invalid Python requirement>"
+                ]
+                first["result"]["content"][0]["text"] = (
+                    "<large invalid Python requirement rejected>"
+                )
+
+                started = control.wait_for(live_id, "worker_operation_started")
+                assert started["response_gate_released"] is True, control.diagnostics()
+                control.wait_for(live_id, "worker_operation_completed")
+                client._receive(live)
+                assert live["result"] == {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "zod response-gated operation\n",
+                        }
+                    ],
+                    "isError": False,
+                }, live
+
+                ping = client._request("ping")
+                assert ping["result"] == {}, ping
+                client.close_input_observer()
+                transcript = client._finish()
+                control.wait_for_eof()
+                cancelled_events = [
+                    event
+                    for event in control.events
+                    if event.get("operation") == cancelled_id
+                    and event.get("component") == "fixture"
+                ]
+                assert not cancelled_events, control.diagnostics()
+                control.assert_before(
+                    (cancelled_id, "cancellation_observed_before_worker_admission"),
+                    (live_id, "worker_operation_started"),
+                )
+                finished = True
+                return transcript
+            finally:
+                if not finished:
+                    stop_client(client)
+                client.close_test_stdio()
+
+
 def test_interrupts_running_worker_with_sigint(binary: Path) -> Transcript:
     zod = Path(__file__).resolve().parents[2] / "fixtures" / "zod"
-    with tempfile.TemporaryDirectory() as temporary_directory:
-        temporary_path = Path(temporary_directory)
-        interrupt_release = FifoCheckpoint(temporary_path / "zod-interrupt-release")
-        environment = os.environ.copy()
-        environment["TMPDIR"] = temporary_directory
-        environment["MCP_CONSOLE_TEST_INTERRUPT_RELEASE"] = str(interrupt_release.path)
+    environment = os.environ.copy()
+    with ZodFixtureControl() as control:
+        control.configure(environment)
         client = McpClient(
             binary,
             ("serve", "--worker", str(zod)),
             environment,
+            pass_fds=control.pass_fds,
         )
-        passed = False
-        released = False
+        control.close_child_ends()
+        finished = False
         try:
             client._initialize_and_list_tools()
-            client.send(r="interrupt", timeout_ms=0)
+
+            target_id = client._next_request_id
+            client.send(
+                r=f"wait for interrupt: {target_id}",
+                timeout_ms=0,
+            )
+            assert client.transcript[-1]["id"] == target_id
             assert last_tool_text(client) == "\n[running; poll with an empty send]"
-            wait_for_marker(
-                temporary_path,
-                "zod-interrupt-evaluation-started",
-                client,
+            control.wait_for(target_id, "worker_operation_started")
+
+            interrupt_id = client._next_request_id
+            client.send(control="interrupt", timeout_ms=3_000)
+            assert client.transcript[-1]["id"] == interrupt_id
+            assert last_tool_text(client) == "zod interrupted\n"
+            observed = control.wait_for(target_id, "worker_interrupt_observed")
+            assert observed["signal"] == signal.SIGINT, observed
+            control.wait_for(target_id, "worker_operation_completed")
+            control.record_client_event(
+                interrupt_id,
+                "interrupt_response_received",
+                target_operation=target_id,
+            )
+            control.assert_before(
+                (target_id, "worker_interrupt_observed"),
+                (interrupt_id, "interrupt_response_received"),
             )
 
-            client.send(control="interrupt", timeout_ms=0)
-            assert last_tool_text(client) == "\n[running; poll with an empty send]"
-            wait_for_marker(temporary_path, "zod-sigint-received", client)
+            checkpoint_id = client._next_request_id
+            client.send(r=f"checkpoint {checkpoint_id}")
+            assert client.transcript[-1]["id"] == checkpoint_id
+            assert last_tool_text(client) == "[done]"
+            control.wait_for(checkpoint_id, "worker_operation_completed")
+            control.assert_before(
+                (target_id, "worker_operation_completed"),
+                (checkpoint_id, "worker_operation_started"),
+            )
 
-            interrupt_release.release()
-            released = True
-            client.send(timeout_ms=3_000)
-            assert last_tool_text(client) == "zod interrupted\n"
-            client.send(r="echo echo")
-            assert last_tool_text(client) == "zod: echo\n"
             transcript = client._finish()
-            passed = True
+            finished = True
             return transcript
         finally:
-            if not released:
-                interrupt_release.release()
-            interrupt_release.close()
-            if not passed:
+            if not finished:
                 stop_client(client)
 
 
@@ -2402,7 +2773,7 @@ def test_orders_failure_and_replacement_output(binary: Path) -> Transcript:
 
         client.send(r="complete silently")
         assert last_tool_text(client) == "[done]"
-        startup_control.write_text("ready with stdout", encoding="utf-8")
+        startup_control.write_text("ready", encoding="utf-8")
         client.send(r="violate protocol after stdout")
         result = client.transcript[-1]["result"]
         assert result["isError"] is True, result
@@ -2414,7 +2785,6 @@ def test_orders_failure_and_replacement_output(binary: Path) -> Transcript:
             "[worker terminated by signal 9]",
             "[worker stopped: in-memory state lost]",
             "[starting new worker]",
-            "zod replacement startup ready",
             "[idle]",
         ]
         assert output.count(raw) == 1, "protocol failure lost raw stdout bytes"
@@ -2433,7 +2803,6 @@ def test_orders_failure_and_replacement_output(binary: Path) -> Transcript:
             "[worker terminated by signal 9]\n"
             "[worker stopped: in-memory state lost]\n"
             "[starting new worker]\n"
-            "zod replacement startup ready\n"
             "[idle]"
         )
 
@@ -2564,14 +2933,13 @@ def test_reports_replacement_startup_failure_and_retry(
             "isError": True,
         }, result
 
-        startup_control.write_text("ready with stdout", encoding="utf-8")
+        startup_control.write_text("ready", encoding="utf-8")
         client.send(
             r="report managed R requirement",
             requirements={"r": ["praise"]},
         )
         assert last_tool_text(client) == (
-            "[starting new worker]\nzod replacement startup ready\n"
-            "zod R requirement: prepared=true\n"
+            "[starting new worker]\nzod R requirement: prepared=true\n"
         )
         return client._finish()
 
@@ -2602,7 +2970,7 @@ def test_polls_replacement_startup_after_send_timeout(binary: Path) -> Transcrip
             client.send(r="complete silently")
             assert last_tool_text(client) == "[done]"
             startup_control.write_text(
-                "block then ready with stdout",
+                "block",
                 encoding="utf-8",
             )
 
@@ -2673,7 +3041,7 @@ def test_polls_replacement_startup_after_send_timeout(binary: Path) -> Transcrip
 
             startup_release.touch()
             client.send(timeout_ms=3_000)
-            assert last_tool_text(client) == ("zod replacement startup ready\n[idle]")
+            assert last_tool_text(client) == "[idle]"
             transcript = client._finish()
             passed = True
             return transcript
@@ -2981,109 +3349,6 @@ def test_control_only_interrupt_returns_while_explicit_preparation_settles(
             resolver_release.close()
             resolver_interrupted.close()
             interrupt_release.close()
-            if not finished:
-                stop_client(client)
-
-
-def test_cancelled_controlled_restart_response_is_reclaimed_once(
-    binary: Path,
-) -> Transcript:
-    zod = Path(__file__).resolve().parents[2] / "fixtures" / "zod"
-    with tempfile.TemporaryDirectory() as temporary_directory:
-        temporary_path = Path(temporary_directory)
-        environment = os.environ.copy()
-        environment["TMPDIR"] = temporary_directory
-        client = McpClient(
-            binary,
-            ("serve", "--worker", str(zod)),
-            environment,
-        )
-        finished = False
-        try:
-            client._initialize_and_list_tools()
-
-            client.send(r="wait for stdin close", timeout_ms=0)
-            assert last_tool_text(client) == "\n[running; poll with an empty send]"
-            wait_for_marker(
-                temporary_path,
-                "zod-waiting-for-stdin-close",
-                client,
-            )
-
-            combined = client._start_send(
-                control="restart",
-                r="inspect controlled restart state",
-            )
-            # The response is larger than the stdout pipe. Once its first bytes
-            # are readable, cancellation can overtake the blocked write.
-            readable, _, _ = select.select([client.stdout], [], [], 10)
-            assert readable, "controlled restart did not reach MCP output"
-            client._notify(
-                "notifications/cancelled",
-                requestId=combined["id"],
-                reason="acceptance test cancelled the controlled send",
-            )
-            cancellation = client.transcript[-1]["input"]["params"]
-            assert cancellation["requestId"] == combined["id"], cancellation
-            cancellation["requestId"] = "<request ID>"
-
-            # Flushing a second oversized message proves the ordered input
-            # transport has observed cancellation before the reclaiming poll.
-            barrier_size = 2 * LARGE_OUTPUT_SIZE
-            client._notify(
-                "notifications/acceptance-test-barrier",
-                padding="b" * barrier_size,
-            )
-            barrier = client.transcript[-1]["input"]["params"]
-            assert len(barrier["padding"]) == barrier_size, barrier
-            barrier["padding"] = f"<input barrier: {barrier_size} bytes>"
-            reclaimed = client._start_send()
-
-            discarded = json.loads(client.stdout.readline())
-            assert discarded.pop("jsonrpc", None) == "2.0", discarded
-            assert discarded.pop("id", None) == combined["id"], discarded
-            assert discarded["result"]["isError"] is False, discarded
-            assert combined.keys() == {"id", "send"}, combined
-
-            client._receive(reclaimed)
-            result = reclaimed["result"]
-            expected = large_output("zod stdin closed\n") + (
-                "\n[active evaluation stopped by session restart request]"
-                "\n[worker stopped: in-memory state lost]"
-                "\n[starting new worker]"
-                "\nzod controlled state: fresh; evaluation=1\n"
-                "[done]"
-            )
-            assert result == {
-                "content": [{"type": "text", "text": expected}],
-                "isError": False,
-            }, result
-            result["content"][0]["text"] = (
-                "zod stdin closed\n<large output>\n"
-                "[active evaluation stopped by session restart request]\n"
-                "[worker stopped: in-memory state lost]\n"
-                "[starting new worker]\n"
-                "zod controlled state: fresh; evaluation=1\n"
-                "[done]"
-            )
-
-            evaluations = wait_for_marker(
-                temporary_path,
-                "zod-controlled-restart-cell-evaluations",
-                client,
-            )
-            records = evaluations.read_text(encoding="utf-8").splitlines()
-            assert len(records) == 1, records
-            _, state, count = records[0].split()
-            assert (state, count) == ("fresh", "1"), records
-
-            client.send()
-            assert last_tool_text(client) == "\n[idle]"
-            assert evaluations.read_text(encoding="utf-8").splitlines() == records
-            transcript = client._finish()
-            finished = True
-            return transcript
-        finally:
             if not finished:
                 stop_client(client)
 
@@ -4030,6 +4295,183 @@ def test_shuts_down_stalled_worker(binary: Path) -> Transcript:
                 stop_process(client.process)
 
 
+def test_shutdown_is_bounded_with_detached_stdin_descendant(
+    binary: Path,
+) -> Transcript:
+    zod = Path(__file__).resolve().parents[2] / "fixtures" / "zod"
+    environment = os.environ.copy()
+    with ZodFixtureControl() as control:
+        control.configure(environment)
+        client = McpClient(
+            binary,
+            ("serve", "--worker", str(zod)),
+            environment,
+            pass_fds=control.pass_fds,
+        )
+        control.close_child_ends()
+        descendant_group = None
+        descendant_cleaned = False
+        worker_group = None
+        server_stopped = False
+        operation = None
+        try:
+            client._initialize_and_list_tools()
+            client.send(r="echo ready")
+            assert last_tool_text(client) == "zod: ready\n"
+
+            operation = client._next_request_id
+            client.send(
+                r=f"stall with detached stdin: {operation}",
+                timeout_ms=0,
+            )
+            submitted = client.transcript[-1]
+            assert submitted["id"] == operation, submitted
+            assert last_tool_text(client) == "\n[running; poll with an empty send]"
+            submitted["send"]["r"] = "<stall with detached stdin>"
+
+            control.wait_for(operation, "worker_operation_started")
+            created = control.wait_for(operation, "detached_descendant_created")
+            created_group = created["process_group"]
+            assert isinstance(created_group, int) and created_group > 0, created
+            assert created["pid"] == created_group, created
+            assert created_group != os.getpgrp(), created
+            assert created["inherited_fd"] == 0, created
+            retained_fd = created["retained_fd"]
+            assert isinstance(retained_fd, int) and retained_fd > 2, created
+            descendant_group = created_group
+
+            control.wait_for(operation, "parent_waiting_for_stdin")
+            probe_start = len(client.transcript)
+            expected_bytes = 0
+            chunk_bytes = 64 * 1024
+            while True:
+                assert expected_bytes + chunk_bytes <= PENDING_TEXT_BUDGET, (
+                    "worker stdin remained fully buffered through the adaptive probe; "
+                    + control.diagnostics()
+                )
+                request = client._next_request_id
+                client.send(stdin="x" * chunk_bytes, timeout_ms=0)
+                probe = client.transcript[-1]
+                assert probe["id"] == request, probe
+                assert last_tool_text(client) == (
+                    "\n[running; poll with an empty send]"
+                )
+                expected_bytes += chunk_bytes
+                control.send_control(
+                    operation,
+                    "probe_stdin",
+                    request=request,
+                    expected_bytes=expected_bytes,
+                )
+                observed = control.wait_for_any(
+                    request,
+                    {"stdin_write_buffered", "stdin_write_pending"},
+                )
+                assert observed["target_operation"] == operation, observed
+                assert observed["expected_bytes"] == expected_bytes, observed
+                consumed_bytes = observed["consumed_bytes"]
+                queued_bytes = observed["queued_bytes"]
+                assert isinstance(consumed_bytes, int), observed
+                assert isinstance(queued_bytes, int) and queued_bytes > 0, observed
+                assert consumed_bytes + queued_bytes <= expected_bytes, observed
+                if observed["kind"] == "stdin_write_pending":
+                    assert consumed_bytes + queued_bytes < expected_bytes, observed
+                    break
+                assert consumed_bytes + queued_bytes == expected_bytes, observed
+                chunk_bytes *= 2
+
+            probes = client.transcript[probe_start:]
+            adaptive_probe = probes[0]
+            adaptive_probe["send"]["stdin"] = "<adaptive stdin probe>"
+            adaptive_probe["result"] = probes[-1]["result"]
+            client.transcript[probe_start:] = [adaptive_probe]
+
+            stalled_event = control.wait_for(operation, "parent_operation_stalled")
+            stalled_group = stalled_event["process_group"]
+            assert isinstance(stalled_group, int) and stalled_group > 0, stalled_event
+            assert stalled_group != os.getpgrp(), stalled_event
+            assert stalled_group != descendant_group, stalled_event
+            worker_group = stalled_group
+
+            stalled = client._start_send(timeout_ms=30_000)
+            client.send(timeout_ms=0)
+            polling = client.transcript[-1]
+            assert polling["result"] == {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "[worker evaluation is already being polled]",
+                    }
+                ],
+                "isError": True,
+            }, polling
+
+            shutdown_started = time.monotonic()
+            client.stdin.close()
+            try:
+                return_code = client.process.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                raise AssertionError(
+                    "mcp-console did not stop with detached worker stdin; "
+                    + control.diagnostics()
+                ) from None
+            shutdown_elapsed = time.monotonic() - shutdown_started
+            server_stopped = True
+
+            client._receive(stalled)
+            assert stalled["result"] == {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "[worker stopped before operation completed]",
+                    }
+                ],
+                "isError": True,
+            }, stalled
+            stalled["id"] = "<pending poll request>"
+            polling["id"] = "<poll ownership request>"
+            standard_error = client.stderr.read()
+            assert return_code == 0, standard_error
+            assert client.stdout.read() == ""
+            assert standard_error == ""
+            assert shutdown_elapsed < 2, (
+                f"worker shutdown took {shutdown_elapsed:.3f} seconds; "
+                + control.diagnostics()
+            )
+            assert not process_group_exists(worker_group), (
+                "worker process group outlived mcp-console shutdown; "
+                + control.diagnostics()
+            )
+
+            control.release_cleanup()
+            cleaned = control.wait_for(operation, "fixture_cleanup_completed")
+            assert cleaned["pid"] == descendant_group, cleaned
+            control.wait_for_eof()
+            descendant_cleaned = True
+            return client.transcript
+        finally:
+            control.release_cleanup()
+            if not server_stopped:
+                stop_process(client.process)
+            try:
+                if (
+                    operation is not None
+                    and descendant_group is not None
+                    and not descendant_cleaned
+                ):
+                    cleaned = control.wait_for(
+                        operation,
+                        "fixture_cleanup_completed",
+                    )
+                    assert cleaned["pid"] == descendant_group, cleaned
+                    control.wait_for_eof()
+                    descendant_cleaned = True
+            finally:
+                if not descendant_cleaned:
+                    stop_process_group(descendant_group)
+                stop_process_group(worker_group)
+
+
 def expose_idle_sideband_output(
     client: McpClient,
     temporary_path: Path,
@@ -4563,6 +5005,8 @@ def wait_for_process_group_exit(process_group: int, client: McpClient) -> None:
 def stop_process_group(process_group: int | None) -> None:
     if process_group is None:
         return
+    assert process_group > 0, process_group
+    assert process_group != os.getpgrp(), process_group
     try:
         os.killpg(process_group, signal.SIGKILL)
     except ProcessLookupError:

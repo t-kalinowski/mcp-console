@@ -3,10 +3,14 @@
 # requires-python = ">=3.11"
 # ///
 
+import array
 import fcntl
 import json
 import os
+import select
 import signal
+import socket
+import termios
 import time
 from enum import StrEnum
 from pathlib import Path
@@ -14,6 +18,10 @@ from typing import Any, TextIO
 
 READ_FD_ENV = "MCP_CONSOLE_SIDEBAND_READ_FD"
 WRITE_FD_ENV = "MCP_CONSOLE_SIDEBAND_WRITE_FD"
+TEST_EVENT_FD_ENV = "ZOD_TEST_EVENT_FD"
+TEST_CONTROL_FD_ENV = "ZOD_TEST_CONTROL_FD"
+TEST_FIXTURE_CLEANUP_FD_ENV = "ZOD_TEST_FIXTURE_CLEANUP_FD"
+TEST_RESPONSE_SOCKET_FD_ENV = "ZOD_TEST_RESPONSE_SOCKET_FD"
 LARGE_OUTPUT_SIZE = 2 * 1024 * 1024
 PENDING_TEXT_BUDGET = 8 * 1024 * 1024
 PNG_1X1 = (
@@ -25,6 +33,87 @@ PNG_1X1 = (
 class ConsoleKind(StrEnum):
     OUTPUT = "console_output"
     DIAGNOSTIC = "console_diagnostic"
+
+
+def emit_test_event(operation: int, kind: str, **details: object) -> None:
+    descriptor_text = os.environ.get(TEST_EVENT_FD_ENV)
+    if descriptor_text is None:
+        return
+    event = {
+        "operation": operation,
+        "kind": kind,
+        "component": "fixture",
+        **details,
+    }
+    payload = json.dumps(event, separators=(",", ":")).encode() + b"\n"
+    assert len(payload) <= 512
+    assert os.write(int(descriptor_text), payload) == len(payload)
+
+
+def wait_for_test_control(operation: int, kind: str) -> dict[str, object]:
+    descriptor = int(os.environ[TEST_CONTROL_FD_ENV])
+    payload = bytearray()
+    while not payload.endswith(b"\n"):
+        chunk = os.read(descriptor, 1)
+        assert chunk, f"test control closed before {kind!r} for request {operation}"
+        payload.extend(chunk)
+    command = json.loads(payload)
+    assert command.get("operation") == operation, command
+    assert command.get("kind") == kind, command
+    return command
+
+
+def queued_stdin_bytes() -> int:
+    available = array.array("i", [0])
+    fcntl.ioctl(0, termios.FIONREAD, available, True)
+    return available[0]
+
+
+def response_gate_completed() -> bool:
+    if Path(os.environ["ZOD_TEST_RESPONSE_GATE_RELEASED"]).is_file():
+        return True
+    descriptor = int(os.environ[TEST_RESPONSE_SOCKET_FD_ENV])
+    stream = socket.socket(fileno=descriptor)
+    try:
+        queued = stream.recv(64 * 1024, socket.MSG_PEEK | socket.MSG_DONTWAIT)
+        return b"\n" in queued
+    except BlockingIOError:
+        return False
+    finally:
+        stream.detach()
+
+
+def discard_stdin_bytes(length: int) -> None:
+    remaining = length
+    while remaining:
+        chunk = os.read(0, remaining)
+        assert chunk, "worker stdin closed during the pending-write probe"
+        remaining -= len(chunk)
+
+
+def probe_pending_stdin(expected_bytes: int, consumed_bytes: int) -> tuple[int, int]:
+    readable, _, _ = select.select([0], [], [], 15)
+    assert readable, "Zod did not receive worker stdin"
+    queued_bytes = queued_stdin_bytes()
+    assert 0 < queued_bytes <= expected_bytes - consumed_bytes, (
+        queued_bytes,
+        consumed_bytes,
+        expected_bytes,
+    )
+    if consumed_bytes + queued_bytes == expected_bytes:
+        return consumed_bytes, queued_bytes
+
+    discard_stdin_bytes(queued_bytes)
+    consumed_bytes += queued_bytes
+    readable, _, _ = select.select([0], [], [], 15)
+    assert readable, "worker stdin writer did not resume after space became available"
+    queued_bytes = queued_stdin_bytes()
+    assert 0 < queued_bytes <= expected_bytes - consumed_bytes, (
+        queued_bytes,
+        consumed_bytes,
+        expected_bytes,
+    )
+    return consumed_bytes, queued_bytes
 
 
 def open_sideband(name: str, mode: str) -> TextIO:
@@ -141,14 +230,11 @@ def configure_startup(root: Path, reader: TextIO, writer: TextIO) -> tuple[bool,
                 signal.pause()
             os.close(sideband_writer)
         mode = "block"
-    if mode in {"block", "block then ready with stdout"}:
+    if mode == "block":
         (root / "zod-replacement-waiting-ready").touch()
         release = Path(os.environ["ZOD_STARTUP_RELEASE"])
         while not release.exists():
             time.sleep(0.01)
-        mode = "ready with stdout" if mode.endswith("with stdout") else "ready"
-    if mode == "ready with stdout":
-        write_all(1, b"zod replacement startup ready\n")
         mode = "ready"
     if mode == "ready with callback":
         return True, False
@@ -164,18 +250,11 @@ def main() -> None:
     if started_marker := os.environ.get("MCP_CONSOLE_TEST_ZOD_STARTED"):
         Path(started_marker).touch()
     received_sigint = False
-    sigint_checkpoint = None
-    if os.environ.get("ZOD_SIGINT_CHECKPOINT") == "1":
-        checkpoint_path = temporary / "zod-sigint-checkpoint"
-        os.mkfifo(checkpoint_path)
-        sigint_checkpoint = os.open(checkpoint_path, os.O_RDWR | os.O_NONBLOCK)
 
     def handle_sigint(_signum: int, _frame: object) -> None:
         nonlocal received_sigint
         received_sigint = True
         (temporary / "zod-sigint-received").touch()
-        if sigint_checkpoint is not None:
-            assert os.write(sigint_checkpoint, b"1") == 1
 
     signal.signal(signal.SIGINT, handle_sigint)
     if os.environ.get("ZOD_REPORT_PROCESS_GROUP") == "1":
@@ -203,7 +282,6 @@ def main() -> None:
     prepared_r_library: str | None = None
     fail_next_r_preparation = False
     emit_output_before_r_preparation_failure = False
-    emit_large_output_before_r_preparation_failure = False
     controlled_restart_state = "fresh"
     controlled_restart_evaluations = 0
     queued_message: dict[str, Any] | None = None
@@ -243,9 +321,6 @@ def main() -> None:
                 if emit_output_before_r_preparation_failure:
                     emit_output_before_r_preparation_failure = False
                     output = "before failed preparation\n"
-                    if emit_large_output_before_r_preparation_failure:
-                        emit_large_output_before_r_preparation_failure = False
-                        output += "x" * (2 * LARGE_OUTPUT_SIZE)
                     send_output(writer, output)
                     send(
                         writer,
@@ -280,6 +355,42 @@ def main() -> None:
             continue
 
         assert language == "r"
+        if source.startswith("check response gate: "):
+            operation = int(source.removeprefix("check response gate: "))
+            gate_released = response_gate_completed()
+            emit_test_event(
+                operation,
+                "worker_operation_started",
+                response_gate_released=gate_released,
+            )
+            send_output(writer, "zod response-gated operation\n")
+            emit_test_event(operation, "worker_operation_completed")
+            send(writer, {"kind": "completed"})
+            continue
+
+        if source.startswith("checkpoint "):
+            operation = int(source.removeprefix("checkpoint "))
+            emit_test_event(operation, "worker_operation_started")
+            emit_test_event(operation, "worker_operation_completed")
+            send(writer, {"kind": "completed"})
+            continue
+
+        if source.startswith("wait for interrupt: "):
+            target = int(source.removeprefix("wait for interrupt: "))
+            previous_mask = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT})
+            try:
+                emit_test_event(target, "worker_operation_started")
+                received = signal.sigwait({signal.SIGINT})
+            finally:
+                signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
+            assert received == signal.SIGINT, received
+            received_sigint = False
+            emit_test_event(target, "worker_interrupt_observed", signal=received)
+            send_output(writer, "zod interrupted\n")
+            emit_test_event(target, "worker_operation_completed")
+            send(writer, {"kind": "completed"})
+            continue
+
         if source == "interrupt":
             (temporary / "zod-interrupt-evaluation-started").touch()
             while not received_sigint:
@@ -595,23 +706,75 @@ def main() -> None:
             writer.flush()
             continue
 
-        if source == "stall with detached stdin":
+        if source.startswith("stall with detached stdin: "):
+            operation = int(source.removeprefix("stall with detached stdin: "))
+            emit_test_event(operation, "worker_operation_started")
+            acknowledged, acknowledge = os.pipe()
             child = os.fork()
             if child == 0:
                 os.setsid()
+                os.close(acknowledged)
+                retained_stdin = os.dup(0)
+                assert os.fstat(retained_stdin) == os.fstat(0)
+                os.close(0)
+                cleanup_source = int(os.environ[TEST_FIXTURE_CLEANUP_FD_ENV])
+                cleanup = os.dup(cleanup_source)
+                os.close(cleanup_source)
+                os.close(int(os.environ[TEST_CONTROL_FD_ENV]))
                 reader.close()
                 writer.close()
                 os.close(1)
                 os.close(2)
-                (temporary / "zod-detached-stdin-pid").write_text(
-                    str(os.getpid()),
-                    encoding="utf-8",
+                emit_test_event(
+                    operation,
+                    "detached_descendant_created",
+                    pid=os.getpid(),
+                    process_group=os.getpgrp(),
+                    inherited_fd=0,
+                    retained_fd=retained_stdin,
                 )
-                (temporary / "zod-detached-stdin-started").touch()
-                while True:
-                    time.sleep(60)
+                assert os.write(acknowledge, b"1") == 1
+                os.close(acknowledge)
+                assert os.read(cleanup, 1) in {b"", b"1"}
+                os.close(cleanup)
+                os.close(retained_stdin)
+                emit_test_event(operation, "fixture_cleanup_completed", pid=os.getpid())
+                os._exit(0)
+            os.close(acknowledge)
+            assert os.read(acknowledged, 1) == b"1"
+            os.close(acknowledged)
+            os.close(int(os.environ[TEST_FIXTURE_CLEANUP_FD_ENV]))
+            consumed_bytes = 0
+            emit_test_event(operation, "parent_waiting_for_stdin")
             while True:
-                time.sleep(60)
+                command = wait_for_test_control(operation, "probe_stdin")
+                request = command["request"]
+                expected_bytes = command["expected_bytes"]
+                assert isinstance(request, int), command
+                assert isinstance(expected_bytes, int), command
+                assert expected_bytes > consumed_bytes, command
+                consumed_bytes, queued_bytes = probe_pending_stdin(
+                    expected_bytes,
+                    consumed_bytes,
+                )
+                details = {
+                    "target_operation": operation,
+                    "expected_bytes": expected_bytes,
+                    "consumed_bytes": consumed_bytes,
+                    "queued_bytes": queued_bytes,
+                }
+                if consumed_bytes + queued_bytes < expected_bytes:
+                    emit_test_event(request, "stdin_write_pending", **details)
+                    break
+                emit_test_event(request, "stdin_write_buffered", **details)
+            emit_test_event(
+                operation,
+                "parent_operation_stalled",
+                pid=os.getpid(),
+                process_group=os.getpgrp(),
+            )
+            while True:
+                signal.pause()
 
         if source == "request input":
             send(writer, {"kind": "input_requested", "prompt": "zod> "})
@@ -828,13 +991,6 @@ def main() -> None:
         if source == "fail next r preparation after output":
             fail_next_r_preparation = True
             emit_output_before_r_preparation_failure = True
-            send(writer, {"kind": "completed"})
-            continue
-
-        if source == "fail next r preparation after large output":
-            fail_next_r_preparation = True
-            emit_output_before_r_preparation_failure = True
-            emit_large_output_before_r_preparation_failure = True
             send(writer, {"kind": "completed"})
             continue
 

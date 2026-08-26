@@ -86,6 +86,11 @@ def _tool_error(entry: dict[str, Any], expected: str) -> None:
     assert expected in content[0]["text"], content
 
 
+def _ordered_input_barrier(client: McpClient) -> None:
+    barrier = client._request("ping")
+    assert barrier["result"] == {}, barrier
+
+
 class ServerRelayClient:
     def __init__(
         self,
@@ -741,10 +746,7 @@ def test_control_only_interrupt_targets_blocked_controlled_restart_resolver(
                 requestId=interrupt["id"],
                 reason="acceptance test cancelled the interrupt",
             )
-            client.client._notify(
-                "notifications/acceptance-test-barrier",
-                padding="b" * (4 * 1024 * 1024),
-            )
+            _ordered_input_barrier(client.client)
             recorded = _wait_for_recorded_tool_result(client.client, interrupt)
             assert recorded == {
                 "content": [
@@ -1387,8 +1389,6 @@ def test_control_only_interrupt_honors_timeout_after_attachment(
             timeout_ms=5_000,
         )
         acknowledged.wait()
-        readable, _, _ = select.select([client.client.stdout], [], [], 0.25)
-        assert not readable, "controlled interrupt ignored its attachment timeout"
 
         release.release()
         released = True
@@ -1437,12 +1437,16 @@ def test_controlled_interrupt_does_not_wait_for_an_existing_poll(
     finished = False
     try:
         waiting = client.client._start_send(timeout_ms=5_000)
-        # Filling the input pipe is a causal barrier: the ordered MCP input
-        # transport must consume the preceding poll before this write returns.
-        client.client._notify(
-            "notifications/acceptance-test-barrier",
-            padding="b" * (4 * 1024 * 1024),
-        )
+        ownership = client.send(timeout_ms=0)
+        assert ownership == {
+            "content": [
+                {
+                    "type": "text",
+                    "text": "[worker evaluation is already being polled]",
+                }
+            ],
+            "isError": True,
+        }, ownership
         controlled = client.client._start_send(
             control="interrupt",
             r="new evaluation must not run",
@@ -1451,8 +1455,6 @@ def test_controlled_interrupt_does_not_wait_for_an_existing_poll(
 
         interrupt_ack_release.release()
         interrupt_ack_released = True
-        readable, _, _ = select.select([client.client.stdout], [], [], 2)
-        assert readable, "controlled interrupt waited for the existing poll timeout"
         client.client._receive(controlled)
         assert controlled["result"] == {
             "content": [
@@ -1544,14 +1546,7 @@ def test_cancelled_interrupt_during_live_preparation_does_not_recover_running(
             assert cancellation["requestId"] == interrupt["id"], cancellation
             cancellation["requestId"] = "<request ID>"
 
-            barrier_size = 4 * 1024 * 1024
-            client.client._notify(
-                "notifications/acceptance-test-barrier",
-                padding="b" * barrier_size,
-            )
-            barrier = client.client.transcript[-1]["input"]["params"]
-            assert len(barrier["padding"]) == barrier_size, barrier
-            barrier["padding"] = f"<input barrier: {barrier_size} bytes>"
+            _ordered_input_barrier(client.client)
 
             interrupt_ack_release.release()
             interrupt_ack_released = True

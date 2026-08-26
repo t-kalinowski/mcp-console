@@ -48,7 +48,7 @@ struct ResponseDeliveryState {
     /// Only node-backed reservations enter this map, so the node cap also bounds it.
     pending: HashMap<RequestId, u64>,
     next_admission_token: u64,
-    /// Delivery-tracked response-write futures registered before they run on the service task.
+    /// Console response-write futures registered before they run on the service task.
     pending_writes: usize,
     /// Last waiting member of the wire-order chain, retained across cancellation gaps.
     admission_tail: Option<Arc<ResponseDeliveryAdmissionNode>>,
@@ -77,12 +77,11 @@ struct ResponseDeliveryCallState {
     admission: Option<Arc<ResponseDeliveryAdmissionNode>>,
 }
 
-/// Keeps one request's delivery claim registered until its response write finishes.
+/// Keeps one console request registered until its response write finishes.
 struct ResponseDeliveryWrite {
     deliveries: ResponseDeliveries,
     request_id: RequestId,
     call: ResponseDeliveryCall,
-    tracks_gate: bool,
     finished: bool,
 }
 
@@ -243,20 +242,17 @@ impl ResponseDeliveries {
     }
 
     fn write(&self, request_id: &RequestId) -> Option<ResponseDeliveryWrite> {
-        let (call, tracks_gate) = {
+        let call = {
             let mut state = self.lock();
             let call = state.active.get(request_id).cloned()?;
-            let tracks_gate = call.tracks_write();
-            if tracks_gate {
-                state.pending_writes += 1;
-            }
-            (call, tracks_gate)
+            call.begin_write();
+            state.pending_writes += 1;
+            call
         };
         Some(ResponseDeliveryWrite {
             deliveries: self.clone(),
             request_id: request_id.clone(),
             call,
-            tracks_gate,
             finished: false,
         })
     }
@@ -630,10 +626,6 @@ impl ResponseDeliveryCall {
             Self::finish_admission(&mut state);
             return (true, state.delivery.take());
         }
-        if state.admission.is_none() && state.delivery.is_none() {
-            state.active = false;
-            return (true, None);
-        }
         (false, None)
     }
 
@@ -664,17 +656,17 @@ impl ResponseDeliveryCall {
 
     fn blocks_new_admissions(&self) -> bool {
         let state = self.lock();
-        state.delivery.is_some()
-            || (state.admission.is_some() && (state.operation_finished || !state.active))
+        state.operation_finished
+            || state.delivery.is_some()
+            || (state.admission.is_some() && !state.active)
     }
 
-    fn tracks_write(&self) -> bool {
+    fn begin_write(&self) {
         let state = self.lock();
         assert!(
             state.operation_finished,
             "response writing must follow operation completion"
         );
-        state.delivery.is_some() || state.admission.is_some()
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, ResponseDeliveryCallState> {
@@ -721,9 +713,7 @@ impl ResponseDeliveryWrite {
         {
             settle_delivery(delivery);
         }
-        if self.tracks_gate {
-            self.deliveries.settle_write();
-        }
+        self.deliveries.settle_write();
     }
 }
 
@@ -834,6 +824,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rmcp::model::ServerResult;
     use tokio::io::AsyncWriteExt;
 
     const PING_REQUEST: &[u8] = b"{\"jsonrpc\":\"2.0\",\"method\":\"ping\",\"id\":1}\n";
@@ -852,6 +843,35 @@ mod tests {
 
     fn is_active(call: &ResponseDeliveryCall) -> bool {
         call.lock().active
+    }
+
+    struct PendingWrite {
+        started: Arc<Notify>,
+    }
+
+    impl AsyncWrite for PendingWrite {
+        fn poll_write(
+            self: std::pin::Pin<&mut Self>,
+            _context: &mut std::task::Context<'_>,
+            _buffer: &[u8],
+        ) -> std::task::Poll<std::io::Result<usize>> {
+            self.started.notify_one();
+            std::task::Poll::Pending
+        }
+
+        fn poll_flush(
+            self: std::pin::Pin<&mut Self>,
+            _context: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<std::io::Result<()>> {
+            std::task::Poll::Ready(Ok(()))
+        }
+
+        fn poll_shutdown(
+            self: std::pin::Pin<&mut Self>,
+            _context: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<std::io::Result<()>> {
+            std::task::Poll::Ready(Ok(()))
+        }
     }
 
     #[test]
@@ -911,7 +931,8 @@ mod tests {
     async fn response_gate_does_not_delay_cancellation_notifications() {
         let deliveries = ResponseDeliveries::default();
         deliveries.lock().pending_writes = 1;
-        let cancelled = deliveries.start_response(request_id(9));
+        let cancelled_id = request_id(9);
+        let cancelled = deliveries.reserve(cancelled_id.clone()).unwrap();
         let (mut input, read) = tokio::io::duplex(1024);
         input.write_all(PING_REQUEST).await.unwrap();
         input.write_all(CANCEL_REQUEST_9).await.unwrap();
@@ -936,7 +957,11 @@ mod tests {
             }
         };
         assert!(matches!(second, JsonRpcMessage::Notification(_)));
-        assert!(!is_active(&cancelled));
+        assert!(matches!(
+            cancelled.admit().await,
+            Err(ResponseDeliveryAdmissionError::Cancelled)
+        ));
+        assert!(current_call(&transport.deliveries, &cancelled_id).is_none());
     }
 
     #[tokio::test]
@@ -944,15 +969,23 @@ mod tests {
         let deliveries = ResponseDeliveries::default();
         deliveries.lock().pending_writes = 1;
         let first = deliveries.reserve(request_id(1)).unwrap();
-        let cancelled = deliveries.reserve(request_id(9)).unwrap();
-        drop(cancelled);
+        let cancelled_id = request_id(9);
+        let cancelled = deliveries.reserve(cancelled_id.clone()).unwrap();
         let second = deliveries.reserve(request_id(2)).unwrap();
         let mut first = Box::pin(first.admit());
+        let mut cancelled = Box::pin(cancelled.admit());
         let mut second = Box::pin(second.admit());
         let mut context = std::task::Context::from_waker(std::task::Waker::noop());
 
         assert!(std::future::Future::poll(second.as_mut(), &mut context).is_pending());
+        assert!(std::future::Future::poll(cancelled.as_mut(), &mut context).is_pending());
         assert!(std::future::Future::poll(first.as_mut(), &mut context).is_pending());
+        deliveries.cancel(&cancelled_id);
+        assert!(matches!(
+            std::future::Future::poll(cancelled.as_mut(), &mut context),
+            std::task::Poll::Ready(Err(ResponseDeliveryAdmissionError::Cancelled))
+        ));
+        drop(cancelled);
         deliveries.settle_write();
         assert!(std::future::Future::poll(second.as_mut(), &mut context).is_pending());
         let (first_call, first_operation) =
@@ -970,6 +1003,142 @@ mod tests {
             std::task::Poll::Ready(Ok((_call, _operation)))
         ));
         assert!(!is_active(&first_call));
+    }
+
+    #[tokio::test]
+    async fn cancelled_admitted_call_holds_successor_until_its_operation_stops() {
+        let deliveries = ResponseDeliveries::default();
+        deliveries.lock().pending_writes = 1;
+        let cancelled_id = request_id(1);
+        let cancelled = deliveries.reserve(cancelled_id.clone()).unwrap();
+        let successor = deliveries.reserve(request_id(2)).unwrap();
+        let mut cancelled = Box::pin(cancelled.admit());
+        let mut successor = Box::pin(successor.admit());
+        let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+
+        deliveries.settle_write();
+        let (call, operation) = match std::future::Future::poll(cancelled.as_mut(), &mut context) {
+            std::task::Poll::Ready(Ok(admitted)) => admitted,
+            _ => panic!("the first reserved call should be admitted"),
+        };
+        assert!(std::future::Future::poll(successor.as_mut(), &mut context).is_pending());
+
+        deliveries.cancel(&cancelled_id);
+        assert!(!is_active(&call));
+        assert!(current_call(&deliveries, &cancelled_id).is_some());
+        assert!(std::future::Future::poll(successor.as_mut(), &mut context).is_pending());
+
+        drop(operation);
+        assert!(current_call(&deliveries, &cancelled_id).is_none());
+        assert!(matches!(
+            std::future::Future::poll(successor.as_mut(), &mut context),
+            std::task::Poll::Ready(Ok((_call, _operation)))
+        ));
+    }
+
+    #[tokio::test]
+    async fn completed_initial_operation_holds_successor_until_its_response_write() {
+        let deliveries = ResponseDeliveries::default();
+        let first_id = request_id(1);
+        let admission = deliveries.reserve(first_id.clone()).unwrap();
+        let (call, operation) = match admission.admit().await {
+            Ok(admitted) => admitted,
+            Err(_) => panic!("the initial call should be admitted"),
+        };
+
+        operation.complete();
+        assert!(current_call(&deliveries, &first_id).is_some_and(|current| current.is(&call)));
+        assert!(call.blocks_new_admissions());
+        let successor = deliveries.reserve(request_id(2)).unwrap();
+        let mut successor = Box::pin(successor.admit());
+        let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+        assert!(std::future::Future::poll(successor.as_mut(), &mut context).is_pending());
+
+        let write = deliveries.write(&first_id).unwrap();
+        assert_eq!(deliveries.lock().pending_writes, 1);
+        assert!(std::future::Future::poll(successor.as_mut(), &mut context).is_pending());
+        write.delivered();
+
+        assert_eq!(deliveries.lock().pending_writes, 0);
+        assert!(current_call(&deliveries, &first_id).is_none());
+        assert!(matches!(
+            std::future::Future::poll(successor.as_mut(), &mut context),
+            std::task::Poll::Ready(Ok((_call, _operation)))
+        ));
+    }
+
+    #[test]
+    fn bounds_response_gated_reservations() {
+        let deliveries = ResponseDeliveries::default();
+        let blocker_id = request_id(0);
+        deliveries.start_response(blocker_id.clone());
+        let blocker_write = deliveries.write(&blocker_id).unwrap();
+        let reservations = (1..MAX_RESPONSE_GATED_CALLS)
+            .map(|id| {
+                deliveries
+                    .reserve(request_id(id as i64))
+                    .expect("reservation within the response-gated bound")
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            deliveries.admission_count.load(Ordering::Acquire),
+            MAX_RESPONSE_GATED_CALLS
+        );
+        assert!(
+            deliveries
+                .reserve(request_id(MAX_RESPONSE_GATED_CALLS as i64))
+                .is_none()
+        );
+
+        drop(reservations);
+        blocker_write.delivered();
+        assert_eq!(deliveries.admission_count.load(Ordering::Acquire), 0);
+    }
+
+    #[tokio::test]
+    async fn eof_cancels_pending_response_write() {
+        let deliveries = ResponseDeliveries::default();
+        let response_id = request_id(1);
+        let admission = deliveries.reserve(response_id.clone()).unwrap();
+        let (call, operation) = match admission.admit().await {
+            Ok(admitted) => admitted,
+            Err(_) => panic!("the initial call should be admitted"),
+        };
+        operation.complete();
+        let successor = deliveries.reserve(request_id(2)).unwrap();
+
+        let (input, read) = tokio::io::duplex(1);
+        let started = Arc::new(Notify::new());
+        let writer = PendingWrite {
+            started: Arc::clone(&started),
+        };
+        let mut transport = ServerTransport::new(read, writer, deliveries.clone());
+        let response = JsonRpcMessage::response(ServerResult::empty(()), response_id.clone());
+        let send = tokio::spawn(transport.send(response));
+
+        tokio::time::timeout(std::time::Duration::from_secs(1), started.notified())
+            .await
+            .expect("response writer should be reached");
+        assert_eq!(deliveries.lock().pending_writes, 1);
+        assert!(current_call(&deliveries, &response_id).is_some_and(|current| current.is(&call)));
+
+        drop(input);
+        assert!(transport.receive().await.is_none());
+        let error = tokio::time::timeout(std::time::Duration::from_secs(1), send)
+            .await
+            .expect("response write should be cancelled")
+            .expect("response write task should finish")
+            .expect_err("EOF should cancel the pending response write");
+
+        assert_eq!(error.kind(), std::io::ErrorKind::BrokenPipe);
+        assert_eq!(deliveries.lock().pending_writes, 0);
+        assert!(current_call(&deliveries, &response_id).is_none());
+        assert!(!is_active(&call));
+        assert!(matches!(
+            successor.admit().await,
+            Err(ResponseDeliveryAdmissionError::Closed)
+        ));
     }
 
     #[test]

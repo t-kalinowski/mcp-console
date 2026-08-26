@@ -49,7 +49,5 @@ send:
 result:
   content:
     - type: text
-      text: |-
-        zod replacement startup ready
-        [idle]
+      text: "[idle]"
   isError: false
