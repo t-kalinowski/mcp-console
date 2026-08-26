@@ -28,8 +28,7 @@ use lifecycle::{
 pub(crate) use output::{Content, Response, ResponseDelivery};
 use output::{OutputTape, SendFailure, SendResponse};
 
-#[cfg(target_os = "macos")]
-const DEFAULT_R_REQUIREMENTS: &[&str] = &[
+pub(crate) const DEFAULT_R_REQUIREMENTS: &[&str] = &[
     "tidyverse",
     "github::rstudio/reticulate",
     "DBI",

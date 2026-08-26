@@ -105,4 +105,6 @@ produced session:
   root: .mcp-console/sessions/<run ID>
   files:
     - internal/events.jsonl
+    - transcript.md
+    - transcript.qmd
     - artifacts/call-000001-image-000001.png

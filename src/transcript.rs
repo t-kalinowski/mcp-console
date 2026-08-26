@@ -12,6 +12,8 @@ use rmcp::model::{
 };
 use serde_json::{Value, json};
 
+mod markdown;
+
 const SCHEMA_VERSION: u64 = 1;
 
 #[derive(Clone)]
@@ -26,6 +28,8 @@ struct TranscriptState {
 struct ActiveTranscript {
     directory: PathBuf,
     writer: BufWriter<File>,
+    projections: Option<markdown::Writers>,
+    pending_projection_failure: Option<String>,
     run_id: String,
     sequence: u64,
     next_call_id: u64,
@@ -143,7 +147,17 @@ impl Transcript {
         }
         let result = operation(&mut state);
         match result {
-            Ok(value) => Some(value),
+            Ok(value) => {
+                let projection_failure = state
+                    .active
+                    .as_mut()
+                    .and_then(ActiveTranscript::take_projection_failure);
+                drop(state);
+                if let Some(error) = projection_failure {
+                    report_projection_failure(&error);
+                }
+                Some(value)
+            }
             Err(error) => {
                 state.disable(error.clone());
                 drop(state);
@@ -217,10 +231,34 @@ impl ActiveTranscript {
         let writer = create_private_file(&journal)
             .map(BufWriter::new)
             .map_err(|error| format!("failed to create {}: {error}", journal.display()))?;
+        let projections = (|| {
+            let working_directory = working_directory.to_str().ok_or_else(|| {
+                "Quarto execution root requires a UTF-8 working directory".to_string()
+            })?;
+            let markdown_path = directory.join("transcript.md");
+            let markdown = create_private_file(&markdown_path).map_err(|error| {
+                format!("failed to create {}: {error}", markdown_path.display())
+            })?;
+            let quarto_path = directory.join("transcript.qmd");
+            let quarto = create_private_file(&quarto_path)
+                .map_err(|error| format!("failed to create {}: {error}", quarto_path.display()))?;
+            drop(quarto);
+            Ok(markdown::Writers::new(
+                markdown,
+                quarto_path,
+                working_directory,
+            ))
+        })();
+        let (projections, pending_projection_failure) = match projections {
+            Ok(projections) => (Some(projections), None),
+            Err(error) => (None, Some(error)),
+        };
 
         let mut transcript = Self {
             directory,
             writer,
+            projections,
+            pending_projection_failure,
             run_id,
             sequence: 0,
             next_call_id: 0,
@@ -294,7 +332,17 @@ impl ActiveTranscript {
             .and_then(|()| self.writer.flush())
             .map_err(|error| format!("failed to append transcript event: {error}"))?;
         self.sequence = sequence;
+        if let Some(projections) = &mut self.projections
+            && let Err(error) = projections.append(&event)
+        {
+            self.projections = None;
+            self.pending_projection_failure = Some(error);
+        }
         Ok(())
+    }
+
+    fn take_projection_failure(&mut self) -> Option<String> {
+        self.pending_projection_failure.take()
     }
 
     fn finish(
@@ -410,6 +458,13 @@ fn report_failure(error: &str) {
     );
 }
 
+fn report_projection_failure(error: &str) {
+    let _ = writeln!(
+        std::io::stderr().lock(),
+        "mcp-console: transcript projections disabled: {error}"
+    );
+}
+
 fn create_private_directory(path: &Path, recursive: bool) -> std::io::Result<()> {
     let mut builder = DirBuilder::new();
     builder.recursive(recursive);
@@ -432,4 +487,21 @@ fn write_new(path: &Path, bytes: &[u8]) -> Result<(), String> {
     file.write_all(bytes)
         .and_then(|()| file.flush())
         .map_err(|error| format!("failed to write {}: {error}", path.display()))
+}
+
+fn replace_private_file(path: &Path, bytes: &[u8]) -> Result<(), String> {
+    let temporary = path.with_file_name(".transcript.qmd.tmp");
+    if let Err(error) = write_new(&temporary, bytes) {
+        let _ = std::fs::remove_file(&temporary);
+        return Err(error);
+    }
+    if let Err(error) = std::fs::rename(&temporary, path) {
+        let _ = std::fs::remove_file(&temporary);
+        return Err(format!(
+            "failed to replace {} from {}: {error}",
+            path.display(),
+            temporary.display()
+        ));
+    }
+    Ok(())
 }

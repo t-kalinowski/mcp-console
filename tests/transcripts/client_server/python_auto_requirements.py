@@ -82,6 +82,31 @@ def initialize_python_and_record_baseline(client: McpClient, record: Path) -> in
     return len(uv_tool_run_requirements(record))
 
 
+def resolve_managed_python(binary: Path, directory: Path) -> Path:
+    workspace = directory / "managed-python"
+    workspace.mkdir()
+    environment = os.environ.copy()
+    environment.pop("RETICULATE_PYTHON", None)
+    environment.pop("UV_PYTHON", None)
+    client = McpClient(
+        binary,
+        ("serve",),
+        environment,
+        current_directory=workspace,
+    )
+    client._initialize_and_list_tools()
+    client.send(python='import sys\nprint(f"managed-python={sys.executable}")')
+    output = last_tool_text(client)
+    client._finish()
+    executable = Path(
+        next(
+            line for line in output.splitlines() if line.startswith("managed-python=")
+        ).split("=", 1)[1]
+    ).resolve()
+    assert executable.is_file(), executable
+    return executable
+
+
 def send_and_collect_runtime_python_resolution(
     client: McpClient,
     **arguments: object,
@@ -737,8 +762,9 @@ def test_disables_automatic_resolution_for_user_selected_python(
     missing = "mcp_console_user_selected_missing"
     with tempfile.TemporaryDirectory() as temporary:
         directory = Path(temporary)
+        managed_python = resolve_managed_python(binary, directory)
         environment, record = recording_uv_environment(directory)
-        environment["RETICULATE_PYTHON"] = str(Path(sys.executable).resolve())
+        environment["RETICULATE_PYTHON"] = str(managed_python)
         environment["PYTHONNODEBUGRANGES"] = "1"
         client = McpClient(binary, ("serve",), environment)
         client._initialize_and_list_tools()

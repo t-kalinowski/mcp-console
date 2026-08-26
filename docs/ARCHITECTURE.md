@@ -272,9 +272,30 @@ It appends tool calls and assembled results to `internal/events.jsonl`.
 Each `tool_result` is appended before the MCP transport attempts the corresponding response write.
 It records server assembly, not whether the transport write succeeded or the client received the response.
 
+The run directory also contains `transcript.md` and `transcript.qmd` projections.
+For each event, the server flushes the authoritative JSONL record first.
+It then appends and flushes the corresponding Markdown fragment without rewriting earlier bytes.
+When a call submits source or declares R or Python requirements, the server updates QMD-only in-memory state, regenerates the complete document from that state, and atomically replaces the prior file.
+It does not reread or parse prior result events from the journal during live projection.
+Both documents are emitted in Yamark-formatted form without rewriting submitted code or result content through embedded formatters.
+The Markdown document presents R, Python, and SQL source as syntax-highlighted code fences, stdin and result text as literal text fences, call options as JSON, and artifacts through relative links.
+Fences expand when literal content contains backticks.
+It is a chronological call ledger: a timed-out cell, later polls, and eventual results remain separate calls because the journal does not infer evaluation-level grouping.
+The executable Quarto document contains the source from calls with exactly one submitted R, Python, or SQL field in call order; it omits stdin, options, results, errors, polls, and artifacts.
+It retains source even when another argument later makes the call fail, so it is source material rather than an execution ledger.
+Its IR front matter declares the built-in R and Python requirements followed by cumulative explicit declarations from recorded calls.
+It does not declare a Python version, so `ir render transcript.qmd` uses reticulate's default managed Python selection.
+The declarations are submitted inputs, not a lockfile or an exact record of successful retained and automatically inferred requirements.
+Rendering executes the captured client-authored cells in order in a fresh Quarto/knitr runtime outside the MCP Console worker sandbox and exports their new output.
+This is intended to reproduce the analysis represented by the Markdown ledger, but it does not replay recorded output or artifacts.
+It does not yet reconstruct every MCP Console runtime detail; in particular, SQL chunks require a DBI connection supplied by the document user.
+
 Images remain ordinary MCP image content for the client.
 For recording, the server decodes retained image data into files under the run's `artifacts/` directory and records artifact identifiers and relative paths in the JSONL result instead of duplicating the encoded payload there.
-A recording failure disables further recording and reports a server diagnostic without stopping the console or worker.
+Artifact events appear as links in the live Markdown projection as soon as their files are recorded, even when no later poll collects them; result image blocks remain inline in result-content order.
+A journal or artifact failure disables further recording and reports a server diagnostic without stopping the console or worker.
+A Markdown or Quarto creation, append, or regeneration failure disables both derived projections; the journal and artifacts continue, and the server reports the failure once.
+This includes a server working directory that cannot be represented as UTF-8 because its exact path cannot be emitted as the QMD execution root.
 
 ## Platform support
 

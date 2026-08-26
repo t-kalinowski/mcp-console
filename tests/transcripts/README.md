@@ -11,8 +11,9 @@ Each `test_` function in a suite is a transcript case.
 The runner passes the built binary path to each case.
 Each case returns a `Transcript`: an ordered list of transcript entries.
 The runner serializes each entry as one document in the matching YAML 1.2 stream under `golden/BOUNDARY/SUITE/CASE.yaml`.
-A case may return `TranscriptWithCompanion` to place a separate YAML stream at `golden/BOUNDARY/SUITE/CASE.NAME.yaml`.
-The runner compares YAML 1.2 values, so equivalent scalar spellings and layouts are accepted.
+A case may return `TranscriptWithCompanions` to place named sibling files beside that stream.
+YAML companions use names such as `CASE.events.yaml` and are compared as YAML 1.2 values, so equivalent scalar spellings and layouts are accepted.
+Markdown and Quarto companions use `CASE.md` and `CASE.qmd` and are compared as exact UTF-8 text.
 Server cases record each JSON-RPC client message and any matching response as one YAML document.
 They omit the invariant `jsonrpc: "2.0"` field and request-response IDs from the rendered golden.
 The client still requires every issued request ID to be unique and validates the response ID before recording each exchange.
@@ -45,8 +46,13 @@ The suite asserts the public `send` result and records relay-to-worker and worke
 Pending standard-output and standard-error chunks are grouped into one event without defining their relative order.
 The `client_server/r`, `client_server/python`, and `client_server/sql` suites exercise the built-in worker through the public `send` tool.
 The Zod materialization case verifies that initialization and unknown tool calls create no run, while a first `send` call does.
-The recording-failure cases verify that recording disables itself with one standard-error diagnostic while console calls and images continue normally.
-The Zod recording case projects `events.jsonl` into a readable YAML sequence in `records_tool_calls_and_images.events.yaml`, followed by the produced session root and file list.
+The authoritative recording-failure cases verify that recording disables itself with one standard-error diagnostic while console calls and images continue normally.
+Projection failures disable both derived documents while JSONL events and artifacts continue.
+The Zod recording case projects `events.jsonl` and the literal generated `transcript.md` and `transcript.qmd` into `records_tool_calls_and_images.events.yaml`, followed by the produced session root and file list.
+The live-recording case uses causal fixture gates to verify that each Markdown snapshot retains the prior bytes as an exact prefix while calls complete, artifacts arrive, and later polls collect them; the server regenerates the Quarto document for source-bearing calls and leaves it unchanged for results, artifacts, and polls.
+The Markdown suite's real mixed-language recording case snapshots the public stdio transcript and literal generated documents as sibling `.yaml`, `.md`, and `.qmd` goldens.
+It exercises the built-in R, Python, and SQL runtimes in one session and verifies that the recorded R image artifact is byte-identical to a reference plot.
+The suite also verifies both documents with Yamark, and the optional Quarto suite executes generated R and Python cells through IR when `ir` and `quarto` are installed.
 
 Run commands from the repository root:
 

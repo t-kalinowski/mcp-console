@@ -27,7 +27,7 @@ Common calls should look like:
 The empty object waits for or polls the default session.
 Replies are bounded text.
 Complete explicit stream output and generated artifacts live in managed session files.
-Each session maintains a generated, non-executing `transcript.qmd` that an agent can read after context compaction and use as source material for a refined notebook, script, or report.
+Each session maintains a generated `transcript.md` that an agent can read after context compaction, plus an executable `transcript.qmd` containing only submitted code cells for later source reuse or reproducible rendering.
 
 Humans may attach to the live MCP server through a process-scoped local API.
 That API supports observation, structured inspection, plot viewing, bounded live-table exploration, point-in-time snapshots, and explicitly attributed external control without adding more MCP tools or flooding model context.
@@ -60,7 +60,7 @@ Safety is enforced around the worker process and its descendants, not by filteri
 - MCP results are text-only; v1 has no `outputSchema`, structured-content mirror, MCP resource dependency, or inline image result.
 - Oversized explicit output is retained in bounded session spools; each response contains only a bounded current excerpt.
 - Large values and SQL relations are previewed structurally before full textual materialization.
-- The agent-facing durable record is `transcript.qmd`; a granular JSONL journal is internal implementation state.
+- The agent-facing durable record is `transcript.md`; `transcript.qmd` is the source-only code-cell projection, and a granular JSONL journal is internal implementation state.
 - Requirements are additive logical-session configuration managed by `session`.
   They survive runtime restarts and are not accepted on ordinary `send` calls.
 - Interrupt, restart, close, and worker crash are distinct observable events.
@@ -135,7 +135,7 @@ Store source out of band and pass a short evaluation ID through bridge calls so 
   - **Inspect:** sends typed, bounded requests to supported runtime adapters; accepts no caller-supplied R, Python, or SQL source.
   - **Control:** submits code, stdin, environment changes, or lifecycle operations through the same session state machine as MCP.
 - Arbitrary external code is always a primary attributed evaluation.
-  It receives an evaluation ID, appears in `transcript.qmd`, emits ordinary events, and causes a compact notice to the MCP-side agent before later state-dependent work.
+  It receives an evaluation ID, appears in `transcript.md`, emits ordinary events, and causes a compact notice to the MCP-side agent before later state-dependent work.
   Never add a hidden or nominally “read-only” arbitrary-code path.
 - R and embedded Python are owned by one runtime thread.
   Generic inspection runs only while the session is idle and returns `session_busy` otherwise.
@@ -178,7 +178,7 @@ Create focused documents only when a subsystem has enough detail to justify a se
 
 - `docs/WORKER_PROTOCOL.md` — exact private IPC messages and ordering.
 - `docs/LOCAL_API_PROTOCOL.md` — generated local API contract once endpoint names stabilize.
-- `docs/OUTPUT_AND_TRANSCRIPTS.md` — output timeline, spools, previews, QMD generation, and retention.
+- `docs/OUTPUT_AND_TRANSCRIPTS.md` — output timeline, spools, previews, document generation, and retention.
 - `docs/SANDBOX.md` — platform policies and inherited-host sandbox behavior.
 - `docs/DEPENDENCIES.md` — R/Python requirement grammar, resolution, caching, and activation.
 - `docs/TESTING.md` — supported runtime matrix, integration harness, fixtures, and snapshot rules.
@@ -221,8 +221,8 @@ Create focused documents only when a subsystem has enough detail to justify a se
 
 - `src/output/` — managed and raw stream intake, per-evaluation spools, reply cursors, value/table previews, and final response budgets.
 
-- `src/transcript/` — internal journal model and generated Quarto projection.
-  The QMD must be rebuildable and must not be edited in place.
+- `src/transcript/` — internal journal model, generated Markdown ledger, and source-only Quarto projection.
+  Users and agents must not edit the live generated documents; the server appends Markdown and regenerates the QMD from incremental source and requirement state.
 
 - `src/local_api/` — process-scoped service router, local transports, protected discovery records, handshake, authorization, snapshots, event replay, and managed-file delivery.
 
@@ -256,8 +256,8 @@ Create focused documents only when a subsystem has enough detail to justify a se
    Do not stringify or collect an arbitrary object or relation in full and truncate afterward.
 8. Polls return only newly observed bounded output and current state.
    Unseen overflow stays in the evaluation spool and is not forced through later calls.
-9. Keep the internal journal and generated QMD separate.
-   The journal may be granular; the QMD is the readable agent artifact.
+9. Keep the internal journal and generated documents separate.
+   The journal may be granular; Markdown is the readable agent artifact and QMD contains only source cells.
 10. Record a worker crash before automatically starting a fresh worker.
     Preserve honest state-loss and generation boundaries.
 11. Observation must never enter the runtime.
@@ -286,7 +286,7 @@ Create focused documents only when a subsystem has enough detail to justify a se
 1. Build the session state machine, normalized runtime interface, and deterministic fake backend around the implemented persistent R worker.
 2. Complete the remaining backend evaluation covering interrupts, plots/help, Python and SQL dispatch, and an independent large-table viewer using live viewport requests.
 3. Record the full-runtime backend decision, then extend the selected worker with structured interrupt, restart, crash reporting, and capability negotiation.
-4. Bounded output spools, reply cursors, value previews, generated `transcript.qmd`, and managed artifacts.
+4. Bounded output spools, reply cursors, value previews, generated `transcript.md` and source-only `transcript.qmd`, and managed artifacts.
 5. Reticulate Python cell execution and interactive input.
 6. Persistent DuckDB through R/DBI, bounded SQL results, R environment scanning, and explicit registration.
 7. Atomic session requirement preparation and restart.

@@ -35,7 +35,7 @@ The interface is optimized for frequent use and global enablement:
 ```json
 {
   "name": "send",
-  "description": "Persistent R, Python, and DuckDB SQL console. Use it whenever exact computation or direct inspection would improve accuracy—from arithmetic, string counting, parsing, and file or binary-data inspection to data wrangling, exploratory analysis, visualization, statistics, simulation, and model training or tuning. State persists across calls; R and Python exchange objects, and SQL queries live or registered tabular data. Language-native help, introspection, interactive input, and debuggers work. Send exactly one complete r, python, or sql cell, optionally with stdin; send stdin on its own to queue exact text to the session worker; send neither to wait/poll. Large values are previewed; oversized stdout/stderr, plots, artifacts, and the Quarto transcript are saved in the workspace.",
+  "description": "Persistent R, Python, and DuckDB SQL console. Use it whenever exact computation or direct inspection would improve accuracy—from arithmetic, string counting, parsing, and file or binary-data inspection to data wrangling, exploratory analysis, visualization, statistics, simulation, and model training or tuning. State persists across calls; R and Python exchange objects, and SQL queries live or registered tabular data. Language-native help, introspection, interactive input, and debuggers work. Send exactly one complete r, python, or sql cell, optionally with stdin; send stdin on its own to queue exact text to the session worker; send neither to wait/poll. Large values are previewed; oversized stdout/stderr, plots, artifacts, the Markdown transcript, and the source-only Quarto document are saved in the workspace.",
   "inputSchema": {
     "type": "object",
     "additionalProperties": false,
@@ -68,7 +68,7 @@ The interface is optimized for frequent use and global enablement:
         "type": "string",
         "minLength": 1,
         "maxLength": 160,
-        "description": "Optional short heading for this cell in the Quarto transcript; it has no effect on execution."
+        "description": "Optional short heading for this cell in the Markdown transcript; it has no effect on execution."
       },
       "wait_ms": {
         "type": "integer",
@@ -371,7 +371,7 @@ model-fit  running  python  18s
 ```text
 default  generation=1  input_required  r
 requirements: r=2 python=1
-transcript: .mcp-console/sessions/default/transcript.qmd
+transcript: .mcp-console/sessions/default/transcript.md
 ```
 
 `prepare` follows the requirement semantics above.
@@ -603,10 +603,12 @@ Tests should assert hard bounds and semantic markers, not incidental table glyph
 Each session exposes:
 
 ```text
-.mcp-console/sessions/<session>/transcript.qmd
+.mcp-console/sessions/<session>/transcript.md
 ```
 
-The transcript is generated at stable boundaries and contains:
+The transcript is append-only and grows as recorded events arrive.
+The planned evaluation-level event vocabulary makes completion, interruption, restart, stop, and crash explicit boundaries.
+It contains:
 
 - session and generation metadata;
 - stable evaluation IDs;
@@ -614,15 +616,17 @@ The transcript is generated at stable boundaries and contains:
 - complete submitted source;
 - bounded stdout, stderr, result, and error excerpts;
 - paths to complete output and artifacts;
-- input prompts and supplied interactive lines when safe to record;
+- input prompts and supplied interactive lines without redaction;
 - restart, stop, and crash boundaries.
 
-The document is marked non-executing.
 It is a chronological execution record, not a promise of reproducibility and not a polished notebook.
+The companion `transcript.qmd` contains executable submitted code cells plus IR front matter for declared R and Python requirements.
+Users can reuse its source or run `ir render` to execute the client-authored action stream in a fresh environment and export a new report.
+The goal is to reproduce the analysis represented by the Markdown transcript, although not every runtime detail can be reconstructed yet.
 Agents create refined `.qmd`, `.R`, `.py`, or `.ipynb` files separately.
 
 A granular event journal may back transcript recovery.
-It is internal implementation state, is not advertised as the normal agent artifact, and need not share the QMD format's compatibility guarantees.
+It is internal implementation state, is not advertised as the normal agent artifact, and need not share the Markdown format's compatibility guarantees.
 
 ## 12. SQL behavior
 

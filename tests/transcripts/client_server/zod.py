@@ -25,7 +25,7 @@ from _support import (
     FifoCheckpoint,
     McpClient,
     Transcript,
-    TranscriptWithCompanion,
+    TranscriptWithCompanions,
     code,
     r_test_environment,
     run_this_suite,
@@ -748,7 +748,53 @@ def test_continues_without_record_when_record_cannot_be_created(
         return transcript
 
 
-def test_records_tool_calls_and_images(binary: Path) -> TranscriptWithCompanion:
+def test_updates_quarto_without_rereading_journal(binary: Path) -> Transcript:
+    zod = Path(__file__).resolve().parents[2] / "fixtures" / "zod"
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        workspace = Path(temporary_directory)
+        client = McpClient(
+            binary,
+            ("serve", "--worker", str(zod)),
+            current_directory=workspace,
+        )
+        finished = False
+        journal_read_disabled = False
+        try:
+            client._initialize_and_list_tools()
+            client.send(r="echo first")
+
+            session = next((workspace / ".mcp-console" / "sessions").iterdir())
+            journal = session / "internal" / "events.jsonl"
+            journal.chmod(0o200)
+            journal_read_disabled = True
+
+            client.send(python="echo second")
+            quarto = (session / "transcript.qmd").read_text(encoding="utf-8")
+
+            journal.chmod(0o600)
+            journal_read_disabled = False
+            assert "```{r}\necho first\n```" in quarto, quarto
+            assert "```{python}\necho second\n```" in quarto, quarto
+
+            transcript = client._finish()
+            transcript.append(
+                {
+                    "quarto projection": {
+                        "updated from incremental state": True,
+                        "journal reopened for reading": False,
+                    }
+                }
+            )
+            finished = True
+            return transcript
+        finally:
+            if journal_read_disabled:
+                journal.chmod(0o600)
+            if not finished:
+                stop_client(client)
+
+
+def test_records_tool_calls_and_images(binary: Path) -> TranscriptWithCompanions:
     zod = Path(__file__).resolve().parents[2] / "fixtures" / "zod"
     with tempfile.TemporaryDirectory() as temporary_directory:
         workspace = Path(temporary_directory)
@@ -768,6 +814,12 @@ def test_records_tool_calls_and_images(binary: Path) -> TranscriptWithCompanion:
             stdin="recorded stdin\n",
             requirements={"r": ["praise"]},
         )
+        session = next((workspace / ".mcp-console" / "sessions").iterdir())
+        quarto_path = session / "transcript.qmd"
+        quarto_before_python_requirement = quarto_path.read_text(encoding="utf-8")
+        quarto_before_inode = quarto_path.stat().st_ino
+        assert "    - praise" in quarto_before_python_requirement
+        assert "transcript-fixture" not in quarto_before_python_requirement
         image_request_id = client.transcript[-1]["id"]
         invalid = client._request(
             "tools/call",
@@ -786,7 +838,12 @@ def test_records_tool_calls_and_images(binary: Path) -> TranscriptWithCompanion:
         journal_text = (session / "internal" / "events.jsonl").read_text(
             encoding="utf-8"
         )
+        markdown_path = session / "transcript.md"
+        markdown_text = markdown_path.read_text(encoding="utf-8")
+        quarto_text = quarto_path.read_text(encoding="utf-8")
         assert PNG_1X1 not in journal_text, journal_text
+        assert PNG_1X1 not in markdown_text, markdown_text
+        assert PNG_1X1 not in quarto_text, quarto_text
         events = [json.loads(line) for line in journal_text.splitlines()]
         assert [event["event"] for event in events] == [
             "session_started",
@@ -889,7 +946,12 @@ def test_records_tool_calls_and_images(binary: Path) -> TranscriptWithCompanion:
         assert set(directory_modes.values()) == {0o700}, directory_modes
         file_modes = {
             path.relative_to(workspace).as_posix(): path.stat().st_mode & 0o777
-            for path in (session / "internal" / "events.jsonl", image_path)
+            for path in (
+                session / "internal" / "events.jsonl",
+                markdown_path,
+                quarto_path,
+                image_path,
+            )
         }
         assert set(file_modes.values()) == {0o600}, file_modes
         transcript = client._finish()
@@ -903,22 +965,41 @@ def test_records_tool_calls_and_images(binary: Path) -> TranscriptWithCompanion:
                 event["request_id"] = "<request ID>"
         events[0]["working_directory"] = "<workspace>"
         assert journal_text.endswith("\n"), journal_text
+        assert markdown_text.endswith("\n"), markdown_text
+        assert quarto_text.endswith("\n"), quarto_text
+        assert "```{r}\nemit image\n```" in quarto_text
+        assert quarto_path.stat().st_ino != quarto_before_inode
+        assert "    - praise" in quarto_text
+        assert "    - transcript-fixture" in quarto_text
+        assert "python-version:" not in quarto_text
+        assert all(
+            excluded not in quarto_text
+            for excluded in (
+                "recorded stdin",
+                "before image",
+                "Artifact 1",
+                "Result for call",
+            )
+        ), quarto_text
 
-        return TranscriptWithCompanion(
+        return TranscriptWithCompanions(
             transcript=transcript,
-            companion_name="events",
-            companion=[
-                events,
-                {
-                    "produced session": {
-                        "root": ".mcp-console/sessions/<run ID>",
-                        "files": [
-                            "internal/events.jsonl",
-                            "artifacts/call-000001-image-000001.png",
-                        ],
-                    }
-                },
-            ],
+            companions={
+                "events.yaml": [
+                    events,
+                    {
+                        "produced session": {
+                            "root": ".mcp-console/sessions/<run ID>",
+                            "files": [
+                                "internal/events.jsonl",
+                                "transcript.md",
+                                "transcript.qmd",
+                                "artifacts/call-000001-image-000001.png",
+                            ],
+                        }
+                    },
+                ],
+            },
         )
 
 
@@ -1010,6 +1091,8 @@ def test_flushes_calls_and_keeps_unpolled_images(binary: Path) -> Transcript:
         )
         session = next((workspace / ".mcp-console" / "sessions").iterdir())
         journal = session / "internal" / "events.jsonl"
+        markdown = session / "transcript.md"
+        quarto = session / "transcript.qmd"
         before_release = [
             json.loads(line)
             for line in journal.read_text(encoding="utf-8").splitlines()
@@ -1018,6 +1101,14 @@ def test_flushes_calls_and_keeps_unpolled_images(binary: Path) -> Transcript:
             "session_started",
             "tool_call",
         ], before_release
+        before_release_markdown = markdown.read_text(encoding="utf-8")
+        before_release_quarto = quarto.read_text(encoding="utf-8")
+        assert "## Call 1: R" in before_release_markdown
+        assert "complete after release" in before_release_markdown
+        assert "## Result for call 1" not in before_release_markdown
+        assert "```{r}\ncomplete after release\n```" in before_release_quarto
+        markdown_inode = markdown.stat().st_ino
+        quarto_inode = quarto.stat().st_ino
 
         (started.parent / "zod-release-evaluation").touch()
         client._receive(waiting)
@@ -1030,6 +1121,14 @@ def test_flushes_calls_and_keeps_unpolled_images(binary: Path) -> Transcript:
             "tool_call",
             "tool_result",
         ], after_release
+        after_release_markdown = markdown.read_text(encoding="utf-8")
+        after_release_quarto = quarto.read_text(encoding="utf-8")
+        assert after_release_markdown.startswith(before_release_markdown)
+        assert markdown.stat().st_ino == markdown_inode
+        assert "## Result for call 1" in after_release_markdown
+        assert "zod: complete after release" in after_release_markdown
+        assert after_release_quarto == before_release_quarto
+        assert quarto.stat().st_ino == quarto_inode
 
         client.send(
             r="emit image before completion",
@@ -1077,6 +1176,16 @@ def test_flushes_calls_and_keeps_unpolled_images(binary: Path) -> Transcript:
         }, artifact
         image_path = session / artifact["path"]
         assert image_path.read_bytes() == base64.b64decode(PNG_1X1), image_path
+        unpolled_markdown = markdown.read_text(encoding="utf-8")
+        unpolled_quarto = quarto.read_text(encoding="utf-8")
+        assert unpolled_markdown.startswith(after_release_markdown)
+        assert markdown.stat().st_ino == markdown_inode
+        assert f"[Artifact {artifact['artifact_id']} from call 2]" in unpolled_markdown
+        assert artifact["path"] in unpolled_markdown
+        assert unpolled_quarto.startswith(after_release_quarto)
+        assert "```{r}\nemit image before completion\n```" in unpolled_quarto
+        assert quarto.stat().st_ino != quarto_inode
+        unpolled_quarto_inode = quarto.stat().st_ino
 
         (image_started.parent / "zod-release-image-completion").touch()
         client.send(timeout_ms=3_000)
@@ -1105,6 +1214,14 @@ def test_flushes_calls_and_keeps_unpolled_images(binary: Path) -> Transcript:
             ],
             "isError": False,
         }, polled_events[-1]
+        polled_markdown = markdown.read_text(encoding="utf-8")
+        polled_quarto = quarto.read_text(encoding="utf-8")
+        assert polled_markdown.startswith(unpolled_markdown)
+        assert markdown.stat().st_ino == markdown_inode
+        assert "## Call 3: Poll" in polled_markdown
+        assert "## Result for call 3" in polled_markdown
+        assert polled_quarto == unpolled_quarto
+        assert quarto.stat().st_ino == unpolled_quarto_inode
 
         transcript = client._finish()
         transcript.append(
@@ -1122,6 +1239,12 @@ def test_flushes_calls_and_keeps_unpolled_images(binary: Path) -> Transcript:
                         "data": "<byte-identical decoded PNG>",
                     },
                     "later poll result": polled_events[-1]["result"],
+                    "Markdown projection": {
+                        "live before result": True,
+                        "each snapshot retained as an exact prefix": True,
+                        "inode retained": True,
+                    },
+                    "Quarto projection": "source cells only",
                 }
             }
         )

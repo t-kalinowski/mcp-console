@@ -48,4 +48,8 @@ live journal:
         artifactId: 1
         path: artifacts/call-000002-image-000001.png
     isError: false
-...
+  Markdown projection:
+    live before result: true
+    each snapshot retained as an exact prefix: true
+    inode retained: true
+  Quarto projection: source cells only
