@@ -17,7 +17,7 @@ relay:
 ---
 server:
   kind: shutdown
-  grace_millis: 1000
+  grace_millis: <remaining shutdown grace>
 ---
 relay:
   kind: shutdown_started
@@ -34,4 +34,3 @@ relay:
 relay:
   kind: worker_exited
   code: 0
-...

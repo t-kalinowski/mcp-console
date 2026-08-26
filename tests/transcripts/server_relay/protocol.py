@@ -568,6 +568,7 @@ def test_stdin_forwarding_failure_does_not_execute_cell(
             with replacement_capture_path.open(encoding="utf-8") as replacement:
                 client.client._finish()
                 transcript.extend(client._read_open_capture(replacement))
+            assert len(_normalize_shutdown_grace(transcript)) == 1
             finished = True
             return transcript
         finally:
