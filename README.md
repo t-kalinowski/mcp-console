@@ -45,6 +45,90 @@ mcp-console serve
 `mcp-console serve` communicates with its MCP client over standard input and output.
 It waits for MCP protocol input rather than presenting an interactive terminal prompt.
 
+## Python integrations
+
+The Python package includes small adapters for chatlas, the OpenAI Agents SDK, and the Anthropic Python SDK.
+Install MCP Console and the desired framework extra into the same Python environment:
+
+```sh
+pip install "mcp-console[chatlas]"
+pip install "mcp-console[openai]"
+pip install "mcp-console[anthropic]"
+```
+
+Each adapter resolves the `mcp-console` executable from the current Python environment and launches it with `serve`.
+Pass `command=` and `args=` to any adapter to replace that default, for example `command="uvx", args=["mcp-console", "serve"]`.
+
+### chatlas
+
+`register_chatlas()` delegates to chatlas's native stdio MCP registration and leaves cleanup with the `Chat` object:
+
+```python
+from chatlas import ChatOpenAI
+from mcp_console import register_chatlas
+
+chat = ChatOpenAI()
+await register_chatlas(chat)
+
+try:
+    await chat.chat_async("Use the console to calculate the first 20 Fibonacci numbers.")
+finally:
+    await chat.cleanup_mcp_tools()
+```
+
+Any additional keyword arguments are forwarded to `Chat.register_mcp_tools_stdio_async()`, including `name`, `namespace`, tool filters, and transport options.
+
+### OpenAI
+
+Local stdio MCP servers are supported by OpenAI's official Agents SDK, distributed as `openai-agents`.
+`openai_agents_server()` returns the SDK's native `MCPServerStdio` object:
+
+```python
+from agents import Agent, Runner
+from mcp_console import openai_agents_server
+
+async with openai_agents_server() as server:
+    agent = Agent(
+        name="Data analyst",
+        instructions="Use MCP Console for calculations and data analysis.",
+        mcp_servers=[server],
+    )
+    result = await Runner.run(agent, "Fit a line through the points (1, 2), (2, 4), and (3, 5).")
+    print(result.final_output)
+```
+
+Additional `params=` entries are merged into the native stdio process parameters, and remaining keyword arguments are forwarded to `MCPServerStdio`.
+The lower-level `openai` package's hosted MCP tool expects a network-accessible MCP server; the local `mcp-console serve` process therefore uses the Agents SDK integration.
+
+### Anthropic
+
+`anthropic_tools()` follows Anthropic's native MCP helper pattern: it opens an MCP client session, converts each MCP tool with `async_mcp_tool()`, and keeps the session alive for the duration of the context manager:
+
+```python
+from anthropic import AsyncAnthropic
+from mcp_console import anthropic_tools
+
+client = AsyncAnthropic()
+
+async with anthropic_tools() as tools:
+    runner = client.beta.messages.tool_runner(
+        model="your-model",
+        max_tokens=4096,
+        tools=tools,
+        messages=[
+            {
+                "role": "user",
+                "content": "Use the console to calculate the first 20 Fibonacci numbers.",
+            }
+        ],
+    )
+    async for message in runner:
+        print(message)
+```
+
+Keep the tool runner inside the `anthropic_tools()` context because the returned tools call through its live MCP session.
+Use `server_parameters=` for native `StdioServerParameters` options and `tool_kwargs=` for options forwarded to `async_mcp_tool()`.
+
 ## What it is useful for
 
 MCP Console is intended for iterative computational work: inspecting and transforming data, fitting models, running simulations, making plots, debugging code, and checking exact results.
@@ -179,7 +263,7 @@ scripts/test --update BOUNDARY/SUITE[::CASE]
 ```
 
 `scripts/format` attempts each installed formatter and leaves failures visible while continuing with the remaining formatters.
-`scripts/check` validates extracted runtime sources, checks Rust formatting and Clippy, runs Rust tests, and runs the complete transcript suite.
+`scripts/check` validates extracted runtime sources, checks the Python adapters, checks Rust formatting and Clippy, runs Rust tests, and runs the complete transcript suite.
 
 ## Documentation
 

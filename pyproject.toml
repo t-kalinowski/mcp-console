@@ -16,9 +16,16 @@ classifiers = [
     "Environment :: Console",
     "License :: OSI Approved :: MIT License",
     "Operating System :: MacOS",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3",
     "Programming Language :: Rust",
     "Topic :: Scientific/Engineering",
 ]
+
+[project.optional-dependencies]
+anthropic = ["anthropic[mcp]"]
+chatlas = ["chatlas[mcp]"]
+openai = ["openai-agents"]
 
 [project.urls]
 Homepage = "https://github.com/t-kalinowski/mcp-console"
@@ -29,3 +36,5 @@ Issues = "https://github.com/t-kalinowski/mcp-console/issues"
 bindings = "bin"
 compatibility = "pypi"
 locked = true
+module-name = "mcp_console"
+python-source = "python"
