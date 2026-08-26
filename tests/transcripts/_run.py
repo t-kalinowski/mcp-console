@@ -32,10 +32,10 @@ initialization_case = "initializes_and_lists_tools"
 initialization_reference = (
     f"tests/transcripts/golden/{initialization_suite}/{initialization_case}.yaml"
 )
-SLOW_TEST_SECONDS = 5.0
-FREQUENT_STATUS_SECONDS = 30.0
-FREQUENT_STATUS_UNTIL_SECONDS = 180.0
-LATER_STATUS_SECONDS = 60.0
+SLOW_TEST_SECONDS = 10.0
+FREQUENT_STATUS_SECONDS = 60.0
+FREQUENT_STATUS_UNTIL_SECONDS = 300.0
+LATER_STATUS_SECONDS = 120.0
 
 parser = argparse.ArgumentParser(prog="scripts/test")
 parser.add_argument("--list", action="store_true", dest="list_tests")
@@ -292,7 +292,11 @@ def next_status_after(elapsed: float) -> float:
             FREQUENT_STATUS_SECONDS
         )
         return max(FREQUENT_STATUS_SECONDS, next_status)
-    return (int(elapsed // LATER_STATUS_SECONDS) + 1) * LATER_STATUS_SECONDS
+    later_elapsed = elapsed - FREQUENT_STATUS_UNTIL_SECONDS
+    return (
+        FREQUENT_STATUS_UNTIL_SECONDS
+        + (int(later_elapsed // LATER_STATUS_SECONDS) + 1) * LATER_STATUS_SECONDS
+    )
 
 
 @dataclass

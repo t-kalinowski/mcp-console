@@ -28,7 +28,10 @@ pub(crate) struct ResponseDeliveries {
 pub(crate) struct ResponseDeliveryAdmission(Arc<ResponseDeliveryAdmissionState>);
 
 #[derive(Clone)]
-pub(crate) struct ResponseDeliveryCall(Arc<Mutex<ResponseDeliveryCallState>>);
+pub(crate) struct ResponseDeliveryCall {
+    request_id: RequestId,
+    state: Arc<Mutex<ResponseDeliveryCallState>>,
+}
 
 pub(crate) struct ResponseDeliveryOperation {
     deliveries: ResponseDeliveries,
@@ -48,7 +51,7 @@ struct ResponseDeliveryState {
     /// Only node-backed reservations enter this map, so the node cap also bounds it.
     pending: HashMap<RequestId, u64>,
     next_admission_token: u64,
-    /// Delivery-tracked response-write futures registered before they run on the service task.
+    /// Console response-write futures registered before they run on the service task.
     pending_writes: usize,
     /// Last waiting member of the wire-order chain, retained across cancellation gaps.
     admission_tail: Option<Arc<ResponseDeliveryAdmissionNode>>,
@@ -77,12 +80,11 @@ struct ResponseDeliveryCallState {
     admission: Option<Arc<ResponseDeliveryAdmissionNode>>,
 }
 
-/// Keeps one request's delivery claim registered until its response write finishes.
+/// Keeps one console request registered until its response write finishes.
 struct ResponseDeliveryWrite {
     deliveries: ResponseDeliveries,
     request_id: RequestId,
     call: ResponseDeliveryCall,
-    tracks_gate: bool,
     finished: bool,
 }
 
@@ -147,10 +149,11 @@ impl ResponseDeliveries {
         };
         let admission = ResponseDeliveryAdmission(Arc::new(ResponseDeliveryAdmissionState {
             deliveries: self.clone(),
-            request_id,
+            request_id: request_id.clone(),
             token,
             node: Mutex::new(node),
         }));
+        crate::test_control::emit(&request_id, "operation_accepted", "transport");
         self.gate_changed.notify_waiters();
         Some(admission)
     }
@@ -160,7 +163,7 @@ impl ResponseDeliveries {
         request_id: RequestId,
         admission: Option<Arc<ResponseDeliveryAdmissionNode>>,
     ) -> (ResponseDeliveryCall, Option<ResponseDelivery>) {
-        let call = ResponseDeliveryCall::new(!state.closed, admission);
+        let call = ResponseDeliveryCall::new(request_id.clone(), !state.closed, admission);
         let replaced = if state.closed {
             None
         } else {
@@ -172,24 +175,34 @@ impl ResponseDeliveries {
     }
 
     pub(crate) fn cancel(&self, request_id: &RequestId) {
-        let delivery = {
+        let (cancellation, delivery) = {
             let mut state = self.lock();
             // A pending reuse of the ID is newer than an active call whose
             // already-visible response write has not settled yet.
             let pending = state.pending.remove(request_id).is_some();
-            let delivery = (!pending)
+            let active = (!pending)
                 .then(|| state.active.get(request_id).cloned())
-                .flatten()
-                .and_then(|call| {
-                    let (remove, delivery) = call.cancel();
-                    if remove {
-                        state.active.remove(request_id);
-                    }
-                    delivery
-                });
+                .flatten();
+            let delivery = active.as_ref().and_then(|call| {
+                let (remove, delivery) = call.cancel();
+                if remove {
+                    state.active.remove(request_id);
+                }
+                delivery
+            });
             Self::prune_admission_tail(&mut state);
-            delivery
+            let cancellation = if pending {
+                Some("cancellation_before_admission")
+            } else if active.is_some() {
+                Some("cancellation_after_admission")
+            } else {
+                None
+            };
+            (cancellation, delivery)
         };
+        if let Some(kind) = cancellation {
+            crate::test_control::emit(request_id, kind, "transport");
+        }
         if let Some(delivery) = delivery {
             delivery.unclaimed();
         }
@@ -236,6 +249,7 @@ impl ResponseDeliveries {
             Self::prune_admission_tail(&mut state);
             delivery
         };
+        crate::test_control::emit(request_id, "operation_stopped", "transport");
         if let Some(delivery) = delivery {
             delivery.unclaimed();
         }
@@ -243,20 +257,17 @@ impl ResponseDeliveries {
     }
 
     fn write(&self, request_id: &RequestId) -> Option<ResponseDeliveryWrite> {
-        let (call, tracks_gate) = {
+        let call = {
             let mut state = self.lock();
             let call = state.active.get(request_id).cloned()?;
-            let tracks_gate = call.tracks_write();
-            if tracks_gate {
-                state.pending_writes += 1;
-            }
-            (call, tracks_gate)
+            call.begin_write();
+            state.pending_writes += 1;
+            call
         };
         Some(ResponseDeliveryWrite {
             deliveries: self.clone(),
             request_id: request_id.clone(),
             call,
-            tracks_gate,
             finished: false,
         })
     }
@@ -379,6 +390,9 @@ impl ResponseDeliveryAdmission {
     {
         let node = self.0.node();
         let queued = node.is_some();
+        if queued {
+            crate::test_control::emit(&self.0.request_id, "operation_waiting", "transport");
+        }
         if let Some(node) = &node {
             loop {
                 let gate_changed = self.0.deliveries.gate_changed.notified();
@@ -439,6 +453,7 @@ impl ResponseDeliveryAdmission {
                     call: call.clone(),
                     completed: false,
                 };
+                crate::test_control::emit(&self.0.request_id, "operation_admitted", "transport");
                 return Ok((call, operation));
             }
             gate_changed.await;
@@ -582,13 +597,20 @@ impl Drop for ResponseDeliveryAdmissionNode {
 }
 
 impl ResponseDeliveryCall {
-    fn new(active: bool, admission: Option<Arc<ResponseDeliveryAdmissionNode>>) -> Self {
-        Self(Arc::new(Mutex::new(ResponseDeliveryCallState {
-            active,
-            operation_finished: false,
-            delivery: None,
-            admission,
-        })))
+    fn new(
+        request_id: RequestId,
+        active: bool,
+        admission: Option<Arc<ResponseDeliveryAdmissionNode>>,
+    ) -> Self {
+        Self {
+            request_id,
+            state: Arc::new(Mutex::new(ResponseDeliveryCallState {
+                active,
+                operation_finished: false,
+                delivery: None,
+                admission,
+            })),
+        }
     }
 
     fn register(&self, delivery: ResponseDelivery) -> Result<(), ResponseDelivery> {
@@ -630,10 +652,6 @@ impl ResponseDeliveryCall {
             Self::finish_admission(&mut state);
             return (true, state.delivery.take());
         }
-        if state.admission.is_none() && state.delivery.is_none() {
-            state.active = false;
-            return (true, None);
-        }
         (false, None)
     }
 
@@ -659,28 +677,32 @@ impl ResponseDeliveryCall {
     }
 
     fn is(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.0, &other.0)
+        Arc::ptr_eq(&self.state, &other.state)
     }
 
     fn blocks_new_admissions(&self) -> bool {
         let state = self.lock();
-        state.delivery.is_some()
-            || (state.admission.is_some() && (state.operation_finished || !state.active))
+        state.operation_finished
+            || state.delivery.is_some()
+            || (state.admission.is_some() && !state.active)
     }
 
-    fn tracks_write(&self) -> bool {
+    fn begin_write(&self) {
         let state = self.lock();
         assert!(
             state.operation_finished,
             "response writing must follow operation completion"
         );
-        state.delivery.is_some() || state.admission.is_some()
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, ResponseDeliveryCallState> {
-        self.0
+        self.state
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    pub(crate) fn test_operation(&self) -> crate::test_control::Operation {
+        crate::test_control::Operation::new(self.request_id.clone())
     }
 }
 
@@ -721,9 +743,7 @@ impl ResponseDeliveryWrite {
         {
             settle_delivery(delivery);
         }
-        if self.tracks_gate {
-            self.deliveries.settle_write();
-        }
+        self.deliveries.settle_write();
     }
 }
 
@@ -777,13 +797,25 @@ where
             // blocked stdout write so transport shutdown remains bounded.
             let result = tokio::select! {
                 biased;
-                result = send => result,
+                result = async {
+                    if let Some(delivery) = delivery.as_ref() {
+                        crate::test_control::emit(
+                            &delivery.request_id,
+                            "response_write_started",
+                            "transport",
+                        );
+                        crate::test_control::wait_for_response_gate(&delivery.request_id).await;
+                    }
+                    send.await
+                } => result,
                 _ = deliveries.wait_for_close() => {
                     Err(std::io::ErrorKind::BrokenPipe.into())
                 },
             };
             if let Some(delivery) = delivery {
+                let request_id = delivery.request_id.clone();
                 if result.is_ok() {
+                    crate::test_control::emit(&request_id, "response_write_completed", "transport");
                     delivery.delivered();
                 } else {
                     delivery.unclaimed();
@@ -803,6 +835,7 @@ where
                     let Some(admission) = self.deliveries.reserve(request.id.clone()) else {
                         // Under stdout backpressure another response is not reliable,
                         // so overload retires the connection and its worker session.
+                        crate::test_control::emit(&request.id, "transport_closed", "transport");
                         self.deliveries.close();
                         return None;
                     };
@@ -819,6 +852,7 @@ where
             }
             Some(JsonRpcMessage::Response(_) | JsonRpcMessage::Error(_)) => {}
             None => {
+                crate::test_control::emit(&0, "transport_closed", "transport");
                 self.deliveries.close();
             }
         }
@@ -970,6 +1004,137 @@ mod tests {
             std::task::Poll::Ready(Ok((_call, _operation)))
         ));
         assert!(!is_active(&first_call));
+    }
+
+    #[tokio::test]
+    async fn cancelled_pending_admission_cannot_start_and_does_not_skip_successor() {
+        let deliveries = ResponseDeliveries::default();
+        let blocker_id = request_id(0);
+        deliveries.start_response(blocker_id.clone());
+        let blocker_write = deliveries.write(&blocker_id).unwrap();
+        let cancelled_id = request_id(1);
+        let successor_id = request_id(2);
+        let cancelled = deliveries.reserve(cancelled_id.clone()).unwrap();
+        let successor = deliveries.reserve(successor_id).unwrap();
+        let mut cancelled = Box::pin(cancelled.admit());
+        let mut successor = Box::pin(successor.admit());
+        let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+
+        assert!(std::future::Future::poll(cancelled.as_mut(), &mut context).is_pending());
+        assert!(std::future::Future::poll(successor.as_mut(), &mut context).is_pending());
+
+        deliveries.cancel(&cancelled_id);
+        assert!(matches!(
+            std::future::Future::poll(cancelled.as_mut(), &mut context),
+            std::task::Poll::Ready(Err(ResponseDeliveryAdmissionError::Cancelled))
+        ));
+        assert!(!deliveries.lock().pending.contains_key(&cancelled_id));
+        assert!(current_call(&deliveries, &cancelled_id).is_none());
+        assert!(std::future::Future::poll(successor.as_mut(), &mut context).is_pending());
+
+        blocker_write.delivered();
+        assert!(matches!(
+            std::future::Future::poll(successor.as_mut(), &mut context),
+            std::task::Poll::Ready(Ok((_call, _operation)))
+        ));
+    }
+
+    #[tokio::test]
+    async fn cancelled_admitted_call_retains_order_until_operation_stops() {
+        let deliveries = ResponseDeliveries::default();
+        let blocker_id = request_id(0);
+        deliveries.start_response(blocker_id.clone());
+        let blocker_write = deliveries.write(&blocker_id).unwrap();
+        let first_id = request_id(1);
+        let successor_id = request_id(2);
+        let first = deliveries.reserve(first_id.clone()).unwrap();
+        let successor = deliveries.reserve(successor_id).unwrap();
+        let mut first = Box::pin(first.admit());
+        let mut successor = Box::pin(successor.admit());
+        let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+
+        assert!(std::future::Future::poll(first.as_mut(), &mut context).is_pending());
+        assert!(std::future::Future::poll(successor.as_mut(), &mut context).is_pending());
+        blocker_write.delivered();
+        let (first_call, first_operation) =
+            match std::future::Future::poll(first.as_mut(), &mut context) {
+                std::task::Poll::Ready(Ok(admitted)) => admitted,
+                _ => panic!("the first reserved call should be admitted"),
+            };
+        assert!(std::future::Future::poll(successor.as_mut(), &mut context).is_pending());
+
+        deliveries.cancel(&first_id);
+        assert!(current_call(&deliveries, &first_id).is_some());
+        assert!(!is_active(&first_call));
+        assert!(std::future::Future::poll(successor.as_mut(), &mut context).is_pending());
+
+        drop(first_operation);
+        assert!(current_call(&deliveries, &first_id).is_none());
+        assert!(matches!(
+            std::future::Future::poll(successor.as_mut(), &mut context),
+            std::task::Poll::Ready(Ok((_call, _operation)))
+        ));
+    }
+
+    #[tokio::test]
+    async fn completed_operation_holds_order_until_response_write_settles() {
+        let deliveries = ResponseDeliveries::default();
+        let blocker_id = request_id(0);
+        deliveries.start_response(blocker_id.clone());
+        let blocker_write = deliveries.write(&blocker_id).unwrap();
+        let first_id = request_id(1);
+        let successor_id = request_id(2);
+        let first = deliveries.reserve(first_id.clone()).unwrap();
+        let successor = deliveries.reserve(successor_id).unwrap();
+        let mut first = Box::pin(first.admit());
+        let mut successor = Box::pin(successor.admit());
+        let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+
+        assert!(std::future::Future::poll(first.as_mut(), &mut context).is_pending());
+        assert!(std::future::Future::poll(successor.as_mut(), &mut context).is_pending());
+        blocker_write.delivered();
+        let (_first_call, first_operation) =
+            match std::future::Future::poll(first.as_mut(), &mut context) {
+                std::task::Poll::Ready(Ok(admitted)) => admitted,
+                _ => panic!("the first reserved call should be admitted"),
+            };
+
+        first_operation.complete();
+        assert!(std::future::Future::poll(successor.as_mut(), &mut context).is_pending());
+        let first_write = deliveries.write(&first_id).unwrap();
+        assert_eq!(deliveries.lock().pending_writes, 1);
+        assert!(current_call(&deliveries, &first_id).is_some());
+        assert!(std::future::Future::poll(successor.as_mut(), &mut context).is_pending());
+
+        first_write.delivered();
+        assert_eq!(deliveries.lock().pending_writes, 0);
+        assert!(current_call(&deliveries, &first_id).is_none());
+        assert!(matches!(
+            std::future::Future::poll(successor.as_mut(), &mut context),
+            std::task::Poll::Ready(Ok((_call, _operation)))
+        ));
+    }
+
+    #[tokio::test]
+    async fn completed_initial_operation_remains_registered_until_its_response_write() {
+        let deliveries = ResponseDeliveries::default();
+        let request_id = request_id(1);
+        let admission = deliveries.reserve(request_id.clone()).unwrap();
+        let (call, operation) = match admission.admit().await {
+            Ok(admitted) => admitted,
+            Err(_) => panic!("the initial call should be admitted"),
+        };
+
+        operation.complete();
+        assert!(current_call(&deliveries, &request_id).is_some_and(|current| current.is(&call)));
+        assert!(call.blocks_new_admissions());
+
+        let write = deliveries.write(&request_id).unwrap();
+        assert_eq!(deliveries.lock().pending_writes, 1);
+        write.delivered();
+
+        assert_eq!(deliveries.lock().pending_writes, 0);
+        assert!(current_call(&deliveries, &request_id).is_none());
     }
 
     #[test]

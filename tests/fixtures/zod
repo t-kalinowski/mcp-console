@@ -14,6 +14,11 @@ from typing import Any, TextIO
 
 READ_FD_ENV = "MCP_CONSOLE_SIDEBAND_READ_FD"
 WRITE_FD_ENV = "MCP_CONSOLE_SIDEBAND_WRITE_FD"
+TEST_EVENT_FD_ENV = "MCP_CONSOLE_TEST_EVENT_FD"
+TEST_OPERATION_GATE_FD_ENV = "MCP_CONSOLE_TEST_OPERATION_GATE_FD"
+TEST_OPERATION_GATE_OPERATION_ENV = "MCP_CONSOLE_TEST_OPERATION_GATE_OPERATION"
+TEST_FIXTURE_CLEANUP_FD_ENV = "MCP_CONSOLE_TEST_FIXTURE_CLEANUP_FD"
+TEST_STDOUT_OBSERVED_ENV = "MCP_CONSOLE_TEST_STDOUT_OBSERVED"
 LARGE_OUTPUT_SIZE = 2 * 1024 * 1024
 PENDING_TEXT_BUDGET = 8 * 1024 * 1024
 PNG_1X1 = (
@@ -25,6 +30,37 @@ PNG_1X1 = (
 class ConsoleKind(StrEnum):
     OUTPUT = "console_output"
     DIAGNOSTIC = "console_diagnostic"
+
+
+def emit_test_event(operation: int, kind: str, **details: object) -> None:
+    descriptor_text = os.environ.get(TEST_EVENT_FD_ENV)
+    if descriptor_text is None:
+        return
+    event = {
+        "operation": operation,
+        "kind": kind,
+        "component": "fixture",
+        **details,
+    }
+    payload = json.dumps(event, separators=(",", ":")).encode() + b"\n"
+    assert len(payload) <= 512
+    assert os.write(int(descriptor_text), payload) == len(payload)
+
+
+def wait_for_test_operation_release(operation: int) -> None:
+    expected = int(os.environ[TEST_OPERATION_GATE_OPERATION_ENV])
+    assert operation == expected
+    descriptor = int(os.environ[TEST_OPERATION_GATE_FD_ENV])
+    assert os.read(descriptor, 1) in {b"", b"1"}
+
+
+def test_stdout_observed_path(root: Path) -> Path | None:
+    name = os.environ.get(TEST_STDOUT_OBSERVED_ENV)
+    if name is None:
+        return None
+    path = Path(name)
+    assert path.name == name
+    return root / path
 
 
 def open_sideband(name: str, mode: str) -> TextIO:
@@ -148,7 +184,17 @@ def configure_startup(root: Path, reader: TextIO, writer: TextIO) -> tuple[bool,
             time.sleep(0.01)
         mode = "ready with stdout" if mode.endswith("with stdout") else "ready"
     if mode == "ready with stdout":
+        observed = test_stdout_observed_path(root)
+        if observed is not None:
+            observed.unlink(missing_ok=True)
         write_all(1, b"zod replacement startup ready\n")
+        if observed is not None:
+            deadline = time.monotonic() + 15
+            while not observed.exists():
+                assert time.monotonic() < deadline, (
+                    f"relay did not acknowledge replacement stdout at {observed}"
+                )
+                time.sleep(0.01)
         mode = "ready"
     if mode == "ready with callback":
         return True, False
@@ -164,18 +210,11 @@ def main() -> None:
     if started_marker := os.environ.get("MCP_CONSOLE_TEST_ZOD_STARTED"):
         Path(started_marker).touch()
     received_sigint = False
-    sigint_checkpoint = None
-    if os.environ.get("ZOD_SIGINT_CHECKPOINT") == "1":
-        checkpoint_path = temporary / "zod-sigint-checkpoint"
-        os.mkfifo(checkpoint_path)
-        sigint_checkpoint = os.open(checkpoint_path, os.O_RDWR | os.O_NONBLOCK)
 
     def handle_sigint(_signum: int, _frame: object) -> None:
         nonlocal received_sigint
         received_sigint = True
         (temporary / "zod-sigint-received").touch()
-        if sigint_checkpoint is not None:
-            assert os.write(sigint_checkpoint, b"1") == 1
 
     signal.signal(signal.SIGINT, handle_sigint)
     if os.environ.get("ZOD_REPORT_PROCESS_GROUP") == "1":
@@ -280,6 +319,21 @@ def main() -> None:
             continue
 
         assert language == "r"
+        if source.startswith("checkpoint "):
+            operation = int(source.removeprefix("checkpoint "))
+            emit_test_event(operation, "worker_operation_started")
+            emit_test_event(operation, "worker_operation_completed")
+            send(writer, {"kind": "completed"})
+            continue
+
+        if source.startswith("complete after test release: "):
+            operation = int(source.removeprefix("complete after test release: "))
+            emit_test_event(operation, "worker_operation_started")
+            wait_for_test_operation_release(operation)
+            emit_test_event(operation, "worker_operation_completed")
+            send(writer, {"kind": "completed"})
+            continue
+
         if source == "interrupt":
             (temporary / "zod-interrupt-evaluation-started").touch()
             while not received_sigint:
@@ -595,23 +649,40 @@ def main() -> None:
             writer.flush()
             continue
 
-        if source == "stall with detached stdin":
+        if source.startswith("stall with detached stdin: "):
+            operation = int(source.removeprefix("stall with detached stdin: "))
+            acknowledged, acknowledge = os.pipe()
             child = os.fork()
             if child == 0:
                 os.setsid()
+                os.close(acknowledged)
+                retained_stdin = os.dup(0)
+                assert os.fstat(retained_stdin) == os.fstat(0)
+                cleanup = os.dup(int(os.environ[TEST_FIXTURE_CLEANUP_FD_ENV]))
                 reader.close()
                 writer.close()
                 os.close(1)
                 os.close(2)
-                (temporary / "zod-detached-stdin-pid").write_text(
-                    str(os.getpid()),
-                    encoding="utf-8",
+                emit_test_event(
+                    operation,
+                    "detached_descendant_created",
+                    pid=os.getpid(),
+                    inherited_fd=0,
+                    retained_fd=retained_stdin,
                 )
-                (temporary / "zod-detached-stdin-started").touch()
-                while True:
-                    time.sleep(60)
+                assert os.write(acknowledge, b"1") == 1
+                os.close(acknowledge)
+                assert os.read(cleanup, 1) in {b"", b"1"}
+                os.close(cleanup)
+                os.close(retained_stdin)
+                emit_test_event(operation, "fixture_cleanup_completed", pid=os.getpid())
+                os._exit(0)
+            os.close(acknowledge)
+            assert os.read(acknowledged, 1) == b"1"
+            os.close(acknowledged)
+            emit_test_event(operation, "parent_operation_stalled", pid=os.getpid())
             while True:
-                time.sleep(60)
+                signal.pause()
 
         if source == "request input":
             send(writer, {"kind": "input_requested", "prompt": "zod> "})
