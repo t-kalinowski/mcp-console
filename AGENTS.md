@@ -116,6 +116,7 @@ Keep these ownership rules intact:
 - `tests/transcripts/relay_worker/` — worker sideband and standard-stream behavior through the relay.
 - `tests/transcripts/cli/` — direct CLI transcripts.
 - `tests/transcripts/golden/` — generated YAML 1.2 snapshots.
+- `scripts/release.py`, `tests/release.py` — release validation and installed-wheel acceptance.
 - `scripts/test` — binary build and selected transcript execution.
 - `scripts/validate_runtime_sources.py` — extracted R/Python inventory and syntax validation.
 - `scripts/format`, `scripts/check` — repository-wide formatting and checks.

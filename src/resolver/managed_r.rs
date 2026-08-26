@@ -128,8 +128,13 @@ pub(crate) fn resolve_r(
             program.display()
         )
     })?;
-    let output =
-        collect_resolver_output(&resolver, &mut child, &mut on_started, &program, "R package")?;
+    let output = collect_resolver_output(
+        &resolver,
+        &mut child,
+        &mut on_started,
+        &program,
+        "R package",
+    )?;
     if !output.status.success() {
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
