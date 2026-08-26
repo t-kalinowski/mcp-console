@@ -51,14 +51,23 @@ jobs:
           import gzip
           from pathlib import Path
 
+          import hashlib
+
           root = Path.cwd()
           codex_data = (root / ".validation-v2/codex.patch.gz.b64").read_text().strip()
-          (root / "codex.patch").write_bytes(gzip.decompress(base64.b64decode(codex_data)))
+          codex_patch = gzip.decompress(base64.b64decode(codex_data))
+          if hashlib.sha256(codex_patch).hexdigest() != "0d1af2cf7f2806d154adf5767dc6e7a20ce4839ee7efab1044351db0230d8634":
+              raise SystemExit("Codex validation patch digest mismatch")
+          (root / "codex.patch").write_bytes(codex_patch)
+
           mcp_data = "".join(
               path.read_text().strip()
               for path in sorted((root / ".validation-v2").glob("mcp.patch.gz.b64.*"))
           )
-          (root / "mcp.patch").write_bytes(gzip.decompress(base64.b64decode(mcp_data)))
+          mcp_patch = gzip.decompress(base64.b64decode(mcp_data))
+          if hashlib.sha256(mcp_patch).hexdigest() != "5b11feb89c78071c2c3ba8d3c3fb8e7c31d780aaf0c3a30369880f6e37564205":
+              raise SystemExit("MCP Console validation patch digest mismatch")
+          (root / "mcp.patch").write_bytes(mcp_patch)
           PY
           git -C codex-source apply --index --binary "$GITHUB_WORKSPACE/codex.patch"
           git apply --index --binary "$GITHUB_WORKSPACE/mcp.patch"
@@ -217,6 +226,11 @@ jobs:
           mkdir -p "$RUNNER_TEMP/sandbox-boundary-validation-v2"
           printf '%s\n' "${{ job.status }}" > "$RUNNER_TEMP/sandbox-boundary-validation-v2/job-status.txt"
 
+          git -C codex-source add -A
+          git -C codex-source diff --cached --check
+          git -C codex-source diff --cached --binary > "$RUNNER_TEMP/sandbox-boundary-validation-v2/codex-validated.patch"
+
+          rm -rf codex-source
           git restore --source=HEAD --staged --worktree -- \
             .validation-v2 \
             .github/workflows/validate-sandbox-boundary-v2.yml
@@ -224,10 +238,6 @@ jobs:
           git add -A
           git diff --cached --check
           git diff --cached --binary > "$RUNNER_TEMP/sandbox-boundary-validation-v2/mcp-validated.patch"
-
-          git -C codex-source add -A
-          git -C codex-source diff --cached --check
-          git -C codex-source diff --cached --binary > "$RUNNER_TEMP/sandbox-boundary-validation-v2/codex-validated.patch"
 
           if [[ -f "$RUNNER_TEMP/mcp-console-cargo-tree.txt" ]]; then
             cp "$RUNNER_TEMP/mcp-console-cargo-tree.txt" "$RUNNER_TEMP/sandbox-boundary-validation-v2/"
