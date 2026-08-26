@@ -1,5 +1,4 @@
 ---
 command: mcp-console --version
 stdout: |
-  mcp-console 0.1.0
-...
+  mcp-console 0.0.2

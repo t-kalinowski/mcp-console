@@ -344,7 +344,9 @@ It passes that exact `Rscript` to IR and uses it for DuckDB resolution.
 When Python is server-managed, the same `Rscript` also runs managed-Python resolution.
 The server prepends the resolved managed library to inherited `R_LIBS`, preserving its nonempty path entries after the managed library.
 
-The server requires `ir` 0.4.0 or later on `PATH`.
+The server first looks for `ir` beside its installed executable and falls back to `PATH` only when no sibling file exists.
+It requires the selected `ir` to be version 0.4.0 or later.
+The PyPI package depends on `r-lib-ir`, which supplies the sibling command in the uv tool environment.
 It passes each requirement as a separate `ir run --with` argument; requirement text is never inserted into R source.
 Every invocation sets `IR_NO_LOCAL_SOURCES=1`, so IR rejects direct or transitive installation from the local filesystem.
 Remote package installation and build code still run with server permissions.

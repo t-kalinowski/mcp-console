@@ -16,6 +16,35 @@ Python runs through reticulate, and SQL runs through a persistent DuckDB connect
 R and Python can access one another's globals through reticulate, while DuckDB can query data frames in the R workspace directly.
 R plots made with the default device and open Matplotlib figures are returned as images, SQL results are returned as bounded previews, and long-running work can be polled or interrupted.
 
+## Install
+
+MCP Console is currently distributed as native wheels for Apple Silicon and Intel macOS.
+Linux and Windows are not supported yet.
+
+A working R installation is required.
+Set `R_HOME` or make `R` discoverable on `PATH`.
+The Python package installs `r-lib-ir` into the same uv tool environment; it supplies the `ir` command used to prepare R libraries.
+The first server start may download and install the default R and Python requirements.
+
+Run the published command without installing it persistently:
+
+```sh
+uvx mcp-console --help
+uvx mcp-console serve
+```
+
+Or install it as a persistent uv tool:
+
+```sh
+uv tool install mcp-console
+
+mcp-console --help
+mcp-console serve
+```
+
+`mcp-console serve` communicates with its MCP client over standard input and output.
+It waits for MCP protocol input rather than presenting an interactive terminal prompt.
+
 ## What it is useful for
 
 MCP Console is intended for iterative computational work: inspecting and transforming data, fitting models, running simulations, making plots, debugging code, and checking exact results.
@@ -87,15 +116,16 @@ The data, model, Python imports, and DuckDB catalog remain available for later c
 The repository contains a working Rust MCP server, sandboxed worker relay, built-in mixed-language worker, host dependency resolvers, session recording, and public process-boundary transcript tests.
 The registered MCP surface contains only `send`.
 
-The core console currently runs only on macOS.
-Linux and Windows support is not implemented, the package is not published, and this repository does not yet document an installation route.
-For now, the repository is mainly useful to readers following the design and implementation.
+The core console and its initial PyPI distribution currently support only macOS.
+Linux and Windows support is not implemented.
+The project remains under active construction.
 
 The server records a JSONL journal of tool calls and results together with image artifacts.
 It projects each journal event into a Yamark-formatted, append-only `transcript.md` with syntax-highlighted R, Python, and SQL source, text results, and relative artifact links.
 Alongside it, the server regenerates a Yamark-formatted `transcript.qmd` from incremental source and requirement state when submitted code or declared R or Python requirements change.
 The QMD contains only submitted executable code cells and IR front matter with the built-in requirements and cumulative declarations.
-Run `ir render transcript.qmd` to execute those client-authored cells in order and export a fresh report using reticulate's default managed Python selection.
+With the PyPI package, run `uvx --from r-lib-ir ir render transcript.qmd` to execute those client-authored cells in order and export a fresh report using reticulate's default managed Python selection.
+When `ir` is installed separately, `ir render transcript.qmd` is equivalent.
 The projection is intended to reproduce the analysis represented by `transcript.md`, but it does not include recorded output or artifacts and does not yet reconstruct every runtime detail.
 Human-facing tools for following and inspecting an agent's work remain future design.
 
@@ -113,14 +143,14 @@ This is a process boundary, not a safe evaluator for untrusted code with access 
 
 The server installs automatically inferred or explicitly declared R and Python packages and DuckDB extensions outside the worker sandbox with server permissions.
 Those operations may access the network and execute installation or build code, so only trusted requirements should be supplied.
-See [Requirements and environments](docs/REQUIREMENTS.md) for the accepted inputs and trust model.
+See [Requirements and environments](https://github.com/t-kalinowski/mcp-console/blob/main/docs/REQUIREMENTS.md) for the accepted inputs and trust model.
 
 Session journals and the Markdown projection record submitted source, standard input, declared requirements, result text, and artifact paths without redaction.
 Image bytes are stored in separate artifact files linked from those records.
 The source-only Quarto document contains submitted code and declared R and Python requirements without redaction.
 Rendering it executes that source outside the MCP Console worker sandbox with the permissions of the `ir` and Quarto processes.
 Render only code you trust.
-See [Implemented architecture](docs/ARCHITECTURE.md) for recording and process placement.
+See [Implemented architecture](https://github.com/t-kalinowski/mcp-console/blob/main/docs/ARCHITECTURE.md) for recording and process placement.
 
 ## Development
 
@@ -153,18 +183,19 @@ scripts/test --update BOUNDARY/SUITE[::CASE]
 
 ## Documentation
 
-The [documentation index](docs/README.md) maps current documents by audience.
+The [documentation index](https://github.com/t-kalinowski/mcp-console/blob/main/docs/README.md) maps current documents by audience.
 
-- [Implemented architecture](docs/ARCHITECTURE.md) explains current process boundaries, ownership, lifecycle, recording, and artifacts.
-- [Built-in runtime](docs/BUILTIN_RUNTIME.md) describes user-visible R, Python, SQL, input, output, and graphics behavior.
-- [Requirements and environments](docs/REQUIREMENTS.md) describes dependency preparation and its trust boundary.
-- [Worker protocol](docs/WORKER_PROTOCOL.md) and [relay protocol](docs/RELAY_PROTOCOL.md) define the exact transport contracts.
-  [Registered tool descriptions](docs/TOOL_DESCRIPTIONS.md) is a human-readable mirror of the current agent-facing wording.
-- [Transcript test guide](tests/transcripts/README.md) explains selectors, normalization, and golden updates.
+- [Implemented architecture](https://github.com/t-kalinowski/mcp-console/blob/main/docs/ARCHITECTURE.md) explains current process boundaries, ownership, lifecycle, recording, and artifacts.
+- [Built-in runtime](https://github.com/t-kalinowski/mcp-console/blob/main/docs/BUILTIN_RUNTIME.md) describes user-visible R, Python, SQL, input, output, and graphics behavior.
+- [Requirements and environments](https://github.com/t-kalinowski/mcp-console/blob/main/docs/REQUIREMENTS.md) describes dependency preparation and its trust boundary.
+- [Worker protocol](https://github.com/t-kalinowski/mcp-console/blob/main/docs/WORKER_PROTOCOL.md) and [relay protocol](https://github.com/t-kalinowski/mcp-console/blob/main/docs/RELAY_PROTOCOL.md) define the exact transport contracts.
+  [Registered tool descriptions](https://github.com/t-kalinowski/mcp-console/blob/main/docs/TOOL_DESCRIPTIONS.md) is a human-readable mirror of the current agent-facing wording.
+- [Transcript test guide](https://github.com/t-kalinowski/mcp-console/blob/main/tests/transcripts/README.md) explains selectors, normalization, and golden updates.
+- The [release guide](https://github.com/t-kalinowski/mcp-console/blob/main/RELEASE.md) describes PyPI setup, publication, verification, and recovery.
 
-The [project vision](design-sketches/VISION.md) and other documents under [`design-sketches/`](design-sketches/README.md) describe intended or exploratory future design, not the implemented system.
+The [project vision](https://github.com/t-kalinowski/mcp-console/blob/main/design-sketches/VISION.md) and other documents under [`design-sketches/`](https://github.com/t-kalinowski/mcp-console/blob/main/design-sketches/README.md) describe intended or exploratory future design, not the implemented system.
 When current prose and implementation disagree, source and public acceptance tests are authoritative.
 
 ## License
 
-MCP Console is licensed under the [MIT license](LICENSE).
+MCP Console is licensed under the [MIT license](https://github.com/t-kalinowski/mcp-console/blob/main/LICENSE).

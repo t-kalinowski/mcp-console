@@ -23,6 +23,10 @@ Source and public acceptance tests remain the final authority when prose disagre
 - The [transcript test guide](../tests/transcripts/README.md) is the source of truth for transcript boundaries, selectors, normalization, and golden-snapshot updates.
 - [`AGENTS.md`](../AGENTS.md) contains repository-wide maintenance rules and the source and test navigation map.
 
+## Maintainers
+
+- The [release guide](../RELEASE.md) describes PyPI setup, publication, verification, and recovery.
+
 ## Future design
 
 The documents under [`design-sketches/`](../design-sketches/README.md) describe intended or exploratory future behavior.
