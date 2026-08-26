@@ -248,7 +248,7 @@ impl ActiveTranscript {
         let quarto = match create_private_file(&quarto_path) {
             Ok(file) => {
                 drop(file);
-                Some((journal.clone(), quarto_path))
+                Some(quarto_path)
             }
             Err(error) => {
                 projection_error.get_or_insert_with(|| {

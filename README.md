@@ -93,7 +93,7 @@ For now, the repository is mainly useful to readers following the design and imp
 
 The server records a JSONL journal of tool calls and results together with image artifacts.
 It projects each journal event into a Yamark-formatted, append-only `transcript.md` with syntax-highlighted R, Python, and SQL source, text results, and relative artifact links.
-Alongside it, the server regenerates a Yamark-formatted `transcript.qmd` from the journal when submitted code or declared R or Python requirements change.
+Alongside it, the server regenerates a Yamark-formatted `transcript.qmd` from incremental source and requirement state when submitted code or declared R or Python requirements change.
 The QMD contains only submitted executable code cells and IR front matter with the built-in requirements and cumulative declarations.
 Run `ir render transcript.qmd` to execute those client-authored cells in order and export a fresh report using reticulate's default managed Python selection.
 The projection is intended to reproduce the analysis represented by `transcript.md`, but it does not include recorded output or artifacts and does not yet reconstruct every runtime detail.

@@ -222,7 +222,7 @@ Create focused documents only when a subsystem has enough detail to justify a se
 - `src/output/` — managed and raw stream intake, per-evaluation spools, reply cursors, value/table previews, and final response budgets.
 
 - `src/transcript/` — internal journal model, generated Markdown ledger, and source-only Quarto projection.
-  Users and agents must not edit the live generated documents; the server appends Markdown and regenerates the QMD from the journal.
+  Users and agents must not edit the live generated documents; the server appends Markdown and regenerates the QMD from incremental source and requirement state.
 
 - `src/local_api/` — process-scoped service router, local transports, protected discovery records, handshake, authorization, snapshots, event replay, and managed-file delivery.
 

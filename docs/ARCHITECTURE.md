@@ -275,7 +275,8 @@ It records server assembly, not whether the transport write succeeded or the cli
 The run directory also contains `transcript.md` and `transcript.qmd` projections.
 For each event, the server flushes the authoritative JSONL record first.
 It then appends and flushes the corresponding Markdown fragment without rewriting earlier bytes.
-When a call submits source or declares R or Python requirements, the server regenerates the complete QMD from the journal and atomically replaces the prior file.
+When a call submits source or declares R or Python requirements, the server updates QMD-only in-memory state, regenerates the complete document from that state, and atomically replaces the prior file.
+It does not reread or parse prior result events from the journal during live projection.
 Both documents are emitted in Yamark-formatted form without rewriting submitted code or result content through embedded formatters.
 The Markdown document presents R, Python, and SQL source as syntax-highlighted code fences, stdin and result text as literal text fences, call options as JSON, and artifacts through relative links.
 Fences expand when literal content contains backticks.

@@ -1,5 +1,5 @@
 use std::fmt::Write as _;
-use std::fs::{self, File};
+use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::{Component, Path, PathBuf};
 
@@ -27,15 +27,22 @@ struct ProjectionWriter {
 }
 
 struct QuartoWriter {
-    journal: PathBuf,
     path: PathBuf,
+    r_requirements: Vec<String>,
+    python_requirements: Vec<String>,
+    sources: Vec<QuartoSource>,
+}
+
+struct QuartoSource {
+    language: &'static str,
+    contents: String,
 }
 
 impl Writers {
-    pub(super) fn new(markdown: Option<File>, quarto: Option<(PathBuf, PathBuf)>) -> Self {
+    pub(super) fn new(markdown: Option<File>, quarto: Option<PathBuf>) -> Self {
         Self {
             markdown: markdown.map(|file| ProjectionWriter::new(file, "Markdown transcript")),
-            quarto: quarto.map(|(journal, path)| QuartoWriter { journal, path }),
+            quarto: quarto.map(QuartoWriter::new),
         }
     }
 
@@ -49,17 +56,14 @@ impl Writers {
             return Err(error);
         }
         let markdown = append_rendered(&mut self.markdown, MARKDOWN_HEADER, event, render_event);
-        let quarto = rewrite_quarto(&mut self.quarto, event);
+        let quarto = update_quarto(&mut self.quarto, event);
         markdown.or(quarto).map_or(Ok(()), Err)
     }
 }
 
-fn rewrite_quarto(projection: &mut Option<QuartoWriter>, event: &Value) -> Option<String> {
-    let writer = projection.as_ref()?;
-    if !quarto_changes(event) {
-        return None;
-    }
-    if let Err(error) = writer.rewrite() {
+fn update_quarto(projection: &mut Option<QuartoWriter>, event: &Value) -> Option<String> {
+    let writer = projection.as_mut()?;
+    if let Err(error) = writer.append(event) {
         *projection = None;
         return Some(error);
     }
@@ -67,77 +71,79 @@ fn rewrite_quarto(projection: &mut Option<QuartoWriter>, event: &Value) -> Optio
 }
 
 impl QuartoWriter {
-    fn rewrite(&self) -> Result<(), String> {
-        let journal = fs::read_to_string(&self.journal).map_err(|error| {
-            format!(
-                "failed to read {} for Quarto projection: {error}",
-                self.journal.display()
-            )
-        })?;
-        let events = journal
-            .lines()
-            .map(|line| {
-                serde_json::from_str(line)
-                    .map_err(|error| format!("failed to parse transcript event: {error}"))
-            })
-            .collect::<Result<Vec<Value>, String>>()?;
-        let document = render_quarto(&events)?;
+    fn new(path: PathBuf) -> Self {
+        Self {
+            path,
+            r_requirements: crate::worker_client::DEFAULT_R_REQUIREMENTS
+                .iter()
+                .map(|requirement| (*requirement).to_string())
+                .collect(),
+            python_requirements: crate::worker_protocol::DEFAULT_PYTHON_PACKAGES
+                .iter()
+                .map(|requirement| (*requirement).to_string())
+                .collect(),
+            sources: Vec::new(),
+        }
+    }
+
+    fn append(&mut self, event: &Value) -> Result<(), String> {
+        let changed = match string(field(event, "event")?, "event kind")? {
+            "session_started" => true,
+            "tool_call" => {
+                let Some(request) = event.get("request").and_then(Value::as_object) else {
+                    return Ok(());
+                };
+                let mut changed = false;
+                if let Some(requirements) = declared_requirements(request) {
+                    extend_unique(&mut self.r_requirements, requirements.r);
+                    extend_unique(&mut self.python_requirements, requirements.python);
+                    changed = true;
+                }
+                if let Some(source) = submitted_source(request) {
+                    self.sources.push(QuartoSource {
+                        language: source.language,
+                        contents: source.contents.to_string(),
+                    });
+                    changed = true;
+                }
+                changed
+            }
+            "artifact_created" | "tool_result" => false,
+            kind => {
+                return Err(format!(
+                    "Quarto source transcript has unsupported event kind {kind:?}"
+                ));
+            }
+        };
+        if !changed {
+            return Ok(());
+        }
+        let document = self.render();
         super::replace_private_file(&self.path, document.as_bytes())
     }
-}
 
-fn quarto_changes(event: &Value) -> bool {
-    match event.get("event").and_then(Value::as_str) {
-        Some("session_started") => true,
-        Some("tool_call") => {
-            event
-                .get("request")
-                .and_then(Value::as_object)
-                .is_some_and(|request| {
-                    submitted_source(request).is_some() || declared_requirements(request).is_some()
-                })
-        }
-        _ => false,
-    }
-}
-
-fn render_quarto(events: &[Value]) -> Result<String, String> {
-    let mut r_requirements = crate::worker_client::DEFAULT_R_REQUIREMENTS
-        .iter()
-        .map(|requirement| (*requirement).to_string())
-        .collect::<Vec<_>>();
-    let mut python_requirements = crate::worker_protocol::DEFAULT_PYTHON_PACKAGES
-        .iter()
-        .map(|requirement| (*requirement).to_string())
-        .collect::<Vec<_>>();
-
-    for event in events {
-        validate_envelope(event)?;
-        let Some(request) = event.get("request").and_then(Value::as_object) else {
-            continue;
-        };
-        let Some(requirements) = declared_requirements(request) else {
-            continue;
-        };
-        extend_unique(&mut r_requirements, requirements.r);
-        extend_unique(&mut python_requirements, requirements.python);
-    }
-
-    let mut document = String::from(
-        r#"---
+    fn render(&self) -> String {
+        let mut document = String::from(
+            r#"---
 # Generated by MCP Console. Do not edit.
 title: MCP Console code cells
 ir:
   isolated: true
 "#,
-    );
-    push_yaml_sequence(&mut document, "  packages", &r_requirements);
-    push_yaml_sequence(&mut document, "  python-packages", &python_requirements);
-    document.push_str("---\n\n");
-    for event in events {
-        render_source(&mut document, event)?;
+        );
+        push_yaml_sequence(&mut document, "  packages", &self.r_requirements);
+        push_yaml_sequence(
+            &mut document,
+            "  python-packages",
+            &self.python_requirements,
+        );
+        document.push_str("---\n\n");
+        for source in &self.sources {
+            let language = format!("{{{}}}", source.language);
+            push_fence(&mut document, &language, &source.contents);
+        }
+        document
     }
-    Ok(document)
 }
 
 struct DeclaredRequirements<'a> {
@@ -275,23 +281,6 @@ fn render_event(document: &mut String, event: &Value) -> Result<(), String> {
         "tool_result" => render_tool_result(document, event),
         kind => Err(format!(
             "Markdown transcript has unsupported event kind {kind:?}"
-        )),
-    }
-}
-
-fn render_source(document: &mut String, event: &Value) -> Result<(), String> {
-    match string(field(event, "event")?, "event kind")? {
-        "tool_call" => {
-            let request = object(field(event, "request")?, "tool request")?;
-            if let Some(source) = submitted_source(request) {
-                let language = format!("{{{}}}", source.language);
-                push_fence(document, &language, source.contents);
-            }
-            Ok(())
-        }
-        "session_started" | "artifact_created" | "tool_result" => Ok(()),
-        kind => Err(format!(
-            "Quarto source transcript has unsupported event kind {kind:?}"
         )),
     }
 }

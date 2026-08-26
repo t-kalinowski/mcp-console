@@ -651,6 +651,52 @@ def test_keeps_recording_when_quarto_rewrite_fails(binary: Path) -> Transcript:
     )
 
 
+def test_updates_quarto_without_rereading_journal(binary: Path) -> Transcript:
+    zod = Path(__file__).resolve().parents[2] / "fixtures" / "zod"
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        workspace = Path(temporary_directory)
+        client = McpClient(
+            binary,
+            ("serve", "--worker", str(zod)),
+            current_directory=workspace,
+        )
+        finished = False
+        journal_read_disabled = False
+        try:
+            client._initialize_and_list_tools()
+            client.send(r="echo first")
+
+            session = next((workspace / ".mcp-console" / "sessions").iterdir())
+            journal = session / "internal" / "events.jsonl"
+            journal.chmod(0o200)
+            journal_read_disabled = True
+
+            client.send(python="echo second")
+            quarto = (session / "transcript.qmd").read_text(encoding="utf-8")
+
+            journal.chmod(0o600)
+            journal_read_disabled = False
+            assert "```{r}\necho first\n```" in quarto, quarto
+            assert "```{python}\necho second\n```" in quarto, quarto
+
+            transcript = client._finish()
+            transcript.append(
+                {
+                    "quarto projection": {
+                        "updated from incremental state": True,
+                        "journal reopened for reading": False,
+                    }
+                }
+            )
+            finished = True
+            return transcript
+        finally:
+            if journal_read_disabled:
+                journal.chmod(0o600)
+            if not finished:
+                stop_client(client)
+
+
 def test_records_tool_calls_and_images(binary: Path) -> TranscriptWithCompanions:
     zod = Path(__file__).resolve().parents[2] / "fixtures" / "zod"
     with tempfile.TemporaryDirectory() as temporary_directory:
