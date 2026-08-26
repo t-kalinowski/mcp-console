@@ -945,7 +945,7 @@ Initialization, tool listing, unknown tool calls, and an unused server process c
 On Unix, it creates the record directories with mode `0700` and journal, document, and artifact files with mode `0600`.
 Its journal records MCP tool calls and results plus image artifacts when worker frames arrive; it does not yet implement the complete evaluation-event vocabulary below.
 Recording is optional: the first journal or artifact failure disables it for that server process, emits one diagnostic to standard error, and does not change console results or worker lifecycle.
-Failure of either generated document disables only that projection while the journal, artifacts, and other document continue.
+Failure of either generated document disables both projections while the journal and artifacts continue.
 An existing journal may therefore end with the last successfully flushed event.
 The named-session design will replace that temporary run identity with the planned layout below:
 

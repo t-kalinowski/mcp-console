@@ -17,17 +17,24 @@ result:
   isError: false
 ---
 send:
-  python: echo print('formatted')
+  python: |-
+    echo before
+    ````
+    <div>not markdown</div>
+    after
 result:
   content:
     - type: text
       text: |
-        zod python: print('formatted')
+        zod python: before
+        ````
+        <div>not markdown</div>
+        after
   isError: false
 ---
 send:
-  sql: |-
-    --| eval: false
+  sql: |2-
+      --| eval: false
     echo SELECT 42
   typo: true
 result:
@@ -45,6 +52,9 @@ send:
     r:
       - "foo:"
       - foo#bar
+      - "delete\x7Fcontrol"
+      - "c1-start\x80control"
+      - "c1-end\x9Fcontrol"
       - line separator
       - paragraph separator
 result:

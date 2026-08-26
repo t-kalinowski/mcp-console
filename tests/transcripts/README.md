@@ -47,7 +47,7 @@ Pending standard-output and standard-error chunks are grouped into one event wit
 The `client_server/r`, `client_server/python`, and `client_server/sql` suites exercise the built-in worker through the public `send` tool.
 The Zod materialization case verifies that initialization and unknown tool calls create no run, while a first `send` call does.
 The authoritative recording-failure cases verify that recording disables itself with one standard-error diagnostic while console calls and images continue normally.
-The projection-failure cases verify that one broken document emits one diagnostic without stopping JSONL events, artifacts, or the other document.
+Projection failures disable both derived documents while JSONL events and artifacts continue.
 The Zod recording case projects `events.jsonl` and the literal generated `transcript.md` and `transcript.qmd` into `records_tool_calls_and_images.events.yaml`, followed by the produced session root and file list.
 The live-recording case uses causal fixture gates to verify that each Markdown snapshot retains the prior bytes as an exact prefix while calls complete, artifacts arrive, and later polls collect them; the server regenerates the Quarto document for source-bearing calls and leaves it unchanged for results, artifacts, and polls.
 The Markdown suite's real mixed-language recording case snapshots the public stdio transcript and literal generated documents as sibling `.yaml`, `.md`, and `.qmd` goldens.

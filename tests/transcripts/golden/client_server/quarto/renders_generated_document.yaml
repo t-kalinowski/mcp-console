@@ -2,8 +2,8 @@
 !same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
 ---
 send:
-  r: |-
-    #| eval: false
+  r: |2-
+      #| eval: false
     echo <- 0L
     render_value <- as.integer(readLines("render-value.txt"))
     cat("executed-r=40\n")
@@ -15,8 +15,8 @@ result:
   isError: false
 ---
 send:
-  python: |-
-    #| eval: false
+  python: |2-
+      #| eval: false
     echo = """before
     ````
     <div>not markdown</div>

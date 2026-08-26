@@ -16,8 +16,8 @@ This document is an append-only chronological record of MCP Console events.
 "#;
 
 pub(super) struct Writers {
-    markdown: Option<ProjectionWriter>,
-    quarto: Option<QuartoWriter>,
+    markdown: ProjectionWriter,
+    quarto: QuartoWriter,
 }
 
 struct ProjectionWriter {
@@ -40,35 +40,20 @@ struct QuartoSource {
 }
 
 impl Writers {
-    pub(super) fn new(markdown: Option<File>, quarto: Option<PathBuf>) -> Self {
+    pub(super) fn new(markdown: File, quarto: PathBuf) -> Self {
         Self {
-            markdown: markdown.map(|file| ProjectionWriter::new(file, "Markdown transcript")),
-            quarto: quarto.map(QuartoWriter::new),
+            markdown: ProjectionWriter::new(markdown, "Markdown transcript"),
+            quarto: QuartoWriter::new(quarto),
         }
     }
 
     pub(super) fn append(&mut self, event: &Value) -> Result<(), String> {
-        if self.markdown.is_none() && self.quarto.is_none() {
-            return Ok(());
-        }
-        if let Err(error) = validate_envelope(event) {
-            self.markdown = None;
-            self.quarto = None;
-            return Err(error);
-        }
-        let markdown = append_rendered(&mut self.markdown, MARKDOWN_HEADER, event, render_event);
-        let quarto = update_quarto(&mut self.quarto, event);
-        markdown.or(quarto).map_or(Ok(()), Err)
+        validate_envelope(event)?;
+        let mut fragment = String::new();
+        render_event(&mut fragment, event)?;
+        self.markdown.append(MARKDOWN_HEADER, &fragment)?;
+        self.quarto.append(event)
     }
-}
-
-fn update_quarto(projection: &mut Option<QuartoWriter>, event: &Value) -> Option<String> {
-    let writer = projection.as_mut()?;
-    if let Err(error) = writer.append(event) {
-        *projection = None;
-        return Some(error);
-    }
-    None
 }
 
 impl QuartoWriter {
@@ -220,11 +205,21 @@ fn yaml_string(value: &str) -> String {
     if is_plain_yaml_string(value) {
         value.to_string()
     } else {
-        serde_json::to_string(value)
-            .expect("serializing a string cannot fail")
-            .replace('\u{0085}', "\\N")
-            .replace('\u{2028}', "\\L")
-            .replace('\u{2029}', "\\P")
+        let json = serde_json::to_string(value).expect("serializing a string cannot fail");
+        let mut yaml = String::with_capacity(json.len());
+        for character in json.chars() {
+            match character {
+                '\u{0085}' => yaml.push_str("\\N"),
+                '\u{2028}' => yaml.push_str("\\L"),
+                '\u{2029}' => yaml.push_str("\\P"),
+                '\u{007f}'..='\u{009f}' => {
+                    write!(yaml, "\\x{:02X}", character as u32)
+                        .expect("writing to a String cannot fail");
+                }
+                _ => yaml.push(character),
+            }
+        }
+        yaml
     }
 }
 
@@ -254,24 +249,6 @@ fn is_plain_yaml_string(value: &str) -> bool {
         value.to_ascii_lowercase().as_str(),
         "null" | "true" | "false"
     )
-}
-
-fn append_rendered(
-    projection: &mut Option<ProjectionWriter>,
-    header: &str,
-    event: &Value,
-    render: fn(&mut String, &Value) -> Result<(), String>,
-) -> Option<String> {
-    let writer = projection.as_mut()?;
-    let mut fragment = String::new();
-    let result = render(&mut fragment, event).and_then(|()| writer.append(header, &fragment));
-    match result {
-        Ok(()) => None,
-        Err(error) => {
-            *projection = None;
-            Some(error)
-        }
-    }
 }
 
 impl ProjectionWriter {
@@ -460,26 +437,13 @@ fn parse_send(request: &Map<String, Value>) -> Option<Send<'_>> {
     }) {
         return None;
     }
-    let mut source = None;
-    for (field, label, language) in [
-        ("r", "R", "r"),
-        ("python", "Python", "python"),
-        ("sql", "SQL", "sql"),
-    ] {
-        let Some(value) = arguments.get(field) else {
-            continue;
-        };
-        let value = value.as_str()?;
-        if source
-            .replace(Source {
-                label,
-                language,
-                contents: value,
-            })
-            .is_some()
-        {
-            return None;
-        }
+    let source = submitted_source(request);
+    if source.is_none()
+        && arguments
+            .keys()
+            .any(|key| matches!(key.as_str(), "r" | "python" | "sql"))
+    {
+        return None;
     }
     let stdin = match arguments.get("stdin") {
         Some(stdin) => Some(stdin.as_str()?),
@@ -595,6 +559,7 @@ fn starts_with_quarto_cell_option(language: &str, contents: &str) -> bool {
     };
     let first_line = contents.split_once('\n').map_or(contents, |(line, _)| line);
     first_line
+        .trim_start()
         .strip_prefix(comment)
         .map(str::trim_start)
         .is_some_and(|line| line.starts_with('|'))

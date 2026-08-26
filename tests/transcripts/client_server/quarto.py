@@ -38,7 +38,7 @@ def test_renders_generated_document(binary: Path) -> Transcript:
         client._initialize_and_list_tools()
         (workspace / "render-value.txt").write_text("40\n", encoding="utf-8")
         r_source = (
-            "#| eval: false\n"
+            "  #| eval: false\n"
             'echo <- 0L\nrender_value <- as.integer(readLines("render-value.txt"))\n'
             'cat("executed-r=40\\n")'
         )
@@ -47,7 +47,7 @@ def test_renders_generated_document(binary: Path) -> Transcript:
             {"type": "text", "text": "executed-r=40\n"}
         ]
         source = (
-            "#| eval: false\n"
+            "  #| eval: false\n"
             'echo = """before\n````\n<div>not markdown</div>\nafter"""\n'
             'print(f"executed-python={int(r.render_value) + 2}")\n'
             "print(echo)"

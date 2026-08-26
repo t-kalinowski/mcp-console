@@ -294,7 +294,7 @@ Images remain ordinary MCP image content for the client.
 For recording, the server decodes retained image data into files under the run's `artifacts/` directory and records artifact identifiers and relative paths in the JSONL result instead of duplicating the encoded payload there.
 Artifact events appear as links in the live Markdown projection as soon as their files are recorded, even when no later poll collects them; result image blocks remain inline in result-content order.
 A journal or artifact failure disables further recording and reports a server diagnostic without stopping the console or worker.
-A Markdown or Quarto creation, append, or regeneration failure disables only the affected projection; the journal, artifacts, and other projection continue, and the server reports only the first projection failure.
+A Markdown or Quarto creation, append, or regeneration failure disables both derived projections; the journal and artifacts continue, and the server reports the failure once.
 
 ## Platform support
 

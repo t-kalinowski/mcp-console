@@ -139,11 +139,12 @@ def test_emits_yamark_formatted_documents(binary: Path) -> Transcript:
         )
         client._initialize_and_list_tools()
         client.send(r="emit image")
-        client.send(python="echo print('formatted')")
+        source = "echo before\n````\n<div>not markdown</div>\nafter"
+        client.send(python=source)
         client._request(
             "tools/call",
             name="send",
-            arguments={"sql": "--| eval: false\necho SELECT 42", "typo": True},
+            arguments={"sql": "  --| eval: false\necho SELECT 42", "typo": True},
         )
         client._request(
             "tools/call",
@@ -155,6 +156,9 @@ def test_emits_yamark_formatted_documents(binary: Path) -> Transcript:
                     "r": [
                         "foo:",
                         "foo#bar",
+                        "delete\u007fcontrol",
+                        "c1-start\u0080control",
+                        "c1-end\u009fcontrol",
                         "line\u2028separator",
                         "paragraph\u2029separator",
                     ]
@@ -164,13 +168,24 @@ def test_emits_yamark_formatted_documents(binary: Path) -> Transcript:
         transcript = client._finish()
 
         session = next((workspace / ".mcp-console" / "sessions").iterdir())
+        markdown = (session / "transcript.md").read_text(encoding="utf-8")
         quarto = (session / "transcript.qmd").read_text(encoding="utf-8")
+        assert f"`````python\n{source}\n`````" in markdown
+        assert (
+            "`````text\nzod python: before\n````\n<div>not markdown</div>\nafter\n`````"
+            in markdown
+        )
+        assert "```sql\n  --| eval: false\necho SELECT 42\n```" in markdown
+        assert '"typo": true' in markdown
         assert "```{r}\nemit image\n```" in quarto
-        assert "```{python}\necho print('formatted')\n```" in quarto
-        assert "```{sql}\n\n--| eval: false\necho SELECT 42\n```" in quarto
+        assert f"`````{{python}}\n{source}\n`````" in quarto
+        assert "```{sql}\n\n  --| eval: false\necho SELECT 42\n```" in quarto
         assert "execute:" not in quarto
         assert '    - "foo:"' in quarto
         assert "    - foo#bar" in quarto
+        assert '    - "delete\\x7Fcontrol"' in quarto
+        assert '    - "c1-start\\x80control"' in quarto
+        assert '    - "c1-end\\x9Fcontrol"' in quarto
         assert '    - "line\\Lseparator"' in quarto
         assert '    - "paragraph\\Pseparator"' in quarto
         formatting = subprocess.run(
