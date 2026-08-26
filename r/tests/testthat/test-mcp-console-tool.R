@@ -128,7 +128,7 @@ test_that("mcp_console_tool resolves, initializes, and forwards calls", {
       calls$from <- from
       binary
     },
-    .package = "mcpconsole"
+    .package = "mcp.console"
   )
 
   tool <- mcp_console_tool(from = "mcp-console==test")
@@ -185,7 +185,7 @@ test_that("mcp_console_tool uses the server's configured language fields", {
   binary <- fake_mcp_console(c("r", "sql"))
   testthat::local_mocked_bindings(
     uv_run_tool = function(...) binary,
-    .package = "mcpconsole"
+    .package = "mcp.console"
   )
 
   tool <- mcp_console_tool(from = "mcp-console==test")
@@ -204,7 +204,7 @@ test_that("mcp_console_tool preserves content from failed calls", {
   binary <- fake_mcp_console()
   testthat::local_mocked_bindings(
     uv_run_tool = function(...) binary,
-    .package = "mcpconsole"
+    .package = "mcp.console"
   )
 
   tool <- mcp_console_tool(from = "mcp-console==test")
@@ -224,7 +224,7 @@ test_that("mcp_console_tool invalidates an interrupted client", {
   binary <- fake_mcp_console()
   testthat::local_mocked_bindings(
     uv_run_tool = function(...) binary,
-    .package = "mcpconsole"
+    .package = "mcp.console"
   )
 
   tool <- mcp_console_tool(from = "mcp-console==test")

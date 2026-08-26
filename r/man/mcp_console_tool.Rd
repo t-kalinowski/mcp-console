@@ -26,6 +26,8 @@ consume its unread response. Construct and register a new tool to continue.
 \dontrun{
 chat <- ellmer::chat_openai()
 chat$register_tool(mcp_console_tool())
-chat$chat("Use the console to simulate data and summarize the result.")
+chat$chat(
+  "Tell me something interesting about mtcars. Use the console as a workbench."
+)
 }
 }

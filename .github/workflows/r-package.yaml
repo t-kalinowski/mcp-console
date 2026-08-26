@@ -39,4 +39,4 @@ jobs:
         working-directory: r
         run: |
           R CMD build .
-          R CMD check --no-manual mcpconsole_*.tar.gz
+          R CMD check --no-manual mcp.console_*.tar.gz

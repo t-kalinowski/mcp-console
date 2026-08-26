@@ -15,7 +15,9 @@
 #' \dontrun{
 #' chat <- ellmer::chat_openai()
 #' chat$register_tool(mcp_console_tool())
-#' chat$chat("Use the console to simulate data and summarize the result.")
+#' chat$chat(
+#'   "Tell me something interesting about mtcars. Use the console as a workbench."
+#' )
 #' }
 #' @export
 mcp_console_tool <- function(from = "mcp-console") {
@@ -36,8 +38,8 @@ mcp_console_tool <- function(from = "mcp-console") {
       protocolVersion = "2025-11-25",
       capabilities = json_object(),
       clientInfo = list(
-        name = "mcpconsole",
-        version = as.character(utils::packageVersion("mcpconsole"))
+        name = "mcp.console",
+        version = as.character(utils::packageVersion("mcp.console"))
       )
     )
   )

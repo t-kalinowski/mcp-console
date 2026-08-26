@@ -1,4 +1,4 @@
 library(testthat)
-library(mcpconsole)
+library(mcp.console)
 
-test_check("mcpconsole")
+test_check("mcp.console")
