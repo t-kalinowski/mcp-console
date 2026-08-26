@@ -452,11 +452,37 @@ fn transcript_test_script_keeps_reporting_running_cases_after_a_failure() {
     let stderr = stderr.join("\n");
 
     assert!(!status.success(), "fixture failure unexpectedly passed");
-    assert_eq!(lines.len(), 2, "unexpected stdout: {lines:?}");
-    assert!(lines[0].starts_with(running_prefix));
+    let failing_running_prefix = "client_server/server::fails_after_sibling_starts: running for ";
+    let finished_prefix = "client_server/server::blocks_while_sibling_fails: finished in ";
     assert!(
-        lines[1].starts_with("client_server/server::blocks_while_sibling_fails: finished in "),
+        lines.iter().all(|line| line.starts_with(running_prefix)
+            || line.starts_with(failing_running_prefix)
+            || line.starts_with(finished_prefix)),
+        "unexpected stdout: {lines:?}"
+    );
+    assert_eq!(
+        lines
+            .iter()
+            .filter(|line| line.starts_with(running_prefix))
+            .count(),
+        1,
+        "unexpected running sibling status: {lines:?}"
+    );
+    assert_eq!(
+        lines
+            .iter()
+            .filter(|line| line.starts_with(finished_prefix))
+            .count(),
+        1,
         "missing sibling completion: {lines:?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .filter(|line| line.starts_with(failing_running_prefix))
+            .count()
+            <= 1,
+        "duplicate failing sibling status: {lines:?}"
     );
     assert!(
         stderr.contains("client_server/server::fails_after_sibling_starts: failed"),

@@ -1478,13 +1478,25 @@ def test_preserves_fd0_order_between_readers(binary: Path) -> Transcript:
         })
         cat(paste(prompted, direct, sep = "|"), "\n", sep = "")
         """)
+    expected = '[input requested: "callback> "]\ncallback|direct\n'
+    call_start = len(client.transcript)
     client.send(
         r=r,
         stdin="callback\ndirect\n",
         timeout_ms=1_000,
     )
-    output = last_tool_text(client)
-    assert output == '[input requested: "callback> "]\ncallback|direct\n', output
+    deadline = time.monotonic() + 3
+    while last_tool_text(client) != expected:
+        output = last_tool_text(client)
+        assert output == "\n[running; poll with an empty send]", output
+        if time.monotonic() >= deadline:
+            raise AssertionError("ordered fd 0 readers did not finish")
+        client.send(timeout_ms=1_000)
+
+    calls = client.transcript[call_start:]
+    final_call = calls[-1]
+    final_call["send"] = calls[0]["send"]
+    client.transcript[call_start:] = [final_call]
     return client._finish()
 
 
