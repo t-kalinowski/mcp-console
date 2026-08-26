@@ -2,7 +2,7 @@
 name = "mcp-console"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.94"
+rust-version = "1.95"
 description = "Persistent R, Python, and SQL sessions for MCP clients"
 repository = "https://github.com/t-kalinowski/mcp-console"
 license = "MIT"
@@ -10,7 +10,7 @@ publish = false
 
 [dependencies]
 anyhow = "1"
-base64 = "0.22"
+base64 = "0.23"
 chrono = { version = "0.4", default-features = false, features = ["now"] }
 clap = { version = "4.5", features = ["derive"] }
 ctor = "1.0.7"
