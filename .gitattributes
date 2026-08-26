@@ -1,0 +1,2 @@
+tests/transcripts/golden/**/*.md whitespace=-blank-at-eof
+tests/transcripts/golden/**/*.qmd whitespace=-blank-at-eof
