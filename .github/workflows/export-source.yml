@@ -12,13 +12,29 @@ jobs:
   export:
     runs-on: ubuntu-22.04
     steps:
-      - name: Check out repository
+      - name: Check out MCP Console
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: mcp-console
+      - name: Check out Codex sandbox patch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: t-kalinowski/codex
+          ref: 855e8f9ef5b4211408791252e02e38b4757218cc
+          path: codex
       - name: Archive source
-        run: tar --exclude=.git -czf "${RUNNER_TEMP}/mcp-console-source.tgz" .
-      - name: Upload source
+        run: |
+          tar --exclude=.git -czf "${RUNNER_TEMP}/mcp-console-source.tgz" mcp-console
+          tar --exclude=.git -czf "${RUNNER_TEMP}/codex-source.tgz" codex
+      - name: Upload MCP Console source
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: mcp-console-source
           path: ${{ runner.temp }}/mcp-console-source.tgz
+          if-no-files-found: error
+      - name: Upload Codex source
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: codex-source
+          path: ${{ runner.temp }}/codex-source.tgz
           if-no-files-found: error
