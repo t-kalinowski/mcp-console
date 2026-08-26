@@ -221,6 +221,128 @@ static struct {
     return library
 
 
+def build_transcript_projection_failure_interposer(directory: Path) -> Path:
+    source = directory / "fail-transcript-projection.c"
+    library = directory / "fail-transcript-projection.dylib"
+    source.write_text(
+        r"""
+#include <errno.h>
+#include <fcntl.h>
+#include <limits.h>
+#include <stdarg.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/syscall.h>
+#include <sys/uio.h>
+#include <unistd.h>
+
+static int is_target(const char *path) {
+    const char *target = getenv("MCP_CONSOLE_TEST_PROJECTION_TARGET");
+    if (target == NULL) {
+        return 0;
+    }
+    const char *name = strrchr(path, '/');
+    name = name == NULL ? path : name + 1;
+    return strcmp(name, target) == 0;
+}
+
+static int fail_creation(const char *path) {
+    const char *failure = getenv("MCP_CONSOLE_TEST_PROJECTION_FAILURE");
+    return failure != NULL
+        && strcmp(failure, "create") == 0
+        && is_target(path);
+}
+
+static int fail_append(int descriptor) {
+    const char *failure = getenv("MCP_CONSOLE_TEST_PROJECTION_FAILURE");
+    if (failure == NULL || strcmp(failure, "append") != 0) {
+        return 0;
+    }
+    char path[PATH_MAX];
+    return fcntl(descriptor, F_GETPATH, path) == 0 && is_target(path);
+}
+
+static int projection_open(const char *path, int flags, ...) {
+    mode_t mode = 0;
+    if ((flags & O_CREAT) != 0) {
+        va_list arguments;
+        va_start(arguments, flags);
+        mode = va_arg(arguments, int);
+        va_end(arguments);
+    }
+    if (fail_creation(path)) {
+        errno = EACCES;
+        return -1;
+    }
+    return (int)syscall(SYS_open, path, flags, mode);
+}
+
+static int projection_openat(int directory, const char *path, int flags, ...) {
+    mode_t mode = 0;
+    if ((flags & O_CREAT) != 0) {
+        va_list arguments;
+        va_start(arguments, flags);
+        mode = va_arg(arguments, int);
+        va_end(arguments);
+    }
+    if (fail_creation(path)) {
+        errno = EACCES;
+        return -1;
+    }
+    return (int)syscall(SYS_openat, directory, path, flags, mode);
+}
+
+static ssize_t projection_write(
+    int descriptor,
+    const void *buffer,
+    size_t length
+) {
+    if (fail_append(descriptor)) {
+        errno = EIO;
+        return -1;
+    }
+    return (ssize_t)syscall(SYS_write, descriptor, buffer, length);
+}
+
+static ssize_t projection_writev(
+    int descriptor,
+    const struct iovec *buffers,
+    int count
+) {
+    if (fail_append(descriptor)) {
+        errno = EIO;
+        return -1;
+    }
+    return (ssize_t)syscall(SYS_writev, descriptor, buffers, count);
+}
+
+__attribute__((constructor))
+static void remove_interposer_from_child_environment(void) {
+    unsetenv("DYLD_INSERT_LIBRARIES");
+}
+
+__attribute__((used))
+static struct {
+    const void *replacement;
+    const void *replacee;
+} interposers[] __attribute__((section("__DATA,__interpose"))) = {
+    {(const void *)&projection_open, (const void *)&open},
+    {(const void *)&projection_openat, (const void *)&openat},
+    {(const void *)&projection_write, (const void *)&write},
+    {(const void *)&projection_writev, (const void *)&writev},
+};
+""".removeprefix("\n"),
+        encoding="utf-8",
+    )
+    subprocess.run(
+        ["cc", "-dynamiclib", "-o", library, source],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return library
+
+
 def record_resolved_r_library(environment: dict[str, str], directory: Path) -> None:
     real_ir = shutil.which("ir", path=environment.get("PATH"))
     assert real_ir is not None, "ir is required"
@@ -417,6 +539,112 @@ def test_continues_without_record_when_record_cannot_be_created(
         return transcript
 
 
+def run_derived_projection_failure(
+    binary: Path,
+    *,
+    failure: str,
+    target: str,
+    surviving_projection: str,
+) -> Transcript:
+    zod = Path(__file__).resolve().parents[2] / "fixtures" / "zod"
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        temporary = Path(temporary_directory)
+        workspace = temporary / "workspace"
+        workspace.mkdir()
+        environment = os.environ.copy()
+        environment["DYLD_INSERT_LIBRARIES"] = str(
+            build_transcript_projection_failure_interposer(temporary)
+        )
+        environment["MCP_CONSOLE_TEST_PROJECTION_FAILURE"] = failure
+        environment["MCP_CONSOLE_TEST_PROJECTION_TARGET"] = target
+        client = McpClient(
+            binary,
+            ("serve", "--worker", str(zod)),
+            environment,
+            current_directory=workspace,
+        )
+        client._initialize_and_list_tools()
+
+        client.send(r="emit image")
+        client.send(python="echo after projection failure")
+
+        session = next((workspace / ".mcp-console" / "sessions").iterdir())
+        journal = session / "internal" / "events.jsonl"
+        events = [json.loads(line) for line in journal.read_text().splitlines()]
+        assert [event["event"] for event in events] == [
+            "session_started",
+            "tool_call",
+            "artifact_created",
+            "tool_result",
+            "tool_call",
+            "tool_result",
+        ], events
+        assert [event["sequence"] for event in events] == list(range(1, 7)), events
+        artifact = events[2]
+        assert (session / artifact["path"]).read_bytes() == base64.b64decode(PNG_1X1)
+
+        surviving_text = (session / surviving_projection).read_text(encoding="utf-8")
+        if surviving_projection == "transcript.qmd":
+            assert "```r\nemit image\n```" in surviving_text, surviving_text
+            assert "```python\necho after projection failure\n```" in surviving_text, (
+                surviving_text
+            )
+        else:
+            assert "[Artifact 1 from call 1]" in surviving_text, surviving_text
+            assert "![Artifact 1]" in surviving_text, surviving_text
+            assert "echo after projection failure" in surviving_text, surviving_text
+
+        transcript, standard_error = client._finish_with_standard_error()
+        assert standard_error.count("\n") == 1, standard_error
+        assert standard_error.startswith(
+            "mcp-console: transcript projection disabled: "
+        ), standard_error
+        projection_description = (
+            target
+            if failure == "create"
+            else {
+                "transcript.md": "Markdown transcript",
+                "transcript.qmd": "Quarto source transcript",
+            }[target]
+        )
+        assert projection_description in standard_error, standard_error
+        assert "transcript recording disabled" not in standard_error, standard_error
+        transcript.append(
+            {
+                "derived projection failure": {
+                    "failure": failure,
+                    "target": target,
+                    "journal events": [event["event"] for event in events],
+                    "artifact recorded": True,
+                    "surviving projection": surviving_projection,
+                    "server stderr": (
+                        "mcp-console: transcript projection disabled: "
+                        "<projection failure>"
+                    ),
+                }
+            }
+        )
+        return transcript
+
+
+def test_keeps_recording_when_markdown_creation_fails(binary: Path) -> Transcript:
+    return run_derived_projection_failure(
+        binary,
+        failure="create",
+        target="transcript.md",
+        surviving_projection="transcript.qmd",
+    )
+
+
+def test_keeps_recording_when_quarto_append_fails(binary: Path) -> Transcript:
+    return run_derived_projection_failure(
+        binary,
+        failure="append",
+        target="transcript.qmd",
+        surviving_projection="transcript.md",
+    )
+
+
 def test_records_tool_calls_and_images(binary: Path) -> TranscriptWithCompanion:
     zod = Path(__file__).resolve().parents[2] / "fixtures" / "zod"
     with tempfile.TemporaryDirectory() as temporary_directory:
@@ -455,7 +683,13 @@ def test_records_tool_calls_and_images(binary: Path) -> TranscriptWithCompanion:
         journal_text = (session / "internal" / "events.jsonl").read_text(
             encoding="utf-8"
         )
+        markdown_path = session / "transcript.md"
+        markdown_text = markdown_path.read_text(encoding="utf-8")
+        quarto_path = session / "transcript.qmd"
+        quarto_text = quarto_path.read_text(encoding="utf-8")
         assert PNG_1X1 not in journal_text, journal_text
+        assert PNG_1X1 not in markdown_text, markdown_text
+        assert PNG_1X1 not in quarto_text, quarto_text
         events = [json.loads(line) for line in journal_text.splitlines()]
         assert [event["event"] for event in events] == [
             "session_started",
@@ -558,11 +792,18 @@ def test_records_tool_calls_and_images(binary: Path) -> TranscriptWithCompanion:
         assert set(directory_modes.values()) == {0o700}, directory_modes
         file_modes = {
             path.relative_to(workspace).as_posix(): path.stat().st_mode & 0o777
-            for path in (session / "internal" / "events.jsonl", image_path)
+            for path in (
+                session / "internal" / "events.jsonl",
+                markdown_path,
+                quarto_path,
+                image_path,
+            )
         }
         assert set(file_modes.values()) == {0o600}, file_modes
         transcript = client._finish()
 
+        timestamps = [event["at"] for event in events]
+        working_directory = events[0]["working_directory"]
         for event in events:
             assert event["at"].endswith("Z"), event
             datetime.fromisoformat(event["at"])
@@ -572,23 +813,94 @@ def test_records_tool_calls_and_images(binary: Path) -> TranscriptWithCompanion:
                 event["request_id"] = "<request ID>"
         events[0]["working_directory"] = "<workspace>"
         assert journal_text.endswith("\n"), journal_text
+        assert markdown_text.endswith("\n"), markdown_text
+        assert quarto_text.endswith("\n"), quarto_text
+        markdown_text = markdown_text.replace(run_id, "<run ID>")
+        markdown_text = markdown_text.replace(working_directory, "<workspace>")
+        for timestamp in timestamps:
+            markdown_text = markdown_text.replace(timestamp, "<UTC timestamp>")
+        assert "```r\nemit image\n```" in quarto_text
+        assert all(
+            excluded not in quarto_text
+            for excluded in (
+                "recorded stdin",
+                "praise",
+                "before image",
+                "Artifact 1",
+                "Result for call",
+            )
+        ), quarto_text
 
         return TranscriptWithCompanion(
             transcript=transcript,
             companion_name="events",
             companion=[
                 events,
+                {"transcript.md": markdown_text.splitlines()},
+                {"transcript.qmd": quarto_text.splitlines()},
                 {
                     "produced session": {
                         "root": ".mcp-console/sessions/<run ID>",
                         "files": [
                             "internal/events.jsonl",
+                            "transcript.md",
+                            "transcript.qmd",
                             "artifacts/call-000001-image-000001.png",
                         ],
                     }
                 },
             ],
         )
+
+
+def test_quotes_quarto_fences(binary: Path) -> Transcript:
+    zod = Path(__file__).resolve().parents[2] / "fixtures" / "zod"
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        workspace = Path(temporary_directory)
+        client = McpClient(
+            binary,
+            ("serve", "--worker", str(zod)),
+            current_directory=workspace,
+        )
+        client._initialize_and_list_tools()
+        source = "echo before\n````\n<div>not markdown</div>\nafter"
+        client.send(python=source)
+        rejected_source = "echo retained despite invalid option"
+        rejected = client._request(
+            "tools/call",
+            name="send",
+            arguments={"python": rejected_source, "typo": True},
+        )
+        assert rejected["result"]["isError"] is True, rejected
+
+        session = next((workspace / ".mcp-console" / "sessions").iterdir())
+        markdown = (session / "transcript.md").read_text(encoding="utf-8")
+        quarto = (session / "transcript.qmd").read_text(encoding="utf-8")
+        assert f"`````python\n{source}\n`````" in markdown
+        assert (
+            "`````text\nzod python: before\n````\n<div>not markdown</div>\nafter\n`````"
+        ) in markdown
+        assert f"```python\n{rejected_source}\n```" in markdown
+        assert '"typo": true' in markdown
+        assert f"`````python\n{source}\n`````" in quarto
+        assert f"```python\n{rejected_source}\n```" in quarto
+        assert "zod python:" not in quarto
+
+        transcript = client._finish()
+        transcript.append(
+            {
+                "markdown projection": {
+                    "source from a rejected call is retained": True,
+                    "raw rejected request is retained": True,
+                },
+                "quarto projection": {
+                    "source fence exceeds literal backtick run": True,
+                    "result fence exceeds literal backtick run": True,
+                    "source from a rejected call is retained": True,
+                },
+            }
+        )
+        return transcript
 
 
 def test_disables_recording_after_transcript_failure(binary: Path) -> Transcript:
@@ -679,6 +991,8 @@ def test_flushes_calls_and_keeps_unpolled_images(binary: Path) -> Transcript:
         )
         session = next((workspace / ".mcp-console" / "sessions").iterdir())
         journal = session / "internal" / "events.jsonl"
+        markdown = session / "transcript.md"
+        quarto = session / "transcript.qmd"
         before_release = [
             json.loads(line)
             for line in journal.read_text(encoding="utf-8").splitlines()
@@ -687,6 +1001,14 @@ def test_flushes_calls_and_keeps_unpolled_images(binary: Path) -> Transcript:
             "session_started",
             "tool_call",
         ], before_release
+        before_release_markdown = markdown.read_text(encoding="utf-8")
+        before_release_quarto = quarto.read_text(encoding="utf-8")
+        assert "## Call 1: R" in before_release_markdown
+        assert "complete after release" in before_release_markdown
+        assert "## Result for call 1" not in before_release_markdown
+        assert "```r\ncomplete after release\n```" in before_release_quarto
+        markdown_inode = markdown.stat().st_ino
+        quarto_inode = quarto.stat().st_ino
 
         (started.parent / "zod-release-evaluation").touch()
         client._receive(waiting)
@@ -699,6 +1021,14 @@ def test_flushes_calls_and_keeps_unpolled_images(binary: Path) -> Transcript:
             "tool_call",
             "tool_result",
         ], after_release
+        after_release_markdown = markdown.read_text(encoding="utf-8")
+        after_release_quarto = quarto.read_text(encoding="utf-8")
+        assert after_release_markdown.startswith(before_release_markdown)
+        assert markdown.stat().st_ino == markdown_inode
+        assert "## Result for call 1" in after_release_markdown
+        assert "zod: complete after release" in after_release_markdown
+        assert after_release_quarto == before_release_quarto
+        assert quarto.stat().st_ino == quarto_inode
 
         client.send(
             r="emit image before completion",
@@ -746,6 +1076,15 @@ def test_flushes_calls_and_keeps_unpolled_images(binary: Path) -> Transcript:
         }, artifact
         image_path = session / artifact["path"]
         assert image_path.read_bytes() == base64.b64decode(PNG_1X1), image_path
+        unpolled_markdown = markdown.read_text(encoding="utf-8")
+        unpolled_quarto = quarto.read_text(encoding="utf-8")
+        assert unpolled_markdown.startswith(after_release_markdown)
+        assert markdown.stat().st_ino == markdown_inode
+        assert f"[Artifact {artifact['artifact_id']} from call 2]" in unpolled_markdown
+        assert artifact["path"] in unpolled_markdown
+        assert unpolled_quarto.startswith(after_release_quarto)
+        assert "```r\nemit image before completion\n```" in unpolled_quarto
+        assert quarto.stat().st_ino == quarto_inode
 
         (image_started.parent / "zod-release-image-completion").touch()
         client.send(timeout_ms=3_000)
@@ -774,6 +1113,14 @@ def test_flushes_calls_and_keeps_unpolled_images(binary: Path) -> Transcript:
             ],
             "isError": False,
         }, polled_events[-1]
+        polled_markdown = markdown.read_text(encoding="utf-8")
+        polled_quarto = quarto.read_text(encoding="utf-8")
+        assert polled_markdown.startswith(unpolled_markdown)
+        assert markdown.stat().st_ino == markdown_inode
+        assert "## Call 3: Poll" in polled_markdown
+        assert "## Result for call 3" in polled_markdown
+        assert polled_quarto == unpolled_quarto
+        assert quarto.stat().st_ino == quarto_inode
 
         transcript = client._finish()
         transcript.append(
@@ -791,6 +1138,12 @@ def test_flushes_calls_and_keeps_unpolled_images(binary: Path) -> Transcript:
                         "data": "<byte-identical decoded PNG>",
                     },
                     "later poll result": polled_events[-1]["result"],
+                    "Markdown projection": {
+                        "live before result": True,
+                        "each snapshot retained as an exact prefix": True,
+                        "inode retained": True,
+                    },
+                    "Quarto projection": "source cells only",
                 }
             }
         )

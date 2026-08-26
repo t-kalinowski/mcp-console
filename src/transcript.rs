@@ -12,6 +12,8 @@ use rmcp::model::{
 };
 use serde_json::{Value, json};
 
+mod markdown;
+
 const SCHEMA_VERSION: u64 = 1;
 
 #[derive(Clone)]
@@ -26,6 +28,9 @@ struct TranscriptState {
 struct ActiveTranscript {
     directory: PathBuf,
     writer: BufWriter<File>,
+    projections: markdown::Writers,
+    pending_projection_failure: Option<String>,
+    projection_failure_reported: bool,
     run_id: String,
     sequence: u64,
     next_call_id: u64,
@@ -143,7 +148,17 @@ impl Transcript {
         }
         let result = operation(&mut state);
         match result {
-            Ok(value) => Some(value),
+            Ok(value) => {
+                let projection_failure = state
+                    .active
+                    .as_mut()
+                    .and_then(ActiveTranscript::take_projection_failure);
+                drop(state);
+                if let Some(error) = projection_failure {
+                    report_projection_failure(&error);
+                }
+                Some(value)
+            }
             Err(error) => {
                 state.disable(error.clone());
                 drop(state);
@@ -217,10 +232,36 @@ impl ActiveTranscript {
         let writer = create_private_file(&journal)
             .map(BufWriter::new)
             .map_err(|error| format!("failed to create {}: {error}", journal.display()))?;
+        let mut projection_error = None;
+        let markdown_path = directory.join("transcript.md");
+        let markdown_file = match create_private_file(&markdown_path) {
+            Ok(file) => Some(file),
+            Err(error) => {
+                projection_error = Some(format!(
+                    "failed to create {}: {error}",
+                    markdown_path.display()
+                ));
+                None
+            }
+        };
+        let quarto_path = directory.join("transcript.qmd");
+        let quarto_file = match create_private_file(&quarto_path) {
+            Ok(file) => Some(file),
+            Err(error) => {
+                projection_error.get_or_insert_with(|| {
+                    format!("failed to create {}: {error}", quarto_path.display())
+                });
+                None
+            }
+        };
+        let projections = markdown::Writers::new(markdown_file, quarto_file);
 
         let mut transcript = Self {
             directory,
             writer,
+            projections,
+            pending_projection_failure: projection_error,
+            projection_failure_reported: false,
             run_id,
             sequence: 0,
             next_call_id: 0,
@@ -294,7 +335,22 @@ impl ActiveTranscript {
             .and_then(|()| self.writer.flush())
             .map_err(|error| format!("failed to append transcript event: {error}"))?;
         self.sequence = sequence;
+        if let Err(error) = self.projections.append(&event) {
+            self.queue_projection_failure(error);
+        }
         Ok(())
+    }
+
+    fn queue_projection_failure(&mut self, error: String) {
+        if !self.projection_failure_reported && self.pending_projection_failure.is_none() {
+            self.pending_projection_failure = Some(error);
+        }
+    }
+
+    fn take_projection_failure(&mut self) -> Option<String> {
+        let failure = self.pending_projection_failure.take();
+        self.projection_failure_reported |= failure.is_some();
+        failure
     }
 
     fn finish(
@@ -407,6 +463,13 @@ fn report_failure(error: &str) {
     let _ = writeln!(
         std::io::stderr().lock(),
         "mcp-console: transcript recording disabled: {error}"
+    );
+}
+
+fn report_projection_failure(error: &str) {
+    let _ = writeln!(
+        std::io::stderr().lock(),
+        "mcp-console: transcript projection disabled: {error}"
     );
 }
 

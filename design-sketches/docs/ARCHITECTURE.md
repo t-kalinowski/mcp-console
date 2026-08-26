@@ -16,7 +16,7 @@ The architecture must support:
 - complete-cell evaluation plus genuine interactive stdin;
 - precise state, interrupt, and failure behavior;
 - bounded model-facing output with complete retained streams;
-- a generated Quarto transcript;
+- generated Markdown and source-only Quarto documents;
 - process-scoped human observation and typed large-object inspection;
 - process-level isolation around arbitrary code.
 
@@ -85,7 +85,7 @@ Backend transport must not leak into MCP, session, transcript, or local sidecar 
 12. Full explicit stream output remains outside model context.
 13. Known large values are previewed before full textual materialization.
 14. Restart and crash create explicit state-loss boundaries.
-15. The QMD transcript is generated from a more authoritative internal record.
+15. The Markdown transcript and source-only QMD are generated from a more authoritative internal record.
 16. Runtime transport is encapsulated.
     Ark/Jupyter or a native `harp`/`libr` worker may implement the same service, but backend-specific types never cross the adapter boundary.
 17. Live-object inspection is typed, bounded, revisioned, and distinct from arbitrary evaluation.
@@ -158,7 +158,7 @@ An Ark-backed implementation must still provide:
 - minimal and truthful Python/SQL bridge frames and source locations;
 - compact MCP wait and polling semantics;
 - bounded text output and managed sidecars;
-- named sessions, requirement manifests, sandbox policy, and QMD transcripts;
+- named sessions, requirement manifests, sandbox policy, and generated session documents;
 - a process-scoped local API that proxies or translates Ark comms rather than exposing them directly;
 - an upgrade strategy that avoids an unmaintainable fork.
 
@@ -317,7 +317,7 @@ Responsibilities:
 - launch workers under explicit sandbox policy;
 - own command, sideband, control, stdout, and stderr channels;
 - enforce wait, polling, cancellation, and output-budget behavior;
-- write output spools, internal records, and QMD projections;
+- write output spools, internal records, and document projections;
 - report worker crashes without corrupting MCP stdout;
 - restart, close, and retain session files according to policy.
 
@@ -940,16 +940,18 @@ The transcript links to the same files.
 
 ### 16.1 Directory layout
 
-The implemented journal-only slice creates one run-specific directory at `.mcp-console/sessions/<UTC-first-use>-<pid>/` when the first ordinary `send` or `session` call arrives, with `artifacts/` and `internal/events.jsonl` beneath it.
+The implemented slice creates one run-specific directory at `.mcp-console/sessions/<UTC-first-use>-<pid>/` when the first ordinary `send` call arrives, with `transcript.md`, `transcript.qmd`, `artifacts/`, and `internal/events.jsonl` beneath it.
 Initialization, tool listing, unknown tool calls, and an unused server process create no record.
-On Unix, it creates the record directories with mode `0700` and journal and artifact files with mode `0600`.
+On Unix, it creates the record directories with mode `0700` and journal, document, and artifact files with mode `0600`.
 Its journal records MCP tool calls and results plus image artifacts when worker frames arrive; it does not yet implement the complete evaluation-event vocabulary below.
-Recording is optional: the first recording failure disables it for that server process, emits one diagnostic to standard error, and does not change console results or worker lifecycle.
+Recording is optional: the first journal or artifact failure disables it for that server process, emits one diagnostic to standard error, and does not change console results or worker lifecycle.
+Failure of either generated document disables only that projection while the journal, artifacts, and other document continue.
 An existing journal may therefore end with the last successfully flushed event.
-The generated transcript and named-session design will replace that temporary run identity with the planned layout below:
+The named-session design will replace that temporary run identity with the planned layout below:
 
 ```text
 .mcp-console/sessions/default/
+├── transcript.md
 ├── transcript.qmd
 ├── environment.json
 ├── outputs/
@@ -986,19 +988,23 @@ generation_started
 This file is not the normal agent-facing artifact and need not expose Rust's internal serialization directly.
 Give it an explicit private schema version.
 
-### 16.3 Generated QMD
+### 16.3 Generated documents
 
-`transcript.qmd` is the compact human- and agent-facing projection.
-Update it at stable boundaries: completion, error, interruption, input request, worker stop, and generation change.
+`transcript.md` is the compact human- and agent-facing projection.
+The current server appends once for each recorded session, call, artifact, or result event.
+The planned evaluation-event vocabulary adds explicit completion, error, interruption, input-request, worker-stop, and generation-change boundaries.
 
-It contains complete source, labels, bounded output, errors, supplied input when safe, and relative artifact paths.
-It is marked non-executing and generated.
+It contains complete source, labels, bounded output, errors, supplied input, and relative artifact paths without redaction.
+It is generated and formatted with Yamark without applying embedded formatters to submitted code or result content.
+
+`transcript.qmd` contains source from calls with exactly one submitted R, Python, or SQL field in call order, including source from a call that later fails option validation or preparation.
+It is marked non-executing, formatted with Yamark without rewriting submitted cells, and can be used as source material or rendered as a static code report without replaying the session.
 
 Do not continuously embed unlimited output.
 Refer to full output sidecars when excerpts are insufficient.
 
-Do not let agents edit the live generated transcript in place.
-Refined notebooks, reports, and scripts are separate files created from the transcript and runtime artifacts.
+Do not let agents edit the live generated documents in place.
+Refined notebooks, reports, and scripts are separate files created from the transcript, code-cell projection, and runtime artifacts.
 
 ## 17. Session manager and concurrency
 
@@ -1135,7 +1141,7 @@ Required scenarios include:
 - bounded stdout/stderr and sidecars;
 - bounded R, Python, and SQL values;
 - plot paths;
-- QMD transcript recovery;
+- generated-document recovery;
 - sandbox restrictions.
 
 ### 22.2 Stack-semantics tests
@@ -1208,10 +1214,10 @@ Exit: persistent R, visible values, `readline()`, `browser()`, large live-table 
 
 - add output spools and reply cursors;
 - add structural previews;
-- add internal journal and generated QMD;
+- extend the internal journal and generated documents with evaluation-level events and bounded output references;
 - add plot/artifact files and full-resolution viewer delivery.
 
-Exit: no tested reply exceeds its configured budget and the QMD reconstructs useful session history.
+Exit: no tested reply exceeds its configured budget and the Markdown transcript reconstructs useful session history.
 
 ### Milestone 4: reticulate Python
 
@@ -1275,7 +1281,7 @@ Exit: supported-platform security and resource tests pass in CI.
 11. **DuckDB environment scan:** verify the exact R environment used, name precedence, rebinding, and registration lifetimes.
 12. **DuckDB bounded fetch:** compare bounded DBI, Arrow, and record-batch paths and confirm interruption behavior.
 13. **Output ordering:** define the merge contract for managed events and raw process streams.
-14. **Transcript recovery:** choose incremental QMD updates versus deterministic rebuild on startup.
+14. **Transcript recovery:** define recovery for a partial final Markdown or QMD fragment without mutating the authoritative journal.
 15. **Cancellation:** define exact mapping between MCP cancellation, initiating calls, later poll waiters, and runtime interrupts.
 
 Resolve the remaining portions of spikes 1–8 before treating the full backend substrate as settled.

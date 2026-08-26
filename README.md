@@ -91,8 +91,10 @@ The core console currently runs only on macOS.
 Linux and Windows support is not implemented, the package is not published, and this repository does not yet document an installation route.
 For now, the repository is mainly useful to readers following the design and implementation.
 
-The server already records a JSONL journal of tool calls and results together with image artifacts.
-The generated Quarto transcript and human-facing tools for following and inspecting an agent's work remain future design.
+The server records a JSONL journal of tool calls and results together with image artifacts.
+It projects each journal event into a Yamark-formatted, append-only `transcript.md` with syntax-highlighted R, Python, and SQL source, text results, and relative artifact links.
+Alongside it, `transcript.qmd` contains only the submitted code cells, ready to use as source material or render as a static code report with Quarto.
+Human-facing tools for following and inspecting an agent's work remain future design.
 
 Other current limitations include:
 
@@ -110,7 +112,9 @@ The server installs automatically inferred or explicitly declared R and Python p
 Those operations may access the network and execute installation or build code, so only trusted requirements should be supplied.
 See [Requirements and environments](docs/REQUIREMENTS.md) for the accepted inputs and trust model.
 
-Session records contain submitted source, standard input, declared requirements, results, and images without redaction.
+Session journals and the Markdown projection record submitted source, standard input, declared requirements, result text, and artifact paths without redaction.
+Image bytes are stored in separate artifact files linked from those records.
+The source-only Quarto document contains submitted code without redaction.
 See [Implemented architecture](docs/ARCHITECTURE.md) for recording and process placement.
 
 ## Development

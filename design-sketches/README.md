@@ -102,7 +102,7 @@ mcp-console watch default
 mcp-console send default --r 'summary(df)'
 ```
 
-A viewer can follow evaluations and bounded live output, read the Quarto transcript, display plots at their original resolution, inspect supported objects, and browse large tables without placing their contents in model context.
+A viewer can follow evaluations and bounded live output, read the Markdown transcript, display plots at their original resolution, inspect supported objects, and browse large tables without placing their contents in model context.
 A live view retrieves only the visible rows and columns from a retained runtime object; a snapshot view materializes a point-in-time relation that remains browsable while the agent continues computing.
 Ephemeral filters and sorts can be converted back to R, Python, or SQL source without executing them invisibly.
 The event stream is resumable and slow viewers cannot block evaluation.
@@ -149,10 +149,11 @@ See [`docs/RUNTIME_BACKEND.md`](docs/RUNTIME_BACKEND.md) and [`docs/R_REPL_DLL_I
 
 MCP results are text-only and strictly bounded.
 Large values receive structural previews, while complete explicitly printed output is retained in session files.
-Every session maintains a generated `transcript.qmd` containing submitted code, bounded output, errors, labels, origins, and artifact paths.
+Every session maintains a generated `transcript.md` containing submitted code, bounded output, errors, labels, origins, and artifact paths.
+It also maintains a source-only `transcript.qmd` containing submitted code cells in call order.
 
-The Quarto transcript is a chronological execution record, not a polished notebook.
-An agent can use ordinary file tools to turn selected work into a refined `.qmd`, `.R`, `.py`, or `.ipynb` artifact.
+The Markdown transcript is a chronological execution record, not a polished report.
+An agent can use the source-only QMD or ordinary file tools to turn selected work into a refined `.qmd`, `.R`, `.py`, or `.ipynb` artifact.
 
 The human-facing event stream carries bounded metadata and offsets, not unbounded tables or output.
 Complete text, plots, live table batches, and snapshots are fetched separately by managed IDs.
@@ -184,7 +185,7 @@ Complete text, plots, live table batches, and snapshots are fetched separately b
 - Output: bounded MCP text plus managed workspace files.
 - Environment: additive session requirements configured by `session`; they survive runtime restarts.
 - Lifecycle: `restart` replaces in-memory runtime state while retaining requirements, workspace files, and transcript.
-- Durable record: generated Quarto transcript; granular JSONL journal remains internal.
+- Durable record: generated Markdown transcript plus a source-only Quarto document; granular JSONL journal remains internal.
 - Human visibility: a process-scoped local API with snapshot plus resumable event-stream semantics; no detached daemon.
 - Sideband boundary: typed bounded inspection is distinct from arbitrary external evaluation.
 - Data explorer: typed live views for bounded viewport access plus immutable snapshots for concurrent and repeatable exploration.
@@ -198,6 +199,6 @@ The design builds on:
 - [posit-dev/ark](https://github.com/posit-dev/ark) for native R execution, Jupyter lifecycle, plots, help, debugging, Variables, and the Data Explorer comm/backend; `harp` and `libr` remain candidate lower-level building blocks for a custom worker;
 - [reticulate](https://rstudio.github.io/reticulate/) for embedded Python and R/Python object interchange;
 - [DuckDB](https://duckdb.org/docs/current/clients/r) and [DBI](https://dbi.r-dbi.org/) for embedded SQL;
-- [Quarto](https://quarto.org/) for the readable session transcript;
+- [Quarto](https://quarto.org/) for the source-only code-cell projection and static report export;
 - [kata](https://github.com/kenn-io/kata) for the pattern of one local service API shared by agent and human clients, protected runtime discovery, and resumable bounded event subscriptions;
 - [Positron's Data Explorer](https://positron.posit.co/data-explorer.html) and [Plots pane](https://positron.posit.co/plots-pane.html) for human-facing ephemeral data exploration and full-scale plot inspection.
