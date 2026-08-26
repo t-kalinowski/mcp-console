@@ -410,6 +410,7 @@ The built-in worker resolves ordinary CRAN packages and missing imports in its m
                 timeout: Duration::from_millis(timeout_ms),
                 transcript: self.transcript.clone(),
                 call_id: call.id(),
+                test_operation: delivery.test_operation(),
             })
             .await?;
         Ok(response_to_tool_result(

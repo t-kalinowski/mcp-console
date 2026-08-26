@@ -30,6 +30,7 @@ from _support import (
 PLATFORMS = {"darwin"}
 LARGE_OUTPUT_SIZE = 2 * 1024 * 1024
 PENDING_TEXT_BUDGET = 8 * 1024 * 1024
+TEST_STDOUT_OBSERVED_ENV = "MCP_CONSOLE_TEST_STDOUT_OBSERVED"
 PNG_1X1 = (
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42Y"
     "AAAAASUVORK5CYII="
@@ -2393,6 +2394,7 @@ def test_orders_failure_and_replacement_output(binary: Path) -> Transcript:
         environment = os.environ.copy()
         environment["TMPDIR"] = temporary_directory
         environment["ZOD_STARTUP_CONTROL"] = str(startup_control)
+        environment[TEST_STDOUT_OBSERVED_ENV] = "zod-stdout-observed"
         client = McpClient(
             binary,
             ("serve", "--worker", str(zod)),
@@ -2517,6 +2519,7 @@ def test_reports_replacement_startup_failure_and_retry(
         environment["RETICULATE_PYTHON"] = ""
         environment["TMPDIR"] = temporary_directory
         environment["ZOD_STARTUP_CONTROL"] = str(startup_control)
+        environment[TEST_STDOUT_OBSERVED_ENV] = "zod-stdout-observed"
         record_resolved_r_library(environment, Path(temporary_directory))
         client = McpClient(
             binary,
@@ -2588,6 +2591,7 @@ def test_polls_replacement_startup_after_send_timeout(binary: Path) -> Transcrip
         environment["TMPDIR"] = temporary_directory
         environment["ZOD_STARTUP_CONTROL"] = str(startup_control)
         environment["ZOD_STARTUP_RELEASE"] = str(startup_release)
+        environment[TEST_STDOUT_OBSERVED_ENV] = "zod-stdout-observed"
         record_resolved_r_library(environment, temporary_path)
         client = McpClient(
             binary,

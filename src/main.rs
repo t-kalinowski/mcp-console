@@ -22,6 +22,7 @@ mod server_transport;
 mod sideband;
 #[cfg(target_os = "macos")]
 mod sql;
+mod test_control;
 mod transcript;
 mod worker;
 mod worker_client;

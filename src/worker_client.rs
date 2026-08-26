@@ -64,6 +64,13 @@ pub(crate) struct SendRequest {
     pub(crate) timeout: Duration,
     pub(crate) transcript: crate::transcript::Transcript,
     pub(crate) call_id: Option<u64>,
+    pub(crate) test_operation: crate::test_control::Operation,
+}
+
+struct InterruptRequest {
+    transcript: crate::transcript::Transcript,
+    call_id: Option<u64>,
+    test_operation: crate::test_control::Operation,
 }
 
 /// A cloneable handle to one lazily started worker.
@@ -370,6 +377,7 @@ impl Client {
             timeout,
             transcript,
             call_id,
+            test_operation: _,
         } = request;
         if let Some(requirements) = requirements {
             let Some(cell) = cell else {
@@ -477,6 +485,7 @@ impl Client {
             timeout: _,
             transcript,
             call_id,
+            test_operation,
         } = request;
         let standalone_interrupt = matches!(requested, SendControl::Interrupt)
             && cell.is_none()
@@ -488,6 +497,7 @@ impl Client {
                 // A controlled restart owns admission while its resolver is live.
                 // Preserve resolver-first signaling for an empty interrupt.
                 self.interrupt_standalone_blocking()?;
+                test_operation.emit("interrupt_delivered");
                 std::thread::sleep(INTERRUPT_GRACE);
                 let control = match self.begin_controlled_send() {
                     Ok(control) => control,
@@ -516,8 +526,11 @@ impl Client {
                 cell,
                 stdin,
                 requirements,
-                transcript,
-                call_id,
+                InterruptRequest {
+                    transcript,
+                    call_id,
+                    test_operation,
+                },
             ),
             SendControl::Restart => self.restart_and_start_evaluation(
                 &control,
@@ -576,11 +589,16 @@ impl Client {
         cell: Option<crate::cell::Cell>,
         stdin: Option<String>,
         requirements: Option<RequirementSubmission>,
-        transcript: crate::transcript::Transcript,
-        call_id: Option<u64>,
+        request: InterruptRequest,
     ) -> Result<ControlledEvaluation, String> {
+        let InterruptRequest {
+            transcript,
+            call_id,
+            test_operation,
+        } = request;
         let generation = control.generation();
         self.interrupt_blocking()?;
+        test_operation.emit("interrupt_delivered");
         self.ensure_controlled_generation(control, &generation)?;
         match self.submit_controlled_stdin(stdin, &generation, control) {
             Ok(()) => {}

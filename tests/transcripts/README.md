@@ -63,8 +63,8 @@ scripts/test --update client_server/server::initializes_and_lists_tools
 With no selectors, `scripts/test` runs every suite and case in parallel, using at least two worker processes and otherwise one per available CPU by default.
 Pass `--jobs N` to set the maximum concurrency or `--jobs 1` to run serially.
 Normal runs emit one flushed `.` for every passing case and end the progress line with a newline.
-A case that runs for five seconds is named with its current status.
-The runner reports it again at 30-second elapsed intervals through three minutes, then once per minute, and names it when it finishes.
+A case that runs for ten seconds is named with its current status.
+The runner reports it again at one-minute elapsed intervals through five minutes, then once every two minutes, and names it when it finishes.
 On failure, the runner prints the fully qualified selector before the error or diff.
 Snapshot updates retain their named `updated ...` and `removed ...` records instead of dots.
 This output belongs only to the test-runner user interface; it is not captured transcript data or part of the MCP or relay protocol.

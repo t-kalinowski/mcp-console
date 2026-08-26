@@ -1198,9 +1198,38 @@ mod platform {
             let (cancelled, cancel) = cancellation_pipe("worker stdin")?;
             let (sender, receiver) = mpsc::channel();
             let thread = thread::spawn(move || {
+                let mut test_gate = crate::test_control::stdin_gate();
                 for message in receiver {
                     match message {
                         StdinWrite::Write(bytes) => {
+                            if let Some((operation, descriptor)) = test_gate.take() {
+                                crate::test_control::emit(
+                                    &operation,
+                                    "stdin_write_paused",
+                                    "relay",
+                                );
+                                match wait_for_test_stdin_release(descriptor, &cancelled) {
+                                    Ok(true) => crate::test_control::emit(
+                                        &operation,
+                                        "stdin_write_released",
+                                        "relay",
+                                    ),
+                                    Ok(false) => {
+                                        crate::test_control::emit(
+                                            &operation,
+                                            "stdin_write_cancelled",
+                                            "relay",
+                                        );
+                                        return;
+                                    }
+                                    Err(error) => {
+                                        if !stopping.load(Ordering::SeqCst) {
+                                            failures.report(error);
+                                        }
+                                        return;
+                                    }
+                                }
+                            }
                             let mut remaining = bytes.as_slice();
                             while !remaining.is_empty() {
                                 let ready = match wait_for_io(
@@ -1276,6 +1305,37 @@ mod platform {
         }
     }
 
+    fn wait_for_test_stdin_release(
+        descriptor: RawFd,
+        cancelled: &std::io::PipeReader,
+    ) -> Result<bool, String> {
+        loop {
+            let ready = wait_for_io(descriptor, libc::POLLIN, cancelled)
+                .map_err(|error| format!("test stdin gate wait failed: {error}"))?;
+            if ready.cancelled {
+                return Ok(false);
+            }
+            if !ready.stream {
+                continue;
+            }
+            let mut byte = 0_u8;
+            // SAFETY: `byte` remains valid for this call, and the descriptor
+            // was explicitly inherited through the test environment.
+            let read = unsafe { libc::read(descriptor, (&mut byte as *mut u8).cast(), 1) };
+            if read < 0 && std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted
+            {
+                continue;
+            }
+            if matches!(read, 0 | 1) {
+                return Ok(true);
+            }
+            return Err(format!(
+                "test stdin gate read failed: {}",
+                std::io::Error::last_os_error()
+            ));
+        }
+    }
+
     struct OutputReader {
         cancel: Cancellation,
         thread: thread::JoinHandle<()>,
@@ -1319,6 +1379,13 @@ mod platform {
                             Ok(0) => break,
                             Ok(length) => {
                                 if events.send(output_event(kind, &buffer[..length])).is_err() {
+                                    break;
+                                }
+                                if matches!(kind, OutputStream::Stdout)
+                                    && let Err(error) =
+                                        crate::test_control::acknowledge_stdout_observed()
+                                {
+                                    failures.report(error);
                                     break;
                                 }
                             }
@@ -1393,6 +1460,9 @@ mod platform {
                 Ok(length) => {
                     if events.send(output_event(kind, &buffer[..length])).is_err() {
                         break;
+                    }
+                    if matches!(kind, OutputStream::Stdout) {
+                        crate::test_control::acknowledge_stdout_observed()?;
                     }
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
