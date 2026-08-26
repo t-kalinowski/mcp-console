@@ -159,6 +159,9 @@ def test_emits_yamark_formatted_documents(binary: Path) -> Transcript:
                         "delete\u007fcontrol",
                         "c1-start\u0080control",
                         "c1-end\u009fcontrol",
+                        "bom\ufeffvalue",
+                        "noncharacter\ufffevalue",
+                        "noncharacter\uffffvalue",
                         "line\u2028separator",
                         "paragraph\u2029separator",
                     ]
@@ -186,6 +189,9 @@ def test_emits_yamark_formatted_documents(binary: Path) -> Transcript:
         assert '    - "delete\\x7Fcontrol"' in quarto
         assert '    - "c1-start\\x80control"' in quarto
         assert '    - "c1-end\\x9Fcontrol"' in quarto
+        assert '    - "bom\\uFEFFvalue"' in quarto
+        assert '    - "noncharacter\\uFFFEvalue"' in quarto
+        assert '    - "noncharacter\\uFFFFvalue"' in quarto
         assert '    - "line\\Lseparator"' in quarto
         assert '    - "paragraph\\Pseparator"' in quarto
         formatting = subprocess.run(

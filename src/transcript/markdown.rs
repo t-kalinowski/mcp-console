@@ -216,6 +216,10 @@ fn yaml_string(value: &str) -> String {
                     write!(yaml, "\\x{:02X}", character as u32)
                         .expect("writing to a String cannot fail");
                 }
+                '\u{feff}' | '\u{fffe}' | '\u{ffff}' => {
+                    write!(yaml, "\\u{:04X}", character as u32)
+                        .expect("writing to a String cannot fail");
+                }
                 _ => yaml.push(character),
             }
         }
@@ -229,9 +233,12 @@ fn is_plain_yaml_string(value: &str) -> bool {
     };
     if !matches!(first, 'A'..='Z' | 'a'..='z' | '_' | '/')
         || value.chars().any(char::is_control)
-        || value
-            .chars()
-            .any(|character| matches!(character, '\u{0085}' | '\u{2028}' | '\u{2029}'))
+        || value.chars().any(|character| {
+            matches!(
+                character,
+                '\u{0085}' | '\u{2028}' | '\u{2029}' | '\u{feff}' | '\u{fffe}' | '\u{ffff}'
+            )
+        })
         || value.trim() != value
         || value.ends_with(':')
         || value

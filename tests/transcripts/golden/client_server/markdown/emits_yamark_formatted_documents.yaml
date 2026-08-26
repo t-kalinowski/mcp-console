@@ -55,6 +55,9 @@ send:
       - "delete\x7Fcontrol"
       - "c1-start\x80control"
       - "c1-end\x9Fcontrol"
+      - "bom\uFEFFvalue"
+      - "noncharacter\uFFFEvalue"
+      - "noncharacter\uFFFFvalue"
       - line separator
       - paragraph separator
 result:
