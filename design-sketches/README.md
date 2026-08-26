@@ -150,10 +150,10 @@ See [`docs/RUNTIME_BACKEND.md`](docs/RUNTIME_BACKEND.md) and [`docs/R_REPL_DLL_I
 MCP results are text-only and strictly bounded.
 Large values receive structural previews, while complete explicitly printed output is retained in session files.
 Every session maintains a generated `transcript.md` containing submitted code, bounded output, errors, labels, origins, and artifact paths.
-It also maintains a source-only `transcript.qmd` containing submitted code cells in call order and non-executing IR front matter for the session's declared R and Python requirements.
+It also maintains a source-only `transcript.qmd` containing executable submitted code cells in call order and IR front matter for the session's declared R and Python requirements.
 
 The Markdown transcript is a chronological execution record, not a polished report.
-An agent can use the source-only QMD or ordinary file tools to turn selected work into a refined `.qmd`, `.R`, `.py`, or `.ipynb` artifact.
+An agent can render the source-only QMD to reproduce the analysis incrementally, or use ordinary file tools to turn selected work into a refined `.qmd`, `.R`, `.py`, or `.ipynb` artifact.
 
 The human-facing event stream carries bounded metadata and offsets, not unbounded tables or output.
 Complete text, plots, live table batches, and snapshots are fetched separately by managed IDs.

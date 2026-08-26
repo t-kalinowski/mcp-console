@@ -94,8 +94,9 @@ For now, the repository is mainly useful to readers following the design and imp
 The server records a JSONL journal of tool calls and results together with image artifacts.
 It projects each journal event into a Yamark-formatted, append-only `transcript.md` with syntax-highlighted R, Python, and SQL source, text results, and relative artifact links.
 Alongside it, the server regenerates a Yamark-formatted `transcript.qmd` from the journal when submitted code or declared R or Python requirements change.
-The QMD contains only submitted code cells and non-executing IR front matter with the built-in requirements and cumulative declarations.
-Run `ir render transcript.qmd` to export a static code report using reticulate's default managed Python selection.
+The QMD contains only submitted executable code cells and IR front matter with the built-in requirements and cumulative declarations.
+Run `ir render transcript.qmd` to execute those client-authored cells in order and export a fresh report using reticulate's default managed Python selection.
+The projection is intended to reproduce the analysis represented by `transcript.md`, but it does not include recorded output or artifacts and does not yet reconstruct every runtime detail.
 Human-facing tools for following and inspecting an agent's work remain future design.
 
 Other current limitations include:
@@ -117,6 +118,8 @@ See [Requirements and environments](docs/REQUIREMENTS.md) for the accepted input
 Session journals and the Markdown projection record submitted source, standard input, declared requirements, result text, and artifact paths without redaction.
 Image bytes are stored in separate artifact files linked from those records.
 The source-only Quarto document contains submitted code and declared R and Python requirements without redaction.
+Rendering it executes that source outside the MCP Console worker sandbox with the permissions of the `ir` and Quarto processes.
+Render only code you trust.
 See [Implemented architecture](docs/ARCHITECTURE.md) for recording and process placement.
 
 ## Development

@@ -280,12 +280,14 @@ Both documents are emitted in Yamark-formatted form without rewriting submitted 
 The Markdown document presents R, Python, and SQL source as syntax-highlighted code fences, stdin and result text as literal text fences, call options as JSON, and artifacts through relative links.
 Fences expand when literal content contains backticks.
 It is a chronological call ledger: a timed-out cell, later polls, and eventual results remain separate calls because the journal does not infer evaluation-level grouping.
-The non-executing Quarto document contains the source from calls with exactly one submitted R, Python, or SQL field in call order; it omits stdin, options, results, errors, polls, and artifacts.
+The executable Quarto document contains the source from calls with exactly one submitted R, Python, or SQL field in call order; it omits stdin, options, results, errors, polls, and artifacts.
 It retains source even when another argument later makes the call fail, so it is source material rather than an execution ledger.
 Its IR front matter declares the built-in R and Python requirements followed by cumulative explicit declarations from recorded calls.
 It does not declare a Python version, so `ir render transcript.qmd` uses reticulate's default managed Python selection.
 The declarations are submitted inputs, not a lockfile or an exact record of successful retained and automatically inferred requirements.
-Rendering exports a static code report and does not replay the console session.
+Rendering executes the captured client-authored cells in order in a fresh Quarto/knitr runtime outside the MCP Console worker sandbox and exports their new output.
+This is intended to reproduce the analysis represented by the Markdown ledger, but it does not replay recorded output or artifacts.
+It does not yet reconstruct every MCP Console runtime detail; in particular, SQL chunks require a DBI connection supplied by the document user.
 
 Images remain ordinary MCP image content for the client.
 For recording, the server decodes retained image data into files under the run's `artifacts/` directory and records artifact identifiers and relative paths in the JSONL result instead of duplicating the encoded payload there.

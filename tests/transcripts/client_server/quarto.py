@@ -34,17 +34,24 @@ def test_renders_generated_document(binary: Path) -> Transcript:
             current_directory=workspace,
         )
         client._initialize_and_list_tools()
-        client.send(r="emit image")
-        source = "echo before\n````\n<div>not markdown</div>\nafter"
+        r_source = 'echo <- 0L\nrender_value <- 40L\ncat("executed-r=40\\n")'
+        client.send(r=r_source)
+        source = (
+            'echo = """before\n````\n<div>not markdown</div>\nafter"""\n'
+            'print(f"executed-python={int(r.render_value) + 2}")\n'
+            "print(echo)"
+        )
         client.send(python=source)
         transcript = client._finish()
 
         session = next((workspace / ".mcp-console" / "sessions").iterdir())
         document = session / "transcript.qmd"
         document_text = document.read_text(encoding="utf-8")
-        assert f"`````python\n{source}\n`````" in document_text
+        assert f"```{{r}}\n{r_source}\n```" in document_text
+        assert f"`````{{python}}\n{source}\n`````" in document_text
+        assert "zod:" not in document_text
         assert "zod python:" not in document_text
-        assert "call-000001-image-000001.png" not in document_text
+        assert "execute:" not in document_text
         assert "python-version:" not in document_text
         assert "  python-packages:" in document_text
         rendering = subprocess.run(
@@ -72,16 +79,18 @@ def test_renders_generated_document(binary: Path) -> Transcript:
         rendered_text.feed(rendered)
         visible_text = "".join(rendered_text.parts)
         assert "MCP Console code cells" in rendered
+        assert "executed-r=40" in visible_text
+        assert "executed-python=42" in visible_text
         assert "not markdown" in visible_text
         assert "<div>not markdown</div>" not in rendered
+        assert "zod:" not in rendered
         assert "zod python:" not in rendered
-        assert "call-000001-image-000001.png" not in rendered
         transcript.append(
             {
                 "quarto document": {
-                    "rendered through IR without executing source cells": True,
+                    "executed client-authored R and Python cells through IR": True,
                     "selected Python through reticulate defaults": True,
-                    "omitted results and artifacts": True,
+                    "omitted recorded runtime results": True,
                     "kept Markdown-looking source inside a code block": True,
                 }
             }

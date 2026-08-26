@@ -27,7 +27,7 @@ Common calls should look like:
 The empty object waits for or polls the default session.
 Replies are bounded text.
 Complete explicit stream output and generated artifacts live in managed session files.
-Each session maintains a generated `transcript.md` that an agent can read after context compaction, plus a non-executing `transcript.qmd` containing only submitted code cells for later source reuse or static rendering.
+Each session maintains a generated `transcript.md` that an agent can read after context compaction, plus an executable `transcript.qmd` containing only submitted code cells for later source reuse or reproducible rendering.
 
 Humans may attach to the live MCP server through a process-scoped local API.
 That API supports observation, structured inspection, plot viewing, bounded live-table exploration, point-in-time snapshots, and explicitly attributed external control without adding more MCP tools or flooding model context.

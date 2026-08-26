@@ -999,8 +999,9 @@ It is generated and formatted with Yamark without applying embedded formatters t
 
 `transcript.qmd` contains source from calls with exactly one submitted R, Python, or SQL field in call order, including source from a call that later fails option validation or preparation.
 It is regenerated from the journal when source or declared R or Python requirements change.
-Its non-executing IR front matter records those declarations without selecting a Python version, so reticulate chooses its default managed Python when users run `ir render`.
-Yamark formatting does not rewrite submitted cells, and rendering exports a static code report without replaying the session.
+Its IR front matter records those declarations without selecting a Python version, so reticulate chooses its default managed Python when users run `ir render`.
+Yamark formatting does not rewrite submitted cells, and rendering executes the captured client-authored action stream in a fresh environment.
+The direction is to reproduce the analysis represented by the Markdown transcript, while accepting that runtime state, artifacts, and SQL connections are not fully reconstructable yet.
 
 Do not continuously embed unlimited output.
 Refer to full output sidecars when excerpts are insufficient.

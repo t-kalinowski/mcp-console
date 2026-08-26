@@ -587,10 +587,10 @@ def run_derived_projection_failure(
 
         surviving_text = (session / surviving_projection).read_text(encoding="utf-8")
         if surviving_projection == "transcript.qmd":
-            assert "```r\nemit image\n```" in surviving_text, surviving_text
-            assert "```python\necho after projection failure\n```" in surviving_text, (
-                surviving_text
-            )
+            assert "```{r}\nemit image\n```" in surviving_text, surviving_text
+            assert (
+                "```{python}\necho after projection failure\n```" in surviving_text
+            ), surviving_text
         else:
             assert "[Artifact 1 from call 1]" in surviving_text, surviving_text
             assert "![Artifact 1]" in surviving_text, surviving_text
@@ -829,7 +829,7 @@ def test_records_tool_calls_and_images(binary: Path) -> TranscriptWithCompanions
         markdown_text = markdown_text.replace(working_directory, "<workspace>")
         for timestamp in timestamps:
             markdown_text = markdown_text.replace(timestamp, "<UTC timestamp>")
-        assert "```r\nemit image\n```" in quarto_text
+        assert "```{r}\nemit image\n```" in quarto_text
         assert quarto_path.stat().st_ino != quarto_before_inode
         assert "    - praise" in quarto_text
         assert "    - transcript-fixture" in quarto_text
@@ -896,8 +896,8 @@ def test_quotes_quarto_fences(binary: Path) -> Transcript:
         ) in markdown
         assert f"```python\n{rejected_source}\n```" in markdown
         assert '"typo": true' in markdown
-        assert f"`````python\n{source}\n`````" in quarto
-        assert f"```python\n{rejected_source}\n```" in quarto
+        assert f"`````{{python}}\n{source}\n`````" in quarto
+        assert f"```{{python}}\n{rejected_source}\n```" in quarto
         assert "zod python:" not in quarto
 
         transcript = client._finish()
@@ -1022,7 +1022,7 @@ def test_flushes_calls_and_keeps_unpolled_images(binary: Path) -> Transcript:
         assert "## Call 1: R" in before_release_markdown
         assert "complete after release" in before_release_markdown
         assert "## Result for call 1" not in before_release_markdown
-        assert "```r\ncomplete after release\n```" in before_release_quarto
+        assert "```{r}\ncomplete after release\n```" in before_release_quarto
         markdown_inode = markdown.stat().st_ino
         quarto_inode = quarto.stat().st_ino
 
@@ -1099,7 +1099,7 @@ def test_flushes_calls_and_keeps_unpolled_images(binary: Path) -> Transcript:
         assert f"[Artifact {artifact['artifact_id']} from call 2]" in unpolled_markdown
         assert artifact["path"] in unpolled_markdown
         assert unpolled_quarto.startswith(after_release_quarto)
-        assert "```r\nemit image before completion\n```" in unpolled_quarto
+        assert "```{r}\nemit image before completion\n```" in unpolled_quarto
         assert quarto.stat().st_ino != quarto_inode
         unpolled_quarto_inode = quarto.stat().st_ino
 

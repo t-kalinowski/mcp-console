@@ -101,10 +101,11 @@ def test_records_real_mixed_language_session(
         assert "[Artifact 1 from call 1]" in markdown
         assert "![Artifact 1]" in markdown
         assert artifact["path"] in markdown
-        assert f"```r\n{r}```" in quarto
-        assert f"```python\n{python}```" in quarto
-        assert f"```sql\n{sql}```" in quarto
+        assert f"```{{r}}\n{r}```" in quarto
+        assert f"```{{python}}\n{python}```" in quarto
+        assert f"```{{sql}}\n{sql}```" in quarto
         assert "Artifact 1" not in quarto
+        assert "execute:" not in quarto
         assert markdown.endswith("\n")
         assert quarto.endswith("\n")
 
@@ -149,9 +150,10 @@ def test_emits_yamark_formatted_documents(binary: Path) -> Transcript:
 
         session = next((workspace / ".mcp-console" / "sessions").iterdir())
         quarto = (session / "transcript.qmd").read_text(encoding="utf-8")
-        assert "```r\nemit image\n```" in quarto
-        assert "```python\necho print('formatted')\n```" in quarto
-        assert "```sql\necho SELECT 42\n```" in quarto
+        assert "```{r}\nemit image\n```" in quarto
+        assert "```{python}\necho print('formatted')\n```" in quarto
+        assert "```{sql}\necho SELECT 42\n```" in quarto
+        assert "execute:" not in quarto
         assert '    - "foo:"' in quarto
         assert "    - foo#bar" in quarto
         formatting = subprocess.run(
