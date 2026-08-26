@@ -1204,6 +1204,7 @@ def test_records_tool_calls_and_images(binary: Path) -> TranscriptWithCompanions
         assert quarto_text.endswith("\n"), quarto_text
         markdown_text = markdown_text.replace(run_id, "<run ID>")
         markdown_text = markdown_text.replace(working_directory, "<workspace>")
+        quarto_text = quarto_text.replace(working_directory, "<workspace>")
         for timestamp in timestamps:
             markdown_text = markdown_text.replace(timestamp, "<UTC timestamp>")
         assert "```{r}\nemit image\n```" in quarto_text

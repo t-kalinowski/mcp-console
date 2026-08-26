@@ -115,6 +115,10 @@ def test_records_real_mixed_language_session(
             session_event["working_directory"],
             "<workspace>",
         )
+        quarto = quarto.replace(
+            session_event["working_directory"],
+            "<workspace>",
+        )
         for event in events:
             markdown = markdown.replace(event["at"], "<UTC timestamp>")
 
@@ -136,14 +140,25 @@ def test_emits_yamark_formatted_documents(binary: Path) -> Transcript:
         client._initialize_and_list_tools()
         client.send(r="emit image")
         client.send(python="echo print('formatted')")
-        client.send(sql="echo SELECT 42")
+        client._request(
+            "tools/call",
+            name="send",
+            arguments={"sql": "--| eval: false\necho SELECT 42", "typo": True},
+        )
         client._request(
             "tools/call",
             name="send",
             arguments={
                 "r": "echo rejected",
                 "python": "echo rejected",
-                "requirements": {"r": ["foo:", "foo#bar"]},
+                "requirements": {
+                    "r": [
+                        "foo:",
+                        "foo#bar",
+                        "line\u2028separator",
+                        "paragraph\u2029separator",
+                    ]
+                },
             },
         )
         transcript = client._finish()
@@ -152,10 +167,12 @@ def test_emits_yamark_formatted_documents(binary: Path) -> Transcript:
         quarto = (session / "transcript.qmd").read_text(encoding="utf-8")
         assert "```{r}\nemit image\n```" in quarto
         assert "```{python}\necho print('formatted')\n```" in quarto
-        assert "```{sql}\necho SELECT 42\n```" in quarto
+        assert "```{sql}\n\n--| eval: false\necho SELECT 42\n```" in quarto
         assert "execute:" not in quarto
         assert '    - "foo:"' in quarto
         assert "    - foo#bar" in quarto
+        assert '    - "line\\Lseparator"' in quarto
+        assert '    - "paragraph\\Pseparator"' in quarto
         formatting = subprocess.run(
             [
                 "yamark",

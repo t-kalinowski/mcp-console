@@ -3,20 +3,20 @@
 ---
 send:
   r: |-
+    #| eval: false
     echo <- 0L
-    render_value <- 40L
+    render_value <- as.integer(readLines("render-value.txt"))
     cat("executed-r=40\n")
 result:
   content:
     - type: text
       text: |
-        zod: <- 0L
-        render_value <- 40L
-        cat("executed-r=40\n")
+        executed-r=40
   isError: false
 ---
 send:
   python: |-
+    #| eval: false
     echo = """before
     ````
     <div>not markdown</div>
@@ -27,12 +27,11 @@ result:
   content:
     - type: text
       text: |
-        zod python: = """before
+        executed-python=42
+        before
         ````
         <div>not markdown</div>
-        after"""
-        print(f"executed-python={int(r.render_value) + 2}")
-        print(echo)
+        after
   isError: false
 ---
 quarto document:

@@ -26,13 +26,17 @@ result:
   isError: false
 ---
 send:
-  sql: echo SELECT 42
+  sql: |-
+    --| eval: false
+    echo SELECT 42
+  typo: true
 result:
   content:
     - type: text
-      text: |
-        zod sql: SELECT 42
-  isError: false
+      text: >-
+        failed to deserialize parameters: unknown field `typo`, expected one of
+        `r`, `python`, `sql`, `control`, `requirements`, `stdin`, `timeout_ms`
+  isError: true
 ---
 send:
   r: echo rejected
@@ -41,6 +45,8 @@ send:
     r:
       - "foo:"
       - foo#bar
+      - line separator
+      - paragraph separator
 result:
   content:
     - type: text

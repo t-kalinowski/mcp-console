@@ -8,7 +8,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from _support import McpClient, Transcript, run_this_suite
+from _support import McpClient, Transcript, r_test_environment, run_this_suite
 
 
 PLATFORMS = {"darwin"}
@@ -25,35 +25,50 @@ class RenderedText(HTMLParser):
 
 
 def test_renders_generated_document(binary: Path) -> Transcript:
-    zod = Path(__file__).resolve().parents[2] / "fixtures" / "zod"
     with tempfile.TemporaryDirectory() as temporary_directory:
         workspace = Path(temporary_directory)
+        environment, _ = r_test_environment()
+        environment.pop("RETICULATE_PYTHON", None)
         client = McpClient(
             binary,
-            ("serve", "--worker", str(zod)),
+            ("serve",),
+            environment,
             current_directory=workspace,
         )
         client._initialize_and_list_tools()
-        r_source = 'echo <- 0L\nrender_value <- 40L\ncat("executed-r=40\\n")'
+        (workspace / "render-value.txt").write_text("40\n", encoding="utf-8")
+        r_source = (
+            "#| eval: false\n"
+            'echo <- 0L\nrender_value <- as.integer(readLines("render-value.txt"))\n'
+            'cat("executed-r=40\\n")'
+        )
         client.send(r=r_source)
+        assert client.transcript[-1]["result"]["content"] == [
+            {"type": "text", "text": "executed-r=40\n"}
+        ]
         source = (
+            "#| eval: false\n"
             'echo = """before\n````\n<div>not markdown</div>\nafter"""\n'
             'print(f"executed-python={int(r.render_value) + 2}")\n'
             "print(echo)"
         )
         client.send(python=source)
+        python_result = client.transcript[-1]["result"]["content"][0]["text"]
+        assert "executed-python=42" in python_result, python_result
+        assert "<div>not markdown</div>" in python_result, python_result
         transcript = client._finish()
 
         session = next((workspace / ".mcp-console" / "sessions").iterdir())
         document = session / "transcript.qmd"
         document_text = document.read_text(encoding="utf-8")
-        assert f"```{{r}}\n{r_source}\n```" in document_text
-        assert f"`````{{python}}\n{source}\n`````" in document_text
+        assert f"```{{r}}\n\n{r_source}\n```" in document_text
+        assert f"`````{{python}}\n\n{source}\n`````" in document_text
         assert "zod:" not in document_text
         assert "zod python:" not in document_text
         assert "execute:" not in document_text
         assert "python-version:" not in document_text
         assert "  python-packages:" in document_text
+        assert f"    root.dir: {workspace.resolve()}" in document_text
         rendering = subprocess.run(
             [
                 "ir",
