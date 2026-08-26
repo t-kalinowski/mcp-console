@@ -1,0 +1,31 @@
+[build-system]
+requires = ["maturin>=1.10,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "mcp-console"
+dynamic = ["version"]
+description = "Persistent R, Python, and SQL sessions for MCP clients"
+readme = "README.md"
+requires-python = ">=3.8"
+dependencies = ["r-lib-ir>=0.4.0"]
+license = "MIT"
+keywords = ["mcp", "r", "python", "sql", "duckdb"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: MacOS",
+    "Programming Language :: Rust",
+    "Topic :: Scientific/Engineering",
+]
+
+[project.urls]
+Homepage = "https://github.com/t-kalinowski/mcp-console"
+Repository = "https://github.com/t-kalinowski/mcp-console"
+Issues = "https://github.com/t-kalinowski/mcp-console/issues"
+
+[tool.maturin]
+bindings = "bin"
+compatibility = "pypi"
+locked = true

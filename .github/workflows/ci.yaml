@@ -54,6 +54,11 @@ jobs:
         with:
           components: clippy, rustfmt
 
+      - name: Install Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
       - name: Install uv
         uses: astral-sh/setup-uv@v9.0.0
 
@@ -89,3 +94,85 @@ jobs:
         env:
           GITHUB_PAT: ${{ github.token }}
         run: scripts/check
+
+      - name: Build and smoke-test Python package
+        shell: bash
+        env:
+          GITHUB_PAT: ${{ github.token }}
+          UV_TOOL_DIR: ${{ runner.temp }}/mcp-console-tool
+          UV_TOOL_BIN_DIR: ${{ runner.temp }}/mcp-console-bin
+          UV_CACHE_DIR: ${{ runner.temp }}/mcp-console-cache
+          UV_PYTHON_DOWNLOADS: never
+          UV_NO_CONFIG: "1"
+        run: |
+          set -euo pipefail
+
+          rm -rf dist
+          cargo build --locked --bin mcp-console
+          uv build --wheel --out-dir dist
+
+          version="$(
+            python -c \
+              'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["package"]["version"])'
+          )"
+          wheels=(dist/*.whl)
+          test "${#wheels[@]}" -eq 1
+          wheel="${wheels[0]}"
+          filename="$(basename "$wheel")"
+
+          case "$filename" in
+            mcp_console-"$version"-*-macosx_*.whl) ;;
+            *)
+              echo "unexpected wheel: $filename" >&2
+              exit 1
+              ;;
+          esac
+
+          case "$filename" in
+            *-none-any.whl)
+              echo "wheel must be platform-specific" >&2
+              exit 1
+              ;;
+          esac
+
+          cargo_bin="target/debug/mcp-console"
+          expected_version="$("$cargo_bin" --version)"
+
+          actual_version="$(
+            uvx --from "$wheel" mcp-console --version
+          )"
+          test "$actual_version" = "$expected_version"
+
+          "$cargo_bin" --help > "$RUNNER_TEMP/cargo-help.txt"
+          uvx --from "$wheel" mcp-console --help > "$RUNNER_TEMP/uvx-help.txt"
+          diff -u "$RUNNER_TEMP/cargo-help.txt" "$RUNNER_TEMP/uvx-help.txt"
+
+          uv tool install "$wheel"
+
+          installed="$UV_TOOL_BIN_DIR/mcp-console"
+          test -x "$installed"
+          test "$("$installed" --version)" = "$expected_version"
+
+          "$installed" --help > "$RUNNER_TEMP/installed-help.txt"
+          diff -u "$RUNNER_TEMP/cargo-help.txt" "$RUNNER_TEMP/installed-help.txt"
+          "$installed" sandbox -- /usr/bin/true
+
+          internal_ir="$(
+            find "$UV_TOOL_DIR" -path '*/bin/ir' -print -quit
+          )"
+          test -n "$internal_ir"
+          test -x "$internal_ir"
+          "$internal_ir" --version
+
+          fake_bin="$RUNNER_TEMP/mcp-console-fake-bin"
+          mkdir -p "$fake_bin"
+          cat > "$fake_bin/ir" <<'EOF'
+          #!/bin/sh
+          echo "PATH ir should not be used" >&2
+          exit 99
+          EOF
+          chmod +x "$fake_bin/ir"
+
+          R_HOME="$(R RHOME)" \
+            PATH="$fake_bin:$PATH" \
+            "$installed" serve < /dev/null

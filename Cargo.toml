@@ -1,12 +1,16 @@
 [package]
 name = "mcp-console"
-version = "0.1.0"
+version = "0.0.2"
 edition = "2024"
 rust-version = "1.95"
 description = "Persistent R, Python, and SQL sessions for MCP clients"
 repository = "https://github.com/t-kalinowski/mcp-console"
 license = "MIT"
 publish = false
+
+[[bin]]
+name = "mcp-console"
+path = "src/main.rs"
 
 [dependencies]
 anyhow = "1"
@@ -28,3 +32,6 @@ tokio = { version = "1", features = ["macros", "rt", "sync", "time"] }
 
 [build-dependencies]
 cc = "1"
+
+[profile.release]
+strip = true

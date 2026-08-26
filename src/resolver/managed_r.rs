@@ -102,9 +102,9 @@ pub(crate) fn resolve_r(
             PathBuf::from(r_home).join("bin/Rscript")
         }
     };
-    let program = Path::new("ir");
-    validate_ir_version(&resolver, &mut on_started, program)?;
-    let mut command = resolver_command(program);
+    let program = ir_program();
+    validate_ir_version(&resolver, &mut on_started, &program)?;
+    let mut command = resolver_command(&program);
     command.arg("run").arg("--rscript").arg(&rscript);
     for requirement in &requirements {
         command.arg("--with").arg(requirement);
@@ -129,7 +129,7 @@ pub(crate) fn resolve_r(
         )
     })?;
     let output =
-        collect_resolver_output(&resolver, &mut child, &mut on_started, program, "R package")?;
+        collect_resolver_output(&resolver, &mut child, &mut on_started, &program, "R package")?;
     if !output.status.success() {
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -166,6 +166,26 @@ pub(crate) fn resolve_r(
         rscript,
         requirements,
     })
+}
+
+fn ir_program() -> PathBuf {
+    let executable = match std::env::current_exe() {
+        Ok(executable) => executable,
+        Err(_) => return PathBuf::from("ir"),
+    };
+
+    let canonical = std::fs::canonicalize(&executable).ok();
+    for executable in std::iter::once(executable).chain(canonical) {
+        let Some(directory) = executable.parent() else {
+            continue;
+        };
+        let candidate = directory.join("ir");
+        if candidate.is_file() {
+            return candidate;
+        }
+    }
+
+    PathBuf::from("ir")
 }
 
 fn validate_ir_version(

@@ -1,0 +1,257 @@
+name: Release
+
+# Build native macOS wheels and publish them to PyPI.
+#
+# Releases are tag-driven. A manual workflow run builds artifacts for
+# inspection but does not publish.
+#
+# If publication partially fails, rerun the failed job while the original
+# artifacts are retained. Do not rebuild an already partially uploaded version.
+
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
+      - "v[0-9]+.[0-9]+.[0-9]+-*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  wheels:
+    name: pypi-${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            target: aarch64-apple-darwin
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Set up R
+        uses: r-lib/actions/setup-r@v2
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v9.0.0
+
+      - name: Build wheel
+        uses: PyO3/maturin-action@v1
+        with:
+          maturin-version: v1.14.1
+          target: ${{ matrix.target }}
+          manylinux: "off"
+          args: --release --out dist
+
+      - name: Smoke-test wheel
+        shell: bash
+        env:
+          UV_TOOL_DIR: ${{ runner.temp }}/mcp-console-tool
+          UV_TOOL_BIN_DIR: ${{ runner.temp }}/mcp-console-bin
+          UV_CACHE_DIR: ${{ runner.temp }}/mcp-console-cache
+          UV_PYTHON_DOWNLOADS: never
+          UV_NO_CONFIG: "1"
+        run: |
+          set -euo pipefail
+
+          version="$(
+            python -c \
+              'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["package"]["version"])'
+          )"
+          cargo_bin="target/${{ matrix.target }}/release/mcp-console"
+          test -x "$cargo_bin"
+
+          wheels=(dist/*.whl)
+          test "${#wheels[@]}" -eq 1
+          wheel="${wheels[0]}"
+          filename="$(basename "$wheel")"
+
+          case "${{ matrix.target }}" in
+            aarch64-apple-darwin)
+              case "$filename" in
+                mcp_console-"$version"-*-macosx_*_arm64.whl) ;;
+                *)
+                  echo "unexpected Apple Silicon wheel: $filename" >&2
+                  exit 1
+                  ;;
+              esac
+              ;;
+
+            x86_64-apple-darwin)
+              case "$filename" in
+                mcp_console-"$version"-*-macosx_*_x86_64.whl) ;;
+                *)
+                  echo "unexpected Intel wheel: $filename" >&2
+                  exit 1
+                  ;;
+              esac
+              ;;
+
+            *)
+              echo "unhandled target: ${{ matrix.target }}" >&2
+              exit 1
+              ;;
+          esac
+
+          expected_version="$("$cargo_bin" --version)"
+          actual_version="$(
+            uvx --from "$wheel" mcp-console --version
+          )"
+          test "$actual_version" = "$expected_version"
+
+          "$cargo_bin" --help > "$RUNNER_TEMP/cargo-help.txt"
+          uvx --from "$wheel" mcp-console --help > "$RUNNER_TEMP/uvx-help.txt"
+          diff -u "$RUNNER_TEMP/cargo-help.txt" "$RUNNER_TEMP/uvx-help.txt"
+
+          uv tool install "$wheel"
+
+          installed="$UV_TOOL_BIN_DIR/mcp-console"
+          test -x "$installed"
+          test "$("$installed" --version)" = "$expected_version"
+
+          "$installed" --help > "$RUNNER_TEMP/installed-help.txt"
+          diff -u "$RUNNER_TEMP/cargo-help.txt" "$RUNNER_TEMP/installed-help.txt"
+          "$installed" sandbox -- /usr/bin/true
+
+          internal_ir="$(
+            find "$UV_TOOL_DIR" -path '*/bin/ir' -print -quit
+          )"
+          test -n "$internal_ir"
+          test -x "$internal_ir"
+          "$internal_ir" --version
+
+      - name: Upload wheel
+        uses: actions/upload-artifact@v4
+        with:
+          name: pypi-${{ matrix.target }}
+          path: dist/*.whl
+          if-no-files-found: error
+
+  publish-pypi:
+    name: publish PyPI
+    needs: wheels
+
+    # Manual dispatch is build-only. Only tag-triggered runs may publish.
+    if: ${{ github.ref_type == 'tag' }}
+
+    runs-on: ubuntu-22.04
+    environment: pypi
+
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Check out release tag
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Validate tag and package version
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          tag="$GITHUB_REF_NAME"
+
+          if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "invalid release tag: $tag" >&2
+            exit 1
+          fi
+
+          package_version="$(
+            python -c \
+              'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["package"]["version"])'
+          )"
+
+          if [[ "$tag" != "v$package_version" ]]; then
+            echo \
+              "tag $tag does not match Cargo.toml version v$package_version" \
+              >&2
+            exit 1
+          fi
+
+          git rev-parse "refs/tags/$tag" >/dev/null
+
+      - name: Download wheels
+        uses: actions/download-artifact@v4
+        with:
+          pattern: pypi-*
+          path: dist
+          merge-multiple: true
+
+      - name: Verify wheel set
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+
+          wheels=(dist/*.whl)
+          arm64=(dist/mcp_console-*-macosx_*_arm64.whl)
+          x86_64=(dist/mcp_console-*-macosx_*_x86_64.whl)
+          universal=(dist/*-none-any.whl)
+          sdists=(dist/*.tar.gz)
+
+          if [[ "${#wheels[@]}" -ne 2 ]]; then
+            printf 'expected exactly two wheels, found:\n' >&2
+            printf '  %s\n' "${wheels[@]:-<none>}" >&2
+            exit 1
+          fi
+
+          [[ "${#arm64[@]}" -eq 1 ]] || {
+            echo "expected exactly one Apple Silicon wheel" >&2
+            exit 1
+          }
+
+          [[ "${#x86_64[@]}" -eq 1 ]] || {
+            echo "expected exactly one Intel macOS wheel" >&2
+            exit 1
+          }
+
+          [[ "${#universal[@]}" -eq 0 ]] || {
+            echo "a platform-independent wheel must not be published" >&2
+            exit 1
+          }
+
+          [[ "${#sdists[@]}" -eq 0 ]] || {
+            echo "a source distribution must not be published" >&2
+            exit 1
+          }
+
+          printf 'Publishing:\n'
+          printf '  %s\n' "${wheels[@]}"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v9.0.0
+
+      - name: Publish wheels to PyPI
+        run: |
+          uv publish \
+            --trusted-publishing always \
+            --check-url https://pypi.org/simple \
+            dist/*.whl

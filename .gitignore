@@ -1,4 +1,5 @@
 /target
+/dist
 .mcp-console
 __pycache__/
 .codex

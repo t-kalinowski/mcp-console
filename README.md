@@ -16,6 +16,35 @@ Python runs through reticulate, and SQL runs through a persistent DuckDB connect
 R and Python can access one another's globals through reticulate, while DuckDB can query data frames in the R workspace directly.
 R plots made with the default device and open Matplotlib figures are returned as images, SQL results are returned as bounded previews, and long-running work can be polled or interrupted.
 
+## Install
+
+MCP Console is currently distributed as native wheels for Apple Silicon and Intel macOS.
+Linux and Windows are not supported yet.
+
+A working R installation is required.
+Set `R_HOME` or make `R` discoverable on `PATH`.
+The Python package installs `r-lib-ir` into the same uv tool environment; it supplies the `ir` command used to prepare R libraries.
+The first server start may download and install the default R and Python requirements.
+
+Run the published command without installing it persistently:
+
+```sh
+uvx mcp-console --help
+uvx mcp-console serve
+```
+
+Or install it as a persistent uv tool:
+
+```sh
+uv tool install mcp-console
+
+mcp-console --help
+mcp-console serve
+```
+
+`mcp-console serve` communicates with its MCP client over standard input and output.
+It waits for MCP protocol input rather than presenting an interactive terminal prompt.
+
 ## What it is useful for
 
 MCP Console is intended for iterative computational work: inspecting and transforming data, fitting models, running simulations, making plots, debugging code, and checking exact results.
@@ -87,9 +116,9 @@ The data, model, Python imports, and DuckDB catalog remain available for later c
 The repository contains a working Rust MCP server, sandboxed worker relay, built-in mixed-language worker, host dependency resolvers, session recording, and public process-boundary transcript tests.
 The registered MCP surface contains only `send`.
 
-The core console currently runs only on macOS.
-Linux and Windows support is not implemented, the package is not published, and this repository does not yet document an installation route.
-For now, the repository is mainly useful to readers following the design and implementation.
+The core console and its initial PyPI distribution currently support only macOS.
+Linux and Windows support is not implemented.
+The project remains under active construction.
 
 The server records a JSONL journal of tool calls and results together with image artifacts.
 It projects each journal event into a Yamark-formatted, append-only `transcript.md` with syntax-highlighted R, Python, and SQL source, text results, and relative artifact links.
