@@ -1093,7 +1093,8 @@ mod tests {
             Vec::new(),
             None,
             None,
-        );
+        )
+        .unwrap();
         let evaluation = Arc::new(super::super::Evaluation::new(
             crate::transcript::Transcript::new(),
             None,
@@ -1141,7 +1142,8 @@ mod tests {
             Vec::new(),
             None,
             None,
-        );
+        )
+        .unwrap();
         let evaluation = Arc::new(super::super::Evaluation::new(
             crate::transcript::Transcript::new(),
             None,

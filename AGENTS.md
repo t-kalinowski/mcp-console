@@ -67,6 +67,8 @@ Keep these ownership rules intact:
   It preserves each producer's order and supplies serialized observation order; it does not reconstruct chronology across independent sideband, stdout, and stderr pipes.
 - The server owns worker-generation state, operation admission, output cuts, pending-output budgets, response assembly, delivery ownership, retained requirements, and host resolvers.
   Do not move these responsibilities into the relay.
+- The pinned Codex sandbox facade owns native policy enforcement and outer relay process-tree supervision.
+  The mcp-console adapter owns command and environment construction, executable resolution, private directory lifetime, stream bridging, and mapping facade retirement onto server deadlines.
 - Restart, replacement, evaluation admission, stdin writes, resolver callbacks, and retained-environment commits are scoped to the worker generation that accepted them.
   Work admitted for an old generation must not reach its replacement.
 - R, Python, and DuckDB dependency resolution runs outside the worker sandbox.
@@ -105,7 +107,7 @@ Keep these ownership rules intact:
 
 - `src/resolver.rs`, `src/resolver/` — retained host environments, validation, platform implementations, and resolver process-group lifecycle.
 - `src/resolver/programs/` — compile-time R programs for managed Python, Python-version selection, DuckDB extensions, and R-library discovery.
-- `src/sandbox.rs`, `src/sandbox/` — platform dispatch and macOS Seatbelt policy.
+- `src/sandbox.rs`, `src/sandbox/` — platform dispatch, pinned sandbox-facade adapter, private directory ownership, and synchronous stream driver.
 
 ### Tests and development scripts
 

@@ -280,7 +280,7 @@ fn interrupted_cell_not_run_response(wait: EvaluationWait) -> Response {
 
 impl Client {
     pub(crate) fn new(program: PathBuf, relay: Option<PathBuf>) -> Result<Self, String> {
-        Ok(Self::with_arguments(
+        Self::with_arguments(
             program,
             Vec::new(),
             relay,
@@ -291,7 +291,7 @@ impl Client {
                 python: None,
                 r: None,
             }),
-        ))
+        )
     }
 
     pub(crate) fn builtin() -> Result<Self, String> {
@@ -321,7 +321,7 @@ impl Client {
             Default::default(),
         );
         let python = PythonEnvironment::builtin(configured_python, python_resolver, r.as_ref())?;
-        Ok(Self::with_arguments(
+        Self::with_arguments(
             program,
             vec![OsString::from("worker")],
             None,
@@ -332,7 +332,7 @@ impl Client {
                 python: Some(python),
                 r,
             }),
-        ))
+        )
     }
 
     fn with_arguments(
@@ -340,9 +340,9 @@ impl Client {
         arguments: Vec<OsString>,
         relay: Option<PathBuf>,
         environment: Option<Environment>,
-    ) -> Self {
-        Self(Arc::new(ClientInner {
-            runtime: platform::WorkerRuntime,
+    ) -> Result<Self, String> {
+        Ok(Self(Arc::new(ClientInner {
+            runtime: platform::WorkerRuntime::new()?,
             program,
             arguments,
             relay,
@@ -353,7 +353,7 @@ impl Client {
             output: OutputTape::new(),
             lifecycle: Mutex::new(LifecycleControl::new()),
             environment: environment.map(Mutex::new),
-        }))
+        })))
     }
 
     /// Starts one cell, supplies stdin, or collects an idle response.

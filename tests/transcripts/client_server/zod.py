@@ -43,33 +43,72 @@ PNG_1X1 = (
 
 
 class ZodFixtureControl:
-    def __init__(self) -> None:
-        self.event_reader, self.event_writer = os.pipe()
-        self.control_reader, self.control_writer = os.pipe()
-        self.cleanup_reader, self.cleanup_writer = os.pipe()
-        os.set_blocking(self.event_reader, False)
+    """Connect fixture gates created by the relay after sandbox entry.
+
+    The sandbox facade closes nonstandard inherited descriptors. The test relay
+    opens these channels inside its private TMPDIR before it execs the built-in
+    relay, so the production sandbox boundary remains the one under test.
+    """
+
+    def __init__(self, binary: Path) -> None:
+        self.binary = binary
+        self.temporary_directory = tempfile.TemporaryDirectory()
+        self.event_reader: int | None = None
+        self.control_writer: int | None = None
+        self.cleanup_writer: int | None = None
         self.events: list[dict[str, object]] = []
         self.buffer = bytearray()
-        self.child_ends_closed = False
         self.cleanup_released = False
 
     @property
-    def pass_fds(self) -> tuple[int, ...]:
-        return (self.event_writer, self.control_reader, self.cleanup_reader)
+    def relay_arguments(self) -> tuple[str, str]:
+        relay = Path(__file__).resolve().parents[2] / "fixtures" / "control_relay"
+        return ("--relay", str(relay))
 
     def configure(self, environment: dict[str, str]) -> None:
-        environment["ZOD_TEST_EVENT_FD"] = str(self.event_writer)
-        environment["ZOD_TEST_CONTROL_FD"] = str(self.control_reader)
-        environment["ZOD_TEST_FIXTURE_CLEANUP_FD"] = str(self.cleanup_reader)
+        environment["TMPDIR"] = self.temporary_directory.name
+        environment["MCP_CONSOLE_TEST_RELAY_EXECUTABLE"] = str(self.binary)
 
-    def close_child_ends(self) -> None:
-        assert not self.child_ends_closed
-        os.close(self.event_writer)
-        os.close(self.control_reader)
-        os.close(self.cleanup_reader)
-        self.child_ends_closed = True
+    def connect(self) -> None:
+        if self.event_reader is not None:
+            return
+        root = Path(self.temporary_directory.name)
+        deadline = time.monotonic() + 15
+        while True:
+            for event_path in root.glob("mcp-console-tmp-*/zod-test-event"):
+                control_path = event_path.with_name("zod-test-control")
+                cleanup_path = event_path.with_name("zod-test-cleanup")
+                if not control_path.exists() or not cleanup_path.exists():
+                    continue
+                event_reader = os.open(event_path, os.O_RDONLY | os.O_NONBLOCK)
+                control_writer = None
+                try:
+                    control_writer = os.open(
+                        control_path,
+                        os.O_WRONLY | os.O_NONBLOCK,
+                    )
+                    cleanup_writer = os.open(
+                        cleanup_path,
+                        os.O_WRONLY | os.O_NONBLOCK,
+                    )
+                except OSError:
+                    if control_writer is not None:
+                        os.close(control_writer)
+                    os.close(event_reader)
+                    continue
+                self.event_reader = event_reader
+                self.control_writer = control_writer
+                self.cleanup_writer = cleanup_writer
+                return
+            if time.monotonic() >= deadline:
+                raise AssertionError(
+                    "sandbox relay did not create fixture control channels"
+                )
+            time.sleep(0.001)
 
     def send_control(self, operation: int, kind: str, **details: object) -> None:
+        self.connect()
+        assert self.control_writer is not None
         payload = (
             json.dumps(
                 {"operation": operation, "kind": kind, **details},
@@ -81,6 +120,9 @@ class ZodFixtureControl:
 
     def release_cleanup(self) -> None:
         if self.cleanup_released:
+            return
+        if self.cleanup_writer is None:
+            self.cleanup_released = True
             return
         try:
             os.write(self.cleanup_writer, b"1")
@@ -97,6 +139,8 @@ class ZodFixtureControl:
         operation: int,
         kinds: set[str],
     ) -> dict[str, object]:
+        self.connect()
+        assert self.event_reader is not None
         deadline = time.monotonic() + 15
         while True:
             event = next(
@@ -169,6 +213,8 @@ class ZodFixtureControl:
         return f"outstanding requests: {sorted(started - completed)}; event trace:\n{trace}"
 
     def wait_for_eof(self) -> None:
+        self.connect()
+        assert self.event_reader is not None
         deadline = time.monotonic() + 15
         while True:
             remaining = deadline - time.monotonic()
@@ -187,14 +233,13 @@ class ZodFixtureControl:
             self.record_events(chunk)
 
     def close(self) -> None:
-        os.close(self.control_writer)
-        if not self.cleanup_released:
+        if self.control_writer is not None:
+            os.close(self.control_writer)
+        if self.cleanup_writer is not None and not self.cleanup_released:
             os.close(self.cleanup_writer)
-        if not self.child_ends_closed:
-            os.close(self.event_writer)
-            os.close(self.control_reader)
-            os.close(self.cleanup_reader)
-        os.close(self.event_reader)
+        if self.event_reader is not None:
+            os.close(self.event_reader)
+        self.temporary_directory.cleanup()
 
     def __enter__(self) -> Self:
         return self
@@ -239,7 +284,6 @@ class SocketTextReader:
     def release_completed_response(
         self,
         request: int,
-        release: Path,
         diagnostics: str,
     ) -> None:
         deadline = time.monotonic() + 15
@@ -258,7 +302,6 @@ class SocketTextReader:
             )
             queued = self.stream.recv(pending, socket.MSG_PEEK)
             if b"\n" in queued:
-                release.touch()
                 return
             self.buffer.extend(self.stream.recv(pending))
 
@@ -292,11 +335,9 @@ class SocketGateMcpClient(McpClient):
         arguments: tuple[str, ...],
         environment: dict[str, str],
         current_directory: Path,
-        pass_fds: tuple[int, ...],
     ) -> None:
         input_writer, input_reader = socket.socketpair()
         output_reader, output_writer = socket.socketpair()
-        output_observer = output_reader.dup()
         output_writer.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 4 * 1024)
         output_reader.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4 * 1024)
         self.output_buffer_sizes = (
@@ -304,7 +345,6 @@ class SocketGateMcpClient(McpClient):
             output_reader.getsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF),
         )
         assert max(self.output_buffer_sizes) < TEST_GATED_RESPONSE_SIZE
-        environment["ZOD_TEST_RESPONSE_SOCKET_FD"] = str(output_observer.fileno())
         process = subprocess.Popen(
             [binary, *arguments],
             env=environment,
@@ -314,9 +354,7 @@ class SocketGateMcpClient(McpClient):
             stderr=subprocess.PIPE,
             text=True,
             encoding="utf-8",
-            pass_fds=(*pass_fds, output_observer.fileno()),
         )
-        output_observer.close()
         output_writer.close()
         input_stream = input_writer.makefile("w", encoding="utf-8")
         input_writer.close()
@@ -367,6 +405,110 @@ class SocketGateMcpClient(McpClient):
         self.test_stdio_closed = True
 
 
+def build_response_gate_interposer(directory: Path) -> Path:
+    """Create the release marker before a completed stdout write returns.
+
+    The constructor removes the loader variable, so only the host server is
+    interposed; its sandboxed relay and worker start with ordinary writes.
+    """
+    source = directory / "response-gate.c"
+    library = directory / "response-gate.dylib"
+    source.write_text(
+        r"""
+#include <errno.h>
+#include <fcntl.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/syscall.h>
+#include <sys/uio.h>
+#include <unistd.h>
+
+static int response_gate_is_armed(void) {
+    const char *path = getenv("MCP_CONSOLE_TEST_RESPONSE_GATE_ARMED");
+    return path != NULL && access(path, F_OK) == 0;
+}
+
+static void release_response_gate(void) {
+    const char *path = getenv("ZOD_TEST_RESPONSE_GATE_RELEASED");
+    if (path == NULL) {
+        return;
+    }
+    int descriptor = open(path, O_WRONLY | O_CREAT | O_EXCL, 0600);
+    if (descriptor >= 0) {
+        close(descriptor);
+    }
+}
+
+static void observe_write(const void *buffer, size_t length) {
+    if (response_gate_is_armed() && memchr(buffer, '\n', length) != NULL) {
+        release_response_gate();
+    }
+}
+
+static void observe_writev(const struct iovec *vectors, int count, size_t length) {
+    if (!response_gate_is_armed()) {
+        return;
+    }
+    for (int index = 0; index < count && length > 0; index++) {
+        size_t vector_length = vectors[index].iov_len;
+        size_t written = vector_length < length ? vector_length : length;
+        if (memchr(vectors[index].iov_base, '\n', written) != NULL) {
+            release_response_gate();
+            return;
+        }
+        length -= written;
+    }
+}
+
+static ssize_t response_gate_write(int descriptor, const void *buffer, size_t length) {
+    ssize_t result = (ssize_t)syscall(SYS_write, descriptor, buffer, length);
+    int saved_errno = errno;
+    if (descriptor == STDOUT_FILENO && result > 0) {
+        observe_write(buffer, (size_t)result);
+    }
+    errno = saved_errno;
+    return result;
+}
+
+static ssize_t response_gate_writev(
+    int descriptor,
+    const struct iovec *vectors,
+    int count
+) {
+    ssize_t result = (ssize_t)syscall(SYS_writev, descriptor, vectors, count);
+    int saved_errno = errno;
+    if (descriptor == STDOUT_FILENO && result > 0) {
+        observe_writev(vectors, count, (size_t)result);
+    }
+    errno = saved_errno;
+    return result;
+}
+
+__attribute__((constructor))
+static void remove_interposer_from_child_environment(void) {
+    unsetenv("DYLD_INSERT_LIBRARIES");
+}
+
+__attribute__((used))
+static struct {
+    const void *replacement;
+    const void *replacee;
+} interposers[] __attribute__((section("__DATA,__interpose"))) = {
+    {(const void *)&response_gate_write, (const void *)&write},
+    {(const void *)&response_gate_writev, (const void *)&writev},
+};
+""".removeprefix("\n"),
+        encoding="utf-8",
+    )
+    subprocess.run(
+        ["cc", "-dynamiclib", "-o", library, source],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return library
+
+
 def build_killpg_denial_interposer(directory: Path) -> Path:
     source = directory / "deny-killpg.c"
     library = directory / "deny-killpg.dylib"
@@ -378,13 +520,9 @@ def build_killpg_denial_interposer(directory: Path) -> Path:
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/syscall.h>
-#include <sys/wait.h>
 #include <sys/types.h>
 #include <unistd.h>
 
-static pid_t denied_process_group = 0;
-static int added_late_member = 0;
-static pid_t late_member = 0;
 static int killpg_count = 0;
 
 static void write_pid_marker(const char *name, pid_t process_id) {
@@ -395,18 +533,6 @@ static void write_pid_marker(const char *name, pid_t process_id) {
     int descriptor = open(marker, O_WRONLY | O_CREAT | O_TRUNC, 0600);
     if (descriptor >= 0) {
         dprintf(descriptor, "%d\n", process_id);
-        close(descriptor);
-    }
-}
-
-static void write_member_marker(pid_t process_id, pid_t process_group) {
-    const char *marker = getenv("MCP_CONSOLE_TEST_LATE_MEMBER_MARKER");
-    if (marker == NULL) {
-        return;
-    }
-    int descriptor = open(marker, O_WRONLY | O_CREAT | O_TRUNC, 0600);
-    if (descriptor >= 0) {
-        dprintf(descriptor, "%d %d\n", process_id, process_group);
         close(descriptor);
     }
 }
@@ -424,7 +550,6 @@ static int deny_killpg(pid_t process_group, int signal) {
     }
     if (signal == SIGKILL
         && getenv("MCP_CONSOLE_TEST_KILLPG_MARKER") != NULL) {
-        denied_process_group = process_group;
         write_pid_marker("MCP_CONSOLE_TEST_KILLPG_MARKER", process_group);
         errno = EPERM;
         return -1;
@@ -438,94 +563,6 @@ static int deny_killpg(pid_t process_group, int signal) {
     return (int)syscall(SYS_kill, -process_group, signal);
 }
 
-static pid_t add_process_group_member(pid_t process_group) {
-    int descriptors[2];
-    if (pipe(descriptors) != 0) {
-        return -1;
-    }
-
-    pid_t member = fork();
-    if (member < 0) {
-        close(descriptors[0]);
-        close(descriptors[1]);
-        return -1;
-    }
-    if (member == 0) {
-        close(descriptors[0]);
-        if (setpgid(0, process_group) != 0) {
-            _exit(1);
-        }
-        pid_t process_id = getpid();
-        if (write(descriptors[1], &process_id, sizeof(process_id))
-            != sizeof(process_id)) {
-            _exit(1);
-        }
-        close(descriptors[1]);
-        for (;;) {
-            pause();
-        }
-    }
-
-    close(descriptors[1]);
-    pid_t acknowledged_member = 0;
-    ssize_t bytes_read;
-    do {
-        bytes_read = read(
-            descriptors[0],
-            &acknowledged_member,
-            sizeof(acknowledged_member)
-        );
-    } while (bytes_read < 0 && errno == EINTR);
-    int read_error = bytes_read < 0 ? errno : EIO;
-    close(descriptors[0]);
-
-    if (bytes_read != sizeof(acknowledged_member)
-        || acknowledged_member != member) {
-        syscall(SYS_kill, member, SIGKILL);
-        while (waitpid(member, NULL, 0) < 0 && errno == EINTR) {
-        }
-        errno = read_error;
-        return -1;
-    }
-    return member;
-}
-
-static pid_t getpgid_and_add_member(pid_t process_id) {
-    pid_t process_group = (pid_t)syscall(SYS_getpgid, process_id);
-    // Rust rechecks group membership only after taking its kernel snapshot.
-    // Join the group here so a one-pass fallback cannot observe this child.
-    if (process_group == denied_process_group && !added_late_member) {
-        added_late_member = 1;
-        pid_t member = add_process_group_member(process_group);
-        if (member < 0) {
-            return -1;
-        }
-        late_member = member;
-        write_member_marker(member, process_group);
-    }
-    return process_group;
-}
-
-static int kill_and_reap_late_member(pid_t process_id, int signal) {
-    int result = (int)syscall(SYS_kill, process_id, signal);
-    int signal_error = errno;
-    if (result == 0 && signal == SIGKILL && process_id == late_member) {
-        // Keep the final assertion independent of launchd's orphan reaping.
-        int status = 0;
-        pid_t waited;
-        do {
-            waited = waitpid(process_id, &status, 0);
-        } while (waited < 0 && errno == EINTR);
-        if (waited != process_id) {
-            return -1;
-        }
-        write_pid_marker("MCP_CONSOLE_TEST_LATE_MEMBER_REAP_MARKER", process_id);
-        late_member = 0;
-    }
-    errno = signal_error;
-    return result;
-}
-
 __attribute__((constructor))
 static void remove_interposer_from_child_environment(void) {
     unsetenv("DYLD_INSERT_LIBRARIES");
@@ -537,8 +574,6 @@ static struct {
     const void *replacee;
 } interposers[] __attribute__((section("__DATA,__interpose"))) = {
     {(const void *)&deny_killpg, (const void *)&killpg},
-    {(const void *)&getpgid_and_add_member, (const void *)&getpgid},
-    {(const void *)&kill_and_reap_late_member, (const void *)&kill},
 };
 """.removeprefix("\n"),
         encoding="utf-8",
@@ -2124,18 +2159,22 @@ def test_orders_queued_cancellation_behind_incomplete_response(
     zod = Path(__file__).resolve().parents[2] / "fixtures" / "zod"
     environment = os.environ.copy()
     with tempfile.TemporaryDirectory() as temporary_directory:
-        release = Path(temporary_directory) / "response-gate-released"
+        temporary_path = Path(temporary_directory)
+        arm = temporary_path / "response-gate-armed"
+        release = temporary_path / "response-gate-released"
+        environment["MCP_CONSOLE_TEST_RESPONSE_GATE_ARMED"] = str(arm)
         environment["ZOD_TEST_RESPONSE_GATE_RELEASED"] = str(release)
-        with ZodFixtureControl() as control:
+        environment["DYLD_INSERT_LIBRARIES"] = str(
+            build_response_gate_interposer(temporary_path)
+        )
+        with ZodFixtureControl(binary) as control:
             control.configure(environment)
             client = SocketGateMcpClient(
                 binary,
-                ("serve", "--worker", str(zod)),
+                ("serve", "--worker", str(zod), *control.relay_arguments),
                 environment,
-                Path(temporary_directory),
-                control.pass_fds,
+                temporary_path,
             )
-            control.close_child_ends()
             finished = False
             try:
                 client._initialize_and_list_tools()
@@ -2153,6 +2192,9 @@ def test_orders_queued_cancellation_behind_incomplete_response(
                     len(invalid_requirement),
                     control.diagnostics(),
                 )
+                # The incomplete response was only peeked, so the full socket
+                # cannot advance before this checkpoint is armed.
+                arm.touch()
                 control.record_client_event(
                     first_id,
                     "response_writer_reached_gate",
@@ -2196,7 +2238,6 @@ def test_orders_queued_cancellation_behind_incomplete_response(
 
                 client.stdout.release_completed_response(
                     first_id,
-                    release,
                     control.diagnostics(),
                 )
                 control.record_client_event(first_id, "response_write_completed")
@@ -2258,15 +2299,13 @@ def test_orders_queued_cancellation_behind_incomplete_response(
 def test_interrupts_running_worker_with_sigint(binary: Path) -> Transcript:
     zod = Path(__file__).resolve().parents[2] / "fixtures" / "zod"
     environment = os.environ.copy()
-    with ZodFixtureControl() as control:
+    with ZodFixtureControl(binary) as control:
         control.configure(environment)
         client = McpClient(
             binary,
-            ("serve", "--worker", str(zod)),
+            ("serve", "--worker", str(zod), *control.relay_arguments),
             environment,
-            pass_fds=control.pass_fds,
         )
-        control.close_child_ends()
         finished = False
         try:
             client._initialize_and_list_tools()
@@ -3654,7 +3693,7 @@ def test_restarts_after_unexpected_sideband_message(binary: Path) -> Transcript:
         environment["TMPDIR"] = temporary_directory
         environment["MCP_CONSOLE_TEST_KILLPG_MARKER"] = str(killpg_marker)
         # The interposer removes its loader variable after reaching the server,
-        # so sandbox-exec and Zod do not inherit it.
+        # so the sandbox launcher and Zod do not inherit it.
         environment["DYLD_INSERT_LIBRARIES"] = str(
             build_killpg_denial_interposer(temporary_path)
         )
@@ -3988,16 +4027,10 @@ def test_restart_outer_force_stops_unresponsive_relay(binary: Path) -> Transcrip
     with tempfile.TemporaryDirectory() as temporary_directory:
         temporary_path = Path(temporary_directory)
         killpg_marker = temporary_path / "killpg-denied"
-        late_member_marker = temporary_path / "late-process-group-member"
-        late_member_reap_marker = temporary_path / "late-process-group-member-reaped"
         environment = os.environ.copy()
         environment["TMPDIR"] = temporary_directory
         environment["ZOD_REPORT_PROCESS_GROUP"] = "1"
         environment["MCP_CONSOLE_TEST_KILLPG_MARKER"] = str(killpg_marker)
-        environment["MCP_CONSOLE_TEST_LATE_MEMBER_MARKER"] = str(late_member_marker)
-        environment["MCP_CONSOLE_TEST_LATE_MEMBER_REAP_MARKER"] = str(
-            late_member_reap_marker
-        )
         environment["DYLD_INSERT_LIBRARIES"] = str(
             build_killpg_denial_interposer(temporary_path)
         )
@@ -4066,17 +4099,6 @@ def test_restart_outer_force_stops_unresponsive_relay(binary: Path) -> Transcrip
 
             assert restart_elapsed < 2, f"restart took {restart_elapsed:.3f} seconds"
             assert int(killpg_marker.read_text(encoding="utf-8")) == worker_group
-            late_member, late_member_group = map(
-                int,
-                late_member_marker.read_text(encoding="utf-8").split(),
-            )
-            assert late_member > 0, "invalid late process-group member PID"
-            assert late_member_group == worker_group, (
-                "late member joined a different process group"
-            )
-            assert int(late_member_reap_marker.read_text(encoding="utf-8")) == (
-                late_member
-            ), "a different late process-group member was reaped"
             assert not process_group_exists(worker_group), (
                 "stopped relay process group outlived restart"
             )
@@ -4423,15 +4445,13 @@ def test_shutdown_is_bounded_with_detached_stdin_descendant(
 ) -> Transcript:
     zod = Path(__file__).resolve().parents[2] / "fixtures" / "zod"
     environment = os.environ.copy()
-    with ZodFixtureControl() as control:
+    with ZodFixtureControl(binary) as control:
         control.configure(environment)
         client = McpClient(
             binary,
-            ("serve", "--worker", str(zod)),
+            ("serve", "--worker", str(zod), *control.relay_arguments),
             environment,
-            pass_fds=control.pass_fds,
         )
-        control.close_child_ends()
         descendant_group = None
         descendant_cleaned = False
         worker_group = None

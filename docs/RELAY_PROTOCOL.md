@@ -19,6 +19,8 @@ server <--> (worker relay <--> worker)
 
 The parentheses mark the sandbox boundary.
 The relay is also the dedicated sandbox process-group leader, and the worker inherits that group.
+The pinned Codex sandbox facade supplies the native Seatbelt policy, isolated relay session, and supervised outer process-tree lifetime.
+The mcp-console adapter supplies the complete child environment, private writable temporary directory, stream modes, and synchronous protocol-stream bridge.
 
 Only the relay's standard input, standard output, and standard error cross the server/sandbox boundary.
 Standard input and output carry the framed relay protocol described below.
@@ -176,14 +178,14 @@ The failure retirement marker and physical relay wait share one absolute two-sec
 This keeps the relay reader alive for drained raw output, stream closures, and the final process outcome before the outer fail-safe runs.
 
 The relay closes worker stdin and sends the unchanged worker-sideband `shutdown` message without waiting for one path before attempting the other.
-If the worker remains live at its deadline, the relay first sends `SIGKILL` to the direct worker, then repeatedly stops every other live process whose current process group is exactly the relay's group while leaving the relay alive as group leader, and finally reaps the direct worker.
+If the worker remains live at its deadline, the relay first sends `SIGKILL` to the direct worker, then uses the sandbox facade to stop every other live process whose current process group is exactly the relay's group while leaving the relay alive as group leader, and finally reaps the direct worker.
 Clean relay-stdin EOF does not emit `shutdown_started`; it performs the same worker shutdown with a new one-second grace period measured from EOF.
 EOF midway through a command frame is a transport failure instead.
 
-The server leaves an exited relay waitable until cleanup, preserving the process-group identity while retirement finishes.
+The server observes direct-relay exit through the sandbox facade without retiring the supervised group, so an exited relay remains waitable and the process-group identity remains pinned while cleanup finishes.
 It waits through the worker deadline and uses the additional two-second allowance only after timely `shutdown_started` acceptance or a pre-retirement failure.
-It then closes the sandbox process-group lifetime and reaps the relay, including when the relay stalls or has already exited.
-Concurrent or repeated retirement reuses the recorded result and never signals a retired PID or process group again.
+It then requests complete tree termination and awaits facade retirement, including when the relay stalls or has already exited.
+Retirement quiesces descendants, reaps the direct relay exactly once, and preserves its originally observed status; concurrent or repeated retirement reuses that result and never signals a retired PID or process group again.
 Descendants that leave the group remain unsupported.
 
 ## Retirement and failure

@@ -41,6 +41,11 @@ R, Python, and DuckDB dependency resolution follows a separate path.
 The server launches resolver subprocesses on the host, outside the worker sandbox, because they need normal installation, cache, and network access.
 Resolver inputs are restricted and may execute trusted installation or build code with server permissions; [requirements and environments](REQUIREMENTS.md) owns the accepted syntax and security policy.
 
+Native macOS policy enforcement and outer relay process-tree supervision are supplied by the pinned Codex sandbox facade.
+The mcp-console adapter owns complete command and environment construction, executable resolution, private state and launch directories, native stream selection, and the synchronous bridge used by the relay transport threads.
+It validates the selected Seatbelt backend and required capabilities before launch, grants writes only to the private launch directory, and requests a supervised lifetime for the relay.
+The facade does not own worker generations, relay commands or events, shutdown deadlines, output, or host resolvers.
+
 ## Communication boundaries
 
 ### MCP client and server
@@ -133,6 +138,7 @@ The worker itself starts lazily when an operation first needs it; preparing reta
 An explicit restart starts its replacement eagerly, including when the session had not started a worker before.
 
 For each worker start, the server configures a sandboxed relay from the retained environment.
+The adapter launches that relay through the pinned sandbox facade with piped protocol input and output, inherited standard error, and supervised process-tree ownership.
 The relay creates the worker sideband and standard streams, launches the worker, and forwards its startup events.
 The server admits the worker only after the required readiness exchange succeeds.
 
@@ -301,4 +307,5 @@ This includes a server working directory that cannot be represented as UTF-8 bec
 
 The implemented sandbox command, relay, built-in worker, and managed resolvers are supported only on macOS.
 The complete CI check runs on macOS.
-Linux and Windows have unsupported-platform paths but no working execution stack yet.
+The executable performs the sandbox facade's embedded-helper dispatch before argument parsing or runtime construction, but Linux and Windows still have unsupported mcp-console platform paths and no working worker stack.
+Later platform support begins by generalizing the sandbox adapter and worker-client relay transport, then implementing the relay-worker platform primitives, with capability validation and equivalent public acceptance coverage; it does not require changing the server's generation ownership, either private protocol, or the host-resolver boundary.

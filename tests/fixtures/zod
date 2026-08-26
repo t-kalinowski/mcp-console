@@ -9,7 +9,6 @@ import json
 import os
 import select
 import signal
-import socket
 import termios
 import time
 from enum import StrEnum
@@ -21,7 +20,6 @@ WRITE_FD_ENV = "MCP_CONSOLE_SIDEBAND_WRITE_FD"
 TEST_EVENT_FD_ENV = "ZOD_TEST_EVENT_FD"
 TEST_CONTROL_FD_ENV = "ZOD_TEST_CONTROL_FD"
 TEST_FIXTURE_CLEANUP_FD_ENV = "ZOD_TEST_FIXTURE_CLEANUP_FD"
-TEST_RESPONSE_SOCKET_FD_ENV = "ZOD_TEST_RESPONSE_SOCKET_FD"
 LARGE_OUTPUT_SIZE = 2 * 1024 * 1024
 PENDING_TEXT_BUDGET = 8 * 1024 * 1024
 PNG_1X1 = (
@@ -70,17 +68,7 @@ def queued_stdin_bytes() -> int:
 
 
 def response_gate_completed() -> bool:
-    if Path(os.environ["ZOD_TEST_RESPONSE_GATE_RELEASED"]).is_file():
-        return True
-    descriptor = int(os.environ[TEST_RESPONSE_SOCKET_FD_ENV])
-    stream = socket.socket(fileno=descriptor)
-    try:
-        queued = stream.recv(64 * 1024, socket.MSG_PEEK | socket.MSG_DONTWAIT)
-        return b"\n" in queued
-    except BlockingIOError:
-        return False
-    finally:
-        stream.detach()
+    return Path(os.environ["ZOD_TEST_RESPONSE_GATE_RELEASED"]).is_file()
 
 
 def discard_stdin_bytes(length: int) -> None:

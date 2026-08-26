@@ -4,6 +4,10 @@ pub(super) struct WorkerRuntime;
 pub(super) struct Worker;
 
 impl WorkerRuntime {
+    pub(super) fn new() -> Result<Self, String> {
+        Ok(Self)
+    }
+
     pub(super) fn spawn(
         &self,
         spec: super::WorkerSpec<'_>,
