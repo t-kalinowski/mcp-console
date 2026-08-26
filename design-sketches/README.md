@@ -150,7 +150,7 @@ See [`docs/RUNTIME_BACKEND.md`](docs/RUNTIME_BACKEND.md) and [`docs/R_REPL_DLL_I
 MCP results are text-only and strictly bounded.
 Large values receive structural previews, while complete explicitly printed output is retained in session files.
 Every session maintains a generated `transcript.md` containing submitted code, bounded output, errors, labels, origins, and artifact paths.
-It also maintains a source-only `transcript.qmd` containing submitted code cells in call order.
+It also maintains a source-only `transcript.qmd` containing submitted code cells in call order and non-executing IR front matter for the session's declared R and Python requirements.
 
 The Markdown transcript is a chronological execution record, not a polished report.
 An agent can use the source-only QMD or ordinary file tools to turn selected work into a refined `.qmd`, `.R`, `.py`, or `.ipynb` artifact.
@@ -199,6 +199,6 @@ The design builds on:
 - [posit-dev/ark](https://github.com/posit-dev/ark) for native R execution, Jupyter lifecycle, plots, help, debugging, Variables, and the Data Explorer comm/backend; `harp` and `libr` remain candidate lower-level building blocks for a custom worker;
 - [reticulate](https://rstudio.github.io/reticulate/) for embedded Python and R/Python object interchange;
 - [DuckDB](https://duckdb.org/docs/current/clients/r) and [DBI](https://dbi.r-dbi.org/) for embedded SQL;
-- [Quarto](https://quarto.org/) for the source-only code-cell projection and static report export;
+- [IR](https://github.com/r-lib/ir) and [Quarto](https://quarto.org/) for the source-only code-cell projection, managed requirements, and static report export;
 - [kata](https://github.com/kenn-io/kata) for the pattern of one local service API shared by agent and human clients, protected runtime discovery, and resumable bounded event subscriptions;
 - [Positron's Data Explorer](https://positron.posit.co/data-explorer.html) and [Plots pane](https://positron.posit.co/plots-pane.html) for human-facing ephemeral data exploration and full-scale plot inspection.

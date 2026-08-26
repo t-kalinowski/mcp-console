@@ -33,6 +33,7 @@ result:
   isError: false
 ---
 quarto document:
-  rendered source cells without executing them: true
+  rendered through IR without executing source cells: true
+  selected Python through reticulate defaults: true
   omitted results and artifacts: true
   kept Markdown-looking source inside a code block: true

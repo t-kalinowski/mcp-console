@@ -545,6 +545,8 @@ def run_derived_projection_failure(
     failure: str,
     target: str,
     surviving_projection: str,
+    injected_failure: str | None = None,
+    injected_target: str | None = None,
 ) -> Transcript:
     zod = Path(__file__).resolve().parents[2] / "fixtures" / "zod"
     with tempfile.TemporaryDirectory() as temporary_directory:
@@ -555,8 +557,8 @@ def run_derived_projection_failure(
         environment["DYLD_INSERT_LIBRARIES"] = str(
             build_transcript_projection_failure_interposer(temporary)
         )
-        environment["MCP_CONSOLE_TEST_PROJECTION_FAILURE"] = failure
-        environment["MCP_CONSOLE_TEST_PROJECTION_TARGET"] = target
+        environment["MCP_CONSOLE_TEST_PROJECTION_FAILURE"] = injected_failure or failure
+        environment["MCP_CONSOLE_TEST_PROJECTION_TARGET"] = injected_target or target
         client = McpClient(
             binary,
             ("serve", "--worker", str(zod)),
@@ -602,7 +604,8 @@ def run_derived_projection_failure(
         projection_description = (
             target
             if failure == "create"
-            else {
+            else injected_target
+            or {
                 "transcript.md": "Markdown transcript",
                 "transcript.qmd": "Quarto source transcript",
             }[target]
@@ -636,12 +639,14 @@ def test_keeps_recording_when_markdown_creation_fails(binary: Path) -> Transcrip
     )
 
 
-def test_keeps_recording_when_quarto_append_fails(binary: Path) -> Transcript:
+def test_keeps_recording_when_quarto_rewrite_fails(binary: Path) -> Transcript:
     return run_derived_projection_failure(
         binary,
-        failure="append",
+        failure="rewrite",
         target="transcript.qmd",
         surviving_projection="transcript.md",
+        injected_failure="append",
+        injected_target=".transcript.qmd.tmp",
     )
 
 
@@ -665,6 +670,12 @@ def test_records_tool_calls_and_images(binary: Path) -> TranscriptWithCompanion:
             stdin="recorded stdin\n",
             requirements={"r": ["praise"]},
         )
+        session = next((workspace / ".mcp-console" / "sessions").iterdir())
+        quarto_path = session / "transcript.qmd"
+        quarto_before_python_requirement = quarto_path.read_text(encoding="utf-8")
+        quarto_before_inode = quarto_path.stat().st_ino
+        assert "    - praise" in quarto_before_python_requirement
+        assert "transcript-fixture" not in quarto_before_python_requirement
         image_request_id = client.transcript[-1]["id"]
         invalid = client._request(
             "tools/call",
@@ -685,7 +696,6 @@ def test_records_tool_calls_and_images(binary: Path) -> TranscriptWithCompanion:
         )
         markdown_path = session / "transcript.md"
         markdown_text = markdown_path.read_text(encoding="utf-8")
-        quarto_path = session / "transcript.qmd"
         quarto_text = quarto_path.read_text(encoding="utf-8")
         assert PNG_1X1 not in journal_text, journal_text
         assert PNG_1X1 not in markdown_text, markdown_text
@@ -820,11 +830,14 @@ def test_records_tool_calls_and_images(binary: Path) -> TranscriptWithCompanion:
         for timestamp in timestamps:
             markdown_text = markdown_text.replace(timestamp, "<UTC timestamp>")
         assert "```r\nemit image\n```" in quarto_text
+        assert quarto_path.stat().st_ino != quarto_before_inode
+        assert "    - praise" in quarto_text
+        assert "    - transcript-fixture" in quarto_text
+        assert "python-version:" not in quarto_text
         assert all(
             excluded not in quarto_text
             for excluded in (
                 "recorded stdin",
-                "praise",
                 "before image",
                 "Artifact 1",
                 "Result for call",
@@ -890,13 +903,15 @@ def test_quotes_quarto_fences(binary: Path) -> Transcript:
         transcript.append(
             {
                 "markdown projection": {
+                    "source fence exceeds literal backtick run": True,
+                    "result fence exceeds literal backtick run": True,
                     "source from a rejected call is retained": True,
                     "raw rejected request is retained": True,
                 },
                 "quarto projection": {
                     "source fence exceeds literal backtick run": True,
-                    "result fence exceeds literal backtick run": True,
                     "source from a rejected call is retained": True,
+                    "results are omitted": True,
                 },
             }
         )
@@ -1084,7 +1099,8 @@ def test_flushes_calls_and_keeps_unpolled_images(binary: Path) -> Transcript:
         assert artifact["path"] in unpolled_markdown
         assert unpolled_quarto.startswith(after_release_quarto)
         assert "```r\nemit image before completion\n```" in unpolled_quarto
-        assert quarto.stat().st_ino == quarto_inode
+        assert quarto.stat().st_ino != quarto_inode
+        unpolled_quarto_inode = quarto.stat().st_ino
 
         (image_started.parent / "zod-release-image-completion").touch()
         client.send(timeout_ms=3_000)
@@ -1120,7 +1136,7 @@ def test_flushes_calls_and_keeps_unpolled_images(binary: Path) -> Transcript:
         assert "## Call 3: Poll" in polled_markdown
         assert "## Result for call 3" in polled_markdown
         assert polled_quarto == unpolled_quarto
-        assert quarto.stat().st_ino == quarto_inode
+        assert quarto.stat().st_ino == unpolled_quarto_inode
 
         transcript = client._finish()
         transcript.append(

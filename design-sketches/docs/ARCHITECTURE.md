@@ -998,7 +998,9 @@ It contains complete source, labels, bounded output, errors, supplied input, and
 It is generated and formatted with Yamark without applying embedded formatters to submitted code or result content.
 
 `transcript.qmd` contains source from calls with exactly one submitted R, Python, or SQL field in call order, including source from a call that later fails option validation or preparation.
-It is marked non-executing, formatted with Yamark without rewriting submitted cells, and can be used as source material or rendered as a static code report without replaying the session.
+It is regenerated from the journal when source or declared R or Python requirements change.
+Its non-executing IR front matter records those declarations without selecting a Python version, so reticulate chooses its default managed Python when users run `ir render`.
+Yamark formatting does not rewrite submitted cells, and rendering exports a static code report without replaying the session.
 
 Do not continuously embed unlimited output.
 Refer to full output sidecars when excerpts are insufficient.
@@ -1281,7 +1283,7 @@ Exit: supported-platform security and resource tests pass in CI.
 11. **DuckDB environment scan:** verify the exact R environment used, name precedence, rebinding, and registration lifetimes.
 12. **DuckDB bounded fetch:** compare bounded DBI, Arrow, and record-batch paths and confirm interruption behavior.
 13. **Output ordering:** define the merge contract for managed events and raw process streams.
-14. **Transcript recovery:** define recovery for a partial final Markdown or QMD fragment without mutating the authoritative journal.
+14. **Transcript recovery:** define recovery for a partial final Markdown append or interrupted QMD replacement without mutating the authoritative journal.
 15. **Cancellation:** define exact mapping between MCP cancellation, initiating calls, later poll waiters, and runtime interrupts.
 
 Resolve the remaining portions of spikes 1–8 before treating the full backend substrate as settled.

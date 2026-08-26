@@ -620,7 +620,8 @@ It contains:
 - restart, stop, and crash boundaries.
 
 It is a chronological execution record, not a promise of reproducibility and not a polished notebook.
-The companion `transcript.qmd` is marked non-executing and contains only submitted code cells for source reuse or static rendering.
+The companion `transcript.qmd` is marked non-executing and contains only submitted code cells plus IR front matter for declared R and Python requirements.
+Users can reuse its source or export a static report with `ir render` without replaying the console session.
 Agents create refined `.qmd`, `.R`, `.py`, or `.ipynb` files separately.
 
 A granular event journal may back transcript recovery.

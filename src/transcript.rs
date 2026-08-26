@@ -245,8 +245,11 @@ impl ActiveTranscript {
             }
         };
         let quarto_path = directory.join("transcript.qmd");
-        let quarto_file = match create_private_file(&quarto_path) {
-            Ok(file) => Some(file),
+        let quarto = match create_private_file(&quarto_path) {
+            Ok(file) => {
+                drop(file);
+                Some((journal.clone(), quarto_path))
+            }
             Err(error) => {
                 projection_error.get_or_insert_with(|| {
                     format!("failed to create {}: {error}", quarto_path.display())
@@ -254,7 +257,7 @@ impl ActiveTranscript {
                 None
             }
         };
-        let projections = markdown::Writers::new(markdown_file, quarto_file);
+        let projections = markdown::Writers::new(markdown_file, quarto);
 
         let mut transcript = Self {
             directory,
@@ -495,4 +498,21 @@ fn write_new(path: &Path, bytes: &[u8]) -> Result<(), String> {
     file.write_all(bytes)
         .and_then(|()| file.flush())
         .map_err(|error| format!("failed to write {}: {error}", path.display()))
+}
+
+fn replace_private_file(path: &Path, bytes: &[u8]) -> Result<(), String> {
+    let temporary = path.with_file_name(".transcript.qmd.tmp");
+    if let Err(error) = write_new(&temporary, bytes) {
+        let _ = std::fs::remove_file(&temporary);
+        return Err(error);
+    }
+    if let Err(error) = std::fs::rename(&temporary, path) {
+        let _ = std::fs::remove_file(&temporary);
+        return Err(format!(
+            "failed to replace {} from {}: {error}",
+            path.display(),
+            temporary.display()
+        ));
+    }
+    Ok(())
 }

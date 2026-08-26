@@ -12,7 +12,7 @@ from _support import McpClient, Transcript, run_this_suite
 
 
 PLATFORMS = {"darwin"}
-REQUIRED_COMMANDS = {"quarto"}
+REQUIRED_COMMANDS = {"ir", "quarto"}
 
 
 class RenderedText(HTMLParser):
@@ -45,9 +45,11 @@ def test_renders_generated_document(binary: Path) -> Transcript:
         assert f"`````python\n{source}\n`````" in document_text
         assert "zod python:" not in document_text
         assert "call-000001-image-000001.png" not in document_text
+        assert "python-version:" not in document_text
+        assert "  python-packages:" in document_text
         rendering = subprocess.run(
             [
-                "quarto",
+                "ir",
                 "render",
                 document.name,
                 "--to",
@@ -77,7 +79,8 @@ def test_renders_generated_document(binary: Path) -> Transcript:
         transcript.append(
             {
                 "quarto document": {
-                    "rendered source cells without executing them": True,
+                    "rendered through IR without executing source cells": True,
+                    "selected Python through reticulate defaults": True,
                     "omitted results and artifacts": True,
                     "kept Markdown-looking source inside a code block": True,
                 }

@@ -29,9 +29,11 @@ result:
   isError: true
 ---
 markdown projection:
+  source fence exceeds literal backtick run: true
+  result fence exceeds literal backtick run: true
   source from a rejected call is retained: true
   raw rejected request is retained: true
 quarto projection:
   source fence exceeds literal backtick run: true
-  result fence exceeds literal backtick run: true
   source from a rejected call is retained: true
+  results are omitted: true

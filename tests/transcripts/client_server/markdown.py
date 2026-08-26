@@ -27,6 +27,15 @@ def test_emits_yamark_formatted_documents(binary: Path) -> Transcript:
         client.send(r="emit image")
         client.send(python="echo print('formatted')")
         client.send(sql="echo SELECT 42")
+        client._request(
+            "tools/call",
+            name="send",
+            arguments={
+                "r": "echo rejected",
+                "python": "echo rejected",
+                "requirements": {"r": ["foo:", "foo#bar"]},
+            },
+        )
         transcript = client._finish()
 
         session = next((workspace / ".mcp-console" / "sessions").iterdir())
@@ -34,6 +43,8 @@ def test_emits_yamark_formatted_documents(binary: Path) -> Transcript:
         assert "```r\nemit image\n```" in quarto
         assert "```python\necho print('formatted')\n```" in quarto
         assert "```sql\necho SELECT 42\n```" in quarto
+        assert '    - "foo:"' in quarto
+        assert "    - foo#bar" in quarto
         formatting = subprocess.run(
             [
                 "yamark",
