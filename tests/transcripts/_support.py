@@ -20,10 +20,9 @@ YamlStream = list[Any]
 
 
 @dataclass(frozen=True)
-class TranscriptWithCompanion:
+class TranscriptWithCompanions:
     transcript: Transcript
-    companion_name: str
-    companion: YamlStream
+    companions: dict[str, YamlStream | str]
 
 
 class FifoCheckpoint:

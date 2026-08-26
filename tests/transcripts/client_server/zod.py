@@ -20,7 +20,7 @@ from _support import (
     FifoCheckpoint,
     McpClient,
     Transcript,
-    TranscriptWithCompanion,
+    TranscriptWithCompanions,
     code,
     r_test_environment,
     run_this_suite,
@@ -650,7 +650,7 @@ def test_keeps_recording_when_quarto_rewrite_fails(binary: Path) -> Transcript:
     )
 
 
-def test_records_tool_calls_and_images(binary: Path) -> TranscriptWithCompanion:
+def test_records_tool_calls_and_images(binary: Path) -> TranscriptWithCompanions:
     zod = Path(__file__).resolve().parents[2] / "fixtures" / "zod"
     with tempfile.TemporaryDirectory() as temporary_directory:
         workspace = Path(temporary_directory)
@@ -844,25 +844,26 @@ def test_records_tool_calls_and_images(binary: Path) -> TranscriptWithCompanion:
             )
         ), quarto_text
 
-        return TranscriptWithCompanion(
+        return TranscriptWithCompanions(
             transcript=transcript,
-            companion_name="events",
-            companion=[
-                events,
-                {"transcript.md": markdown_text.splitlines()},
-                {"transcript.qmd": quarto_text.splitlines()},
-                {
-                    "produced session": {
-                        "root": ".mcp-console/sessions/<run ID>",
-                        "files": [
-                            "internal/events.jsonl",
-                            "transcript.md",
-                            "transcript.qmd",
-                            "artifacts/call-000001-image-000001.png",
-                        ],
-                    }
-                },
-            ],
+            companions={
+                "events.yaml": [
+                    events,
+                    {"transcript.md": markdown_text.splitlines()},
+                    {"transcript.qmd": quarto_text.splitlines()},
+                    {
+                        "produced session": {
+                            "root": ".mcp-console/sessions/<run ID>",
+                            "files": [
+                                "internal/events.jsonl",
+                                "transcript.md",
+                                "transcript.qmd",
+                                "artifacts/call-000001-image-000001.png",
+                            ],
+                        }
+                    },
+                ],
+            },
         )
 
 

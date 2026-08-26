@@ -19,7 +19,7 @@ from pathlib import Path
 from queue import Empty
 from typing import Protocol
 
-from _support import Transcript, TranscriptWithCompanion, YamlStream
+from _support import Transcript, TranscriptWithCompanions, YamlStream
 from yaml12 import Yaml, format_yaml, parse_yaml, read_yaml
 
 directory = Path(__file__).resolve().parent
@@ -49,8 +49,8 @@ parser.add_argument(
 )
 parser.add_argument("selectors", nargs="*", metavar="BOUNDARY/SUITE[::CASE]")
 
-TranscriptCase = Callable[[Path], Transcript | TranscriptWithCompanion]
-RecordedTranscript = Transcript | TranscriptWithCompanion
+TranscriptCase = Callable[[Path], Transcript | TranscriptWithCompanions]
+RecordedTranscript = Transcript | TranscriptWithCompanions
 
 
 class ProgressQueue(Protocol):
@@ -188,6 +188,30 @@ def check_golden(golden: Path, actual: YamlStream, case: str, *, update: bool) -
         raise SystemExit(f"{difference}{case} differs from its golden snapshot")
 
 
+def check_text_golden(golden: Path, actual: str, case: str, *, update: bool) -> None:
+    if update:
+        golden.parent.mkdir(parents=True, exist_ok=True)
+        golden.write_text(actual, encoding="utf-8")
+        print(f"updated {golden.relative_to(root)}", flush=True)
+        return
+    if not golden.exists():
+        raise SystemExit(
+            f"{golden.relative_to(root)} is missing; run scripts/test --update {case}"
+        )
+
+    expected = golden.read_text(encoding="utf-8")
+    if actual != expected:
+        difference = "".join(
+            difflib.unified_diff(
+                expected.splitlines(keepends=True),
+                actual.splitlines(keepends=True),
+                fromfile=str(golden.relative_to(root)),
+                tofile="actual",
+            )
+        )
+        raise SystemExit(f"{difference}{case} differs from its golden snapshot")
+
+
 def record_case(
     suite_path: Path,
     case_name: str,
@@ -220,15 +244,16 @@ def check_recording(
 ) -> set[Path]:
     golden = directory / "golden" / suite_name / f"{case_name}.yaml"
     case = f"{suite_name}::{case_name}"
-    if isinstance(recorded, TranscriptWithCompanion):
+    if isinstance(recorded, TranscriptWithCompanions):
         actual = without_request_ids(recorded.transcript)
-        companion = (
-            golden.with_suffix(f".{recorded.companion_name}.yaml"),
-            recorded.companion,
-        )
+        companions = []
+        for name, contents in recorded.companions.items():
+            assert name and Path(name).name == name and not name.startswith("."), name
+            assert name in {"md", "qmd"} or name.endswith(".yaml"), name
+            companions.append((golden.with_suffix(f".{name}"), contents))
     else:
         actual = without_request_ids(recorded)
-        companion = None
+        companions = []
     if golden != root / initialization_reference:
         reference = without_request_ids(
             read_yaml(root / initialization_reference, multi=True)
@@ -241,9 +266,13 @@ def check_recording(
             ]
     check_golden(golden, actual, case, update=update)
     checked = {golden}
-    if companion is not None:
-        check_golden(*companion, case, update=update)
-        checked.add(companion[0])
+    for companion, contents in companions:
+        if isinstance(contents, str):
+            check_text_golden(companion, contents, case, update=update)
+        else:
+            assert companion.suffix == ".yaml", companion
+            check_golden(companion, contents, case, update=update)
+        checked.add(companion)
     return checked
 
 
@@ -414,7 +443,9 @@ def prune_stale_goldens(suites: dict[str, Path], checked_goldens: set[Path]) -> 
     }
     cases_by_suite: dict[str, tuple[str, ...]] = {}
 
-    for golden in golden_root.rglob("*.yaml"):
+    for golden in golden_root.rglob("*"):
+        if not golden.is_file() or golden.suffix not in {".yaml", ".md", ".qmd"}:
+            continue
         suite_name = golden.parent.relative_to(golden_root).as_posix()
         if suite_name not in suites:
             stale = True
