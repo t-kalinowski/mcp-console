@@ -28,10 +28,7 @@ pub(crate) struct ResponseDeliveries {
 pub(crate) struct ResponseDeliveryAdmission(Arc<ResponseDeliveryAdmissionState>);
 
 #[derive(Clone)]
-pub(crate) struct ResponseDeliveryCall {
-    request_id: RequestId,
-    state: Arc<Mutex<ResponseDeliveryCallState>>,
-}
+pub(crate) struct ResponseDeliveryCall(Arc<Mutex<ResponseDeliveryCallState>>);
 
 pub(crate) struct ResponseDeliveryOperation {
     deliveries: ResponseDeliveries,
@@ -149,11 +146,10 @@ impl ResponseDeliveries {
         };
         let admission = ResponseDeliveryAdmission(Arc::new(ResponseDeliveryAdmissionState {
             deliveries: self.clone(),
-            request_id: request_id.clone(),
+            request_id,
             token,
             node: Mutex::new(node),
         }));
-        crate::test_control::emit(&request_id, "operation_accepted", "transport");
         self.gate_changed.notify_waiters();
         Some(admission)
     }
@@ -163,7 +159,7 @@ impl ResponseDeliveries {
         request_id: RequestId,
         admission: Option<Arc<ResponseDeliveryAdmissionNode>>,
     ) -> (ResponseDeliveryCall, Option<ResponseDelivery>) {
-        let call = ResponseDeliveryCall::new(request_id.clone(), !state.closed, admission);
+        let call = ResponseDeliveryCall::new(!state.closed, admission);
         let replaced = if state.closed {
             None
         } else {
@@ -175,34 +171,24 @@ impl ResponseDeliveries {
     }
 
     pub(crate) fn cancel(&self, request_id: &RequestId) {
-        let (cancellation, delivery) = {
+        let delivery = {
             let mut state = self.lock();
             // A pending reuse of the ID is newer than an active call whose
             // already-visible response write has not settled yet.
             let pending = state.pending.remove(request_id).is_some();
-            let active = (!pending)
+            let delivery = (!pending)
                 .then(|| state.active.get(request_id).cloned())
-                .flatten();
-            let delivery = active.as_ref().and_then(|call| {
-                let (remove, delivery) = call.cancel();
-                if remove {
-                    state.active.remove(request_id);
-                }
-                delivery
-            });
+                .flatten()
+                .and_then(|call| {
+                    let (remove, delivery) = call.cancel();
+                    if remove {
+                        state.active.remove(request_id);
+                    }
+                    delivery
+                });
             Self::prune_admission_tail(&mut state);
-            let cancellation = if pending {
-                Some("cancellation_before_admission")
-            } else if active.is_some() {
-                Some("cancellation_after_admission")
-            } else {
-                None
-            };
-            (cancellation, delivery)
+            delivery
         };
-        if let Some(kind) = cancellation {
-            crate::test_control::emit(request_id, kind, "transport");
-        }
         if let Some(delivery) = delivery {
             delivery.unclaimed();
         }
@@ -249,7 +235,6 @@ impl ResponseDeliveries {
             Self::prune_admission_tail(&mut state);
             delivery
         };
-        crate::test_control::emit(request_id, "operation_stopped", "transport");
         if let Some(delivery) = delivery {
             delivery.unclaimed();
         }
@@ -390,9 +375,6 @@ impl ResponseDeliveryAdmission {
     {
         let node = self.0.node();
         let queued = node.is_some();
-        if queued {
-            crate::test_control::emit(&self.0.request_id, "operation_waiting", "transport");
-        }
         if let Some(node) = &node {
             loop {
                 let gate_changed = self.0.deliveries.gate_changed.notified();
@@ -453,7 +435,6 @@ impl ResponseDeliveryAdmission {
                     call: call.clone(),
                     completed: false,
                 };
-                crate::test_control::emit(&self.0.request_id, "operation_admitted", "transport");
                 return Ok((call, operation));
             }
             gate_changed.await;
@@ -597,20 +578,13 @@ impl Drop for ResponseDeliveryAdmissionNode {
 }
 
 impl ResponseDeliveryCall {
-    fn new(
-        request_id: RequestId,
-        active: bool,
-        admission: Option<Arc<ResponseDeliveryAdmissionNode>>,
-    ) -> Self {
-        Self {
-            request_id,
-            state: Arc::new(Mutex::new(ResponseDeliveryCallState {
-                active,
-                operation_finished: false,
-                delivery: None,
-                admission,
-            })),
-        }
+    fn new(active: bool, admission: Option<Arc<ResponseDeliveryAdmissionNode>>) -> Self {
+        Self(Arc::new(Mutex::new(ResponseDeliveryCallState {
+            active,
+            operation_finished: false,
+            delivery: None,
+            admission,
+        })))
     }
 
     fn register(&self, delivery: ResponseDelivery) -> Result<(), ResponseDelivery> {
@@ -677,7 +651,7 @@ impl ResponseDeliveryCall {
     }
 
     fn is(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.state, &other.state)
+        Arc::ptr_eq(&self.0, &other.0)
     }
 
     fn blocks_new_admissions(&self) -> bool {
@@ -696,13 +670,9 @@ impl ResponseDeliveryCall {
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, ResponseDeliveryCallState> {
-        self.state
+        self.0
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
-    }
-
-    pub(crate) fn test_operation(&self) -> crate::test_control::Operation {
-        crate::test_control::Operation::new(self.request_id.clone())
     }
 }
 
@@ -797,25 +767,13 @@ where
             // blocked stdout write so transport shutdown remains bounded.
             let result = tokio::select! {
                 biased;
-                result = async {
-                    if let Some(delivery) = delivery.as_ref() {
-                        crate::test_control::emit(
-                            &delivery.request_id,
-                            "response_write_started",
-                            "transport",
-                        );
-                        crate::test_control::wait_for_response_gate(&delivery.request_id).await;
-                    }
-                    send.await
-                } => result,
+                result = send => result,
                 _ = deliveries.wait_for_close() => {
                     Err(std::io::ErrorKind::BrokenPipe.into())
                 },
             };
             if let Some(delivery) = delivery {
-                let request_id = delivery.request_id.clone();
                 if result.is_ok() {
-                    crate::test_control::emit(&request_id, "response_write_completed", "transport");
                     delivery.delivered();
                 } else {
                     delivery.unclaimed();
@@ -835,7 +793,6 @@ where
                     let Some(admission) = self.deliveries.reserve(request.id.clone()) else {
                         // Under stdout backpressure another response is not reliable,
                         // so overload retires the connection and its worker session.
-                        crate::test_control::emit(&request.id, "transport_closed", "transport");
                         self.deliveries.close();
                         return None;
                     };
@@ -852,7 +809,6 @@ where
             }
             Some(JsonRpcMessage::Response(_) | JsonRpcMessage::Error(_)) => {}
             None => {
-                crate::test_control::emit(&0, "transport_closed", "transport");
                 self.deliveries.close();
             }
         }
@@ -868,6 +824,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rmcp::model::ServerResult;
     use tokio::io::AsyncWriteExt;
 
     const PING_REQUEST: &[u8] = b"{\"jsonrpc\":\"2.0\",\"method\":\"ping\",\"id\":1}\n";
@@ -886,6 +843,35 @@ mod tests {
 
     fn is_active(call: &ResponseDeliveryCall) -> bool {
         call.lock().active
+    }
+
+    struct PendingWrite {
+        started: Arc<Notify>,
+    }
+
+    impl AsyncWrite for PendingWrite {
+        fn poll_write(
+            self: std::pin::Pin<&mut Self>,
+            _context: &mut std::task::Context<'_>,
+            _buffer: &[u8],
+        ) -> std::task::Poll<std::io::Result<usize>> {
+            self.started.notify_one();
+            std::task::Poll::Pending
+        }
+
+        fn poll_flush(
+            self: std::pin::Pin<&mut Self>,
+            _context: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<std::io::Result<()>> {
+            std::task::Poll::Ready(Ok(()))
+        }
+
+        fn poll_shutdown(
+            self: std::pin::Pin<&mut Self>,
+            _context: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<std::io::Result<()>> {
+            std::task::Poll::Ready(Ok(()))
+        }
     }
 
     #[test]
@@ -945,7 +931,8 @@ mod tests {
     async fn response_gate_does_not_delay_cancellation_notifications() {
         let deliveries = ResponseDeliveries::default();
         deliveries.lock().pending_writes = 1;
-        let cancelled = deliveries.start_response(request_id(9));
+        let cancelled_id = request_id(9);
+        let cancelled = deliveries.reserve(cancelled_id.clone()).unwrap();
         let (mut input, read) = tokio::io::duplex(1024);
         input.write_all(PING_REQUEST).await.unwrap();
         input.write_all(CANCEL_REQUEST_9).await.unwrap();
@@ -970,7 +957,11 @@ mod tests {
             }
         };
         assert!(matches!(second, JsonRpcMessage::Notification(_)));
-        assert!(!is_active(&cancelled));
+        assert!(matches!(
+            cancelled.admit().await,
+            Err(ResponseDeliveryAdmissionError::Cancelled)
+        ));
+        assert!(current_call(&transport.deliveries, &cancelled_id).is_none());
     }
 
     #[tokio::test]
@@ -978,15 +969,23 @@ mod tests {
         let deliveries = ResponseDeliveries::default();
         deliveries.lock().pending_writes = 1;
         let first = deliveries.reserve(request_id(1)).unwrap();
-        let cancelled = deliveries.reserve(request_id(9)).unwrap();
-        drop(cancelled);
+        let cancelled_id = request_id(9);
+        let cancelled = deliveries.reserve(cancelled_id.clone()).unwrap();
         let second = deliveries.reserve(request_id(2)).unwrap();
         let mut first = Box::pin(first.admit());
+        let mut cancelled = Box::pin(cancelled.admit());
         let mut second = Box::pin(second.admit());
         let mut context = std::task::Context::from_waker(std::task::Waker::noop());
 
         assert!(std::future::Future::poll(second.as_mut(), &mut context).is_pending());
+        assert!(std::future::Future::poll(cancelled.as_mut(), &mut context).is_pending());
         assert!(std::future::Future::poll(first.as_mut(), &mut context).is_pending());
+        deliveries.cancel(&cancelled_id);
+        assert!(matches!(
+            std::future::Future::poll(cancelled.as_mut(), &mut context),
+            std::task::Poll::Ready(Err(ResponseDeliveryAdmissionError::Cancelled))
+        ));
+        drop(cancelled);
         deliveries.settle_write();
         assert!(std::future::Future::poll(second.as_mut(), &mut context).is_pending());
         let (first_call, first_operation) =
@@ -1007,32 +1006,30 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn cancelled_pending_admission_cannot_start_and_does_not_skip_successor() {
+    async fn cancelled_admitted_call_holds_successor_until_its_operation_stops() {
         let deliveries = ResponseDeliveries::default();
-        let blocker_id = request_id(0);
-        deliveries.start_response(blocker_id.clone());
-        let blocker_write = deliveries.write(&blocker_id).unwrap();
+        deliveries.lock().pending_writes = 1;
         let cancelled_id = request_id(1);
-        let successor_id = request_id(2);
         let cancelled = deliveries.reserve(cancelled_id.clone()).unwrap();
-        let successor = deliveries.reserve(successor_id).unwrap();
+        let successor = deliveries.reserve(request_id(2)).unwrap();
         let mut cancelled = Box::pin(cancelled.admit());
         let mut successor = Box::pin(successor.admit());
         let mut context = std::task::Context::from_waker(std::task::Waker::noop());
 
-        assert!(std::future::Future::poll(cancelled.as_mut(), &mut context).is_pending());
+        deliveries.settle_write();
+        let (call, operation) = match std::future::Future::poll(cancelled.as_mut(), &mut context) {
+            std::task::Poll::Ready(Ok(admitted)) => admitted,
+            _ => panic!("the first reserved call should be admitted"),
+        };
         assert!(std::future::Future::poll(successor.as_mut(), &mut context).is_pending());
 
         deliveries.cancel(&cancelled_id);
-        assert!(matches!(
-            std::future::Future::poll(cancelled.as_mut(), &mut context),
-            std::task::Poll::Ready(Err(ResponseDeliveryAdmissionError::Cancelled))
-        ));
-        assert!(!deliveries.lock().pending.contains_key(&cancelled_id));
+        assert!(!is_active(&call));
+        assert!(current_call(&deliveries, &cancelled_id).is_some());
+        assert!(std::future::Future::poll(successor.as_mut(), &mut context).is_pending());
+
+        drop(operation);
         assert!(current_call(&deliveries, &cancelled_id).is_none());
-        assert!(std::future::Future::poll(successor.as_mut(), &mut context).is_pending());
-
-        blocker_write.delivered();
         assert!(matches!(
             std::future::Future::poll(successor.as_mut(), &mut context),
             std::task::Poll::Ready(Ok((_call, _operation)))
@@ -1040,101 +1037,108 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn cancelled_admitted_call_retains_order_until_operation_stops() {
+    async fn completed_initial_operation_holds_successor_until_its_response_write() {
         let deliveries = ResponseDeliveries::default();
-        let blocker_id = request_id(0);
-        deliveries.start_response(blocker_id.clone());
-        let blocker_write = deliveries.write(&blocker_id).unwrap();
         let first_id = request_id(1);
-        let successor_id = request_id(2);
-        let first = deliveries.reserve(first_id.clone()).unwrap();
-        let successor = deliveries.reserve(successor_id).unwrap();
-        let mut first = Box::pin(first.admit());
-        let mut successor = Box::pin(successor.admit());
-        let mut context = std::task::Context::from_waker(std::task::Waker::noop());
-
-        assert!(std::future::Future::poll(first.as_mut(), &mut context).is_pending());
-        assert!(std::future::Future::poll(successor.as_mut(), &mut context).is_pending());
-        blocker_write.delivered();
-        let (first_call, first_operation) =
-            match std::future::Future::poll(first.as_mut(), &mut context) {
-                std::task::Poll::Ready(Ok(admitted)) => admitted,
-                _ => panic!("the first reserved call should be admitted"),
-            };
-        assert!(std::future::Future::poll(successor.as_mut(), &mut context).is_pending());
-
-        deliveries.cancel(&first_id);
-        assert!(current_call(&deliveries, &first_id).is_some());
-        assert!(!is_active(&first_call));
-        assert!(std::future::Future::poll(successor.as_mut(), &mut context).is_pending());
-
-        drop(first_operation);
-        assert!(current_call(&deliveries, &first_id).is_none());
-        assert!(matches!(
-            std::future::Future::poll(successor.as_mut(), &mut context),
-            std::task::Poll::Ready(Ok((_call, _operation)))
-        ));
-    }
-
-    #[tokio::test]
-    async fn completed_operation_holds_order_until_response_write_settles() {
-        let deliveries = ResponseDeliveries::default();
-        let blocker_id = request_id(0);
-        deliveries.start_response(blocker_id.clone());
-        let blocker_write = deliveries.write(&blocker_id).unwrap();
-        let first_id = request_id(1);
-        let successor_id = request_id(2);
-        let first = deliveries.reserve(first_id.clone()).unwrap();
-        let successor = deliveries.reserve(successor_id).unwrap();
-        let mut first = Box::pin(first.admit());
-        let mut successor = Box::pin(successor.admit());
-        let mut context = std::task::Context::from_waker(std::task::Waker::noop());
-
-        assert!(std::future::Future::poll(first.as_mut(), &mut context).is_pending());
-        assert!(std::future::Future::poll(successor.as_mut(), &mut context).is_pending());
-        blocker_write.delivered();
-        let (_first_call, first_operation) =
-            match std::future::Future::poll(first.as_mut(), &mut context) {
-                std::task::Poll::Ready(Ok(admitted)) => admitted,
-                _ => panic!("the first reserved call should be admitted"),
-            };
-
-        first_operation.complete();
-        assert!(std::future::Future::poll(successor.as_mut(), &mut context).is_pending());
-        let first_write = deliveries.write(&first_id).unwrap();
-        assert_eq!(deliveries.lock().pending_writes, 1);
-        assert!(current_call(&deliveries, &first_id).is_some());
-        assert!(std::future::Future::poll(successor.as_mut(), &mut context).is_pending());
-
-        first_write.delivered();
-        assert_eq!(deliveries.lock().pending_writes, 0);
-        assert!(current_call(&deliveries, &first_id).is_none());
-        assert!(matches!(
-            std::future::Future::poll(successor.as_mut(), &mut context),
-            std::task::Poll::Ready(Ok((_call, _operation)))
-        ));
-    }
-
-    #[tokio::test]
-    async fn completed_initial_operation_remains_registered_until_its_response_write() {
-        let deliveries = ResponseDeliveries::default();
-        let request_id = request_id(1);
-        let admission = deliveries.reserve(request_id.clone()).unwrap();
+        let admission = deliveries.reserve(first_id.clone()).unwrap();
         let (call, operation) = match admission.admit().await {
             Ok(admitted) => admitted,
             Err(_) => panic!("the initial call should be admitted"),
         };
 
         operation.complete();
-        assert!(current_call(&deliveries, &request_id).is_some_and(|current| current.is(&call)));
+        assert!(current_call(&deliveries, &first_id).is_some_and(|current| current.is(&call)));
         assert!(call.blocks_new_admissions());
+        let successor = deliveries.reserve(request_id(2)).unwrap();
+        let mut successor = Box::pin(successor.admit());
+        let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+        assert!(std::future::Future::poll(successor.as_mut(), &mut context).is_pending());
 
-        let write = deliveries.write(&request_id).unwrap();
+        let write = deliveries.write(&first_id).unwrap();
         assert_eq!(deliveries.lock().pending_writes, 1);
+        assert!(std::future::Future::poll(successor.as_mut(), &mut context).is_pending());
         write.delivered();
 
         assert_eq!(deliveries.lock().pending_writes, 0);
-        assert!(current_call(&deliveries, &request_id).is_none());
+        assert!(current_call(&deliveries, &first_id).is_none());
+        assert!(matches!(
+            std::future::Future::poll(successor.as_mut(), &mut context),
+            std::task::Poll::Ready(Ok((_call, _operation)))
+        ));
+    }
+
+    #[test]
+    fn bounds_response_gated_reservations() {
+        let deliveries = ResponseDeliveries::default();
+        let blocker_id = request_id(0);
+        deliveries.start_response(blocker_id.clone());
+        let blocker_write = deliveries.write(&blocker_id).unwrap();
+        let reservations = (1..MAX_RESPONSE_GATED_CALLS)
+            .map(|id| {
+                deliveries
+                    .reserve(request_id(id as i64))
+                    .expect("reservation within the response-gated bound")
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            deliveries.admission_count.load(Ordering::Acquire),
+            MAX_RESPONSE_GATED_CALLS
+        );
+        assert!(
+            deliveries
+                .reserve(request_id(MAX_RESPONSE_GATED_CALLS as i64))
+                .is_none()
+        );
+
+        drop(reservations);
+        blocker_write.delivered();
+        assert_eq!(deliveries.admission_count.load(Ordering::Acquire), 0);
+    }
+
+    #[tokio::test]
+    async fn eof_cancels_pending_response_write() {
+        let deliveries = ResponseDeliveries::default();
+        let response_id = request_id(1);
+        let admission = deliveries.reserve(response_id.clone()).unwrap();
+        let (call, operation) = match admission.admit().await {
+            Ok(admitted) => admitted,
+            Err(_) => panic!("the initial call should be admitted"),
+        };
+        operation.complete();
+        let successor = deliveries.reserve(request_id(2)).unwrap();
+
+        let (input, read) = tokio::io::duplex(1);
+        let started = Arc::new(Notify::new());
+        let writer = PendingWrite {
+            started: Arc::clone(&started),
+        };
+        let mut transport = ServerTransport::new(read, writer, deliveries.clone());
+        let response = JsonRpcMessage::response(ServerResult::empty(()), response_id.clone());
+        let send = tokio::spawn(transport.send(response));
+
+        tokio::time::timeout(std::time::Duration::from_secs(1), started.notified())
+            .await
+            .expect("response writer should be reached");
+        assert_eq!(deliveries.lock().pending_writes, 1);
+        assert!(current_call(&deliveries, &response_id).is_some_and(|current| current.is(&call)));
+
+        drop(input);
+        assert!(transport.receive().await.is_none());
+        let error = tokio::time::timeout(std::time::Duration::from_secs(1), send)
+            .await
+            .expect("response write should be cancelled")
+            .expect("response write task should finish")
+            .expect_err("EOF should cancel the pending response write");
+
+        assert_eq!(error.kind(), std::io::ErrorKind::BrokenPipe);
+        assert_eq!(deliveries.lock().pending_writes, 0);
+        assert!(current_call(&deliveries, &response_id).is_none());
+        assert!(!is_active(&call));
+        assert!(matches!(
+            successor.admit().await,
+            Err(ResponseDeliveryAdmissionError::Closed)
+        ));
     }
 
     #[test]

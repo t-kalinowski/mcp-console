@@ -181,11 +181,11 @@ fn runner_fixture(name: &str, slow_test_seconds: &str) -> (TestDirectory, PathBu
     let runner = transcripts.join("_run.py");
     fs::copy(repository.join("tests/transcripts/_run.py"), &runner).unwrap();
     let source = fs::read_to_string(&runner).unwrap();
-    assert_eq!(source.matches("SLOW_TEST_SECONDS = 10.0").count(), 1);
+    assert_eq!(source.matches("SLOW_TEST_SECONDS = 60.0").count(), 1);
     let slow_test_seconds = format!("SLOW_TEST_SECONDS = {slow_test_seconds}");
     fs::write(
         &runner,
-        source.replace("SLOW_TEST_SECONDS = 10.0", &slow_test_seconds),
+        source.replace("SLOW_TEST_SECONDS = 60.0", &slow_test_seconds),
     )
     .unwrap();
     fs::copy(

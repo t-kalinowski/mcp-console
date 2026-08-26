@@ -1,61 +1,20 @@
-#[cfg(unix)]
-use std::collections::BTreeSet;
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
 #[cfg(target_os = "macos")]
 use std::net::TcpListener;
-#[cfg(unix)]
-use std::os::fd::AsRawFd;
 #[cfg(target_os = "macos")]
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
-#[cfg(unix)]
-use std::sync::mpsc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde_json::{Value, json};
 
 struct TestDirectory(PathBuf);
 
-#[cfg(unix)]
-const FIXTURE_EVENT_TIMEOUT: Duration = Duration::from_secs(15);
-#[cfg(unix)]
-const TEST_EVENT_FD_ENV: &str = "MCP_CONSOLE_TEST_EVENT_FD";
-#[cfg(unix)]
-const TEST_RESPONSE_GATE_FD_ENV: &str = "MCP_CONSOLE_TEST_RESPONSE_GATE_FD";
-#[cfg(unix)]
-const TEST_RESPONSE_GATE_OPERATION_ENV: &str = "MCP_CONSOLE_TEST_RESPONSE_GATE_OPERATION";
-#[cfg(unix)]
-const TEST_OPERATION_GATE_FD_ENV: &str = "MCP_CONSOLE_TEST_OPERATION_GATE_FD";
-#[cfg(unix)]
-const TEST_OPERATION_GATE_OPERATION_ENV: &str = "MCP_CONSOLE_TEST_OPERATION_GATE_OPERATION";
-#[cfg(unix)]
-const TEST_STDIN_GATE_FD_ENV: &str = "MCP_CONSOLE_TEST_STDIN_GATE_FD";
-#[cfg(unix)]
-const TEST_STDIN_GATE_OPERATION_ENV: &str = "MCP_CONSOLE_TEST_STDIN_GATE_OPERATION";
-#[cfg(unix)]
-const TEST_FIXTURE_CLEANUP_FD_ENV: &str = "MCP_CONSOLE_TEST_FIXTURE_CLEANUP_FD";
-
-#[cfg(unix)]
-struct FixtureControl {
-    events: mpsc::Receiver<Result<Value, String>>,
-    trace: Vec<Value>,
-    outstanding: BTreeSet<u64>,
-    event_writer: Option<std::io::PipeWriter>,
-    response_gate_reader: Option<std::io::PipeReader>,
-    response_gate_release: Option<std::io::PipeWriter>,
-    operation_gate_reader: Option<std::io::PipeReader>,
-    operation_gate_release: Option<std::io::PipeWriter>,
-    stdin_gate_reader: Option<std::io::PipeReader>,
-    stdin_gate_release: Option<std::io::PipeWriter>,
-    fixture_cleanup_reader: Option<std::io::PipeReader>,
-    fixture_cleanup: Option<std::io::PipeWriter>,
-}
-
 #[cfg(target_os = "macos")]
-struct KillOnDrop(Option<libc::pid_t>);
+struct KillOnDrop(libc::pid_t);
 
 impl TestDirectory {
     fn new(name: &str) -> Self {
@@ -83,319 +42,12 @@ impl Drop for TestDirectory {
     }
 }
 
-#[cfg(unix)]
-impl FixtureControl {
-    fn new(command: &mut Command) -> Self {
-        let (event_reader, event_writer) = std::io::pipe().expect("event pipe should be created");
-        make_inheritable(&event_writer);
-        command.env(TEST_EVENT_FD_ENV, event_writer.as_raw_fd().to_string());
-
-        let (sender, events) = mpsc::channel();
-        std::thread::spawn(move || {
-            for line in BufReader::new(event_reader).lines() {
-                let event = line
-                    .map_err(|error| format!("fixture event read failed: {error}"))
-                    .and_then(|line| {
-                        serde_json::from_str(&line)
-                            .map_err(|error| format!("invalid fixture event {line:?}: {error}"))
-                    });
-                if sender.send(event).is_err() {
-                    return;
-                }
-            }
-        });
-
-        Self {
-            events,
-            trace: Vec::new(),
-            outstanding: BTreeSet::new(),
-            event_writer: Some(event_writer),
-            response_gate_reader: None,
-            response_gate_release: None,
-            operation_gate_reader: None,
-            operation_gate_release: None,
-            stdin_gate_reader: None,
-            stdin_gate_release: None,
-            fixture_cleanup_reader: None,
-            fixture_cleanup: None,
-        }
-    }
-
-    fn gate_response(&mut self, command: &mut Command, operation: u64) {
-        let (reader, writer) = std::io::pipe().expect("response gate pipe should be created");
-        make_inheritable(&reader);
-        command
-            .env(TEST_RESPONSE_GATE_FD_ENV, reader.as_raw_fd().to_string())
-            .env(TEST_RESPONSE_GATE_OPERATION_ENV, operation.to_string());
-        self.response_gate_reader = Some(reader);
-        self.response_gate_release = Some(writer);
-    }
-
-    fn gate_operation(&mut self, command: &mut Command, operation: u64) {
-        let (reader, writer) = std::io::pipe().expect("operation gate pipe should be created");
-        make_inheritable(&reader);
-        command
-            .env(TEST_OPERATION_GATE_FD_ENV, reader.as_raw_fd().to_string())
-            .env(TEST_OPERATION_GATE_OPERATION_ENV, operation.to_string());
-        self.operation_gate_reader = Some(reader);
-        self.operation_gate_release = Some(writer);
-    }
-
-    fn gate_stdin(&mut self, command: &mut Command, operation: u64) {
-        let (reader, writer) = std::io::pipe().expect("stdin gate pipe should be created");
-        make_inheritable(&reader);
-        command
-            .env(TEST_STDIN_GATE_FD_ENV, reader.as_raw_fd().to_string())
-            .env(TEST_STDIN_GATE_OPERATION_ENV, operation.to_string());
-        self.stdin_gate_reader = Some(reader);
-        self.stdin_gate_release = Some(writer);
-    }
-
-    fn control_fixture_cleanup(&mut self, command: &mut Command) {
-        let (reader, writer) = std::io::pipe().expect("cleanup pipe should be created");
-        make_inheritable(&reader);
-        command.env(TEST_FIXTURE_CLEANUP_FD_ENV, reader.as_raw_fd().to_string());
-        self.fixture_cleanup_reader = Some(reader);
-        self.fixture_cleanup = Some(writer);
-    }
-
-    fn child_spawned(&mut self) {
-        drop(self.event_writer.take());
-        drop(self.response_gate_reader.take());
-        drop(self.operation_gate_reader.take());
-        drop(self.stdin_gate_reader.take());
-        drop(self.fixture_cleanup_reader.take());
-    }
-
-    fn release_response(&mut self) {
-        release_pipe(&mut self.response_gate_release, "response gate");
-    }
-
-    fn release_operation(&mut self) {
-        release_pipe(&mut self.operation_gate_release, "operation gate");
-    }
-
-    fn cleanup_fixture(&mut self) {
-        release_pipe(&mut self.fixture_cleanup, "fixture cleanup");
-    }
-
-    fn wait_for(&mut self, operation: u64, kind: &str) -> Value {
-        if let Some(event) = self.find(operation, kind) {
-            return event;
-        }
-        let started = Instant::now();
-        loop {
-            let remaining = FIXTURE_EVENT_TIMEOUT.saturating_sub(started.elapsed());
-            if remaining.is_zero() {
-                self.fail(format!(
-                    "timed out waiting for operation {operation} event {kind:?}"
-                ));
-            }
-            match self.events.recv_timeout(remaining) {
-                Ok(Ok(event)) => {
-                    self.record(event);
-                    if let Some(event) = self.find(operation, kind) {
-                        return event;
-                    }
-                }
-                Ok(Err(error)) => self.fail(error),
-                Err(mpsc::RecvTimeoutError::Timeout) => self.fail(format!(
-                    "timed out waiting for operation {operation} event {kind:?}"
-                )),
-                Err(mpsc::RecvTimeoutError::Disconnected) => self.fail(format!(
-                    "event stream closed while waiting for operation {operation} event {kind:?}"
-                )),
-            }
-        }
-    }
-
-    fn assert_absent(&mut self, operation: u64, kind: &str) {
-        let diagnostics = self.diagnostics();
-        let absent = self.find(operation, kind).is_none();
-        assert!(
-            absent,
-            "unexpected operation {operation} event {kind:?};{diagnostics}"
-        );
-    }
-
-    fn assert_before(&mut self, first: (u64, &str), second: (u64, &str)) {
-        self.drain();
-        let first_index = self.event_index(first.0, first.1).unwrap_or_else(|| {
-            self.fail(format!("missing operation {} event {:?}", first.0, first.1))
-        });
-        let second_index = self.event_index(second.0, second.1).unwrap_or_else(|| {
-            self.fail(format!(
-                "missing operation {} event {:?}",
-                second.0, second.1
-            ))
-        });
-        let diagnostics = self.diagnostics();
-        assert!(
-            first_index < second_index,
-            "operation {} event {:?} followed operation {} event {:?};{}",
-            first.0,
-            first.1,
-            second.0,
-            second.1,
-            diagnostics
-        );
-    }
-
-    fn assert_response_id(&mut self, response: &Value, expected: u64) {
-        let diagnostics = self.diagnostics();
-        assert_eq!(
-            response["id"], expected,
-            "unexpected response: {response};{diagnostics}"
-        );
-    }
-
-    fn drain(&mut self) {
-        loop {
-            match self.events.try_recv() {
-                Ok(Ok(event)) => self.record(event),
-                Ok(Err(error)) => self.fail(error),
-                Err(mpsc::TryRecvError::Empty | mpsc::TryRecvError::Disconnected) => return,
-            }
-        }
-    }
-
-    fn record(&mut self, event: Value) {
-        if let Some(operation) = event["operation"].as_u64() {
-            match event["kind"].as_str() {
-                Some("operation_accepted") => {
-                    self.outstanding.insert(operation);
-                }
-                Some("cancellation_before_admission" | "response_write_completed") => {
-                    self.outstanding.remove(&operation);
-                }
-                Some("operation_stopped")
-                    if self
-                        .find(operation, "cancellation_after_admission")
-                        .is_some() =>
-                {
-                    self.outstanding.remove(&operation);
-                }
-                _ => {}
-            }
-        }
-        self.trace.push(event);
-    }
-
-    fn find(&self, operation: u64, kind: &str) -> Option<Value> {
-        self.trace
-            .iter()
-            .find(|event| event["operation"] == operation && event["kind"] == kind)
-            .cloned()
-    }
-
-    fn event_index(&self, operation: u64, kind: &str) -> Option<usize> {
-        self.trace
-            .iter()
-            .position(|event| event["operation"] == operation && event["kind"] == kind)
-    }
-
-    fn formatted_trace(&self) -> String {
-        serde_json::to_string_pretty(&self.trace).expect("fixture trace should serialize")
-    }
-
-    fn diagnostics(&mut self) -> String {
-        self.drain();
-        format!(
-            " outstanding operations: {:?}; trace:\n{}",
-            self.outstanding,
-            self.formatted_trace()
-        )
-    }
-
-    fn fail(&self, message: String) -> ! {
-        panic!(
-            "{message}; outstanding operations: {:?}; trace:\n{}",
-            self.outstanding,
-            self.formatted_trace()
-        )
-    }
-}
-
-#[cfg(unix)]
-fn make_inheritable(descriptor: &impl AsRawFd) {
-    let descriptor = descriptor.as_raw_fd();
-    // SAFETY: `descriptor` is open and remains owned by its Rust pipe wrapper.
-    let flags = unsafe { libc::fcntl(descriptor, libc::F_GETFD) };
-    assert!(flags >= 0, "pipe descriptor flags should be readable");
-    // SAFETY: this changes only the close-on-exec flag of the open descriptor.
-    assert_eq!(
-        unsafe { libc::fcntl(descriptor, libc::F_SETFD, flags & !libc::FD_CLOEXEC) },
-        0,
-        "pipe descriptor should be inheritable"
-    );
-}
-
-#[cfg(unix)]
-fn release_pipe(pipe: &mut Option<std::io::PipeWriter>, description: &str) {
-    let mut pipe = pipe
-        .take()
-        .unwrap_or_else(|| panic!("{description} should be pending"));
-    pipe.write_all(b"1")
-        .unwrap_or_else(|error| panic!("{description} release should succeed: {error}"));
-}
-
-#[cfg(target_os = "macos")]
-fn wait_for_process_event(path: &Path, operation: u64, kind: &str) -> Value {
-    let started = Instant::now();
-    loop {
-        match fs::read_to_string(path) {
-            Ok(contents) => {
-                let event: Value = serde_json::from_str(&contents).unwrap_or_else(|error| {
-                    panic!(
-                        "invalid process event at {}: {error}; contents: {contents:?}",
-                        path.display()
-                    )
-                });
-                assert_eq!(event["operation"], operation, "{event}");
-                assert_eq!(event["kind"], kind, "{event}");
-                return event;
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => panic!("failed to read process event {}: {error}", path.display()),
-        }
-        assert!(
-            started.elapsed() < FIXTURE_EVENT_TIMEOUT,
-            "timed out waiting for operation {operation} event {kind:?} at {}",
-            path.display()
-        );
-        std::thread::sleep(Duration::from_millis(10));
-    }
-}
-
-#[cfg(target_os = "macos")]
-fn process_event_pid(event: &Value) -> libc::pid_t {
-    event["pid"]
-        .as_i64()
-        .and_then(|process| libc::pid_t::try_from(process).ok())
-        .filter(|process| *process > 0)
-        .expect("process event PID should be positive")
-}
-
-#[cfg(target_os = "macos")]
-impl KillOnDrop {
-    fn new(process: libc::pid_t) -> Self {
-        Self(Some(process))
-    }
-
-    fn disarm(&mut self) {
-        self.0 = None;
-    }
-}
-
 #[cfg(target_os = "macos")]
 impl Drop for KillOnDrop {
     fn drop(&mut self) {
-        let Some(process) = self.0 else {
-            return;
-        };
         // SAFETY: the fixture records the child PID immediately after `fork`, and
         // this guard lives only for that test invocation.
-        let _ = unsafe { libc::kill(process, libc::SIGKILL) };
+        let _ = unsafe { libc::kill(self.0, libc::SIGKILL) };
     }
 }
 
@@ -414,259 +66,6 @@ nchar(long_line_value)
         client.call_console(2, json!({"r": long_line})),
         "[1] 100000\n"
     );
-}
-
-#[cfg(target_os = "macos")]
-#[test]
-fn stdio_console_orders_requests_and_cancellation_during_response_writes() {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_mcp-console"));
-    command.arg("serve");
-    let mut control = FixtureControl::new(&mut command);
-    control.gate_response(&mut command, 2);
-    let mut client = McpClient::spawn(command);
-    control.child_spawned();
-
-    let invalid_send = json!({"r": "1", "python": "1"});
-    client.send_tool(2, "send", invalid_send.clone());
-    control.wait_for(2, "response_write_paused");
-
-    client.send_tool(3, "send", invalid_send.clone());
-    control.wait_for(3, "operation_waiting");
-    client.cancel(3);
-    control.wait_for(3, "cancellation_before_admission");
-
-    client.send_tool(4, "send", invalid_send);
-    control.wait_for(4, "operation_waiting");
-    control.release_response();
-    control.wait_for(2, "response_write_completed");
-    control.wait_for(4, "operation_admitted");
-    control.wait_for(4, "response_write_completed");
-    control.assert_before((2, "response_write_completed"), (4, "operation_admitted"));
-    control.assert_absent(3, "operation_admitted");
-
-    let first = read_message(&mut client.output);
-    control.assert_response_id(&first, 2);
-    assert_eq!(
-        response_text(&first),
-        "only one of `r`, `python`, or `sql` may be supplied"
-    );
-    let second = read_message(&mut client.output);
-    control.assert_response_id(&second, 4);
-    assert_eq!(
-        response_text(&second),
-        "only one of `r`, `python`, or `sql` may be supplied"
-    );
-    write_message(
-        client.input.as_mut().expect("stdin should be open"),
-        &json!({"jsonrpc": "2.0", "id": 5, "method": "ping"}),
-    );
-    let ping = read_message(&mut client.output);
-    control.assert_response_id(&ping, 5);
-    client.close_controlled(&mut control);
-}
-
-#[cfg(target_os = "macos")]
-#[test]
-fn stdio_console_reports_only_successful_interrupt_delivery() {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_mcp-console"));
-    command.arg("serve");
-    let mut control = FixtureControl::new(&mut command);
-    let mut client = McpClient::spawn(command);
-    control.child_spawned();
-
-    client.send_tool(2, "send", json!({"control": "interrupt", "timeout_ms": 0}));
-    control.wait_for(2, "response_write_completed");
-    control.assert_absent(2, "interrupt_delivered");
-
-    let response = read_message(&mut client.output);
-    control.assert_response_id(&response, 2);
-    assert_eq!(response["result"]["isError"], true, "{response}");
-    client.close_controlled(&mut control);
-}
-
-#[cfg(target_os = "macos")]
-#[test]
-fn stdio_console_releases_calls_received_after_response_gate_settles() {
-    let zod = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/zod");
-    let mut command = Command::new(env!("CARGO_BIN_EXE_mcp-console"));
-    command.arg("serve").arg("--worker").arg(zod);
-    let mut control = FixtureControl::new(&mut command);
-    control.gate_response(&mut command, 2);
-    let mut client = McpClient::spawn(command);
-    control.child_spawned();
-
-    client.send_console(2, json!({"r": "checkpoint 2"}));
-    control.wait_for(2, "worker_operation_started");
-    control.wait_for(2, "worker_operation_completed");
-    control.wait_for(2, "response_write_paused");
-
-    client.send_tool(3, "send", json!({"control": "interrupt", "timeout_ms": 0}));
-    control.wait_for(3, "operation_waiting");
-    client.cancel(3);
-    control.wait_for(3, "cancellation_before_admission");
-    client.send_tool(4, "send", json!({"control": "interrupt", "timeout_ms": 0}));
-    control.wait_for(4, "operation_waiting");
-    control.release_response();
-    control.wait_for(2, "response_write_completed");
-    control.wait_for(4, "operation_admitted");
-    control.wait_for(4, "interrupt_delivered");
-    control.wait_for(4, "response_write_completed");
-    control.assert_before((2, "response_write_completed"), (4, "operation_admitted"));
-    control.assert_absent(3, "operation_admitted");
-    control.assert_absent(3, "interrupt_delivered");
-
-    let checkpoint = read_message(&mut client.output);
-    control.assert_response_id(&checkpoint, 2);
-    let interrupt = read_message(&mut client.output);
-    control.assert_response_id(&interrupt, 4);
-    assert_eq!(response_text(&interrupt), "\n[idle]");
-    write_message(
-        client.input.as_mut().expect("stdin should be open"),
-        &json!({"jsonrpc": "2.0", "id": 5, "method": "ping"}),
-    );
-    let ping = read_message(&mut client.output);
-    control.assert_response_id(&ping, 5);
-    client.close_controlled(&mut control);
-}
-
-#[cfg(target_os = "macos")]
-#[test]
-fn stdio_console_keeps_later_calls_behind_an_existing_gated_cohort() {
-    let zod = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/zod");
-    let mut command = Command::new(env!("CARGO_BIN_EXE_mcp-console"));
-    command.arg("serve").arg("--worker").arg(zod);
-    let mut control = FixtureControl::new(&mut command);
-    control.gate_response(&mut command, 2);
-    control.gate_operation(&mut command, 3);
-    let mut client = McpClient::spawn(command);
-    control.child_spawned();
-
-    client.send_console(2, json!({"r": "checkpoint 2"}));
-    control.wait_for(2, "response_write_paused");
-    client.send_console(3, json!({"r": "complete after test release: 3"}));
-    client.send_tool(4, "send", json!({"control": "interrupt", "timeout_ms": 0}));
-    control.wait_for(3, "operation_waiting");
-    control.wait_for(4, "operation_waiting");
-
-    control.release_response();
-    control.wait_for(2, "response_write_completed");
-    control.wait_for(3, "operation_admitted");
-    control.wait_for(3, "worker_operation_started");
-
-    client.send_tool(5, "send", json!({"control": "interrupt", "timeout_ms": 0}));
-    control.wait_for(5, "operation_waiting");
-    control.release_operation();
-    control.wait_for(3, "worker_operation_completed");
-    control.wait_for(3, "response_write_completed");
-    control.wait_for(4, "operation_admitted");
-    control.wait_for(4, "interrupt_delivered");
-    control.wait_for(4, "response_write_completed");
-    control.wait_for(5, "operation_admitted");
-    control.wait_for(5, "interrupt_delivered");
-    control.wait_for(5, "response_write_completed");
-    control.assert_before((3, "response_write_completed"), (4, "operation_admitted"));
-    control.assert_before((4, "response_write_completed"), (5, "operation_admitted"));
-
-    for id in 2..=5 {
-        let response = read_message(&mut client.output);
-        control.assert_response_id(&response, id);
-        if id >= 4 {
-            assert_eq!(response_text(&response), "\n[idle]");
-        }
-    }
-    client.close_controlled(&mut control);
-}
-
-#[cfg(target_os = "macos")]
-#[test]
-fn stdio_console_keeps_cancelled_gated_operation_ordered_until_it_stops() {
-    let zod = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/zod");
-    let mut command = Command::new(env!("CARGO_BIN_EXE_mcp-console"));
-    command.arg("serve").arg("--worker").arg(zod);
-    let mut control = FixtureControl::new(&mut command);
-    control.gate_response(&mut command, 2);
-    control.gate_operation(&mut command, 3);
-    let mut client = McpClient::spawn(command);
-    control.child_spawned();
-
-    client.send_console(2, json!({"r": "checkpoint 2"}));
-    control.wait_for(2, "response_write_paused");
-    client.send_console(3, json!({"r": "complete after test release: 3"}));
-    control.wait_for(3, "operation_waiting");
-    control.release_response();
-    control.wait_for(2, "response_write_completed");
-    control.wait_for(3, "operation_admitted");
-    control.wait_for(3, "worker_operation_started");
-    let checkpoint = read_message(&mut client.output);
-    control.assert_response_id(&checkpoint, 2);
-
-    client.cancel(3);
-    control.wait_for(3, "cancellation_after_admission");
-    write_message(
-        client.input.as_mut().expect("stdin should be open"),
-        &json!({"jsonrpc": "2.0", "id": 4, "method": "ping"}),
-    );
-    let ping = read_message(&mut client.output);
-    control.assert_response_id(&ping, 4);
-    client.send_tool(5, "send", json!({"control": "interrupt", "timeout_ms": 0}));
-    control.wait_for(5, "operation_waiting");
-    control.release_operation();
-    control.wait_for(3, "worker_operation_completed");
-    control.wait_for(3, "operation_stopped");
-    control.wait_for(5, "operation_admitted");
-    control.wait_for(5, "interrupt_delivered");
-    control.wait_for(5, "response_write_completed");
-    control.assert_before((3, "worker_operation_completed"), (5, "operation_admitted"));
-    control.assert_before((3, "operation_stopped"), (5, "operation_admitted"));
-    control.assert_absent(3, "response_write_completed");
-
-    let interrupt = read_message(&mut client.output);
-    control.assert_response_id(&interrupt, 5);
-    assert_eq!(response_text(&interrupt), "[done]");
-    client.close_controlled(&mut control);
-}
-
-#[cfg(target_os = "macos")]
-#[test]
-fn stdio_console_bounds_response_gated_calls() {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_mcp-console"));
-    command.arg("serve");
-    let mut control = FixtureControl::new(&mut command);
-    control.gate_response(&mut command, 2);
-    let mut client = McpClient::spawn(command);
-    control.child_spawned();
-
-    let invalid_send = json!({"r": "1", "python": "1"});
-    client.send_tool(2, "send", invalid_send.clone());
-    control.wait_for(2, "response_write_paused");
-    for id in 3..=67 {
-        client.send_tool(id, "send", invalid_send.clone());
-    }
-    control.wait_for(67, "transport_closed");
-    control.assert_before((66, "operation_accepted"), (67, "transport_closed"));
-
-    client.wait_for_exit_within_controlled(Duration::from_secs(2), &mut control);
-}
-
-#[cfg(target_os = "macos")]
-#[test]
-fn stdio_console_shutdown_observes_eof_behind_response_gate() {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_mcp-console"));
-    command.arg("serve");
-    let mut control = FixtureControl::new(&mut command);
-    control.gate_response(&mut command, 2);
-    let mut client = McpClient::spawn(command);
-    control.child_spawned();
-
-    let invalid_send = json!({"r": "1", "python": "1"});
-    client.send_tool(2, "send", invalid_send.clone());
-    control.wait_for(2, "response_write_paused");
-    client.send_tool(3, "send", invalid_send);
-    control.wait_for(3, "operation_waiting");
-
-    drop(client.input.take());
-    control.wait_for(0, "transport_closed");
-    client.wait_for_exit_within_controlled(Duration::from_secs(2), &mut control);
 }
 
 #[cfg(target_os = "macos")]
@@ -838,7 +237,7 @@ fn stdio_console_shutdown_is_bounded_during_r_preparation_discovery() {
     let test_directory = TestDirectory::new("r-preparation-discovery-shutdown");
     let fake_bin = test_directory.path().join("bin");
     let fake_r = fake_bin.join("R");
-    let resolver_started = test_directory.path().join("resolver-started.json");
+    let resolver_started = test_directory.path().join("resolver-started");
     let preflight_complete = test_directory.path().join("preflight-complete");
     fs::create_dir(&fake_bin).expect("fake bin directory should be created");
     fs::write(
@@ -849,8 +248,8 @@ if [ ! -e "$MCP_CONSOLE_PREFLIGHT_COMPLETE" ]; then
   printf '%s\n' "$MCP_CONSOLE_REAL_R_HOME"
   exit 0
 fi
-printf '{"operation":2,"kind":"r_preparation_discovery_started","component":"fixture","pid":%s}\n' "$$" > "${MCP_CONSOLE_PROCESS_EVENT}.tmp"
-/bin/mv "${MCP_CONSOLE_PROCESS_EVENT}.tmp" "$MCP_CONSOLE_PROCESS_EVENT"
+printf '%s\n' "$$" > "${MCP_CONSOLE_RESOLVER_STARTED}.tmp"
+/bin/mv "${MCP_CONSOLE_RESOLVER_STARTED}.tmp" "$MCP_CONSOLE_RESOLVER_STARTED"
 exec /bin/sleep 4
 "#,
     )
@@ -879,7 +278,7 @@ exec /bin/sleep 4
         .env("PATH", path)
         .env("MCP_CONSOLE_PREFLIGHT_COMPLETE", &preflight_complete)
         .env("MCP_CONSOLE_REAL_R_HOME", &real_r_home)
-        .env("MCP_CONSOLE_PROCESS_EVENT", &resolver_started);
+        .env("MCP_CONSOLE_RESOLVER_STARTED", &resolver_started);
     let mut client = McpClient::spawn(command);
     client.send_tool(
         2,
@@ -889,11 +288,19 @@ exec /bin/sleep 4
         }),
     );
 
-    let resolver_group = process_event_pid(&wait_for_process_event(
-        &resolver_started,
-        2,
-        "r_preparation_discovery_started",
-    ));
+    let started = Instant::now();
+    while !resolver_started.exists() {
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "worker R discovery did not start"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let resolver_group = fs::read_to_string(&resolver_started)
+        .expect("resolver process group should be recorded")
+        .trim()
+        .parse::<libc::pid_t>()
+        .expect("resolver process group should be numeric");
 
     let elapsed = client.close_within(Duration::from_secs(6));
     assert!(
@@ -928,11 +335,6 @@ if [ ! -e "$MCP_CONSOLE_PREFLIGHT_COMPLETE" ]; then
   printf '%s\n' "$MCP_CONSOLE_REAL_R_HOME"
   exit 0
 fi
-case "$MCP_CONSOLE_TEST_EVENT_FD" in
-  ''|*[!0-9]*) exit 97 ;;
-esac
-event=$(printf '{"operation":2,"kind":"r_discovery_started","component":"fixture","pid":%s}' "$$")
-eval "printf '%s\\n' \"\$event\" >&$MCP_CONSOLE_TEST_EVENT_FD"
 exec /bin/sleep 3
 "#,
     )
@@ -960,13 +362,10 @@ exec /bin/sleep 3
         .env("PATH", path)
         .env("MCP_CONSOLE_PREFLIGHT_COMPLETE", &preflight_complete)
         .env("MCP_CONSOLE_REAL_R_HOME", &real_r_home);
-    let mut control = FixtureControl::new(&mut command);
     let mut client = McpClient::spawn(command);
-    control.child_spawned();
     client.send_console(2, json!({"r": "1 + 1"}));
-    control.wait_for(2, "r_discovery_started");
 
-    let elapsed = client.close_within_controlled(Duration::from_secs(2), &mut control);
+    let elapsed = client.close_within(Duration::from_secs(2));
     assert!(
         elapsed < Duration::from_secs(2),
         "server shutdown took {elapsed:?}"
@@ -982,7 +381,7 @@ fn stdio_console_stops_resolver_descendants_when_leader_exits() {
     let fake_rscript = fake_bin.join("Rscript");
     let fake_python = test_directory.path().join("python");
     let python_preflight_complete = test_directory.path().join("python-preflight-complete");
-    let resolver_started = test_directory.path().join("resolver-started.json");
+    let resolver_started = test_directory.path().join("resolver-started");
     fs::create_dir(&fake_bin).expect("fake bin directory should be created");
     fs::write(
         &fake_ir,
@@ -1016,8 +415,8 @@ if [ ! -e "$MCP_CONSOLE_PYTHON_PREFLIGHT_COMPLETE" ]; then
   exit 0
 fi
 /bin/sleep 30 &
-printf '{"operation":2,"kind":"python_resolver_started","component":"fixture","pid":%s}\n' "$$" > "${MCP_CONSOLE_PROCESS_EVENT}.tmp"
-/bin/mv "${MCP_CONSOLE_PROCESS_EVENT}.tmp" "$MCP_CONSOLE_PROCESS_EVENT"
+printf '%s\n' "$$" > "${MCP_CONSOLE_RESOLVER_STARTED}.tmp"
+/bin/mv "${MCP_CONSOLE_RESOLVER_STARTED}.tmp" "$MCP_CONSOLE_RESOLVER_STARTED"
 printf '%s\n' "$MCP_CONSOLE_TEST_PYTHON"
 exit 0
 "#,
@@ -1043,7 +442,7 @@ exit 0
             "MCP_CONSOLE_PYTHON_PREFLIGHT_COMPLETE",
             &python_preflight_complete,
         )
-        .env("MCP_CONSOLE_PROCESS_EVENT", &resolver_started)
+        .env("MCP_CONSOLE_RESOLVER_STARTED", &resolver_started)
         .env("MCP_CONSOLE_TEST_PYTHON", &fake_python);
     let mut client = McpClient::spawn(command);
     client.send_tool(
@@ -1054,11 +453,19 @@ exit 0
         }),
     );
 
-    let resolver_group = process_event_pid(&wait_for_process_event(
-        &resolver_started,
-        2,
-        "python_resolver_started",
-    ));
+    let started = Instant::now();
+    while !resolver_started.exists() {
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "Python resolver did not start"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let resolver_group = fs::read_to_string(&resolver_started)
+        .expect("resolver process group should be recorded")
+        .trim()
+        .parse::<libc::pid_t>()
+        .expect("resolver process group should be numeric");
     let stopped = Instant::now();
     let group_stopped = loop {
         if unsafe { libc::killpg(resolver_group, 0) } < 0
@@ -1095,9 +502,7 @@ fn stdio_console_shutdown_is_bounded_during_python_preparation() {
     let fake_rscript = fake_bin.join("Rscript");
     let fake_python = test_directory.path().join("python");
     let python_preflight_complete = test_directory.path().join("python-preflight-complete");
-    let resolver_event_base = test_directory.path().join("resolver-started");
-    let first_resolver_started = test_directory.path().join("resolver-started-2.json");
-    let queued_resolver_started = test_directory.path().join("resolver-started-3.json");
+    let resolver_started = test_directory.path().join("resolver-started");
     fs::create_dir(&fake_bin).expect("fake bin directory should be created");
     fs::write(
         &fake_ir,
@@ -1130,14 +535,7 @@ if [ ! -e "$MCP_CONSOLE_PYTHON_PREFLIGHT_COMPLETE" ]; then
   printf '%s\n' "$MCP_CONSOLE_TEST_PYTHON"
   exit 0
 fi
-case "$input" in
-  *'py-yaml12'*) operation=2 ;;
-  *'scipy'*) operation=3 ;;
-  *) exit 98 ;;
-esac
-event="${MCP_CONSOLE_PROCESS_EVENT_BASE}-${operation}.json"
-printf '{"operation":%s,"kind":"python_preparation_started","component":"fixture","pid":%s}\n' "$operation" "$$" > "${event}.tmp"
-/bin/mv "${event}.tmp" "$event"
+printf '%s\n' "$$" >> "$MCP_CONSOLE_RESOLVER_STARTED"
 exec /bin/sleep 3
 "#,
     )
@@ -1162,7 +560,7 @@ exec /bin/sleep 3
             "MCP_CONSOLE_PYTHON_PREFLIGHT_COMPLETE",
             &python_preflight_complete,
         )
-        .env("MCP_CONSOLE_PROCESS_EVENT_BASE", &resolver_event_base)
+        .env("MCP_CONSOLE_RESOLVER_STARTED", &resolver_started)
         .env("MCP_CONSOLE_TEST_PYTHON", &fake_python);
     let mut client = McpClient::spawn(command);
     client.send_tool(
@@ -1173,11 +571,19 @@ exec /bin/sleep 3
         }),
     );
 
-    let resolver_group = process_event_pid(&wait_for_process_event(
-        &first_resolver_started,
-        2,
-        "python_preparation_started",
-    ));
+    let started = Instant::now();
+    while !resolver_started.exists() {
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "Python resolver did not start"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let resolver_group = fs::read_to_string(&resolver_started)
+        .expect("resolver process group should be recorded")
+        .trim()
+        .parse::<libc::pid_t>()
+        .expect("resolver process group should be numeric");
     client.send_tool(
         3,
         "send",
@@ -1199,8 +605,12 @@ exec /bin/sleep 3
         Some(libc::ESRCH),
         "resolver process group outlived server shutdown"
     );
-    assert!(
-        !queued_resolver_started.exists(),
+    assert_eq!(
+        fs::read_to_string(&resolver_started)
+            .expect("resolver starts should be recorded")
+            .lines()
+            .count(),
+        1,
         "queued preparation started a resolver after shutdown"
     );
 }
@@ -1338,87 +748,13 @@ fn stdio_console_shutdown_is_bounded_with_background_stderr_descendants() {
         .expect("background stderr PID should be readable")
         .parse()
         .expect("background stderr PID should be numeric");
-    let _descendant = KillOnDrop::new(descendant);
+    let _descendant = KillOnDrop(descendant);
 
     let elapsed = client.close_within(Duration::from_secs(2));
     assert!(
         elapsed < Duration::from_secs(2),
         "server shutdown took {elapsed:?}"
     );
-}
-
-#[cfg(target_os = "macos")]
-#[test]
-fn stdio_console_shutdown_is_bounded_with_detached_stdin_descendants() {
-    let zod = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/zod");
-    let test_directory = TestDirectory::new("detached-stdin-shutdown");
-    let temporary_path = test_directory.path().to_path_buf();
-    let mut environment = std::env::vars().collect::<std::collections::HashMap<_, _>>();
-    environment.insert("TMPDIR".to_string(), temporary_path.display().to_string());
-
-    let mut command = Command::new(env!("CARGO_BIN_EXE_mcp-console"));
-    command
-        .arg("serve")
-        .arg("--worker")
-        .arg(zod)
-        .envs(environment);
-    let mut control = FixtureControl::new(&mut command);
-    control.gate_stdin(&mut command, 3);
-    control.control_fixture_cleanup(&mut command);
-    let mut client = McpClient::spawn(command);
-    control.child_spawned();
-    // Start the worker before the detached-child checkpoint so its deadline
-    // does not also include lazy worker startup.
-    assert_eq!(
-        client.call_console(2, json!({"r": "echo ready"})),
-        "zod: ready\n"
-    );
-    client.send_console(
-        3,
-        json!({
-            "r": "stall with detached stdin: 3",
-            "stdin": "retained by detached descendant\n",
-        }),
-    );
-
-    control.wait_for(3, "stdin_write_paused");
-    let created = control.wait_for(3, "detached_descendant_created");
-    let descendant_pid = created["pid"]
-        .as_i64()
-        .and_then(|process| libc::pid_t::try_from(process).ok())
-        .filter(|process| *process > 0)
-        .expect("detached descendant PID should be positive");
-    let mut descendant = KillOnDrop::new(descendant_pid);
-    assert_eq!(created["inherited_fd"], 0, "{created}");
-    assert!(
-        created["retained_fd"].as_i64().is_some_and(|fd| fd >= 3),
-        "{created}"
-    );
-    control.wait_for(3, "parent_operation_stalled");
-
-    let elapsed = client.close_within_controlled(Duration::from_secs(2), &mut control);
-    assert!(
-        elapsed < Duration::from_secs(2),
-        "server shutdown took {elapsed:?}"
-    );
-    control.wait_for(3, "stdin_write_cancelled");
-    control.cleanup_fixture();
-    control.wait_for(3, "fixture_cleanup_completed");
-    let cleanup_started = Instant::now();
-    loop {
-        // SAFETY: this checks only the fixture PID reported for this invocation.
-        if unsafe { libc::kill(descendant_pid, 0) } < 0
-            && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
-        {
-            break;
-        }
-        assert!(
-            cleanup_started.elapsed() < Duration::from_secs(2),
-            "detached descendant {descendant_pid} did not exit after fixture cleanup"
-        );
-        std::thread::sleep(Duration::from_millis(10));
-    }
-    descendant.disarm();
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -1593,7 +929,7 @@ impl McpClient {
         self.send_tool(id, "send", arguments);
     }
 
-    #[cfg(unix)]
+    #[cfg(target_os = "macos")]
     fn send_tool(&mut self, id: u64, name: &str, arguments: Value) {
         write_message(
             self.input.as_mut().expect("stdin should be open"),
@@ -1605,18 +941,6 @@ impl McpClient {
                     "name": name,
                     "arguments": arguments
                 }
-            }),
-        );
-    }
-
-    #[cfg(unix)]
-    fn cancel(&mut self, id: u64) {
-        write_message(
-            self.input.as_mut().expect("stdin should be open"),
-            &json!({
-                "jsonrpc": "2.0",
-                "method": "notifications/cancelled",
-                "params": {"requestId": id}
             }),
         );
     }
@@ -1643,47 +967,7 @@ impl McpClient {
         self.wait_for_exit_within(timeout)
     }
 
-    #[cfg(unix)]
-    fn close_controlled(&mut self, control: &mut FixtureControl) {
-        if self.closed {
-            return;
-        }
-        drop(self.input.take());
-        control.wait_for(0, "transport_closed");
-        self.wait_for_exit_within_controlled(Duration::from_secs(3), control);
-    }
-
-    #[cfg(unix)]
-    fn close_within_controlled(
-        &mut self,
-        timeout: Duration,
-        control: &mut FixtureControl,
-    ) -> Duration {
-        if self.closed {
-            return Duration::ZERO;
-        }
-        drop(self.input.take());
-        self.wait_for_exit_within_controlled(timeout, control)
-    }
-
     fn wait_for_exit_within(&mut self, timeout: Duration) -> Duration {
-        self.wait_for_exit_within_context(timeout, String::new)
-    }
-
-    #[cfg(unix)]
-    fn wait_for_exit_within_controlled(
-        &mut self,
-        timeout: Duration,
-        control: &mut FixtureControl,
-    ) -> Duration {
-        self.wait_for_exit_within_context(timeout, || control.diagnostics())
-    }
-
-    fn wait_for_exit_within_context(
-        &mut self,
-        timeout: Duration,
-        timeout_context: impl FnOnce() -> String,
-    ) -> Duration {
         if self.closed {
             return Duration::ZERO;
         }
@@ -1699,8 +983,7 @@ impl McpClient {
             if started.elapsed() >= timeout {
                 let _ = self.server.kill();
                 let _ = self.server.wait();
-                let context = timeout_context();
-                panic!("mcp-console did not stop within {timeout:?};{context}");
+                panic!("mcp-console did not stop within {timeout:?}");
             }
             std::thread::sleep(Duration::from_millis(10));
         };

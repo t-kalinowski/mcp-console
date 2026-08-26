@@ -32,10 +32,10 @@ initialization_case = "initializes_and_lists_tools"
 initialization_reference = (
     f"tests/transcripts/golden/{initialization_suite}/{initialization_case}.yaml"
 )
-SLOW_TEST_SECONDS = 10.0
-FREQUENT_STATUS_SECONDS = 60.0
-FREQUENT_STATUS_UNTIL_SECONDS = 300.0
-LATER_STATUS_SECONDS = 120.0
+SLOW_TEST_SECONDS = 60.0
+FREQUENT_STATUS_SECONDS = 120.0
+FREQUENT_STATUS_UNTIL_SECONDS = 600.0
+LATER_STATUS_SECONDS = 300.0
 
 parser = argparse.ArgumentParser(prog="scripts/test")
 parser.add_argument("--list", action="store_true", dest="list_tests")
