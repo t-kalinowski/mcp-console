@@ -25,10 +25,10 @@ classifiers = [
 [project.optional-dependencies]
 anthropic = ["anthropic[mcp]"]
 chatlas = ["chatlas[mcp]"]
-client = ["mcp>=1.19,<2"]
+client = ["mcp>=1.19"]
 codex = ["openai-codex"]
 codex-sdk = ["openai-codex-sdk>=0.1.11"]
-openai = ["openai", "mcp>=1.19,<2"]
+openai = ["openai", "mcp>=1.19"]
 openai-agents = ["openai-agents"]
 
 [project.urls]
