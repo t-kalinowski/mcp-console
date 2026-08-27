@@ -103,7 +103,7 @@ def test_renders_generated_document(binary: Path) -> Transcript:
         transcript.append(
             {
                 "quarto document": {
-                    "executed client-authored R and Python cells through IR": True,
+                    "executed client-authored R and Python cells through `ir`": True,
                     "selected Python through reticulate defaults": True,
                     "omitted recorded runtime results": True,
                     "kept Markdown-looking source inside a code block": True,

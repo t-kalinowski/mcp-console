@@ -34,7 +34,7 @@ def recording_ir_environment(
     environment, _ = r_test_environment()
     environment["RETICULATE_PYTHON"] = ""
     real_ir = shutil.which("ir")
-    assert real_ir is not None, "real ir is required"
+    assert real_ir is not None, "real `ir` is required"
     fake_bin = directory / "bin"
     fake_bin.mkdir()
     fixture = Path(__file__).resolve().parents[2] / "fixtures" / "record_ir"
@@ -280,14 +280,14 @@ def test_does_not_resolve_unreached_package_loads(binary: Path) -> Transcript:
         assert len(ir_run_records(record)) == baseline
 
         client.send(r=f"library({missing})")
-        assert f"synthetic IR failure for {missing}" in last_tool_text(client)
+        assert f"synthetic `ir` failure for {missing}" in last_tool_text(client)
         failed = len(ir_run_records(record))
         assert failed == baseline + 1
 
         client.send(r="42L")
         assert last_tool_text(client) == "[1] 42\n"
         client.send(r=f"library({missing})")
-        assert f"synthetic IR failure for {missing}" in last_tool_text(client)
+        assert f"synthetic `ir` failure for {missing}" in last_tool_text(client)
         assert len(ir_run_records(record)) == failed + 1
         return client._finish()
 

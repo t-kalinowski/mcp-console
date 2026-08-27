@@ -1,3 +1,4 @@
+use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -7,34 +8,113 @@ use super::process::{
 };
 
 const MANAGED_R_LIBRARY_RESOLVER_SOURCE: &str = include_str!("programs/r_library.R");
+const UV_BINARY_RESOLVER_SOURCE: &str = include_str!("programs/uv_binary.R");
 const MINIMUM_IR_VERSION: semver::Version = semver::Version::new(0, 4, 0);
+const UV_UNAVAILABLE_STATUSES: &[i32] = &[42, 43, 44];
 
+#[derive(Clone)]
 struct IrCommand {
-    program: &'static str,
-    arguments: &'static [&'static str],
+    program: OsString,
+    display_program: OsString,
+    arguments: Vec<OsString>,
 }
 
 impl IrCommand {
+    fn direct(program: impl Into<OsString>) -> Self {
+        Self {
+            program: program.into(),
+            display_program: OsString::from("ir"),
+            arguments: Vec::new(),
+        }
+    }
+
+    fn through_uv(uv: impl Into<OsString>) -> Self {
+        let program = uv.into();
+        Self::through_uv_with_display(program.clone(), program)
+    }
+
+    fn through_path_uv(uv: impl Into<OsString>) -> Self {
+        Self::through_uv_with_display(uv.into(), OsString::from("uv"))
+    }
+
+    fn through_uv_with_display(program: OsString, display_program: OsString) -> Self {
+        Self {
+            program,
+            display_program,
+            arguments: ["tool", "run", "--from", "r-lib-ir", "ir"]
+                .into_iter()
+                .map(OsString::from)
+                .collect(),
+        }
+    }
+
     fn command(&self) -> Command {
-        let mut command = resolver_command(Path::new(self.program));
-        command.args(self.arguments);
+        let mut command = resolver_command(Path::new(&self.program));
+        command.args(&self.arguments);
         command
     }
 
+    fn display_program(&self) -> &Path {
+        Path::new(&self.display_program)
+    }
+
     fn label(&self) -> String {
-        std::iter::once(self.program)
-            .chain(self.arguments.iter().copied())
+        std::iter::once(self.display_program.as_os_str())
+            .chain(self.arguments.iter().map(OsString::as_os_str))
+            .map(|argument| argument.to_string_lossy())
             .collect::<Vec<_>>()
             .join(" ")
     }
 }
 
 #[derive(Clone)]
+pub(crate) struct ManagedRResolverConfiguration {
+    ir: IrCommand,
+    rscript: PathBuf,
+}
+
+#[derive(Clone)]
 pub(crate) struct ManagedR {
     library: PathBuf,
-    r_libs: std::ffi::OsString,
+    r_libs: OsString,
     rscript: PathBuf,
     requirements: Vec<String>,
+}
+
+impl ManagedRResolverConfiguration {
+    pub(crate) fn resolve_uv(
+        &self,
+        managed_r: &ManagedR,
+        configuration: &super::ManagedPythonResolverConfiguration,
+        on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
+    ) -> Result<OsString, String> {
+        let resolver = ResolverProcess::new();
+        let mut on_started = Some(on_started);
+        let mut command = resolver_command(&self.rscript);
+        command
+            .args(["--vanilla", "-e", UV_BINARY_RESOLVER_SOURCE])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        managed_r.configure_resolver(&mut command)?;
+        configuration.configure_uv_bootstrap(&mut command);
+        let mut child = command.spawn().map_err(|error| {
+            format!(
+                "failed to resolve `uv` with `{}`: {error}",
+                self.rscript.display()
+            )
+        })?;
+        let output = collect_resolver_output(
+            &resolver,
+            &mut child,
+            &mut on_started,
+            &self.rscript,
+            "`uv`",
+        )?;
+        finish_uv_resolution(output, false)?.ok_or_else(|| {
+            "managed R environment does not provide reticulate `uv` resolution".to_string()
+        })
+    }
 }
 
 impl ManagedR {
@@ -76,55 +156,194 @@ impl ManagedR {
     }
 }
 
+pub(crate) fn discover_r_resolver(
+    python: &mut super::ManagedPythonResolverConfiguration,
+    on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
+) -> Result<Option<ManagedRResolverConfiguration>, String> {
+    let resolver = ResolverProcess::new();
+    let mut on_started = Some(on_started);
+    discover_r_resolver_with(&resolver, &mut on_started, python)
+}
+
 pub(crate) fn resolve_r(
     requirements: Vec<String>,
     on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
 ) -> Result<ManagedR, String> {
     let resolver = ResolverProcess::new();
     let mut on_started = Some(on_started);
-    let rscript = match std::env::var("R_HOME") {
-        Ok(r_home) => PathBuf::from(r_home).join("bin/Rscript"),
-        Err(_) => {
-            let program = Path::new("R");
-            let mut command = resolver_command(program);
-            command
-                .arg("RHOME")
-                .stdin(Stdio::null())
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped());
-            let mut child = command.spawn().map_err(|error| {
-                format!(
-                    "failed to discover the worker R home with `{}`: {error}",
-                    program.display()
-                )
-            })?;
-            let output = collect_resolver_output(
-                &resolver,
-                &mut child,
-                &mut on_started,
-                program,
-                "worker R home",
-            )?;
-            if !output.status.success() {
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                return Err(format!(
-                    "worker R home discovery failed with {}: {}",
-                    output.status,
-                    stderr.trim()
-                ));
-            }
-            let r_home = String::from_utf8(output.stdout)
-                .map_err(|error| format!("worker R returned a non-UTF-8 home path: {error}"))?;
-            let r_home = r_home.trim();
-            if r_home.is_empty() {
-                return Err("worker R returned an empty home path".to_string());
-            }
-            PathBuf::from(r_home).join("bin/Rscript")
+    let mut python = super::ManagedPythonResolverConfiguration::capture();
+    let configuration = discover_r_resolver_with(&resolver, &mut on_started, &mut python)?
+        .ok_or_else(|| "dynamic environment resolution requires `ir` or `uv`".to_string())?;
+    resolve_r_with_process(&configuration, requirements, &resolver, &mut on_started)
+}
+
+pub(crate) fn resolve_r_with(
+    configuration: &ManagedRResolverConfiguration,
+    requirements: Vec<String>,
+    on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
+) -> Result<ManagedR, String> {
+    let resolver = ResolverProcess::new();
+    let mut on_started = Some(on_started);
+    resolve_r_with_process(configuration, requirements, &resolver, &mut on_started)
+}
+
+fn discover_r_resolver_with(
+    resolver: &ResolverProcess,
+    on_started: &mut Option<impl FnOnce(ResolverStopHandle) -> Result<(), String>>,
+    python: &mut super::ManagedPythonResolverConfiguration,
+) -> Result<Option<ManagedRResolverConfiguration>, String> {
+    let rscript = discover_rscript(resolver, on_started)?;
+    let path_ir = find_path_entry("ir");
+    let path_uv = find_path_entry("uv");
+    let ir = if let Some(ir) = path_ir {
+        if let Some(uv) = path_uv.as_ref() {
+            python.set_default_uv(uv.as_os_str().to_os_string());
         }
+        IrCommand::direct(ir)
+    } else if let Some(uv) = path_uv {
+        python.set_default_uv(uv.as_os_str().to_os_string());
+        IrCommand::through_path_uv(uv)
+    } else if let Some(uv) = python
+        .explicit_uv()
+        .filter(|uv| *uv != OsStr::new("managed"))
+        .map(OsStr::to_os_string)
+    {
+        IrCommand::through_uv(uv)
+    } else {
+        let Some(uv) = resolve_uv_with_rscript(resolver, on_started, &rscript, python, true)?
+        else {
+            return Ok(None);
+        };
+        python.set_default_uv(uv.clone());
+        IrCommand::through_uv(uv)
     };
-    let ir = ir_command(&resolver, &mut on_started)?;
-    let mut command = ir.command();
-    command.arg("run").arg("--rscript").arg(&rscript);
+    validate_ir_version(resolver, on_started, &ir)?;
+    Ok(Some(ManagedRResolverConfiguration { ir, rscript }))
+}
+
+fn discover_rscript(
+    resolver: &ResolverProcess,
+    on_started: &mut Option<impl FnOnce(ResolverStopHandle) -> Result<(), String>>,
+) -> Result<PathBuf, String> {
+    if let Some(r_home) = std::env::var_os("R_HOME") {
+        return Ok(PathBuf::from(r_home).join("bin/Rscript"));
+    }
+    let program = Path::new("R");
+    let mut command = resolver_command(program);
+    command
+        .arg("RHOME")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = command.spawn().map_err(|error| {
+        format!(
+            "failed to discover the worker R home with `{}`: {error}",
+            program.display()
+        )
+    })?;
+    let output =
+        collect_resolver_output(resolver, &mut child, on_started, program, "worker R home")?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!(
+            "worker R home discovery failed with {}: {}",
+            output.status,
+            stderr.trim()
+        ));
+    }
+    let r_home = String::from_utf8(output.stdout)
+        .map_err(|error| format!("worker R returned a non-UTF-8 home path: {error}"))?;
+    let r_home = r_home.trim();
+    if r_home.is_empty() {
+        return Err("worker R returned an empty home path".to_string());
+    }
+    Ok(PathBuf::from(r_home).join("bin/Rscript"))
+}
+
+fn resolve_uv_with_rscript(
+    resolver: &ResolverProcess,
+    on_started: &mut Option<impl FnOnce(ResolverStopHandle) -> Result<(), String>>,
+    rscript: &Path,
+    configuration: &super::ManagedPythonResolverConfiguration,
+    unavailable_is_bare: bool,
+) -> Result<Option<OsString>, String> {
+    let mut command = resolver_command(rscript);
+    command
+        .args(["--vanilla", "-e", UV_BINARY_RESOLVER_SOURCE])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    configuration.configure_uv_bootstrap(&mut command);
+    let mut child = command.spawn().map_err(|error| {
+        format!(
+            "failed to inspect ambient reticulate with `{}`: {error}",
+            rscript.display()
+        )
+    })?;
+    let output = collect_resolver_output(
+        resolver,
+        &mut child,
+        on_started,
+        rscript,
+        "ambient reticulate `uv`",
+    )?;
+    finish_uv_resolution(output, unavailable_is_bare)
+}
+
+fn finish_uv_resolution(
+    output: ResolverOutput,
+    unavailable_is_bare: bool,
+) -> Result<Option<OsString>, String> {
+    if !output.status.success() {
+        if unavailable_is_bare
+            && output
+                .status
+                .code()
+                .is_some_and(|status| UV_UNAVAILABLE_STATUSES.contains(&status))
+        {
+            return Ok(None);
+        }
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let detail = if stderr.trim().is_empty() {
+            stdout.trim()
+        } else {
+            stderr.trim()
+        };
+        return Err(format!(
+            "reticulate `uv` resolution failed with {}: {detail}",
+            output.status
+        ));
+    }
+    let output = String::from_utf8(output.stdout)
+        .map_err(|_| "reticulate `uv` resolver returned a non-UTF-8 path".to_string())?;
+    let path = output
+        .strip_suffix('\n')
+        .filter(|path| !path.is_empty() && !path.contains(['\n', '\r']))
+        .map(PathBuf::from)
+        .ok_or_else(|| "reticulate `uv` resolver returned an invalid path line".to_string())?;
+    if !path.is_absolute() || !path.is_file() {
+        return Err(format!(
+            "reticulate `uv` resolver returned invalid executable `{}`",
+            path.display()
+        ));
+    }
+    Ok(Some(path.into_os_string()))
+}
+
+fn resolve_r_with_process(
+    configuration: &ManagedRResolverConfiguration,
+    requirements: Vec<String>,
+    resolver: &ResolverProcess,
+    on_started: &mut Option<impl FnOnce(ResolverStopHandle) -> Result<(), String>>,
+) -> Result<ManagedR, String> {
+    // `ir` resolves and installs remote packages with normal host cache and
+    // network access. Requirement strings are process arguments, never R source.
+    let mut command = configuration.ir.command();
+    command
+        .arg("run")
+        .arg("--rscript")
+        .arg(&configuration.rscript);
     for requirement in &requirements {
         command.arg("--with").arg(requirement);
     }
@@ -139,19 +358,17 @@ pub(crate) fn resolve_r(
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    // IR resolves and installs remote packages with normal host cache and
-    // network access. Requirement strings are process arguments, never R source.
     let mut child = command.spawn().map_err(|error| {
         format!(
             "failed to run R package resolver with `{}`: {error}",
-            ir.label()
+            configuration.ir.label()
         )
     })?;
     let output = collect_resolver_output(
-        &resolver,
+        resolver,
         &mut child,
-        &mut on_started,
-        Path::new(ir.program),
+        on_started,
+        configuration.ir.display_program(),
         "R package",
     )?;
     if !output.status.success() {
@@ -187,40 +404,24 @@ pub(crate) fn resolve_r(
     Ok(ManagedR {
         library,
         r_libs,
-        rscript,
+        rscript: configuration.rscript.clone(),
         requirements,
     })
 }
 
-fn ir_command(
-    resolver: &ResolverProcess,
-    on_started: &mut Option<impl FnOnce(ResolverStopHandle) -> Result<(), String>>,
-) -> Result<IrCommand, String> {
-    let ir = if path_contains_entry("ir") {
-        IrCommand {
-            program: "ir",
-            arguments: &[],
-        }
-    } else if path_contains_entry("uvx") {
-        IrCommand {
-            program: "uvx",
-            arguments: &["--from", "r-lib-ir", "ir"],
-        }
-    } else {
-        return Err("R package resolution requires `ir` or host `uvx` on PATH".to_string());
-    };
-    validate_ir_version(resolver, on_started, &ir)?;
-    Ok(ir)
-}
-
-fn path_contains_entry(program: &str) -> bool {
-    let Some(path) = std::env::var_os("PATH") else {
-        return false;
-    };
+fn find_path_entry(program: &str) -> Option<PathBuf> {
+    let path = std::env::var_os("PATH")?;
     // A broken symlink or non-executable entry is a broken installation, not
     // permission to select a different resolver.
     std::env::split_paths(&path)
-        .any(|directory| std::fs::symlink_metadata(directory.join(program)).is_ok())
+        .map(|directory| {
+            if directory.as_os_str().is_empty() {
+                PathBuf::from(".").join(program)
+            } else {
+                directory.join(program)
+            }
+        })
+        .find(|candidate| std::fs::symlink_metadata(candidate).is_ok())
 }
 
 fn validate_ir_version(
@@ -244,7 +445,7 @@ fn validate_ir_version(
         resolver,
         &mut child,
         on_started,
-        Path::new(ir.program),
+        ir.display_program(),
         "R package",
     )?;
     if !output.status.success() {
@@ -269,12 +470,12 @@ fn validate_ir_version(
         .and_then(|version| semver::Version::parse(version).ok())
         .ok_or_else(|| {
             format!(
-                "R package resolution requires ir {MINIMUM_IR_VERSION} or later; could not parse `{reported}`"
+                "R package resolution requires `ir` {MINIMUM_IR_VERSION} or later; could not parse `{reported}`"
             )
         })?;
     if version < MINIMUM_IR_VERSION {
         return Err(format!(
-            "R package resolution requires ir {MINIMUM_IR_VERSION} or later; found ir {version}"
+            "R package resolution requires `ir` {MINIMUM_IR_VERSION} or later; found `ir` {version}"
         ));
     }
     Ok(())

@@ -102,8 +102,9 @@ It reports readiness, accepts complete cells and supported preparation operation
 
 The built-in worker embeds R on its main thread.
 Its language adapters provide persistent Python and DuckDB SQL within that worker process.
-Its private R environment bridge wraps `base::library` and `base::loadNamespace`, applies accepted managed libraries, and reports activation outcomes.
-Its private Python runtime appends a last-chance import finder, while the R Python bridge owns the reticulate manifest and the callback into the existing managed-Python resolver.
+Its private R environment bridge conditionally wraps `base::library` and `base::loadNamespace`, applies accepted managed libraries, and reports activation outcomes.
+Its private Python runtime conditionally appends a last-chance import finder, while the R Python bridge owns the reticulate manifest and the callback into the existing managed-Python resolver.
+Bare sessions leave both resolution adapters disabled.
 Their user-visible behavior belongs in the [built-in runtime guide](BUILTIN_RUNTIME.md), while the sideband contract remains independent of the interpreter implementation.
 
 ## Worker generations
@@ -128,7 +129,10 @@ The server reports the failed operation and does not replay its cell or stdin ag
 
 ### Server and worker startup
 
-The built-in server constructs its retained environment before it accepts MCP input, resolving the default R and DuckDB environment and managed Python when selected.
+The built-in server first selects a stable host resolver configuration.
+It prefers `ir` on `PATH`, otherwise uses `uv` on `PATH` to run `ir`, and can obtain `uv` from reticulate when only `ir` or an ambient R installation is available.
+With that configuration, it constructs its retained environment before accepting MCP input, resolving the default R and DuckDB environment and managed Python when selected.
+If no resolver bootstrap is available, it accepts MCP input with an empty retained environment and a fixed bare capability that disables later dynamic resolution.
 The worker itself starts lazily when an operation first needs it; preparing retained requirements can happen without launching a worker.
 An explicit restart starts its replacement eagerly, including when the session had not started a worker before.
 
@@ -179,7 +183,7 @@ If the callback already owns the transition, preparation returns a nonfatal tool
 A runtime R callback sent after live preparation begins is a protocol failure.
 
 For a request, the server verifies the worker generation and validates the supplied plain package names.
-It serializes access to the retained environment and host resolver, merges the names into the complete retained R requirement set, and returns the existing managed environment without invoking IR when that set is unchanged.
+It serializes access to the retained environment and host resolver, merges the names into the complete retained R requirement set, and returns the existing managed environment without invoking `ir` when that set is unchanged.
 Otherwise it resolves the complete candidate on the host and prepares every retained DuckDB extension for that candidate library.
 The server rechecks the generation and returns the candidate path without committing it.
 
@@ -269,6 +273,7 @@ The [relay protocol](RELAY_PROTOCOL.md) owns that ordering guarantee, and the [b
 Recording is a server responsibility and does not add messages to either private protocol.
 On the first `send` call, the server creates a private run directory under `.mcp-console/sessions/` in its working directory.
 It appends tool calls and assembled results to `internal/events.jsonl`.
+The initial `session_started` event records whether dynamic environment resolution is available, and the Quarto projection derives its managed defaults from that capability.
 Each `tool_result` is appended before the MCP transport attempts the corresponding response write.
 It records server assembly, not whether the transport write succeeded or the client received the response.
 
@@ -283,7 +288,8 @@ Fences expand when literal content contains backticks.
 It is a chronological call ledger: a timed-out cell, later polls, and eventual results remain separate calls because the journal does not infer evaluation-level grouping.
 The executable Quarto document contains the source from calls with exactly one submitted R, Python, or SQL field in call order; it omits stdin, options, results, errors, polls, and artifacts.
 It retains source even when another argument later makes the call fail, so it is source material rather than an execution ledger.
-Its IR front matter declares the built-in R and Python requirements followed by cumulative explicit declarations from recorded calls.
+Its `ir` front matter declares the managed built-in R and Python requirements followed by cumulative explicit declarations from recorded calls.
+Bare sessions omit both managed defaults and rejected requirement payloads.
 It does not declare a Python version, so `ir render transcript.qmd` uses reticulate's default managed Python selection.
 The declarations are submitted inputs, not a lockfile or an exact record of successful retained and automatically inferred requirements.
 Rendering executes the captured client-authored cells in order in a fresh Quarto/knitr runtime outside the MCP Console worker sandbox and exports their new output.

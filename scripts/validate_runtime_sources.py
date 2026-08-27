@@ -18,6 +18,7 @@ EXPECTED_SOURCES = {
     "src/resolver/programs/managed_python.R",
     "src/resolver/programs/python_version.R",
     "src/resolver/programs/r_library.R",
+    "src/resolver/programs/uv_binary.R",
     "src/sql/bridge.R",
 }
 INCLUDE_PATTERN = re.compile(

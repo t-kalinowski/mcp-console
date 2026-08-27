@@ -332,7 +332,7 @@ Package download access does not imply general network access for user code.
             "type": "array",
             "items": { "type": "string", "minLength": 1 },
             "maxItems": 64,
-            "description": "R package requirement strings. IR prevents installation from local package sources because it runs with server permissions. prepare can add them to an idle built-in runtime without replacing it."
+            "description": "R package requirement strings. `ir` prevents installation from local package sources because it runs with server permissions. prepare can add them to an idle built-in runtime without replacing it."
           },
           "python": {
             "type": "array",
@@ -620,7 +620,7 @@ It contains:
 - restart, stop, and crash boundaries.
 
 It is a chronological execution record, not a promise of reproducibility and not a polished notebook.
-The companion `transcript.qmd` contains executable submitted code cells plus IR front matter for declared R and Python requirements.
+The companion `transcript.qmd` contains executable submitted code cells plus `ir` front matter for declared R and Python requirements.
 Users can reuse its source or run `ir render` to execute the client-authored action stream in a fresh environment and export a new report.
 The goal is to reproduce the analysis represented by the Markdown transcript, although not every runtime detail can be reconstructed yet.
 Agents create refined `.qmd`, `.R`, `.py`, or `.ipynb` files separately.

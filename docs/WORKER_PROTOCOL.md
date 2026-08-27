@@ -335,7 +335,7 @@ It must not depend on host Python resolution, whose requests are rejected for cu
 
 A custom worker may opt into runtime managed-R resolution and the matching `r_activated` and `r_activation_failed` messages.
 The server merges each request with the complete retained R environment and the custom worker's fixed R requirements.
-It validates package names before invoking IR, so an invalid request receives an ordinary `host` rejection.
+It validates package names before invoking `ir`, so an invalid request receives an ordinary `host` rejection.
 Activation messages remain subject to the same candidate and generation matching rules as the built-in worker.
 
 ### Synchronous resolver waits

@@ -819,7 +819,7 @@ mod tests {
     async fn completed_response() -> (Arc<Evaluation>, Response) {
         let output = OutputTape::new();
         let evaluation = Arc::new(Evaluation::new(
-            crate::transcript::Transcript::new(),
+            crate::transcript::Transcript::new(true),
             None,
             output,
             Response::default(),
