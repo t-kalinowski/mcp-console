@@ -1,0 +1,104 @@
+name: Finalize sandbox pull request metadata
+
+on:
+  push:
+    branches:
+      - use-bundled-codex-sandbox-runner-validated
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: finalize-sandbox-pull-request-metadata
+  cancel-in-progress: false
+
+jobs:
+  finalize:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    env:
+      GH_TOKEN: ${{ github.token }}
+      FEATURE_BRANCH: use-bundled-codex-sandbox-runner-validated
+      CODEX_BRANCH: mcp-console/sandbox-runner-v1-validated
+      CODEX_BASE_REVISION: 855e8f9ef5b4211408791252e02e38b4757218cc
+    steps:
+      - name: Check out the feature branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 50
+          ref: use-bundled-codex-sandbox-runner-validated
+
+      - name: Verify the implementation commit and update the draft PR
+        shell: bash
+        run: |
+          set -euo pipefail
+          codex_sha=$(git log -50 --format=%B | sed -n 's/^Codex-Sandbox-Revision: \([0-9a-f]\{40\}\)$/\1/p' | head -1)
+          if [[ -z "$codex_sha" || "$codex_sha" == "$CODEX_BASE_REVISION" ]]; then
+            echo 'The feature branch does not contain a completed implementation commit with a Codex revision trailer' >&2
+            exit 1
+          fi
+          remote_codex_sha=$(git ls-remote https://github.com/t-kalinowski/codex.git "refs/heads/${CODEX_BRANCH}" | awk '{print $1}')
+          if [[ "$remote_codex_sha" != "$codex_sha" ]]; then
+            echo "Pinned Codex revision $codex_sha does not match runner branch head $remote_codex_sha" >&2
+            exit 1
+          fi
+
+          pr_url=$(gh pr list --repo t-kalinowski/mcp-console --head "$FEATURE_BRANCH" --base main --state open --json url --jq '.[0].url // empty')
+          if [[ -z "$pr_url" ]]; then
+            echo 'No open pull request exists for the validated feature branch' >&2
+            exit 1
+          fi
+
+          body_file="${RUNNER_TEMP}/pull-request-body.md"
+          cat > "$body_file" <<EOF
+          ## Summary
+
+          Replace MCP Console's home-grown macOS Seatbelt launcher with a separately built, privately bundled `mcp-console-sandbox` executable derived from the pinned Codex sandbox patch.
+
+          - **Codex revision:** `${codex_sha}`
+          - **Runner topology:** direct-exec. The helper validates protocol version 1, reports startup status over a private descriptor, and replaces itself with the native sandbox launcher and target.
+          - **Launch protocol:** a strict, typed JSON launch specification with `protocol_version: 1`. Native target program and argument values remain trailing OS arguments; the target environment remains inherited.
+          - **Private packaging:** the matching-architecture helper is injected into the wheel's private `mcp-console-libexec` layout. It is resolved by absolute installed-layout path and is not exposed as another uv tool command or found through arbitrary `PATH` entries.
+
+          ## Boundary and lifecycle
+
+          MCP Console owns the normalized application policy and Codex owns the native sandbox implementation. Relay stdin/stdout remain the existing native pipes, relay stderr remains inherited diagnostics, and neither the relay nor worker protocol changes.
+
+          The direct-exec path preserves the relay as the direct sandboxed child, process-group and session leader. Existing non-reaping exit observation, relay-led worker shutdown and stream drain, bounded descendant retirement, exact one-time reap, generation-safe replacement, and private temporary-directory cleanup remain in MCP Console.
+
+          This removes the old `src/sandbox/macos.rs` Seatbelt profile and MCP Console's direct `/usr/bin/sandbox-exec` construction. There is no fallback or feature-flagged copy of the old backend.
+
+          MCP Console links no Codex crates. The private helper is built from the Codex repository using that repository's toolchain, lockfile, native sandbox crates, and focused tests, then assembled into the MCP Console wheel. R, Python, and DuckDB requirement resolution remains outside the sandbox.
+
+          ## Validation
+
+          - Codex focused tests for `codex-sandbox-api` and `codex-sandboxing`
+          - Codex scoped fixes and formatting
+          - release build of only `mcp-console-sandbox`
+          - `scripts/format`
+          - `scripts/check`
+          - `git diff --exit-code -- tests/transcripts/golden`
+          - `cargo tree` verification that no Codex crates enter MCP Console's dependency graph
+          - installed-wheel helper discovery, architecture, private-command, sandbox, and MCP/R smoke tests
+
+          Golden transcripts are unchanged.
+
+          ## Non-goals
+
+          This does not add named profiles, an MCP Console config file, Codex `_meta` inheritance, managed networking, domain or socket policy, elicitation or approvals, Docker, SSH, remote bootstrap, Linux, or Windows support. It does not change the MCP, relay, or worker protocols.
+          EOF
+
+          gh pr edit "$pr_url" --repo t-kalinowski/mcp-console \
+            --title 'Use a bundled Codex-derived sandbox runner' \
+            --body-file "$body_file"
+
+      - name: Remove the one-shot workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          git rm .github/workflows/finalize-sandbox-pr-metadata.yml
+          git config user.name 'Tomasz Kalinowski'
+          git config user.email 'kalinowskit@gmail.com'
+          git commit -m 'Remove one-shot PR metadata workflow'
+          git push origin HEAD:use-bundled-codex-sandbox-runner-validated
