@@ -38,6 +38,8 @@ def resolve() -> None:
     if gate_index is None or index == int(gate_index):
         if started := os.environ.get("MCP_CONSOLE_TEST_IR_STARTED"):
             notify(started)
+        if release_gate := os.environ.get("MCP_CONSOLE_TEST_IR_RELEASE_GATE"):
+            wait(release_gate)
         if release := os.environ.get("MCP_CONSOLE_TEST_IR_RELEASE"):
             wait(release)
     counter.write_text(str(index + 1), encoding="utf-8")

@@ -344,12 +344,13 @@ It passes that exact `Rscript` to IR and uses it for DuckDB resolution.
 When Python is server-managed, the same `Rscript` also runs managed-Python resolution.
 The server prepends the resolved managed library to inherited `R_LIBS`, preserving its nonempty path entries after the managed library.
 
-The server first looks for `ir` beside its installed executable and falls back to `PATH` only when no sibling file exists.
-It requires the selected `ir` to be version 0.4.0 or later.
-The PyPI package depends on `r-lib-ir`, which supplies the sibling command in the uv tool environment.
+The server first runs `ir` from `PATH`.
+If that executable is absent, it runs `uvx --from r-lib-ir ir` instead.
+It does not fall back when a PATH `ir` fails or reports an unsupported version.
+The selected `ir` must be version 0.4.0 or later, and host uv must supply `uvx` on `PATH`.
 It passes each requirement as a separate `ir run --with` argument; requirement text is never inserted into R source.
 Every invocation sets `IR_NO_LOCAL_SOURCES=1`, so IR rejects direct or transitive installation from the local filesystem.
-Remote package installation and build code still run with server permissions.
+The fallback may download `r-lib-ir`; remote package installation and build code still run with server permissions.
 
 ### Python
 
@@ -437,6 +438,8 @@ Host resolution and managed-environment startup may run accepted distributions' 
 
 ### Server-owned uv configuration
 
+When `RETICULATE_UV` is unset at server startup, managed-Python resolvers receive `RETICULATE_UV=uv` so reticulate uses the host command instead of bootstrapping uv.
+An explicit startup value is retained.
 When the server starts, it captures inherited `UV_*` variables except `UV_OFFLINE`.
 Before each managed-Python resolver starts, it removes the current `UV_*` environment, restores that startup snapshot, and removes `UV_OFFLINE`.
 Changes made later by evaluated R or Python code therefore cannot configure host resolution.

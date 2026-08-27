@@ -21,9 +21,10 @@ R plots made with the default device and open Matplotlib figures are returned as
 MCP Console is currently distributed as native wheels for Apple Silicon and Intel macOS.
 Linux and Windows are not supported yet.
 
-A working R installation is required.
+A working R installation and a host installation of uv are required.
 Set `R_HOME` or make `R` discoverable on `PATH`.
-The Python package installs `r-lib-ir` into the same uv tool environment; it supplies the `ir` command used to prepare R libraries.
+Make uv and its `uvx` command discoverable on `PATH`.
+The server uses `ir` 0.4.0 or later from `PATH` when available; otherwise it runs `uvx --from r-lib-ir ir` to prepare R libraries.
 The first server start may download and install the default R and Python requirements.
 
 Run the published command without installing it persistently:
@@ -124,8 +125,8 @@ The server records a JSONL journal of tool calls and results together with image
 It projects each journal event into a Yamark-formatted, append-only `transcript.md` with syntax-highlighted R, Python, and SQL source, text results, and relative artifact links.
 Alongside it, the server regenerates a Yamark-formatted `transcript.qmd` from incremental source and requirement state when submitted code or declared R or Python requirements change.
 The QMD contains only submitted executable code cells and IR front matter with the built-in requirements and cumulative declarations.
-With the PyPI package, run `uvx --from r-lib-ir ir render transcript.qmd` to execute those client-authored cells in order and export a fresh report using reticulate's default managed Python selection.
-When `ir` is installed separately, `ir render transcript.qmd` is equivalent.
+Run `uvx --from r-lib-ir ir render transcript.qmd` to execute those client-authored cells in order and export a fresh report using reticulate's default managed Python selection.
+When `ir` is installed on `PATH`, `ir render transcript.qmd` is equivalent.
 The projection is intended to reproduce the analysis represented by `transcript.md`, but it does not include recorded output or artifacts and does not yet reconstruct every runtime detail.
 Human-facing tools for following and inspecting an agent's work remain future design.
 

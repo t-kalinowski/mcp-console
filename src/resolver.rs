@@ -22,6 +22,7 @@ mod unsupported;
 #[derive(Clone)]
 pub(crate) struct ManagedPythonResolverConfiguration {
     environment: Arc<BTreeMap<OsString, OsString>>,
+    reticulate_uv: OsString,
 }
 
 impl ManagedPythonResolverConfiguration {
@@ -29,8 +30,11 @@ impl ManagedPythonResolverConfiguration {
         let environment = std::env::vars_os()
             .filter(|(name, _)| is_uv_environment_variable(name) && name != "UV_OFFLINE")
             .collect();
+        let reticulate_uv =
+            std::env::var_os("RETICULATE_UV").unwrap_or_else(|| OsString::from("uv"));
         Self {
             environment: Arc::new(environment),
+            reticulate_uv,
         }
     }
 
@@ -46,6 +50,7 @@ impl ManagedPythonResolverConfiguration {
         }
         command
             .envs(self.environment.iter())
+            .env("RETICULATE_UV", &self.reticulate_uv)
             .env_remove("UV_OFFLINE");
         Ok(())
     }
