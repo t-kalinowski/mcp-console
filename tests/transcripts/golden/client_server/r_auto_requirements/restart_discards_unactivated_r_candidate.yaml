@@ -41,7 +41,7 @@ send:
       print = FALSE,
       where = base::baseenv()
     )))
-    package <- "fortunes"
+    package <- "mcprestart"
     invisible(base::do.call(
       base::loadNamespace,
       list(package = package)
@@ -69,7 +69,7 @@ result:
 ---
 send:
   r: >-
-    package <- 'fortunes'; invisible(base::do.call(base::loadNamespace,
+    package <- 'mcprestart'; invisible(base::do.call(base::loadNamespace,
     list(package = package))); 42L
 result:
   content:

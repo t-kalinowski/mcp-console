@@ -107,6 +107,8 @@ Encoding: UTF-8
 
     r_home = Path(environment["R_HOME"])
     for library, library_sources in zip(libraries, sources, strict=True):
+        if not library_sources:
+            continue
         subprocess.run(
             [
                 r_home / "bin/R",
@@ -125,6 +127,26 @@ Encoding: UTF-8
             env=environment,
         )
     return libraries
+
+
+def recording_fixture_r_environment(
+    directory: Path,
+    packages: tuple[str, ...],
+) -> tuple[dict[str, str], Path]:
+    environment, record = recording_ir_environment(directory)
+    isolated_library = directory / "r-library"
+    environment["R_LIBS_SITE"] = str(isolated_library)
+    environment["R_LIBS_USER"] = str(isolated_library)
+    source_libraries = fixture_r_libraries(environment, directory, packages)
+    environment["MCP_CONSOLE_TEST_IR_SOURCE_LIBRARIES"] = os.pathsep.join(
+        map(str, source_libraries)
+    )
+    environment["MCP_CONSOLE_TEST_IR_LIBRARY_ROOT"] = str(
+        directory / "resolved-r-libraries"
+    )
+    environment["MCP_CONSOLE_TEST_IR_FIXTURE_PACKAGES"] = ",".join(packages)
+    environment["MCP_CONSOLE_TEST_IR_BASE_LIBRARY"] = str(directory / "base-r-library")
+    return environment, record
 
 
 def send_and_collect_runtime_r_resolution(
@@ -167,57 +189,55 @@ def send_and_collect_runtime_r_resolution(
 
 
 def test_resolves_missing_r_packages_during_evaluation(binary: Path) -> Transcript:
-    environment, _ = r_test_environment()
-    environment["RETICULATE_PYTHON"] = ""
-    client = McpClient(binary, ("serve",), environment)
-    client._initialize_and_list_tools()
+    with tempfile.TemporaryDirectory() as temporary:
+        directory = Path(temporary)
+        packages = ("mcpfirst", "mcpsecond")
+        environment, _ = recording_fixture_r_environment(directory, packages)
+        client = McpClient(binary, ("serve",), environment)
+        client._initialize_and_list_tools()
 
-    client.send(python="python_sentinel = 40")
-    output = last_tool_text(client)
-    assert output == "[done]", repr(output)
-    client.send(sql="CREATE TABLE automatic_r_state AS SELECT 42 AS answer")
+        client.send(python="python_sentinel = 40")
+        output = last_tool_text(client)
+        assert output == "[done]", repr(output)
+        client.send(sql="CREATE TABLE automatic_r_state AS SELECT 42 AS answer")
 
-    # fmt: r
-    setup = code(r"""
-        sentinel <- 42L
-        worker_pid <- Sys.getpid()
-        """)
-    client.send(r=setup)
-    assert last_tool_text(client) == "[done]"
+        # fmt: r
+        setup = code(r"""
+            sentinel <- 42L
+            worker_pid <- Sys.getpid()
+            """)
+        client.send(r=setup)
+        assert last_tool_text(client) == "[done]"
 
-    # fmt: r
-    r = code(r"""
-        stopifnot(is.function(fortunes::fortune))
-        library(english)
-        stopifnot(
-          identical(sentinel, 42L),
-          identical(Sys.getpid(), worker_pid),
-          require(fortunes, quietly = TRUE),
-          requireNamespace("english", quietly = TRUE)
-        )
-        connection <- suppressWarnings(file("/dev/stdin"))
-        on.exit(close(connection))
-        input <- readLines(connection, n = 1L)
-        cat("answer: ", input, "\n", sep = "")
-        """)
-    client.send(r=r, stdin="42\n")
-    output = last_tool_text(client)
-    assert output == "answer: 42\n", repr(output)
+        # fmt: r
+        r = code(r"""
+            stopifnot(is.function(mcpfirst::fixture))
+            suppressPackageStartupMessages(library(mcpsecond))
+            stopifnot(
+              identical(sentinel, 42L),
+              identical(Sys.getpid(), worker_pid),
+              suppressPackageStartupMessages(require(mcpfirst, quietly = TRUE)),
+              requireNamespace("mcpsecond", quietly = TRUE)
+            )
+            connection <- suppressWarnings(file("/dev/stdin"))
+            on.exit(close(connection))
+            input <- readLines(connection, n = 1L)
+            cat("answer: ", input, "\n", sep = "")
+            """)
+        client.send(r=r, stdin="42\n")
+        output = last_tool_text(client)
+        assert output == "answer: 42\n", repr(output)
 
-    client.send(python="python_sentinel + 2")
-    assert last_tool_text(client) == "42\n"
-    client.send(sql="SELECT answer FROM automatic_r_state")
-    assert last_tool_text(client).splitlines()[-1].split() == ["1", "42"]
-    return client._finish()
+        client.send(python="python_sentinel + 2")
+        assert last_tool_text(client) == "42\n"
+        client.send(sql="SELECT answer FROM automatic_r_state")
+        assert last_tool_text(client).splitlines()[-1].split() == ["1", "42"]
+        return client._finish()
 
 
 def test_resolves_reached_r_packages_at_runtime(binary: Path) -> Transcript:
     with tempfile.TemporaryDirectory() as temporary:
         directory = Path(temporary)
-        environment, record = recording_ir_environment(directory)
-        isolated_library = directory / "r-library"
-        environment["R_LIBS_SITE"] = str(isolated_library)
-        environment["R_LIBS_USER"] = str(isolated_library)
         packages = (
             "mcplibrary",
             "mcpcharacter",
@@ -228,17 +248,7 @@ def test_resolves_reached_r_packages_at_runtime(binary: Path) -> Transcript:
             "mcpdynamic",
             "mcpdynamicns",
         )
-        source_libraries = fixture_r_libraries(environment, directory, packages)
-        environment["MCP_CONSOLE_TEST_IR_SOURCE_LIBRARIES"] = os.pathsep.join(
-            map(str, source_libraries)
-        )
-        environment["MCP_CONSOLE_TEST_IR_LIBRARY_ROOT"] = str(
-            directory / "resolved-r-libraries"
-        )
-        environment["MCP_CONSOLE_TEST_IR_FIXTURE_PACKAGES"] = ",".join(packages)
-        environment["MCP_CONSOLE_TEST_IR_BASE_LIBRARY"] = str(
-            directory / "base-r-library"
-        )
+        environment, record = recording_fixture_r_environment(directory, packages)
         client = McpClient(binary, ("serve",), environment)
         client._initialize_and_list_tools()
         baseline = len(ir_run_records(record))
@@ -596,7 +606,8 @@ def test_restart_discards_unactivated_r_candidate(binary: Path) -> Transcript:
     checkpoint_name = "automatic-r-activation-before-report"
     with tempfile.TemporaryDirectory() as temporary:
         directory = Path(temporary)
-        environment, record = recording_ir_environment(directory)
+        package = "mcprestart"
+        environment, record = recording_fixture_r_environment(directory, (package,))
         environment["TMPDIR"] = temporary
         client = McpClient(binary, ("serve",), environment)
         passed = False
@@ -642,7 +653,7 @@ def test_restart_discards_unactivated_r_candidate(binary: Path) -> Transcript:
                   print = FALSE,
                   where = base::baseenv()
                 )))
-                package <- "fortunes"
+                package <- "{package}"
                 invisible(base::do.call(
                   base::loadNamespace,
                   list(package = package)
@@ -668,12 +679,13 @@ def test_restart_discards_unactivated_r_candidate(binary: Path) -> Transcript:
 
             client.send(
                 r=(
-                    "package <- 'fortunes'; "
+                    f"package <- '{package}'; "
                     "invisible(base::do.call(base::loadNamespace, "
                     "list(package = package))); 42L"
                 )
             )
-            assert last_tool_text(client) == "[1] 42\n"
+            output = last_tool_text(client)
+            assert output == "[1] 42\n", repr(output)
             assert len(ir_run_records(record)) == baseline + 2
             transcript = client._finish()
             passed = True

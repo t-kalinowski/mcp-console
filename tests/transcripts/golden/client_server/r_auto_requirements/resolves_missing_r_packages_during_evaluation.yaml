@@ -29,13 +29,13 @@ result:
 ---
 send:
   r: |
-    stopifnot(is.function(fortunes::fortune))
-    library(english)
+    stopifnot(is.function(mcpfirst::fixture))
+    suppressPackageStartupMessages(library(mcpsecond))
     stopifnot(
       identical(sentinel, 42L),
       identical(Sys.getpid(), worker_pid),
-      require(fortunes, quietly = TRUE),
-      requireNamespace("english", quietly = TRUE)
+      suppressPackageStartupMessages(require(mcpfirst, quietly = TRUE)),
+      requireNamespace("mcpsecond", quietly = TRUE)
     )
     connection <- suppressWarnings(file("/dev/stdin"))
     on.exit(close(connection))
@@ -70,4 +70,3 @@ result:
           <int32>
         1      42
   isError: false
-...

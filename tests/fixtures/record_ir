@@ -48,7 +48,7 @@ def fixture_library(arguments: list[str]) -> Path | None:
     base = Path(base)
     assert base.is_dir(), base
     library = Path(root_value) / "-".join(requirements)
-    library.mkdir(parents=True)
+    library.mkdir(parents=True, exist_ok=True)
     for package in base.iterdir():
         if package.name in configured:
             continue
