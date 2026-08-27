@@ -45,6 +45,203 @@ mcp-console serve
 `mcp-console serve` communicates with its MCP client over standard input and output.
 It waits for MCP protocol input rather than presenting an interactive terminal prompt.
 
+## Python integrations
+
+The Python package exposes `MCPConsole`, a stateful async connection to `mcp-console serve`.
+It owns only the local MCP subprocess and MCP client session.
+The application continues to create and own its chat client, agent, Codex client, threads, and tool loop.
+
+Install the extra for the interface you use:
+
+```sh
+pip install "mcp-console[client]"
+pip install "mcp-console[chatlas]"
+pip install "mcp-console[openai]"
+pip install "mcp-console[openai-agents]"
+pip install "mcp-console[anthropic]"
+pip install "mcp-console[codex]"
+pip install "mcp-console[codex-sdk]"  # legacy package linked below
+```
+
+All integrations default to the `mcp-console` executable installed in the current Python environment and the `serve` argument.
+Pass `command=` and `args=` to `MCPConsole` or an individual helper to override that command.
+
+### Callable `send`
+
+`MCPConsole.send` mirrors the server's sole MCP tool and preserves one console session across calls:
+
+```python
+from mcp_console import MCPConsole
+
+async with MCPConsole() as console:
+    print(await console.send(r="x <- 6 * 7; x"))
+    print(await console.send(python="r.x + 1"))
+```
+
+The object is also callable, so `await console(python="...")` is equivalent.
+This function-style surface is useful with frameworks that register ordinary Python callables.
+It returns text and compact placeholders for non-text MCP content.
+Use the native MCP integrations below when complete multimodal MCP results are important.
+
+### chatlas
+
+Register the native stdio MCP server on a chat object that the application already owns:
+
+```python
+from chatlas import ChatOpenAI
+from mcp_console import MCPConsole
+
+chat = ChatOpenAI()
+console = MCPConsole()
+await console.register_chatlas(chat)
+
+try:
+    await chat.chat_async("Use the console to calculate the first 20 Fibonacci numbers.")
+finally:
+    await chat.cleanup_mcp_tools()
+```
+
+For function-style registration, keep the console connection alive and register its bound method:
+
+```python
+async with MCPConsole() as console:
+    chat.register_tool(console.send)
+    await chat.chat_async("Use the console to calculate the first 20 Fibonacci numbers.")
+```
+
+### OpenAI Responses API
+
+`openai_responses_tool()` returns a small dispatcher object.
+Its `definition` slots into the standard `tools=` argument, and calling the object with a response function call produces the corresponding `function_call_output` item:
+
+```python
+from openai import AsyncOpenAI
+from mcp_console import MCPConsole
+
+client = AsyncOpenAI()
+
+async with MCPConsole() as console:
+    tool = console.openai_responses_tool()
+    response = await client.responses.create(
+        model="your-model",
+        input="Use the console to calculate the first 20 Fibonacci numbers.",
+        tools=[tool.definition],
+    )
+
+    while calls := [
+        item
+        for item in response.output
+        if item.type == "function_call" and item.name == "send"
+    ]:
+        response = await client.responses.create(
+            model="your-model",
+            previous_response_id=response.id,
+            input=[await tool(call) for call in calls],
+            tools=[tool.definition],
+        )
+
+    print(response.output_text)
+```
+
+The application owns the OpenAI client and response loop.
+The dispatcher reads the live MCP tool schema and preserves text and image output, but owns no model state.
+
+### OpenAI Agents SDK
+
+The most direct Agents integration returns the SDK's native `MCPServerStdio`, which is supplied through the normal `Agent.mcp_servers` field:
+
+```python
+from agents import Agent, Runner
+from mcp_console import MCPConsole
+
+console = MCPConsole()
+
+async with console.openai_agents_server() as server:
+    agent = Agent(
+        name="Data analyst",
+        instructions="Use MCP Console for calculations and data analysis.",
+        mcp_servers=[server],
+    )
+    result = await Runner.run(agent, "Fit a line through (1, 2), (2, 4), and (3, 5).")
+    print(result.final_output)
+```
+
+A function-tool form is also available:
+
+```python
+async with MCPConsole() as console:
+    agent = Agent(
+        name="Data analyst",
+        tools=[console.openai_agents_tool()],
+    )
+    result = await Runner.run(agent, "Use the console to calculate 20!.")
+```
+
+In both cases, MCP Console creates neither the `Agent` nor the `Runner`.
+
+### Anthropic Python SDK
+
+The callable form returns a native Anthropic async function tool that can be supplied directly to the SDK's tool runner:
+
+```python
+from anthropic import AsyncAnthropic
+from mcp_console import MCPConsole
+
+client = AsyncAnthropic()
+
+async with MCPConsole() as console:
+    runner = client.beta.messages.tool_runner(
+        model="your-model",
+        max_tokens=4096,
+        tools=[console.anthropic_tool()],
+        messages=[
+            {
+                "role": "user",
+                "content": "Use the console to calculate the first 20 Fibonacci numbers.",
+            }
+        ],
+    )
+    async for message in runner:
+        print(message)
+```
+
+For native MCP conversion, including richer MCP content handling, use `console.anthropic_tools()` as the context manager and pass the yielded list to `tools=`.
+
+### Codex Python SDK
+
+The current official `openai-codex` package exposes a per-thread `config=` argument on `thread_start()`.
+`codex_config()` returns an ordinary mapping that slots into that argument:
+
+```python
+from openai_codex import Codex
+from mcp_console import MCPConsole
+
+console = MCPConsole()
+
+with Codex() as codex:
+    thread = codex.thread_start(config=console.codex_config())
+    result = thread.run("Use MCP Console to inspect and summarize measurements.csv.")
+    print(result.final_response)
+```
+
+The older `openai-codex-sdk` 0.1.11 package linked in the original request exposes neither thread-level tools nor a generic Codex config argument.
+There is therefore no native tool object to supply to a thread.
+A compatibility context manager is available, but it yields only constructor options; the application still creates and owns the Codex client and threads:
+
+```python
+from openai_codex_sdk import Codex
+from mcp_console import MCPConsole
+
+console = MCPConsole()
+
+with console.openai_codex_sdk_options() as options:
+    codex = Codex(options)
+    thread = codex.start_thread()
+    result = await thread.run("Use MCP Console to inspect measurements.csv.")
+```
+
+The compatibility helper uses a temporary Codex executable shim to supply MCP configuration because that older SDK has no native insertion point.
+
 ## What it is useful for
 
 MCP Console is intended for iterative computational work: inspecting and transforming data, fitting models, running simulations, making plots, debugging code, and checking exact results.
@@ -179,7 +376,7 @@ scripts/test --update BOUNDARY/SUITE[::CASE]
 ```
 
 `scripts/format` attempts each installed formatter and leaves failures visible while continuing with the remaining formatters.
-`scripts/check` validates extracted runtime sources, checks Rust formatting and Clippy, runs Rust tests, and runs the complete transcript suite.
+`scripts/check` validates extracted runtime sources, checks the Python integrations, checks Rust formatting and Clippy, runs Rust tests, and runs the complete transcript suite.
 
 ## Documentation
 

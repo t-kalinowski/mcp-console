@@ -41,7 +41,7 @@ scripts/test --update BOUNDARY/SUITE[::CASE]
 
 `scripts/format` attempts Ruff, Yamark, rustfmt, and Air in sequence.
 A missing or failing formatter does not prevent the remaining formatters from running or make the script fail, so review its output and resulting changes.
-`scripts/check` validates extracted runtime sources, checks Rust formatting and Clippy, runs Rust tests, and runs the complete transcript suite.
+`scripts/check` validates extracted runtime sources, checks the Python integrations, checks Rust formatting and Clippy, runs Rust tests, and runs the complete transcript suite.
 
 ### Transcript goldens
 
@@ -84,6 +84,7 @@ Keep these ownership rules intact:
 - `src/main.rs`, `src/cli.rs` — binary entry point and command definitions.
 - `src/server.rs`, `src/server_transport.rs` — MCP tools, stdio transport, and response-delivery ownership.
 - `src/transcript.rs`, `src/transcript/markdown.rs` — append-only tool journal, Markdown and source-only Quarto projections, and image artifacts.
+- `python/mcp_console/` — callable MCP client plus chatlas, OpenAI, Anthropic, and Codex integration objects.
 
 ### Protocols, relay, and worker orchestration
 
@@ -116,6 +117,7 @@ Keep these ownership rules intact:
 - `tests/transcripts/relay_worker/` — worker sideband and standard-stream behavior through the relay.
 - `tests/transcripts/cli/` — direct CLI transcripts.
 - `tests/transcripts/golden/` — generated YAML 1.2 snapshots.
+- `tests/python_api.py` — Python integration delegation, output conversion, and lifecycle tests.
 - `scripts/release.py`, `tests/release.py` — release validation and installed-wheel acceptance.
 - `scripts/test` — binary build and selected transcript execution.
 - `scripts/validate_runtime_sources.py` — extracted R/Python inventory and syntax validation.
