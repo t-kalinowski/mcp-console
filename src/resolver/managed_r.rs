@@ -15,20 +15,32 @@ const UV_UNAVAILABLE_STATUSES: &[i32] = &[42, 43, 44];
 #[derive(Clone)]
 struct IrCommand {
     program: OsString,
+    display_program: OsString,
     arguments: Vec<OsString>,
 }
 
 impl IrCommand {
-    fn direct() -> Self {
+    fn direct(program: impl Into<OsString>) -> Self {
         Self {
-            program: OsString::from("ir"),
+            program: program.into(),
+            display_program: OsString::from("ir"),
             arguments: Vec::new(),
         }
     }
 
     fn through_uv(uv: impl Into<OsString>) -> Self {
+        let program = uv.into();
+        Self::through_uv_with_display(program.clone(), program)
+    }
+
+    fn through_path_uv(uv: impl Into<OsString>) -> Self {
+        Self::through_uv_with_display(uv.into(), OsString::from("uv"))
+    }
+
+    fn through_uv_with_display(program: OsString, display_program: OsString) -> Self {
         Self {
-            program: uv.into(),
+            program,
+            display_program,
             arguments: ["tool", "run", "--from", "r-lib-ir", "ir"]
                 .into_iter()
                 .map(OsString::from)
@@ -42,12 +54,12 @@ impl IrCommand {
         command
     }
 
-    fn program(&self) -> &Path {
-        Path::new(&self.program)
+    fn display_program(&self) -> &Path {
+        Path::new(&self.display_program)
     }
 
     fn label(&self) -> String {
-        std::iter::once(self.program.as_os_str())
+        std::iter::once(self.display_program.as_os_str())
             .chain(self.arguments.iter().map(OsString::as_os_str))
             .map(|argument| argument.to_string_lossy())
             .collect::<Vec<_>>()
@@ -176,14 +188,16 @@ fn discover_r_resolver_with(
     python: &mut super::ManagedPythonResolverConfiguration,
 ) -> Result<Option<ManagedRResolverConfiguration>, String> {
     let rscript = discover_rscript(resolver, on_started)?;
-    let ir = if path_contains_entry("ir") {
-        if path_contains_entry("uv") {
-            python.set_default_uv("uv");
+    let path_ir = find_path_entry("ir");
+    let path_uv = find_path_entry("uv");
+    let ir = if let Some(ir) = path_ir {
+        if let Some(uv) = path_uv.as_ref() {
+            python.set_default_uv(uv.as_os_str().to_os_string());
         }
-        IrCommand::direct()
-    } else if path_contains_entry("uv") {
-        python.set_default_uv("uv");
-        IrCommand::through_uv("uv")
+        IrCommand::direct(ir)
+    } else if let Some(uv) = path_uv {
+        python.set_default_uv(uv.as_os_str().to_os_string());
+        IrCommand::through_path_uv(uv)
     } else if let Some(uv) = python
         .explicit_uv()
         .filter(|uv| *uv != OsStr::new("managed"))
@@ -349,7 +363,7 @@ fn resolve_r_with_process(
         resolver,
         &mut child,
         on_started,
-        configuration.ir.program(),
+        configuration.ir.display_program(),
         "R package",
     )?;
     if !output.status.success() {
@@ -390,14 +404,19 @@ fn resolve_r_with_process(
     })
 }
 
-fn path_contains_entry(program: &str) -> bool {
-    let Some(path) = std::env::var_os("PATH") else {
-        return false;
-    };
+fn find_path_entry(program: &str) -> Option<PathBuf> {
+    let path = std::env::var_os("PATH")?;
     // A broken symlink or non-executable entry is a broken installation, not
     // permission to select a different resolver.
     std::env::split_paths(&path)
-        .any(|directory| std::fs::symlink_metadata(directory.join(program)).is_ok())
+        .map(|directory| {
+            if directory.as_os_str().is_empty() {
+                PathBuf::from(".").join(program)
+            } else {
+                directory.join(program)
+            }
+        })
+        .find(|candidate| std::fs::symlink_metadata(candidate).is_ok())
 }
 
 fn validate_ir_version(
@@ -417,8 +436,13 @@ fn validate_ir_version(
             ir.label()
         )
     })?;
-    let output =
-        collect_resolver_output(resolver, &mut child, on_started, ir.program(), "R package")?;
+    let output = collect_resolver_output(
+        resolver,
+        &mut child,
+        on_started,
+        ir.display_program(),
+        "R package",
+    )?;
     if !output.status.success() {
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);

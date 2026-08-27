@@ -134,11 +134,15 @@ fn stdio_console_does_not_fallback_when_path_ir_cannot_start() {
 
     let test_directory = TestDirectory::new("broken-path-ir-selection");
     let fake_bin = test_directory.path().join("bin");
+    let fallback_bin = test_directory.path().join("fallback-bin");
     let broken_ir = fake_bin.join("ir");
     let fake_uv = fake_bin.join("uv");
+    let fallback_ir = fallback_bin.join("ir");
     let missing_interpreter = test_directory.path().join("missing-ir-interpreter");
     let uv_used = test_directory.path().join("uv-used");
+    let fallback_ir_used = test_directory.path().join("fallback-ir-used");
     fs::create_dir(&fake_bin).expect("fake bin directory should be created");
+    fs::create_dir(&fallback_bin).expect("fallback bin directory should be created");
     fs::write(&broken_ir, format!("#!{}\n", missing_interpreter.display()))
         .expect("broken ir should be written");
     fs::write(
@@ -146,15 +150,18 @@ fn stdio_console_does_not_fallback_when_path_ir_cannot_start() {
         "#!/bin/sh\n: > \"$MCP_CONSOLE_UV_USED\"\nexit 99\n",
     )
     .expect("fake uv should be written");
+    fs::write(
+        &fallback_ir,
+        "#!/bin/sh\n: > \"$MCP_CONSOLE_FALLBACK_IR_USED\"\nexit 99\n",
+    )
+    .expect("fallback ir should be written");
     fs::set_permissions(&broken_ir, fs::Permissions::from_mode(0o755))
         .expect("broken ir should be executable");
     fs::set_permissions(&fake_uv, fs::Permissions::from_mode(0o755))
         .expect("fake uv should be executable");
-    let original_path = std::env::var_os("PATH").unwrap_or_default();
-    let path = std::env::join_paths(std::iter::once(fake_bin).chain(
-        std::env::split_paths(&original_path).filter(|directory| !directory.join("ir").is_file()),
-    ))
-    .expect("test PATH should be valid");
+    fs::set_permissions(&fallback_ir, fs::Permissions::from_mode(0o755))
+        .expect("fallback ir should be executable");
+    let path = std::env::join_paths([fake_bin, fallback_bin]).expect("test PATH should be valid");
 
     let output = Command::new(env!("CARGO_BIN_EXE_mcp-console"))
         .arg("serve")
@@ -162,11 +169,16 @@ fn stdio_console_does_not_fallback_when_path_ir_cannot_start() {
         .env("R_HOME", r_home.trim())
         .env("RETICULATE_PYTHON", "/usr/bin/python3")
         .env("MCP_CONSOLE_UV_USED", &uv_used)
+        .env("MCP_CONSOLE_FALLBACK_IR_USED", &fallback_ir_used)
         .output()
         .expect("mcp-console should run");
 
     assert!(!output.status.success());
     assert!(!uv_used.exists(), "uv should not be used");
+    assert!(
+        !fallback_ir_used.exists(),
+        "a later PATH ir should not be used"
+    );
     let stderr = String::from_utf8(output.stderr).expect("server stderr should be valid UTF-8");
     assert!(
         stderr.contains("failed to check R package resolver version with `ir`"),
@@ -186,28 +198,40 @@ fn stdio_console_does_not_fallback_when_path_uv_cannot_start() {
 
     let test_directory = TestDirectory::new("broken-path-uv-selection");
     let fake_bin = test_directory.path().join("bin");
+    let fallback_bin = test_directory.path().join("fallback-bin");
     let broken_uv = fake_bin.join("uv");
+    let fallback_uv = fallback_bin.join("uv");
     let missing_interpreter = test_directory.path().join("missing-uv-interpreter");
+    let fallback_uv_used = test_directory.path().join("fallback-uv-used");
     fs::create_dir(&fake_bin).expect("fake bin directory should be created");
+    fs::create_dir(&fallback_bin).expect("fallback bin directory should be created");
     fs::write(&broken_uv, format!("#!{}\n", missing_interpreter.display()))
         .expect("broken uv should be written");
+    fs::write(
+        &fallback_uv,
+        "#!/bin/sh\n: > \"$MCP_CONSOLE_FALLBACK_UV_USED\"\nexit 99\n",
+    )
+    .expect("fallback uv should be written");
     fs::set_permissions(&broken_uv, fs::Permissions::from_mode(0o755))
         .expect("broken uv should be executable");
-    let original_path = std::env::var_os("PATH").unwrap_or_default();
-    let path = std::env::join_paths(std::iter::once(fake_bin).chain(
-        std::env::split_paths(&original_path).filter(|directory| !directory.join("ir").is_file()),
-    ))
-    .expect("test PATH should be valid");
+    fs::set_permissions(&fallback_uv, fs::Permissions::from_mode(0o755))
+        .expect("fallback uv should be executable");
+    let path = std::env::join_paths([fake_bin, fallback_bin]).expect("test PATH should be valid");
 
     let output = Command::new(env!("CARGO_BIN_EXE_mcp-console"))
         .arg("serve")
         .env("PATH", path)
         .env("R_HOME", r_home.trim())
         .env("RETICULATE_PYTHON", "/usr/bin/python3")
+        .env("MCP_CONSOLE_FALLBACK_UV_USED", &fallback_uv_used)
         .output()
         .expect("mcp-console should run");
 
     assert!(!output.status.success());
+    assert!(
+        !fallback_uv_used.exists(),
+        "a later PATH uv should not be used"
+    );
     let stderr = String::from_utf8(output.stderr).expect("server stderr should be valid UTF-8");
     assert!(
         stderr.contains(
@@ -415,7 +439,8 @@ exec "$MCP_CONSOLE_REAL_UV" "$@"
 
     let values = fs::read_to_string(uv_log).expect("host uv invocation should be recorded");
     assert!(!values.is_empty());
-    assert!(values.lines().all(|value| value == "uv"), "{values}");
+    let expected = fake_uv.to_string_lossy();
+    assert!(values.lines().all(|value| value == expected), "{values}");
 }
 
 #[cfg(target_os = "macos")]
