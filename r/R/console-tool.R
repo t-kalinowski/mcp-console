@@ -1,33 +1,46 @@
 #' Use MCP Console as an ellmer tool
 #'
-#' `mcp_console_tool()` uses `mcp-console` from `PATH` when available, otherwise
-#' resolves it with [reticulate::uv_run_tool()]. It starts `mcp-console serve`
-#' and returns its `send` tool as an [ellmer::ToolDef].
-#' The server process and its persistent R, Python, and DuckDB state live as
-#' long as the returned tool remains reachable.
+#' `console_tool()` starts `mcp-console serve` and returns its `send` tool as
+#' an [ellmer::ToolDef]. The server process and its persistent R, Python, and
+#' DuckDB state live as long as the returned tool remains reachable.
 #'
-#' @param from A fallback Python package requirement passed to
-#'   [reticulate::uv_run_tool()] when `mcp-console` is not on `PATH`. The default
-#'   resolves the latest available `mcp-console` package; use
-#'   `"mcp-console==0.0.2"` to pin a fallback version.
-#' @return An [ellmer::ToolDef] for [ellmer::Chat]`$register_tool()`.
+#' @section Executable resolution:
+#'
+#' * If `path` is supplied, `console_tool()` uses that executable directly.
+#' * Otherwise, if `version` is supplied, it resolves that published version
+#'   with [reticulate::uv_run_tool()] without consulting `PATH`.
+#' * Otherwise, it uses `mcp-console` from `PATH` when available and falls back
+#'   to the latest published version through [reticulate::uv_run_tool()].
+#'
+#' `path` and `version` are mutually exclusive.
+#'
+#' @param ... Must be empty. Reserved for future use.
+#' @param path `NULL`, or a path to an `mcp-console` executable.
+#' @param version `NULL`, or one published `mcp-console` version, such as
+#'   `"0.0.2"`.
+#' @return An [ellmer::ToolDef] to pass to an ellmer chat's
+#'   `$register_tool()` method.
 #' @examples
 #' \dontrun{
 #' chat <- ellmer::chat_openai()
-#' chat$register_tool(mcp_console_tool())
+#' chat$register_tool(console_tool())
 #' chat$chat(
 #'   "Tell me something interesting about mtcars. Use the console as a workbench."
 #' )
+#'
+#' console_tool(path = Sys.which("mcp-console"))
+#' console_tool(version = "0.0.2")
 #' }
 #' @export
-mcp_console_tool <- function(from = "mcp-console") {
-  if (
-    !is.character(from) || length(from) != 1L || is.na(from) || !nzchar(from)
-  ) {
-    stop("`from` must be one non-empty string.", call. = FALSE)
+console_tool <- function(..., path = NULL, version = NULL) {
+  if (...length() != 0L) {
+    stop("`...` must be empty.", call. = FALSE)
+  }
+  if (!is.null(path) && !is.null(version)) {
+    stop("Only one of `path` and `version` may be supplied.", call. = FALSE)
   }
 
-  client <- new_mcp_client(resolve_mcp_console(from))
+  client <- new_mcp_client(resolve_mcp_console(path, version))
   ready <- FALSE
   on.exit(if (!ready) close_mcp_client(client), add = TRUE)
 
@@ -119,12 +132,46 @@ ellmer_argument_schema <- function(schema) {
   schema
 }
 
-resolve_mcp_console <- function(from) {
+resolve_mcp_console <- function(path, version) {
+  if (!is.null(path)) {
+    if (
+      !is.character(path) || length(path) != 1L || is.na(path) || !nzchar(path)
+    ) {
+      stop("`path` must be NULL or one non-empty string.", call. = FALSE)
+    }
+    if (!file.exists(path) || isTRUE(file.info(path)$isdir)) {
+      stop("`path` must identify an existing file.", call. = FALSE)
+    }
+    path <- normalizePath(path, mustWork = TRUE)
+    if (file.access(path, mode = 1L) != 0L) {
+      stop("`path` must identify an executable file.", call. = FALSE)
+    }
+    return(path)
+  }
+
+  if (
+    !is.null(version) &&
+      (!is.character(version) ||
+        length(version) != 1L ||
+        is.na(version) ||
+        !nzchar(version))
+  ) {
+    stop("`version` must be NULL or one non-empty string.", call. = FALSE)
+  }
+
+  if (!is.null(version)) {
+    return(resolve_mcp_console_uv(paste0("mcp-console==", version)))
+  }
+
   binary <- unname(Sys.which("mcp-console"))
   if (nzchar(binary)) {
     return(normalizePath(binary, mustWork = TRUE))
   }
 
+  resolve_mcp_console_uv("mcp-console")
+}
+
+resolve_mcp_console_uv <- function(from) {
   code <- paste(
     "import os, pathlib, sys",
     "name = 'mcp-console.exe' if os.name == 'nt' else 'mcp-console'",
