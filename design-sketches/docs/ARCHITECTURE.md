@@ -488,12 +488,12 @@ There is no universal interpreted R call such as `.mcp_console_eval(id)` around 
 
 The stack contract is intentionally asymmetric:
 
-| Input | Required semantic boundary | Console-owned interpreted R frame |
-| --- | --- | ---: |
-| R | native top-level R cell behavior | no |
-| Python | private reticulate cell boundary | minimal and truthful if present |
-| SQL | private DBI/DuckDB boundary | minimal and truthful if present |
-| stdin | append to worker input stream | no new top-level frame |
+| Input  | Required semantic boundary       | Console-owned interpreted R frame |
+| ------ | -------------------------------- | --------------------------------: |
+| R      | native top-level R cell behavior |                                no |
+| Python | private reticulate cell boundary |   minimal and truthful if present |
+| SQL    | private DBI/DuckDB boundary      |   minimal and truthful if present |
+| stdin  | append to worker input stream    |            no new top-level frame |
 
 This asymmetry follows the actual implementation boundaries and should be documented rather than concealed.
 

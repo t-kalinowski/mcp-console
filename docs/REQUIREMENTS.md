@@ -24,11 +24,11 @@ The current API has no operation to remove a requirement, replace a manifest, se
 
 The built-in server prepares these defaults before accepting MCP input:
 
-| Environment | Defaults |
-| --- | --- |
-| R | `tidyverse`, `github::rstudio/reticulate`, `DBI`, `duckdb`, `arrow`, and `nanoarrow` |
-| Python | NumPy and pandas when Python is server-managed |
-| DuckDB | ICU and JSON extensions |
+| Environment | Defaults                                                                             |
+| ----------- | ------------------------------------------------------------------------------------ |
+| R           | `tidyverse`, `github::rstudio/reticulate`, `DBI`, `duckdb`, `arrow`, and `nanoarrow` |
+| Python      | NumPy and pandas when Python is server-managed                                       |
+| DuckDB      | ICU and JSON extensions                                                              |
 
 These defaults apply when startup establishes an `ir` resolver from `ir` on `PATH`, `uv` on `PATH`, an explicit `uv` selection, or ambient reticulate.
 Server-managed Python additionally needs `uv`; when only `ir` is on `PATH`, the resolved reticulate installation supplies it.
