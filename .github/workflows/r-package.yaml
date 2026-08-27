@@ -33,7 +33,6 @@ jobs:
           working-directory: r
           packages: |
             deps::.
-            any::sessioninfo
 
       - name: Check package
         working-directory: r

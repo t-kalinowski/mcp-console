@@ -20,7 +20,9 @@ fake_mcp_console <- function(languages = c("r", "python", "sql")) {
       "  line <- readLines(input, n = 1L, warn = FALSE)",
       "  if (length(line) == 0L) break",
       "  request <- fromJSON(line, simplifyVector = FALSE)",
-      "  if (identical(request$method, 'notifications/initialized')) next",
+      "  if (request$method %in% c(",
+      "    'notifications/initialized', 'notifications/cancelled'",
+      "  )) next",
       "  interrupt_parent <- FALSE",
       "  if (identical(request$method, 'initialize')) {",
       "    result <- list(",
@@ -93,7 +95,17 @@ fake_mcp_console <- function(languages = c("r", "python", "sql")) {
       "  } else {",
       "    stop('unexpected method')",
       "  }",
-      "  if (isTRUE(interrupt_parent)) tools::pskill(parent_pid, tools::SIGINT)",
+      "  if (isTRUE(interrupt_parent)) {",
+      "    tools::pskill(parent_pid, tools::SIGINT)",
+      "    cancelled <- fromJSON(",
+      "      readLines(input, n = 1L, warn = FALSE),",
+      "      simplifyVector = FALSE",
+      "    )",
+      "    stopifnot(",
+      "      identical(cancelled$method, 'notifications/cancelled'),",
+      "      identical(cancelled$params$requestId, request$id)",
+      "    )",
+      "  }",
       "  response <- list(jsonrpc = '2.0', id = request$id, result = result)",
       "  cat(toJSON(response, auto_unbox = TRUE, null = 'null'), '\n', sep = '')",
       "  flush(stdout())",
@@ -118,7 +130,42 @@ fake_mcp_console <- function(languages = c("r", "python", "sql")) {
   launcher
 }
 
-test_that("mcp_console_tool resolves, initializes, and forwards calls", {
+with_path <- function(path, code) {
+  old <- Sys.getenv("PATH")
+  on.exit(Sys.setenv(PATH = old), add = TRUE)
+  Sys.setenv(PATH = path)
+  force(code)
+}
+
+without_mcp_console <- function(code) {
+  directory <- tempfile("empty-path-")
+  dir.create(directory)
+  with_path(directory, code)
+}
+
+test_that("mcp_console_tool prefers mcp-console on PATH", {
+  directory <- tempfile("mcp-console-path-")
+  dir.create(directory)
+  binary <- file.path(directory, "mcp-console")
+  file.copy(fake_mcp_console(), binary)
+  Sys.chmod(binary, "0755")
+
+  with_path(directory, {
+    testthat::local_mocked_bindings(
+      uv_run_tool = function(...) stop("uv fallback used"),
+      .package = "mcp.console"
+    )
+
+    tool <- mcp_console_tool(from = "mcp-console==test")
+
+    expect_equal(format(tool(r = "1 + 1")), "1 + 1")
+
+    rm(tool)
+    gc()
+  })
+})
+
+test_that("mcp_console_tool falls back to uv, initializes, and forwards calls", {
   binary <- fake_mcp_console()
   calls <- new.env(parent = emptyenv())
   testthat::local_mocked_bindings(
@@ -131,7 +178,9 @@ test_that("mcp_console_tool resolves, initializes, and forwards calls", {
     .package = "mcp.console"
   )
 
-  tool <- mcp_console_tool(from = "mcp-console==test")
+  tool <- without_mcp_console(
+    mcp_console_tool(from = "mcp-console==test")
+  )
 
   expect_equal(calls$tool, "python")
   expect_equal(calls$from, "mcp-console==test")
@@ -188,7 +237,9 @@ test_that("mcp_console_tool uses the server's configured language fields", {
     .package = "mcp.console"
   )
 
-  tool <- mcp_console_tool(from = "mcp-console==test")
+  tool <- without_mcp_console(
+    mcp_console_tool(from = "mcp-console==test")
+  )
 
   expect_named(
     formals(tool),
@@ -207,7 +258,9 @@ test_that("mcp_console_tool preserves content from failed calls", {
     .package = "mcp.console"
   )
 
-  tool <- mcp_console_tool(from = "mcp-console==test")
+  tool <- without_mcp_console(
+    mcp_console_tool(from = "mcp-console==test")
+  )
   result <- tool(r = "error_plot()")
 
   expect_length(result, 3L)
@@ -220,18 +273,20 @@ test_that("mcp_console_tool preserves content from failed calls", {
   gc()
 })
 
-test_that("mcp_console_tool invalidates an interrupted client", {
+test_that("mcp_console_tool preserves state after an R interrupt", {
   binary <- fake_mcp_console()
   testthat::local_mocked_bindings(
     uv_run_tool = function(...) binary,
     .package = "mcp.console"
   )
 
-  tool <- mcp_console_tool(from = "mcp-console==test")
+  tool <- without_mcp_console(
+    mcp_console_tool(from = "mcp-console==test")
+  )
   condition <- tryCatch(tool(r = "interrupt()"), interrupt = identity)
 
   expect_s3_class(condition, "interrupt")
-  expect_error(tool(r = "1 + 1"), "mcp-console is not running", fixed = TRUE)
+  expect_equal(format(tool(r = "1 + 1")), "1 + 1")
 
   rm(tool)
   gc()

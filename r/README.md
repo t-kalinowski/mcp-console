@@ -27,9 +27,10 @@ chat$chat(
 The console keeps its R, Python, and DuckDB state between calls.
 When using `chat$chat_async()`, set `tool_mode = "sequential"` when later calls depend on earlier ones.
 
-After interrupting a tool call, construct and register a new tool before continuing.
+`mcp_console_tool()` uses `mcp-console` from `PATH` when available.
+If it is not on `PATH`, MCP Console is installed automatically.
 
-Pin a specific MCP Console version if needed:
+When `mcp-console` is not on `PATH`, pin a specific fallback version if needed:
 
 ```r
 tool <- mcp_console_tool(from = "mcp-console==0.0.2")

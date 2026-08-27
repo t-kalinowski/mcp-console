@@ -1,15 +1,15 @@
 #' Use MCP Console as an ellmer tool
 #'
-#' `mcp_console_tool()` resolves the `mcp-console` executable, starts
-#' `mcp-console serve`, and returns its `send` tool as an [ellmer::ToolDef].
+#' `mcp_console_tool()` uses `mcp-console` from `PATH` when available, otherwise
+#' resolves it with [reticulate::uv_run_tool()]. It starts `mcp-console serve`
+#' and returns its `send` tool as an [ellmer::ToolDef].
 #' The server process and its persistent R, Python, and DuckDB state live as
 #' long as the returned tool remains reachable.
-#' Interrupting an in-progress call closes that process so a later call cannot
-#' consume its unread response. Construct and register a new tool to continue.
 #'
-#' @param from A Python package requirement passed to
-#'   [reticulate::uv_run_tool()]. The default resolves the latest available
-#'   `mcp-console` package; use `"mcp-console==0.0.2"` to pin a version.
+#' @param from A fallback Python package requirement passed to
+#'   [reticulate::uv_run_tool()] when `mcp-console` is not on `PATH`. The default
+#'   resolves the latest available `mcp-console` package; use
+#'   `"mcp-console==0.0.2"` to pin a fallback version.
 #' @return An [ellmer::ToolDef] for [ellmer::Chat]`$register_tool()`.
 #' @examples
 #' \dontrun{
@@ -52,24 +52,8 @@ mcp_console_tool <- function(from = "mcp-console") {
   }
   metadata <- tools[[which(matches)]]
 
-  language_fields <- c("r", "python", "sql")
-  stable_fields <- c("control", "requirements", "stdin", "timeout_ms")
   properties <- metadata$inputSchema$properties
-  property_fields <- names(properties)
-  configured_languages <- language_fields[language_fields %in% property_fields]
-  fields <- c(configured_languages, stable_fields)
-  if (
-    !is.list(properties) ||
-      anyDuplicated(property_fields) ||
-      length(configured_languages) == 0L ||
-      !setequal(property_fields, fields)
-  ) {
-    stop(
-      "The installed mcp-console `send` schema is incompatible with this package.",
-      call. = FALSE
-    )
-  }
-  properties <- properties[fields]
+  fields <- names(properties)
   properties <- lapply(properties, ellmer_argument_schema)
 
   send <- function() {
@@ -108,76 +92,39 @@ mcp_console_tool <- function(from = "mcp-console") {
 }
 
 ellmer_argument_schema <- function(schema) {
-  types <- unlist(schema$type, use.names = FALSE)
-  if (length(types) == 0L || anyNA(types) || !all(nzchar(types))) {
-    stop(
-      "The installed mcp-console `send` schema is incompatible with this package.",
-      call. = FALSE
-    )
-  }
-  types <- unique(types[types != "null"])
-  if (length(types) == 0L) {
-    stop(
-      "The installed mcp-console `send` schema is incompatible with this package.",
-      call. = FALSE
-    )
-  }
+  types <- setdiff(unlist(schema$type, use.names = FALSE), "null")
   schema$type <- if (length(types) == 1L) types[[1L]] else as.list(types)
 
   if (!is.null(schema$enum)) {
-    enum <- as.list(schema$enum)
-    if (!any(vapply(enum, is.null, logical(1)))) {
-      enum <- c(enum, list(NULL))
-    }
-    schema$enum <- enum
+    schema$enum <- unique(c(as.list(schema$enum), list(NULL)))
   }
 
-  if ("object" %in% types && is.list(schema$properties)) {
-    property_names <- names(schema$properties)
-    required <- unlist(schema$required, use.names = FALSE)
-    if (
-      is.null(property_names) ||
-        anyDuplicated(property_names) ||
-        anyNA(required) ||
-        !all(required %in% property_names)
-    ) {
-      stop(
-        "The installed mcp-console `send` schema is incompatible with this package.",
-        call. = FALSE
-      )
-    }
-    optional <- !property_names %in% required
-    schema$properties[optional] <- lapply(
-      schema$properties[optional],
-      function(property) {
-        property_types <- unlist(property$type, use.names = FALSE)
-        if (
-          length(property_types) == 0L ||
-            anyNA(property_types) ||
-            !all(nzchar(property_types))
-        ) {
-          stop(
-            "The installed mcp-console `send` schema is incompatible with this package.",
-            call. = FALSE
-          )
-        }
-        property_types <- unique(c(property_types, "null"))
-        property$type <- as.list(property_types)
-        if (!is.null(property$enum)) {
-          property_enum <- as.list(property$enum)
-          if (!any(vapply(property_enum, is.null, logical(1)))) {
-            property$enum <- c(property_enum, list(NULL))
-          }
-        }
-        property
-      }
-    )
-    schema$required <- as.list(property_names)
+  if (!"object" %in% types) {
+    return(schema)
   }
+
+  required <- unlist(schema$required, use.names = FALSE)
+  optional <- !names(schema$properties) %in% required
+  schema$properties[optional] <- lapply(
+    schema$properties[optional],
+    function(property) {
+      property$type <- unique(c(as.list(property$type), "null"))
+      if (!is.null(property$enum)) {
+        property$enum <- unique(c(as.list(property$enum), list(NULL)))
+      }
+      property
+    }
+  )
+  schema$required <- as.list(names(schema$properties))
   schema
 }
 
 resolve_mcp_console <- function(from) {
+  binary <- unname(Sys.which("mcp-console"))
+  if (nzchar(binary)) {
+    return(normalizePath(binary, mustWork = TRUE))
+  }
+
   code <- paste(
     "import os, pathlib, sys",
     "name = 'mcp-console.exe' if os.name == 'nt' else 'mcp-console'",
@@ -226,6 +173,7 @@ new_mcp_client <- function(binary) {
   )
   client$id <- 1L
   client$output <- ""
+  client$abandoned <- integer()
   reg.finalizer(client, close_mcp_client, onexit = TRUE)
   client
 }
@@ -253,10 +201,33 @@ mcp_request <- function(client, method, params = NULL) {
   on.exit(if (!complete) close_mcp_client(client), add = TRUE)
   mcp_write(client, message)
 
-  response <- mcp_read(client)
-  if (!identical(response$id, id)) {
-    stop("mcp-console sent an unexpected JSON-RPC message.", call. = FALSE)
-  }
+  response <- tryCatch(
+    mcp_read(client, id),
+    interrupt = function(condition) {
+      client$abandoned <- c(client$abandoned, id)
+      cancelled <- tryCatch(
+        {
+          mcp_write(
+            client,
+            list(
+              jsonrpc = "2.0",
+              method = "notifications/cancelled",
+              params = list(
+                requestId = id,
+                reason = "User interrupted the request."
+              )
+            )
+          )
+          TRUE
+        },
+        error = function(...) FALSE
+      )
+      if (cancelled) {
+        complete <<- TRUE
+      }
+      stop(condition)
+    }
+  )
   complete <- TRUE
   if (!is.null(response$error)) {
     stop(
@@ -301,13 +272,25 @@ mcp_write <- function(client, message) {
   invisible()
 }
 
-mcp_read <- function(client) {
+mcp_read <- function(client, id) {
   repeat {
     newline <- regexpr("\n", client$output, fixed = TRUE)[[1L]]
     if (newline > 0L) {
       line <- substr(client$output, 1L, newline - 1L)
       client$output <- substr(client$output, newline + 1L, nchar(client$output))
-      return(jsonlite::fromJSON(sub("\r$", "", line), simplifyVector = FALSE))
+      response <- jsonlite::fromJSON(
+        sub("\r$", "", line),
+        simplifyVector = FALSE
+      )
+      if (identical(response$id, id)) {
+        return(response)
+      }
+      stale <- match(response$id, client$abandoned, nomatch = 0L)
+      if (stale > 0L) {
+        client$abandoned <- client$abandoned[-stale]
+        next
+      }
+      stop("mcp-console sent an unexpected JSON-RPC message.", call. = FALSE)
     }
 
     mcp_pump(client, 100)

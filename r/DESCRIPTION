@@ -3,10 +3,8 @@ Title: Use MCP Console with 'ellmer'
 Version: 0.0.0.9000
 Authors@R:
     person("Tomasz", "Kalinowski", , "kalinowskit@gmail.com", role = c("aut", "cre"))
-Description: Provides a thin 'ellmer' tool wrapper around the MCP Console
-    server. The package resolves the 'mcp-console' executable with
-    'reticulate', manages the server process with 'processx', and forwards the
-    server's single tool over its standard input and output streams.
+Description: Adds MCP Console to an 'ellmer' chat as a persistent workbench
+    for R, Python, and DuckDB.
 License: MIT + file LICENSE
 URL: https://github.com/t-kalinowski/mcp-console
 BugReports: https://github.com/t-kalinowski/mcp-console/issues
