@@ -2,15 +2,19 @@
 
 from __future__ import annotations
 
+import json
 import os
+import shlex
 import shutil
 import sysconfig
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, contextmanager
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import (
     Any,
     AsyncIterator,
     Dict,
+    Iterator,
     List,
     Mapping,
     Optional,
@@ -22,6 +26,7 @@ from typing import (
 __all__ = [
     "anthropic_tools",
     "openai_agents_server",
+    "openai_codex",
     "register_chatlas",
 ]
 
@@ -100,6 +105,70 @@ def openai_agents_server(
     server_params: Dict[str, Any] = dict(params or {})
     server_params.update(command=resolved_command, args=resolved_args)
     return MCPServerStdio(name=name, params=server_params, **kwargs)
+
+
+@contextmanager
+def openai_codex(
+    *,
+    command: Optional[Command] = None,
+    args: Optional[Sequence[Command]] = None,
+    server_name: str = "mcp-console",
+    options: Optional[Mapping[str, Any]] = None,
+) -> Iterator[Any]:
+    """Yield an ``openai_codex_sdk.Codex`` configured with MCP Console.
+
+    The helper preserves the SDK's native options and Codex configuration. It
+    temporarily replaces only ``codex_path_override`` with a launcher that adds
+    MCP server command and argument overrides before delegating to the resolved
+    Codex executable.
+    """
+    try:
+        from openai_codex_sdk import Codex
+        from openai_codex_sdk.exec import find_codex_path
+    except ImportError as error:
+        raise ImportError(
+            "The Codex integration requires openai-codex-sdk. Install it with "
+            "`pip install 'mcp-console[codex]'`."
+        ) from error
+
+    resolved_command, resolved_args = _stdio_command(command, args)
+    codex_options: Dict[str, Any] = dict(options or {})
+    snake_path = codex_options.pop("codex_path_override", None)
+    camel_path = codex_options.pop("codexPathOverride", None)
+    if snake_path is not None and camel_path is not None:
+        raise ValueError(
+            "options cannot contain both codex_path_override and codexPathOverride"
+        )
+    codex_path = snake_path if snake_path is not None else camel_path
+    if codex_path is None:
+        codex_path = find_codex_path()
+
+    table = f"mcp_servers.{json.dumps(server_name)}"
+    overrides = [
+        f"{table}.command={json.dumps(resolved_command)}",
+        f"{table}.args={json.dumps(resolved_args)}",
+    ]
+
+    with TemporaryDirectory(prefix="mcp-console-codex-") as directory:
+        launcher = Path(directory) / "codex"
+        delegated = shlex.quote(os.fspath(codex_path))
+        config_arguments = " ".join(
+            part
+            for override in overrides
+            for part in ("--config", shlex.quote(override))
+        )
+        launcher.write_text(
+            "#!/bin/sh\n"
+            'if [ "$#" -gt 0 ] && [ "$1" = "exec" ]; then\n'
+            "  shift\n"
+            f'  exec {delegated} exec {config_arguments} "$@"\n'
+            "fi\n"
+            f'exec {delegated} "$@"\n',
+            encoding="utf-8",
+        )
+        launcher.chmod(0o755)
+        codex_options["codex_path_override"] = str(launcher)
+        yield Codex(codex_options)
 
 
 @asynccontextmanager

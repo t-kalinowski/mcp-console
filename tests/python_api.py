@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import os
+import subprocess
 import sys
 import tempfile
 import types
@@ -111,6 +113,102 @@ class OpenAITests(unittest.TestCase):
                 }
             ],
         )
+
+
+class OpenAICodexTests(unittest.TestCase):
+    def test_openai_codex_injects_mcp_overrides_and_delegates(self) -> None:
+        calls = []
+
+        class Codex:
+            def __init__(self, options):
+                self.options = options
+                calls.append(options)
+
+        with tempfile.TemporaryDirectory() as directory:
+            directory_path = Path(directory)
+            captured = directory_path / "arguments.txt"
+            executable = directory_path / "real codex"
+            executable.write_text(
+                '#!/bin/sh\nprintf "%s\\n" "$@" > "$CAPTURE"\n',
+                encoding="utf-8",
+            )
+            executable.chmod(0o755)
+
+            sdk = types.ModuleType("openai_codex_sdk")
+            sdk.__path__ = []
+            sdk.Codex = Codex
+            sdk_exec = types.ModuleType("openai_codex_sdk.exec")
+            sdk_exec.find_codex_path = lambda: str(executable)
+            sdk.exec = sdk_exec
+
+            with patch.dict(
+                sys.modules,
+                {
+                    "openai_codex_sdk": sdk,
+                    "openai_codex_sdk.exec": sdk_exec,
+                },
+            ):
+                with mcp_console.openai_codex(
+                    command=Path("/custom/mcp-console"),
+                    args=["serve", "--future-option"],
+                    server_name="analysis console",
+                    options={"baseUrl": "https://example.test"},
+                ) as codex:
+                    launcher = Path(codex.options["codex_path_override"])
+                    self.assertTrue(launcher.is_file())
+                    environment = os.environ.copy()
+                    environment["CAPTURE"] = str(captured)
+                    subprocess.run(
+                        [str(launcher), "exec", "--experimental-json"],
+                        env=environment,
+                        check=True,
+                    )
+
+                self.assertFalse(launcher.exists())
+                captured_arguments = captured.read_text(encoding="utf-8").splitlines()
+
+        self.assertEqual(
+            captured_arguments,
+            [
+                "exec",
+                "--config",
+                'mcp_servers."analysis console".command="/custom/mcp-console"',
+                "--config",
+                'mcp_servers."analysis console".args=["serve", "--future-option"]',
+                "--experimental-json",
+            ],
+        )
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0]["baseUrl"], "https://example.test")
+        self.assertEqual(calls[0]["codex_path_override"], str(launcher))
+
+    def test_openai_codex_accepts_the_sdk_camel_case_path_option(self) -> None:
+        class Codex:
+            def __init__(self, options):
+                self.options = options
+
+        sdk = types.ModuleType("openai_codex_sdk")
+        sdk.__path__ = []
+        sdk.Codex = Codex
+        sdk_exec = types.ModuleType("openai_codex_sdk.exec")
+        sdk_exec.find_codex_path = lambda: self.fail("resolver should not run")
+        sdk.exec = sdk_exec
+
+        with patch.dict(
+            sys.modules,
+            {
+                "openai_codex_sdk": sdk,
+                "openai_codex_sdk.exec": sdk_exec,
+            },
+        ):
+            with mcp_console.openai_codex(
+                command="mcp-console-dev",
+                options={"codexPathOverride": "/custom/codex"},
+            ) as codex:
+                source = Path(codex.options["codex_path_override"]).read_text()
+
+        self.assertIn("exec /custom/codex ", source)
+        self.assertNotIn("codexPathOverride", codex.options)
 
 
 class AnthropicTests(unittest.TestCase):

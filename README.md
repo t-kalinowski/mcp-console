@@ -47,12 +47,13 @@ It waits for MCP protocol input rather than presenting an interactive terminal p
 
 ## Python integrations
 
-The Python package includes small adapters for chatlas, the OpenAI Agents SDK, and the Anthropic Python SDK.
+The Python package includes small adapters for chatlas, the OpenAI Agents SDK, the OpenAI Codex SDK, and the Anthropic Python SDK.
 Install MCP Console and the desired framework extra into the same Python environment:
 
 ```sh
 pip install "mcp-console[chatlas]"
 pip install "mcp-console[openai]"
+pip install "mcp-console[codex]"
 pip install "mcp-console[anthropic]"
 ```
 
@@ -78,9 +79,9 @@ finally:
 
 Any additional keyword arguments are forwarded to `Chat.register_mcp_tools_stdio_async()`, including `name`, `namespace`, tool filters, and transport options.
 
-### OpenAI
+### OpenAI Agents SDK
 
-Local stdio MCP servers are supported by OpenAI's official Agents SDK, distributed as `openai-agents`.
+Local stdio MCP servers are supported by OpenAI's Agents SDK, distributed as `openai-agents`.
 `openai_agents_server()` returns the SDK's native `MCPServerStdio` object:
 
 ```python
@@ -99,6 +100,34 @@ async with openai_agents_server() as server:
 
 Additional `params=` entries are merged into the native stdio process parameters, and remaining keyword arguments are forwarded to `MCPServerStdio`.
 The lower-level `openai` package's hosted MCP tool expects a network-accessible MCP server; the local `mcp-console serve` process therefore uses the Agents SDK integration.
+
+### OpenAI Codex SDK
+
+`openai_codex()` yields the native `openai_codex_sdk.Codex` object with MCP Console registered for its Codex CLI invocations:
+
+```python
+import asyncio
+
+from mcp_console import openai_codex
+
+
+async def main():
+    with openai_codex() as codex:
+        thread = codex.start_thread()
+        turn = await thread.run(
+            "Use MCP Console to calculate the first 20 Fibonacci numbers."
+        )
+        print(turn.final_response)
+
+
+asyncio.run(main())
+```
+
+The Codex SDK exposes a Codex executable override rather than an MCP registration API.
+The adapter therefore creates a temporary launcher that inserts only the MCP server `--config` overrides and delegates to the SDK-resolved Codex executable.
+It does not rewrite the user's Codex configuration or authentication files.
+Keep thread operations inside the `openai_codex()` context because the launcher is removed when the context exits.
+Pass native constructor settings through `options=`; an existing `codex_path_override` or `codexPathOverride` is used as the delegated Codex executable.
 
 ### Anthropic
 

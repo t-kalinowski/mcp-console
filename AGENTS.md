@@ -84,7 +84,7 @@ Keep these ownership rules intact:
 - `src/main.rs`, `src/cli.rs` — binary entry point and command definitions.
 - `src/server.rs`, `src/server_transport.rs` — MCP tools, stdio transport, and response-delivery ownership.
 - `src/transcript.rs`, `src/transcript/markdown.rs` — append-only tool journal, Markdown and source-only Quarto projections, and image artifacts.
-- `python/mcp_console/__init__.py` — optional chatlas, OpenAI Agents, and Anthropic framework adapters.
+- `python/mcp_console/__init__.py` — optional chatlas, OpenAI Agents, OpenAI Codex, and Anthropic framework adapters.
 
 ### Protocols, relay, and worker orchestration
 
