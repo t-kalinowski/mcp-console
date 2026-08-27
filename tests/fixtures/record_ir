@@ -18,18 +18,18 @@ def wait(path: str) -> None:
 
 
 def fixture_library(arguments: list[str]) -> Path | None:
-    source_value = os.environ.get("MCP_CONSOLE_TEST_IR_SOURCE_LIBRARY")
+    sources_value = os.environ.get("MCP_CONSOLE_TEST_IR_SOURCE_LIBRARIES")
     root_value = os.environ.get("MCP_CONSOLE_TEST_IR_LIBRARY_ROOT")
     packages_value = os.environ.get("MCP_CONSOLE_TEST_IR_FIXTURE_PACKAGES")
     base_value = os.environ.get("MCP_CONSOLE_TEST_IR_BASE_LIBRARY")
     if (
-        source_value is None
+        sources_value is None
         and root_value is None
         and packages_value is None
         and base_value is None
     ):
         return None
-    assert source_value is not None and root_value is not None
+    assert sources_value is not None and root_value is not None
     assert packages_value is not None and base_value is not None
     if arguments[0] != "run":
         return None
@@ -42,22 +42,26 @@ def fixture_library(arguments: list[str]) -> Path | None:
     ]
     if not requirements:
         return None
-    source = Path(source_value)
+    sources = [Path(value) for value in sources_value.split(os.pathsep)]
+    assert sources and all(source.is_dir() for source in sources), sources
     base = Path(base_value).read_text(encoding="utf-8")
     base = Path(base)
     assert base.is_dir(), base
     library = Path(root_value) / "-".join(requirements)
     library.mkdir(parents=True)
     for package in base.iterdir():
+        if package.name in configured:
+            continue
         link = library / package.name
         if not link.exists():
             link.symlink_to(package, target_is_directory=package.is_dir())
     for requirement in requirements:
-        package = source / requirement
-        assert package.is_dir(), package
+        packages = [source / requirement for source in sources]
+        packages = [package for package in packages if package.is_dir()]
+        assert len(packages) == 1, (requirement, packages)
         link = library / requirement
         if not link.exists():
-            link.symlink_to(package, target_is_directory=True)
+            link.symlink_to(packages[0], target_is_directory=True)
     return library.resolve()
 
 

@@ -70,32 +70,61 @@ def ir_requirements(record: dict[str, object]) -> list[str]:
     ]
 
 
-def installed_r_library(
+def fixture_r_libraries(
     environment: dict[str, str],
+    directory: Path,
     packages: tuple[str, ...],
-) -> Path:
-    r_home = Path(environment["R_HOME"])
-    result = subprocess.run(
-        [
-            r_home / "bin/Rscript",
-            "--vanilla",
-            "-e",
-            (
-                "packages <- commandArgs(trailingOnly = TRUE); "
-                "libraries <- unique(dirname(vapply(packages, find.package, "
-                "character(1L)))); stopifnot(length(libraries) == 1L); "
-                "cat(libraries)"
-            ),
-            *packages,
-        ],
-        check=True,
-        capture_output=True,
-        text=True,
-        env=environment,
+) -> tuple[Path, Path]:
+    source_root = directory / "r-package-sources"
+    libraries = (
+        directory / "r-package-library-one",
+        directory / "r-package-library-two",
     )
-    library = Path(result.stdout)
-    assert library.is_dir(), library
-    return library
+    source_root.mkdir()
+    sources: tuple[list[Path], list[Path]] = ([], [])
+    for library in libraries:
+        library.mkdir()
+    for index, package in enumerate(packages):
+        source = source_root / package
+        (source / "R").mkdir(parents=True)
+        (source / "DESCRIPTION").write_text(
+            f"""\
+Package: {package}
+Title: MCP Console Runtime Resolution Fixture
+Version: 0.0.0.9000
+Authors@R: person("MCP Console", role = c("aut", "cre"), email = "fixture@example.com")
+Description: Provides a function for automatic R resolution transcript tests.
+License: MIT
+Encoding: UTF-8
+""",
+            encoding="utf-8",
+        )
+        (source / "NAMESPACE").write_text("export(fixture)\n", encoding="utf-8")
+        (source / "R" / "fixture.R").write_text(
+            "fixture <- function() TRUE\n", encoding="utf-8"
+        )
+        sources[index % len(sources)].append(source)
+
+    r_home = Path(environment["R_HOME"])
+    for library, library_sources in zip(libraries, sources, strict=True):
+        subprocess.run(
+            [
+                r_home / "bin/R",
+                "CMD",
+                "INSTALL",
+                "--use-vanilla",
+                f"--library={library}",
+                "--no-docs",
+                "--no-help",
+                "--no-byte-compile",
+                "--no-test-load",
+                *library_sources,
+            ],
+            check=True,
+            capture_output=True,
+            env=environment,
+        )
+    return libraries
 
 
 def send_and_collect_runtime_r_resolution(
@@ -186,18 +215,22 @@ def test_resolves_reached_r_packages_at_runtime(binary: Path) -> Transcript:
     with tempfile.TemporaryDirectory() as temporary:
         directory = Path(temporary)
         environment, record = recording_ir_environment(directory)
+        isolated_library = directory / "r-library"
+        environment["R_LIBS_SITE"] = str(isolated_library)
+        environment["R_LIBS_USER"] = str(isolated_library)
         packages = (
-            "whoami",
-            "praise",
-            "brio",
-            "desc",
-            "pkgbuild",
-            "pkgload",
-            "diffobj",
-            "waldo",
+            "mcplibrary",
+            "mcpcharacter",
+            "mcprequire",
+            "mcpnamespace",
+            "mcpload",
+            "mcpinternal",
+            "mcpdynamic",
+            "mcpdynamicns",
         )
-        environment["MCP_CONSOLE_TEST_IR_SOURCE_LIBRARY"] = str(
-            installed_r_library(environment, packages)
+        source_libraries = fixture_r_libraries(environment, directory, packages)
+        environment["MCP_CONSOLE_TEST_IR_SOURCE_LIBRARIES"] = os.pathsep.join(
+            map(str, source_libraries)
         )
         environment["MCP_CONSOLE_TEST_IR_LIBRARY_ROOT"] = str(
             directory / "resolved-r-libraries"
@@ -206,9 +239,6 @@ def test_resolves_reached_r_packages_at_runtime(binary: Path) -> Transcript:
         environment["MCP_CONSOLE_TEST_IR_BASE_LIBRARY"] = str(
             directory / "base-r-library"
         )
-        isolated_library = directory / "r-library"
-        environment["R_LIBS_SITE"] = str(isolated_library)
-        environment["R_LIBS_USER"] = str(isolated_library)
         client = McpClient(binary, ("serve",), environment)
         client._initialize_and_list_tools()
         baseline = len(ir_run_records(record))
@@ -216,21 +246,21 @@ def test_resolves_reached_r_packages_at_runtime(binary: Path) -> Transcript:
         # fmt: r
         static = code(r"""
             invisible(suppressWarnings(suppressPackageStartupMessages({
-              base::library(package = whoami, quietly = TRUE)
+              base::library(package = mcplibrary, quietly = TRUE)
               library(
-                "praise",
+                "mcpcharacter",
                 help = stats,
                 character.only = TRUE,
                 quietly = TRUE
               )
               stopifnot(
-                base::require(brio, quietly = TRUE),
-                base::requireNamespace("desc", quietly = TRUE),
-                is.environment(base::loadNamespace("pkgbuild")),
-                is.environment(pkgload:::.__NAMESPACE__.),
-                is.function(whoami::username),
-                is.function("whoami"::username),
-                is.function(whoami::username)
+                base::require(mcprequire, quietly = TRUE),
+                base::requireNamespace("mcpnamespace", quietly = TRUE),
+                is.environment(base::loadNamespace("mcpload")),
+                is.environment(mcpinternal:::.__NAMESPACE__.),
+                is.function(mcplibrary::fixture),
+                is.function("mcplibrary"::fixture),
+                is.function(mcplibrary::fixture)
               )
             })))
             42L
@@ -255,7 +285,7 @@ def test_resolves_reached_r_packages_at_runtime(binary: Path) -> Transcript:
         # fmt: r
         dynamic = code(r"""
             invisible(suppressWarnings(suppressPackageStartupMessages({
-              attached <- "diffobj"
+              attached <- "mcpdynamic"
               stopifnot(do.call(
                 base::library,
                 list(
@@ -266,7 +296,7 @@ def test_resolves_reached_r_packages_at_runtime(binary: Path) -> Transcript:
                   quietly = TRUE
                 )
               ))
-              package <- "waldo"
+              package <- "mcpdynamicns"
               stopifnot(do.call(
                 base::requireNamespace,
                 list(package = package, quietly = TRUE)
@@ -277,8 +307,8 @@ def test_resolves_reached_r_packages_at_runtime(binary: Path) -> Transcript:
         send_and_collect_runtime_r_resolution(client, "[1] 42\n", r=dynamic)
         dynamic_runs = ir_run_records(record)[dynamic_baseline:]
         assert len(dynamic_runs) == 2, dynamic_runs
-        assert "diffobj" in ir_requirements(dynamic_runs[0]), dynamic_runs
-        assert "waldo" in ir_requirements(dynamic_runs[1]), dynamic_runs
+        assert "mcpdynamic" in ir_requirements(dynamic_runs[0]), dynamic_runs
+        assert "mcpdynamicns" in ir_requirements(dynamic_runs[1]), dynamic_runs
         return client._finish()
 
 

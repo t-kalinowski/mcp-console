@@ -4,21 +4,21 @@
 send:
   r: |
     invisible(suppressWarnings(suppressPackageStartupMessages({
-      base::library(package = whoami, quietly = TRUE)
+      base::library(package = mcplibrary, quietly = TRUE)
       library(
-        "praise",
+        "mcpcharacter",
         help = stats,
         character.only = TRUE,
         quietly = TRUE
       )
       stopifnot(
-        base::require(brio, quietly = TRUE),
-        base::requireNamespace("desc", quietly = TRUE),
-        is.environment(base::loadNamespace("pkgbuild")),
-        is.environment(pkgload:::.__NAMESPACE__.),
-        is.function(whoami::username),
-        is.function("whoami"::username),
-        is.function(whoami::username)
+        base::require(mcprequire, quietly = TRUE),
+        base::requireNamespace("mcpnamespace", quietly = TRUE),
+        is.environment(base::loadNamespace("mcpload")),
+        is.environment(mcpinternal:::.__NAMESPACE__.),
+        is.function(mcplibrary::fixture),
+        is.function("mcplibrary"::fixture),
+        is.function(mcplibrary::fixture)
       )
     })))
     42L
@@ -32,7 +32,7 @@ result:
 send:
   r: |
     invisible(suppressWarnings(suppressPackageStartupMessages({
-      attached <- "diffobj"
+      attached <- "mcpdynamic"
       stopifnot(do.call(
         base::library,
         list(
@@ -43,7 +43,7 @@ send:
           quietly = TRUE
         )
       ))
-      package <- "waldo"
+      package <- "mcpdynamicns"
       stopifnot(do.call(
         base::requireNamespace,
         list(package = package, quietly = TRUE)

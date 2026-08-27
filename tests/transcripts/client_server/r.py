@@ -1507,21 +1507,46 @@ def test_preserves_fd0_order_between_readers(binary: Path) -> Transcript:
 
 
 def test_preserves_utf8_across_console_reads(binary: Path) -> Transcript:
-    client = McpClient(binary, ("serve",))
-    client._initialize_and_list_tools()
+    with r_input_handler_client(binary) as (client, _):
+        client._initialize_and_list_tools()
 
-    # fmt: r
-    r = code(r"""
-        value <- readline("long> ")
-        cat(paste(nchar(value, type = "bytes"), endsWith(value, "é")), "\n", sep = "")
-        """)
-    client.send(r=r, stdin=("x" * 4_094) + "é\n")
-    client.transcript[-1]["send"]["stdin"] = "<long stdin ending in UTF-8>"
-    output = last_tool_text(client)
-    assert output == (
-        '[input requested: "long> "]\n[input requested: "long> "]\n4096 TRUE\n'
-    ), output
-    return client._finish()
+        # The four-byte native buffer splits the two-byte character across
+        # callbacks without making thousands of single-byte reads.
+        # fmt: r
+        r = code(r"""
+            dyn.load("./mcp_test_input_handler.so")
+            first <- .Call("mcp_test_read_console_once", "short> ")
+            second <- .Call("mcp_test_read_console_once", "short> ")
+            bytes <- c(charToRaw(first), charToRaw(second))
+            value <- rawToChar(bytes[bytes != as.raw(10)])
+            Encoding(value) <- "UTF-8"
+            cat(
+              paste(nchar(value, type = "bytes"), endsWith(value, "é")),
+              "\n",
+              sep = ""
+            )
+            """)
+        client.send(r=r)
+        assert last_tool_text(client) == (
+            '[input requested: "short> "]\n[waiting for stdin]'
+        )
+
+        client.send(stdin="xx")
+        assert last_tool_text(client) == "\n[waiting for stdin]"
+
+        client.send(stdin="é")
+        assert last_tool_text(client) == (
+            '[input requested: "short> "]\n[waiting for stdin]'
+        )
+
+        wait_for_evaluation_output(
+            client,
+            "4 TRUE\n",
+            "UTF-8 console input",
+            stdin="\n",
+            timeout_ms=3_000,
+        )
+        return client._finish()
 
 
 def test_keeps_stdin_open_after_partial_payload(binary: Path) -> Transcript:

@@ -166,15 +166,7 @@ jobs:
           install-quarto: true
           upgrade: "FALSE"
           packages: |
-            any::brio
-            any::desc
-            any::diffobj
-            any::pkgbuild
-            any::pkgload
-            any::praise
             any::processx
-            any::waldo
-            any::whoami
             github::rstudio/reticulate
 
       - name: Install Rust
