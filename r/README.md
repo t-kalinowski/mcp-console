@@ -17,7 +17,7 @@ library(ellmer)
 library(mcp.console)
 
 chat <- chat_openai()
-chat$register_tool(mcp_console_tool())
+chat$register_tool(console_tool())
 
 chat$chat(
   "Tell me something interesting about mtcars. Use the console as a workbench."
@@ -27,11 +27,20 @@ chat$chat(
 The console keeps its R, Python, and DuckDB state between calls.
 When using `chat$chat_async()`, set `tool_mode = "sequential"` when later calls depend on earlier ones.
 
-`mcp_console_tool()` uses `mcp-console` from `PATH` when available.
-If it is not on `PATH`, MCP Console is installed automatically.
+With neither `path` nor `version` supplied, `console_tool()` uses the first `mcp-console` executable on `PATH`.
+If none is found, it resolves the latest published release with `reticulate::uv_run_tool()`.
 
-When `mcp-console` is not on `PATH`, pin a specific fallback version if needed:
+Use a specific executable directly:
 
 ```r
-tool <- mcp_console_tool(from = "mcp-console==0.0.2")
+tool <- console_tool(path = Sys.which("mcp-console"))
 ```
+
+Use a specific published release, regardless of what is on `PATH`:
+
+```r
+tool <- console_tool(version = "0.0.2")
+```
+
+`path` and `version` are mutually exclusive and must be named.
+`...` is reserved for future use and must currently be empty.

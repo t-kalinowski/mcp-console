@@ -1055,12 +1055,16 @@ def test_restart_discards_unactivated_automatic_python_candidate(
 ) -> Transcript:
     with tempfile.TemporaryDirectory() as temporary:
         directory = Path(temporary)
+        replacement_requirement = "mcp-console-restart-fixture"
         environment, uv_started, uv_release = checkpoint_uv_environment(
             directory,
-            "matplotlib",
+            replacement_requirement,
+            reuse_resolved_python_for=("py-yaml12", replacement_requirement),
+            provide_python_module=("py-yaml12", "yaml12"),
         )
         environment.pop("RETICULATE_PYTHON", None)
         environment["TMPDIR"] = temporary
+        reuse_record = Path(environment["MCP_CONSOLE_TEST_UV_REUSE_RECORD"])
         client = McpClient(binary, ("serve",), environment)
         passed = False
         worker_checkpoints: list[FifoCheckpoint] = []
@@ -1068,16 +1072,28 @@ def test_restart_discards_unactivated_automatic_python_candidate(
             client._initialize_and_list_tools()
             # fmt: r
             r = code(r"""
-                invisible(reticulate::py_config())
+                config <- reticulate::py_config()
                 activation_ready <- tempfile("mcp-console-activation-ready-")
                 activation_release <- tempfile("mcp-console-activation-release-")
                 activation_sent <- tempfile("mcp-console-activation-sent-")
-                cat(activation_ready, activation_release, activation_sent, sep = "\n")
+                cat(
+                  activation_ready,
+                  activation_release,
+                  activation_sent,
+                  config$python,
+                  sep = "\n"
+                )
                 """)
             client.send(r=r)
             setup = client.transcript[-1]["result"]
             paths = setup["content"][0]["text"].splitlines()
-            assert len(paths) == 3, setup
+            assert len(paths) == 4, setup
+            resolved_python = paths.pop()
+            assert Path(resolved_python).is_file(), resolved_python
+            Path(environment["MCP_CONSOLE_TEST_UV_REUSE_PYTHON"]).write_text(
+                resolved_python,
+                encoding="utf-8",
+            )
             setup["content"][0]["text"] = (
                 "<activation ready>\n<activation release>\n<activation sent>"
             )
@@ -1113,30 +1129,33 @@ def test_restart_discards_unactivated_automatic_python_candidate(
             client.send(r=r)
             assert last_tool_text(client) == "[done]"
 
-            evaluation = client._start_send(python="import yaml12")
+            evaluation = client._start_send(
+                python="import yaml12",
+                timeout_ms=0,
+            )
             activation_ready.wait("automatic managed Python activation")
+            client._receive(evaluation)
+            evaluation_result = evaluation["result"]
+            assert evaluation_result == {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "\n[running; poll with an empty send]",
+                    }
+                ],
+                "isError": False,
+            }, evaluation_result
 
             restart = client._start_send(
                 control="restart",
-                requirements={"python": ["matplotlib"]},
+                requirements={"python": [replacement_requirement]},
             )
             uv_started.wait("restart Python resolution")
             activation_release.release()
             activation_sent.wait("published automatic Python activation")
             uv_release.release()
-            client._receive_many([evaluation, restart])
+            client._receive(restart)
 
-            evaluation_result = evaluation["result"]
-            assert evaluation_result.get("isError") is True, evaluation_result
-            assert evaluation_result["content"] == [
-                {
-                    "type": "text",
-                    "text": (
-                        "[stopped by session restart request before evaluation finished]\n"
-                        "[worker stopped: in-memory state lost]"
-                    ),
-                }
-            ], evaluation_result
             restart_result = restart["result"]
             assert restart_result.get("isError") is not True, restart_result
             assert restart_result["content"] == [
@@ -1152,12 +1171,16 @@ def test_restart_discards_unactivated_automatic_python_candidate(
             ], restart_result
 
             # fmt: r
-            r = code(r"""
+            r = code(f"""
                 packages <- reticulate::py_require()$packages
-                c("matplotlib" %in% packages, "py-yaml12" %in% packages)
+                c("{replacement_requirement}" %in% packages, "py-yaml12" %in% packages)
                 """)
             client.send(r=r)
             assert last_tool_text(client) == "[1]  TRUE FALSE\n"
+            assert reuse_record.read_text(encoding="utf-8").splitlines() == [
+                "py-yaml12",
+                replacement_requirement,
+            ]
             transcript = client._finish()
             passed = True
             return transcript

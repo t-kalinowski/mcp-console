@@ -17,6 +17,9 @@ Imports:
     reticulate (>= 1.41.0),
     utils
 Suggests:
+    mcptools (>= 1.0.2),
     testthat (>= 3.1.8)
 Config/testthat/edition: 3
 Encoding: UTF-8
+Roxygen: list(markdown = TRUE)
+Config/roxygen2/version: 8.1.0

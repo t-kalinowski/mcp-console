@@ -75,7 +75,7 @@ result:
         }
         uv output:
         Traceback (most recent call last):
-          File "<workspace>/tests/fixtures/checkpoint_uv", line 55, in <module>
+          File "<workspace>/tests/fixtures/checkpoint_uv", line <line>, in <module>
             raise KeyboardInterrupt from None
         KeyboardInterrupt
 
