@@ -40,6 +40,30 @@ real_mcp_console <- function() {
   normalizePath(binary, mustWork = TRUE)
 }
 
+bare_mcp_console <- function() {
+  binary <- real_mcp_console()
+  # Managed resolution has its own transcript coverage. Keep the R package's
+  # checkout smoke tests independent of resolver tools, caches, and the network.
+  library <- tempfile("mcp-console-bare-library-")
+  dir.create(library)
+  launcher <- tempfile("mcp-console-bare-")
+  writeLines(
+    c(
+      "#!/bin/sh",
+      "unset R_TESTS RETICULATE_UV",
+      "export PATH=/usr/bin:/bin:/usr/sbin:/sbin",
+      sprintf("export R_HOME=%s", shQuote(R.home())),
+      sprintf("export R_LIBS=%s", shQuote(library)),
+      sprintf("export R_LIBS_USER=%s", shQuote(library)),
+      sprintf("export R_LIBS_SITE=%s", shQuote(library)),
+      sprintf("exec %s \"$@\"", shQuote(binary))
+    ),
+    launcher
+  )
+  Sys.chmod(launcher, "0755")
+  launcher
+}
+
 with_path <- function(path, code) {
   old <- Sys.getenv("PATH")
   on.exit(Sys.setenv(PATH = old), add = TRUE)
@@ -98,7 +122,7 @@ test_that("console_tool finds mcp-console on PATH by default", {
   })
 })
 
-test_that("console_tool falls back to uv", {
+test_that("console_tool falls back to uv and adapts the server schema", {
   binary <- mcptools_mcp_console()
   calls <- new.env(parent = emptyenv())
   testthat::local_mocked_bindings(
@@ -118,9 +142,33 @@ test_that("console_tool falls back to uv", {
   expect_match(paste(calls$args, collapse = " "), "sys.executable")
   expect_equal(tool@name, "send")
   expect_equal(tool@description, "Persistent test console.")
-  expect_named(formals(tool), "r")
+  expect_named(
+    formals(tool),
+    c("r", "sql", "control", "requirements", "stdin", "timeout_ms")
+  )
+  for (argument in tool@arguments@properties) {
+    expect_false("null" %in% unlist(argument@json$type, use.names = FALSE))
+    expect_false(argument@required)
+  }
+  expect_equal(
+    tool@arguments@properties$requirements@json$required,
+    as.list(c("duckdb", "r", "python"))
+  )
+  for (requirement in tool@arguments@properties$requirements@json$properties) {
+    expect_true("null" %in% unlist(requirement$type, use.names = FALSE))
+  }
+  expect_true(any(vapply(
+    tool@arguments@properties$control@json$enum,
+    is.null,
+    logical(1)
+  )))
   expect_equal(format(tool(r = "1 + 1")), "1 + 1")
+  expect_equal(format(tool(sql = "select 1")), "select 1")
   expect_equal(format(tool()), "<poll>")
+  expect_match(
+    format(tool(requirements = list(r = character()))),
+    "at least one of `requirements.r`"
+  )
 
   rm(tool)
   gc()
@@ -201,7 +249,7 @@ test_that("console_tool continues after an R interrupt", {
 })
 
 test_that("console_tool cancels an interrupted checkout request", {
-  binary <- real_mcp_console()
+  binary <- bare_mcp_console()
   watcher_file <- normalizePath(
     testthat::test_path("fixtures", "watch-cancellation.R"),
     mustWork = TRUE
@@ -308,7 +356,7 @@ test_that("console_tool cancels an interrupted checkout request", {
 })
 
 test_that("console_tool works with the checkout binary", {
-  binary <- real_mcp_console()
+  binary <- bare_mcp_console()
 
   with_temp_working_directory({
     with_mcp_console_languages(c("r", "sql"), {
@@ -316,31 +364,11 @@ test_that("console_tool works with the checkout binary", {
 
       expect_named(
         formals(tool),
-        c("r", "sql", "control", "requirements", "stdin", "timeout_ms")
+        c("r", "sql", "control", "stdin", "timeout_ms")
       )
-      for (argument in tool@arguments@properties) {
-        expect_false("null" %in% unlist(argument@json$type, use.names = FALSE))
-        expect_false(argument@required)
-      }
-      expect_equal(
-        tool@arguments@properties$requirements@json$required,
-        as.list(c("duckdb", "r", "python"))
-      )
-      for (requirement in tool@arguments@properties$requirements@json$properties) {
-        expect_true("null" %in% unlist(requirement$type, use.names = FALSE))
-      }
-      expect_true(any(vapply(
-        tool@arguments@properties$control@json$enum,
-        is.null,
-        logical(1)
-      )))
 
       expect_equal(format(tool(r = "x <- 41; x + 1")), "[1] 42\n")
       expect_equal(format(tool(r = "x + 2")), "[1] 43\n")
-      expect_match(
-        format(tool(requirements = list(r = character()))),
-        "at least one of `requirements.r`"
-      )
 
       result <- tool(r = "plot(1:3); stop('boom')")
       expect_length(result, 2L)
