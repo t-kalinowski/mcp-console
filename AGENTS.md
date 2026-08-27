@@ -119,7 +119,7 @@ Keep these ownership rules intact:
 - `scripts/release.py`, `tests/release.py` — release validation and installed-wheel acceptance.
 - `scripts/test` — binary build and selected transcript execution.
 - `scripts/validate_runtime_sources.py` — extracted R/Python inventory and syntax validation.
-- `scripts/format`, `scripts/check` — repository-wide formatting and checks.
+- `scripts/format`, `scripts/check-core`, `scripts/check` — formatting, core checks, and repository-wide checks.
 
 ## Working rules
 

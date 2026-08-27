@@ -387,7 +387,8 @@ class ReleaseScriptTests(unittest.TestCase):
         self.assertNotIn("python3 -", release_source)
         self.assertIn("GITHUB_PAT: ${{ github.token }}", release_source)
         self.assertIn('install.libs("gettext")', release_source)
-        self.assertEqual(ci_source.count('version: "0.12.4"'), 1)
+        self.assertEqual(ci_source.count('UV_VERSION: "0.12.4"'), 1)
+        self.assertEqual(ci_source.count("version: ${{ env.UV_VERSION }}"), 2)
         self.assertEqual(release_source.count('version: "0.12.4"'), 2)
 
 
