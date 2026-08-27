@@ -1114,7 +1114,12 @@ def test_restart_discards_unactivated_automatic_python_candidate(
             assert last_tool_text(client) == "[done]"
 
             evaluation = client._start_send(python="import yaml12")
-            activation_ready.wait("automatic managed Python activation")
+            # External resolution can wait behind another uv cache writer. The
+            # activation marker, rather than wall time, defines this boundary.
+            activation_ready.wait(
+                "automatic managed Python activation",
+                timeout=None,
+            )
 
             restart = client._start_send(
                 control="restart",
