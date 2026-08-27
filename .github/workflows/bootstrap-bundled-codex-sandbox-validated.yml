@@ -1,4 +1,4 @@
-name: Publish recovered sandbox work for handoff
+name: Publish sandbox handoff
 
 on:
   push:
@@ -10,7 +10,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: publish-recovered-sandbox-handoff
+  group: publish-sandbox-handoff
   cancel-in-progress: false
 
 env:
@@ -41,7 +41,7 @@ jobs:
           fetch-depth: 0
           ref: use-bundled-codex-sandbox-runner-validated
 
-      - name: Reconstruct and publish the Codex runner patch
+      - name: Publish the Codex handoff branch
         id: codex
         shell: bash
         run: |
@@ -52,25 +52,46 @@ jobs:
             "${RUNNER_TEMP}/codex"
           git -C "${RUNNER_TEMP}/codex" checkout --detach "$CODEX_BASE_REVISION"
 
+          handoff="${RUNNER_TEMP}/codex/.mcp-console-handoff"
+          mkdir -p "$handoff/recovered"
           for part in 00 01 02; do
             curl -fsSL \
-              "https://raw.githubusercontent.com/t-kalinowski/mcp-console/codex-sandbox-runner/.validation/codex.patch.gz.b64.${part}"
-          done \
-            | tr -d '\r\n' \
-            | base64 --decode \
-            | gzip -dc > "${RUNNER_TEMP}/codex.patch"
+              "https://raw.githubusercontent.com/t-kalinowski/mcp-console/codex-sandbox-runner/.validation/codex.patch.gz.b64.${part}" \
+              -o "$handoff/recovered/codex.patch.gz.b64.${part}"
+          done
 
-          git -C "${RUNNER_TEMP}/codex" apply --index --binary \
-            "${RUNNER_TEMP}/codex.patch"
-          git -C "${RUNNER_TEMP}/codex" diff --cached --check
+          cat > "${RUNNER_TEMP}/codex/MCP_CONSOLE_SANDBOX_HANDOFF.md" <<'EOF'
+          # MCP Console sandbox runner handoff
+
+          This branch is a handoff of the first-slice sandbox-boundary work. It is based exactly on Codex commit `855e8f9ef5b4211408791252e02e38b4757218cc`, the head of `mcp-console/sandbox-api/2161ec27` when the work began.
+
+          The intended implementation adds a focused private `mcp-console-sandbox` binary without involving the full Codex CLI. The selected topology is direct-exec: the helper reads and validates MCP Console launch protocol version 1 over a private inherited descriptor, reports startup status through that channel, and then replaces itself with Codex's native sandbox launcher and the target. Standard input, output, and error remain native descriptors. MCP Console owns normalized application policy; Codex owns the native filesystem-policy translation and Seatbelt implementation.
+
+          Recovered raw patch-transport fragments are retained under `.mcp-console-handoff/recovered/`. The prior transport is malformed and was not applied to this branch. Preserve those files as evidence of the earlier implementation attempt, but do not assume they can be concatenated and decoded directly.
+
+          ## Remaining Codex work
+
+          1. Recover or reapply the runner implementation on this branch.
+          2. Add the dedicated binary under the focused sandbox API/runner boundary, including the typed protocol-v1 launch specification and private startup channel.
+          3. Reuse the existing Codex sandbox API and Seatbelt translation; do not duplicate policy-to-SBPL translation or depend on the full CLI, core, authentication, sessions, approvals, MCP, or normal `CODEX_HOME`.
+          4. Preserve native target arguments and environment, close the private specification descriptor before target launch, and keep the direct-exec process topology.
+          5. Update Cargo/Bazel metadata, the sandbox API README, and rolling-patch maintenance notes.
+          6. Commit the result and provide the immutable commit SHA to the MCP Console branch.
+
+          No validation result is claimed by this handoff commit.
+          EOF
+
+          git -C "${RUNNER_TEMP}/codex" add \
+            MCP_CONSOLE_SANDBOX_HANDOFF.md \
+            .mcp-console-handoff
           git -C "${RUNNER_TEMP}/codex" config user.name 'Tomasz Kalinowski'
           git -C "${RUNNER_TEMP}/codex" config user.email 'kalinowskit@gmail.com'
           git -C "${RUNNER_TEMP}/codex" commit \
-            -m 'Add the private MCP Console sandbox runner' \
+            -m 'Publish the MCP Console sandbox runner handoff [skip ci]' \
             -m "MCP-Console-Sandbox-Base: ${CODEX_BASE_REVISION}"
           codex_revision=$(git -C "${RUNNER_TEMP}/codex" rev-parse HEAD)
 
-          token=''
+          pushed=false
           for variable in \
             TOKEN_CODEX_REPO_PAT \
             TOKEN_CODEX_REPO_TOKEN \
@@ -85,55 +106,78 @@ jobs:
             TOKEN_REPOSITORY
           do
             candidate=${!variable:-}
-            if [[ -n "$candidate" ]]; then
-              token=$candidate
+            if [[ -z "$candidate" ]]; then
+              continue
+            fi
+            echo "Trying the credential supplied by ${variable}"
+            git -C "${RUNNER_TEMP}/codex" remote set-url origin \
+              "https://x-access-token:${candidate}@github.com/t-kalinowski/codex.git"
+            if git -C "${RUNNER_TEMP}/codex" push \
+              origin "HEAD:refs/heads/${CODEX_BRANCH}"; then
+              pushed=true
               break
             fi
           done
-          if [[ -z "$token" ]]; then
-            echo 'No GitHub write credential was available' >&2
+          git -C "${RUNNER_TEMP}/codex" remote set-url origin \
+            https://github.com/t-kalinowski/codex.git
+
+          if [[ "$pushed" != true ]]; then
+            echo 'None of the available credentials could write t-kalinowski/codex' >&2
             exit 1
           fi
 
-          git -C "${RUNNER_TEMP}/codex" remote set-url origin \
-            "https://x-access-token:${token}@github.com/t-kalinowski/codex.git"
-          git -C "${RUNNER_TEMP}/codex" push --force-with-lease \
-            origin "HEAD:refs/heads/${CODEX_BRANCH}"
-
           echo "revision=${codex_revision}" >> "$GITHUB_OUTPUT"
 
-      - name: Publish the recovered MCP Console integration
+      - name: Replace the MCP Console bootstrap with a handoff commit
         shell: bash
         env:
-          CODEX_REVISION: ${{ steps.codex.outputs.revision }}
+          CODEX_HANDOFF_REVISION: ${{ steps.codex.outputs.revision }}
         run: |
           set -euo pipefail
 
-          for part in 00 01 02 03 04; do
-            curl -fsSL \
-              "https://raw.githubusercontent.com/t-kalinowski/mcp-console/codex-sandbox-runner/.validation/mcp.patch.gz.b64.${part}"
-          done \
-            | tr -d '\r\n' \
-            | base64 --decode \
-            | gzip -dc > "${RUNNER_TEMP}/mcp-console.patch"
+          cat > SANDBOX_HANDOFF.md <<EOF
+          # Bundled Codex sandbox runner handoff
 
-          git apply --index --binary "${RUNNER_TEMP}/mcp-console.patch"
-          while IFS= read -r file; do
-            perl -0pi -e \
-              "s/855e8f9ef5b4211408791252e02e38b4757218cc/${CODEX_REVISION}/g; s/__CODEX_SANDBOX_REVISION__/${CODEX_REVISION}/g" \
-              "$file"
-          done < <(grep -RIl --exclude-dir=.git -E \
-            '855e8f9ef5b4211408791252e02e38b4757218cc|__CODEX_SANDBOX_REVISION__' \
-            . || true)
+          This branch and draft PR preserve the first-slice sandbox-boundary work for another agent. No validation result is claimed.
+
+          ## Published state
+
+          - MCP Console base: \`50d2f5c613f382b1381447b64505e269262ff2a9\`
+          - Codex sandbox API base: \`855e8f9ef5b4211408791252e02e38b4757218cc\`
+          - Codex handoff branch: \`mcp-console/sandbox-runner-v1-validated\`
+          - Codex handoff commit: \`${CODEX_HANDOFF_REVISION}\`
+          - Raw recovered patch fragments: branch \`codex-sandbox-runner\`, directory \`.validation/\`
+
+          The Codex branch intentionally contains the handoff and raw recovery artifacts rather than claiming that the malformed recovered patch was applied.
+
+          ## Intended design already selected
+
+          - A focused private \`mcp-console-sandbox\` executable, not a mode of the full Codex CLI.
+          - A strict typed JSON launch specification with \`protocol_version: 1\` over a private inherited descriptor.
+          - Native target program and arguments remain OS arguments; the target environment remains inherited.
+          - Direct-exec topology so the relay remains the direct sandboxed process, process-group leader, and session leader.
+          - Relay stdin/stdout remain native pipes and relay stderr remains inherited diagnostics.
+          - MCP Console owns normalized policy and helper discovery; Codex owns native sandbox enforcement.
+          - The helper is bundled privately in the wheel and never exposed as a second uv tool command.
+          - R, Python, and DuckDB resolvers remain outside the sandbox.
+
+          ## Remaining work
+
+          1. Recover or reapply the Codex runner implementation on the published Codex handoff branch and commit it.
+          2. Replace the handoff Codex SHA with that implementation commit in MCP Console.
+          3. Recover or reapply the MCP Console integration from the raw patch fragments, or reimplement it from the requirements and design above.
+          4. Remove this handoff file once the implementation is represented directly in the branch diff.
+          5. Update the PR body with the exact Codex implementation commit and actual test results.
+          6. Run the requested Codex focused checks, MCP Console \`scripts/format\`, \`scripts/check\`, golden-diff check, \`cargo tree\`, and installed-wheel smoke tests.
+
+          Do not merge the draft PR in its current handoff-only state.
+          EOF
 
           git rm \
             .github/workflows/bootstrap-bundled-codex-sandbox-validated.yml \
             .github/workflows/finalize-sandbox-pr-metadata.yml
-          git add -A
-          git diff --cached --check
+          git add SANDBOX_HANDOFF.md
           git config user.name 'Tomasz Kalinowski'
           git config user.email 'kalinowskit@gmail.com'
-          git commit \
-            -m 'Use a bundled Codex-derived sandbox runner' \
-            -m "Codex-Sandbox-Revision: ${CODEX_REVISION}"
+          git commit -m 'Publish the sandbox boundary handoff [skip ci]'
           git push origin "HEAD:${FEATURE_BRANCH}"
