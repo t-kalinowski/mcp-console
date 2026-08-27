@@ -3,11 +3,17 @@
 ---
 send:
   r: |
-    invisible(reticulate::py_config())
+    config <- reticulate::py_config()
     activation_ready <- tempfile("mcp-console-activation-ready-")
     activation_release <- tempfile("mcp-console-activation-release-")
     activation_sent <- tempfile("mcp-console-activation-sent-")
-    cat(activation_ready, activation_release, activation_sent, sep = "\n")
+    cat(
+      activation_ready,
+      activation_release,
+      activation_sent,
+      config$python,
+      sep = "\n"
+    )
 result:
   content:
     - type: text
@@ -45,19 +51,20 @@ result:
 ---
 send:
   python: import yaml12
+  timeout_ms: 0
 result:
   content:
     - type: text
       text: |-
-        [stopped by session restart request before evaluation finished]
-        [worker stopped: in-memory state lost]
-  isError: true
+
+        [running; poll with an empty send]
+  isError: false
 ---
 send:
   control: restart
   requirements:
     python:
-      - matplotlib
+      - mcp-console-restart-fixture
 result:
   content:
     - type: text
@@ -71,7 +78,7 @@ result:
 send:
   r: |
     packages <- reticulate::py_require()$packages
-    c("matplotlib" %in% packages, "py-yaml12" %in% packages)
+    c("mcp-console-restart-fixture" %in% packages, "py-yaml12" %in% packages)
 result:
   content:
     - type: text

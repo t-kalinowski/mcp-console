@@ -34,8 +34,8 @@ class FifoCheckpoint:
     def close(self) -> None:
         os.close(self.descriptor)
 
-    def wait(self, description: str) -> None:
-        readable, _, _ = select.select([self.descriptor], [], [], 10)
+    def wait(self, description: str, timeout: float = 10) -> None:
+        readable, _, _ = select.select([self.descriptor], [], [], timeout)
         assert readable, f"checkpoint was not reached: {description}"
         assert os.read(self.descriptor, 1) == b"1"
 
@@ -46,7 +46,15 @@ class FifoCheckpoint:
 def checkpoint_uv_environment(
     temporary: Path,
     argument: str,
+    *,
+    reuse_resolved_python_for: tuple[str, ...] = (),
+    provide_python_module: tuple[str, str] | None = None,
 ) -> tuple[dict[str, str], FifoCheckpoint, FifoCheckpoint]:
+    assert all(reuse_resolved_python_for)
+    assert provide_python_module is None or (
+        provide_python_module[0] in reuse_resolved_python_for
+        and provide_python_module[1].isidentifier()
+    )
     real_uv = shutil.which("uv")
     assert real_uv is not None, "real uv is required"
     started = FifoCheckpoint(temporary / "uv-started")
@@ -60,6 +68,25 @@ def checkpoint_uv_environment(
     environment["MCP_CONSOLE_TEST_UV_CHECKPOINT_CLAIM"] = str(temporary / "uv-claimed")
     environment["MCP_CONSOLE_TEST_UV_STARTED"] = str(started.path)
     environment["MCP_CONSOLE_TEST_UV_RELEASE"] = str(release.path)
+    if reuse_resolved_python_for:
+        environment["MCP_CONSOLE_TEST_UV_REUSE_PYTHON"] = str(
+            temporary / "resolved-python"
+        )
+        environment["MCP_CONSOLE_TEST_UV_REUSE_REQUIREMENTS"] = os.pathsep.join(
+            reuse_resolved_python_for
+        )
+        environment["MCP_CONSOLE_TEST_UV_REUSE_RECORD"] = str(
+            temporary / "uv-reuse-record"
+        )
+    if provide_python_module is not None:
+        requirement, module = provide_python_module
+        modules = temporary / "python-modules"
+        modules.mkdir()
+        environment["PYTHONPATH"] = str(modules)
+        environment["MCP_CONSOLE_TEST_UV_PROVIDE_REQUIREMENT"] = requirement
+        environment["MCP_CONSOLE_TEST_UV_PROVIDE_MODULE"] = str(
+            modules / f"{module}.py"
+        )
     return environment, started, release
 
 
@@ -100,8 +127,9 @@ def normalize_python_traceback_paths(error: str) -> str:
             r"\1<python-stdlib>/\2",
         ),
         (
-            r'(?m)^(\s+File ")[^"\n]*/(tests/fixtures/checkpoint_uv")',
-            r"\1<workspace>/\2",
+            r'(?m)^(\s+File ")[^"\n]*/(tests/fixtures/checkpoint_uv")'
+            r", line \d+",
+            r"\1<workspace>/\2, line <line>",
         ),
     )
     for pattern, replacement in replacements:
