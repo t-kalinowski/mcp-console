@@ -34,7 +34,7 @@ class FifoCheckpoint:
     def close(self) -> None:
         os.close(self.descriptor)
 
-    def wait(self, description: str, timeout: float | None = 10) -> None:
+    def wait(self, description: str, timeout: float = 10) -> None:
         readable, _, _ = select.select([self.descriptor], [], [], timeout)
         assert readable, f"checkpoint was not reached: {description}"
         assert os.read(self.descriptor, 1) == b"1"
