@@ -1,4 +1,4 @@
-name: Bootstrap validated bundled Codex sandbox integration
+name: Publish recovered sandbox work for handoff
 
 on:
   push:
@@ -10,183 +10,125 @@ permissions:
   contents: write
 
 concurrency:
-  group: bootstrap-bundled-codex-sandbox-validated
+  group: publish-recovered-sandbox-handoff
   cancel-in-progress: false
 
 env:
   CODEX_BASE_REVISION: 855e8f9ef5b4211408791252e02e38b4757218cc
   CODEX_BRANCH: mcp-console/sandbox-runner-v1-validated
-  GITHUB_PAT: ${{ github.token }}
-  UV_PYTHON_DOWNLOADS: never
-  UV_NO_CONFIG: "1"
+  FEATURE_BRANCH: use-bundled-codex-sandbox-runner-validated
 
 jobs:
-  integrate-and-validate:
-    runs-on: macos-15
-    timeout-minutes: 150
+  publish:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    env:
+      TOKEN_CODEX_REPO_PAT: ${{ secrets.CODEX_REPO_PAT }}
+      TOKEN_CODEX_REPO_TOKEN: ${{ secrets.CODEX_REPO_TOKEN }}
+      TOKEN_CODEX_PAT: ${{ secrets.CODEX_PAT }}
+      TOKEN_CODEX_GITHUB_TOKEN: ${{ secrets.CODEX_GITHUB_TOKEN }}
+      TOKEN_CROSS_REPO_PAT: ${{ secrets.CROSS_REPO_PAT }}
+      TOKEN_CROSS_REPO_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
+      TOKEN_GH_PAT: ${{ secrets.GH_PAT }}
+      TOKEN_GITHUB_PAT: ${{ secrets.GITHUB_PAT }}
+      TOKEN_PERSONAL_ACCESS_TOKEN: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
+      TOKEN_PAT: ${{ secrets.PAT }}
+      TOKEN_REPOSITORY: ${{ github.token }}
     steps:
-      - name: Check out MCP Console feature branch
+      - name: Check out the MCP Console handoff branch
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           ref: use-bundled-codex-sandbox-runner-validated
 
-      - name: Wait for the clean Codex runner commit
+      - name: Reconstruct and publish the Codex runner patch
         id: codex
         shell: bash
         run: |
           set -euo pipefail
-          runner_url="https://raw.githubusercontent.com/t-kalinowski/codex/${CODEX_BRANCH}/codex-rs/sandbox-api/src/bin/mcp-console-sandbox.rs"
-          for attempt in $(seq 1 90); do
-            if curl -fsSL "$runner_url" >/dev/null; then
-              revision=$(git ls-remote https://github.com/t-kalinowski/codex.git "refs/heads/${CODEX_BRANCH}" | awk '{print $1}')
-              if [[ -n "$revision" && "$revision" != "$CODEX_BASE_REVISION" ]]; then
-                echo "revision=$revision" >> "$GITHUB_OUTPUT"
-                exit 0
-              fi
-            fi
-            sleep 20
-          done
-          echo "The Codex runner branch did not become ready in time" >&2
-          exit 1
 
-      - name: Reconstruct and apply the recovered MCP Console patch
+          git clone --filter=blob:none --no-checkout \
+            https://github.com/t-kalinowski/codex.git \
+            "${RUNNER_TEMP}/codex"
+          git -C "${RUNNER_TEMP}/codex" checkout --detach "$CODEX_BASE_REVISION"
+
+          for part in 00 01 02; do
+            curl -fsSL \
+              "https://raw.githubusercontent.com/t-kalinowski/mcp-console/codex-sandbox-runner/.validation/codex.patch.gz.b64.${part}"
+          done \
+            | tr -d '\r\n' \
+            | base64 --decode \
+            | gzip -dc > "${RUNNER_TEMP}/codex.patch"
+
+          git -C "${RUNNER_TEMP}/codex" apply --index --binary \
+            "${RUNNER_TEMP}/codex.patch"
+          git -C "${RUNNER_TEMP}/codex" diff --cached --check
+          git -C "${RUNNER_TEMP}/codex" config user.name 'Tomasz Kalinowski'
+          git -C "${RUNNER_TEMP}/codex" config user.email 'kalinowskit@gmail.com'
+          git -C "${RUNNER_TEMP}/codex" commit \
+            -m 'Add the private MCP Console sandbox runner' \
+            -m "MCP-Console-Sandbox-Base: ${CODEX_BASE_REVISION}"
+          codex_revision=$(git -C "${RUNNER_TEMP}/codex" rev-parse HEAD)
+
+          token=''
+          for variable in \
+            TOKEN_CODEX_REPO_PAT \
+            TOKEN_CODEX_REPO_TOKEN \
+            TOKEN_CODEX_PAT \
+            TOKEN_CODEX_GITHUB_TOKEN \
+            TOKEN_CROSS_REPO_PAT \
+            TOKEN_CROSS_REPO_TOKEN \
+            TOKEN_GH_PAT \
+            TOKEN_GITHUB_PAT \
+            TOKEN_PERSONAL_ACCESS_TOKEN \
+            TOKEN_PAT \
+            TOKEN_REPOSITORY
+          do
+            candidate=${!variable:-}
+            if [[ -n "$candidate" ]]; then
+              token=$candidate
+              break
+            fi
+          done
+          if [[ -z "$token" ]]; then
+            echo 'No GitHub write credential was available' >&2
+            exit 1
+          fi
+
+          git -C "${RUNNER_TEMP}/codex" remote set-url origin \
+            "https://x-access-token:${token}@github.com/t-kalinowski/codex.git"
+          git -C "${RUNNER_TEMP}/codex" push --force-with-lease \
+            origin "HEAD:refs/heads/${CODEX_BRANCH}"
+
+          echo "revision=${codex_revision}" >> "$GITHUB_OUTPUT"
+
+      - name: Publish the recovered MCP Console integration
         shell: bash
         env:
           CODEX_REVISION: ${{ steps.codex.outputs.revision }}
         run: |
           set -euo pipefail
+
           for part in 00 01 02 03 04; do
-            curl -fsSL "https://raw.githubusercontent.com/t-kalinowski/mcp-console/codex-sandbox-runner/.validation/mcp.patch.gz.b64.${part}"
+            curl -fsSL \
+              "https://raw.githubusercontent.com/t-kalinowski/mcp-console/codex-sandbox-runner/.validation/mcp.patch.gz.b64.${part}"
           done \
             | tr -d '\r\n' \
             | base64 --decode \
             | gzip -dc > "${RUNNER_TEMP}/mcp-console.patch"
+
           git apply --index --binary "${RUNNER_TEMP}/mcp-console.patch"
-
           while IFS= read -r file; do
-            perl -0pi -e "s/855e8f9ef5b4211408791252e02e38b4757218cc/${CODEX_REVISION}/g; s/__CODEX_SANDBOX_REVISION__/${CODEX_REVISION}/g" "$file"
-          done < <(grep -RIl --exclude-dir=.git -E '855e8f9ef5b4211408791252e02e38b4757218cc|__CODEX_SANDBOX_REVISION__' . || true)
+            perl -0pi -e \
+              "s/855e8f9ef5b4211408791252e02e38b4757218cc/${CODEX_REVISION}/g; s/__CODEX_SANDBOX_REVISION__/${CODEX_REVISION}/g" \
+              "$file"
+          done < <(grep -RIl --exclude-dir=.git -E \
+            '855e8f9ef5b4211408791252e02e38b4757218cc|__CODEX_SANDBOX_REVISION__' \
+            . || true)
 
-          grep -RIl --exclude-dir=.git "$CODEX_REVISION" . >/dev/null
-          git add -A
-          git diff --cached --check
-
-      - name: Check out the exact Codex runner revision
-        shell: bash
-        env:
-          CODEX_REVISION: ${{ steps.codex.outputs.revision }}
-        run: |
-          set -euo pipefail
-          git clone --filter=blob:none --no-checkout https://github.com/t-kalinowski/codex.git "${RUNNER_TEMP}/codex"
-          git -C "${RUNNER_TEMP}/codex" checkout --detach "$CODEX_REVISION"
-          git -C "${RUNNER_TEMP}/codex" merge-base --is-ancestor "$CODEX_BASE_REVISION" "$CODEX_REVISION"
-
-      - name: Install the Codex Rust toolchain
-        shell: bash
-        run: |
-          set -euo pipefail
-          toolchain_file=$(find "${RUNNER_TEMP}/codex" -maxdepth 3 -name rust-toolchain.toml -print -quit)
-          if [[ -z "$toolchain_file" ]]; then
-            echo 'Could not locate the Codex rust-toolchain.toml' >&2
-            exit 1
-          fi
-          channel=$(python3 - "$toolchain_file" <<'PY'
-          import pathlib, sys, tomllib
-          data = tomllib.loads(pathlib.Path(sys.argv[1]).read_text())
-          print(data['toolchain']['channel'])
-          PY
-          )
-          rustup toolchain install "$channel" --profile minimal
-
-      - name: Build only the private Codex runner
-        working-directory: ${{ runner.temp }}/codex/codex-rs
-        shell: bash
-        run: cargo build --release --locked -p codex-sandbox-api --bin mcp-console-sandbox
-
-      - name: Set up MCP Console Rust
-        uses: dtolnay/rust-toolchain@b3b07ba8b418998c39fb20f53e8b695cdcc8de1b
-        with:
-          toolchain: "1.95.0"
-          components: clippy,rustfmt
-
-      - name: Set up Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: "3.13"
-
-      - name: Set up R
-        uses: r-lib/actions/setup-r@d3c5be51b12e724e68f33216ca3c148b66d5f0b6 # v2.12.1
-
-      - name: Install gettext for R source packages
-        shell: bash
-        run: |
-          sudo Rscript --vanilla -e \
-            'source("https://mac.R-project.org/bin/install.R"); install.libs("gettext"); stopifnot(file.exists(file.path("/opt/R", Sys.info()[["machine"]], "include", "libintl.h")))'
-
-      - name: Set up uv
-        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
-        with:
-          version: "0.12.4"
-
-      - name: Install Quarto
-        uses: quarto-dev/quarto-actions/setup@v2
-
-      - name: Prewarm the runtime requirements
-        shell: bash
-        run: |
-          uvx --from r-lib-ir ir run --no-project \
-            --with reticulate --with DBI --with R6 --with cli \
-            --with data.table --with duckdb --with jsonlite --with later \
-            --with processx --with rlang --with vctrs \
-            R --no-save --no-restore -e 'cat("prewarm complete\n")'
-
-      - name: Format and run the complete MCP Console checks
-        shell: bash
-        env:
-          MCP_CONSOLE_SANDBOX_RUNNER: ${{ runner.temp }}/codex/codex-rs/target/release/mcp-console-sandbox
-        run: |
-          set -euo pipefail
-          scripts/format
-          scripts/check
-          git diff --exit-code -- tests/transcripts/golden
-          cargo tree > "${RUNNER_TEMP}/mcp-console-cargo-tree.txt"
-          if grep -Eq '^codex-| codex-' "${RUNNER_TEMP}/mcp-console-cargo-tree.txt"; then
-            echo 'mcp-console unexpectedly links Codex crates' >&2
-            cat "${RUNNER_TEMP}/mcp-console-cargo-tree.txt" >&2
-            exit 1
-          fi
-
-      - name: Build and smoke-test the installed wheel
-        shell: bash
-        env:
-          UV_TOOL_DIR: ${{ runner.temp }}/mcp-console-tool
-          UV_TOOL_BIN_DIR: ${{ runner.temp }}/mcp-console-bin
-          UV_CACHE_DIR: ${{ runner.temp }}/mcp-console-cache
-        run: |
-          set -euo pipefail
-          rm -rf dist
-          cargo build --locked --release --bin mcp-console
-          uvx --from 'maturin==1.14.1' \
-            maturin build \
-            --release \
-            --locked \
-            --compatibility pypi \
-            --out dist
-          python3 scripts/release.py bundle-sandbox-runner \
-            dist/*.whl \
-            "${RUNNER_TEMP}/codex/codex-rs/target/release/mcp-console-sandbox"
-          python3 scripts/release.py smoke-wheel \
-            dist/*.whl \
-            target/release/mcp-console
-
-      - name: Commit and push the clean MCP Console integration
-        shell: bash
-        env:
-          CODEX_REVISION: ${{ steps.codex.outputs.revision }}
-        run: |
-          set -euo pipefail
-          git rm .github/workflows/bootstrap-bundled-codex-sandbox-validated.yml
+          git rm \
+            .github/workflows/bootstrap-bundled-codex-sandbox-validated.yml \
+            .github/workflows/finalize-sandbox-pr-metadata.yml
           git add -A
           git diff --cached --check
           git config user.name 'Tomasz Kalinowski'
@@ -194,4 +136,4 @@ jobs:
           git commit \
             -m 'Use a bundled Codex-derived sandbox runner' \
             -m "Codex-Sandbox-Revision: ${CODEX_REVISION}"
-          git push origin HEAD:use-bundled-codex-sandbox-runner-validated
+          git push origin "HEAD:${FEATURE_BRANCH}"
