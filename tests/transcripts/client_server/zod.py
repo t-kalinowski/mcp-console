@@ -4376,34 +4376,41 @@ def test_runs_worker_inside_sandbox(binary: Path) -> Transcript:
 
 def test_shuts_down_stalled_worker(binary: Path) -> Transcript:
     zod = Path(__file__).resolve().parents[2] / "fixtures" / "zod"
-    with tempfile.TemporaryDirectory() as temporary_directory:
+    with (
+        tempfile.TemporaryDirectory() as temporary_directory,
+        ZodFixtureControl() as control,
+    ):
         environment = os.environ.copy()
-        temporary_path = Path(temporary_directory)
         environment["TMPDIR"] = temporary_directory
-        environment["ZOD_REPORT_PROCESS_GROUP"] = "1"
+        control.configure(environment)
         client = McpClient(
             binary,
             ("serve", "--worker", str(zod)),
             environment,
+            pass_fds=control.pass_fds,
         )
+        control.close_child_ends()
         worker_group = None
         passed = False
         try:
             client._initialize_and_list_tools()
+            operation = client._next_request_id
             stalled = client._start_send(
-                r="stall",
+                r=f"stall: {operation}",
                 stdin="x" * (2 * 1024 * 1024),
             )
+            stalled["send"]["r"] = "stall"
             stalled["send"]["stdin"] = "<large stdin>"
-            group_marker = wait_for_marker(temporary_path, "zod-process-group", client)
-            worker_group = read_worker_group(group_marker)
-            wait_for_marker(temporary_path, "zod-stalled", client)
+            event = control.wait_for(operation, "parent_operation_stalled")
+            worker_group = event["process_group"]
+            assert isinstance(worker_group, int) and worker_group > 0, event
             client.stdin.close()
             try:
                 return_code = client.process.wait(timeout=3)
             except subprocess.TimeoutExpired:
                 raise AssertionError(
-                    "mcp-console did not stop its stalled worker"
+                    "mcp-console did not stop its stalled worker; "
+                    + control.diagnostics()
                 ) from None
 
             assert return_code == 0, client.stderr.read()
@@ -5018,33 +5025,36 @@ def test_shutdown_deadline_does_not_wait_for_sideband_writer(
     binary: Path,
 ) -> Transcript:
     zod = Path(__file__).resolve().parents[2] / "fixtures" / "zod"
-    with tempfile.TemporaryDirectory() as temporary_directory:
-        temporary_path = Path(temporary_directory)
+    with (
+        tempfile.TemporaryDirectory() as temporary_directory,
+        ZodFixtureControl() as control,
+    ):
         environment = os.environ.copy()
         environment["TMPDIR"] = temporary_directory
-        environment["ZOD_BLOCK_SIDEBAND_WRITE"] = "1"
-        environment["ZOD_REPORT_PROCESS_GROUP"] = "1"
+        environment["ZOD_BLOCK_NEXT_SIDEBAND_WRITE"] = "1"
+        control.configure(environment)
         client = McpClient(
             binary,
             ("serve", "--worker", str(zod)),
             environment,
+            pass_fds=control.pass_fds,
         )
+        control.close_child_ends()
         worker_group = None
         passed = False
         try:
             client._initialize_and_list_tools()
+            target_operation = client._next_request_id
+            control.send_control(
+                0,
+                "block_next_sideband_write",
+                target_operation=target_operation,
+            )
             entry = client._start_send(r="x" * (2 * 1024 * 1024))
-            group_marker = wait_for_marker(
-                temporary_path,
-                "zod-process-group",
-                client,
-            )
-            worker_group = read_worker_group(group_marker)
-            wait_for_marker(
-                temporary_path,
-                "zod-sideband-blocked",
-                client,
-            )
+            assert entry["id"] == target_operation, entry
+            event = control.wait_for(target_operation, "sideband_reader_stalled")
+            worker_group = event["process_group"]
+            assert isinstance(worker_group, int) and worker_group > 0, event
             entry["send"]["r"] = "<large cell>"
             shutdown_started = time.monotonic()
             client.stdin.close()
@@ -5052,7 +5062,8 @@ def test_shutdown_deadline_does_not_wait_for_sideband_writer(
                 return_code = client.process.wait(timeout=3)
             except subprocess.TimeoutExpired:
                 raise AssertionError(
-                    "mcp-console did not enforce its worker shutdown deadline"
+                    "mcp-console did not enforce its worker shutdown deadline; "
+                    + control.diagnostics()
                 ) from None
             shutdown_elapsed = time.monotonic() - shutdown_started
 

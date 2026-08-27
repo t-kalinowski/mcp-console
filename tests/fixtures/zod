@@ -309,6 +309,12 @@ def main() -> None:
     controlled_restart_state = "fresh"
     controlled_restart_evaluations = 0
     queued_message: dict[str, Any] | None = None
+    block_next_sideband_write: int | None = None
+    if os.environ.get("ZOD_BLOCK_NEXT_SIDEBAND_WRITE") == "1":
+        command = wait_for_test_control(0, "block_next_sideband_write")
+        target_operation = command.get("target_operation")
+        assert isinstance(target_operation, int), command
+        block_next_sideband_write = target_operation
 
     def receive_resolver_response(expected_kind: str) -> dict[str, Any]:
         nonlocal queued_message
@@ -319,13 +325,17 @@ def main() -> None:
             assert queued_message is None, response
             queued_message = response
 
-    if os.environ.get("ZOD_BLOCK_SIDEBAND_WRITE") == "1":
-        reader.read(1)
-        Path(os.environ["TMPDIR"], "zod-sideband-blocked").touch()
-        while True:
-            time.sleep(60)
-
     while True:
+        if block_next_sideband_write is not None:
+            assert reader.read(1) != ""
+            emit_test_event(
+                block_next_sideband_write,
+                "sideband_reader_stalled",
+                pid=os.getpid(),
+                process_group=os.getpgrp(),
+            )
+            while True:
+                signal.pause()
         if queued_message is None:
             line = reader.readline()
             if line == "":
@@ -428,9 +438,38 @@ def main() -> None:
             continue
 
         if source == "stall":
-            Path(os.environ["TMPDIR"], "zod-stalled").touch()
+            (temporary / "zod-stalled").touch()
             while True:
-                time.sleep(60)
+                signal.pause()
+
+        if source.startswith("stall: "):
+            operation = int(source.removeprefix("stall: "))
+            emit_test_event(operation, "worker_operation_started")
+            emit_test_event(
+                operation,
+                "parent_operation_stalled",
+                pid=os.getpid(),
+                process_group=os.getpgrp(),
+            )
+            while True:
+                signal.pause()
+
+        if source == "close sideband with unread shutdown":
+            send_output(writer, "zod waiting for shutdown\n")
+            while os.read(0, 8192) != b"":
+                pass
+            expected = b'{"kind":"shutdown"}\n'
+            queued = endpoint.recv(
+                len(expected),
+                socket.MSG_PEEK | socket.MSG_WAITALL,
+            )
+            assert queued == expected, queued
+            endpoint.shutdown(socket.SHUT_WR)
+            close_sideband(endpoint, reader, writer)
+            reset_marker = Path(os.environ["MCP_CONSOLE_TEST_RESET_SIDEBAND_EOF"])
+            while not reset_marker.exists():
+                time.sleep(0.01)
+            return
 
         if source == "stall accepted relay shutdown":
             relay_pid = os.getpgrp()

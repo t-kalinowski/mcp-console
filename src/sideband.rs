@@ -96,7 +96,11 @@ impl Reader {
     pub(crate) fn read_chunk(&mut self) -> io::Result<()> {
         let mut buffer = [0; READ_CHUNK_SIZE];
         let mut endpoint = self.endpoint.as_ref();
-        let length = endpoint.read(&mut buffer)?;
+        let length = match endpoint.read(&mut buffer) {
+            Ok(length) => length,
+            Err(error) if error.kind() == io::ErrorKind::ConnectionReset => 0,
+            Err(error) => return Err(error),
+        };
         self.append_chunk(&buffer[..length])
     }
 
@@ -114,7 +118,11 @@ impl Reader {
             )
         };
         if length < 0 {
-            return Err(io::Error::last_os_error());
+            let error = io::Error::last_os_error();
+            if error.kind() == io::ErrorKind::ConnectionReset {
+                return self.append_chunk(&[]);
+            }
+            return Err(error);
         }
         self.append_chunk(&buffer[..length as usize])
     }

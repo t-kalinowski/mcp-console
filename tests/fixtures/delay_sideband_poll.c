@@ -10,11 +10,23 @@
 #include <unistd.h>
 
 static atomic_bool claimed = false;
+static atomic_bool reset_claimed = false;
+static atomic_int sideband_descriptor = -1;
 
 typedef int (*poll_function)(struct pollfd *, nfds_t, int);
+typedef ssize_t (*read_function)(int, void *, size_t);
+typedef ssize_t (*recv_function)(int, void *, size_t, int);
 
 static poll_function next_poll(void) {
   return poll;
+}
+
+static read_function next_read(void) {
+  return read;
+}
+
+static recv_function next_recv(void) {
+  return recv;
 }
 
 static bool target_process(void) {
@@ -60,6 +72,10 @@ static int delayed_poll(struct pollfd *descriptors, nfds_t count, int timeout) {
     errno = ENOSYS;
     return -1;
   }
+  if (target_process() && count == 2 && timeout == -1 &&
+      unix_stream(descriptors[0].fd)) {
+    atomic_store(&sideband_descriptor, descriptors[0].fd);
+  }
   int result = poll_next(descriptors, count, timeout);
   if (result <= 0 || !target_process() || count != 2 || timeout != -1 ||
       !armed() || (descriptors[0].revents & POLLIN) == 0 ||
@@ -83,6 +99,39 @@ static int delayed_poll(struct pollfd *descriptors, nfds_t count, int timeout) {
   return (descriptors[0].revents != 0) + (descriptors[1].revents != 0);
 }
 
+static bool reset_sideband_eof(int descriptor, ssize_t result) {
+  if (result != 0 || !target_process() ||
+      descriptor != atomic_load(&sideband_descriptor) ||
+      getenv("MCP_CONSOLE_TEST_RESET_SIDEBAND_EOF") == NULL ||
+      atomic_exchange(&reset_claimed, true)) {
+    return false;
+  }
+  mark("MCP_CONSOLE_TEST_RESET_SIDEBAND_EOF");
+  errno = ECONNRESET;
+  return true;
+}
+
+static ssize_t reset_read(int descriptor, void *buffer, size_t length) {
+  read_function read_next = next_read();
+  if (read_next == NULL) {
+    errno = ENOSYS;
+    return -1;
+  }
+  ssize_t result = read_next(descriptor, buffer, length);
+  return reset_sideband_eof(descriptor, result) ? -1 : result;
+}
+
+static ssize_t reset_recv(int descriptor, void *buffer, size_t length,
+                          int flags) {
+  recv_function recv_next = next_recv();
+  if (recv_next == NULL) {
+    errno = ENOSYS;
+    return -1;
+  }
+  ssize_t result = recv_next(descriptor, buffer, length, flags);
+  return reset_sideband_eof(descriptor, result) ? -1 : result;
+}
+
 __attribute__((constructor)) static void prevent_worker_injection(void) {
   if (target_process()) {
     mark("MCP_CONSOLE_TEST_POLL_LOADED");
@@ -99,3 +148,5 @@ __attribute__((constructor)) static void prevent_worker_injection(void) {
       (const void *)(uintptr_t)&replacee};
 
 DYLD_INTERPOSE(delayed_poll, poll)
+DYLD_INTERPOSE(reset_read, read)
+DYLD_INTERPOSE(reset_recv, recv)
