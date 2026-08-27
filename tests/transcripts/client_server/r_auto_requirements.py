@@ -572,6 +572,8 @@ def test_restart_discards_unactivated_r_candidate(binary: Path) -> Transcript:
         passed = False
         try:
             client._initialize_and_list_tools()
+            client.send(r="invisible(NULL)")
+            assert last_tool_text(client) == "[done]"
             baseline = len(ir_run_records(record))
 
             # The live .libPaths() binding is reached after RResolved and

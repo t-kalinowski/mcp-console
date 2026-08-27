@@ -2,6 +2,14 @@
 !same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
 ---
 send:
+  python: None
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+send:
   python: |
     automatic_timeout_attempts = (
         globals().get(
@@ -31,4 +39,3 @@ result:
         [resolved PyPI distribution 'py-yaml12' for Python import 'yaml12']
         ('yaml12', 1)
   isError: false
-...
