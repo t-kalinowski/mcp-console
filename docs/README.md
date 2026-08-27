@@ -8,6 +8,7 @@ Source and public acceptance tests remain the final authority when prose disagre
 ## Project and console users
 
 - The [project README](../README.md) is the short product overview and current project-status page.
+- The [ellmer R package](../r/README.md) explains how to install and register MCP Console as an ellmer tool.
 - [Built-in runtime](BUILTIN_RUNTIME.md) is the source of truth for user-visible R, Python, DuckDB SQL, input, output, graphics, and interoperability behavior.
 - [Requirements and environments](REQUIREMENTS.md) is the source of truth for dependency preparation, retained environments, accepted requirement syntax, and the host-resolution trust boundary.
 
