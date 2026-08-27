@@ -8,7 +8,9 @@ send:
       tempdir(),
       "r-interrupt-started"
     )))
-    repeat {}
+    repeat {
+      Sys.sleep(60)
+    }
   timeout_ms: 0
 result:
   content:
@@ -43,7 +45,9 @@ send:
           "r-boundary-interrupt-started"
         )))
         on.exit(boundary_interrupt_cleanup <<- TRUE)
-        repeat {}
+        repeat {
+          Sys.sleep(60)
+        }
       }
     ))
     boundary_interrupt_state <- 42L

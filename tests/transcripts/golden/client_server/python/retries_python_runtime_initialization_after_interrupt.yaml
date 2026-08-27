@@ -14,7 +14,9 @@ send:
             tempdir(),
             "python-runtime-configuring"
           )))
-          repeat {}
+          repeat {
+            Sys.sleep(60)
+          }
         }
       }),
       print = FALSE,

@@ -58,7 +58,9 @@ send:
           tempdir(),
           "between-console-callbacks-started"
         )))
-        repeat {}
+        repeat {
+          Sys.sleep(60)
+        }
       },
       interrupt = function(condition) {
         cat("caught between-callback interrupt\n")

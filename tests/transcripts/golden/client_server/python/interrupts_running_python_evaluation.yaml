@@ -10,7 +10,9 @@ send:
           tempdir(),
           "python-r-interrupt-started"
         )))
-        repeat {}
+        repeat {
+          Sys.sleep(60)
+        }
       }),
       print = FALSE,
       where = asNamespace("reticulate")
@@ -73,6 +75,7 @@ send:
   python: |
     import inspect
     import os
+    import time
     from pathlib import Path
 
     inspect.getmro.__code__ = inspect._mcp_original_getmro_code
@@ -82,7 +85,7 @@ send:
         "python-interrupt-started",
     ).touch()
     while True:
-        pass
+        time.sleep(60)
   timeout_ms: 0
 result:
   content:
@@ -101,7 +104,7 @@ result:
       text: |
         Traceback (most recent call last):
           File "<string>", line 467, in _mcp_console_eval_cell
-          File "<mcp-console:python:e2>", line 11, in <module>
+          File "<mcp-console:python:e2>", line 13, in <module>
         KeyboardInterrupt
   isError: false
 ---

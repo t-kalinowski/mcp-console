@@ -4,6 +4,7 @@ import json
 import os
 import select
 import shutil
+import subprocess
 import sys
 import tempfile
 import threading
@@ -67,6 +68,34 @@ def ir_requirements(record: dict[str, object]) -> list[str]:
         for index, argument in enumerate(arguments[:-1])
         if argument == "--with"
     ]
+
+
+def installed_r_library(
+    environment: dict[str, str],
+    packages: tuple[str, ...],
+) -> Path:
+    r_home = Path(environment["R_HOME"])
+    result = subprocess.run(
+        [
+            r_home / "bin/Rscript",
+            "--vanilla",
+            "-e",
+            (
+                "packages <- commandArgs(trailingOnly = TRUE); "
+                "libraries <- unique(dirname(vapply(packages, find.package, "
+                "character(1L)))); stopifnot(length(libraries) == 1L); "
+                "cat(libraries)"
+            ),
+            *packages,
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+        env=environment,
+    )
+    library = Path(result.stdout)
+    assert library.is_dir(), library
+    return library
 
 
 def send_and_collect_runtime_r_resolution(
@@ -157,6 +186,26 @@ def test_resolves_reached_r_packages_at_runtime(binary: Path) -> Transcript:
     with tempfile.TemporaryDirectory() as temporary:
         directory = Path(temporary)
         environment, record = recording_ir_environment(directory)
+        packages = (
+            "whoami",
+            "praise",
+            "brio",
+            "desc",
+            "pkgbuild",
+            "pkgload",
+            "diffobj",
+            "waldo",
+        )
+        environment["MCP_CONSOLE_TEST_IR_SOURCE_LIBRARY"] = str(
+            installed_r_library(environment, packages)
+        )
+        environment["MCP_CONSOLE_TEST_IR_LIBRARY_ROOT"] = str(
+            directory / "resolved-r-libraries"
+        )
+        environment["MCP_CONSOLE_TEST_IR_FIXTURE_PACKAGES"] = ",".join(packages)
+        environment["MCP_CONSOLE_TEST_IR_BASE_LIBRARY"] = str(
+            directory / "base-r-library"
+        )
         isolated_library = directory / "r-library"
         environment["R_LIBS_SITE"] = str(isolated_library)
         environment["R_LIBS_USER"] = str(isolated_library)
@@ -166,69 +215,70 @@ def test_resolves_reached_r_packages_at_runtime(binary: Path) -> Transcript:
 
         # fmt: r
         static = code(r"""
-            base::library(package = fortunes, quietly = TRUE)
-            library(
-              "english",
-              help = stats,
-              character.only = TRUE,
-              quietly = TRUE
-            )
-            stopifnot(
-              base::require(whoami, quietly = TRUE),
-              base::requireNamespace("mockery", quietly = TRUE),
-              is.environment(base::loadNamespace("microbenchmark")),
-              is.environment(cyclocomp:::.__NAMESPACE__.),
-              is.function(fortunes::fortune),
-              is.function("fortunes"::fortune),
-              is.function(fortunes::fortune)
-            )
+            invisible(suppressWarnings(suppressPackageStartupMessages({
+              base::library(package = whoami, quietly = TRUE)
+              library(
+                "praise",
+                help = stats,
+                character.only = TRUE,
+                quietly = TRUE
+              )
+              stopifnot(
+                base::require(brio, quietly = TRUE),
+                base::requireNamespace("desc", quietly = TRUE),
+                is.environment(base::loadNamespace("pkgbuild")),
+                is.environment(pkgload:::.__NAMESPACE__.),
+                is.function(whoami::username),
+                is.function("whoami"::username),
+                is.function(whoami::username)
+              )
+            })))
             42L
             """)
         send_and_collect_runtime_r_resolution(client, "[1] 42\n", r=static)
         static_runs = ir_run_records(record)[baseline:]
-        packages = (
-            "fortunes",
-            "english",
-            "whoami",
-            "mockery",
-            "microbenchmark",
-            "cyclocomp",
-        )
-        assert len(static_runs) == len(packages), static_runs
-        for index, (run, package) in enumerate(zip(static_runs, packages, strict=True)):
+        static_packages = packages[:6]
+        assert len(static_runs) == len(static_packages), static_runs
+        for index, (run, package) in enumerate(
+            zip(static_runs, static_packages, strict=True)
+        ):
             requirements = ir_requirements(run)
             assert requirements.count(package) == 1, requirements
-            for retained in packages[: index + 1]:
+            for retained in static_packages[: index + 1]:
                 assert requirements.count(retained) == 1, requirements
-            assert all(later not in requirements for later in packages[index + 1 :])
+            assert all(
+                later not in requirements for later in static_packages[index + 1 :]
+            )
             assert run["no_local_sources"] == "1", run
 
         dynamic_baseline = len(ir_run_records(record))
         # fmt: r
         dynamic = code(r"""
-            attached <- "RcppRoll"
-            stopifnot(do.call(
-              base::library,
-              list(
-                package = attached,
-                help = NULL,
-                character.only = TRUE,
-                logical.return = TRUE,
-                quietly = TRUE
-              )
-            ))
-            package <- "snakecase"
-            stopifnot(do.call(
-              base::requireNamespace,
-              list(package = package, quietly = TRUE)
-            ))
+            invisible(suppressWarnings(suppressPackageStartupMessages({
+              attached <- "diffobj"
+              stopifnot(do.call(
+                base::library,
+                list(
+                  package = attached,
+                  help = NULL,
+                  character.only = TRUE,
+                  logical.return = TRUE,
+                  quietly = TRUE
+                )
+              ))
+              package <- "waldo"
+              stopifnot(do.call(
+                base::requireNamespace,
+                list(package = package, quietly = TRUE)
+              ))
+            })))
             42L
             """)
         send_and_collect_runtime_r_resolution(client, "[1] 42\n", r=dynamic)
         dynamic_runs = ir_run_records(record)[dynamic_baseline:]
         assert len(dynamic_runs) == 2, dynamic_runs
-        assert "RcppRoll" in ir_requirements(dynamic_runs[0]), dynamic_runs
-        assert "snakecase" in ir_requirements(dynamic_runs[1]), dynamic_runs
+        assert "diffobj" in ir_requirements(dynamic_runs[0]), dynamic_runs
+        assert "waldo" in ir_requirements(dynamic_runs[1]), dynamic_runs
         return client._finish()
 
 

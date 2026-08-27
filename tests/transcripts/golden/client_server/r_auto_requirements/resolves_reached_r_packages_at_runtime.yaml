@@ -3,22 +3,24 @@
 ---
 send:
   r: |
-    base::library(package = fortunes, quietly = TRUE)
-    library(
-      "english",
-      help = stats,
-      character.only = TRUE,
-      quietly = TRUE
-    )
-    stopifnot(
-      base::require(whoami, quietly = TRUE),
-      base::requireNamespace("mockery", quietly = TRUE),
-      is.environment(base::loadNamespace("microbenchmark")),
-      is.environment(cyclocomp:::.__NAMESPACE__.),
-      is.function(fortunes::fortune),
-      is.function("fortunes"::fortune),
-      is.function(fortunes::fortune)
-    )
+    invisible(suppressWarnings(suppressPackageStartupMessages({
+      base::library(package = whoami, quietly = TRUE)
+      library(
+        "praise",
+        help = stats,
+        character.only = TRUE,
+        quietly = TRUE
+      )
+      stopifnot(
+        base::require(brio, quietly = TRUE),
+        base::requireNamespace("desc", quietly = TRUE),
+        is.environment(base::loadNamespace("pkgbuild")),
+        is.environment(pkgload:::.__NAMESPACE__.),
+        is.function(whoami::username),
+        is.function("whoami"::username),
+        is.function(whoami::username)
+      )
+    })))
     42L
 result:
   content:
@@ -29,22 +31,24 @@ result:
 ---
 send:
   r: |
-    attached <- "RcppRoll"
-    stopifnot(do.call(
-      base::library,
-      list(
-        package = attached,
-        help = NULL,
-        character.only = TRUE,
-        logical.return = TRUE,
-        quietly = TRUE
-      )
-    ))
-    package <- "snakecase"
-    stopifnot(do.call(
-      base::requireNamespace,
-      list(package = package, quietly = TRUE)
-    ))
+    invisible(suppressWarnings(suppressPackageStartupMessages({
+      attached <- "diffobj"
+      stopifnot(do.call(
+        base::library,
+        list(
+          package = attached,
+          help = NULL,
+          character.only = TRUE,
+          logical.return = TRUE,
+          quietly = TRUE
+        )
+      ))
+      package <- "waldo"
+      stopifnot(do.call(
+        base::requireNamespace,
+        list(package = package, quietly = TRUE)
+      ))
+    })))
     42L
 result:
   content:
@@ -52,4 +56,3 @@ result:
       text: |
         [1] 42
   isError: false
-...

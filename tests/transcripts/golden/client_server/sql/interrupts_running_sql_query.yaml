@@ -3,7 +3,6 @@
 ---
 send:
   r: |
-    sql_interrupt_armed <- FALSE
     dyn.load("./mcp_test_input_handler.so")
     invisible(.Call(
       "mcp_test_register_input_handler",
@@ -15,15 +14,11 @@ send:
         )))
       }
     ))
-    options(duckdb.progress_display = function(percentage) {
-      if (isTRUE(sql_interrupt_armed)) {
-        invisible(file.create(file.path(
-          tempdir(),
-          "sql-interrupt-started"
-        )))
-      }
-    })
-    invisible(sql_connection())
+    invisible(DBI::dbExecute(
+      sql_connection(),
+      "SET VARIABLE sql_interrupt_marker = ?",
+      params = list(file.path(tempdir(), "sql-interrupt-started"))
+    ))
 result:
   content:
     - type: text
@@ -41,26 +36,9 @@ result:
   isError: false
 ---
 send:
-  r: |
-    sql_interrupt_armed <- TRUE
-    invisible(DBI::dbExecute(
-      sql_connection(),
-      "SET enable_progress_bar = true"
-    ))
-    invisible(DBI::dbExecute(
-      sql_connection(),
-      "SET progress_bar_time = 0"
-    ))
-result:
-  content:
-    - type: text
-      text: "[done]"
-  isError: false
----
-send:
   sql: |
-    SELECT sum(hash(value)) AS total
-    FROM range(1000000000000) AS values(value)
+    COPY (SELECT 1) TO (getvariable('sql_interrupt_marker'));
+    SELECT sleep_ms(60000) AS waited
   timeout_ms: 0
 result:
   content:

@@ -1106,7 +1106,9 @@ def test_interrupts_running_r_evaluation(binary: Path) -> Transcript:
                   tempdir(),
                   "r-interrupt-started"
                 )))
-                repeat {}
+                repeat {
+                  Sys.sleep(60)
+                }
                 """)
             client.send(r=r, timeout_ms=0)
             assert last_tool_text(client) == "\n[running; poll with an empty send]"
@@ -1135,7 +1137,9 @@ def test_interrupts_running_r_evaluation(binary: Path) -> Transcript:
                       "r-boundary-interrupt-started"
                     )))
                     on.exit(boundary_interrupt_cleanup <<- TRUE)
-                    repeat {}
+                    repeat {
+                      Sys.sleep(60)
+                    }
                   }
                 ))
                 boundary_interrupt_state <- 42L
@@ -1323,7 +1327,9 @@ def test_replays_console_prefix_after_operation_boundary_interrupt(
                   tempdir(),
                   "between-console-callbacks-started"
                 )))
-                repeat {}
+                repeat {
+                  Sys.sleep(60)
+                }
               },
               interrupt = function(condition) {
                 cat("caught between-callback interrupt\n")
