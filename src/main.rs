@@ -18,7 +18,8 @@ mod resolver;
 mod sandbox;
 mod server;
 mod server_transport;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[cfg_attr(target_os = "linux", allow(dead_code))]
 mod sideband;
 #[cfg(target_os = "macos")]
 mod sql;

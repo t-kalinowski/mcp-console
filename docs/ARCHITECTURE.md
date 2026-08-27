@@ -57,7 +57,7 @@ The client does not communicate directly with a relay, worker, or resolver.
 
 The server sends commands to the relay's standard input and receives JSONL events from the relay's standard output.
 Relay standard error is inherited separately and is not part of that protocol.
-The transport is private and currently exists to keep worker pipes and process supervision inside the sandbox.
+The transport is private and currently exists to keep worker connections and process supervision inside the sandbox.
 [`RELAY_PROTOCOL.md`](RELAY_PROTOCOL.md) defines its commands, events, framing, and retirement behavior.
 
 ### Relay and worker
@@ -90,7 +90,7 @@ The server does not execute submitted cells or ask the relay to interpret MCP ca
 The relay is a thin ordered transport and worker supervisor.
 It owns the worker's local descriptors, translates applicable relay commands to worker-sideband messages, forwards worker observations, delivers signals, bounds shutdown, drains streams, and reaps the direct worker.
 Its producers preserve their own order, and one relay writer serializes their observations for the server.
-That serialization does not reconstruct chronology across the independent sideband, stdout, and stderr pipes.
+That serialization does not reconstruct chronology across the independent sideband, stdout, and stderr transports.
 
 The relay does not own the logical session, retained requirements, evaluation admission, output budgets, response assembly, or MCP delivery.
 It exits with the worker lifetime it supervises.
@@ -115,7 +115,7 @@ The operation can affect only the lifecycle generation that accepted it.
 
 An explicit restart advances admission to a new generation before the old relay and worker finish retirement.
 Work still completing for the retiring generation is either settled for that generation or discarded according to its existing lifecycle contract; it cannot be forwarded to the replacement or commit state on its behalf.
-The replacement receives new worker pipes and fresh language-runtime state, while the server supplies the retained environment selected for it.
+The replacement receives new worker transports and fresh language-runtime state, while the server supplies the retained environment selected for it.
 
 A controlled `send` keeps one admission boundary from control through reservation of its optional new cell.
 After restart, same-call stdin and code belong only to the replacement generation.
@@ -265,7 +265,7 @@ The resulting delivery owner covers prior-operation output, restart lifecycle no
 If MCP response delivery is cancelled or its write fails, the complete combined response returns to its delivery owner and can be delivered exactly once.
 
 Each relay producer preserves its own order.
-The serialized event stream gives the server one observation order, but it does not establish chronology between independent worker sideband, stdout, and stderr pipes.
+The serialized event stream gives the server one observation order, but it does not establish chronology between independent worker sideband, stdout, and stderr transports.
 The [relay protocol](RELAY_PROTOCOL.md) owns that ordering guarantee, and the [built-in runtime guide](BUILTIN_RUNTIME.md) describes the resulting console behavior.
 
 ## Recording and image artifacts

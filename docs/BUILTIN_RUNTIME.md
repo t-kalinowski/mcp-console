@@ -404,7 +404,7 @@ R plots created through Python's `r` bridge follow the R graphics rules.
 ## Output and notices
 
 Console output, diagnostics, captured stdout and stderr, input-request records, images, and server lifecycle notices are assembled in one server-owned output stream for delivery.
-The server preserves each producer's order but cannot reconstruct chronology across independent pipes.
+The server preserves each producer's order but cannot reconstruct chronology across independent transports.
 Outside the progress-frame compaction described below, it does not normalize ordinary whitespace or reinterpret output based on its source.
 Invalid UTF-8 from raw standard streams is replaced when projected to MCP text; the private relay transport still preserves the bytes.
 

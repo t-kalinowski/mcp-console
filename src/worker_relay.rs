@@ -42,7 +42,7 @@ mod platform {
         let failures = FailureReporter::new(controls.clone());
         let stopping = Arc::new(AtomicBool::new(false));
 
-        let (sideband_reader, sideband_writer, child_fds) = match crate::sideband::bind() {
+        let (sideband_reader, sideband_writer, child_endpoint) = match crate::sideband::bind() {
             Ok(sideband) => sideband,
             Err(error) => {
                 return report_startup_failure(
@@ -58,7 +58,7 @@ mod platform {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-        child_fds.configure_process(&mut command);
+        child_endpoint.configure_process(&mut command);
         let child = match command.spawn() {
             Ok(child) => child,
             Err(error) => {
@@ -69,7 +69,7 @@ mod platform {
                 );
             }
         };
-        drop(child_fds);
+        drop(child_endpoint);
 
         let mut worker = WorkerLifecycle::new(child);
         let setup = worker.start_io(
@@ -595,7 +595,6 @@ mod platform {
                     collect_error(&mut error, sideband_reader.cancel_and_join())
                 }
                 (None, Some(mut sideband_reader)) => {
-                    collect_error(&mut error, set_nonblocking(&sideband_reader));
                     collect_error(&mut error, discard_retiring_sideband(&mut sideband_reader));
                 }
                 _ => unreachable!("worker sideband reader must have exactly one owner"),
@@ -1030,11 +1029,10 @@ mod platform {
         }
     }
 
-    // Keep this reader cancellable and nonblocking through retirement. A worker
-    // descendant can retain the pipe after writing only part of a frame, so a
-    // blocking line read could prevent the relay from flushing already complete
-    // events and exiting. Cancellation forwards complete buffered or immediately
-    // readable frames, then abandons any incomplete tail.
+    // Keep this blocking reader cancellable through retirement. A worker
+    // descendant can retain the socket after writing only part of a frame, so
+    // cancellation forwards complete buffered or immediately readable frames
+    // with per-call nonblocking reads, then abandons any incomplete tail.
     struct SidebandReader {
         cancel: Cancellation,
         thread: thread::JoinHandle<()>,
@@ -1047,9 +1045,6 @@ mod platform {
             failures: FailureReporter,
             controls: mpsc::Sender<Control>,
         ) -> Result<Self, (crate::sideband::Reader, String)> {
-            if let Err(error) = set_nonblocking(&reader) {
-                return Err((reader, error));
-            }
             let (cancelled, cancel) = match cancellation_pipe("worker sideband") {
                 Ok(pipe) => pipe,
                 Err(error) => return Err((reader, error)),
@@ -1083,11 +1078,7 @@ mod platform {
                     let had_buffered_data = reader.has_buffered_data();
                     match reader.read_chunk() {
                         Ok(()) => {}
-                        Err(error)
-                            if matches!(
-                                error.kind(),
-                                std::io::ErrorKind::Interrupted | std::io::ErrorKind::WouldBlock
-                            ) => {}
+                        Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
                         Err(error)
                             if error.kind() == std::io::ErrorKind::UnexpectedEof
                                 && !had_buffered_data =>
@@ -1139,7 +1130,7 @@ mod platform {
     ) -> Result<(), String> {
         loop {
             forward_buffered_sideband(reader, events)?;
-            match reader.read_chunk() {
+            match reader.read_chunk_nonblocking() {
                 Ok(()) => {}
                 Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
                 Err(error)
@@ -1159,7 +1150,7 @@ mod platform {
 
     fn discard_retiring_sideband(reader: &mut crate::sideband::Reader) -> Result<(), String> {
         loop {
-            match reader.read_chunk() {
+            match reader.read_chunk_nonblocking() {
                 Ok(()) => {}
                 Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
                 Err(error)
