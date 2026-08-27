@@ -219,13 +219,6 @@ class ReleaseScriptTests(unittest.TestCase):
         write_executable(cargo_bin, executable_source)
         installed = tool_directory / "mcp-console"
         write_executable(installed, executable_source)
-        write_executable(
-            tool_directory / "ir",
-            """
-            #!/bin/sh
-            echo 'ir 0.4.0'
-            """,
-        )
         (tool_bin / "mcp-console").symlink_to(installed)
 
         write_executable(

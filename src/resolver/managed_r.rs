@@ -9,6 +9,26 @@ use super::process::{
 const MANAGED_R_LIBRARY_RESOLVER_SOURCE: &str = include_str!("programs/r_library.R");
 const MINIMUM_IR_VERSION: semver::Version = semver::Version::new(0, 4, 0);
 
+struct IrCommand {
+    program: &'static str,
+    arguments: &'static [&'static str],
+}
+
+impl IrCommand {
+    fn command(&self) -> Command {
+        let mut command = resolver_command(Path::new(self.program));
+        command.args(self.arguments);
+        command
+    }
+
+    fn label(&self) -> String {
+        std::iter::once(self.program)
+            .chain(self.arguments.iter().copied())
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+}
+
 #[derive(Clone)]
 pub(crate) struct ManagedR {
     library: PathBuf,
@@ -102,9 +122,8 @@ pub(crate) fn resolve_r(
             PathBuf::from(r_home).join("bin/Rscript")
         }
     };
-    let program = ir_program();
-    validate_ir_version(&resolver, &mut on_started, &program)?;
-    let mut command = resolver_command(&program);
+    let ir = ir_command(&resolver, &mut on_started)?;
+    let mut command = ir.command();
     command.arg("run").arg("--rscript").arg(&rscript);
     for requirement in &requirements {
         command.arg("--with").arg(requirement);
@@ -125,14 +144,14 @@ pub(crate) fn resolve_r(
     let mut child = command.spawn().map_err(|error| {
         format!(
             "failed to run R package resolver with `{}`: {error}",
-            program.display()
+            ir.label()
         )
     })?;
     let output = collect_resolver_output(
         &resolver,
         &mut child,
         &mut on_started,
-        &program,
+        Path::new(ir.program),
         "R package",
     )?;
     if !output.status.success() {
@@ -173,44 +192,57 @@ pub(crate) fn resolve_r(
     })
 }
 
-fn ir_program() -> PathBuf {
-    let executable = match std::env::current_exe() {
-        Ok(executable) => executable,
-        Err(_) => return PathBuf::from("ir"),
+fn ir_command(
+    resolver: &ResolverProcess,
+    on_started: &mut Option<impl FnOnce(ResolverStopHandle) -> Result<(), String>>,
+) -> Result<IrCommand, String> {
+    let ir = IrCommand {
+        program: "ir",
+        arguments: &[],
     };
-
-    let canonical = std::fs::canonicalize(&executable).ok();
-    for executable in std::iter::once(executable).chain(canonical) {
-        let Some(directory) = executable.parent() else {
-            continue;
-        };
-        let candidate = directory.join("ir");
-        if candidate.is_file() {
-            return candidate;
-        }
+    if validate_ir_version(resolver, on_started, &ir)? {
+        return Ok(ir);
     }
 
-    PathBuf::from("ir")
+    let ir = IrCommand {
+        program: "uvx",
+        arguments: &["--from", "r-lib-ir", "ir"],
+    };
+    if validate_ir_version(resolver, on_started, &ir)? {
+        Ok(ir)
+    } else {
+        Err("R package resolution requires `ir` or host `uvx` on PATH".to_string())
+    }
 }
 
 fn validate_ir_version(
     resolver: &ResolverProcess,
     on_started: &mut Option<impl FnOnce(ResolverStopHandle) -> Result<(), String>>,
-    program: &Path,
-) -> Result<(), String> {
-    let mut command = resolver_command(program);
+    ir: &IrCommand,
+) -> Result<bool, String> {
+    let mut command = ir.command();
     command
         .arg("--version")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    let mut child = command.spawn().map_err(|error| {
-        format!(
-            "failed to check R package resolver version with `{}`: {error}",
-            program.display()
-        )
-    })?;
-    let output = collect_resolver_output(resolver, &mut child, on_started, program, "R package")?;
+    let mut child = match command.spawn() {
+        Ok(child) => child,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => {
+            return Err(format!(
+                "failed to check R package resolver version with `{}`: {error}",
+                ir.label()
+            ));
+        }
+    };
+    let output = collect_resolver_output(
+        resolver,
+        &mut child,
+        on_started,
+        Path::new(ir.program),
+        "R package",
+    )?;
     if !output.status.success() {
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -241,7 +273,7 @@ fn validate_ir_version(
             "R package resolution requires ir {MINIMUM_IR_VERSION} or later; found ir {version}"
         ));
     }
-    Ok(())
+    Ok(true)
 }
 
 fn collect_resolver_output(

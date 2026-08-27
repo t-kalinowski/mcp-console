@@ -5,6 +5,7 @@ import json
 import os
 import re
 import select
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -246,25 +247,30 @@ def smoke_wheel(args: argparse.Namespace) -> None:
     run_command([str(installed), "sandbox", "--", "/usr/bin/true"])
 
     internal_ir = installed.resolve().with_name("ir")
-    require(internal_ir.is_file(), f"sibling ir does not exist: {internal_ir}")
-    require(
-        os.access(internal_ir, os.X_OK), f"sibling ir is not executable: {internal_ir}"
-    )
-    command_output([str(internal_ir), "--version"])
+    require(not internal_ir.exists(), f"wheel contains sibling ir: {internal_ir}")
 
     r_home = command_output(["R", "RHOME"])
-    with tempfile.TemporaryDirectory(prefix="mcp-console-fake-path-") as directory:
-        fake_bin = Path(directory)
-        fake_ir = fake_bin / "ir"
-        fake_ir.write_text(
-            '#!/bin/sh\necho "PATH ir should not be used" >&2\nexit 99\n',
-            encoding="utf-8",
+    uv = shutil.which("uv")
+    uvx = shutil.which("uvx")
+    require(uv is not None, "host uv is not on PATH")
+    require(uvx is not None, "host uvx is not on PATH")
+    with tempfile.TemporaryDirectory(prefix="mcp-console-uvx-path-") as directory:
+        uvx_bin = Path(directory)
+        (uvx_bin / "uv").symlink_to(Path(uv).resolve())
+        (uvx_bin / "uvx").symlink_to(Path(uvx).resolve())
+        path = os.pathsep.join(
+            [str(uvx_bin)]
+            + [
+                entry
+                for entry in os.environ.get("PATH", "").split(os.pathsep)
+                if not (Path(entry) / "ir").is_file()
+            ]
         )
-        fake_ir.chmod(0o755)
 
         env = os.environ.copy()
+        env.pop("RETICULATE_UV", None)
         env["R_HOME"] = r_home
-        env["PATH"] = f"{fake_bin}{os.pathsep}{env['PATH']}"
+        env["PATH"] = path
         smoke_mcp(
             installed,
             version,

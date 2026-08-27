@@ -70,6 +70,156 @@ nchar(long_line_value)
 
 #[cfg(target_os = "macos")]
 #[test]
+fn stdio_console_prefers_path_ir_over_an_unrelated_sibling() {
+    let original_path = std::env::var_os("PATH").unwrap_or_default();
+    let real_ir = std::env::split_paths(&original_path)
+        .map(|directory| directory.join("ir"))
+        .find(|candidate| candidate.is_file())
+        .expect("test ir should be discoverable");
+    let test_directory = TestDirectory::new("plain-install-ir-selection");
+    let installed = test_directory.path().join("mcp-console");
+    let unrelated_ir = test_directory.path().join("ir");
+    let fake_bin = test_directory.path().join("bin");
+    let path_ir = fake_bin.join("ir");
+    let path_ir_used = test_directory.path().join("path-ir-used");
+    let uvx = fake_bin.join("uvx");
+    let uvx_used = test_directory.path().join("uvx-used");
+    fs::copy(env!("CARGO_BIN_EXE_mcp-console"), &installed).expect("mcp-console should be copied");
+    fs::write(&unrelated_ir, "#!/bin/sh\nprintf 'ir 0.3.0+dev\\n'\n")
+        .expect("unrelated ir should be written");
+    fs::set_permissions(&unrelated_ir, fs::Permissions::from_mode(0o755))
+        .expect("unrelated ir should be executable");
+    fs::create_dir(&fake_bin).expect("fake bin directory should be created");
+    fs::write(
+        &path_ir,
+        r#"#!/bin/sh
+: > "$MCP_CONSOLE_PATH_IR_USED"
+exec "$MCP_CONSOLE_REAL_IR" "$@"
+"#,
+    )
+    .expect("PATH ir should be written");
+    fs::write(&uvx, "#!/bin/sh\n: > \"$MCP_CONSOLE_UVX_USED\"\nexit 99\n")
+        .expect("uvx should be written");
+    fs::set_permissions(&path_ir, fs::Permissions::from_mode(0o755))
+        .expect("PATH ir should be executable");
+    fs::set_permissions(&uvx, fs::Permissions::from_mode(0o755)).expect("uvx should be executable");
+    let path = std::env::join_paths(
+        std::iter::once(fake_bin).chain(std::env::split_paths(&original_path)),
+    )
+    .expect("test PATH should be valid");
+
+    let mut command = Command::new(installed);
+    command
+        .arg("serve")
+        .env("PATH", path)
+        .env("MCP_CONSOLE_PATH_IR_USED", &path_ir_used)
+        .env("MCP_CONSOLE_REAL_IR", real_ir)
+        .env("MCP_CONSOLE_UVX_USED", &uvx_used);
+    let _client = McpClient::spawn(command);
+
+    assert!(path_ir_used.is_file(), "PATH ir should be used");
+    assert!(!uvx_used.exists(), "uvx should not be used");
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn stdio_console_uses_uvx_when_ir_is_not_on_path() {
+    let original_path = std::env::var_os("PATH").unwrap_or_default();
+    let real_ir = std::env::split_paths(&original_path)
+        .map(|directory| directory.join("ir"))
+        .find(|candidate| candidate.is_file())
+        .expect("test ir should be discoverable");
+    let r_home = Command::new("R")
+        .arg("RHOME")
+        .output()
+        .expect("test R should be discoverable");
+    assert!(r_home.status.success());
+    let r_home = String::from_utf8(r_home.stdout).expect("test R home should be valid UTF-8");
+
+    let test_directory = TestDirectory::new("uvx-ir-selection");
+    let fake_bin = test_directory.path().join("bin");
+    let fake_uvx = fake_bin.join("uvx");
+    let uvx_log = test_directory.path().join("uvx.log");
+    fs::create_dir(&fake_bin).expect("fake bin directory should be created");
+    fs::write(
+        &fake_uvx,
+        r#"#!/bin/sh
+if [ "$1" != "--from" ] || [ "$2" != "r-lib-ir" ] || [ "$3" != "ir" ]; then
+  exit 97
+fi
+printf '%s\n' "$1" "$2" "$3" "$4" >> "$MCP_CONSOLE_UVX_LOG"
+shift 3
+exec "$MCP_CONSOLE_REAL_IR" "$@"
+"#,
+    )
+    .expect("fake uvx should be written");
+    fs::set_permissions(&fake_uvx, fs::Permissions::from_mode(0o755))
+        .expect("fake uvx should be executable");
+    let path = std::env::join_paths(std::iter::once(fake_bin).chain(
+        std::env::split_paths(&original_path).filter(|directory| !directory.join("ir").is_file()),
+    ))
+    .expect("test PATH should be valid");
+
+    let mut command = Command::new(env!("CARGO_BIN_EXE_mcp-console"));
+    command
+        .arg("serve")
+        .env("PATH", path)
+        .env("R_HOME", r_home.trim())
+        .env("RETICULATE_PYTHON", "/usr/bin/python3")
+        .env("MCP_CONSOLE_REAL_IR", real_ir)
+        .env("MCP_CONSOLE_UVX_LOG", &uvx_log);
+    let _client = McpClient::spawn(command);
+
+    assert_eq!(
+        fs::read_to_string(uvx_log).expect("uvx invocation should be recorded"),
+        "--from\nr-lib-ir\nir\n--version\n--from\nr-lib-ir\nir\nrun\n"
+    );
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn stdio_console_uses_host_uv_for_managed_python() {
+    let original_path = std::env::var_os("PATH").unwrap_or_default();
+    let real_uv = std::env::split_paths(&original_path)
+        .map(|directory| directory.join("uv"))
+        .find(|candidate| candidate.is_file())
+        .expect("test uv should be discoverable");
+    let test_directory = TestDirectory::new("host-uv-selection");
+    let fake_bin = test_directory.path().join("bin");
+    let fake_uv = fake_bin.join("uv");
+    let uv_log = test_directory.path().join("uv.log");
+    fs::create_dir(&fake_bin).expect("fake bin directory should be created");
+    fs::write(
+        &fake_uv,
+        r#"#!/bin/sh
+printf '%s\n' "${RETICULATE_UV-unset}" >> "$MCP_CONSOLE_UV_LOG"
+exec "$MCP_CONSOLE_REAL_UV" "$@"
+"#,
+    )
+    .expect("fake uv should be written");
+    fs::set_permissions(&fake_uv, fs::Permissions::from_mode(0o755))
+        .expect("fake uv should be executable");
+    let path = std::env::join_paths(
+        std::iter::once(fake_bin).chain(std::env::split_paths(&original_path)),
+    )
+    .expect("test PATH should be valid");
+
+    let mut command = Command::new(env!("CARGO_BIN_EXE_mcp-console"));
+    command
+        .arg("serve")
+        .env_remove("RETICULATE_UV")
+        .env("PATH", path)
+        .env("MCP_CONSOLE_REAL_UV", real_uv)
+        .env("MCP_CONSOLE_UV_LOG", &uv_log);
+    let _client = McpClient::spawn(command);
+
+    let values = fs::read_to_string(uv_log).expect("host uv invocation should be recorded");
+    assert!(!values.is_empty());
+    assert!(values.lines().all(|value| value == "uv"), "{values}");
+}
+
+#[cfg(target_os = "macos")]
+#[test]
 fn stdio_console_discovers_r_inside_the_worker_sandbox() {
     let test_directory = TestDirectory::new("native-worker-r-discovery");
     let fake_bin = test_directory.path().join("bin");
