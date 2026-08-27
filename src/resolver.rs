@@ -22,7 +22,7 @@ mod unsupported;
 #[derive(Clone)]
 pub(crate) struct ManagedPythonResolverConfiguration {
     environment: Arc<BTreeMap<OsString, OsString>>,
-    reticulate_uv: OsString,
+    reticulate_uv: Option<OsString>,
 }
 
 impl ManagedPythonResolverConfiguration {
@@ -30,12 +30,44 @@ impl ManagedPythonResolverConfiguration {
         let environment = std::env::vars_os()
             .filter(|(name, _)| is_uv_environment_variable(name) && name != "UV_OFFLINE")
             .collect();
-        let reticulate_uv =
-            std::env::var_os("RETICULATE_UV").unwrap_or_else(|| OsString::from("uv"));
+        let reticulate_uv = std::env::var_os("RETICULATE_UV");
         Self {
             environment: Arc::new(environment),
             reticulate_uv,
         }
+    }
+
+    #[cfg(target_os = "macos")]
+    fn explicit_uv(&self) -> Option<&OsStr> {
+        self.reticulate_uv.as_deref()
+    }
+
+    #[cfg(target_os = "macos")]
+    pub(crate) fn has_uv(&self) -> bool {
+        self.reticulate_uv.is_some()
+    }
+
+    #[cfg(target_os = "macos")]
+    pub(crate) fn set_default_uv(&mut self, uv: impl Into<OsString>) {
+        if self.reticulate_uv.is_none() {
+            self.reticulate_uv = Some(uv.into());
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    fn configure_uv(&self, command: &mut std::process::Command, uv: &OsStr) {
+        for (name, _) in std::env::vars_os().filter(|(name, _)| is_uv_environment_variable(name)) {
+            command.env_remove(name);
+        }
+        command
+            .envs(self.environment.iter())
+            .env("RETICULATE_UV", uv)
+            .env_remove("UV_OFFLINE");
+    }
+
+    #[cfg(target_os = "macos")]
+    fn configure_uv_bootstrap(&self, command: &mut std::process::Command) {
+        self.configure_uv(command, OsStr::new("managed"));
     }
 
     #[cfg(target_os = "macos")]
@@ -45,13 +77,11 @@ impl ManagedPythonResolverConfiguration {
         command: &mut std::process::Command,
     ) -> Result<(), String> {
         managed_r.configure_resolver(command)?;
-        for (name, _) in std::env::vars_os().filter(|(name, _)| is_uv_environment_variable(name)) {
-            command.env_remove(name);
-        }
-        command
-            .envs(self.environment.iter())
-            .env("RETICULATE_UV", &self.reticulate_uv)
-            .env_remove("UV_OFFLINE");
+        let uv = self
+            .reticulate_uv
+            .as_deref()
+            .ok_or_else(|| "managed Python resolver has no `uv` executable".to_string())?;
+        self.configure_uv(command, uv);
         Ok(())
     }
 }
@@ -68,11 +98,14 @@ pub(crate) use managed_python::{
     resolve_python_version,
 };
 #[cfg(target_os = "macos")]
-pub(crate) use managed_r::{ManagedR, resolve_r};
+pub(crate) use managed_r::{
+    ManagedR, ManagedRResolverConfiguration, discover_r_resolver, resolve_r, resolve_r_with,
+};
 #[cfg(target_os = "macos")]
 pub(crate) use process::ResolverStopHandle;
 #[cfg(not(target_os = "macos"))]
 pub(crate) use unsupported::{
-    ManagedPython, ManagedR, ResolverStopHandle, resolve_duckdb_extensions, resolve_python,
-    resolve_python_host, resolve_python_manifest, resolve_python_version, resolve_r,
+    ManagedPython, ManagedR, ManagedRResolverConfiguration, ResolverStopHandle,
+    resolve_duckdb_extensions, resolve_python, resolve_python_host, resolve_python_manifest,
+    resolve_python_version, resolve_r, resolve_r_with,
 };

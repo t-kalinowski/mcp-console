@@ -2,6 +2,13 @@ base::local(
   {
     managed <- base::.libPaths()[[1L]]
     in_progress <- base::character()
+    dynamic_resolution <- base::identical(
+      base::Sys.getenv(
+        "MCP_CONSOLE_DYNAMIC_ENVIRONMENT_RESOLUTION",
+        unset = "1"
+      ),
+      "1"
+    )
 
     original_library <- base::library
     original_load_namespace <- base::loadNamespace
@@ -272,8 +279,10 @@ base::local(
       base::assign(name, value, envir = environment)
     }
 
-    replace_base_binding("library", library_wrapper)
-    replace_base_binding("loadNamespace", load_namespace_wrapper)
+    if (dynamic_resolution) {
+      replace_base_binding("library", library_wrapper)
+      replace_base_binding("loadNamespace", load_namespace_wrapper)
+    }
 
     base::environment()
   },

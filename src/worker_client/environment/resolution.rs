@@ -107,10 +107,24 @@ impl Client {
         requirements: Vec<String>,
     ) -> Result<crate::resolver::ManagedR, EnvironmentResolutionFailure> {
         let mut stop_handle = None;
-        let result = crate::resolver::resolve_r(requirements, |handle| {
+        let on_started = |handle: crate::resolver::ResolverStopHandle| {
             stop_handle = Some(handle.clone());
             self.register_resolver_stop_handle(generation, handle)
-        });
+        };
+        let result = match &self.0.r_resolver {
+            super::super::RResolver::Discover => {
+                crate::resolver::resolve_r(requirements, on_started)
+            }
+            super::super::RResolver::Configured(configuration) => {
+                crate::resolver::resolve_r_with(configuration, requirements, on_started)
+            }
+            super::super::RResolver::Disabled => {
+                return Err(EnvironmentResolutionFailure::Host(
+                    "dynamic environment resolution is unavailable; install `ir` or `uv` and restart MCP Console"
+                        .to_string(),
+                ));
+            }
+        };
         self.clear_resolver_stop_handle(generation)
             .map_err(EnvironmentResolutionFailure::Operation)?;
         classify_resolver_result(result, stop_handle.as_ref())

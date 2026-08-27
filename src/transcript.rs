@@ -25,6 +25,7 @@ pub(crate) struct Transcript(Arc<Mutex<TranscriptState>>);
 
 struct TranscriptState {
     working_directory: Result<PathBuf, String>,
+    dynamic_resolution: bool,
     active: Option<ActiveTranscript>,
     failure: Option<String>,
 }
@@ -54,10 +55,11 @@ pub(crate) struct Artifact {
 }
 
 impl Transcript {
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new(dynamic_resolution: bool) -> Self {
         Self(Arc::new(Mutex::new(TranscriptState {
             working_directory: std::env::current_dir()
                 .map_err(|error| format!("failed to find the current working directory: {error}")),
+            dynamic_resolution,
             active: None,
             failure: None,
         })))
@@ -186,7 +188,10 @@ impl TranscriptState {
     fn materialize(&mut self) -> Result<&mut ActiveTranscript, String> {
         if self.active.is_none() {
             let working_directory = self.working_directory.clone()?;
-            self.active = Some(ActiveTranscript::create(&working_directory)?);
+            self.active = Some(ActiveTranscript::create(
+                &working_directory,
+                self.dynamic_resolution,
+            )?);
         }
         self.active()
     }
@@ -208,7 +213,7 @@ impl TranscriptState {
 }
 
 impl ActiveTranscript {
-    fn create(working_directory: &Path) -> Result<Self, String> {
+    fn create(working_directory: &Path, dynamic_resolution: bool) -> Result<Self, String> {
         let working_directory_text = working_directory.to_string_lossy();
         let started_at = Utc::now();
         let run_id = format!(
@@ -273,6 +278,7 @@ impl ActiveTranscript {
                 "event": "session_started",
                 "session": "default",
                 "working_directory": working_directory_text,
+                "dynamic_resolution": dynamic_resolution,
             }),
             started_at,
         )?;

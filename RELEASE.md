@@ -39,11 +39,11 @@ git tag -a v0.0.2 -m "Release v0.0.2"
 git push origin v0.0.2
 ```
 
-The tag-triggered Release workflow verifies that the tag matches `Cargo.toml`, builds both native wheels, install-tests them with uv, and publishes them through PyPI Trusted Publishing.
+The tag-triggered Release workflow verifies that the tag matches `Cargo.toml`, builds both native wheels, install-tests them with `uv`, and publishes them through PyPI Trusted Publishing.
 
 ## Verify the publication
 
-Use clean uv directories when testing the public index:
+Use clean `uv` directories when testing the public index:
 
 ```sh
 cache_dir="$(mktemp -d)"
@@ -80,7 +80,7 @@ uvx mcp-console@0.0.2 serve
 through an MCP client.
 `serve` waits for protocol input; waiting is not an interactive-command failure.
 
-After exact-version verification, test unqualified resolution in fresh uv directories:
+After exact-version verification, test unqualified resolution in fresh `uv` directories:
 
 ```sh
 uvx mcp-console --help
