@@ -1281,6 +1281,7 @@ def test_restart_loses_state_and_retains_python_requirements(
 def test_restart_discards_pre_marker_python_activation(binary: Path) -> Transcript:
     with tempfile.TemporaryDirectory() as temporary_directory:
         temporary = Path(temporary_directory)
+        replacement_requirement = "urllib3!=2.0.0; python_version < '0'"
         real_uv = shutil.which("uv")
         assert real_uv is not None, "real uv is required for managed-Python tests"
         uv = Path(__file__).parents[2] / "fixtures" / "checkpoint_uv"
@@ -1291,7 +1292,7 @@ def test_restart_discards_pre_marker_python_activation(binary: Path) -> Transcri
         environment["TMPDIR"] = temporary_directory
         environment["RETICULATE_UV"] = str(uv)
         environment["MCP_CONSOLE_TEST_REAL_UV"] = real_uv
-        environment["MCP_CONSOLE_TEST_UV_CHECKPOINT_ARGUMENT"] = "matplotlib"
+        environment["MCP_CONSOLE_TEST_UV_CHECKPOINT_ARGUMENT"] = "urllib3!=2.0.0"
         environment["MCP_CONSOLE_TEST_UV_CHECKPOINT_CLAIM"] = str(
             temporary / "uv-claimed"
         )
@@ -1354,7 +1355,7 @@ def test_restart_discards_pre_marker_python_activation(binary: Path) -> Transcri
 
             restart = client._start_send(
                 control="restart",
-                requirements={"python": ["matplotlib"]},
+                requirements={"python": [replacement_requirement]},
             )
             uv_started.wait("restart Python resolution")
             activation_release.release()
@@ -1390,9 +1391,10 @@ def test_restart_discards_pre_marker_python_activation(binary: Path) -> Transcri
             # The replacement environment wins over the old generation's
             # activation, even though that event preceded ordered retirement.
             # fmt: r
-            r = code(r"""
+            r = code(rf"""
                 packages <- reticulate::py_require()$packages
-                c("matplotlib" %in% packages, "py-yaml12" %in% packages)
+                replacement <- {json.dumps(replacement_requirement)}
+                c(replacement %in% packages, "py-yaml12" %in% packages)
                 """)
             client.send(r=r)
             assert last_tool_text(client) == "[1]  TRUE FALSE\n"

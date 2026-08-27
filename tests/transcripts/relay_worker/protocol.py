@@ -17,6 +17,7 @@ PLATFORMS = {"darwin"}
 CAPTURE_NAME = "mcp-console-worker-wire.jsonl"
 CAPTURE_STDIN_CLOSE_ENV = "MCP_CONSOLE_MITM_CAPTURE_STDIN_CLOSE"
 CAPTURE_WORKER_SIDEBAND_CLOSE_ENV = "MCP_CONSOLE_MITM_CAPTURE_WORKER_SIDEBAND_CLOSE"
+SHUTDOWN_ENOTCONN_ENV = "MCP_CONSOLE_MITM_SHUTDOWN_ENOTCONN"
 
 
 def _tool_text(result: ToolResult) -> str:
@@ -32,6 +33,7 @@ class RelayWorkerClient:
         capture_stdin_close: bool = False,
         capture_worker_sideband_close: bool = False,
         disable_r_segv_handler: bool = False,
+        inject_shutdown_enotconn: bool = False,
     ) -> None:
         self._temporary = tempfile.TemporaryDirectory()
         root = Path(self._temporary.name)
@@ -44,6 +46,8 @@ class RelayWorkerClient:
             environment[CAPTURE_WORKER_SIDEBAND_CLOSE_ENV] = "1"
         if disable_r_segv_handler:
             environment["R_NO_SEGV_HANDLER"] = "1"
+        if inject_shutdown_enotconn:
+            environment[SHUTDOWN_ENOTCONN_ENV] = "relay"
         mitm = Path(__file__).resolve().parents[2] / "fixtures" / "worker_mitm"
         self._client = McpClient(
             binary,
@@ -138,6 +142,22 @@ def test_restarts_session(binary: Path) -> Transcript:
     transcript = client._finish_replacement(old_path, old_capture)
     assert {"stdin": {"closed": True}} in transcript
     assert {"worker_sideband": {"closed": True}} in transcript
+    return transcript
+
+
+def test_tolerates_enotconn_during_directional_shutdown(binary: Path) -> Transcript:
+    client = RelayWorkerClient(binary, inject_shutdown_enotconn=True)
+    assert _tool_text(client.send(r="invisible(NULL)")) == "[done]"
+    old_path, old_capture = client._open_capture()
+    result = _tool_text(client.send(control="restart"))
+    assert result == (
+        "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
+    ), result
+    assert _tool_text(client.send(r="cat('replacement ready\\n')")) == (
+        "replacement ready\n"
+    )
+    transcript = client._finish_replacement(old_path, old_capture)
+    assert {"shutdown_enotconn": {"direction": "relay"}} in transcript
     return transcript
 
 

@@ -4,6 +4,7 @@
 # ///
 
 import codecs
+import errno
 import json
 import os
 import select
@@ -19,6 +20,7 @@ CAPTURE_STDIN_CLOSE_ENV = "MCP_CONSOLE_MITM_CAPTURE_STDIN_CLOSE"
 CAPTURE_WORKER_SIDEBAND_CLOSE_ENV = (
     "MCP_CONSOLE_MITM_CAPTURE_WORKER_SIDEBAND_CLOSE"
 )
+SHUTDOWN_ENOTCONN_ENV = "MCP_CONSOLE_MITM_SHUTDOWN_ENOTCONN"
 CAPTURE_NAME = "mcp-console-worker-wire.jsonl"
 BUFFER_SIZE = 64 * 1024
 
@@ -50,6 +52,27 @@ def record(stream: TextIO, event: dict[str, Any]) -> None:
     stream.flush()
 
 
+def shutdown_write(
+    endpoint: socket.socket,
+    direction: str,
+    injected_direction: str | None,
+    capture: TextIO,
+) -> None:
+    try:
+        if direction == injected_direction:
+            try:
+                endpoint.shutdown(socket.SHUT_WR)
+            except OSError as error:
+                if error.errno != errno.ENOTCONN:
+                    raise
+            record(capture, {"shutdown_enotconn": {"direction": direction}})
+            raise OSError(errno.ENOTCONN, os.strerror(errno.ENOTCONN))
+        endpoint.shutdown(socket.SHUT_WR)
+    except OSError as error:
+        if error.errno != errno.ENOTCONN:
+            raise
+
+
 def proxy(
     relay: socket.socket,
     worker: socket.socket,
@@ -58,6 +81,7 @@ def proxy(
     capture: TextIO,
     capture_stdin_close: bool,
     capture_worker_sideband_close: bool,
+    injected_shutdown_direction: str | None,
 ) -> None:
     streams = {
         stdout.fileno(): ("stdout", 1),
@@ -143,7 +167,12 @@ def proxy(
                 active.remove(worker_descriptor)
                 if capture_worker_sideband_close:
                     record(capture, {"worker_sideband": {"closed": True}})
-                relay.shutdown(socket.SHUT_WR)
+                shutdown_write(
+                    relay,
+                    "relay",
+                    injected_shutdown_direction,
+                    capture,
+                )
 
         if relay_descriptor in ready:
             chunk = relay.recv(BUFFER_SIZE)
@@ -154,7 +183,12 @@ def proxy(
                 shutdown = True
             if shutdown:
                 active.remove(relay_descriptor)
-                worker.shutdown(socket.SHUT_WR)
+                shutdown_write(
+                    worker,
+                    "worker",
+                    injected_shutdown_direction,
+                    capture,
+                )
 
     assert not buffers["relay"], "relay stopped during a sideband frame"
     assert not buffers["worker"], "worker stopped during a sideband frame"
@@ -172,6 +206,7 @@ def main() -> None:
     capture_worker_sideband_close = (
         environment.pop(CAPTURE_WORKER_SIDEBAND_CLOSE_ENV, None) == "1"
     )
+    injected_shutdown_direction = environment.pop(SHUTDOWN_ENOTCONN_ENV, None)
     environment[SIDEBAND_FD_ENV] = str(worker_endpoint.fileno())
     process = subprocess.Popen(
         [program, "worker"],
@@ -194,6 +229,7 @@ def main() -> None:
             capture,
             capture_stdin_close,
             capture_worker_sideband_close,
+            injected_shutdown_direction,
         )
     process.stdout.close()
     process.stderr.close()

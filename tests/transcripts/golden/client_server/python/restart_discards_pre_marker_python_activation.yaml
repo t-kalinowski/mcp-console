@@ -50,7 +50,7 @@ send:
   control: restart
   requirements:
     python:
-      - matplotlib
+      - urllib3!=2.0.0; python_version < '0'
 result:
   content:
     - type: text
@@ -64,7 +64,8 @@ result:
 send:
   r: |
     packages <- reticulate::py_require()$packages
-    c("matplotlib" %in% packages, "py-yaml12" %in% packages)
+    replacement <- "urllib3!=2.0.0; python_version < '0'"
+    c(replacement %in% packages, "py-yaml12" %in% packages)
 result:
   content:
     - type: text

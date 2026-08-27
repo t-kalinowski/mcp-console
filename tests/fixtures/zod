@@ -710,6 +710,33 @@ def main() -> None:
             writer.flush()
             os._exit(86)
 
+        if source == "wait after readable frame and partial tail":
+            cleanup_source = int(os.environ.pop(TEST_FIXTURE_CLEANUP_FD_ENV))
+            child = os.fork()
+            if child == 0:
+                os.setsid()
+                cleanup = os.dup(cleanup_source)
+                os.close(cleanup_source)
+                reader.close()
+                for descriptor in (0, 1, 2):
+                    os.close(descriptor)
+                assert os.read(cleanup, 1) in {b"", b"1"}
+                os.close(cleanup)
+                writer.close()
+                endpoint.close()
+                os._exit(0)
+            os.close(cleanup_source)
+            (temporary / "zod-sideband-descendant-pid").write_text(
+                str(child),
+                encoding="utf-8",
+            )
+            send_output(writer, "zod readable retirement frame\n")
+            writer.write('{"kind":"console_output"')
+            writer.flush()
+            (temporary / "zod-sideband-partial-tail-written").touch()
+            assert os.read(0, 1) == b""
+            os._exit(86)
+
         if source == "complete before partial sideband descendant":
             child = os.fork()
             if child == 0:
