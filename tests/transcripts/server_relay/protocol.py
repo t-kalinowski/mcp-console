@@ -216,7 +216,9 @@ class FifoCheckpoint:
         self.path = path
         if create:
             os.mkfifo(path)
-        self.descriptor = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+        # Keep a writer open so an early release cannot strand a later reader
+        # in its blocking open.
+        self.descriptor = os.open(path, os.O_RDWR | os.O_NONBLOCK)
 
     def close(self) -> None:
         os.close(self.descriptor)
@@ -227,12 +229,7 @@ class FifoCheckpoint:
         assert os.read(self.descriptor, 1) == b"1"
 
     def release(self) -> None:
-        descriptor = os.open(self.path, os.O_WRONLY | os.O_NONBLOCK)
-        try:
-            write = os.write(descriptor, b"1")
-            assert write == 1
-        finally:
-            os.close(descriptor)
+        assert os.write(self.descriptor, b"1") == 1
 
 
 def _fake_ir_environment(
@@ -1955,10 +1952,18 @@ def test_restart_discards_pre_marker_r_preparation_result(
             library.mkdir()
         environment = _fake_ir_environment(root, libraries)
         resolver_started = FifoCheckpoint(root / "resolver-started", create=True)
+        resolver_release_gate = FifoCheckpoint(
+            root / "resolver-release-gate", create=True
+        )
         resolver_release = FifoCheckpoint(root / "resolver-release", create=True)
+        resolver_finished = FifoCheckpoint(root / "resolver-finished", create=True)
         environment["MCP_CONSOLE_TEST_IR_GATE_INDEX"] = "1"
         environment["MCP_CONSOLE_TEST_IR_STARTED"] = str(resolver_started.path)
+        environment["MCP_CONSOLE_TEST_IR_RELEASE_GATE"] = str(
+            resolver_release_gate.path
+        )
         environment["MCP_CONSOLE_TEST_IR_RELEASE"] = str(resolver_release.path)
+        environment["MCP_CONSOLE_TEST_IR_FINISHED"] = str(resolver_finished.path)
 
         client = ServerRelayClient(
             binary,
@@ -1986,6 +1991,8 @@ def test_restart_discards_pre_marker_r_preparation_result(
             result_release.release()
             result_sent.wait()
             resolver_release.release()
+            resolver_release_gate.release()
+            resolver_finished.wait()
             client.client._receive_many([preparation, restart])
 
             assert preparation["result"] == {
@@ -2040,7 +2047,9 @@ def test_restart_discards_pre_marker_r_preparation_result(
             result_sent.close()
             shutdown_received.close()
             resolver_started.close()
+            resolver_release_gate.close()
             resolver_release.close()
+            resolver_finished.close()
             client._temporary.cleanup()
 
     transcript = old_transcript + replacement_transcript
