@@ -392,8 +392,28 @@ class ReleaseScriptTests(unittest.TestCase):
         self.assertNotIn("python3 -", release_source)
         self.assertIn("GITHUB_PAT: ${{ github.token }}", release_source)
         self.assertIn('install.libs("gettext")', release_source)
-        self.assertEqual(ci_source.count('version: "0.12.4"'), 1)
+        self.assertEqual(ci_source.count('UV_VERSION: "0.12.4"'), 1)
+        self.assertEqual(ci_source.count("version: ${{ env.UV_VERSION }}"), 2)
         self.assertEqual(release_source.count('version: "0.12.4"'), 2)
+
+    def test_ci_prefers_binary_r_packages_and_installs_uv_tools_first(self) -> None:
+        ci_source = (ROOT / ".github" / "workflows" / "ci.yaml").read_text()
+        checks, transcripts = ci_source.split("\n  transcripts:\n", 1)
+
+        self.assertEqual(ci_source.count("use-public-rspm: always"), 2)
+        self.assertIn('upgrade: "FALSE"', transcripts)
+        self.assertLess(
+            checks.index("- name: Install IR"), checks.index("- name: Install R\n")
+        )
+        self.assertLess(
+            transcripts.index("- name: Install transcript tools"),
+            transcripts.index("- name: Install R\n"),
+        )
+        self.assertIn(
+            '-e \'sessionInfo(package = c("tidyverse", "reticulate", '
+            '"DBI", "duckdb", "arrow", "nanoarrow"))\'',
+            transcripts,
+        )
 
 
 if __name__ == "__main__":

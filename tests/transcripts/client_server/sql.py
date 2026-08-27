@@ -675,16 +675,11 @@ def test_interrupts_running_sql_query(binary: Path) -> Transcript:
             client._initialize_and_list_tools()
             # fmt: r
             r = code(r"""
-                sql_interrupt_armed <- FALSE
-                options(duckdb.progress_display = function(percentage) {
-                  if (isTRUE(sql_interrupt_armed)) {
-                    invisible(file.create(file.path(
-                      tempdir(),
-                      "sql-interrupt-started"
-                    )))
-                  }
-                })
-                invisible(sql_connection())
+                invisible(DBI::dbExecute(
+                  sql_connection(),
+                  "SET VARIABLE sql_interrupt_marker = ?",
+                  params = list(file.path(tempdir(), "sql-interrupt-started"))
+                ))
                 """)
             client.send(r=r)
             output = last_tool_text(client)
@@ -697,24 +692,9 @@ def test_interrupts_running_sql_query(binary: Path) -> Transcript:
             client.send(sql=sql)
             assert last_tool_text(client) == "[done]"
 
-            # fmt: r
-            r = code(r"""
-                sql_interrupt_armed <- TRUE
-                invisible(DBI::dbExecute(
-                  sql_connection(),
-                  "SET enable_progress_bar = true"
-                ))
-                invisible(DBI::dbExecute(
-                  sql_connection(),
-                  "SET progress_bar_time = 0"
-                ))
-                """)
-            client.send(r=r)
-            assert last_tool_text(client) == "[done]"
-
             sql = code(r"""
-                SELECT sum(hash(value)) AS total
-                FROM range(1000000000000) AS values(value)
+                COPY (SELECT 1) TO (getvariable('sql_interrupt_marker'));
+                SELECT sleep_ms(60000) AS waited
                 """)
             client.send(sql=sql, timeout_ms=0)
             assert last_tool_text(client) == "\n[running; poll with an empty send]"

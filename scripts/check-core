@@ -1,0 +1,9 @@
+#!/bin/sh
+
+set -eu
+
+python3 scripts/validate_runtime_sources.py
+python3 tests/release.py
+cargo fmt --all --check
+cargo clippy --all-targets --all-features -- -D warnings
+cargo test --all-targets --all-features

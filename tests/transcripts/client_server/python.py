@@ -2,6 +2,7 @@
 
 import json
 import os
+import plistlib
 import select
 import shutil
 import signal
@@ -1971,7 +1972,9 @@ def test_interrupts_running_python_evaluation(binary: Path) -> Transcript:
                       tempdir(),
                       "python-r-interrupt-started"
                     )))
-                    repeat {}
+                    repeat {
+                      Sys.sleep(60)
+                    }
                   }),
                   print = FALSE,
                   where = asNamespace("reticulate")
@@ -2025,6 +2028,7 @@ def test_interrupts_running_python_evaluation(binary: Path) -> Transcript:
             python = code("""
                 import inspect
                 import os
+                import time
                 from pathlib import Path
 
                 inspect.getmro.__code__ = inspect._mcp_original_getmro_code
@@ -2034,7 +2038,7 @@ def test_interrupts_running_python_evaluation(binary: Path) -> Transcript:
                     "python-interrupt-started",
                 ).touch()
                 while True:
-                    pass
+                    time.sleep(60)
                 """)
             client.send(python=python, timeout_ms=0)
             assert last_tool_text(client) == "\n[running; poll with an empty send]"
@@ -2103,7 +2107,9 @@ def test_retries_python_runtime_initialization_after_interrupt(
                         tempdir(),
                         "python-runtime-configuring"
                       )))
-                      repeat {}
+                      repeat {
+                        Sys.sleep(60)
+                      }
                     }
                   }),
                   print = FALSE,
@@ -2598,8 +2604,17 @@ def test_returns_matplotlib_plots(binary: Path) -> Transcript:
         temporary = Path(temporary_directory)
         workspace = temporary / "workspace-one"
         workspace.mkdir()
-        system_profiler = shutil.which("system_profiler")
-        assert system_profiler is not None, "system_profiler is required"
+        system_fonts = sorted(
+            path
+            for path in Path("/System/Library/Fonts").iterdir()
+            if path.is_file() and path.suffix.lower() in {".otf", ".ttc", ".ttf"}
+        )
+        assert system_fonts, "test system font is required"
+        system_font = system_fonts[0]
+        profiler_output = temporary / "system-profiler.plist"
+        profiler_output.write_bytes(
+            plistlib.dumps([{"_items": [{"path": str(system_font)}]}])
+        )
         path = os.environ.get("PATH")
         assert path is not None, "PATH is required"
         probe = temporary / "bin" / "system_profiler"
@@ -2607,8 +2622,12 @@ def test_returns_matplotlib_plots(binary: Path) -> Transcript:
         probe.write_text(
             code(r"""
                 #!/bin/sh
+                set -eu
+                test "$#" -eq 2
+                test "$1" = "-xml"
+                test "$2" = "SPFontsDataType"
                 : > "$TMPDIR/mcp-console-font-discovery"
-                exec "$MCP_CONSOLE_TEST_SYSTEM_PROFILER" "$@"
+                /bin/cat "$MCP_CONSOLE_TEST_SYSTEM_PROFILER_OUTPUT"
                 """),
             encoding="utf-8",
         )
@@ -2633,7 +2652,7 @@ def test_returns_matplotlib_plots(binary: Path) -> Transcript:
         environment["FONTCONFIG_FILE"] = str(fontconfig)
         environment["MPLCONFIGDIR"] = str(host_matplotlib)
         environment["MCP_CONSOLE_TEST_MATPLOTLIBRC"] = str(host_matplotlibrc)
-        environment["MCP_CONSOLE_TEST_SYSTEM_PROFILER"] = system_profiler
+        environment["MCP_CONSOLE_TEST_SYSTEM_PROFILER_OUTPUT"] = str(profiler_output)
         environment["PATH"] = os.pathsep.join((str(probe.parent), path))
         environment.pop("MATPLOTLIBRC", None)
         environment.pop("MPL_IGNORE_SYSTEM_FONTS", None)

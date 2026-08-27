@@ -921,6 +921,8 @@ def test_times_out_and_polls_automatic_python_resolution(
         finished = False
         try:
             client._initialize_and_list_tools()
+            client.send(python="None")
+            assert last_tool_text(client) == "[done]"
             # fmt: python
             python = code("""
                 automatic_timeout_attempts = (
@@ -983,6 +985,8 @@ def test_interrupts_automatic_python_resolver_and_preserves_worker(
         passed = False
         try:
             client._initialize_and_list_tools()
+            client.send(python="None")
+            assert last_tool_text(client) == "[done]"
             # fmt: python
             python = code(f"""
                 import importlib
