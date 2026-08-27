@@ -80,7 +80,7 @@ impl ManagedPythonResolverConfiguration {
         let uv = self
             .reticulate_uv
             .as_deref()
-            .ok_or_else(|| "managed Python resolver has no uv executable".to_string())?;
+            .ok_or_else(|| "managed Python resolver has no `uv` executable".to_string())?;
         self.configure_uv(command, uv);
         Ok(())
     }

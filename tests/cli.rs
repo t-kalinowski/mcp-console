@@ -75,7 +75,7 @@ fn stdio_console_prefers_path_ir_over_an_unrelated_sibling() {
     let real_ir = std::env::split_paths(&original_path)
         .map(|directory| directory.join("ir"))
         .find(|candidate| candidate.is_file())
-        .expect("test ir should be discoverable");
+        .expect("test `ir` should be discoverable");
     let test_directory = TestDirectory::new("plain-install-ir-selection");
     let installed = test_directory.path().join("mcp-console");
     let unrelated_ir = test_directory.path().join("ir");
@@ -86,9 +86,9 @@ fn stdio_console_prefers_path_ir_over_an_unrelated_sibling() {
     let uv_used = test_directory.path().join("uv-used");
     fs::copy(env!("CARGO_BIN_EXE_mcp-console"), &installed).expect("mcp-console should be copied");
     fs::write(&unrelated_ir, "#!/bin/sh\nprintf 'ir 0.3.0+dev\\n'\n")
-        .expect("unrelated ir should be written");
+        .expect("unrelated `ir` should be written");
     fs::set_permissions(&unrelated_ir, fs::Permissions::from_mode(0o755))
-        .expect("unrelated ir should be executable");
+        .expect("unrelated `ir` should be executable");
     fs::create_dir(&fake_bin).expect("fake bin directory should be created");
     fs::write(
         &path_ir,
@@ -97,12 +97,12 @@ fn stdio_console_prefers_path_ir_over_an_unrelated_sibling() {
 exec "$MCP_CONSOLE_REAL_IR" "$@"
 "#,
     )
-    .expect("PATH ir should be written");
+    .expect("PATH `ir` should be written");
     fs::write(&uv, "#!/bin/sh\n: > \"$MCP_CONSOLE_UV_USED\"\nexit 99\n")
-        .expect("uv should be written");
+        .expect("`uv` should be written");
     fs::set_permissions(&path_ir, fs::Permissions::from_mode(0o755))
-        .expect("PATH ir should be executable");
-    fs::set_permissions(&uv, fs::Permissions::from_mode(0o755)).expect("uv should be executable");
+        .expect("PATH `ir` should be executable");
+    fs::set_permissions(&uv, fs::Permissions::from_mode(0o755)).expect("`uv` should be executable");
     let path = std::env::join_paths(
         std::iter::once(fake_bin).chain(std::env::split_paths(&original_path)),
     )
@@ -118,8 +118,8 @@ exec "$MCP_CONSOLE_REAL_IR" "$@"
         .env("MCP_CONSOLE_UV_USED", &uv_used);
     let _client = McpClient::spawn(command);
 
-    assert!(path_ir_used.is_file(), "PATH ir should be used");
-    assert!(!uv_used.exists(), "uv should not be used");
+    assert!(path_ir_used.is_file(), "PATH `ir` should be used");
+    assert!(!uv_used.exists(), "`uv` should not be used");
 }
 
 #[cfg(target_os = "macos")]
@@ -144,23 +144,23 @@ fn stdio_console_does_not_fallback_when_path_ir_cannot_start() {
     fs::create_dir(&fake_bin).expect("fake bin directory should be created");
     fs::create_dir(&fallback_bin).expect("fallback bin directory should be created");
     fs::write(&broken_ir, format!("#!{}\n", missing_interpreter.display()))
-        .expect("broken ir should be written");
+        .expect("broken `ir` should be written");
     fs::write(
         &fake_uv,
         "#!/bin/sh\n: > \"$MCP_CONSOLE_UV_USED\"\nexit 99\n",
     )
-    .expect("fake uv should be written");
+    .expect("fake `uv` should be written");
     fs::write(
         &fallback_ir,
         "#!/bin/sh\n: > \"$MCP_CONSOLE_FALLBACK_IR_USED\"\nexit 99\n",
     )
-    .expect("fallback ir should be written");
+    .expect("fallback `ir` should be written");
     fs::set_permissions(&broken_ir, fs::Permissions::from_mode(0o755))
-        .expect("broken ir should be executable");
+        .expect("broken `ir` should be executable");
     fs::set_permissions(&fake_uv, fs::Permissions::from_mode(0o755))
-        .expect("fake uv should be executable");
+        .expect("fake `uv` should be executable");
     fs::set_permissions(&fallback_ir, fs::Permissions::from_mode(0o755))
-        .expect("fallback ir should be executable");
+        .expect("fallback `ir` should be executable");
     let path = std::env::join_paths([fake_bin, fallback_bin]).expect("test PATH should be valid");
 
     let output = Command::new(env!("CARGO_BIN_EXE_mcp-console"))
@@ -174,10 +174,10 @@ fn stdio_console_does_not_fallback_when_path_ir_cannot_start() {
         .expect("mcp-console should run");
 
     assert!(!output.status.success());
-    assert!(!uv_used.exists(), "uv should not be used");
+    assert!(!uv_used.exists(), "`uv` should not be used");
     assert!(
         !fallback_ir_used.exists(),
-        "a later PATH ir should not be used"
+        "a later PATH `ir` should not be used"
     );
     let stderr = String::from_utf8(output.stderr).expect("server stderr should be valid UTF-8");
     assert!(
@@ -206,16 +206,16 @@ fn stdio_console_does_not_fallback_when_path_uv_cannot_start() {
     fs::create_dir(&fake_bin).expect("fake bin directory should be created");
     fs::create_dir(&fallback_bin).expect("fallback bin directory should be created");
     fs::write(&broken_uv, format!("#!{}\n", missing_interpreter.display()))
-        .expect("broken uv should be written");
+        .expect("broken `uv` should be written");
     fs::write(
         &fallback_uv,
         "#!/bin/sh\n: > \"$MCP_CONSOLE_FALLBACK_UV_USED\"\nexit 99\n",
     )
-    .expect("fallback uv should be written");
+    .expect("fallback `uv` should be written");
     fs::set_permissions(&broken_uv, fs::Permissions::from_mode(0o755))
-        .expect("broken uv should be executable");
+        .expect("broken `uv` should be executable");
     fs::set_permissions(&fallback_uv, fs::Permissions::from_mode(0o755))
-        .expect("fallback uv should be executable");
+        .expect("fallback `uv` should be executable");
     let path = std::env::join_paths([fake_bin, fallback_bin]).expect("test PATH should be valid");
 
     let output = Command::new(env!("CARGO_BIN_EXE_mcp-console"))
@@ -230,7 +230,7 @@ fn stdio_console_does_not_fallback_when_path_uv_cannot_start() {
     assert!(!output.status.success());
     assert!(
         !fallback_uv_used.exists(),
-        "a later PATH uv should not be used"
+        "a later PATH `uv` should not be used"
     );
     let stderr = String::from_utf8(output.stderr).expect("server stderr should be valid UTF-8");
     assert!(
@@ -248,7 +248,7 @@ fn stdio_console_uses_uv_when_ir_is_not_on_path() {
     let real_ir = std::env::split_paths(&original_path)
         .map(|directory| directory.join("ir"))
         .find(|candidate| candidate.is_file())
-        .expect("test ir should be discoverable");
+        .expect("test `ir` should be discoverable");
     let r_home = Command::new("R")
         .arg("RHOME")
         .output()
@@ -272,9 +272,9 @@ shift 5
 exec "$MCP_CONSOLE_REAL_IR" "$@"
 "#,
     )
-    .expect("fake uv should be written");
+    .expect("fake `uv` should be written");
     fs::set_permissions(&fake_uv, fs::Permissions::from_mode(0o755))
-        .expect("fake uv should be executable");
+        .expect("fake `uv` should be executable");
     let path = std::env::join_paths(std::iter::once(fake_bin).chain(
         std::env::split_paths(&original_path).filter(|directory| !directory.join("ir").is_file()),
     ))
@@ -291,7 +291,7 @@ exec "$MCP_CONSOLE_REAL_IR" "$@"
     let _client = McpClient::spawn(command);
 
     assert_eq!(
-        fs::read_to_string(uv_log).expect("uv invocation should be recorded"),
+        fs::read_to_string(uv_log).expect("`uv` invocation should be recorded"),
         "tool\nrun\n--from\nr-lib-ir\nir\n--version\ntool\nrun\n--from\nr-lib-ir\nir\nrun\n"
     );
 }
@@ -407,7 +407,7 @@ fn stdio_console_uses_host_uv_for_managed_python() {
     let real_uv = std::env::split_paths(&original_path)
         .map(|directory| directory.join("uv"))
         .find(|candidate| candidate.is_file())
-        .expect("test uv should be discoverable");
+        .expect("test `uv` should be discoverable");
     let test_directory = TestDirectory::new("host-uv-selection");
     let fake_bin = test_directory.path().join("bin");
     let fake_uv = fake_bin.join("uv");
@@ -420,9 +420,9 @@ printf '%s\n' "${RETICULATE_UV-unset}" >> "$MCP_CONSOLE_UV_LOG"
 exec "$MCP_CONSOLE_REAL_UV" "$@"
 "#,
     )
-    .expect("fake uv should be written");
+    .expect("fake `uv` should be written");
     fs::set_permissions(&fake_uv, fs::Permissions::from_mode(0o755))
-        .expect("fake uv should be executable");
+        .expect("fake `uv` should be executable");
     let path = std::env::join_paths(
         std::iter::once(fake_bin).chain(std::env::split_paths(&original_path)),
     )
@@ -437,7 +437,7 @@ exec "$MCP_CONSOLE_REAL_UV" "$@"
         .env("MCP_CONSOLE_UV_LOG", &uv_log);
     let _client = McpClient::spawn(command);
 
-    let values = fs::read_to_string(uv_log).expect("host uv invocation should be recorded");
+    let values = fs::read_to_string(uv_log).expect("host `uv` invocation should be recorded");
     assert!(!values.is_empty());
     let expected = fake_uv.to_string_lossy();
     assert!(values.lines().all(|value| value == expected), "{values}");
@@ -450,7 +450,7 @@ fn stdio_console_uses_managed_r_to_resolve_uv_when_only_ir_is_on_path() {
     let real_ir = std::env::split_paths(&original_path)
         .map(|directory| directory.join("ir"))
         .find(|candidate| candidate.is_file())
-        .expect("test ir should be discoverable");
+        .expect("test `ir` should be discoverable");
     let test_directory = TestDirectory::new("ir-resolves-uv");
     let fake_bin = test_directory.path().join("bin");
     let fake_ir = fake_bin.join("ir");
@@ -469,9 +469,9 @@ esac
 exec "$MCP_CONSOLE_REAL_IR" "$@"
 "#,
     )
-    .expect("fake ir should be written");
+    .expect("fake `ir` should be written");
     fs::set_permissions(&fake_ir, fs::Permissions::from_mode(0o755))
-        .expect("fake ir should be executable");
+        .expect("fake `ir` should be executable");
     let path =
         std::env::join_paths(std::iter::once(fake_bin).chain(
             std::env::split_paths(&original_path).filter(|directory| {
@@ -506,11 +506,11 @@ fn stdio_console_uses_ambient_reticulate_to_resolve_uv() {
     let real_ir = std::env::split_paths(&original_path)
         .map(|directory| directory.join("ir"))
         .find(|candidate| candidate.is_file())
-        .expect("test ir should be discoverable");
+        .expect("test `ir` should be discoverable");
     let real_uv = std::env::split_paths(&original_path)
         .map(|directory| directory.join("uv"))
         .find(|candidate| candidate.is_file())
-        .expect("test uv should be discoverable");
+        .expect("test `uv` should be discoverable");
     let r_home = Command::new("R")
         .arg("RHOME")
         .output()
@@ -563,7 +563,7 @@ fi
 exec "$MCP_CONSOLE_REAL_UV" "$@"
 "#,
     )
-    .expect("resolved uv should be written");
+    .expect("resolved `uv` should be written");
     for program in [&fake_r, &fake_rscript, &resolved_uv] {
         fs::set_permissions(program, fs::Permissions::from_mode(0o755))
             .expect("fake program should be executable");
@@ -600,7 +600,7 @@ exec "$MCP_CONSOLE_REAL_UV" "$@"
     );
     assert!(probe.contains("uv_binary"), "{probe}");
     assert_eq!(
-        fs::read_to_string(uv_log).expect("uv IR invocations should be recorded"),
+        fs::read_to_string(uv_log).expect("`uv`/`ir` invocations should be recorded"),
         "tool\nrun\n--from\nr-lib-ir\nir\n--version\ntool\nrun\n--from\nr-lib-ir\nir\nrun\n"
     );
 }
@@ -668,12 +668,12 @@ fn stdio_console_uses_worker_r_installation_for_r_preparation() {
         .stderr(Stdio::null())
         .status()
     {
-        Ok(status) => assert!(status.success(), "ir --version failed with {status}"),
+        Ok(status) => assert!(status.success(), "`ir --version` failed with {status}"),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            eprintln!("skipping R preparation selection test: ir is not on PATH");
+            eprintln!("skipping R preparation selection test: `ir` is not on `PATH`");
             return;
         }
-        Err(error) => panic!("failed to check ir: {error}"),
+        Err(error) => panic!("failed to check `ir`: {error}"),
     }
 
     let r_home_output = Command::new("R")
@@ -781,7 +781,7 @@ fn stdio_console_shutdown_is_bounded_during_r_preparation() {
     let real_ir = std::env::split_paths(&original_path)
         .map(|directory| directory.join("ir"))
         .find(|candidate| candidate.is_file())
-        .expect("test ir should be discoverable");
+        .expect("test `ir` should be discoverable");
     fs::write(
         &fake_ir,
         r#"#!/bin/sh
@@ -797,9 +797,9 @@ printf '%s\n' "$$" > "${MCP_CONSOLE_RESOLVER_STARTED}.tmp"
 exec /bin/sleep 4
 "#,
     )
-    .expect("fake ir should be written");
+    .expect("fake `ir` should be written");
     fs::set_permissions(&fake_ir, fs::Permissions::from_mode(0o755))
-        .expect("fake ir should be executable");
+        .expect("fake `ir` should be executable");
     let path = std::env::join_paths(std::iter::once(fake_bin).chain(
         std::env::split_paths(&original_path).filter(|directory| !directory.join("ir").is_file()),
     ))
@@ -937,7 +937,7 @@ else
 fi
 "#,
     )
-    .expect("fake IR should be written");
+    .expect("fake `ir` should be written");
     fs::write(&fake_python, "").expect("fake Python should be written");
     fs::write(
         &fake_rscript,
@@ -969,7 +969,7 @@ exit 0
     fs::set_permissions(&fake_rscript, fs::Permissions::from_mode(0o755))
         .expect("fake Rscript should be executable");
     fs::set_permissions(&fake_ir, fs::Permissions::from_mode(0o755))
-        .expect("fake IR should be executable");
+        .expect("fake `ir` should be executable");
     let path = std::env::join_paths(std::iter::once(fake_bin.clone()).chain(
         std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
     ))
@@ -1058,7 +1058,7 @@ else
 fi
 "#,
     )
-    .expect("fake IR should be written");
+    .expect("fake `ir` should be written");
     fs::write(&fake_python, "").expect("fake Python should be written");
     fs::write(
         &fake_rscript,
@@ -1087,7 +1087,7 @@ exec /bin/sleep 3
     fs::set_permissions(&fake_rscript, fs::Permissions::from_mode(0o755))
         .expect("fake Rscript should be executable");
     fs::set_permissions(&fake_ir, fs::Permissions::from_mode(0o755))
-        .expect("fake IR should be executable");
+        .expect("fake `ir` should be executable");
     let path = std::env::join_paths(std::iter::once(fake_bin.clone()).chain(
         std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
     ))

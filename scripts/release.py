@@ -239,20 +239,20 @@ def smoke_wheel(args: argparse.Namespace) -> None:
     )
     require(
         command_output([str(installed), "--version"]) == expected_version,
-        "uv tool and Cargo versions differ",
+        "`uv` tool and Cargo versions differ",
     )
     require(
         command_output([str(installed), "--help"], strip=False) == cargo_help,
-        "uv tool and Cargo help output differ",
+        "`uv` tool and Cargo help output differ",
     )
     run_command([str(installed), "sandbox", "--", "/usr/bin/true"])
 
     internal_ir = installed.resolve().with_name("ir")
-    require(not internal_ir.exists(), f"wheel contains sibling ir: {internal_ir}")
+    require(not internal_ir.exists(), f"wheel contains sibling `ir`: {internal_ir}")
 
     r_home = command_output(["R", "RHOME"])
     uv = shutil.which("uv")
-    require(uv is not None, "host uv is not on PATH")
+    require(uv is not None, "host `uv` is not on `PATH`")
     with tempfile.TemporaryDirectory(prefix="mcp-console-uv-path-") as directory:
         uv_bin = Path(directory)
         (uv_bin / "uv").symlink_to(Path(uv).resolve())

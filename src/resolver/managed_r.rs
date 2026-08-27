@@ -100,14 +100,19 @@ impl ManagedRResolverConfiguration {
         configuration.configure_uv_bootstrap(&mut command);
         let mut child = command.spawn().map_err(|error| {
             format!(
-                "failed to resolve uv with `{}`: {error}",
+                "failed to resolve `uv` with `{}`: {error}",
                 self.rscript.display()
             )
         })?;
-        let output =
-            collect_resolver_output(&resolver, &mut child, &mut on_started, &self.rscript, "uv")?;
+        let output = collect_resolver_output(
+            &resolver,
+            &mut child,
+            &mut on_started,
+            &self.rscript,
+            "`uv`",
+        )?;
         finish_uv_resolution(output, false)?.ok_or_else(|| {
-            "managed R environment does not provide reticulate uv resolution".to_string()
+            "managed R environment does not provide reticulate `uv` resolution".to_string()
         })
     }
 }
@@ -280,7 +285,7 @@ fn resolve_uv_with_rscript(
         &mut child,
         on_started,
         rscript,
-        "ambient reticulate uv",
+        "ambient reticulate `uv`",
     )?;
     finish_uv_resolution(output, unavailable_is_bare)
 }
@@ -306,20 +311,20 @@ fn finish_uv_resolution(
             stderr.trim()
         };
         return Err(format!(
-            "reticulate uv resolution failed with {}: {detail}",
+            "reticulate `uv` resolution failed with {}: {detail}",
             output.status
         ));
     }
     let output = String::from_utf8(output.stdout)
-        .map_err(|_| "reticulate uv resolver returned a non-UTF-8 path".to_string())?;
+        .map_err(|_| "reticulate `uv` resolver returned a non-UTF-8 path".to_string())?;
     let path = output
         .strip_suffix('\n')
         .filter(|path| !path.is_empty() && !path.contains(['\n', '\r']))
         .map(PathBuf::from)
-        .ok_or_else(|| "reticulate uv resolver returned an invalid path line".to_string())?;
+        .ok_or_else(|| "reticulate `uv` resolver returned an invalid path line".to_string())?;
     if !path.is_absolute() || !path.is_file() {
         return Err(format!(
-            "reticulate uv resolver returned invalid executable `{}`",
+            "reticulate `uv` resolver returned invalid executable `{}`",
             path.display()
         ));
     }
@@ -332,7 +337,7 @@ fn resolve_r_with_process(
     resolver: &ResolverProcess,
     on_started: &mut Option<impl FnOnce(ResolverStopHandle) -> Result<(), String>>,
 ) -> Result<ManagedR, String> {
-    // IR resolves and installs remote packages with normal host cache and
+    // `ir` resolves and installs remote packages with normal host cache and
     // network access. Requirement strings are process arguments, never R source.
     let mut command = configuration.ir.command();
     command
@@ -465,12 +470,12 @@ fn validate_ir_version(
         .and_then(|version| semver::Version::parse(version).ok())
         .ok_or_else(|| {
             format!(
-                "R package resolution requires ir {MINIMUM_IR_VERSION} or later; could not parse `{reported}`"
+                "R package resolution requires `ir` {MINIMUM_IR_VERSION} or later; could not parse `{reported}`"
             )
         })?;
     if version < MINIMUM_IR_VERSION {
         return Err(format!(
-            "R package resolution requires ir {MINIMUM_IR_VERSION} or later; found ir {version}"
+            "R package resolution requires `ir` {MINIMUM_IR_VERSION} or later; found `ir` {version}"
         ));
     }
     Ok(())

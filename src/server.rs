@@ -153,7 +153,7 @@ struct SendArguments {
     /// delivery and stdin enqueue happen before requirements are validated or prepared and are not
     /// rolled back if that later work fails. Ordinary CRAN packages used by the built-in R worker need
     /// not be declared here; use `requirements.r` to stage packages ahead of evaluation or provide
-    /// explicit IR references. In the built-in managed Python environment, missing imports normally
+    /// explicit `ir` references. In the built-in managed Python environment, missing imports normally
     /// resolve at runtime. Use `requirements.python` to stage a distribution before the cell, provide
     /// a version, extra, or marker, or correct automatic inference. Python source is not pre-scanned,
     /// and SQL does not trigger package discovery. A cell is not run if explicit preparation fails or
@@ -207,9 +207,9 @@ struct Requirements {
     #[serde(default)]
     #[schemars(length(max = 64), inner(length(min = 1, max = 64)))]
     duckdb: Vec<String>,
-    /// Additive, single-line IR package references for standalone preparation, preparation before a
+    /// Additive, single-line `ir` package references for standalone preparation, preparation before a
     /// cell, or a restart transaction, for example `data.table`, `sf`, or `yaml12`. Use this field
-    /// to stage packages ahead of evaluation or supply an explicit supported remote IR reference.
+    /// to stage packages ahead of evaluation or supply an explicit supported remote `ir` reference.
     /// Automatic R discovery accepts only plain package names. An idle worker that implements R
     /// preparation can add requirements without losing live state. Local package sources are
     /// rejected because resolution runs with server permissions.

@@ -73,10 +73,10 @@ def test_rejects_unsupported_ir_version(binary: Path) -> Transcript:
             requirements={"r": ["local::package"]},
         )
         result = client.transcript[-1]["result"]
-        assert not run_marker.exists(), "unsupported IR reached package resolution"
+        assert not run_marker.exists(), "unsupported `ir` reached package resolution"
         assert result["isError"] is True, result
         assert result["content"][0]["text"] == (
-            "R package resolution requires ir 0.4.0 or later; found ir 0.3.0"
+            "R package resolution requires `ir` 0.4.0 or later; found `ir` 0.3.0"
         ), result
         return client._finish()
 
@@ -121,9 +121,9 @@ def test_rejects_local_r_installation(binary: Path) -> Transcript:
         failure_prefix = "R package resolution failed with exit status: 1: "
         assert progress.startswith(failure_prefix), error
         assert diagnostic_start and "Resolving" in progress, error
-        # IR may load cached metadata or refresh it before the same rejection.
+        # `ir` may load cached metadata or refresh it before the same rejection.
         error = (
-            f"{failure_prefix}<cache-dependent IR progress>\n"
+            f"{failure_prefix}<cache-dependent `ir` progress>\n"
             f"{diagnostic_start}{diagnostic}"
         )
         client.transcript[-1]["send"]["requirements"]["r"] = [
@@ -135,7 +135,7 @@ def test_rejects_local_r_installation(binary: Path) -> Transcript:
         client.transcript[-1]["transcript_normalization"] = {
             "target": "result.content[0].text",
             "replacements": {
-                "cache_dependent_ir_progress": "<cache-dependent IR progress>",
+                "cache_dependent_ir_progress": "<cache-dependent `ir` progress>",
             },
         }
         return client._finish()
@@ -291,7 +291,7 @@ def test_failed_mixed_preparation_retains_live_python_activation(
         environment["R_HOME"] = r_environment["R_HOME"]
 
         real_ir = shutil.which("ir")
-        assert real_ir is not None, "real ir is required"
+        assert real_ir is not None, "real `ir` is required"
         fake_bin = temporary / "bin"
         fake_bin.mkdir()
         (fake_bin / "ir").symlink_to(

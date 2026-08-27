@@ -788,7 +788,7 @@ R packages may declare requirements by calling `py_require()` from load hooks.
 For a server-managed worker, seed reticulate's manifest and intercept its internal `uv_get_or_create_env` and `resolve_python_version` bindings rather than wrapping `py_require()`.
 This retains originating-package attribution, manifest history, and reticulate's native validation and activation behavior within the live R process.
 The environment binding reports the physical resolver manifest and the logical manifest to retain if accepted, together with the worker's `UV_*` settings except `UV_OFFLINE`, and waits for the host resolver to return an interpreter path.
-The version binding reports only the requested constraints and UV settings, then waits for the host resolver to return the selected version without creating a candidate environment.
+The version binding reports only the requested constraints and `uv` settings, then waits for the host resolver to return the selected version without creating a candidate environment.
 
 Before initialization, a lazy `py_require()` declaration remains worker-owned until Python initializes or explicit preparation materializes it.
 Losing the worker before either boundary can therefore lose that declaration.
@@ -807,17 +807,17 @@ Idle `session prepare` uses this path for compatible Python additions; mixed R a
 
 ### 14.2 R
 
-The implemented implicit session uses IR for explicit R requirements.
+The implemented implicit session uses `ir` for explicit R requirements.
 The supervisor requires `ir --version` from `PATH` to report 0.4.0 or later, then runs `ir run` outside the worker sandbox with the same Rscript selection as the worker and one `--with` argument per exact requirement.
-It validates IR's returned library and prepends it to inherited `R_LIBS` before each worker generation initializes R.
+It validates `ir`'s returned library and prepends it to inherited `R_LIBS` before each worker generation initializes R.
 The prepared library persists across explicit restart and crash replacement.
 While the built-in worker is idle, the supervisor can resolve the complete additive R requirement set and ask a fixed private R bridge to prepend the candidate to `.libPaths()` and remove the previous managed entry.
 Each candidate contains the complete retained R requirement set, so replacing the previous managed entry keeps live package lookup consistent with restart and crash replacement instead of accumulating stale candidates.
 The bridge preserves the other live library paths and in-memory state.
 Only after the worker confirms the normalized library path does the supervisor retain that library for later generations.
 The supervisor sets `IR_NO_LOCAL_SOURCES` for every invocation.
-IR owns package-reference parsing and prevents direct or transitive local package installation before materialization.
-This does not sandbox build code from accepted repository or remote packages, and IR may reuse an already materialized library.
+`ir` owns package-reference parsing and prevents direct or transitive local package installation before materialization.
+This does not sandbox build code from accepted repository or remote packages, and `ir` may reuse an already materialized library.
 The exact package-reference grammar belongs in a later `docs/DEPENDENCIES.md`.
 
 ### 14.3 Atomic public behavior
@@ -999,7 +999,7 @@ It is generated and formatted with Yamark without applying embedded formatters t
 
 `transcript.qmd` contains source from calls with exactly one submitted R, Python, or SQL field in call order, including source from a call that later fails option validation or preparation.
 It is regenerated from incremental source and requirement state when those inputs change, without rereading prior result events from the journal.
-Its IR front matter records those declarations without selecting a Python version, so reticulate chooses its default managed Python when users run `ir render`.
+Its `ir` front matter records those declarations without selecting a Python version, so reticulate chooses its default managed Python when users run `ir render`.
 Yamark formatting does not rewrite submitted cells, and rendering executes the captured client-authored action stream in a fresh environment.
 The direction is to reproduce the analysis represented by the Markdown transcript, while accepting that runtime state, artifacts, and SQL connections are not fully reconstructable yet.
 

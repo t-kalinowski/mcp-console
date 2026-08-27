@@ -196,7 +196,7 @@ fn run_python_resolver(
         .stderr(Stdio::piped());
     configuration.configure(managed_r, &mut command)?;
     // Managed resolution intentionally runs outside the sandbox because
-    // reticulate and uv need normal host network and cache access. Resolver
+    // reticulate and `uv` need normal host network and cache access. Resolver
     // inputs are JSON standard-input data, never R source.
     let mut child = command.spawn().map_err(|error| {
         format!(

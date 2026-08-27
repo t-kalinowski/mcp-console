@@ -130,7 +130,7 @@ The server reports the failed operation and does not replay its cell or stdin ag
 ### Server and worker startup
 
 The built-in server first selects a stable host resolver configuration.
-It prefers PATH IR, otherwise uses PATH uv to run IR, and can obtain uv from reticulate when only IR or an ambient R installation is available.
+It prefers `ir` on `PATH`, otherwise uses `uv` on `PATH` to run `ir`, and can obtain `uv` from reticulate when only `ir` or an ambient R installation is available.
 With that configuration, it constructs its retained environment before accepting MCP input, resolving the default R and DuckDB environment and managed Python when selected.
 If no resolver bootstrap is available, it accepts MCP input with an empty retained environment and a fixed bare capability that disables later dynamic resolution.
 The worker itself starts lazily when an operation first needs it; preparing retained requirements can happen without launching a worker.
@@ -183,7 +183,7 @@ If the callback already owns the transition, preparation returns a nonfatal tool
 A runtime R callback sent after live preparation begins is a protocol failure.
 
 For a request, the server verifies the worker generation and validates the supplied plain package names.
-It serializes access to the retained environment and host resolver, merges the names into the complete retained R requirement set, and returns the existing managed environment without invoking IR when that set is unchanged.
+It serializes access to the retained environment and host resolver, merges the names into the complete retained R requirement set, and returns the existing managed environment without invoking `ir` when that set is unchanged.
 Otherwise it resolves the complete candidate on the host and prepares every retained DuckDB extension for that candidate library.
 The server rechecks the generation and returns the candidate path without committing it.
 
@@ -288,7 +288,7 @@ Fences expand when literal content contains backticks.
 It is a chronological call ledger: a timed-out cell, later polls, and eventual results remain separate calls because the journal does not infer evaluation-level grouping.
 The executable Quarto document contains the source from calls with exactly one submitted R, Python, or SQL field in call order; it omits stdin, options, results, errors, polls, and artifacts.
 It retains source even when another argument later makes the call fail, so it is source material rather than an execution ledger.
-Its IR front matter declares the managed built-in R and Python requirements followed by cumulative explicit declarations from recorded calls.
+Its `ir` front matter declares the managed built-in R and Python requirements followed by cumulative explicit declarations from recorded calls.
 Bare sessions omit both managed defaults and rejected requirement payloads.
 It does not declare a Python version, so `ir render transcript.qmd` uses reticulate's default managed Python selection.
 The declarations are submitted inputs, not a lockfile or an exact record of successful retained and automatically inferred requirements.

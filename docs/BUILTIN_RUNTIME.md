@@ -223,9 +223,9 @@ The wrappers preserve ordinary R behavior: `library()` and `require()` attach on
 They bypass automatic resolution for already available packages, `library()` help and listing calls, an explicit non-NULL `lib.loc`, and partial namespace loads.
 
 Runtime discovery accepts plain package names only.
-Use `requirements.r` to stage a package before evaluation or to supply an explicit IR reference such as a remote source.
+Use `requirements.r` to stage a package before evaluation or to supply an explicit `ir` reference such as a remote source.
 The worker does not inspect R source before evaluation.
-Each missing package is resolved only when execution reaches a covered operation, so unreachable or quoted code does not invoke IR and several new packages in one cell can cause several incremental IR calls in execution order.
+Each missing package is resolved only when execution reaches a covered operation, so unreachable or quoted code does not invoke `ir` and several new packages in one cell can cause several incremental `ir` calls in execution order.
 
 In a bare runtime, the worker does not replace `base::library` or `base::loadNamespace`.
 Installed packages work normally, missing packages retain their ordinary R behavior, and `requirements.r` is not available.
@@ -292,7 +292,7 @@ Resolution starts only when execution reaches the missing import.
 Python source is not scanned, so imports in unreachable branches or uncalled functions do not invoke the resolver.
 Each reached missing import resolves in execution order, and the cell is never replayed.
 
-The finder calls the private R bridge, which adds the inferred distribution to reticulate's managed manifest and asks the existing host uv resolver for a compatible environment.
+The finder calls the private R bridge, which adds the inferred distribution to reticulate's managed manifest and asks the existing host `uv` resolver for a compatible environment.
 After reticulate activates that environment, the worker reports the complete manifest to the server.
 Only then does the original import resume against invalidated import caches.
 Preparation makes the distribution available; the original import still performs the import normally.

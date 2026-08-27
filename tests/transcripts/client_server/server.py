@@ -317,7 +317,7 @@ def test_initializes_and_lists_tools(binary: Path) -> Transcript:
     )
     for guidance in (
         "stage packages ahead of evaluation",
-        "explicit supported remote IR reference",
+        "explicit supported remote `ir` reference",
         "Automatic R discovery accepts only plain package names",
         "Local package sources are rejected",
     ):
