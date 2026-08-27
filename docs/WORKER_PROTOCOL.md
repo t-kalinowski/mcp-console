@@ -121,41 +121,41 @@ In particular, raw output written before a `completed` or preparation-result fra
 
 ### Server to worker
 
-| Frame | Required meaning |
-| --- | --- |
-| `{"kind":"evaluate","language":"r","source":"..."}` | Evaluate one complete source string. `language` is `r`, `python`, or `sql`. |
-| `{"kind":"prepare_r","library":"..."}` | Apply this resolved R library to the live R search path. |
-| `{"kind":"r_resolved","library":"..."}` | Return the provisional library selected for the current `resolve_r` request. |
+| Frame                                                             | Required meaning                                                                          |
+| ----------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| `{"kind":"evaluate","language":"r","source":"..."}`               | Evaluate one complete source string. `language` is `r`, `python`, or `sql`.               |
+| `{"kind":"prepare_r","library":"..."}`                            | Apply this resolved R library to the live R search path.                                  |
+| `{"kind":"r_resolved","library":"..."}`                           | Return the provisional library selected for the current `resolve_r` request.              |
 | `{"kind":"r_resolution_failed","failure":"host","message":"..."}` | Fail the current `resolve_r` request. `failure` is `host`, `interrupted`, or `operation`. |
-| `{"kind":"prepare_python","packages":["py-yaml12"]}` | Add these package requirements through the live managed-Python preparation operation. |
-| `{"kind":"python_resolved","python":"..."}` | Return the interpreter path selected for the current `resolve_python` request. |
-| `{"kind":"python_resolution_failed","message":"..."}` | Return an ordinary failure for the current `resolve_python` request. |
-| `{"kind":"python_version_resolved","version":"3.12.11"}` | Return the version selected for the current `resolve_python_version` request. |
-| `{"kind":"python_version_resolution_failed","message":"..."}` | Return an ordinary failure for the current version request. |
-| `{"kind":"shutdown"}` | Exit without a sideband reply. |
+| `{"kind":"prepare_python","packages":["py-yaml12"]}`              | Add these package requirements through the live managed-Python preparation operation.     |
+| `{"kind":"python_resolved","python":"..."}`                       | Return the interpreter path selected for the current `resolve_python` request.            |
+| `{"kind":"python_resolution_failed","message":"..."}`             | Return an ordinary failure for the current `resolve_python` request.                      |
+| `{"kind":"python_version_resolved","version":"3.12.11"}`          | Return the version selected for the current `resolve_python_version` request.             |
+| `{"kind":"python_version_resolution_failed","message":"..."}`     | Return an ordinary failure for the current version request.                               |
+| `{"kind":"shutdown"}`                                             | Exit without a sideband reply.                                                            |
 
 ### Worker to server
 
-| Frame | Required meaning |
-| --- | --- |
-| `{"kind":"ready"}` | Startup is complete. |
-| `{"kind":"console_output","data":"..."}` | Publish ordinary console text. |
-| `{"kind":"console_diagnostic","data":"..."}` | Publish diagnostic console text. |
-| `{"kind":"image","data":"...","mime_type":"image/png"}` | Publish one base64-encoded image. |
-| `{"kind":"input_requested","prompt":"..."}` | Report that a managed console read is about to wait for input. |
-| `{"kind":"input_received"}` | Report that the outstanding managed read succeeded. |
-| `{"kind":"input_cancelled"}` | Report that interruption cancelled the outstanding managed read. |
-| `{"kind":"r_prepared","library":"..."}` | Complete `prepare_r` successfully with the applied library path. |
-| `{"kind":"r_preparation_failed","message":"..."}` | Complete `prepare_r` with an ordinary live-update failure. |
-| `{"kind":"resolve_r","packages":["cli","glue"]}` | Request host resolution of these plain R package names. |
-| `{"kind":"r_activated","library":"..."}` | Report that the worker accepted this resolved R library. |
-| `{"kind":"r_activation_failed","library":"...","message":"..."}` | Report that the worker could not apply this resolved R library. |
-| `{"kind":"resolve_python","request":{"requirements":{"packages":["numpy","pandas"]},"retained_requirements":{"packages":["numpy","pandas"]}}}` | Request host resolution of one managed-Python environment. |
-| `{"kind":"resolve_python_version","request":{"constraints":[]}}` | Request host Python-version selection. |
-| `{"kind":"python_activated","requirements":{"packages":["numpy","pandas"]}}` | Report that the worker accepted this complete logical managed-Python manifest. |
-| `{"kind":"python_prepared"}` | Complete explicit Python preparation successfully. |
-| `{"kind":"python_preparation_failed","message":"..."}` | Complete explicit Python preparation with an ordinary failure. |
-| `{"kind":"completed"}` | Complete the current evaluation. |
+| Frame                                                                                                                                          | Required meaning                                                               |
+| ---------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
+| `{"kind":"ready"}`                                                                                                                             | Startup is complete.                                                           |
+| `{"kind":"console_output","data":"..."}`                                                                                                       | Publish ordinary console text.                                                 |
+| `{"kind":"console_diagnostic","data":"..."}`                                                                                                   | Publish diagnostic console text.                                               |
+| `{"kind":"image","data":"...","mime_type":"image/png"}`                                                                                        | Publish one base64-encoded image.                                              |
+| `{"kind":"input_requested","prompt":"..."}`                                                                                                    | Report that a managed console read is about to wait for input.                 |
+| `{"kind":"input_received"}`                                                                                                                    | Report that the outstanding managed read succeeded.                            |
+| `{"kind":"input_cancelled"}`                                                                                                                   | Report that interruption cancelled the outstanding managed read.               |
+| `{"kind":"r_prepared","library":"..."}`                                                                                                        | Complete `prepare_r` successfully with the applied library path.               |
+| `{"kind":"r_preparation_failed","message":"..."}`                                                                                              | Complete `prepare_r` with an ordinary live-update failure.                     |
+| `{"kind":"resolve_r","packages":["cli","glue"]}`                                                                                               | Request host resolution of these plain R package names.                        |
+| `{"kind":"r_activated","library":"..."}`                                                                                                       | Report that the worker accepted this resolved R library.                       |
+| `{"kind":"r_activation_failed","library":"...","message":"..."}`                                                                               | Report that the worker could not apply this resolved R library.                |
+| `{"kind":"resolve_python","request":{"requirements":{"packages":["numpy","pandas"]},"retained_requirements":{"packages":["numpy","pandas"]}}}` | Request host resolution of one managed-Python environment.                     |
+| `{"kind":"resolve_python_version","request":{"constraints":[]}}`                                                                               | Request host Python-version selection.                                         |
+| `{"kind":"python_activated","requirements":{"packages":["numpy","pandas"]}}`                                                                   | Report that the worker accepted this complete logical managed-Python manifest. |
+| `{"kind":"python_prepared"}`                                                                                                                   | Complete explicit Python preparation successfully.                             |
+| `{"kind":"python_preparation_failed","message":"..."}`                                                                                         | Complete explicit Python preparation with an ordinary failure.                 |
+| `{"kind":"completed"}`                                                                                                                         | Complete the current evaluation.                                               |
 
 `console_output` and `console_diagnostic` remain distinct on this boundary.
 Their MCP projection is described in [`BUILTIN_RUNTIME.md`](BUILTIN_RUNTIME.md).
@@ -352,25 +352,25 @@ A response for another resolver kind, or any resolver response without its match
 The following table summarizes the required semantic transitions.
 Console, image, and permitted nested resolver frames do not by themselves change the current phase.
 
-| Current phase | Frame | Required result |
-| --- | --- | --- |
-| starting | worker -> server `ready` | idle |
-| idle | server -> worker `evaluate` | evaluating |
-| idle | server -> worker `prepare_r` | preparing R |
-| idle | server -> worker `prepare_python` | preparing Python |
-| evaluating | worker -> server `completed` | idle |
-| preparing R | worker -> server `r_prepared` with the requested path | idle |
-| preparing R | worker -> server `r_preparation_failed` | idle |
-| preparing Python | worker -> server `python_prepared` | idle |
-| preparing Python | worker -> server `python_preparation_failed` | idle |
-| idle or evaluating | worker -> server `input_requested` | same phase, input outstanding |
-| input outstanding | worker -> server `input_received` or `input_cancelled` | prior phase |
-| idle or evaluating | worker -> server `resolve_r` | same phase, nested R resolution |
-| nested R resolution | server -> worker `r_resolved` or `r_resolution_failed` | prior phase |
-| idle, evaluating, or preparing | worker -> server `resolve_python` | same phase, nested resolution |
-| idle, evaluating, or preparing | worker -> server `resolve_python_version` | same phase, nested version selection |
-| nested resolution | server -> worker matching success or failure reply | prior phase |
-| any live phase | server -> worker `shutdown` | terminal |
+| Current phase                  | Frame                                                  | Required result                      |
+| ------------------------------ | ------------------------------------------------------ | ------------------------------------ |
+| starting                       | worker -> server `ready`                               | idle                                 |
+| idle                           | server -> worker `evaluate`                            | evaluating                           |
+| idle                           | server -> worker `prepare_r`                           | preparing R                          |
+| idle                           | server -> worker `prepare_python`                      | preparing Python                     |
+| evaluating                     | worker -> server `completed`                           | idle                                 |
+| preparing R                    | worker -> server `r_prepared` with the requested path  | idle                                 |
+| preparing R                    | worker -> server `r_preparation_failed`                | idle                                 |
+| preparing Python               | worker -> server `python_prepared`                     | idle                                 |
+| preparing Python               | worker -> server `python_preparation_failed`           | idle                                 |
+| idle or evaluating             | worker -> server `input_requested`                     | same phase, input outstanding        |
+| input outstanding              | worker -> server `input_received` or `input_cancelled` | prior phase                          |
+| idle or evaluating             | worker -> server `resolve_r`                           | same phase, nested R resolution      |
+| nested R resolution            | server -> worker `r_resolved` or `r_resolution_failed` | prior phase                          |
+| idle, evaluating, or preparing | worker -> server `resolve_python`                      | same phase, nested resolution        |
+| idle, evaluating, or preparing | worker -> server `resolve_python_version`              | same phase, nested version selection |
+| nested resolution              | server -> worker matching success or failure reply     | prior phase                          |
+| any live phase                 | server -> worker `shutdown`                            | terminal                             |
 
 `r_activated` or `r_activation_failed` may occur while idle or evaluating, but only for a matching provisional R library.
 `python_activated` may occur while idle, evaluating, or preparing, but only for a matching managed environment.

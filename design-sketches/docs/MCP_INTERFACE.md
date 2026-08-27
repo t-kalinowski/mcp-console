@@ -87,12 +87,12 @@ The server performs semantic mode validation and returns a short tool error for 
 
 ### 2.2 Modes
 
-| Present mode fields | Operation |
-| --- | --- |
-| exactly one of `r`, `python`, `sql`, optionally with `stdin` | Evaluate one complete cell |
-| `stdin` only | Queue exact text to the session worker |
-| none of `r`, `python`, `sql`, `stdin` | Wait for or poll the session |
-| any other combination | Tool error |
+| Present mode fields                                          | Operation                              |
+| ------------------------------------------------------------ | -------------------------------------- |
+| exactly one of `r`, `python`, `sql`, optionally with `stdin` | Evaluate one complete cell             |
+| `stdin` only                                                 | Queue exact text to the session worker |
+| none of `r`, `python`, `sql`, `stdin`                        | Wait for or poll the session           |
+| any other combination                                        | Tool error                             |
 
 `session`, `label`, and `wait_ms` are modifiers, not modes.
 

@@ -79,7 +79,8 @@ result:
 send:
   python: >-
     automatic_interrupt_state + int('automatic_interrupt_cell_ran' not in
-    globals()) + int(__import__('os').getpid() == automatic_interrupt_pid) - 1
+    globals()) + int(__import__('os').getpid() == automatic_interrupt_pid) -
+    1
 result:
   content:
     - type: text
