@@ -42,8 +42,54 @@ def checkpoint() -> None:
     wait(os.environ["MCP_CONSOLE_TEST_UV_RELEASE"])
 
 
+def reuse_resolved_python() -> None:
+    # Candidate-manifest lifecycle tests reuse the real interpreter resolved at
+    # startup. Execute uv's post-`--` probe unchanged so reticulate observes the
+    # normal output-file contract without another external package resolution.
+    configured = os.environ.get("MCP_CONSOLE_TEST_UV_REUSE_REQUIREMENTS")
+    if configured is None:
+        return
+
+    try:
+        separator = sys.argv.index("--")
+    except ValueError:
+        return
+    arguments = sys.argv[1:separator]
+    with_requirements = {
+        arguments[index + 1]
+        for index, argument in enumerate(arguments[:-1])
+        if argument == "--with"
+    }
+    requirements = set(configured.split(os.pathsep))
+    matched = requirements.intersection(with_requirements)
+    if not matched:
+        return
+
+    assert len(matched) == 1, matched
+    requirement = matched.pop()
+    command = sys.argv[separator + 1 :]
+    assert command and command[0] == "python", command
+
+    path = os.environ["MCP_CONSOLE_TEST_UV_REUSE_PYTHON"]
+    with open(path, encoding="utf-8") as stream:
+        python = stream.read().strip()
+    assert os.path.isabs(python) and os.path.isfile(python), python
+
+    if requirement == os.environ.get("MCP_CONSOLE_TEST_UV_PROVIDE_REQUIREMENT"):
+        # Make an automatic import completable only after its candidate resolves.
+        module = os.environ["MCP_CONSOLE_TEST_UV_PROVIDE_MODULE"]
+        with open(module, "x", encoding="utf-8") as stream:
+            stream.write("# Materialized by the deterministic uv fixture.\n")
+
+    record = os.environ["MCP_CONSOLE_TEST_UV_REUSE_RECORD"]
+    with open(record, "a", encoding="utf-8") as stream:
+        stream.write(requirement + "\n")
+    os.execv(python, [python, *command[1:]])
+
+
 def main() -> None:
     checkpoint()
+    reuse_resolved_python()
     executable = os.environ["MCP_CONSOLE_TEST_REAL_UV"]
     os.execv(executable, [executable, *sys.argv[1:]])
 
