@@ -120,6 +120,7 @@ impl WorkerRuntime {
             relay,
             python,
             managed_r,
+            dynamic_resolution,
             callbacks,
         } = spec;
 
@@ -138,6 +139,10 @@ impl WorkerRuntime {
         if let Some(managed_r) = managed_r {
             managed_r.configure_worker(&mut command)?;
         }
+        command.env(
+            "MCP_CONSOLE_DYNAMIC_ENVIRONMENT_RESOLUTION",
+            if dynamic_resolution { "1" } else { "0" },
+        );
         if use_builtin_relay {
             command.arg("worker-relay");
         }

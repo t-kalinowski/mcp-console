@@ -213,7 +213,7 @@ Packages prepared for the session are available but are not attached automatical
 
 ### On-demand R packages
 
-The built-in worker can prepare a missing plain R package name while the current cell is running.
+When dynamic environment resolution is available, the built-in worker can prepare a missing plain R package name while the current cell is running.
 This covers direct `library()`, `require()`, `requireNamespace()`, and `loadNamespace()` calls and package use through `::` and `:::`.
 Use these operations normally; there is no need to probe package availability or call `install.packages()` first.
 
@@ -226,6 +226,9 @@ Runtime discovery accepts plain package names only.
 Use `requirements.r` to stage a package before evaluation or to supply an explicit IR reference such as a remote source.
 The worker does not inspect R source before evaluation.
 Each missing package is resolved only when execution reaches a covered operation, so unreachable or quoted code does not invoke IR and several new packages in one cell can cause several incremental IR calls in execution order.
+
+In a bare runtime, the worker does not replace `base::library` or `base::loadNamespace`.
+Installed packages work normally, missing packages retain their ordinary R behavior, and `requirements.r` is not available.
 
 When the server returns a candidate library, the worker prepends it through the managed `.libPaths()` bridge and reports activation before resuming the original base call.
 The server retains the library only after that report.
@@ -262,7 +265,7 @@ MCP Console does not add notebook event-loop behavior.
 
 ### On-demand Python packages
 
-The built-in server-managed Python environment resolves missing imports while the current cell runs.
+When dynamic environment resolution is available, the built-in server-managed Python environment resolves missing imports while the current cell runs.
 Import the packages appropriate for the task directly; do not probe for their installation or run pip in the worker.
 Availability queries such as `importlib.util.find_spec()` inspect the current environment without triggering resolution.
 Successful resolution emits no `[prepared]` marker.
@@ -312,6 +315,10 @@ Imports already handled by ordinary Python finders remain available in those con
 
 A nonempty user-selected `RETICULATE_PYTHON` disables both automatic managed resolution and `requirements.python`.
 Its missing-import error directs the user to install the distribution into that environment or restart MCP Console with managed Python enabled.
+
+A bare runtime also disables the import resolver and `requirements.python`.
+If ambient reticulate and Python are usable, installed distributions import normally and a missing import directs the user to install `ir` or `uv` before restarting.
+If reticulate is not installed, Python cells report that ambient adapter error directly.
 
 Automatic import resolution counts toward the active evaluation's `timeout_ms` wait.
 A short wait can therefore return `[running; poll with an empty send]`; poll with an empty `send`, interrupt the active resolver with `control = "interrupt"`, or restart according to the normal generation lifecycle.

@@ -83,6 +83,14 @@ struct ClientInner {
     output: OutputTape,
     lifecycle: Mutex<LifecycleControl>,
     environment: Option<Mutex<Environment>>,
+    r_resolver: RResolver,
+}
+
+#[derive(Clone)]
+enum RResolver {
+    Discover,
+    Configured(crate::resolver::ManagedRResolverConfiguration),
+    Disabled,
 }
 
 /// Describes one worker launch for the current runtime.
@@ -92,6 +100,7 @@ struct WorkerSpec<'a> {
     relay: Option<&'a std::path::Path>,
     python: Option<&'a PythonEnvironment>,
     managed_r: Option<&'a crate::resolver::ManagedR>,
+    dynamic_resolution: bool,
     callbacks: WorkerCallbacks,
 }
 
@@ -291,36 +300,64 @@ impl Client {
                 python: None,
                 r: None,
             }),
+            RResolver::Discover,
         ))
     }
 
     pub(crate) fn builtin() -> Result<Self, String> {
-        let python_resolver = crate::resolver::ManagedPythonResolverConfiguration::capture();
+        let mut python_resolver = crate::resolver::ManagedPythonResolverConfiguration::capture();
         let configured_python = std::env::var_os("RETICULATE_PYTHON");
         let program = std::env::current_exe()
             .map_err(|error| format!("failed to locate the R worker executable: {error}"))?;
         #[cfg(target_os = "macos")]
-        let (r, duckdb_extensions) = {
-            let r = crate::resolver::resolve_r(
-                DEFAULT_R_REQUIREMENTS
-                    .iter()
-                    .map(|requirement| (*requirement).to_string())
-                    .collect(),
-                |_| Ok(()),
-            )?;
-            let duckdb_extensions = DEFAULT_DUCKDB_EXTENSIONS
-                .iter()
-                .map(|extension| (*extension).to_string())
-                .collect::<Vec<_>>();
-            crate::resolver::resolve_duckdb_extensions(&r, &duckdb_extensions, |_| Ok(()))?;
-            (Some(r), duckdb_extensions.into_iter().collect())
+        let (r, duckdb_extensions, python, r_resolver) = {
+            let r_resolver =
+                crate::resolver::discover_r_resolver(&mut python_resolver, |_| Ok(()))?;
+            match r_resolver {
+                Some(r_resolver) => {
+                    let r = crate::resolver::resolve_r_with(
+                        &r_resolver,
+                        DEFAULT_R_REQUIREMENTS
+                            .iter()
+                            .map(|requirement| (*requirement).to_string())
+                            .collect(),
+                        |_| Ok(()),
+                    )?;
+                    if PythonEnvironment::uses_managed(configured_python.as_deref())
+                        && !python_resolver.has_uv()
+                    {
+                        let uv = r_resolver.resolve_uv(&r, &python_resolver, |_| Ok(()))?;
+                        python_resolver.set_default_uv(uv);
+                    }
+                    let duckdb_extensions = DEFAULT_DUCKDB_EXTENSIONS
+                        .iter()
+                        .map(|extension| (*extension).to_string())
+                        .collect::<Vec<_>>();
+                    crate::resolver::resolve_duckdb_extensions(&r, &duckdb_extensions, |_| Ok(()))?;
+                    let python =
+                        PythonEnvironment::builtin(configured_python, python_resolver, Some(&r))?;
+                    (
+                        Some(r),
+                        duckdb_extensions.into_iter().collect(),
+                        python,
+                        RResolver::Configured(r_resolver),
+                    )
+                }
+                None => (
+                    None,
+                    Default::default(),
+                    PythonEnvironment::bare(configured_python),
+                    RResolver::Disabled,
+                ),
+            }
         };
         #[cfg(not(target_os = "macos"))]
-        let (r, duckdb_extensions) = (
+        let (r, duckdb_extensions, python, r_resolver) = (
             Option::<crate::resolver::ManagedR>::None,
             Default::default(),
+            PythonEnvironment::builtin(configured_python, python_resolver, None)?,
+            RResolver::Discover,
         );
-        let python = PythonEnvironment::builtin(configured_python, python_resolver, r.as_ref())?;
         Ok(Self::with_arguments(
             program,
             vec![OsString::from("worker")],
@@ -332,6 +369,7 @@ impl Client {
                 python: Some(python),
                 r,
             }),
+            r_resolver,
         ))
     }
 
@@ -340,6 +378,7 @@ impl Client {
         arguments: Vec<OsString>,
         relay: Option<PathBuf>,
         environment: Option<Environment>,
+        r_resolver: RResolver,
     ) -> Self {
         Self(Arc::new(ClientInner {
             runtime: platform::WorkerRuntime,
@@ -353,7 +392,12 @@ impl Client {
             output: OutputTape::new(),
             lifecycle: Mutex::new(LifecycleControl::new()),
             environment: environment.map(Mutex::new),
+            r_resolver,
         }))
+    }
+
+    pub(crate) fn dynamic_resolution(&self) -> bool {
+        !matches!(self.0.r_resolver, RResolver::Disabled)
     }
 
     /// Starts one cell, supplies stdin, or collects an idle response.
@@ -1376,6 +1420,7 @@ impl Client {
                 relay: self.0.relay.as_deref(),
                 python,
                 managed_r,
+                dynamic_resolution: self.dynamic_resolution(),
                 callbacks: WorkerCallbacks {
                     client: self.clone(),
                     generation,

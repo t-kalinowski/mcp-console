@@ -21,9 +21,14 @@ pub(in crate::worker_client) enum PythonEnvironment {
         resolver: crate::resolver::ManagedPythonResolverConfiguration,
     },
     UserSelected(OsString),
+    Ambient,
 }
 
 impl PythonEnvironment {
+    pub(in crate::worker_client) fn uses_managed(configured: Option<&std::ffi::OsStr>) -> bool {
+        !configured.is_some_and(|configured| !configured.is_empty() && configured != "managed")
+    }
+
     pub(in crate::worker_client) fn builtin(
         configured: Option<OsString>,
         resolver: crate::resolver::ManagedPythonResolverConfiguration,
@@ -39,10 +44,21 @@ impl PythonEnvironment {
         Ok(Self::Managed { selected, resolver })
     }
 
+    pub(in crate::worker_client) fn bare(configured: Option<OsString>) -> Self {
+        if let Some(configured) = configured
+            && !configured.is_empty()
+            && configured != "managed"
+        {
+            Self::UserSelected(configured)
+        } else {
+            Self::Ambient
+        }
+    }
+
     pub(super) fn managed(&self) -> Option<&crate::resolver::ManagedPython> {
         match self {
             Self::Managed { selected, .. } => Some(selected),
-            Self::UserSelected(_) => None,
+            Self::UserSelected(_) | Self::Ambient => None,
         }
     }
 
@@ -58,6 +74,7 @@ impl PythonEnvironment {
         match self {
             Self::Managed { selected, resolver } => Ok((selected, resolver)),
             Self::UserSelected(_) => Err(USER_SELECTED_PYTHON_ERROR.to_string()),
+            Self::Ambient => Err("dynamic environment resolution is unavailable".to_string()),
         }
     }
 
@@ -71,6 +88,7 @@ impl PythonEnvironment {
                 Ok(())
             }
             Self::UserSelected(_) => Err(USER_SELECTED_PYTHON_ERROR.to_string()),
+            Self::Ambient => Err("dynamic environment resolution is unavailable".to_string()),
         }
     }
 
@@ -84,6 +102,11 @@ impl PythonEnvironment {
             Self::UserSelected(python) => {
                 command
                     .env("RETICULATE_PYTHON", python)
+                    .env_remove("MCP_CONSOLE_MANAGED_PYTHON");
+            }
+            Self::Ambient => {
+                command
+                    .env_remove("RETICULATE_PYTHON")
                     .env_remove("MCP_CONSOLE_MANAGED_PYTHON");
             }
         }
@@ -103,6 +126,9 @@ pub(super) fn ensure_python_additions_available(
     match environment.python.as_ref() {
         Some(PythonEnvironment::Managed { .. }) => Ok(()),
         Some(PythonEnvironment::UserSelected(_)) => Err(USER_SELECTED_PYTHON_ERROR.to_string()),
+        Some(PythonEnvironment::Ambient) => {
+            Err("dynamic environment resolution is unavailable".to_string())
+        }
         None => Err("managed Python environment is unavailable".to_string()),
     }
 }

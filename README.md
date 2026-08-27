@@ -21,17 +21,20 @@ R plots made with the default device and open Matplotlib figures are returned as
 MCP Console is currently distributed as native wheels for Apple Silicon and Intel macOS.
 Linux and Windows are not supported yet.
 
-A working R installation and a host installation of uv are required.
+A working R installation is required.
 Set `R_HOME` or make `R` discoverable on `PATH`.
-Make uv and its `uvx` command discoverable on `PATH`.
-The server uses `ir` 0.4.0 or later from `PATH` when available; otherwise it runs `uvx --from r-lib-ir ir` to prepare R libraries.
-The first server start may download and install the default R and Python requirements.
+Dynamic environment resolution normally starts from either `ir` 0.4.0 or later or `uv` on `PATH`.
+When only uv is available, the server runs `uv tool run --from r-lib-ir ir`.
+When only IR is available, the resolved reticulate installation supplies uv for managed Python.
+If neither command is available, an ambient reticulate installation may bootstrap uv and supply IR.
+Otherwise the server starts a bare runtime without automatic or explicit dependency resolution.
+The first managed server start may download and install the default R and Python requirements.
 
 Run the published command without installing it persistently:
 
 ```sh
-uvx mcp-console --help
-uvx mcp-console serve
+uv tool run mcp-console --help
+uv tool run mcp-console serve
 ```
 
 Or install it as a persistent uv tool:
@@ -69,9 +72,10 @@ R and Python global state and the in-memory DuckDB catalog remain available unti
 Prepared requirements remain available across worker restarts, but in-memory language, database, debugger, and unread-input state does not.
 Requirements declared on `send` are prepared before its cell runs and remain available to later cells.
 Preparation makes packages and extensions available; it does not import, attach, or load them.
-The built-in worker resolves missing plain R packages and managed Python imports on demand.
+When dynamic environment resolution is available, the built-in worker resolves missing plain R packages and managed Python imports on demand.
 Use packages directly; declare an explicit Python requirement when exact distribution metadata is needed or automatic inference asks for it.
 Successful package additions survive restart, while attached packages, imported modules, and other in-memory state do not.
+A bare runtime uses only packages already installed in its ambient R and Python environments and does not expose the `requirements` field.
 
 ## Example workflow
 
@@ -124,8 +128,9 @@ The project remains under active construction.
 The server records a JSONL journal of tool calls and results together with image artifacts.
 It projects each journal event into a Yamark-formatted, append-only `transcript.md` with syntax-highlighted R, Python, and SQL source, text results, and relative artifact links.
 Alongside it, the server regenerates a Yamark-formatted `transcript.qmd` from incremental source and requirement state when submitted code or declared R or Python requirements change.
-The QMD contains only submitted executable code cells and IR front matter with the built-in requirements and cumulative declarations.
-Run `uvx --from r-lib-ir ir render transcript.qmd` to execute those client-authored cells in order and export a fresh report using reticulate's default managed Python selection.
+The QMD contains only submitted executable code cells and IR front matter with the managed built-in requirements and cumulative declarations.
+Bare sessions omit the managed defaults.
+Run `uv tool run --from r-lib-ir ir render transcript.qmd` to execute those client-authored cells in order and export a fresh report using reticulate's default managed Python selection.
 When `ir` is installed on `PATH`, `ir render transcript.qmd` is equivalent.
 The projection is intended to reproduce the analysis represented by `transcript.md`, but it does not include recorded output or artifacts and does not yet reconstruct every runtime detail.
 Human-facing tools for following and inspecting an agent's work remain future design.

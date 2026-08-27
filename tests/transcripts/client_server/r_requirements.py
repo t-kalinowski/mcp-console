@@ -46,23 +46,11 @@ def test_rejects_unsupported_ir_version(binary: Path) -> Transcript:
 
                 set -eu
                 if [ "$#" -eq 1 ] && [ "$1" = "--version" ]; then
-                  count=0
-                  if [ -e "$MCP_CONSOLE_IR_VERSION_COUNT" ]; then
-                    read -r count < "$MCP_CONSOLE_IR_VERSION_COUNT"
-                  fi
-                  count=$((count + 1))
-                  printf '%s\n' "$count" > "$MCP_CONSOLE_IR_VERSION_COUNT"
-                  if [ "$count" -eq 1 ]; then
-                    printf 'ir 0.4.0\n'
-                  else
-                    printf 'ir 0.3.0\n'
-                  fi
+                  printf 'ir 0.3.0\n'
                   exit 0
                 fi
-                if [ "$(cat "$MCP_CONSOLE_IR_VERSION_COUNT")" -gt 1 ]; then
-                  printf 'started\n' > "$MCP_CONSOLE_UNSUPPORTED_IR_RUN_MARKER"
-                fi
-                printf '%s' "$MCP_CONSOLE_FAKE_R_LIBRARY"
+                printf 'started\n' > "$MCP_CONSOLE_UNSUPPORTED_IR_RUN_MARKER"
+                exit 97
                 """),
             encoding="utf-8",
         )
@@ -71,15 +59,12 @@ def test_rejects_unsupported_ir_version(binary: Path) -> Transcript:
         assert path is not None, "PATH is required"
         environment["PATH"] = os.pathsep.join((str(fake_bin), path))
         run_marker = workspace / "unsupported-ir-ran"
-        environment["MCP_CONSOLE_IR_VERSION_COUNT"] = str(
-            workspace / "ir-version-count"
-        )
         environment["MCP_CONSOLE_UNSUPPORTED_IR_RUN_MARKER"] = str(run_marker)
-        environment["MCP_CONSOLE_FAKE_R_LIBRARY"] = str(workspace)
+        zod = Path(__file__).resolve().parents[2] / "fixtures" / "zod"
 
         client = McpClient(
             binary,
-            ("serve",),
+            ("serve", "--worker", str(zod)),
             environment,
             current_directory=workspace,
         )

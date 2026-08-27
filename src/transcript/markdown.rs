@@ -31,6 +31,7 @@ struct QuartoWriter {
     working_directory: String,
     r_requirements: Vec<String>,
     python_requirements: Vec<String>,
+    dynamic_resolution: Option<bool>,
     sources: Vec<QuartoSource>,
 }
 
@@ -61,27 +62,49 @@ impl QuartoWriter {
         Self {
             path,
             working_directory: working_directory.to_string(),
-            r_requirements: crate::worker_client::DEFAULT_R_REQUIREMENTS
-                .iter()
-                .map(|requirement| (*requirement).to_string())
-                .collect(),
-            python_requirements: crate::worker_protocol::DEFAULT_PYTHON_PACKAGES
-                .iter()
-                .map(|requirement| (*requirement).to_string())
-                .collect(),
+            r_requirements: Vec::new(),
+            python_requirements: Vec::new(),
+            dynamic_resolution: None,
             sources: Vec::new(),
         }
     }
 
     fn append(&mut self, event: &Value) -> Result<(), String> {
         let changed = match string(field(event, "event")?, "event kind")? {
-            "session_started" => true,
+            "session_started" => {
+                if self.dynamic_resolution.is_some() {
+                    return Err(
+                        "Quarto source transcript received duplicate session start".to_string()
+                    );
+                }
+                let dynamic_resolution = bool_value(
+                    field(event, "dynamic_resolution")?,
+                    "dynamic resolution capability",
+                )?;
+                self.dynamic_resolution = Some(dynamic_resolution);
+                if dynamic_resolution {
+                    self.r_requirements.extend(
+                        crate::worker_client::DEFAULT_R_REQUIREMENTS
+                            .iter()
+                            .map(|requirement| (*requirement).to_string()),
+                    );
+                    self.python_requirements.extend(
+                        crate::worker_protocol::DEFAULT_PYTHON_PACKAGES
+                            .iter()
+                            .map(|requirement| (*requirement).to_string()),
+                    );
+                }
+                true
+            }
             "tool_call" => {
+                let dynamic_resolution = self.dynamic_resolution.ok_or_else(|| {
+                    "Quarto source transcript received a tool call before session start".to_string()
+                })?;
                 let Some(request) = event.get("request").and_then(Value::as_object) else {
                     return Ok(());
                 };
                 let mut changed = false;
-                if let Some(requirements) = declared_requirements(request) {
+                if dynamic_resolution && let Some(requirements) = declared_requirements(request) {
                     extend_unique(&mut self.r_requirements, requirements.r);
                     extend_unique(&mut self.python_requirements, requirements.python);
                     changed = true;

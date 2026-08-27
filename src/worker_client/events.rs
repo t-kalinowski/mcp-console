@@ -1104,7 +1104,7 @@ mod tests {
         let output = OutputTape::new();
         let operation = WorkerOperationState::new();
         let evaluation = Arc::new(Evaluation::new(
-            crate::transcript::Transcript::new(),
+            crate::transcript::Transcript::new(true),
             None,
             output.clone(),
             Response::default(),

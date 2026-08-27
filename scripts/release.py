@@ -217,13 +217,14 @@ def smoke_wheel(args: argparse.Namespace) -> None:
 
     expected_version = command_output([str(cargo_bin), "--version"])
     actual_version = command_output(
-        ["uvx", "--from", str(wheel), "mcp-console", "--version"]
+        ["uv", "tool", "run", "--from", str(wheel), "mcp-console", "--version"]
     )
     require(actual_version == expected_version, "installed and Cargo versions differ")
 
     cargo_help = command_output([str(cargo_bin), "--help"], strip=False)
     wheel_help = command_output(
-        ["uvx", "--from", str(wheel), "mcp-console", "--help"], strip=False
+        ["uv", "tool", "run", "--from", str(wheel), "mcp-console", "--help"],
+        strip=False,
     )
     require(wheel_help == cargo_help, "installed and Cargo help output differ")
 
@@ -251,15 +252,15 @@ def smoke_wheel(args: argparse.Namespace) -> None:
 
     r_home = command_output(["R", "RHOME"])
     uv = shutil.which("uv")
-    uvx = shutil.which("uvx")
     require(uv is not None, "host uv is not on PATH")
-    require(uvx is not None, "host uvx is not on PATH")
-    with tempfile.TemporaryDirectory(prefix="mcp-console-uvx-path-") as directory:
-        uvx_bin = Path(directory)
-        (uvx_bin / "uv").symlink_to(Path(uv).resolve())
-        (uvx_bin / "uvx").symlink_to(Path(uvx).resolve())
+    with tempfile.TemporaryDirectory(prefix="mcp-console-uv-path-") as directory:
+        uv_bin = Path(directory)
+        (uv_bin / "uv").symlink_to(Path(uv).resolve())
+        unavailable_uvx = uv_bin / "uvx"
+        unavailable_uvx.write_text("#!/bin/sh\nexit 97\n", encoding="utf-8")
+        unavailable_uvx.chmod(0o755)
         path = os.pathsep.join(
-            [str(uvx_bin)]
+            [str(uv_bin)]
             + [
                 entry
                 for entry in os.environ.get("PATH", "").split(os.pathsep)

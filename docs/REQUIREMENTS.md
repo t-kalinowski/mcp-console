@@ -30,6 +30,11 @@ The built-in server prepares these defaults before accepting MCP input:
 | Python | NumPy and pandas when Python is server-managed |
 | DuckDB | ICU and JSON extensions |
 
+These defaults apply when startup establishes an IR resolver from PATH IR, PATH uv, an explicit uv selection, or ambient reticulate.
+Server-managed Python additionally needs uv; when only IR is on PATH, the resolved reticulate installation supplies it.
+If startup cannot establish an IR resolver, the built-in server retains no managed environment, exposes no `requirements` field, and starts a bare runtime from the packages already available to R, reticulate, and DuckDB.
+R, Python, and SQL cells remain available, with ordinary R missing-package errors and explicit unavailable-adapter diagnostics where appropriate.
+
 MCP Console applies no deadline to these startup preflights, which run before the MCP transport starts.
 Neither interruption nor closing MCP input can cancel them because the server is not yet accepting MCP requests; if a resolver does not finish, the server does not begin accepting them.
 Host resolution for changed requirements submitted through `send` also has no deadline.
@@ -344,13 +349,20 @@ It passes that exact `Rscript` to IR and uses it for DuckDB resolution.
 When Python is server-managed, the same `Rscript` also runs managed-Python resolution.
 The server prepends the resolved managed library to inherited `R_LIBS`, preserving its nonempty path entries after the managed library.
 
-The server first runs `ir` from `PATH`.
-If that executable is absent, it runs `uvx --from r-lib-ir ir` instead.
-It does not fall back when a PATH `ir` fails or reports an unsupported version.
-The selected `ir` must be version 0.4.0 or later, and host uv must supply `uvx` on `PATH`.
-It passes each requirement as a separate `ir run --with` argument; requirement text is never inserted into R source.
+The server prefers `ir` from `PATH`.
+If IR is absent and uv is present, it runs `uv tool run --from r-lib-ir ir`.
+It does not fall back when a selected PATH entry fails to start, resolve, or report a supported version.
+The selected IR must be version 0.4.0 or later.
+The server passes each requirement as a separate `ir run --with` argument; requirement text is never inserted into R source.
 Every invocation sets `IR_NO_LOCAL_SOURCES=1`, so IR rejects direct or transitive installation from the local filesystem.
-The fallback may download `r-lib-ir`; remote package installation and build code still run with server permissions.
+The uv path may download `r-lib-ir`; remote package installation and build code still run with server permissions.
+
+When IR is the only PATH command and managed Python is selected, the server first resolves the default R library, then runs a fixed `reticulate:::uv_binary()` program through that library's exact `Rscript`.
+The resulting uv executable becomes the session's managed-Python resolver.
+When neither command is on `PATH`, the server runs the same fixed program directly through the selected ambient R installation.
+A usable ambient reticulate can bootstrap uv, which then supplies IR.
+If reticulate or that capability is absent, the server enters bare mode.
+An installed reticulate namespace or bootstrap that fails unexpectedly is a startup error rather than permission to mask the broken installation.
 
 ### Python
 
@@ -398,6 +410,16 @@ A missing import explains that automatic resolution and `requirements.python` ar
 This selection is independent of custom-worker policy.
 A custom worker always rejects managed Python requirements, regardless of `RETICULATE_PYTHON`.
 
+## Bare runtime
+
+Bare mode is selected only when startup cannot establish an IR resolver from PATH IR, PATH uv, an explicit uv selection, or ambient reticulate.
+The server skips the default R, Python, and DuckDB preflights.
+The `send` schema retains R, Python, and SQL cells but omits `requirements`; a manually supplied requirements payload is also rejected.
+Automatic R wrappers and the Python import resolver callback are disabled.
+Installed packages and ambient language adapters continue to work.
+Missing R packages keep their ordinary `library()` behavior, while missing Python imports explain that dynamic resolution is unavailable.
+Install `ir` or `uv` and restart MCP Console to enable dynamic resolution.
+
 ## Custom workers
 
 Custom workers start without the built-in R library, managed Python environment, or default DuckDB extensions.
@@ -438,10 +460,12 @@ Host resolution and managed-environment startup may run accepted distributions' 
 
 ### Server-owned uv configuration
 
-When `RETICULATE_UV` is unset at server startup, managed-Python resolvers receive `RETICULATE_UV=uv` so reticulate uses the host command instead of bootstrapping uv.
-An explicit startup value is retained.
+An explicit `RETICULATE_UV` startup value is retained.
+Otherwise the server selects uv from `PATH`, from the managed R library's reticulate installation, or from ambient reticulate.
+Managed-Python resolvers receive that stable selection.
+The reticulate bootstrap probe receives `RETICULATE_UV=managed`, so reticulate validates or installs its managed uv rather than recursively selecting an absent PATH command.
 When the server starts, it captures inherited `UV_*` variables except `UV_OFFLINE`.
-Before each managed-Python resolver starts, it removes the current `UV_*` environment, restores that startup snapshot, and removes `UV_OFFLINE`.
+Before each managed-Python or bootstrap resolver starts, it removes the current `UV_*` environment, restores that startup snapshot, and removes `UV_OFFLINE`.
 Changes made later by evaluated R or Python code therefore cannot configure host resolution.
 
 The built-in worker has the opposite network policy: it forces `UV_OFFLINE=1` before user code runs inside the network-denied sandbox.

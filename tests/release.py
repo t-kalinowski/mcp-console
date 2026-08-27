@@ -222,22 +222,27 @@ class ReleaseScriptTests(unittest.TestCase):
         (tool_bin / "mcp-console").symlink_to(installed)
 
         write_executable(
-            commands / "uvx",
+            commands / "uv",
             """
             #!/bin/sh
-            case "$4" in
-              --version) echo 'mcp-console 0.0.2' ;;
-              --help)
-                printf 'mcp-console help\n'
-                if test "${FAKE_UVX_HELP_EXTRA_NEWLINE:-}" = 1; then
-                  printf '\n'
-                fi
-                ;;
-              *) exit 2 ;;
-            esac
+            if test "$1 $2 $3 $5" = "tool run --from mcp-console"; then
+              case "$6" in
+                --version) echo 'mcp-console 0.0.2' ;;
+                --help)
+                  printf 'mcp-console help\n'
+                  if test "${FAKE_UV_HELP_EXTRA_NEWLINE:-}" = 1; then
+                    printf '\n'
+                  fi
+                  ;;
+                *) exit 2 ;;
+              esac
+            elif test "$1 $2" = "tool install"; then
+              exit 0
+            else
+              exit 2
+            fi
             """,
         )
-        write_executable(commands / "uv", "#!/bin/sh\nexit 0\n")
         write_executable(
             commands / "R",
             """
@@ -280,7 +285,7 @@ class ReleaseScriptTests(unittest.TestCase):
 
             self.assertEqual(result.returncode, 0, result.stderr)
 
-            environment["FAKE_UVX_HELP_EXTRA_NEWLINE"] = "1"
+            environment["FAKE_UV_HELP_EXTRA_NEWLINE"] = "1"
             result = self.run_script(
                 "smoke-wheel",
                 str(wheel),
@@ -297,7 +302,7 @@ class ReleaseScriptTests(unittest.TestCase):
 
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("installed and Cargo help output differ", result.stderr)
-            del environment["FAKE_UVX_HELP_EXTRA_NEWLINE"]
+            del environment["FAKE_UV_HELP_EXTRA_NEWLINE"]
 
             environment["FAKE_MCP_HANG"] = "1"
             result = self.run_script(

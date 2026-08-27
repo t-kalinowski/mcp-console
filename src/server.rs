@@ -87,6 +87,7 @@ struct ConsoleServer {
     transcript: crate::transcript::Transcript,
     deliveries: crate::server_transport::ResponseDeliveries,
     languages: Languages,
+    dynamic_resolution: bool,
     tool_router: ToolRouter<Self>,
 }
 
@@ -96,11 +97,13 @@ struct SendArguments {
     /// One complete R cell evaluated in persistent global state. Its final visible expression
     /// autoprints through R's normal console display; R also autoprints earlier visible top-level
     /// expressions. Leave the primary result last and print only when additional output is needed.
-    /// The built-in worker resolves missing plain CRAN package names on demand through `library()`,
-    /// `require()`, `requireNamespace()`, `loadNamespace()`, `::`, or `:::`. Treat CRAN packages as
-    /// available and use them directly; do not probe package availability or call
-    /// `install.packages()`. Resolution makes a package available but attaches it only through the
-    /// original `library()` or `require()` call. R source is not scanned in advance. Read Python
+    /// When dynamic resolution is available, the built-in worker resolves missing plain CRAN
+    /// package names on demand through `library()`, `require()`, `requireNamespace()`,
+    /// `loadNamespace()`, `::`, or `:::`. Use packages directly; do not probe package availability
+    /// or call `install.packages()`. Resolution makes a package available but attaches it only
+    /// through the original `library()` or `require()` call. In a bare runtime, packages must
+    /// already be installed and these operations keep their ordinary R behavior. R source is not
+    /// scanned in advance. Read Python
     /// globals through `py$name`. R data frames are directly queryable by name from later SQL cells.
     /// Access DuckDB tables and views through the borrowed `sql_connection()` with DBI or dplyr; do
     /// not disconnect it. Default-device plots return as PNG images. Keep all drawing operations for
@@ -110,14 +113,14 @@ struct SendArguments {
     r: Option<String>,
     /// One complete Python cell evaluated in persistent `__main__` state. Its final visible expression
     /// autoprints through Python's normal display hook. Leave the primary result last and print only
-    /// when additional output is needed. When an import is missing, the built-in managed worker
-    /// resolves a PyPI distribution on demand, using a curated mapping for well-known
+    /// when additional output is needed. When dynamic resolution is available and an import is
+    /// missing, the built-in managed worker resolves a PyPI distribution on demand, using a curated mapping for well-known
     /// import/distribution differences and otherwise assuming the distribution matches the top-level
     /// module. Python source is not scanned; resolution starts only when execution reaches the import.
     /// Use `requirements.python` when the distribution differs from the inferred name, exact registry
     /// metadata is needed, or the package should be prepared before the cell. A user-selected Python
-    /// environment disables both automatic resolution and managed requirements; import packages
-    /// already installed there directly. Read R globals and call R functions through `r.name`. Python
+    /// environment or bare runtime disables both automatic resolution and managed requirements;
+    /// import packages already installed there directly. Read R globals and call R functions through `r.name`. Python
     /// data frames are not automatically visible to SQL; bind them to an R name first. At cell end,
     /// including after a Python error, every open `matplotlib.pyplot` figure returns once as a PNG image
     /// and is closed. `show()` is optional. R plots called through `r` follow the R plot rules. Omit this
@@ -135,9 +138,9 @@ struct SendArguments {
     /// SIGINT from the active host resolver or live worker and preserves in-memory state. After
     /// successful delivery, stdin is queued and `send` waits a short grace before observing the
     /// earlier evaluation or attempting an optional following cell; the cell is not run if the
-    /// interrupted evaluation remains active. `restart` resolves same-call requirements before
-    /// replacement, discards R, Python, DuckDB, debugger, and unread-stdin state, then sends
-    /// same-call stdin and code only to the replacement.
+    /// interrupted evaluation remains active. When `requirements` is available, restart resolves
+    /// same-call requirements before replacement. It then discards R, Python, DuckDB, debugger,
+    /// and unread-stdin state and sends same-call stdin and code only to the replacement.
     control: Option<SendControl>,
     /// Additive R packages, Python packages, or DuckDB extensions to retain for later calls.
     /// Requirements alone perform standalone preparation. With one cell, they are preconditions of
@@ -161,8 +164,8 @@ struct SendArguments {
     /// Input for an active read, prompt, or debugger. When responding to active input, omit R, Python,
     /// and SQL code and send stdin on its own. Its UTF-8 encoding is queued exactly; no newline is added.
     /// Line-oriented input therefore normally needs a trailing `\n`. On a code-bearing call without
-    /// control, requirements are prepared before nonempty stdin is queued. Standalone preparation
-    /// cannot queue nonempty stdin. After `interrupt`, nonempty stdin is queued before the
+    /// control, available requirements are prepared before nonempty stdin is queued. Standalone
+    /// preparation cannot queue nonempty stdin. After `interrupt`, nonempty stdin is queued before the
     /// 100-millisecond grace and may be consumed while the earlier operation unwinds. After `restart`,
     /// same-call stdin is sent only to the replacement. When sent with a cell, nonempty text is queued
     /// before the code is run; an already waiting interactive read may consume it before the new cell
@@ -235,23 +238,25 @@ fn default_timeout_ms() -> u64 {
 impl ConsoleServer {
     fn new(worker: Option<PathBuf>, relay: Option<PathBuf>) -> Result<Self, String> {
         let languages = Languages::from_environment()?;
-        let tool_router = Self::configured_tool_router(languages);
-        let transcript = crate::transcript::Transcript::new();
         let worker = match (worker, relay) {
             (Some(program), relay) => crate::worker_client::Client::new(program, relay)?,
             (None, None) => crate::worker_client::Client::builtin()?,
             (None, Some(_)) => return Err("a custom relay requires a custom worker".to_string()),
         };
+        let dynamic_resolution = worker.dynamic_resolution();
+        let transcript = crate::transcript::Transcript::new(dynamic_resolution);
+        let tool_router = Self::configured_tool_router(languages, dynamic_resolution);
         Ok(Self {
             worker,
             transcript,
             deliveries: crate::server_transport::ResponseDeliveries::default(),
             languages,
+            dynamic_resolution,
             tool_router,
         })
     }
 
-    fn configured_tool_router(languages: Languages) -> ToolRouter<Self> {
+    fn configured_tool_router(languages: Languages, dynamic_resolution: bool) -> ToolRouter<Self> {
         let mut router = Self::tool_router();
         let send = router
             .map
@@ -287,6 +292,9 @@ impl ConsoleServer {
                 properties.shift_remove(field);
             }
         }
+        if !dynamic_resolution {
+            properties.shift_remove("requirements");
+        }
         router
     }
 }
@@ -298,11 +306,11 @@ impl ConsoleServer {
 
 Send one complete `r`, `python`, or `sql` cell per call. Code-bearing calls must be sequential because only one evaluation can be active. A control-only interrupt may overlap a pending `send` while that call resolves or prepares requirements, including for restart. When an intermediate result affects the next step, inspect it before sending another cell. R and Python display a final visible top-level expression, and SQL returns a bounded preview, so leave the primary result last and print only when additional output is needed. Cells are not transactional; changes made before an error may remain.
 
-`send` is the sole interaction with the persistent console. Use one code field for evaluation. Omit code to poll, provide stdin, prepare requirements, interrupt, or restart. Requirements alone stage dependencies; requirements with a cell prepare its preconditions. `control = "restart"` can include requirements, stdin, and a cell. Restart discards in-memory R, Python, DuckDB, debugger, and unread-stdin state, then targets same-call stdin and code only at the replacement. `control = "interrupt"` can include stdin and optionally a following cell. Interrupt preserves in-memory state and waits 100 milliseconds before observing the earlier evaluation or attempting that cell; the cell is not run if the interrupted evaluation remains active. `timeout_ms = 0` gives the shortest post-grace observation after interrupt.
+`send` is the sole interaction with the persistent console. Use one code field for evaluation. Omit code to poll, provide stdin, interrupt, or restart. When `requirements` is available, omit code to prepare requirements alone; with a cell, requirements prepare its preconditions, and `control = "restart"` can include requirements. Restart discards in-memory R, Python, DuckDB, debugger, and unread-stdin state, then targets same-call stdin and code only at the replacement. `control = "interrupt"` can include stdin and optionally a following cell. Interrupt preserves in-memory state and waits 100 milliseconds before observing the earlier evaluation or attempting that cell; the cell is not run if the interrupted evaluation remains active. `timeout_ms = 0` gives the shortest post-grace observation after interrupt.
 
 `timeout_ms` limits how long the call waits after dispatch or attachment. Inline control, interrupt grace, restart, and explicit requirement preparation can make the complete call take longer and do not consume the cell wait timeout. The timeout does not cancel startup, dependency resolution, or evaluation. If a response ends in `[running; poll with an empty send]`, call `send` again without code or stdin; do not resubmit the cell. Send `stdin` without code to answer an active prompt or debugger.
 
-The built-in worker resolves ordinary CRAN packages and missing imports in its managed Python environment on demand. Use `requirements` for explicit R references, exact Python distribution metadata, or DuckDB extensions; preparation makes dependencies available but does not import, attach, or load them. R default-device plots and open `matplotlib.pyplot` figures return as PNG images. Evaluated code can read host files, cannot directly access the network, and can write only in the worker's private temporary directory. Dependency resolution runs outside the sandbox and may execute package installation or build code; use only trusted dependencies."#
+When dynamic resolution is available, the built-in worker resolves ordinary CRAN packages and missing imports in its managed Python environment on demand. Use `requirements` for explicit R references, exact Python distribution metadata, or DuckDB extensions; preparation makes dependencies available but does not import, attach, or load them. If no resolver bootstrap is available, `requirements` is omitted and the bare runtime uses only installed packages. R default-device plots and open `matplotlib.pyplot` figures return as PNG images. Evaluated code can read host files, cannot directly access the network, and can write only in the worker's private temporary directory. When used, dependency resolution runs outside the sandbox and may execute package installation or build code; use only trusted dependencies."#
     )]
     async fn send(
         &self,
@@ -343,6 +351,12 @@ The built-in worker resolves ordinary CRAN packages and missing imports in its m
                 "`{}` cells are disabled by `{LANGUAGES_ENV}`",
                 Languages::field(cell.language)
             ));
+        }
+        if !self.dynamic_resolution && requirements.is_some() {
+            return Err(
+                "dynamic environment resolution is unavailable; install `ir` or `uv` and restart MCP Console"
+                    .to_string(),
+            );
         }
         let standalone_preparation = requirements.is_some() && cell.is_none() && control.is_none();
         if standalone_preparation && stdin.as_ref().is_some_and(|stdin| !stdin.is_empty()) {

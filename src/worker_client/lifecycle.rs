@@ -1082,6 +1082,7 @@ impl Client {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::worker_client::RResolver;
     use crate::worker_client::evaluation::EvaluationWait;
     use crate::worker_client::output::{Content, SendResponse, render_response};
     use crate::worker_protocol::ConsoleChannel;
@@ -1093,9 +1094,10 @@ mod tests {
             Vec::new(),
             None,
             None,
+            RResolver::Discover,
         );
         let evaluation = Arc::new(super::super::Evaluation::new(
-            crate::transcript::Transcript::new(),
+            crate::transcript::Transcript::new(true),
             None,
             client.0.output.clone(),
             Response::default(),
@@ -1141,9 +1143,10 @@ mod tests {
             Vec::new(),
             None,
             None,
+            RResolver::Discover,
         );
         let evaluation = Arc::new(super::super::Evaluation::new(
-            crate::transcript::Transcript::new(),
+            crate::transcript::Transcript::new(true),
             None,
             client.0.output.clone(),
             Response::default(),
