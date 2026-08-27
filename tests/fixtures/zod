@@ -625,10 +625,10 @@ def main() -> None:
             continue
 
         if source == "emit independent stdout stderr redraws":
-            write_all(1, b"\rstdout old")
-            write_all(1, b"\rstdout final\n")
-            write_all(2, b"\rstderr old")
-            write_all(2, b"\rstderr final\n")
+            # A different stream ends the current redraw run, so keep each
+            # stream's sequence in one atomic pipe write.
+            write_all(1, b"\rstdout old\rstdout final\n")
+            write_all(2, b"\rstderr old\rstderr final\n")
             send(writer, {"kind": "completed"})
             continue
 

@@ -374,6 +374,14 @@ def test_forwards_raw_stdout_and_stderr(binary: Path) -> Transcript:
     return transcript
 
 
+def test_interleaved_stream_ends_prior_redraw_run(
+    binary: Path,
+) -> Transcript:
+    client = ServerRelayClient(binary, "interleaved_stream_redraws")
+    assert _tool_text(client.send(r="42")) == ("stderr oldstdout final\nstderr final\n")
+    return client.finish_active()
+
+
 def test_malformed_byte_completes_pending_redraw(binary: Path) -> Transcript:
     client = ServerRelayClient(binary, "raw_malformed_redraw")
     assert _tool_text(client.send(r="42")) == "�\n"
