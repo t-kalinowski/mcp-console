@@ -277,10 +277,13 @@ def main() -> None:
 
     signal.signal(signal.SIGINT, handle_sigint)
     if os.environ.get("ZOD_REPORT_PROCESS_GROUP") == "1":
-        (temporary / "zod-process-group").write_text(
+        group_marker = temporary / "zod-process-group"
+        pending_group_marker = group_marker.with_suffix(".pending")
+        pending_group_marker.write_text(
             str(os.getpgrp()),
             encoding="utf-8",
         )
+        pending_group_marker.replace(group_marker)
     startup_callback, startup_ready_sent = configure_startup(
         temporary,
         endpoint,
