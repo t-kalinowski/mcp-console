@@ -293,7 +293,8 @@ mcp_read <- function(client, id) {
       stop("mcp-console sent an unexpected JSON-RPC message.", call. = FALSE)
     }
 
-    mcp_pump(client, 100)
+    # processx checks pending R interrupts while waiting indefinitely.
+    mcp_pump(client, -1L)
     if (is.null(client$process) || !client$process$is_alive()) {
       mcp_pump(client, 0)
       if (regexpr("\n", client$output, fixed = TRUE)[[1L]] < 0L) {
