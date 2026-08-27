@@ -35,7 +35,8 @@ def resolve() -> None:
     index = int(counter.read_text(encoding="utf-8")) if counter.exists() else 0
     assert index < len(libraries), (index, libraries)
     gate_index = os.environ.get("MCP_CONSOLE_TEST_IR_GATE_INDEX")
-    if gate_index is None or index == int(gate_index):
+    gated = gate_index is None or index == int(gate_index)
+    if gated:
         if started := os.environ.get("MCP_CONSOLE_TEST_IR_STARTED"):
             notify(started)
         if release_gate := os.environ.get("MCP_CONSOLE_TEST_IR_RELEASE_GATE"):
@@ -43,10 +44,11 @@ def resolve() -> None:
         if release := os.environ.get("MCP_CONSOLE_TEST_IR_RELEASE"):
             wait(release)
     counter.write_text(str(index + 1), encoding="utf-8")
-    if finished := os.environ.get("MCP_CONSOLE_TEST_IR_FINISHED"):
-        notify(finished)
-    if finish_release := os.environ.get("MCP_CONSOLE_TEST_IR_FINISH_RELEASE"):
-        wait(finish_release)
+    if gated:
+        if finished := os.environ.get("MCP_CONSOLE_TEST_IR_FINISHED"):
+            notify(finished)
+        if finish_release := os.environ.get("MCP_CONSOLE_TEST_IR_FINISH_RELEASE"):
+            wait(finish_release)
     print(libraries[index], end="")
 
 

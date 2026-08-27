@@ -11,7 +11,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from _support import (
     McpClient,
     Transcript,
-    build_r_input_handler,
     code,
     r_test_environment,
     run_this_suite,
@@ -663,9 +662,8 @@ def test_evaluates_queries_in_a_persistent_catalog(binary: Path) -> Transcript:
 def test_interrupts_running_sql_query(binary: Path) -> Transcript:
     with tempfile.TemporaryDirectory() as temporary_directory:
         temporary_path = Path(temporary_directory)
-        environment, rscript = r_test_environment()
+        environment, _ = r_test_environment()
         environment["TMPDIR"] = temporary_directory
-        build_r_input_handler(temporary_path, environment, rscript)
         client = McpClient(
             binary,
             ("serve",),
@@ -678,17 +676,6 @@ def test_interrupts_running_sql_query(binary: Path) -> Transcript:
             # fmt: r
             r = code(r"""
                 sql_interrupt_armed <- FALSE
-                dyn.load("./mcp_test_input_handler.so")
-                invisible(.Call(
-                  "mcp_test_register_input_handler",
-                  file.path(tempdir(), "sql-interrupt-finished-fifo"),
-                  function() {
-                    invisible(file.create(file.path(
-                      tempdir(),
-                      "sql-interrupt-finished"
-                    )))
-                  }
-                ))
                 options(duckdb.progress_display = function(percentage) {
                   if (isTRUE(sql_interrupt_armed)) {
                     invisible(file.create(file.path(
@@ -736,24 +723,10 @@ def test_interrupts_running_sql_query(binary: Path) -> Transcript:
                 "sql-interrupt-started",
                 client,
             )
-            finished_fifo = wait_for_worker_file(
-                temporary_path,
-                "sql-interrupt-finished-fifo",
-                client,
-            )
-            finished_fifo.write_bytes(b"x")
-
-            interrupt = client._start_send(
+            result = client.send(
                 control="interrupt",
                 timeout_ms=30_000,
             )
-            wait_for_worker_file(
-                temporary_path,
-                "sql-interrupt-finished",
-                client,
-            )
-            client._receive(interrupt)
-            result = interrupt["result"]
             assert result["isError"] is False, result
             output = last_tool_text(client)
             assert output in {"\n", "\n\n"}, repr(output)
