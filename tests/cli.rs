@@ -123,6 +123,58 @@ exec "$MCP_CONSOLE_REAL_IR" "$@"
 
 #[cfg(target_os = "macos")]
 #[test]
+fn stdio_console_does_not_fallback_when_path_ir_cannot_start() {
+    let r_home = Command::new("R")
+        .arg("RHOME")
+        .output()
+        .expect("test R should be discoverable");
+    assert!(r_home.status.success());
+    let r_home = String::from_utf8(r_home.stdout).expect("test R home should be valid UTF-8");
+
+    let test_directory = TestDirectory::new("broken-path-ir-selection");
+    let fake_bin = test_directory.path().join("bin");
+    let broken_ir = fake_bin.join("ir");
+    let fake_uvx = fake_bin.join("uvx");
+    let missing_interpreter = test_directory.path().join("missing-ir-interpreter");
+    let uvx_used = test_directory.path().join("uvx-used");
+    fs::create_dir(&fake_bin).expect("fake bin directory should be created");
+    fs::write(&broken_ir, format!("#!{}\n", missing_interpreter.display()))
+        .expect("broken ir should be written");
+    fs::write(
+        &fake_uvx,
+        "#!/bin/sh\n: > \"$MCP_CONSOLE_UVX_USED\"\nexit 99\n",
+    )
+    .expect("fake uvx should be written");
+    fs::set_permissions(&broken_ir, fs::Permissions::from_mode(0o755))
+        .expect("broken ir should be executable");
+    fs::set_permissions(&fake_uvx, fs::Permissions::from_mode(0o755))
+        .expect("fake uvx should be executable");
+    let original_path = std::env::var_os("PATH").unwrap_or_default();
+    let path = std::env::join_paths(std::iter::once(fake_bin).chain(
+        std::env::split_paths(&original_path).filter(|directory| !directory.join("ir").is_file()),
+    ))
+    .expect("test PATH should be valid");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_mcp-console"))
+        .arg("serve")
+        .env("PATH", path)
+        .env("R_HOME", r_home.trim())
+        .env("RETICULATE_PYTHON", "/usr/bin/python3")
+        .env("MCP_CONSOLE_UVX_USED", &uvx_used)
+        .output()
+        .expect("mcp-console should run");
+
+    assert!(!output.status.success());
+    assert!(!uvx_used.exists(), "uvx should not be used");
+    let stderr = String::from_utf8(output.stderr).expect("server stderr should be valid UTF-8");
+    assert!(
+        stderr.contains("failed to check R package resolver version with `ir`"),
+        "{stderr}"
+    );
+}
+
+#[cfg(target_os = "macos")]
+#[test]
 fn stdio_console_uses_uvx_when_ir_is_not_on_path() {
     let original_path = std::env::var_os("PATH").unwrap_or_default();
     let real_ir = std::env::split_paths(&original_path)

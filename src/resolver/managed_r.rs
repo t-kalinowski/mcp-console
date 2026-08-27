@@ -196,46 +196,50 @@ fn ir_command(
     resolver: &ResolverProcess,
     on_started: &mut Option<impl FnOnce(ResolverStopHandle) -> Result<(), String>>,
 ) -> Result<IrCommand, String> {
-    let ir = IrCommand {
-        program: "ir",
-        arguments: &[],
-    };
-    if validate_ir_version(resolver, on_started, &ir)? {
-        return Ok(ir);
-    }
-
-    let ir = IrCommand {
-        program: "uvx",
-        arguments: &["--from", "r-lib-ir", "ir"],
-    };
-    if validate_ir_version(resolver, on_started, &ir)? {
-        Ok(ir)
+    let ir = if path_contains_entry("ir") {
+        IrCommand {
+            program: "ir",
+            arguments: &[],
+        }
+    } else if path_contains_entry("uvx") {
+        IrCommand {
+            program: "uvx",
+            arguments: &["--from", "r-lib-ir", "ir"],
+        }
     } else {
-        Err("R package resolution requires `ir` or host `uvx` on PATH".to_string())
-    }
+        return Err("R package resolution requires `ir` or host `uvx` on PATH".to_string());
+    };
+    validate_ir_version(resolver, on_started, &ir)?;
+    Ok(ir)
+}
+
+fn path_contains_entry(program: &str) -> bool {
+    let Some(path) = std::env::var_os("PATH") else {
+        return false;
+    };
+    // A broken symlink or non-executable entry is a broken installation, not
+    // permission to select a different resolver.
+    std::env::split_paths(&path)
+        .any(|directory| std::fs::symlink_metadata(directory.join(program)).is_ok())
 }
 
 fn validate_ir_version(
     resolver: &ResolverProcess,
     on_started: &mut Option<impl FnOnce(ResolverStopHandle) -> Result<(), String>>,
     ir: &IrCommand,
-) -> Result<bool, String> {
+) -> Result<(), String> {
     let mut command = ir.command();
     command
         .arg("--version")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    let mut child = match command.spawn() {
-        Ok(child) => child,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
-        Err(error) => {
-            return Err(format!(
-                "failed to check R package resolver version with `{}`: {error}",
-                ir.label()
-            ));
-        }
-    };
+    let mut child = command.spawn().map_err(|error| {
+        format!(
+            "failed to check R package resolver version with `{}`: {error}",
+            ir.label()
+        )
+    })?;
     let output = collect_resolver_output(
         resolver,
         &mut child,
@@ -273,7 +277,7 @@ fn validate_ir_version(
             "R package resolution requires ir {MINIMUM_IR_VERSION} or later; found ir {version}"
         ));
     }
-    Ok(true)
+    Ok(())
 }
 
 fn collect_resolver_output(
