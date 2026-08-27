@@ -27,20 +27,6 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v7
 
-      - name: Install R
-        id: setup-r
-        uses: r-lib/actions/setup-r@v2
-
-      - name: Install gettext for R source packages
-        run: |
-          sudo Rscript --vanilla -e \
-            'source("https://mac.R-project.org/bin/install.R"); install.libs("gettext"); stopifnot(file.exists(file.path("/opt/R", Sys.info()[["machine"]], "include", "libintl.h")))'
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy, rustfmt
-
       - name: Install Python
         uses: actions/setup-python@v7
         with:
@@ -60,6 +46,22 @@ jobs:
           uv tool install r-lib-ir
           uv tool dir --bin >> "$GITHUB_PATH"
           printf 'ir_version=%s\n' "$(ir --version | tr ' ' '-')" >> "$GITHUB_OUTPUT"
+
+      - name: Install R
+        id: setup-r
+        uses: r-lib/actions/setup-r@v2
+        with:
+          use-public-rspm: always
+
+      - name: Install gettext for R source packages
+        run: |
+          sudo Rscript --vanilla -e \
+            'source("https://mac.R-project.org/bin/install.R"); install.libs("gettext"); stopifnot(file.exists(file.path("/opt/R", Sys.info()[["machine"]], "include", "libintl.h")))'
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
 
       - name: Select R cache epoch
         id: cache-epoch
@@ -124,36 +126,6 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v7
 
-      - name: Install R
-        id: setup-r
-        uses: r-lib/actions/setup-r@v2
-
-      # The tidyverse prewarm can build data.table from source. Its NLS code
-      # needs libintl.h in R's /opt/R/<arch> build prefix.
-      - name: Install gettext for R source packages
-        run: |
-          sudo Rscript --vanilla -e \
-            'source("https://mac.R-project.org/bin/install.R"); install.libs("gettext"); stopifnot(file.exists(file.path("/opt/R", Sys.info()[["machine"]], "include", "libintl.h")))'
-
-      - name: Install R dependencies
-        uses: r-lib/actions/setup-r-dependencies@v2
-        with:
-          install-quarto: true
-          packages: |
-            any::brio
-            any::desc
-            any::diffobj
-            any::pkgbuild
-            any::pkgload
-            any::praise
-            any::processx
-            any::waldo
-            any::whoami
-            github::rstudio/reticulate
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-
       - name: Install Python
         uses: actions/setup-python@v7
         with:
@@ -174,6 +146,39 @@ jobs:
           uv tool install yamark
           uv tool dir --bin >> "$GITHUB_PATH"
           printf 'ir_version=%s\n' "$(ir --version | tr ' ' '-')" >> "$GITHUB_OUTPUT"
+
+      - name: Install R
+        id: setup-r
+        uses: r-lib/actions/setup-r@v2
+        with:
+          use-public-rspm: always
+
+      # The tidyverse prewarm can build data.table from source. Its NLS code
+      # needs libintl.h in R's /opt/R/<arch> build prefix.
+      - name: Install gettext for R source packages
+        run: |
+          sudo Rscript --vanilla -e \
+            'source("https://mac.R-project.org/bin/install.R"); install.libs("gettext"); stopifnot(file.exists(file.path("/opt/R", Sys.info()[["machine"]], "include", "libintl.h")))'
+
+      - name: Install R dependencies
+        uses: r-lib/actions/setup-r-dependencies@v2
+        with:
+          install-quarto: true
+          upgrade: "FALSE"
+          packages: |
+            any::brio
+            any::desc
+            any::diffobj
+            any::pkgbuild
+            any::pkgload
+            any::praise
+            any::processx
+            any::waldo
+            any::whoami
+            github::rstudio/reticulate
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
 
       - name: Select R cache epoch
         id: cache-epoch
@@ -211,7 +216,7 @@ jobs:
             --with nanoarrow \
             --isolated \
             --vanilla \
-            -e 'invisible(NULL)'
+            -e 'sessionInfo(package = c("tidyverse", "reticulate", "DBI", "duckdb", "arrow", "nanoarrow"))'
 
       - name: Restore Rust build data
         uses: Swatinem/rust-cache@v2
