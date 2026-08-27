@@ -271,6 +271,20 @@ def run_raw_output(relay: ScriptedRelay) -> None:
     relay.retire()
 
 
+def run_interleaved_stream_redraws(relay: ScriptedRelay) -> None:
+    relay.ready()
+    relay.expect(EVALUATION)
+    relay.send_batch(
+        [
+            {"kind": "stderr", "data": "\rstderr old"},
+            {"kind": "stdout", "data": "\rstdout final\n"},
+            {"kind": "stderr", "data": "\rstderr final\n"},
+        ]
+    )
+    relay.complete()
+    relay.retire()
+
+
 def run_raw_malformed_redraw(relay: ScriptedRelay) -> None:
     relay.ready()
     relay.expect(EVALUATION)
@@ -1100,6 +1114,7 @@ def main() -> None:
         "ready": run_ready,
         "evaluate": run_evaluate,
         "raw_output": run_raw_output,
+        "interleaved_stream_redraws": run_interleaved_stream_redraws,
         "raw_malformed_redraw": run_raw_malformed_redraw,
         "empty_raw_close_between_redraws": run_empty_raw_close_between_redraws,
         "stdin": run_stdin,

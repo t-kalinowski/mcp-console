@@ -16,8 +16,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any, TextIO
 
-READ_FD_ENV = "MCP_CONSOLE_SIDEBAND_READ_FD"
-WRITE_FD_ENV = "MCP_CONSOLE_SIDEBAND_WRITE_FD"
+SIDEBAND_FD_ENV = "MCP_CONSOLE_SIDEBAND_FD"
 TEST_EVENT_FD_ENV = "ZOD_TEST_EVENT_FD"
 TEST_CONTROL_FD_ENV = "ZOD_TEST_CONTROL_FD"
 TEST_FIXTURE_CLEANUP_FD_ENV = "ZOD_TEST_FIXTURE_CLEANUP_FD"
@@ -116,10 +115,27 @@ def probe_pending_stdin(expected_bytes: int, consumed_bytes: int) -> tuple[int, 
     return consumed_bytes, queued_bytes
 
 
-def open_sideband(name: str, mode: str) -> TextIO:
-    descriptor = int(os.environ.pop(name))
+def open_sideband() -> tuple[socket.socket, TextIO, TextIO]:
+    assert "MCP_CONSOLE_SIDEBAND_READ_FD" not in os.environ
+    assert "MCP_CONSOLE_SIDEBAND_WRITE_FD" not in os.environ
+    descriptor = int(os.environ.pop(SIDEBAND_FD_ENV))
     os.set_inheritable(descriptor, False)
-    return os.fdopen(descriptor, mode, encoding="utf-8")
+    endpoint = socket.socket(fileno=descriptor)
+    assert endpoint.family == socket.AF_UNIX
+    assert endpoint.type == socket.SOCK_STREAM
+    reader = endpoint.makefile("r", encoding="utf-8")
+    writer = endpoint.makefile("w", encoding="utf-8")
+    return endpoint, reader, writer
+
+
+def close_sideband(
+    endpoint: socket.socket,
+    reader: TextIO,
+    writer: TextIO,
+) -> None:
+    reader.close()
+    writer.close()
+    endpoint.close()
 
 
 def send(stream: TextIO, message: dict[str, Any]) -> None:
@@ -202,7 +218,12 @@ def wait_for_server_to_process_sideband(reader: TextIO, writer: TextIO) -> None:
     assert response["kind"] == "python_version_resolution_failed", response
 
 
-def configure_startup(root: Path, reader: TextIO, writer: TextIO) -> tuple[bool, bool]:
+def configure_startup(
+    root: Path,
+    endpoint: socket.socket,
+    reader: TextIO,
+    writer: TextIO,
+) -> tuple[bool, bool]:
     control_path = os.environ.get("ZOD_STARTUP_CONTROL")
     if control_path is None:
         return False, False
@@ -217,9 +238,8 @@ def configure_startup(root: Path, reader: TextIO, writer: TextIO) -> tuple[bool,
         child = os.fork()
         if child == 0:
             os.setsid()
-            sideband_writer = os.dup(writer.fileno())
-            reader.close()
-            writer.close()
+            sideband_writer = os.dup(endpoint.fileno())
+            close_sideband(endpoint, reader, writer)
             for descriptor in (0, 1, 2):
                 os.close(descriptor)
             (root / "zod-detached-startup-sideband-pid").write_text(
@@ -244,8 +264,7 @@ def configure_startup(root: Path, reader: TextIO, writer: TextIO) -> tuple[bool,
 
 def main() -> None:
     """Run the deterministic sideband fixture until the server shuts it down."""
-    reader = open_sideband(READ_FD_ENV, "r")
-    writer = open_sideband(WRITE_FD_ENV, "w")
+    endpoint, reader, writer = open_sideband()
     temporary = Path(os.environ["TMPDIR"])
     if started_marker := os.environ.get("MCP_CONSOLE_TEST_ZOD_STARTED"):
         Path(started_marker).touch()
@@ -258,11 +277,19 @@ def main() -> None:
 
     signal.signal(signal.SIGINT, handle_sigint)
     if os.environ.get("ZOD_REPORT_PROCESS_GROUP") == "1":
-        (temporary / "zod-process-group").write_text(
+        group_marker = temporary / "zod-process-group"
+        pending_group_marker = group_marker.with_suffix(".pending")
+        pending_group_marker.write_text(
             str(os.getpgrp()),
             encoding="utf-8",
         )
-    startup_callback, startup_ready_sent = configure_startup(temporary, reader, writer)
+        pending_group_marker.replace(group_marker)
+    startup_callback, startup_ready_sent = configure_startup(
+        temporary,
+        endpoint,
+        reader,
+        writer,
+    )
     if not startup_ready_sent:
         send(writer, {"kind": "ready"})
     if startup_callback:
@@ -285,6 +312,12 @@ def main() -> None:
     controlled_restart_state = "fresh"
     controlled_restart_evaluations = 0
     queued_message: dict[str, Any] | None = None
+    block_next_sideband_write: int | None = None
+    if os.environ.get("ZOD_BLOCK_NEXT_SIDEBAND_WRITE") == "1":
+        command = wait_for_test_control(0, "block_next_sideband_write")
+        target_operation = command.get("target_operation")
+        assert isinstance(target_operation, int), command
+        block_next_sideband_write = target_operation
 
     def receive_resolver_response(expected_kind: str) -> dict[str, Any]:
         nonlocal queued_message
@@ -295,13 +328,17 @@ def main() -> None:
             assert queued_message is None, response
             queued_message = response
 
-    if os.environ.get("ZOD_BLOCK_SIDEBAND_WRITE") == "1":
-        reader.read(1)
-        Path(os.environ["TMPDIR"], "zod-sideband-blocked").touch()
-        while True:
-            time.sleep(60)
-
     while True:
+        if block_next_sideband_write is not None:
+            assert reader.read(1) != ""
+            emit_test_event(
+                block_next_sideband_write,
+                "sideband_reader_stalled",
+                pid=os.getpid(),
+                process_group=os.getpgrp(),
+            )
+            while True:
+                signal.pause()
         if queued_message is None:
             line = reader.readline()
             if line == "":
@@ -404,17 +441,45 @@ def main() -> None:
             continue
 
         if source == "stall":
-            Path(os.environ["TMPDIR"], "zod-stalled").touch()
+            (temporary / "zod-stalled").touch()
             while True:
-                time.sleep(60)
+                signal.pause()
+
+        if source.startswith("stall: "):
+            operation = int(source.removeprefix("stall: "))
+            emit_test_event(operation, "worker_operation_started")
+            emit_test_event(
+                operation,
+                "parent_operation_stalled",
+                pid=os.getpid(),
+                process_group=os.getpgrp(),
+            )
+            while True:
+                signal.pause()
+
+        if source == "close sideband with unread shutdown":
+            send_output(writer, "zod waiting for shutdown\n")
+            while os.read(0, 8192) != b"":
+                pass
+            expected = b'{"kind":"shutdown"}\n'
+            queued = endpoint.recv(
+                len(expected),
+                socket.MSG_PEEK | socket.MSG_WAITALL,
+            )
+            assert queued == expected, queued
+            endpoint.shutdown(socket.SHUT_WR)
+            close_sideband(endpoint, reader, writer)
+            reset_marker = Path(os.environ["MCP_CONSOLE_TEST_RESET_SIDEBAND_EOF"])
+            while not reset_marker.exists():
+                time.sleep(0.01)
+            return
 
         if source == "stall accepted relay shutdown":
             relay_pid = os.getpgrp()
             helper = os.fork()
             if helper == 0:
                 os.setsid()
-                reader.close()
-                writer.close()
+                close_sideband(endpoint, reader, writer)
                 for descriptor in (1, 2):
                     os.close(descriptor)
                 while os.read(0, 1) != b"":
@@ -447,8 +512,7 @@ def main() -> None:
             helper = os.fork()
             if helper == 0:
                 os.setsid()
-                reader.close()
-                writer.close()
+                close_sideband(endpoint, reader, writer)
                 for descriptor in (0, 1, 2):
                     os.close(descriptor)
                 os.kill(relay_pid, signal.SIGSTOP)
@@ -564,10 +628,10 @@ def main() -> None:
             continue
 
         if source == "emit independent stdout stderr redraws":
-            write_all(1, b"\rstdout old")
-            write_all(1, b"\rstdout final\n")
-            write_all(2, b"\rstderr old")
-            write_all(2, b"\rstderr final\n")
+            # A different stream ends the current redraw run, so keep each
+            # stream's sequence in one atomic pipe write.
+            write_all(1, b"\rstdout old\rstdout final\n")
+            write_all(2, b"\rstderr old\rstderr final\n")
             send(writer, {"kind": "completed"})
             continue
 
@@ -688,6 +752,33 @@ def main() -> None:
             writer.flush()
             os._exit(86)
 
+        if source == "wait after readable frame and partial tail":
+            cleanup_source = int(os.environ.pop(TEST_FIXTURE_CLEANUP_FD_ENV))
+            child = os.fork()
+            if child == 0:
+                os.setsid()
+                cleanup = os.dup(cleanup_source)
+                os.close(cleanup_source)
+                reader.close()
+                for descriptor in (0, 1, 2):
+                    os.close(descriptor)
+                assert os.read(cleanup, 1) in {b"", b"1"}
+                os.close(cleanup)
+                writer.close()
+                endpoint.close()
+                os._exit(0)
+            os.close(cleanup_source)
+            (temporary / "zod-sideband-descendant-pid").write_text(
+                str(child),
+                encoding="utf-8",
+            )
+            send_output(writer, "zod readable retirement frame\n")
+            writer.write('{"kind":"console_output"')
+            writer.flush()
+            (temporary / "zod-sideband-partial-tail-written").touch()
+            assert os.read(0, 1) == b""
+            os._exit(86)
+
         if source == "complete before partial sideband descendant":
             child = os.fork()
             if child == 0:
@@ -721,8 +812,7 @@ def main() -> None:
                 cleanup = os.dup(cleanup_source)
                 os.close(cleanup_source)
                 os.close(int(os.environ[TEST_CONTROL_FD_ENV]))
-                reader.close()
-                writer.close()
+                close_sideband(endpoint, reader, writer)
                 os.close(1)
                 os.close(2)
                 emit_test_event(

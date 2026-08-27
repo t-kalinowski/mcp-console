@@ -4376,34 +4376,41 @@ def test_runs_worker_inside_sandbox(binary: Path) -> Transcript:
 
 def test_shuts_down_stalled_worker(binary: Path) -> Transcript:
     zod = Path(__file__).resolve().parents[2] / "fixtures" / "zod"
-    with tempfile.TemporaryDirectory() as temporary_directory:
+    with (
+        tempfile.TemporaryDirectory() as temporary_directory,
+        ZodFixtureControl() as control,
+    ):
         environment = os.environ.copy()
-        temporary_path = Path(temporary_directory)
         environment["TMPDIR"] = temporary_directory
-        environment["ZOD_REPORT_PROCESS_GROUP"] = "1"
+        control.configure(environment)
         client = McpClient(
             binary,
             ("serve", "--worker", str(zod)),
             environment,
+            pass_fds=control.pass_fds,
         )
+        control.close_child_ends()
         worker_group = None
         passed = False
         try:
             client._initialize_and_list_tools()
+            operation = client._next_request_id
             stalled = client._start_send(
-                r="stall",
+                r=f"stall: {operation}",
                 stdin="x" * (2 * 1024 * 1024),
             )
+            stalled["send"]["r"] = "stall"
             stalled["send"]["stdin"] = "<large stdin>"
-            group_marker = wait_for_marker(temporary_path, "zod-process-group", client)
-            worker_group = read_worker_group(group_marker)
-            wait_for_marker(temporary_path, "zod-stalled", client)
+            event = control.wait_for(operation, "parent_operation_stalled")
+            worker_group = event["process_group"]
+            assert isinstance(worker_group, int) and worker_group > 0, event
             client.stdin.close()
             try:
                 return_code = client.process.wait(timeout=3)
             except subprocess.TimeoutExpired:
                 raise AssertionError(
-                    "mcp-console did not stop its stalled worker"
+                    "mcp-console did not stop its stalled worker; "
+                    + control.diagnostics()
                 ) from None
 
             assert return_code == 0, client.stderr.read()
@@ -4843,6 +4850,126 @@ def test_restart_cancels_reader_after_operation_result(
                 stop_process(client.process)
 
 
+def test_restart_drains_readable_frame_before_abandoning_partial_tail(
+    binary: Path,
+) -> Transcript:
+    zod = Path(__file__).resolve().parents[2] / "fixtures" / "zod"
+    relay = Path(__file__).resolve().parents[2] / "fixtures" / "delayed_sideband_relay"
+    interposer_source = (
+        Path(__file__).resolve().parents[2] / "fixtures" / "delay_sideband_poll.c"
+    )
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        temporary = Path(temporary_directory)
+        interposer = temporary / "delay-sideband-poll.dylib"
+        subprocess.run(
+            [
+                "cc",
+                "-dynamiclib",
+                "-std=c11",
+                "-Wall",
+                "-Wextra",
+                "-Werror",
+                "-o",
+                interposer,
+                interposer_source,
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        loaded_name = "delay-sideband-poll-loaded"
+        arm_name = "delay-sideband-poll-arm"
+        socket_ready_name = "delay-sideband-poll-socket-ready"
+        cancellation_ready_name = "delay-sideband-poll-cancellation-ready"
+        partial_tail_name = "zod-sideband-partial-tail-written"
+        cleanup_reader, cleanup_writer = os.pipe()
+        environment = os.environ.copy()
+        environment["TMPDIR"] = temporary_directory
+        environment["MCP_CONSOLE_TEST_RELAY_BINARY"] = str(binary)
+        environment["MCP_CONSOLE_TEST_POLL_DYLIB"] = str(interposer)
+        environment["MCP_CONSOLE_TEST_POLL_LOADED_NAME"] = loaded_name
+        environment["MCP_CONSOLE_TEST_POLL_ARM_NAME"] = arm_name
+        environment["MCP_CONSOLE_TEST_POLL_SOCKET_READY_NAME"] = socket_ready_name
+        environment["MCP_CONSOLE_TEST_POLL_CANCEL_READY_NAME"] = cancellation_ready_name
+        environment["ZOD_TEST_FIXTURE_CLEANUP_FD"] = str(cleanup_reader)
+        client = McpClient(
+            binary,
+            ("serve", "--worker", str(zod), "--relay", str(relay)),
+            environment,
+            pass_fds=(cleanup_reader,),
+        )
+        os.close(cleanup_reader)
+
+        def release_descendant() -> None:
+            nonlocal cleanup_writer
+            if cleanup_writer is not None:
+                os.close(cleanup_writer)
+                cleanup_writer = None
+
+        descendant_group = None
+        passed = False
+        try:
+            client._initialize_and_list_tools()
+            client.send(r="complete silently")
+            assert last_tool_text(client) == "[done]"
+            loaded = wait_for_marker(temporary, loaded_name, client)
+            (loaded.parent / arm_name).touch()
+
+            evaluation = client._start_send(
+                r="wait after readable frame and partial tail"
+            )
+            marker = wait_for_marker(
+                temporary,
+                "zod-sideband-descendant-pid",
+                client,
+            )
+            descendant_group = int(marker.read_text(encoding="utf-8"))
+            wait_for_marker(temporary, socket_ready_name, client)
+            wait_for_marker(temporary, partial_tail_name, client)
+            restart = client._start_send(control="restart")
+            wait_for_marker(temporary, cancellation_ready_name, client)
+            client._receive_many([evaluation, restart])
+            result = evaluation["result"]
+            assert result["isError"] is True, result
+            assert result["content"] == [
+                {
+                    "type": "text",
+                    "text": (
+                        "zod readable retirement frame\n"
+                        "[stopped by session restart request before evaluation finished]\n"
+                        "[worker stopped: in-memory state lost]"
+                    ),
+                }
+            ], result
+            restart_result = restart["result"]
+            assert restart_result.get("isError") is not True, restart_result
+            assert restart_result["content"] == [
+                {
+                    "type": "text",
+                    "text": (
+                        "[active evaluation stopped by session restart request]\n"
+                        "[worker stopped: in-memory state lost]\n"
+                        "[starting new worker]\n"
+                        "[idle]"
+                    ),
+                }
+            ], restart_result
+
+            release_descendant()
+            stop_process_group(descendant_group)
+            descendant_group = None
+            client.send(r="echo replacement ready")
+            assert last_tool_text(client) == "zod: replacement ready\n"
+            transcript = client._finish()
+            passed = True
+            return transcript
+        finally:
+            release_descendant()
+            stop_process_group(descendant_group)
+            if not passed:
+                stop_process(client.process)
+
+
 def test_shutdown_cancels_partial_sideband_frame(binary: Path) -> Transcript:
     zod = Path(__file__).resolve().parents[2] / "fixtures" / "zod"
     with tempfile.TemporaryDirectory() as temporary_directory:
@@ -4898,33 +5025,36 @@ def test_shutdown_deadline_does_not_wait_for_sideband_writer(
     binary: Path,
 ) -> Transcript:
     zod = Path(__file__).resolve().parents[2] / "fixtures" / "zod"
-    with tempfile.TemporaryDirectory() as temporary_directory:
-        temporary_path = Path(temporary_directory)
+    with (
+        tempfile.TemporaryDirectory() as temporary_directory,
+        ZodFixtureControl() as control,
+    ):
         environment = os.environ.copy()
         environment["TMPDIR"] = temporary_directory
-        environment["ZOD_BLOCK_SIDEBAND_WRITE"] = "1"
-        environment["ZOD_REPORT_PROCESS_GROUP"] = "1"
+        environment["ZOD_BLOCK_NEXT_SIDEBAND_WRITE"] = "1"
+        control.configure(environment)
         client = McpClient(
             binary,
             ("serve", "--worker", str(zod)),
             environment,
+            pass_fds=control.pass_fds,
         )
+        control.close_child_ends()
         worker_group = None
         passed = False
         try:
             client._initialize_and_list_tools()
+            target_operation = client._next_request_id
+            control.send_control(
+                0,
+                "block_next_sideband_write",
+                target_operation=target_operation,
+            )
             entry = client._start_send(r="x" * (2 * 1024 * 1024))
-            group_marker = wait_for_marker(
-                temporary_path,
-                "zod-process-group",
-                client,
-            )
-            worker_group = read_worker_group(group_marker)
-            wait_for_marker(
-                temporary_path,
-                "zod-sideband-blocked",
-                client,
-            )
+            assert entry["id"] == target_operation, entry
+            event = control.wait_for(target_operation, "sideband_reader_stalled")
+            worker_group = event["process_group"]
+            assert isinstance(worker_group, int) and worker_group > 0, event
             entry["send"]["r"] = "<large cell>"
             shutdown_started = time.monotonic()
             client.stdin.close()
@@ -4932,7 +5062,8 @@ def test_shutdown_deadline_does_not_wait_for_sideband_writer(
                 return_code = client.process.wait(timeout=3)
             except subprocess.TimeoutExpired:
                 raise AssertionError(
-                    "mcp-console did not enforce its worker shutdown deadline"
+                    "mcp-console did not enforce its worker shutdown deadline; "
+                    + control.diagnostics()
                 ) from None
             shutdown_elapsed = time.monotonic() - shutdown_started
 

@@ -1,0 +1,33 @@
+---
+worker:
+  kind: ready
+---
+relay:
+  kind: evaluate
+  language: r
+  source: invisible(NULL)
+---
+worker:
+  kind: completed
+---
+relay:
+  kind: shutdown
+---
+shutdown_enotconn:
+  direction: relay
+---
+worker:
+  kind: ready
+---
+relay:
+  kind: evaluate
+  language: r
+  source: cat('replacement ready\n')
+---
+worker:
+  kind: console_output
+  data: |
+    replacement ready
+---
+worker:
+  kind: completed

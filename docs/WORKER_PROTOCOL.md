@@ -34,7 +34,8 @@ The sideband has no protocol negotiation, capability exchange, session name, req
 Interrupt delivery is a process signal managed by the relay.
 Response cuts, output budgets, and MCP response assembly are server state and never appear on this boundary.
 
-The protocol is currently supported only on macOS because the worker relay and sandbox runtime are macOS-only.
+The sideband transport implementation is compiled for macOS and Linux.
+The complete protocol execution stack is currently supported only on macOS because the worker relay and sandbox runtime are macOS-only.
 
 ## Launch contract
 
@@ -43,21 +44,23 @@ The relay is already inside the worker sandbox, and the worker inherits that san
 The built-in command is `mcp-console worker`.
 The hidden `serve --worker PATH` option uses `PATH` as one executable name or path, without arguments or shell parsing.
 
-Before spawning the worker, the relay creates two anonymous sideband pipes and places the worker endpoint numbers in its environment:
+Before spawning the worker, the relay creates one unnamed Unix-domain stream socket pair and places the worker endpoint number in its environment:
 
 ```yaml
-MCP_CONSOLE_SIDEBAND_READ_FD: <worker reads server messages here>
-MCP_CONSOLE_SIDEBAND_WRITE_FD: <worker writes messages here>
+MCP_CONSOLE_SIDEBAND_FD: <worker reads and writes sideband messages here>
 ```
 
-The relay clears `FD_CLOEXEC` on those two worker endpoints for the spawn, then drops its duplicate child endpoints.
-The worker takes ownership of both file descriptors.
+The relay clears `FD_CLOEXEC` on the worker endpoint for the spawn, then drops its local copy of that endpoint immediately after spawning.
+The worker takes ownership of the inherited file descriptor.
 
 Before executing descendants or evaluated code, a worker must:
 
-1. remove both sideband environment variables;
-2. set `FD_CLOEXEC` on both descriptors or otherwise prevent exec descendants from inheriting them; and
-3. close both descriptors in fork-only descendants.
+1. remove the sideband environment variable;
+2. set `FD_CLOEXEC` on the descriptor or otherwise prevent exec descendants from inheriting it; and
+3. close the descriptor in fork-only descendants.
+
+A fork child must close its inherited descriptor rather than call `shutdown()`.
+Shutdown would affect the socket endpoint shared with the parent process.
 
 Keeping a sideband endpoint open in a descendant can prevent the relay from observing closure and is outside the contract.
 Descendants may retain fd 1 or fd 2; their bytes remain part of the worker generation's captured standard streams.
@@ -66,12 +69,14 @@ Descendants may retain fd 1 or fd 2; their bytes remain part of the worker gener
 
 ### Sideband framing
 
-The sideband consists of two one-way pipes:
+The sideband is one full-duplex ordered byte connection with separate logical reader and writer halves in each process:
 
 ```text
 relay writer  ──>  worker reader
 relay reader  <──  worker writer
 ```
+
+Reads and writes proceed independently and remain blocking during normal operation.
 
 Each frame is one UTF-8 JSON object followed by line feed (`\n`).
 A sender flushes every frame.
@@ -88,6 +93,7 @@ Nested request and manifest objects also reject unknown fields.
 `shutdown`, `ready`, `input_received`, `input_cancelled`, `python_prepared`, and `completed` are payload-free: their frames contain exactly `kind` and reject every additional field.
 
 Each sideband direction preserves frame order.
+There is no ordering guarantee between the two directions.
 The relay continuously reads worker frames after readiness, including while the worker is idle and after an operation result.
 There is no result acknowledgment that pauses the relay.
 
@@ -114,7 +120,7 @@ The relay reads and forwards arbitrary bytes without line buffering.
 The readable UTF-8 versus base64 representation used on the outer JSONL stream belongs to [`RELAY_PROTOCOL.md`](RELAY_PROTOCOL.md), not to the worker sideband.
 
 Each standard stream preserves its own byte order.
-The worker sideband, stdout, and stderr use independent pipes, so there is no chronological cross-source ordering guarantee.
+The worker sideband, stdout, and stderr are independent transports, so there is no chronological cross-source ordering guarantee.
 In particular, raw output written before a `completed` or preparation-result frame may be observed after that frame.
 
 ## Message schemas
@@ -220,7 +226,7 @@ An ordinary language result ends with exactly one `completed` frame.
 
 All sideband output belonging to the evaluation must precede `completed`.
 Later sideband output is idle activity.
-Raw fd-1 or fd-2 bytes remain subject to the independent-pipe ordering rule above.
+Raw fd-1 or fd-2 bytes remain subject to the independent-source ordering rule above.
 
 Language parse errors, runtime errors, Python exceptions, and DuckDB errors are ordinary console results: a worker reports their text and then `completed` if it remains usable.
 The protocol has no structured language-error message.
@@ -378,7 +384,7 @@ An input request during preparation is an error, as described above.
 
 The relay has independent producers for sideband, stdout, stderr, and process supervision.
 It serializes their outer events without interleaving frames and preserves each producer's order.
-That serialized observation order does not reconstruct chronology between the worker's independent pipes.
+That serialized observation order does not reconstruct chronology between the worker's independent transports.
 
 ## Shutdown and closure
 
@@ -390,6 +396,7 @@ For intentional restart or server shutdown, the relay concurrently closes worker
 
 The worker sends no acknowledgment.
 It exits and lets process closure close its sideband and standard streams.
+The protocol defines no general sideband half-close operation.
 The shutdown frame may arrive while the worker is waiting for a nested resolver reply; it terminates that wait rather than acting as a resolver response.
 
 Fd-0 closure and the `shutdown` frame are both generation-retirement signals, not evaluation or stdin-payload delimiters.
@@ -398,7 +405,7 @@ If it does not exit within the relay's supplied grace period, the relay forcibly
 The exact server-relay acceptance and retirement sequence is specified in [`RELAY_PROTOCOL.md`](RELAY_PROTOCOL.md).
 
 During retirement, the relay forwards every complete worker-sideband frame already buffered or immediately readable.
-It may abandon an incomplete frame held open by a descendant.
+It may abandon an incomplete frame held open by a descendant that retained the endpoint.
 It drains fd 1 and fd 2 before reporting their outer stream closures and the direct worker process outcome.
 
 Outside intentional retirement, worker-sideband EOF is a worker failure.
@@ -429,8 +436,8 @@ Public failure and replacement behavior is described in [`BUILTIN_RUNTIME.md`](B
 
 A conforming custom worker:
 
-- accepts the inherited descriptor and fd-0/1/2 launch contract;
-- removes or closes the sideband bootstrap capability before descendants can inherit it;
+- accepts the inherited full-duplex sideband endpoint and fd-0/1/2 launch contract;
+- removes the sideband bootstrap variable and prevents descendants from inheriting the descriptor;
 - sends `ready` first and exactly once;
 - accepts complete `evaluate` cells for the declared `r`, `python`, and `sql` language values and ends ordinary outcomes with `completed`;
 - uses console, image, and managed-input frames with the exact schemas and ordering above;

@@ -26,9 +26,8 @@ Relay standard error is inherited from the server and is not part of the protoco
 Runtime failures are also represented by a `fatal` event when relay stdout remains usable.
 The framed event is authoritative; stderr diagnostics are best effort because the server's outer fail-safe can terminate a failed relay before its final diagnostic is written.
 
-The relay creates the worker's two private sideband pipes and its standard-input, standard-output, and standard-error pipes after entering the sandbox.
-It passes the same sideband environment variables and fd-0/1/2 contract that the worker used before the relay was introduced.
-The worker protocol is unchanged and is documented in [`WORKER_PROTOCOL.md`](WORKER_PROTOCOL.md).
+The relay creates the worker's private full-duplex sideband socket pair and its standard-input, standard-output, and standard-error pipes after entering the sandbox.
+It passes one worker sideband endpoint through `MCP_CONSOLE_SIDEBAND_FD` together with the fd-0/1/2 contract documented in [`WORKER_PROTOCOL.md`](WORKER_PROTOCOL.md).
 
 The relay owns the worker process and its local transports, translation between this protocol and the worker sideband, signal delivery, bounded termination, and reaping.
 The server owns generation state and host-side dependency resolution; see [Requirements and environments](REQUIREMENTS.md) for that trust boundary.
@@ -141,8 +140,8 @@ One serializer owns relay stdout, writes one complete JSONL frame at a time, and
 Frames therefore never interleave, and each source preserves its own order.
 
 Ordering between different sources is the order in which their reader or supervision threads enqueue events.
-No chronological order is promised between independent worker sideband, stdout, and stderr pipes.
-A mutex or queue cannot reconstruct the order in which the worker wrote to separate pipes, and the protocol does not rely on mutex fairness.
+No chronological order is promised between the independent worker sideband, stdout, and stderr transports.
+A mutex or queue cannot reconstruct the order in which the worker wrote to separate transports, and the protocol does not rely on mutex fairness.
 In particular, raw output written before an operation-result sideband frame can be serialized after that result and remain pending for a later MCP response.
 
 The relay does not classify operation results and never waits for a server acknowledgment before reading another worker-sideband frame.
@@ -189,7 +188,7 @@ Descendants that leave the group remain unsupported.
 ## Retirement and failure
 
 On worker exit or relay failure, the relay first stops the worker transports and drains and joins the stdout and stderr reader threads.
-Cancellation of an already-started worker-sideband reader drains every complete buffered or immediately readable frame, then abandons an incomplete frame rather than waiting on a descendant that retained the pipe.
+Cancellation of an already-started worker-sideband reader drains every complete buffered or immediately readable frame with per-call nonblocking receives, then abandons an incomplete frame rather than waiting on a descendant that retained the endpoint.
 If transport setup fails before that reader starts, the relay discards pending sideband frames so `fatal` remains the first semantic event; raw stdout and stderr are still drained.
 It then emits `stdout_closed` and `stderr_closed`, the retained `fatal` event when present, `worker_sideband_closed`, and the structured worker process outcome when one is available.
 No raw output can follow its stream-closure event, and no event can follow `worker_exited` or `worker_signaled`.
