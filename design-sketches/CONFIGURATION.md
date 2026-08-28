@@ -442,8 +442,8 @@ filesystem:
     - .git/config
 ```
 
-`writable_roots`, `unreadable`, and `unwritable` accept one scalar, a sequence, or a
-list patch.
+`writable_roots`, `unreadable`, and `unwritable` accept one scalar, a sequence,
+or a list patch.
 
 `workspace_write` already grants the working directory. `writable_roots` adds
 other recursive roots; users do not need to restate the workspace. In an
@@ -611,8 +611,8 @@ explicit narrow grant.
 
 The `network` node does not govern the trusted host-side package resolver, which
 runs outside the worker boundary. Resolver egress is controlled by
-`package_resolution`, package sources, project trust, and higher-trust source
-and requirement policy. A fully offline session combines `network: none` with
+`package_resolution`, package sources, project trust, and higher-trust resolver
+policy. A fully offline session combines `network: none` with
 `package_resolution: off` and explicit `existing` or disabled language
 runtimes.
 
@@ -802,9 +802,14 @@ run_on: "docker-sandbox://ghcr.io/acme/analysis:2026.08"
 ```
 
 The scalar forms intentionally contain only the identity needed for the common
-case. `ssh://lab-gpu` starts in the remote account's home directory; a project
-profile normally expands the node and sets `directory`. The compact Docker forms
-mount the project at `/workspace` and use that as the working directory.
+case. `ssh://lab-gpu` uses a dedicated managed directory such as
+`~/.mcp-console/workspaces/<project-id>` as the remote working directory. It
+never turns the remote account's home directory into the writable workspace.
+The derived directory is private to the target user and is shown by
+`config explain`; no project synchronization is implied. Expand `run_on` and set
+`directory` when the project already exists at a specific remote path. The
+compact Docker forms mount the project at `/workspace` and use that as the
+working directory.
 
 ### SSH
 
@@ -818,9 +823,11 @@ run_on:
 `host` is an OpenSSH host or alias. User, port, identity file, jump host,
 host-key policy, and keepalive normally remain in `~/.ssh/config`.
 
-The remote must already contain the project and a compatible MCP Console. The
-default remote command is `mcp-console` from `PATH`. An exact path can be
-supplied without introducing an installation subsystem:
+The remote must already contain a compatible MCP Console. An explicit
+`directory` must already exist unless a future synchronization or provisioning
+feature says otherwise. The default remote command is `mcp-console` from
+`PATH`. An exact path can be supplied without introducing an installation
+subsystem:
 
 ```yaml
 run_on:
@@ -891,6 +898,13 @@ run_on:
     dockerfile: .mcp-console/Dockerfile
   directory: /workspace
 ```
+
+For a top-level local Docker runner, relative build inputs are project paths.
+For Docker nested under SSH or another outer runner, `build.context` and
+`build.dockerfile` are target paths relative to the outer working directory and
+must already be visible to that target's Docker daemon. MCP Console does not
+silently upload a local build context. An explicit future sync/upload feature
+may add that behavior without changing the simple local Docker form.
 
 Embedding a full Dockerfile in YAML is possible in principle but is not
 recommended. It harms readability, editor support, caching, and reuse.
@@ -1081,10 +1095,14 @@ be disabled.
 Project-authored package names and manifests are resolver inputs, not ordinary
 sandboxed data. An automatically discovered project may not cause the
 server-owned resolver to install them until the project is trusted, unless each
-requirement is admitted by a higher-trust requirement allowlist or manifest.
-Syntax validation and an approved registry URL do not by themselves approve a
-package's installation or build code. This rule applies equally to `automatic`
-and `declared_only` and requires no additional common-case YAML.
+normalized requirement is admitted by higher-trust resolver policy. An
+approval binds the requirement to its permitted ordered source set, including
+fallback behavior; requirement and source approvals are not independent
+allowlists whose cross-product is accepted. This prevents a package approved for
+an internal registry from being substituted from a public registry. Syntax
+validation and an approved source URL do not by themselves approve package
+installation or build code. These rules apply equally to `automatic` and
+`declared_only` and require no additional common-case YAML.
 
 A future `frozen` value may require a complete lockfile and prohibit any
 resolution that would change it.
@@ -1167,7 +1185,7 @@ contract, only validated registry references are accepted; local paths, VCS or
 source references, and arbitrary installer or build hooks are rejected.
 Supporting those forms later requires a separate sandboxed resolver boundary,
 not routing resolver work through the worker. The project-trust and
-higher-trust requirement-allowlist rule above still applies to accepted registry
+higher-trust resolver-policy rule above still applies to accepted registry
 requirements.
 
 An exact existing installation is:
@@ -1265,8 +1283,9 @@ python:
 The same resolver and trust contract applies to Python lockfiles, project
 metadata, package lists, and manifests: project mode may select supported
 metadata, but an untrusted project cannot trigger host-side installation unless
-its requirements are approved by higher-trust policy, and local, VCS, source,
-or arbitrary build inputs remain unsupported by the current resolver boundary.
+its requirement-and-source policy is approved by higher-trust configuration,
+and local, VCS, source, or arbitrary build inputs remain unsupported by the
+current resolver boundary.
 
 Because MCP Console uses reticulate for object translation, the selected Python
 must also be compatible with the runtime architecture used by the worker.
@@ -1302,10 +1321,18 @@ python:
 Declaring a source authorizes MCP Console's package resolver to use that source;
 it does not automatically give evaluated code general network access. A source
 URL authored by a project configuration is not passed to the server-owned
-resolver until the project is trusted, unless it matches a source approved by
-user, administrator, or organization configuration. Source approval is distinct
-from requirement approval: an untrusted project also needs each requested
-package or manifest entry admitted by higher-trust requirement policy.
+resolver until the project is trusted, unless it is part of a higher-trust
+resolver policy that admits the requested requirement from that ordered source
+set. Source ordering and fallback are part of the approval, so an approved
+requirement cannot be silently fetched from a different approved registry.
+
+Every field that names a supervisor environment variable for credentials,
+including `credentials_env` and SQL `password_env`, uses the same exact-name
+authorization rule as `env.inherit`: a project-authored name requires project
+trust unless that exact name is approved by higher-trust configuration. The
+value is treated as secret and redacted regardless of whether the project labels
+it. A variable-name field is never itself authorization.
+
 `worker_access: true` derives a corresponding narrow worker allowlist for an
 explicitly supported worker-side operation; it does not move MCP Console's
 dependency resolver into the worker. Derived access must be shown by `config
@@ -1384,8 +1411,10 @@ sql:
 
 `allow_network: true` derives only
 `tcp://warehouse.corp.example:5432`. The connection declaration and the network
-grant remain visibly linked, but the grant is still explicit. Credentials are
-referenced by name and redacted from diagnostics.
+grant remain visibly linked, but the grant is still explicit. `password_env`
+uses the exact-name trust and mandatory-redaction contract described under
+package sources and environment variables; a project cannot use it to select an
+arbitrary supervisor secret.
 
 DuckDB-specific extensions and an exact driver can expand the same
 connection without changing the compact forms:
@@ -1529,8 +1558,9 @@ cache:
 ```
 
 `host` means the ecosystem's normal cache location in the environment where the
-worker or resolver runs. A path asks MCP Console to propagate the relevant
-environment variables and runtime options.
+worker or resolver runs. A path asks MCP Console to route the corresponding
+cache namespace there; it does not imply that every process receives write
+access to the entire tree.
 
 A cache namespace can expand further when necessary:
 
@@ -1549,10 +1579,21 @@ cache:
     every: 24h
 ```
 
-Cleanup is incremental, based on last use, and never removes an active
-environment. Remote/cache paths are target-side; the simple top-level log path
-is supervisor-side. Top-level `cache` supplies the default and a profile-local
-`cache` mapping overrides only the named namespaces it changes.
+Resolver-owned downloads, package libraries, wheels, extensions, and
+manifest-keyed managed environments are immutable from the worker's point of
+view. The resolver may populate them outside the worker boundary; the worker
+receives only the read access needed to use an activated environment. Evaluated
+code must never be able to modify a reusable environment that a later session or
+generation may load.
+
+When a runtime needs writable cache state, MCP Console supplies an isolated
+per-session cache or scratch overlay rather than opening the reusable resolver
+cache. `config explain` shows each namespace's owner and effective access
+(`resolver_write`, `worker_read`, or `session_write`). Cleanup is incremental,
+based on last use, and never removes an active environment. Remote cache paths
+are target-side; the simple top-level log path is supervisor-side. Top-level
+`cache` supplies the default and a profile-local `cache` mapping overrides only
+the named namespaces it changes.
 
 ## Environment variables and secrets
 
@@ -1590,14 +1631,14 @@ supply a documented minimal target baseline needed to start the relay, such as
 its target-side home, temporary directory, and executable search path; that
 baseline is separate from `env.inherit` and is shown by `config explain`.
 
-Every `env.inherit` name authored by an automatically discovered project
-configuration requires project trust unless that exact name is approved for
-forwarding by a higher-trust configuration. MCP Console does not try to infer
-which arbitrary variable names contain secrets. `secret` marks inherited or set
-names for mandatory redaction, but it is not an authorization mechanism. Secret
-values must not appear in project YAML. A future secret-provider form can expand
-an entry without changing callers that already reference an environment
-variable name.
+Every project-authored reference to a supervisor environment variable requires
+project trust unless that exact name is approved for its stated use by
+higher-trust configuration. This applies to `env.inherit`, package-source
+`credentials_env`, database `password_env`, and future credential-variable
+fields. MCP Console does not try to infer which arbitrary variable names contain
+secrets. Credential-reference fields are always redacted; `secret` extends
+redaction to ordinary inherited or set variables, but is not an authorization
+mechanism. Secret values must not appear in project YAML.
 
 The default inheritance policy must be conservative, documented, and visible in
 `config explain`.
@@ -1662,7 +1703,8 @@ A higher-trust policy may:
 - add non-removable read, write, network, or socket denials;
 - cap memory, CPU, storage, runtime, or session concurrency;
 - forbid `full_access`, SSH, Docker, custom commands, or selected providers;
-- restrict package sources and executable paths;
+- restrict package sources, requirement-and-source pairs, credential variable
+  names, and executable paths;
 - limit which profiles an agent may select.
 
 A project file cannot weaken those constraints. Security policy should not be
@@ -1690,22 +1732,23 @@ project checkout.
 
 Every path belongs to a documented namespace:
 
-- **project/supervisor paths** include the config file, Docker build context,
-  Dockerfile, sync sources, the compact top-level log path, and mount sources
-  for a top-level local Docker runner;
+- **project/supervisor paths** include the config file, sync sources, the compact
+  top-level log path, and mount or Docker build sources for a top-level local
+  Docker runner;
 - **target paths** include `run_on.directory`, filesystem roots, runtime
-  executables and project roots, SQL database paths, target caches, and mount
-  sources for a container nested under an outer runner; and
+  executables and project roots, SQL database paths, target caches, and mount or
+  Docker build sources for a container nested under an outer runner; and
 - **container paths** include mount targets and an `inside.directory`.
 
 Relative project/supervisor paths resolve from the project root. Relative target
 paths resolve from the target working directory. `~` expands for the relevant
-target-side user. For a top-level local Docker runner, a relative mount `source`
-resolves from the local project root. For `run_on: ssh` with `inside: docker`, a
-relative mount `source` resolves from the outer SSH target's working directory
-and must be visible to the remote Docker daemon. A mount `target` is always
-container-visible. A field that crosses namespaces must name both sides rather
-than relying on implicit path rewriting.
+target-side user. For a top-level local Docker runner, relative mount sources,
+build contexts, and Dockerfiles resolve from the local project root. For
+`run_on: ssh` with `inside: docker`, those same inputs resolve from the outer SSH
+target's working directory and must be visible to the remote Docker daemon. No
+implicit upload is performed. A mount `target` is always container-visible. A
+field that crosses namespaces must name both sides rather than relying on
+implicit path rewriting.
 
 `config explain` must label resolved paths as supervisor, remote-host, or
 container paths. Diagnostics preserve both the authored and resolved values
@@ -1719,7 +1762,9 @@ Some declarations imply a narrow supporting permission:
   side files;
 - `sql.allow_network: true` implies one exact database endpoint;
 - `worker_access: true` on a package source implies access to that source;
-- a cache path implies the corresponding cache read/write root;
+- resolver-owned package and environment caches imply resolver write and worker
+  read access, never worker write access;
+- a per-session runtime cache implies one isolated worker-writable root;
 - a listener implies one target bind and one supervisor-side loopback forward;
 - a container mount implies target-side visibility but does not automatically
   make the source writable.
@@ -1728,9 +1773,11 @@ Derived permissions must be explicit in `config explain`, labeled by their
 source, and included in enforcement tests. They pass through the same trust and
 higher-trust policy checks as directly authored permissions. In particular, an
 automatically discovered project cannot derive a writable path outside the
-project root through SQL, cache, logs, mounts, or another supporting declaration
-without project trust or higher-trust approval; nor can it derive access inside
-a region denied by a higher-trust layer. Hidden broad grants are not acceptable.
+project root through SQL, per-session cache, logs, mounts, or another supporting
+declaration without project trust or higher-trust approval; nor can it derive
+access inside a region denied by a higher-trust layer. Reusable resolver-owned
+environments remain read-only to the worker regardless of project trust. Hidden
+broad grants are not acceptable.
 
 ## Agent-selectable profiles
 
@@ -1764,11 +1811,12 @@ an explicitly trusted project or a higher-trust configuration source:
 - third-party sandbox providers;
 - high-authority Unix sockets or named pipes;
 - explicit or derived writable paths outside the project root;
-- project-defined package source URLs or package requirements not approved by a
-  higher-trust source or requirement policy;
+- project-defined package requirements and their ordered source policy when not
+  approved together by higher-trust resolver policy;
 - arbitrary executable paths outside the project;
-- every project-authored `env.inherit` name not approved by higher-trust
-  configuration; and
+- every project-authored supervisor environment-variable reference, including
+  `env.inherit`, `credentials_env`, and `password_env`, unless the exact name is
+  approved for that use by higher-trust configuration; and
 - provider-specific options that weaken isolation.
 
 Editing the project file inside a running worker must not increase that
@@ -2190,7 +2238,7 @@ and forces every user to learn matcher specificity.
 An ordered last-match-wins variant also makes line movement and configuration
 merges security-sensitive.
 
-**Recommendation:** use explicit roots and denials for common cases. Normalize
+**Recommendation:** use descriptive path sets for common cases. Normalize
 them into an optional advanced rule form whose precedence is based on
 specificity, not declaration order.
 
@@ -2291,7 +2339,7 @@ Adopt the progressive profile design:
 - one-parent inheritance and explicit list patches provide reuse without hidden
   merge behavior;
 - `run_on` and `sandbox` remain separate, understandable axes;
-- simple filesystem roots and explicit denials cover ordinary permission needs;
+- descriptive filesystem path sets cover ordinary permission needs;
 - advanced rules, reusable definitions, providers, proxy details, nested
   execution, and resource controls remain available without appearing in the
   starter file;
