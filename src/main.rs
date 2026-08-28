@@ -48,7 +48,7 @@ fn main() -> ExitCode {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => exit_with_error(error),
         },
-        cli::Command::SandboxGuardian => match sandbox::run_guardian() {
+        cli::Command::SandboxManager => match sandbox::run_manager() {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => exit_with_error(error),
         },

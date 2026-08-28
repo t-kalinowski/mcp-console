@@ -26,10 +26,14 @@ mod platform {
 
     const READ_CHUNK_SIZE: usize = 8 * 1024;
     const WORKER_SHUTDOWN_GRACE: Duration = Duration::from_secs(1);
-    const DESCENDANT_SHUTDOWN_GRACE: Duration = Duration::from_secs(1);
+    const CHILD_EXITED: libc::c_int = 1;
+    const CHILD_KILLED: libc::c_int = 2;
+    const CHILD_DUMPED: libc::c_int = 3;
+    const CHILD_STOPPED: libc::c_int = 5;
+    const CHILD_CONTINUED: libc::c_int = 6;
 
     pub(super) fn run(command_line: &[std::ffi::OsString]) -> Result<(), String> {
-        let temporary_directory = crate::sandbox::claim_worker_temporary_directory()?;
+        crate::sandbox::await_sandbox_startup()?;
         let (program, arguments) = command_line
             .split_first()
             .ok_or_else(|| "worker relay command must include an executable".to_string())?;
@@ -68,13 +72,7 @@ mod platform {
         };
         drop(child_endpoint);
 
-        let mut worker = match WorkerLifecycle::new(child, temporary_directory) {
-            Ok(worker) => worker,
-            Err(error) => {
-                return report_startup_failure(&events, event_writer, error);
-            }
-        };
-        worker.start_exit_watcher(controls.clone());
+        let mut worker = WorkerLifecycle::new(child);
         let setup = worker.start_io(
             sideband_reader,
             sideband_writer,
@@ -85,6 +83,7 @@ mod platform {
         );
         let (status, retirement_error) = match setup {
             Ok(()) => {
+                worker.start_exit_watcher(controls.clone());
                 let worker_sideband = worker
                     .sideband_writer
                     .as_ref()
@@ -119,11 +118,7 @@ mod platform {
         }
 
         stopping.store(true, Ordering::SeqCst);
-        let finish = worker.cancel_and_join(&events);
-        let mut finish_error = finish.error;
-        if let Some(error) = finish.containment_error.as_ref() {
-            failures.append(error.clone());
-        }
+        let mut finish_error = worker.cancel_and_join(&events);
 
         collect_error(&mut finish_error, events.send(RelayEvent::StdoutClosed));
         collect_error(&mut finish_error, events.send(RelayEvent::StderrClosed));
@@ -157,10 +152,6 @@ mod platform {
         }
 
         collect_error(&mut finish_error, retirement_error.map_or(Ok(()), Err));
-        collect_error(
-            &mut finish_error,
-            finish.containment_error.map_or(Ok(()), Err),
-        );
         finish_error.map_or(Ok(()), Err)
     }
 
@@ -255,12 +246,11 @@ mod platform {
                     stopping.store(true, Ordering::SeqCst);
                     exit_deadline.get_or_insert_with(|| Instant::now() + WORKER_SHUTDOWN_GRACE);
                 }
-                Control::WorkerExited { cleanup_failed } => {
+                Control::WorkerExited(result) => {
                     stopping.store(true, Ordering::SeqCst);
-                    return if cleanup_failed {
-                        force_stop_worker(child, String::new())
-                    } else {
-                        finish_exited_worker(child)
+                    return match result {
+                        Ok(()) => finish_exited_worker(child),
+                        Err(error) => force_stop_worker(child, error),
                     };
                 }
             }
@@ -268,53 +258,125 @@ mod platform {
     }
 
     fn start_worker_exit_watcher(
-        tracker: crate::sandbox::DescendantTracker,
-        temporary_directory: Option<crate::sandbox::SandboxTemporaryDirectory>,
+        process_id: u32,
         controls: mpsc::Sender<Control>,
-    ) -> thread::JoinHandle<Result<(), String>> {
+    ) -> thread::JoinHandle<()> {
         thread::spawn(move || {
-            let mut temporary_directory = PreservedTemporaryDirectory(temporary_directory);
-            let result = tracker.supervise(DESCENDANT_SHUTDOWN_GRACE);
-            if result.is_ok() {
-                temporary_directory.remove();
-            }
-            let _ = controls.send(Control::WorkerExited {
-                cleanup_failed: result.is_err(),
-            });
-            result
+            let process_id = process_id as libc::pid_t;
+            let wait_id = process_id as libc::id_t;
+            let result = loop {
+                let mut information = std::mem::MaybeUninit::<libc::siginfo_t>::zeroed();
+                // SAFETY: `information` points to writable storage and
+                // `process_id` names the direct child. WNOWAIT preserves its
+                // exit status for the relay supervisor, which remains the sole
+                // reaper.
+                let result = unsafe {
+                    libc::waitid(
+                        libc::P_PID,
+                        wait_id,
+                        information.as_mut_ptr(),
+                        libc::WEXITED | libc::WNOWAIT,
+                    )
+                };
+                if result == 0 {
+                    // SAFETY: successful `waitid` initialized the supplied
+                    // `siginfo_t`.
+                    let information = unsafe { information.assume_init() };
+                    if information.si_pid != process_id {
+                        break Err(format!(
+                            "waitid returned process {} while waiting for worker {process_id}",
+                            information.si_pid
+                        ));
+                    }
+                    match information.si_code {
+                        CHILD_EXITED | CHILD_KILLED | CHILD_DUMPED => break Ok(()),
+                        CHILD_STOPPED | CHILD_CONTINUED => {
+                            // Darwin may return a pending stop or continue
+                            // notification even though the call requested only
+                            // `WEXITED`. Consume just that notification, leaving
+                            // the eventual exit status waitable for supervision.
+                            if let Err(error) =
+                                consume_worker_non_exit_notification(wait_id, process_id)
+                            {
+                                if error.kind() == std::io::ErrorKind::Interrupted {
+                                    continue;
+                                }
+                                break Err(format!(
+                                    "failed to consume worker status notification: {error}"
+                                ));
+                            }
+                        }
+                        code => {
+                            break Err(format!(
+                                "waitid returned unexpected worker status code {code}"
+                            ));
+                        }
+                    }
+                    continue;
+                }
+                let error = std::io::Error::last_os_error();
+                if error.kind() != std::io::ErrorKind::Interrupted {
+                    break Err(format!("failed to observe worker exit: {error}"));
+                }
+            };
+            let _ = controls.send(Control::WorkerExited(result));
         })
     }
 
-    struct PreservedTemporaryDirectory(Option<crate::sandbox::SandboxTemporaryDirectory>);
-
-    impl PreservedTemporaryDirectory {
-        fn remove(&mut self) {
-            drop(self.0.take());
+    fn consume_worker_non_exit_notification(
+        wait_id: libc::id_t,
+        process_id: libc::pid_t,
+    ) -> std::io::Result<()> {
+        let mut information = std::mem::MaybeUninit::<libc::siginfo_t>::zeroed();
+        // SAFETY: `information` points to writable storage and `process_id`
+        // names the direct child. Omitting `WEXITED` and `WNOWAIT` consumes only
+        // a pending stop or continue notification, never the exit status.
+        let result = unsafe {
+            libc::waitid(
+                libc::P_PID,
+                wait_id,
+                information.as_mut_ptr(),
+                libc::WSTOPPED | libc::WCONTINUED | libc::WNOHANG,
+            )
+        };
+        if result < 0 {
+            return Err(std::io::Error::last_os_error());
         }
-    }
 
-    impl Drop for PreservedTemporaryDirectory {
-        fn drop(&mut self) {
-            if let Some(temporary_directory) = self.0.take() {
-                temporary_directory.preserve();
-            }
+        // SAFETY: successful `waitid` initialized the supplied `siginfo_t`.
+        let information = unsafe { information.assume_init() };
+        if information.si_pid == 0 {
+            return Ok(());
         }
+        if information.si_pid != process_id {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!(
+                    "waitid returned process {} while consuming a notification for worker {process_id}",
+                    information.si_pid
+                ),
+            ));
+        }
+        if !matches!(information.si_code, CHILD_STOPPED | CHILD_CONTINUED) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!(
+                    "waitid consumed unexpected worker status code {}",
+                    information.si_code
+                ),
+            ));
+        }
+        Ok(())
     }
 
     fn finish_exited_worker(child: &mut Child) -> (Option<ExitStatus>, Option<String>) {
-        let mut errors = Vec::new();
-        let status = match child.wait() {
-            Ok(status) => Some(status),
-            Err(error) => {
-                errors.push(format!("failed to reap the direct worker: {error}"));
-                None
-            }
-        };
-        if let Err(error) = crate::sandbox::force_stop_process_group_members_except_self() {
-            errors.push(format!("failed to stop the worker process group: {error}"));
+        match child.wait() {
+            Ok(status) => (Some(status), None),
+            Err(error) => (
+                None,
+                Some(format!("failed to reap the direct worker: {error}")),
+            ),
         }
-        let error = (!errors.is_empty()).then(|| errors.join("; "));
-        (status, error)
     }
 
     fn interrupt_worker(child: &mut Child) -> Result<(), String> {
@@ -352,10 +414,6 @@ mod platform {
         {
             errors.push(format!("failed to stop the direct worker: {error}"));
         }
-        let group_error = crate::sandbox::force_stop_process_group_members_except_self().err();
-        if let Some(error) = group_error.as_ref() {
-            errors.push(format!("failed to stop the worker process group: {error}"));
-        }
         if status.is_none() {
             match child.wait() {
                 Ok(exit_status) => status = Some(exit_status),
@@ -370,8 +428,6 @@ mod platform {
 
     struct WorkerLifecycle {
         child: Child,
-        tracker: Option<crate::sandbox::DescendantTracker>,
-        temporary_directory: Option<crate::sandbox::SandboxTemporaryDirectory>,
         retired: bool,
         raw_stdin: Option<ChildStdin>,
         raw_stdout: Option<ChildStdout>,
@@ -383,35 +439,11 @@ mod platform {
         stderr: Option<OutputReader>,
         sideband_reader: Option<SidebandReader>,
         command_reader: Option<CommandReader>,
-        exit_watcher: Option<thread::JoinHandle<Result<(), String>>>,
-    }
-
-    struct WorkerFinish {
-        error: Option<String>,
-        containment_error: Option<String>,
+        exit_watcher: Option<thread::JoinHandle<()>>,
     }
 
     impl WorkerLifecycle {
-        fn new(
-            mut child: Child,
-            temporary_directory: Option<crate::sandbox::SandboxTemporaryDirectory>,
-        ) -> Result<Self, String> {
-            let tracker = match crate::sandbox::DescendantTracker::start(child.id() as libc::pid_t)
-            {
-                Ok(tracker) => tracker,
-                Err(error) => {
-                    if let Some(temporary_directory) = temporary_directory {
-                        temporary_directory.preserve();
-                    }
-                    let (_, cleanup_error) = force_stop_worker(
-                        &mut child,
-                        "failed to start worker descendant tracking".to_string(),
-                    );
-                    return Err(cleanup_error.map_or(error.clone(), |cleanup_error| {
-                        format!("{error}; additionally {cleanup_error}")
-                    }));
-                }
-            };
+        fn new(mut child: Child) -> Self {
             let raw_stdin = child
                 .stdin
                 .take()
@@ -424,10 +456,8 @@ mod platform {
                 .stderr
                 .take()
                 .expect("piped worker stderr should be available");
-            Ok(Self {
+            Self {
                 child,
-                tracker: Some(tracker),
-                temporary_directory,
                 retired: false,
                 raw_stdin: Some(raw_stdin),
                 raw_stdout: Some(raw_stdout),
@@ -440,7 +470,7 @@ mod platform {
                 sideband_reader: None,
                 command_reader: None,
                 exit_watcher: None,
-            })
+            }
         }
 
         #[allow(clippy::too_many_arguments)]
@@ -525,7 +555,6 @@ mod platform {
                 events.clone(),
                 failures.clone(),
                 controls.clone(),
-                stopping.clone(),
             ) {
                 Ok(sideband_reader) => self.sideband_reader = Some(sideband_reader),
                 Err((sideband_reader, error)) => {
@@ -537,19 +566,10 @@ mod platform {
         }
 
         fn start_exit_watcher(&mut self, controls: mpsc::Sender<Control>) {
-            let tracker = self
-                .tracker
-                .take()
-                .expect("worker descendant tracker should be available");
-            let temporary_directory = self.temporary_directory.take();
-            self.exit_watcher = Some(start_worker_exit_watcher(
-                tracker,
-                temporary_directory,
-                controls,
-            ));
+            self.exit_watcher = Some(start_worker_exit_watcher(self.child.id(), controls));
         }
 
-        fn cancel_and_join(&mut self, events: &EventSender) -> WorkerFinish {
+        fn cancel_and_join(&mut self, events: &EventSender) -> Option<String> {
             let mut error = None;
             drop(self.raw_stdin.take());
             if let Some(command_reader) = self.command_reader.take() {
@@ -586,28 +606,22 @@ mod platform {
                 ),
                 _ => unreachable!("worker stderr must have exactly one owner"),
             }
-            let containment_error = match self
+            if self
                 .exit_watcher
                 .take()
-                .expect("worker exit watcher should be running")
-                .join()
+                .is_some_and(|watcher| watcher.join().is_err())
             {
-                Ok(Ok(())) => None,
-                Ok(Err(error)) => Some(error),
-                Err(_) => Some("worker exit watcher task failed".to_string()),
-            };
-            WorkerFinish {
-                error,
-                containment_error,
+                collect_error(
+                    &mut error,
+                    Err("worker exit watcher task failed".to_string()),
+                );
             }
+            error
         }
     }
 
     impl Drop for WorkerLifecycle {
         fn drop(&mut self) {
-            if let Some(temporary_directory) = self.temporary_directory.take() {
-                temporary_directory.preserve();
-            }
             if !self.retired {
                 let _ = force_stop_worker(
                     &mut self.child,
@@ -728,17 +742,6 @@ mod platform {
             let _ = self.controls.send(Control::Stop { message });
         }
 
-        fn append(&self, message: String) {
-            let mut reported = self
-                .message
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
-            match reported.as_mut() {
-                Some(reported) => reported.push_str(&format!("; additionally {message}")),
-                None => *reported = Some(message),
-            }
-        }
-
         fn take(&self) -> Option<String> {
             self.message
                 .lock()
@@ -759,9 +762,7 @@ mod platform {
         Stop {
             message: String,
         },
-        WorkerExited {
-            cleanup_failed: bool,
-        },
+        WorkerExited(Result<(), String>),
     }
 
     struct CommandReader {
@@ -973,6 +974,7 @@ mod platform {
 
     struct SidebandWriter {
         sender: mpsc::Sender<SidebandWrite>,
+        cancellation: crate::sideband::Writer,
         thread: thread::JoinHandle<()>,
     }
 
@@ -988,6 +990,7 @@ mod platform {
             stopping: Arc<AtomicBool>,
         ) -> Self {
             let (sender, receiver) = mpsc::channel();
+            let cancellation = writer.clone();
             let thread = thread::spawn(move || {
                 for message in receiver {
                     match message {
@@ -1004,7 +1007,11 @@ mod platform {
                     }
                 }
             });
-            Self { sender, thread }
+            Self {
+                sender,
+                cancellation,
+                thread,
+            }
         }
 
         fn sender(&self) -> mpsc::Sender<SidebandWrite> {
@@ -1013,6 +1020,7 @@ mod platform {
 
         fn cancel_and_join(self) -> Result<(), String> {
             let _ = self.sender.send(SidebandWrite::Close);
+            let _ = self.cancellation.shutdown();
             self.thread
                 .join()
                 .map_err(|_| "worker sideband writer task failed".to_string())
@@ -1034,7 +1042,6 @@ mod platform {
             events: EventSender,
             failures: FailureReporter,
             controls: mpsc::Sender<Control>,
-            stopping: Arc<AtomicBool>,
         ) -> Result<Self, (crate::sideband::Reader, String)> {
             let (cancelled, cancel) = match cancellation_pipe("worker sideband") {
                 Ok(pipe) => pipe,
@@ -1084,9 +1091,7 @@ mod platform {
                         }
                     }
                 }
-                if let Some(error) = sideband_failure
-                    && !stopping.load(Ordering::SeqCst)
-                {
+                if let Some(error) = sideband_failure {
                     failures.report(error);
                 }
                 if ordinary_close {

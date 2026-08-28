@@ -401,14 +401,8 @@ def build_killpg_denial_interposer(directory: Path) -> Path:
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/syscall.h>
-#include <sys/wait.h>
 #include <sys/types.h>
 #include <unistd.h>
-
-static pid_t denied_process_group = 0;
-static int added_late_member = 0;
-static pid_t late_member = 0;
-static int killpg_count = 0;
 
 static void write_pid_marker(const char *name, pid_t process_id) {
     const char *marker = getenv(name);
@@ -422,36 +416,7 @@ static void write_pid_marker(const char *name, pid_t process_id) {
     }
 }
 
-static void write_member_marker(pid_t process_id, pid_t process_group) {
-    const char *marker = getenv("MCP_CONSOLE_TEST_LATE_MEMBER_MARKER");
-    if (marker == NULL) {
-        return;
-    }
-    int descriptor = open(marker, O_WRONLY | O_CREAT | O_TRUNC, 0600);
-    if (descriptor >= 0) {
-        dprintf(descriptor, "%d %d\n", process_id, process_group);
-        close(descriptor);
-    }
-}
-
 static int deny_killpg(pid_t process_group, int signal) {
-    if (signal == SIGKILL
-        && getenv("MCP_CONSOLE_TEST_KILLPG_COUNT_MARKER") != NULL) {
-        const char *marker = getenv("MCP_CONSOLE_TEST_KILLPG_COUNT_MARKER");
-        int descriptor = open(marker, O_WRONLY | O_CREAT | O_TRUNC, 0600);
-        if (descriptor >= 0) {
-            killpg_count += 1;
-            dprintf(descriptor, "%d %d\n", killpg_count, process_group);
-            close(descriptor);
-        }
-    }
-    if (signal == SIGKILL
-        && getenv("MCP_CONSOLE_TEST_KILLPG_MARKER") != NULL) {
-        denied_process_group = process_group;
-        write_pid_marker("MCP_CONSOLE_TEST_KILLPG_MARKER", process_group);
-        errno = EPERM;
-        return -1;
-    }
     if (signal == SIGINT
         && getenv("MCP_CONSOLE_TEST_DENIED_SIGINT") != NULL) {
         write_pid_marker("MCP_CONSOLE_TEST_DENIED_SIGINT", process_group);
@@ -459,94 +424,6 @@ static int deny_killpg(pid_t process_group, int signal) {
         return -1;
     }
     return (int)syscall(SYS_kill, -process_group, signal);
-}
-
-static pid_t add_process_group_member(pid_t process_group) {
-    int descriptors[2];
-    if (pipe(descriptors) != 0) {
-        return -1;
-    }
-
-    pid_t member = fork();
-    if (member < 0) {
-        close(descriptors[0]);
-        close(descriptors[1]);
-        return -1;
-    }
-    if (member == 0) {
-        close(descriptors[0]);
-        if (setpgid(0, process_group) != 0) {
-            _exit(1);
-        }
-        pid_t process_id = getpid();
-        if (write(descriptors[1], &process_id, sizeof(process_id))
-            != sizeof(process_id)) {
-            _exit(1);
-        }
-        close(descriptors[1]);
-        for (;;) {
-            pause();
-        }
-    }
-
-    close(descriptors[1]);
-    pid_t acknowledged_member = 0;
-    ssize_t bytes_read;
-    do {
-        bytes_read = read(
-            descriptors[0],
-            &acknowledged_member,
-            sizeof(acknowledged_member)
-        );
-    } while (bytes_read < 0 && errno == EINTR);
-    int read_error = bytes_read < 0 ? errno : EIO;
-    close(descriptors[0]);
-
-    if (bytes_read != sizeof(acknowledged_member)
-        || acknowledged_member != member) {
-        syscall(SYS_kill, member, SIGKILL);
-        while (waitpid(member, NULL, 0) < 0 && errno == EINTR) {
-        }
-        errno = read_error;
-        return -1;
-    }
-    return member;
-}
-
-static pid_t getpgid_and_add_member(pid_t process_id) {
-    pid_t process_group = (pid_t)syscall(SYS_getpgid, process_id);
-    // Rust rechecks group membership only after taking its kernel snapshot.
-    // Join the group here so a one-pass fallback cannot observe this child.
-    if (process_group == denied_process_group && !added_late_member) {
-        added_late_member = 1;
-        pid_t member = add_process_group_member(process_group);
-        if (member < 0) {
-            return -1;
-        }
-        late_member = member;
-        write_member_marker(member, process_group);
-    }
-    return process_group;
-}
-
-static int kill_and_reap_late_member(pid_t process_id, int signal) {
-    int result = (int)syscall(SYS_kill, process_id, signal);
-    int signal_error = errno;
-    if (result == 0 && signal == SIGKILL && process_id == late_member) {
-        // Keep the final assertion independent of launchd's orphan reaping.
-        int status = 0;
-        pid_t waited;
-        do {
-            waited = waitpid(process_id, &status, 0);
-        } while (waited < 0 && errno == EINTR);
-        if (waited != process_id) {
-            return -1;
-        }
-        write_pid_marker("MCP_CONSOLE_TEST_LATE_MEMBER_REAP_MARKER", process_id);
-        late_member = 0;
-    }
-    errno = signal_error;
-    return result;
 }
 
 __attribute__((constructor))
@@ -560,8 +437,6 @@ static struct {
     const void *replacee;
 } interposers[] __attribute__((section("__DATA,__interpose"))) = {
     {(const void *)&deny_killpg, (const void *)&killpg},
-    {(const void *)&getpgid_and_add_member, (const void *)&getpgid},
-    {(const void *)&kill_and_reap_late_member, (const void *)&kill},
 };
 """.removeprefix("\n"),
         encoding="utf-8",
@@ -3667,16 +3542,8 @@ def test_restart_interrupts_waiting_send(binary: Path) -> Transcript:
 def test_restarts_after_unexpected_sideband_message(binary: Path) -> Transcript:
     zod = Path(__file__).resolve().parents[2] / "fixtures" / "zod"
     with tempfile.TemporaryDirectory() as temporary_directory:
-        temporary_path = Path(temporary_directory)
-        killpg_marker = temporary_path / "killpg-denied"
         environment = os.environ.copy()
         environment["TMPDIR"] = temporary_directory
-        environment["MCP_CONSOLE_TEST_KILLPG_MARKER"] = str(killpg_marker)
-        # The interposer removes its loader variable after reaching the server,
-        # so sandbox-exec and Zod do not inherit it.
-        environment["DYLD_INSERT_LIBRARIES"] = str(
-            build_killpg_denial_interposer(temporary_path)
-        )
         client = McpClient(
             binary,
             ("serve", "--worker", str(zod)),
@@ -3706,9 +3573,11 @@ def test_restarts_after_unexpected_sideband_message(binary: Path) -> Transcript:
             )
             failed_call = client._start_send(r="violate protocol")
             client._receive(failed_call)
-            assert killpg_marker.is_file(), "killpg denial interposer did not run"
-            assert int(killpg_marker.read_text(encoding="utf-8")) == worker_group, (
-                "killpg denial targeted a different process group"
+            assert not process_exists(worker_group), (
+                "server did not reap the failed generation's relay"
+            )
+            assert not process_group_exists(worker_group), (
+                "failed worker generation survived sandbox manager retirement"
             )
             result = failed_call["result"]
             assert result["isError"] is True
@@ -3795,69 +3664,55 @@ def test_reports_unexpected_worker_exit_zero(binary: Path) -> Transcript:
 
 def test_replaces_worker_after_relay_exit(binary: Path) -> Transcript:
     zod = Path(__file__).resolve().parents[2] / "fixtures" / "zod"
-    with tempfile.TemporaryDirectory() as temporary_directory:
-        temporary_path = Path(temporary_directory)
-        killpg_count = temporary_path / "relay-killpg-count"
-        environment = os.environ.copy()
-        environment["MCP_CONSOLE_TEST_KILLPG_COUNT_MARKER"] = str(killpg_count)
-        environment["DYLD_INSERT_LIBRARIES"] = str(
-            build_killpg_denial_interposer(temporary_path)
-        )
-        client = McpClient(
-            binary,
-            ("serve", "--worker", str(zod)),
-            environment,
-        )
-        worker_pid = None
-        relay_pid = None
-        passed = False
-        try:
-            client._initialize_and_list_tools()
-            client.send(r="kill relay and remain live", timeout_ms=5_000)
+    client = McpClient(
+        binary,
+        ("serve", "--worker", str(zod)),
+    )
+    worker_pid = None
+    launcher_pid = None
+    relay_pid = None
+    passed = False
+    try:
+        client._initialize_and_list_tools()
+        client.send(r="kill relay and remain live", timeout_ms=5_000)
 
-            result = client.transcript[-1]["result"]
-            assert result["isError"] is True, result
-            topology, failure = result["content"][0]["text"].split("\n", 1)
-            worker, launcher, relay = topology.split("; ")
-            worker_pid = int(worker.removeprefix("zod worker pid: "))
-            launcher_pid = int(launcher.removeprefix("launcher pid: "))
-            relay_pid = int(relay.removeprefix("relay process group: "))
-            assert len({worker_pid, launcher_pid, relay_pid}) == 3, topology
-            assert failure == (
-                "[worker relay stdout closed before retirement completed]\n"
-                "[worker stopped: in-memory state lost]\n"
-                "[starting new worker]\n"
-                "[idle]"
-            ), failure
-            result["content"][0]["text"] = (
-                "zod worker pid: <worker pid>; "
-                "launcher pid: <launcher pid>; "
-                "relay process group: <relay process group>\n" + failure
-            )
-            assert not process_exists(worker_pid), "worker outlived its relay"
-            assert not process_exists(relay_pid), "server did not reap the relay"
-            assert not process_group_exists(relay_pid), (
-                "relay process group outlived the relay"
-            )
-            count, process_group = map(
-                int,
-                killpg_count.read_text(encoding="utf-8").split(),
-            )
-            assert count == 1, "server tried to stop the retired relay group twice"
-            assert process_group == relay_pid, (
-                "server stopped a different process group"
-            )
+        result = client.transcript[-1]["result"]
+        assert result["isError"] is True, result
+        topology, failure = result["content"][0]["text"].split("\n", 1)
+        worker, launcher, relay = topology.split("; ")
+        worker_pid = int(worker.removeprefix("zod worker pid: "))
+        launcher_pid = int(launcher.removeprefix("launcher pid: "))
+        relay_pid = int(relay.removeprefix("relay process group: "))
+        assert len({worker_pid, launcher_pid, relay_pid}) == 3, topology
+        assert failure == (
+            "[worker relay stdout closed before retirement completed]\n"
+            "[worker stopped: in-memory state lost]\n"
+            "[starting new worker]\n"
+            "[idle]"
+        ), failure
+        result["content"][0]["text"] = (
+            "zod worker pid: <worker pid>; "
+            "launcher pid: <launcher pid>; "
+            "relay process group: <relay process group>\n" + failure
+        )
+        assert not process_exists(worker_pid), "worker outlived its relay"
+        assert not process_exists(launcher_pid), "worker launcher outlived its relay"
+        assert not process_exists(relay_pid), "server did not reap the relay"
+        assert not process_group_exists(relay_pid), (
+            "relay process group outlived sandbox manager retirement"
+        )
 
-            client.send(r="echo echo")
-            assert last_tool_text(client) == "zod: echo\n"
-            transcript = client._finish()
-            passed = True
-            return transcript
-        finally:
-            if not passed:
-                stop_process_group(relay_pid)
-                stop_process_id(worker_pid)
-                stop_process(client.process)
+        client.send(r="echo echo")
+        assert last_tool_text(client) == "zod: echo\n"
+        transcript = client._finish()
+        passed = True
+        return transcript
+    finally:
+        if not passed:
+            stop_process_group(relay_pid)
+            stop_process_id(launcher_pid)
+            stop_process_id(worker_pid)
+            stop_process(client.process)
 
 
 def test_restart_closes_worker_stdin(binary: Path) -> Transcript:
@@ -3982,6 +3837,9 @@ def test_restart_allows_accepted_relay_shutdown_to_finish(
                 client,
             )
             client._receive(restarted)
+            assert not process_exists(helper_pid), (
+                "detached relay-resume helper outlived sandbox retirement"
+            )
             restart_output = last_tool_text(client)
             assert restart_output == (
                 "zod output during relay retirement\n"
@@ -3997,8 +3855,8 @@ def test_restart_allows_accepted_relay_shutdown_to_finish(
             passed = True
             return transcript
         finally:
-            stop_process_id(helper_pid)
             if not passed:
+                stop_process_id(helper_pid)
                 stop_process(client.process)
 
 
@@ -4006,20 +3864,9 @@ def test_restart_outer_force_stops_unresponsive_relay(binary: Path) -> Transcrip
     zod = Path(__file__).resolve().parents[2] / "fixtures" / "zod"
     with tempfile.TemporaryDirectory() as temporary_directory:
         temporary_path = Path(temporary_directory)
-        killpg_marker = temporary_path / "killpg-denied"
-        late_member_marker = temporary_path / "late-process-group-member"
-        late_member_reap_marker = temporary_path / "late-process-group-member-reaped"
         environment = os.environ.copy()
         environment["TMPDIR"] = temporary_directory
         environment["ZOD_REPORT_PROCESS_GROUP"] = "1"
-        environment["MCP_CONSOLE_TEST_KILLPG_MARKER"] = str(killpg_marker)
-        environment["MCP_CONSOLE_TEST_LATE_MEMBER_MARKER"] = str(late_member_marker)
-        environment["MCP_CONSOLE_TEST_LATE_MEMBER_REAP_MARKER"] = str(
-            late_member_reap_marker
-        )
-        environment["DYLD_INSERT_LIBRARIES"] = str(
-            build_killpg_denial_interposer(temporary_path)
-        )
         client = McpClient(
             binary,
             ("serve", "--worker", str(zod)),
@@ -4061,41 +3908,33 @@ def test_restart_outer_force_stops_unresponsive_relay(binary: Path) -> Transcrip
             assert os.getpgid(launcher_pid) == relay_target, (
                 "Zod launcher did not inherit the relay process group"
             )
+            assert os.getpgid(helper_pid) == helper_pid, (
+                "relay-stop helper did not detach from the relay process group"
+            )
 
             restarted = client._start_send(control="restart")
-            killpg_marker = wait_for_marker(
-                temporary_path,
-                killpg_marker.name,
-                client,
-                timeout=2,
-            )
-            assert int(killpg_marker.read_text(encoding="utf-8")) == worker_group
-            late_member_marker = wait_for_marker(
-                temporary_path,
-                late_member_marker.name,
-                client,
-            )
-            late_member, late_member_group = map(
-                int,
-                late_member_marker.read_text(encoding="utf-8").split(),
-            )
-            assert late_member > 0, "invalid late process-group member PID"
-            assert late_member_group == worker_group, (
-                "late member joined a different process group"
-            )
-            late_member_reap_marker = wait_for_marker(
-                temporary_path,
-                late_member_reap_marker.name,
-                client,
-            )
-            assert int(late_member_reap_marker.read_text(encoding="utf-8")) == (
-                late_member
-            ), "a different late process-group member was reaped"
+            retirement_deadline = time.monotonic() + 5
+            while (
+                process_exists(relay_target)
+                or process_group_exists(worker_group)
+                or process_exists(helper_pid)
+            ):
+                assert client.process.poll() is None, (
+                    "mcp-console stopped while retiring the sandbox lifetime"
+                )
+                assert time.monotonic() < retirement_deadline, (
+                    "sandbox manager did not retire the stopped relay, its process "
+                    "group, and its detached descendant within the deadline"
+                )
+                time.sleep(0.01)
             client._receive(restarted)
             assert not process_group_exists(worker_group), (
                 "stopped relay process group outlived restart"
             )
             assert not process_exists(relay_target), "server did not reap the relay"
+            assert not process_exists(helper_pid), (
+                "detached worker descendant outlived sandbox retirement"
+            )
             assert last_tool_text(client) == (
                 "[active evaluation stopped by session restart request]\n"
                 "[worker stopped: in-memory state lost]\n"
@@ -4109,8 +3948,8 @@ def test_restart_outer_force_stops_unresponsive_relay(binary: Path) -> Transcrip
             passed = True
             return transcript
         finally:
-            stop_process_id(helper_pid)
             if not passed:
+                stop_process_id(helper_pid)
                 stop_process_group(worker_group)
                 stop_process(client.process)
 
@@ -4255,6 +4094,9 @@ def test_restart_does_not_report_never_ready_worker_as_stopped(
                 ],
                 "isError": False,
             }, restarted
+            assert not process_group_exists(descendant_group), (
+                "detached startup descendant outlived sandbox retirement"
+            )
 
             client.send(r="echo echo")
             assert last_tool_text(client) == "zod: echo\n"
@@ -4263,8 +4105,8 @@ def test_restart_does_not_report_never_ready_worker_as_stopped(
             return transcript
         finally:
             startup_release.touch()
-            stop_process_group(descendant_group)
             if not passed:
+                stop_process_group(descendant_group)
                 stop_process(client.process)
 
 
@@ -4772,7 +4614,9 @@ def test_restart_cancels_partial_sideband_frame(binary: Path) -> Transcript:
                 "[idle]"
             )
 
-            stop_process_group(descendant_group)
+            assert not process_group_exists(descendant_group), (
+                "partial-sideband descendant outlived sandbox retirement"
+            )
             descendant_group = None
             client.send(r="echo echo")
             assert last_tool_text(client) == "zod: echo\n"
@@ -4833,7 +4677,9 @@ def test_restart_cancels_reader_after_operation_result(
                 "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
             )
 
-            stop_process_group(descendant_group)
+            assert not process_group_exists(descendant_group), (
+                "partial-sideband descendant outlived sandbox retirement"
+            )
             descendant_group = None
             client.send(r="echo echo")
             assert last_tool_text(client) == "zod: echo\n"
@@ -4876,7 +4722,6 @@ def test_restart_drains_readable_frame_before_abandoning_partial_tail(
         loaded_name = "delay-sideband-poll-loaded"
         arm_name = "delay-sideband-poll-arm"
         socket_ready_name = "delay-sideband-poll-socket-ready"
-        cancellation_ready_name = "delay-sideband-poll-cancellation-ready"
         partial_tail_name = "zod-sideband-partial-tail-written"
         channel = f"{os.getpid()}-{time.time_ns()}"
         cleanup_path: Path | None = None
@@ -4887,7 +4732,6 @@ def test_restart_drains_readable_frame_before_abandoning_partial_tail(
         environment["MCP_CONSOLE_TEST_POLL_LOADED_NAME"] = loaded_name
         environment["MCP_CONSOLE_TEST_POLL_ARM_NAME"] = arm_name
         environment["MCP_CONSOLE_TEST_POLL_SOCKET_READY_NAME"] = socket_ready_name
-        environment["MCP_CONSOLE_TEST_POLL_CANCEL_READY_NAME"] = cancellation_ready_name
         environment["ZOD_TEST_CHANNEL"] = channel
         client = McpClient(
             binary,
@@ -4923,7 +4767,6 @@ def test_restart_drains_readable_frame_before_abandoning_partial_tail(
             wait_for_marker(temporary, socket_ready_name, client)
             wait_for_marker(temporary, partial_tail_name, client)
             restart = client._start_send(control="restart")
-            wait_for_marker(temporary, cancellation_ready_name, client)
             client._receive_many([evaluation, restart])
             result = evaluation["result"]
             assert result["isError"] is True, result
@@ -4951,8 +4794,10 @@ def test_restart_drains_readable_frame_before_abandoning_partial_tail(
                 }
             ], restart_result
 
-            release_descendant()
-            stop_process_group(descendant_group)
+            assert not process_group_exists(descendant_group), (
+                "partial-sideband descendant outlived sandbox retirement"
+            )
+            cleanup_path = None
             descendant_group = None
             client.send(r="echo replacement ready")
             assert last_tool_text(client) == "zod: replacement ready\n"
@@ -5007,7 +4852,9 @@ def test_shutdown_cancels_partial_sideband_frame(binary: Path) -> Transcript:
             assert return_code == 0, client.stderr.read()
             client.stdout.read()
             assert client.stderr.read() == ""
-            stop_process_group(descendant_group)
+            assert not process_group_exists(descendant_group), (
+                "partial-sideband descendant outlived server shutdown"
+            )
             descendant_group = None
             passed = True
             return client.transcript

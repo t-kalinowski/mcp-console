@@ -171,8 +171,11 @@ mcp-console --version
 ```
 
 `mcp-console serve` communicates with its MCP client over standard input and output.
-The standalone `sandbox` command is available for development and supervises descendants it observes from the sandbox root, including processes that enter another process group or session.
-After its startup handshake, an independent guardian retires that observed lifetime if the launcher later crashes.
+Each server worker generation has a host-side sandbox manager that treats its relay and worker process tree as one lifetime.
+The manager supervises descendants it observes from the relay root, including processes that enter another process group or session, and retires the lifetime if the server or relay exits unexpectedly.
+If the manager itself exits unsuccessfully while the relay root remains live and pinned, the server reconstructs its current process tree and performs bounded cleanup before replacing that worker generation.
+It cannot reconstruct a descendant that had already detached from that ancestry before the manager failed.
+The standalone `sandbox` development command uses the same manager and remains covered if its launcher crashes after manager ownership is committed.
 On macOS, a descendant that detaches before the post-spawn tracker observes it remains outside this guarantee.
 Use the MCP server for the supported worker-generation lifecycle.
 

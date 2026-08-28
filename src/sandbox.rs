@@ -17,15 +17,15 @@ use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, Stdio};
 use std::time::Duration;
 
 #[cfg(target_os = "macos")]
-const TEMPORARY_DIRECTORY_CONTROL_DESCRIPTOR: &str = "MCP_CONSOLE_TEMPORARY_DIRECTORY_CONTROL_FD";
+const STARTUP_CONTROL_DESCRIPTOR: &str = "MCP_CONSOLE_SANDBOX_STARTUP_FD";
 #[cfg(target_os = "macos")]
-const TEMPORARY_DIRECTORY_OWNER_PID: &str = "MCP_CONSOLE_TEMPORARY_DIRECTORY_OWNER_PID";
+const STARTUP_READY: u8 = 1;
 #[cfg(target_os = "macos")]
-const TEMPORARY_DIRECTORY_READY: u8 = 1;
+const STARTUP_GO: u8 = 2;
 #[cfg(target_os = "macos")]
-const TEMPORARY_DIRECTORY_COMMIT: u8 = 2;
+const STARTUP_TIMEOUT: Duration = Duration::from_secs(5);
 #[cfg(target_os = "macos")]
-const TEMPORARY_DIRECTORY_HANDOFF_TIMEOUT: Duration = Duration::from_secs(5);
+const BACKGROUND_CLEANUP_TIMEOUT: Duration = Duration::from_secs(1);
 
 #[cfg(target_os = "macos")]
 #[path = "sandbox/macos.rs"]
@@ -34,11 +34,6 @@ mod platform;
 #[cfg(target_os = "macos")]
 #[path = "sandbox/supervision.rs"]
 mod supervision;
-
-#[cfg(target_os = "macos")]
-pub(crate) use platform::TemporaryDirectory as SandboxTemporaryDirectory;
-#[cfg(target_os = "macos")]
-pub(crate) use supervision::DescendantTracker;
 
 #[cfg(not(target_os = "macos"))]
 #[path = "sandbox/unsupported.rs"]
@@ -59,8 +54,8 @@ pub fn run(command_line: &[OsString]) -> Result<ExitCode, String> {
 }
 
 #[cfg(target_os = "macos")]
-pub(crate) fn run_guardian() -> Result<(), String> {
-    supervision::run_guardian()
+pub(crate) fn run_manager() -> Result<(), String> {
+    supervision::run_manager()
 }
 
 #[cfg(target_os = "macos")]
@@ -83,53 +78,42 @@ pub(crate) fn configure_child_reaping() -> Result<(), String> {
 }
 
 #[cfg(target_os = "macos")]
-pub(crate) fn claim_worker_temporary_directory() -> Result<Option<SandboxTemporaryDirectory>, String>
-{
-    let descriptor = match std::env::var(TEMPORARY_DIRECTORY_CONTROL_DESCRIPTOR) {
+pub(crate) fn await_sandbox_startup() -> Result<(), String> {
+    let descriptor = match std::env::var(STARTUP_CONTROL_DESCRIPTOR) {
         Ok(descriptor) => descriptor
             .parse::<libc::c_int>()
-            .map_err(|_| "sandbox temporary-directory control descriptor is invalid".to_string())?,
-        Err(std::env::VarError::NotPresent) => return Ok(None),
+            .map_err(|_| "sandbox startup control descriptor is invalid".to_string())?,
+        Err(std::env::VarError::NotPresent) => return Ok(()),
         Err(std::env::VarError::NotUnicode(_)) => {
-            return Err("sandbox temporary-directory control descriptor is invalid".to_string());
+            return Err("sandbox startup control descriptor is invalid".to_string());
         }
     };
     if descriptor <= libc::STDERR_FILENO {
-        return Err("sandbox temporary-directory control descriptor is invalid".to_string());
+        return Err("sandbox startup control descriptor is invalid".to_string());
     }
-    let owner_pid = std::env::var(TEMPORARY_DIRECTORY_OWNER_PID)
-        .ok()
-        .and_then(|owner_pid| owner_pid.parse::<libc::pid_t>().ok())
-        .filter(|owner_pid| *owner_pid > 0)
-        .ok_or_else(|| "sandbox temporary-directory owner PID is invalid".to_string())?;
-    // SAFETY: the built-in relay claims the handoff before it starts any
+    // SAFETY: the built-in relay reaches this gate before it starts any
     // threads, so no other thread can inspect or mutate the process environment.
     unsafe {
-        std::env::remove_var(TEMPORARY_DIRECTORY_CONTROL_DESCRIPTOR);
-        std::env::remove_var(TEMPORARY_DIRECTORY_OWNER_PID);
+        std::env::remove_var(STARTUP_CONTROL_DESCRIPTOR);
     }
-    let path = std::env::var_os("TMPDIR")
-        .map(std::path::PathBuf::from)
-        .ok_or_else(|| "sandbox temporary directory is missing".to_string())?;
-    let temporary_directory = SandboxTemporaryDirectory::adopt(path, owner_pid)?;
-    // SAFETY: the trusted parent supplied this owned descriptor for the
-    // temporary-directory handoff and relinquished its copy after exec.
+    // SAFETY: the trusted host supplied this owned descriptor so it can commit
+    // sandbox tracking before the relay launches the worker.
     let mut control = unsafe { UnixStream::from_raw_fd(descriptor) };
     control
-        .set_read_timeout(Some(TEMPORARY_DIRECTORY_HANDOFF_TIMEOUT))
-        .and_then(|()| control.set_write_timeout(Some(TEMPORARY_DIRECTORY_HANDOFF_TIMEOUT)))
-        .map_err(|error| format!("failed to configure temporary-directory handoff: {error}"))?;
+        .set_read_timeout(Some(STARTUP_TIMEOUT))
+        .and_then(|()| control.set_write_timeout(Some(STARTUP_TIMEOUT)))
+        .map_err(|error| format!("failed to configure sandbox startup gate: {error}"))?;
     control
-        .write_all(&[TEMPORARY_DIRECTORY_READY])
-        .map_err(|error| format!("failed to report temporary-directory ownership: {error}"))?;
-    let mut commit = [0];
+        .write_all(&[STARTUP_READY])
+        .map_err(|error| format!("failed to report sandbox startup readiness: {error}"))?;
+    let mut command = [0];
     control
-        .read_exact(&mut commit)
-        .map_err(|error| format!("temporary-directory ownership was not committed: {error}"))?;
-    if commit != [TEMPORARY_DIRECTORY_COMMIT] {
-        return Err("temporary-directory ownership commit is invalid".to_string());
+        .read_exact(&mut command)
+        .map_err(|error| format!("sandbox startup was not committed: {error}"))?;
+    if command != [STARTUP_GO] {
+        return Err("sandbox startup commit is invalid".to_string());
     }
-    Ok(Some(temporary_directory))
+    Ok(())
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -138,8 +122,8 @@ pub fn run(command_line: &[OsString]) -> Result<ExitCode, String> {
 }
 
 #[cfg(not(target_os = "macos"))]
-pub(crate) fn run_guardian() -> Result<(), String> {
-    Err("the sandbox guardian is currently supported only on macOS".to_string())
+pub(crate) fn run_manager() -> Result<(), String> {
+    Err("the sandbox manager is currently supported only on macOS".to_string())
 }
 
 #[cfg(target_os = "macos")]
@@ -206,11 +190,11 @@ pub(crate) fn run_guardian() -> Result<(), String> {
 pub(crate) struct SandboxedCommand {
     command: Command,
     temporary_directory: platform::TemporaryDirectory,
-    temporary_directory_transfer: Option<TemporaryDirectoryTransfer>,
+    startup_gate: Option<StartupGate>,
 }
 
 #[cfg(target_os = "macos")]
-struct TemporaryDirectoryTransfer {
+struct StartupGate {
     parent: UnixStream,
     child: UnixStream,
 }
@@ -218,16 +202,16 @@ struct TemporaryDirectoryTransfer {
 #[cfg(target_os = "macos")]
 /// A direct sandboxed child and its host-owned lifetime state.
 ///
-/// Retain this owner until the child exits, then call `force_stop` to reap it
-/// and retire its process-group lifetime. Dropping it does not terminate the
-/// child. Unless ownership was explicitly transferred to the child, dropping
-/// it removes the private directory. Piped streams can be taken and moved to
-/// independent I/O tasks before retirement.
+/// Retain this owner until retirement, then call `force_stop` to retire the
+/// sandbox root and observed descendants and reap its direct process. Dropping
+/// this owner runs the same path on a best-effort basis, keeping sandbox-lifetime
+/// cleanup before direct-process reaping. Piped streams can be taken and moved
+/// to independent I/O tasks before retirement.
 #[must_use = "retain the sandboxed child until it is explicitly retired"]
 pub(crate) struct SandboxedChild {
     child: Child,
+    manager: Option<supervision::SandboxManager>,
     retirement: SandboxedChildRetirement,
-    _temporary_directory: Option<platform::TemporaryDirectory>,
 }
 
 #[cfg(target_os = "macos")]
@@ -246,7 +230,7 @@ impl SandboxedCommand {
         let mut sandboxed = Self {
             command,
             temporary_directory,
-            temporary_directory_transfer: None,
+            startup_gate: None,
         };
         sandboxed
             .env("TMPDIR", temporary_directory_path)
@@ -300,76 +284,80 @@ impl SandboxedCommand {
         self
     }
 
-    /// Isolates a background sandbox command for bounded forced termination.
-    pub(crate) fn new_process_group(&mut self) -> &mut Self {
-        self.command.process_group(0);
-        self
-    }
-
-    /// Transfers private temporary-directory ownership to the sandboxed child
-    /// before it starts untrusted work.
-    pub(crate) fn transfer_temporary_directory(&mut self) -> Result<&mut Self, String> {
+    /// Holds the built-in relay at process entry until host-side sandbox
+    /// tracking and temporary-directory ownership are committed.
+    pub(crate) fn gate_startup(&mut self) -> Result<&mut Self, String> {
         assert!(
-            self.temporary_directory_transfer.is_none(),
-            "temporary-directory ownership can be transferred only once"
+            self.startup_gate.is_none(),
+            "sandbox startup can be gated only once"
         );
-        let (parent, child) = UnixStream::pair().map_err(|error| {
-            format!("failed to create temporary-directory ownership control: {error}")
-        })?;
+        let (parent, child) = UnixStream::pair()
+            .map_err(|error| format!("failed to create sandbox startup control: {error}"))?;
         self.command
-            .env(
-                TEMPORARY_DIRECTORY_CONTROL_DESCRIPTOR,
-                child.as_raw_fd().to_string(),
-            )
-            .env(
-                TEMPORARY_DIRECTORY_OWNER_PID,
-                std::process::id().to_string(),
-            );
-        self.temporary_directory_transfer = Some(TemporaryDirectoryTransfer { parent, child });
+            .env(STARTUP_CONTROL_DESCRIPTOR, child.as_raw_fd().to_string());
+        self.startup_gate = Some(StartupGate { parent, child });
         Ok(self)
     }
 
-    /// Spawns the sandboxed program and retains or completes the requested
-    /// temporary-directory ownership transfer.
+    /// Spawns the sandboxed program under a host-side sandbox lifetime manager.
     pub(crate) fn spawn(mut self) -> Result<SandboxedChild, String> {
-        self.command.env("TMPDIR", self.temporary_directory.path());
+        self.command
+            .env("TMPDIR", self.temporary_directory.path())
+            .process_group(0);
         let inherited_descriptors = self
-            .temporary_directory_transfer
+            .startup_gate
             .as_ref()
-            .map(|transfer| vec![transfer.child.as_raw_fd()])
+            .map(|gate| vec![gate.child.as_raw_fd()])
             .unwrap_or_default();
         supervision::configure_command(&mut self.command, inherited_descriptors)?;
+        let mut manager = supervision::SandboxManager::spawn(BACKGROUND_CLEANUP_TIMEOUT)?;
         let mut child = self
             .command
             .spawn()
             .map_err(|error| format!("failed to launch `{}`: {error}", platform::SANDBOX_EXEC))?;
+        let gated_startup = self.startup_gate.is_some();
 
-        let temporary_directory = match self.temporary_directory_transfer.take() {
-            Some(transfer) => {
-                drop(transfer.child);
-                let mut control = match wait_for_temporary_directory_owner(
-                    transfer.parent,
-                    self.temporary_directory.path(),
-                ) {
-                    Ok(control) => control,
-                    Err(error) => return Err(stop_after_handoff_failure(&mut child, error)),
-                };
-                self.temporary_directory.relinquish();
-                if let Err(error) = control.write_all(&[TEMPORARY_DIRECTORY_COMMIT]) {
-                    drop(control);
-                    return Err(stop_after_handoff_failure(
-                        &mut child,
-                        format!("failed to commit temporary-directory ownership: {error}"),
-                    ));
+        let startup_control = match self.startup_gate.take() {
+            Some(gate) => {
+                drop(gate.child);
+                match wait_for_startup_ready(gate.parent) {
+                    Ok(control) => Some(control),
+                    Err(error) => {
+                        drop(manager);
+                        return Err(stop_after_startup_failure(&mut child, error));
+                    }
                 }
-                None
             }
-            None => Some(self.temporary_directory),
+            None => None,
         };
+
+        if let Err(error) = manager.observe(child.id(), self.temporary_directory.path()) {
+            if !gated_startup {
+                self.temporary_directory.preserve();
+            }
+            drop(manager);
+            return Err(stop_after_startup_failure(&mut child, error));
+        }
+        if let Err(error) = manager.commit() {
+            let manager_error = manager.stop().err();
+            if manager_error.is_some() {
+                self.temporary_directory.preserve();
+            }
+            return Err(stop_after_manager_failure(&mut child, error, manager_error));
+        }
+        manager.monitor(child.id(), self.temporary_directory);
+        if let Some(mut control) = startup_control
+            && let Err(error) = control.write_all(&[STARTUP_GO])
+        {
+            let error = format!("failed to commit sandbox startup: {error}");
+            let manager_error = manager.stop().err();
+            return Err(stop_after_manager_failure(&mut child, error, manager_error));
+        }
+
         Ok(SandboxedChild {
             child,
+            manager: Some(manager),
             retirement: SandboxedChildRetirement::Active,
-            _temporary_directory: temporary_directory,
         })
     }
 
@@ -380,34 +368,53 @@ impl SandboxedCommand {
 }
 
 #[cfg(target_os = "macos")]
-fn wait_for_temporary_directory_owner(
-    mut control: UnixStream,
-    path: &std::path::Path,
-) -> Result<UnixStream, String> {
+fn wait_for_startup_ready(mut control: UnixStream) -> Result<UnixStream, String> {
     control
-        .set_read_timeout(Some(TEMPORARY_DIRECTORY_HANDOFF_TIMEOUT))
-        .and_then(|()| control.set_write_timeout(Some(TEMPORARY_DIRECTORY_HANDOFF_TIMEOUT)))
-        .map_err(|error| {
-            format!(
-                "failed to configure temporary-directory ownership for `{}`: {error}",
-                path.display()
-            )
-        })?;
+        .set_read_timeout(Some(STARTUP_TIMEOUT))
+        .and_then(|()| control.set_write_timeout(Some(STARTUP_TIMEOUT)))
+        .map_err(|error| format!("failed to configure sandbox startup control: {error}"))?;
     let mut ready = [0];
-    control.read_exact(&mut ready).map_err(|error| {
-        format!(
-            "sandboxed child did not claim temporary directory `{}`: {error}",
-            path.display()
-        )
-    })?;
-    if ready != [TEMPORARY_DIRECTORY_READY] {
-        return Err("sandboxed child sent an invalid temporary-directory claim".to_string());
+    control
+        .read_exact(&mut ready)
+        .map_err(|error| format!("sandboxed child did not reach its startup gate: {error}"))?;
+    if ready != [STARTUP_READY] {
+        return Err("sandboxed child sent an invalid startup response".to_string());
     }
     Ok(control)
 }
 
 #[cfg(target_os = "macos")]
-fn stop_after_handoff_failure(child: &mut Child, mut error: String) -> String {
+fn stop_after_startup_failure(child: &mut Child, error: String) -> String {
+    stop_unmanaged_child(child, error)
+}
+
+#[cfg(target_os = "macos")]
+fn stop_after_manager_failure(
+    child: &mut Child,
+    mut error: String,
+    manager_error: Option<String>,
+) -> String {
+    let Some(manager_error) = manager_error else {
+        if let Err(wait_error) = child.wait() {
+            error.push_str(&format!(
+                "; additionally failed to reap `{}`: {wait_error}",
+                platform::SANDBOX_EXEC
+            ));
+        }
+        return error;
+    };
+    error.push_str(&format!("; additionally, {manager_error}"));
+    stop_unmanaged_child(child, error)
+}
+
+#[cfg(target_os = "macos")]
+fn stop_unmanaged_child(child: &mut Child, mut error: String) -> String {
+    if let Err(group_error) = platform::kill_process_group(child.id()) {
+        error.push_str(&format!(
+            "; additionally failed to stop `{}` process group: {group_error}",
+            platform::SANDBOX_EXEC
+        ));
+    }
     let exited =
         platform::wait_for_process_exit_without_reaping(child.id(), Duration::from_secs(1))
             .unwrap_or(false);
@@ -449,9 +456,9 @@ impl SandboxedChild {
     /// Waits at most `timeout` for the direct sandbox process to exit without
     /// reaping it.
     ///
-    /// Retaining the waitable child pins its PID, which is also the process
-    /// group ID created by `new_process_group`, until `force_stop` completes
-    /// exact group cleanup and reaps the direct process.
+    /// Retaining the waitable child pins its PID, which is also its process-group
+    /// ID, until sandbox-lifetime cleanup completes and the direct process is
+    /// reaped.
     pub(crate) fn wait_timeout_without_reaping(&self, timeout: Duration) -> Result<bool, String> {
         match &self.retirement {
             SandboxedChildRetirement::Retired { .. } => return Ok(true),
@@ -466,36 +473,38 @@ impl SandboxedChild {
         })
     }
 
-    /// Kills the sandbox process group and reaps its direct process.
-    ///
-    /// Group cleanup still runs when the direct process has already exited so
-    /// descendants cannot outlive the sandbox lifetime supervisor.
+    /// Stops the root and observed descendants through the host-side manager or
+    /// its recovery monitor, then reaps the direct sandbox process.
     pub(crate) fn force_stop(&mut self) -> Result<(), String> {
-        let prior_error = match &self.retirement {
+        match &self.retirement {
             SandboxedChildRetirement::Retired { error } => return stored_retirement_result(error),
             SandboxedChildRetirement::AwaitingReap { error } => {
                 return self.reap_after_stop(error.clone());
             }
             SandboxedChildRetirement::Failed { error } => return Err(error.clone()),
-            SandboxedChildRetirement::Active => None,
-        };
+            SandboxedChildRetirement::Active => {}
+        }
 
-        // `new_process_group` made the child's PID its process-group ID. If
-        // descendant cleanup fails, still stop and reap the direct child while
-        // preserving that error so a replacement is not started.
-        if let Err(group_error) = platform::kill_process_group(self.child.id()) {
-            let group_error = append_retirement_error(
-                prior_error,
-                format!(
-                    "failed to stop `{}` process group: {group_error}",
-                    platform::SANDBOX_EXEC
-                ),
-            );
+        let manager = self
+            .manager
+            .take()
+            .expect("active sandbox child should retain its lifetime manager");
+        let mut error = manager.stop().err();
+        if error.is_some() {
+            if let Err(group_error) = platform::kill_process_group(self.child.id()) {
+                error = Some(append_retirement_error(
+                    error,
+                    format!(
+                        "failed to stop `{}` process group: {group_error}",
+                        platform::SANDBOX_EXEC
+                    ),
+                ));
+            }
             if let Err(kill_error) = self.child.kill()
                 && kill_error.raw_os_error() != Some(libc::ESRCH)
             {
                 let error = append_retirement_error(
-                    Some(group_error),
+                    error,
                     format!(
                         "failed to stop direct `{}` process: {kill_error}",
                         platform::SANDBOX_EXEC
@@ -506,16 +515,12 @@ impl SandboxedChild {
                 };
                 return Err(error);
             }
-            self.retirement = SandboxedChildRetirement::AwaitingReap {
-                error: Some(group_error.clone()),
-            };
-            return self.reap_after_stop(Some(group_error));
         }
 
         self.retirement = SandboxedChildRetirement::AwaitingReap {
-            error: prior_error.clone(),
+            error: error.clone(),
         };
-        self.reap_after_stop(prior_error)
+        self.reap_after_stop(error)
     }
 
     fn reap_after_stop(&mut self, prior_error: Option<String>) -> Result<(), String> {
@@ -551,6 +556,13 @@ impl SandboxedChild {
 }
 
 #[cfg(target_os = "macos")]
+impl Drop for SandboxedChild {
+    fn drop(&mut self) {
+        let _ = self.force_stop();
+    }
+}
+
+#[cfg(target_os = "macos")]
 fn append_retirement_error(prior: Option<String>, error: String) -> String {
     prior.map_or(error.clone(), |prior| {
         format!("{prior}; additionally {error}")
@@ -560,23 +572,4 @@ fn append_retirement_error(prior: Option<String>, error: String) -> String {
 #[cfg(target_os = "macos")]
 fn stored_retirement_result(error: &Option<String>) -> Result<(), String> {
     error.as_ref().map_or(Ok(()), |error| Err(error.clone()))
-}
-
-#[cfg(target_os = "macos")]
-/// Kills every other live member of the caller's sandbox process group.
-///
-/// The sandbox relay remains alive to reap its direct worker and flush its
-/// protocol output. Fail fast unless the caller is the process-group leader so
-/// this cannot accidentally target an inherited server process group.
-pub(crate) fn force_stop_process_group_members_except_self() -> Result<(), String> {
-    let process_id = std::process::id();
-    // SAFETY: `getpgrp` has no error return and reads the calling process's
-    // current process-group ID.
-    let process_group_id = unsafe { libc::getpgrp() };
-    if process_group_id != process_id as libc::pid_t {
-        return Err("sandbox relay is not its process-group leader".to_string());
-    }
-
-    platform::kill_process_group_members_except(process_id, process_id)
-        .map_err(|error| format!("failed to stop sandbox process-group members: {error}"))
 }

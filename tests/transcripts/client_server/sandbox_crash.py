@@ -4,6 +4,7 @@ import os
 import re
 import shutil
 import signal
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -91,6 +92,43 @@ def _wait_for_survivors(pids: tuple[int, ...], timeout: float) -> list[int]:
     return [pid for pid in survivors if _pid_is_alive(pid)]
 
 
+def _wait_for_generation_failure(client: McpClient) -> None:
+    deadline = time.monotonic() + 5
+    poll_start = len(client.transcript)
+    while True:
+        result = client.send()
+        if result.get("isError") is True:
+            assert result["content"][0]["text"] == (
+                "[worker relay stdout closed before retirement completed]\n"
+                "[worker stopped: in-memory state lost]"
+            ), result
+            final_poll = client.transcript[-1]
+            client.transcript[poll_start:] = [final_poll]
+            return
+        assert time.monotonic() < deadline, (
+            "server did not retire the failed generation"
+        )
+        time.sleep(0.01)
+
+
+def _manager_pid(server_pid: int) -> int:
+    processes = subprocess.check_output(
+        ["ps", "-axo", "pid=,ppid=,command="],
+        text=True,
+    )
+    managers = []
+    for process in processes.splitlines():
+        fields = process.strip().split(None, 2)
+        if (
+            len(fields) == 3
+            and int(fields[1]) == server_pid
+            and "sandbox-manager" in fields[2]
+        ):
+            managers.append(int(fields[0]))
+    assert len(managers) == 1, managers
+    return managers[0]
+
+
 def _kill_if_alive(pid: int | None) -> bool:
     if pid is None or not _pid_is_alive(pid):
         return False
@@ -110,10 +148,10 @@ def _close_client_streams(client: McpClient) -> None:
 
 
 def test_server_crash_retires_the_worker_generation(binary: Path) -> Transcript:
-    # The sandbox relay must treat loss of its host-side owner as retirement of
-    # the entire worker generation. A detached processx child must not survive
-    # merely because the server received an uncatchable signal before it could
-    # run its normal shutdown path.
+    # The host-side sandbox manager must treat loss of the server as retirement
+    # of the entire worker generation. A detached processx child must not
+    # survive merely because the server received an uncatchable signal before
+    # it could run its normal shutdown path.
     client = McpClient(binary, ("serve",))
     generation: tuple[int, int, int, Path] | None = None
     try:
@@ -142,6 +180,90 @@ def test_server_crash_retires_the_worker_generation(binary: Path) -> Transcript:
             for pid in generation[:3]:
                 _kill_if_alive(pid)
             shutil.rmtree(generation[3], ignore_errors=True)
+        _close_client_streams(client)
+
+
+def test_relay_crash_retires_the_worker_generation(binary: Path) -> Transcript:
+    # The host-side sandbox lifetime owner must retire the relay and every
+    # observed descendant when the relay itself exits. Cleanup cannot depend on
+    # code running inside the relay.
+    client = McpClient(binary, ("serve",))
+    generation: tuple[int, int, int, Path] | None = None
+    try:
+        client._initialize_and_list_tools()
+        generation = _spawn_processx_generation(client)
+
+        os.kill(generation[0], signal.SIGKILL)
+        client.transcript.append({"relay_signal": "SIGKILL"})
+        _wait_for_generation_failure(client)
+        client.send(r=code('writeLines("replacement ready")'))
+        replacement = _last_text(client)
+        assert replacement == "[starting new worker]\nreplacement ready\n", repr(
+            replacement
+        )
+        survivors = _wait_for_survivors(generation[:3], timeout=5)
+        survivor_names = [
+            name
+            for name, pid in zip(("relay", "worker", "processx child"), generation[:3])
+            if pid in survivors
+        ]
+
+        assert survivors == [], (
+            f"worker-generation processes survived: {survivor_names}"
+        )
+        assert not generation[3].exists(), (
+            f"worker temporary directory survived relay crash: {generation[3]}"
+        )
+        return client.transcript
+    finally:
+        stop_client(client)
+        if generation is not None:
+            for pid in generation[:3]:
+                _kill_if_alive(pid)
+            shutil.rmtree(generation[3], ignore_errors=True)
+        _close_client_streams(client)
+
+
+def test_manager_crash_retires_the_worker_generation(binary: Path) -> Transcript:
+    # While the relay root remains live and pinned, the server-side owner must
+    # reconstruct its current process tree if the committed manager exits.
+    client = McpClient(binary, ("serve",))
+    generation: tuple[int, int, int, Path] | None = None
+    manager_pid: int | None = None
+    try:
+        client._initialize_and_list_tools()
+        generation = _spawn_processx_generation(client)
+        manager_pid = _manager_pid(client.process.pid)
+
+        os.kill(manager_pid, signal.SIGKILL)
+        client.transcript.append({"manager_signal": "SIGKILL"})
+        _wait_for_generation_failure(client)
+        client.send(r=code('writeLines("replacement ready")'))
+        replacement = _last_text(client)
+        assert replacement == "[starting new worker]\nreplacement ready\n", repr(
+            replacement
+        )
+        survivors = _wait_for_survivors(generation[:3], timeout=5)
+        survivor_names = [
+            name
+            for name, pid in zip(("relay", "worker", "processx child"), generation[:3])
+            if pid in survivors
+        ]
+
+        assert survivors == [], (
+            f"worker-generation processes survived manager crash: {survivor_names}"
+        )
+        assert not generation[3].exists(), (
+            f"worker temporary directory survived manager crash: {generation[3]}"
+        )
+        return client.transcript
+    finally:
+        stop_client(client)
+        if generation is not None:
+            for pid in generation[:3]:
+                _kill_if_alive(pid)
+            shutil.rmtree(generation[3], ignore_errors=True)
+        _kill_if_alive(manager_pid)
         _close_client_streams(client)
 
 

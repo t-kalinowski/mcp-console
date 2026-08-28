@@ -14,8 +14,8 @@ use super::{
 };
 use crate::relay_protocol::{JsonlReader, JsonlWriter, RelayCommand, RelayEvent};
 
-/// Lets the relay finish its bounded group cleanup, stream drain, and protocol flush
-/// after the worker's own shutdown deadline before the outer fail-safe stops it.
+/// Lets the relay finish direct-worker shutdown, stream draining, and protocol
+/// flushing after the worker's deadline before the outer fail-safe stops it.
 const RELAY_RETIREMENT_GRACE: Duration = Duration::from_secs(2);
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -145,15 +145,14 @@ impl WorkerRuntime {
         );
         if use_builtin_relay {
             command.arg("worker-relay");
-            command.transfer_temporary_directory()?;
+            command.gate_startup()?;
         }
         command
             .arg(executable.as_os_str())
             .args(arguments)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::inherit())
-            .new_process_group();
+            .stderr(Stdio::inherit());
 
         let (worker_events, worker_event_receiver) = mpsc::channel();
 
@@ -777,14 +776,28 @@ impl RelayConnection {
     }
 
     fn finish_tasks(&mut self) -> Result<Option<WorkerProcessOutcome>, String> {
-        let Some(tasks) = self.tasks.take() else {
-            return Ok(None);
+        let tasks = match self.tasks.take() {
+            Some(tasks) => {
+                let command_writer =
+                    join_worker_thread(tasks.command_writer.stop(), "relay command writer");
+                let event_reader = join_worker_thread(tasks.event_reader, "relay event reader");
+                let outcome = tasks.dispatcher.join();
+                command_writer.and(event_reader).and(outcome)
+            }
+            None => Ok(None),
         };
-        let command_writer =
-            join_worker_thread(tasks.command_writer.stop(), "relay command writer");
-        let event_reader = join_worker_thread(tasks.event_reader, "relay event reader");
-        let outcome = tasks.dispatcher.join();
-        command_writer.and(event_reader).and(outcome)
+        let cleanup = self
+            .child
+            .lock()
+            .map_err(|_| "worker child lock poisoned".to_string())?
+            .force_stop();
+        match (tasks, cleanup) {
+            (Ok(outcome), Ok(())) => Ok(outcome),
+            (Err(error), Ok(())) | (Ok(_), Err(error)) => Err(error),
+            (Err(error), Err(cleanup_error)) => Err(format!(
+                "{error}; additionally failed to retire sandbox lifetime: {cleanup_error}"
+            )),
+        }
     }
 }
 

@@ -95,7 +95,6 @@ static int delayed_poll(struct pollfd *descriptors, nfds_t count, int timeout) {
     }
     descriptors[1].revents = cancellation.revents;
   }
-  mark("MCP_CONSOLE_TEST_POLL_CANCEL_READY");
   return (descriptors[0].revents != 0) + (descriptors[1].revents != 0);
 }
 

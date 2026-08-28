@@ -32,7 +32,7 @@ pub(super) fn wait_for_process_exit_without_reaping(
         // SAFETY: `information` points to writable `siginfo_t` storage and the
         // positive PID names our direct child. `WNOWAIT` observes termination
         // without consuming the wait status, keeping the PID unavailable for
-        // reuse until the caller finishes process-group cleanup and reaps it.
+        // reuse until the caller finishes its cleanup and reaps it.
         let result = unsafe {
             libc::waitid(
                 libc::P_PID,
@@ -62,9 +62,9 @@ pub(super) fn wait_for_process_exit_without_reaping(
                 CHILD_STOPPED | CHILD_CONTINUED => {
                     // Darwin may report a pending stop or continue notification
                     // even though this observation requested only `WEXITED`.
-                    // Consume only non-exit notifications so a stopped relay is
-                    // not mistaken for an exited relay, while leaving any exit
-                    // status waitable to pin the process-group identity.
+                    // Consume only non-exit notifications so a stopped child is
+                    // not mistaken for an exited child, while leaving any exit
+                    // status waitable to pin its identity.
                     if let Err(error) = consume_non_exit_notification(wait_id, process_id) {
                         if error.kind() == io::ErrorKind::Interrupted {
                             if Instant::now() >= deadline {
@@ -98,6 +98,58 @@ pub(super) fn wait_for_process_exit_without_reaping(
             return Ok(false);
         }
         std::thread::sleep(CHILD_EXIT_POLL_INTERVAL.min(deadline.saturating_duration_since(now)));
+    }
+}
+
+pub(super) fn wait_for_process_exit_without_reaping_blocking(process_id: u32) -> io::Result<()> {
+    let process_id = valid_process_id(process_id, "process")?;
+    let wait_id = libc::id_t::try_from(process_id)
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "invalid process ID"))?;
+
+    loop {
+        let mut information = std::mem::MaybeUninit::<libc::siginfo_t>::zeroed();
+        // SAFETY: `information` points to writable `siginfo_t` storage and the
+        // positive PID names our direct child. `WNOWAIT` leaves the exit status
+        // available for the monitor thread to reap after it inspects the result.
+        let result = unsafe {
+            libc::waitid(
+                libc::P_PID,
+                wait_id,
+                information.as_mut_ptr(),
+                libc::WEXITED | libc::WNOWAIT,
+            )
+        };
+        if result < 0 {
+            let error = io::Error::last_os_error();
+            if error.kind() == io::ErrorKind::Interrupted {
+                continue;
+            }
+            return Err(error);
+        }
+
+        // SAFETY: successful `waitid` initialized the supplied `siginfo_t`.
+        let information = unsafe { information.assume_init() };
+        if information.si_pid != process_id {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "waitid returned process {} while waiting for {process_id}",
+                    information.si_pid
+                ),
+            ));
+        }
+        match information.si_code {
+            CHILD_EXITED | CHILD_KILLED | CHILD_DUMPED => return Ok(()),
+            CHILD_STOPPED | CHILD_CONTINUED => {
+                consume_non_exit_notification(wait_id, process_id)?;
+            }
+            code => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("waitid returned unexpected child status code {code}"),
+                ));
+            }
+        }
     }
 }
 
@@ -160,16 +212,7 @@ pub(super) fn kill_process_group(process_group_id: u32) -> io::Result<()> {
         }
     }
 
-    kill_process_group_members(process_group_id, None)
-}
-
-pub(super) fn kill_process_group_members_except(
-    process_group_id: u32,
-    excluded_process_id: u32,
-) -> io::Result<()> {
-    let process_group_id = valid_process_id(process_group_id, "process group")?;
-    let excluded_process_id = valid_process_id(excluded_process_id, "excluded process")?;
-    kill_process_group_members(process_group_id, Some(excluded_process_id))
+    kill_process_group_members(process_group_id)
 }
 
 fn valid_process_id(process_id: u32, kind: &str) -> io::Result<libc::pid_t> {
@@ -179,20 +222,16 @@ fn valid_process_id(process_id: u32, kind: &str) -> io::Result<libc::pid_t> {
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, format!("invalid {kind} ID")))
 }
 
-fn kill_process_group_members(
-    process_group_id: libc::pid_t,
-    excluded_process_id: Option<libc::pid_t>,
-) -> io::Result<()> {
+fn kill_process_group_members(process_group_id: libc::pid_t) -> io::Result<()> {
     // Group signalling and the EPERM fallback both operate on PID snapshots.
-    // The full-group caller normally keeps the direct leader unreaped while
-    // rescanning so its PID pins the process-group identity until the caller
-    // collects it. If it was already reaped, exact membership checks still
-    // prevent a stale snapshot from targeting a process that changed groups.
-    // The relay-side caller remains alive as the excluded group leader.
+    // The caller normally keeps the direct leader unreaped while rescanning so
+    // its PID pins the process-group identity until the caller collects it. If
+    // it was already reaped, exact membership checks still prevent a stale
+    // snapshot from targeting a process that changed groups.
     let deadline = Instant::now() + PROCESS_GROUP_STOP_TIMEOUT;
     loop {
         let mut members = process_group_members(process_group_id)?;
-        if excluded_process_id.is_none() && !members.contains(&process_group_id) {
+        if !members.contains(&process_group_id) {
             members.push(process_group_id);
         }
         // Stop the leader before its descendants so it cannot fork after this
@@ -202,7 +241,7 @@ fn kill_process_group_members(
         let mut observed_live_member = false;
         let mut first_error = None;
         for process_id in members {
-            if process_id <= 0 || Some(process_id) == excluded_process_id {
+            if process_id <= 0 {
                 continue;
             }
             match process_is_live_group_member(process_id, process_group_id) {
@@ -456,10 +495,6 @@ impl TemporaryDirectory {
     }
 
     pub(crate) fn preserve(self) {
-        std::mem::forget(self);
-    }
-
-    pub(crate) fn relinquish(self) {
         std::mem::forget(self);
     }
 }

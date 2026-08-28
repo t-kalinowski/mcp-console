@@ -6,7 +6,6 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::time::{Duration, Instant};
 
-const PROCESS_EXIT_TIMEOUT: Duration = Duration::from_secs(5);
 const PROCESS_REAP_CHECK_INTERVAL: Duration = Duration::from_millis(10);
 const TRACKER_EVENT_CAPACITY: usize = 32;
 #[allow(deprecated)]
@@ -17,6 +16,12 @@ pub(crate) struct DescendantTracker {
     state: TrackerState,
 }
 
+pub(super) struct RootExitWaiter {
+    kqueue: OwnedFd,
+    root: ProcessIdentity,
+    root_exited: bool,
+}
+
 pub(super) enum EventWait {
     Events,
     RootExited,
@@ -25,20 +30,6 @@ pub(super) enum EventWait {
 
 impl DescendantTracker {
     pub(crate) fn start(root_pid: libc::pid_t) -> Result<Self, String> {
-        Self::start_inner(root_pid, None)
-    }
-
-    pub(super) fn start_with_signal_relay(
-        root_pid: libc::pid_t,
-        signal_relay: &SignalRelay,
-    ) -> Result<Self, String> {
-        Self::start_inner(root_pid, Some(signal_relay))
-    }
-
-    fn start_inner(
-        root_pid: libc::pid_t,
-        signal_relay: Option<&SignalRelay>,
-    ) -> Result<Self, String> {
         let kqueue_descriptor = unsafe { libc::kqueue() };
         if kqueue_descriptor < 0 {
             return Err(format!(
@@ -52,7 +43,7 @@ impl DescendantTracker {
         // kqueue NOTE_TRACK facility is unsupported. A descendant that becomes
         // orphaned before this post-spawn watch, or before a NOTE_FORK event can
         // be paired with a libproc snapshot, is therefore an intentional boundary
-        // of the initial launcher. Once observed, descendants that call setsid(),
+        // of this tracker instance. Once observed, descendants that call setsid(),
         // such as processx children, remain tracked by their PID and start time.
         let root = process_identity(root_pid)?
             .ok_or_else(|| format!("sandbox root {root_pid} exited before descendant tracking"))?;
@@ -65,9 +56,6 @@ impl DescendantTracker {
             return Err(format!(
                 "sandbox root {root_pid} changed before descendant tracking"
             ));
-        }
-        if let Some(signal_relay) = signal_relay {
-            watch_signals(kqueue.as_raw_fd(), signal_relay)?;
         }
 
         Ok(Self { kqueue, state })
@@ -178,8 +166,8 @@ impl DescendantTracker {
         }
     }
 
-    pub(super) fn terminate_after_root_exit(self) -> Result<(), String> {
-        self.terminate(true, PROCESS_EXIT_TIMEOUT)
+    pub(crate) fn stop(self, timeout: Duration) -> Result<(), String> {
+        self.terminate(false, timeout)
     }
 
     fn terminate(mut self, mut root_exited: bool, timeout: Duration) -> Result<(), String> {
@@ -238,6 +226,120 @@ impl DescendantTracker {
             return Ok(true);
         };
         Ok(info.identity != root || info.is_zombie)
+    }
+}
+
+impl RootExitWaiter {
+    pub(super) fn start(root_pid: libc::pid_t, signal_relay: &SignalRelay) -> Result<Self, String> {
+        let kqueue_descriptor = unsafe { libc::kqueue() };
+        if kqueue_descriptor < 0 {
+            return Err(format!(
+                "failed to create the sandbox root observer: {}",
+                std::io::Error::last_os_error()
+            ));
+        }
+        let kqueue = unsafe { OwnedFd::from_raw_fd(kqueue_descriptor) };
+
+        let info = process_info(root_pid)?
+            .ok_or_else(|| format!("sandbox root {root_pid} exited before exit observation"))?;
+        let root = info.identity;
+        if !info.is_zombie {
+            match watch_root_exit(kqueue.as_raw_fd(), root_pid) {
+                Ok(()) => {}
+                Err(WatchProcessError::Gone) => {
+                    return Err(format!(
+                        "sandbox root {root_pid} exited before exit observation"
+                    ));
+                }
+                Err(WatchProcessError::Other(error)) => {
+                    return Err(format!("failed to watch sandbox root {root_pid}: {error}"));
+                }
+            }
+            if process_identity(root_pid)? != Some(root) {
+                remove_process_watch(kqueue.as_raw_fd(), root_pid);
+                return Err(format!(
+                    "sandbox root {root_pid} changed before exit observation"
+                ));
+            }
+        }
+        watch_signals(kqueue.as_raw_fd(), signal_relay)?;
+
+        Ok(Self {
+            kqueue,
+            root,
+            root_exited: info.is_zombie,
+        })
+    }
+
+    pub(super) fn wait_for_events(
+        &mut self,
+        timeout: Option<Duration>,
+    ) -> Result<EventWait, String> {
+        if self.root_exited {
+            return Ok(EventWait::RootExited);
+        }
+
+        let mut events: [libc::kevent; TRACKER_EVENT_CAPACITY] =
+            unsafe { std::mem::MaybeUninit::zeroed().assume_init() };
+        let timeout = timeout.map(|duration| libc::timespec {
+            tv_sec: duration.as_secs() as libc::time_t,
+            tv_nsec: duration.subsec_nanos() as libc::c_long,
+        });
+        let timeout = timeout
+            .as_ref()
+            .map_or(std::ptr::null(), |timeout| timeout as *const _);
+
+        let event_count = unsafe {
+            libc::kevent(
+                self.kqueue.as_raw_fd(),
+                std::ptr::null(),
+                0,
+                events.as_mut_ptr(),
+                events.len() as libc::c_int,
+                timeout,
+            )
+        };
+        if event_count < 0 {
+            let error = std::io::Error::last_os_error();
+            if error.kind() == std::io::ErrorKind::Interrupted {
+                return Ok(EventWait::Events);
+            }
+            return Err(format!("sandbox root observer failed: {error}"));
+        }
+        if event_count == 0 {
+            return Ok(EventWait::TimedOut);
+        }
+
+        for event in events.iter().take(event_count as usize) {
+            let event_data = event.data;
+            if event.flags & libc::EV_ERROR != 0 {
+                if event.filter == libc::EVFILT_PROC
+                    && event.ident as libc::pid_t == self.root.pid
+                    && event_data == libc::ESRCH as libc::intptr_t
+                {
+                    self.root_exited = true;
+                    continue;
+                }
+                return Err(format!(
+                    "sandbox root observer received event error {event_data}"
+                ));
+            }
+
+            // Signal filters only wake the launcher loop. SignalRelay inspects
+            // and consumes the pending signals before the next wait.
+            if event.filter == libc::EVFILT_PROC
+                && event.ident as libc::pid_t == self.root.pid
+                && event.fflags & libc::NOTE_EXIT != 0
+            {
+                self.root_exited = true;
+            }
+        }
+
+        Ok(if self.root_exited {
+            EventWait::RootExited
+        } else {
+            EventWait::Events
+        })
     }
 }
 
@@ -393,16 +495,30 @@ fn watch_signals(kqueue: libc::c_int, signal_relay: &SignalRelay) -> Result<(), 
 }
 
 fn watch_process(kqueue: libc::c_int, pid: libc::pid_t) -> Result<(), WatchProcessError> {
+    // NOTE_REAP is deprecated for ordinary exit observation, but NOTE_EXIT
+    // fires while the PID may still exist as a zombie. Requesting both keeps
+    // descendant watches installed until their processes are reaped.
+    watch_process_events(
+        kqueue,
+        pid,
+        libc::NOTE_FORK | libc::NOTE_EXIT | PROCESS_REAP_EVENT,
+    )
+}
+
+fn watch_root_exit(kqueue: libc::c_int, pid: libc::pid_t) -> Result<(), WatchProcessError> {
+    watch_process_events(kqueue, pid, libc::NOTE_EXIT)
+}
+
+fn watch_process_events(
+    kqueue: libc::c_int,
+    pid: libc::pid_t,
+    fflags: u32,
+) -> Result<(), WatchProcessError> {
     let event = libc::kevent {
         ident: pid as libc::uintptr_t,
         filter: libc::EVFILT_PROC,
         flags: libc::EV_ADD | libc::EV_CLEAR,
-        // NOTE_REAP is deprecated for ordinary exit observation, but NOTE_EXIT
-        // fires while the PID may still exist as a zombie. Requesting both
-        // keeps the watch installed until the process is reaped. XNU posts the
-        // event before removing the PID from its process table, so teardown also
-        // verifies that the recorded process identity has disappeared.
-        fflags: libc::NOTE_FORK | libc::NOTE_EXIT | PROCESS_REAP_EVENT,
+        fflags,
         data: 0,
         udata: std::ptr::null_mut(),
     };

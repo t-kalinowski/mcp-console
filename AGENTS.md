@@ -54,7 +54,7 @@ They are not MCP, relay, sideband, or worker-stream records.
 
 ## Process and ownership boundaries
 
-The MCP server has three process boundaries:
+The MCP server has three application protocol boundaries:
 
 1. The client and server communicate through MCP JSON-RPC over stdio.
 2. The server and one per-generation relay communicate through the private, ordered JSONL protocol in `docs/RELAY_PROTOCOL.md`.
@@ -62,8 +62,12 @@ The MCP server has three process boundaries:
 
 Keep these ownership rules intact:
 
-- The relay is a thin ordered transport and worker supervisor.
-  It owns local worker transports, sideband translation, signal delivery, observed-descendant tracking, the committed private temporary-directory guard, bounded termination, and reaping.
+- Treat each relay and its worker process tree as one sandboxed lifetime.
+  A host-side sandbox manager owns primary observed-descendant tracking, bounded force termination, and private-directory cleanup for that lifetime.
+  Its host owner retains a backup directory guard and takes over bounded cleanup if the manager exits unsuccessfully while the sandbox root remains live and pinned.
+  That fallback can reconstruct only descendants still reachable from the root's current ancestry.
+- The relay is a thin ordered transport inside the sandboxed lifetime.
+  It owns worker-local descriptors, sideband translation, direct signal forwarding, stream draining, and direct-child status collection and reaping.
   It preserves each producer's order and supplies serialized observation order; it does not reconstruct chronology across independent sideband, stdout, and stderr transports.
 - The server owns worker-generation state, operation admission, output cuts, pending-output budgets, response assembly, delivery ownership, retained requirements, and host resolvers.
   Do not move these responsibilities into the relay.
@@ -106,7 +110,7 @@ Keep these ownership rules intact:
 
 - `src/resolver.rs`, `src/resolver/` — retained host environments, validation, platform implementations, and resolver process-group lifecycle.
 - `src/resolver/programs/` — compile-time R programs for managed Python, Python-version selection, DuckDB extensions, and R-library discovery.
-- `src/sandbox.rs`, `src/sandbox/` — platform dispatch, macOS Seatbelt policy, standalone job control and guardian, descriptor inheritance, and observed-descendant tracking.
+- `src/sandbox.rs`, `src/sandbox/` — platform dispatch, macOS Seatbelt policy, host-side sandbox manager, standalone job control, descriptor inheritance, and observed-descendant tracking.
 
 ### Tests and development scripts
 

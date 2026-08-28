@@ -135,7 +135,7 @@ def test_retires_every_processx_pipeline_stage(binary: Path) -> Transcript:
 
 def test_launcher_crash_retires_the_sandbox_lifetime(binary: Path) -> Transcript:
     # A sandbox guarantee should not depend on the outer launcher running its
-    # Drop implementations. This case requires a separate lifetime guardian or
+    # Drop implementations. This case requires a separate lifetime manager or
     # an equivalent OS-enforced owner that survives an uncatchable launcher
     # crash long enough to retire the sandbox generation.
     # fmt: r
@@ -169,8 +169,8 @@ def test_launcher_crash_retires_the_sandbox_lifetime(binary: Path) -> Transcript
             "the sandbox root, processx child, and temporary directory",
         )
         pids = [int(lines[0]), int(lines[1])]
-        guardian_pid = _child_pid_by_name(process.pid, "mcp-console")
-        pids.append(guardian_pid)
+        manager_pid = _child_pid_by_name(process.pid, "mcp-console")
+        pids.append(manager_pid)
         temporary_directory = Path(lines[2])
 
         os.kill(process.pid, signal.SIGKILL)
@@ -201,7 +201,7 @@ def test_launcher_crash_retires_the_sandbox_lifetime(binary: Path) -> Transcript
         {
             "launcher_signal": "SIGKILL",
             "launcher_returncode": returncode,
-            "verified_cleanup": "sandbox root, processx child, guardian, and temp",
+            "verified_cleanup": "sandbox root, processx child, manager, and temp",
         },
     ]
 

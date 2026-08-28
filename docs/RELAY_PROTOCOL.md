@@ -15,21 +15,32 @@ For each worker generation it starts one relay as the direct sandbox child, and 
 
 ```text
 server <--> (worker relay <--> worker)
+   \----> sandbox lifetime manager
 ```
 
 The parentheses mark the sandbox boundary.
 The relay is also the dedicated sandbox process-group leader, and the worker inherits that group.
+The sandbox lifetime manager is a separate host-side process outside the parentheses.
+It observes and retires the relay, worker, and their observed descendants as one sandbox lifetime.
 
-Only the relay's standard input, standard output, and standard error cross the server/sandbox boundary.
+The relay's standard input, standard output, and standard error cross the server/sandbox boundary.
 Standard input and output carry the framed relay protocol described below.
 Relay standard error is inherited from the server and is not part of the protocol; it is normally empty and is reserved for fatal or infrastructure diagnostics.
 Runtime failures are also represented by a `fatal` event when relay stdout remains usable.
 The framed event is authoritative; stderr diagnostics are best effort because the server's outer fail-safe can terminate a failed relay before its final diagnostic is written.
 
+The built-in relay also receives an optional private startup-gate descriptor.
+It reports readiness and waits at that gate before it starts the worker.
+The server releases the gate only after the host-side manager has begun observing the relay root and confirmed its ownership commit for the private temporary directory.
+This gate is not part of the JSONL relay protocol, and the manager's private control channel never enters the sandbox.
+Custom relays do not participate in this optional gate.
+
 The relay creates the worker's private full-duplex sideband socket pair and its standard-input, standard-output, and standard-error pipes after entering the sandbox.
 It passes one worker sideband endpoint through `MCP_CONSOLE_SIDEBAND_FD` together with the fd-0/1/2 contract documented in [`WORKER_PROTOCOL.md`](WORKER_PROTOCOL.md).
 
-The relay owns the worker process and its local transports, translation between this protocol and the worker sideband, signal delivery, observed-descendant tracking, bounded termination, and reaping.
+The relay owns the direct worker process and its local transports, translation between this protocol and the worker sideband, direct-worker signal delivery, deadline-bounded direct-worker termination, and direct-worker reaping.
+The host-side manager owns primary tracking and termination of the relay root and observed descendants across process-group and session changes, along with private-directory cleanup.
+The server retains a backup directory guard and a manager monitor outside the sandbox.
 The server owns generation state and host-side dependency resolution; see [Requirements and environments](REQUIREMENTS.md) for that trust boundary.
 
 ## Framing and raw bytes
@@ -117,8 +128,8 @@ The relay can emit these flat frames:
 - `{"kind":"interrupt_result","request_id":1}` reports successful `kill(SIGINT)` delivery.
 - `{"kind":"interrupt_result","request_id":1,"error":"..."}` reports failed `kill(SIGINT)` delivery.
 - `{"kind":"shutdown_started"}` reports acceptance of the server's registered shutdown request.
-- `{"kind":"worker_exited","code":33}` reports ordinary direct-worker exit with this status.
-- `{"kind":"worker_signaled","signal":9}` reports direct-worker signal termination.
+- `{"kind":"worker_exited","code":33}` reports ordinary direct-worker exit with this status; it does not report completion of host-side sandbox cleanup.
+- `{"kind":"worker_signaled","signal":9}` reports direct-worker signal termination; it does not report completion of host-side sandbox cleanup.
 - `{"kind":"fatal","message":"..."}` reports relay infrastructure or protocol failure while relay stdout remains usable.
 
 The [worker protocol](WORKER_PROTOCOL.md#nested-managed-r-resolution) defines runtime R resolution, failure classes, and activation ordering.
@@ -134,12 +145,12 @@ Their serialized JSON remains unchanged.
 
 ## Event production and ordering
 
-Worker sideband, worker stdout, worker stderr, and worker lifecycle or supervision each have one producer.
+Worker sideband, worker stdout, worker stderr, and direct-worker lifecycle each have one producer.
 Each producer enqueues complete relay events into one multi-producer queue.
 One serializer owns relay stdout, writes one complete JSONL frame at a time, and flushes each frame.
 Frames therefore never interleave, and each source preserves its own order.
 
-Ordering between different sources is the order in which their reader or supervision threads enqueue events.
+Ordering between different sources is the order in which their reader or direct-worker lifecycle threads enqueue events.
 No chronological order is promised between the independent worker sideband, stdout, and stderr transports.
 A mutex or queue cannot reconstruct the order in which the worker wrote to separate transports, and the protocol does not rely on mutex fairness.
 In particular, raw output written before an operation-result sideband frame can be serialized after that result and remain pending for a later MCP response.
@@ -165,7 +176,7 @@ Events ahead of that marker remain subject to normal validation and dispatch; ev
 The marker is server state and is not a relay frame or acknowledgment.
 For inline restart, replacement stdin and evaluation admission occur only after this retirement boundary and replacement readiness, so no old-generation relay can receive them.
 
-After parsing the command, the relay supervision producer flushes `shutdown_started` before it begins worker shutdown.
+After parsing the command, the relay's direct-worker lifecycle producer flushes `shutdown_started` before it begins worker shutdown.
 It has no request ID because each generation permits only the one shutdown request that the server registers before enqueueing the command.
 The server rejects it when no shutdown request is registered or when the relay sends it twice.
 If the server observes it by the original worker deadline, the event records timely relay acceptance and permits up to two additional seconds after that deadline for relay retirement.
@@ -174,25 +185,29 @@ For non-intentional startup or runtime failure, the server sends zero worker gra
 The failure retirement marker and physical relay wait share one absolute two-second allowance measured from that zero-grace deadline.
 This keeps the relay reader alive for drained raw output, stream closures, and the final process outcome before the outer fail-safe runs.
 
-The relay begins tracking the worker immediately after spawn, before starting its transport tasks.
-It records each observed process by PID and start time, follows fork events with process-tree snapshots, and retains those identities when descendants enter another process group or session.
-Before spawning the worker, the built-in relay adopts the sandbox's private temporary-directory guard over a private inherited socket and reports readiness.
-The server relinquishes its guard and commits the transfer before the relay proceeds, leaving the relay as the sole owner.
-Successful descendant cleanup removes that directory even after server loss; tracker failure retains the guard in relay memory before the relay reports failure.
-
 The relay closes worker stdin and sends the unchanged worker-sideband `shutdown` message without waiting for one path before attempting the other.
-If the worker remains live at its deadline, the relay sends `SIGKILL` to the direct worker and stops the remaining members of the relay process group while leaving the relay alive as group leader.
-When the worker exits, whether naturally or after forced termination, the descendant tracker sends `SIGKILL` to every still-live observed identity and waits up to one second for those identities to disappear before the relay reports the worker outcome.
-Natural exit keeps the direct worker waitable until that cleanup completes; forced retirement may reap it while enforcing the worker deadline.
-In both paths, the relay joins the tracker and finishes descendant cleanup before it reports the worker outcome.
+If the worker remains live at its deadline, the relay sends `SIGKILL` to that direct child and reaps it.
+The resulting `worker_exited` or `worker_signaled` event describes only that direct child; it is not a sandbox-lifetime retirement acknowledgment.
 Clean relay-stdin EOF does not emit `shutdown_started`; it performs the same worker shutdown with a new one-second grace period measured from EOF.
 EOF midway through a command frame is a transport failure instead.
 
-The server leaves an exited relay waitable until cleanup, preserving the process-group identity while retirement finishes.
+The host-side manager tracks the relay root and every descendant identity it observes by PID and start time, retaining those identities across process-group and session changes.
+It adopts a private temporary-directory guard and removes the directory only after successful lifetime cleanup; a cleanup failure preserves the directory.
+If the relay exits or crashes, the manager treats root exit as retirement of the remaining observed lifetime.
+If the server exits or crashes, closure of the manager's owner channel makes the manager stop the relay root and complete the same cleanup independently.
+If the manager exits unsuccessfully while the server still owns a live, waitable relay root, the server reconstructs bounded tracking from that root's current process tree and completes cleanup before replacement.
+That fallback cannot recover a descendant that had already detached from the root's ancestry before the manager failed.
+
+The server leaves an exited relay waitable until sandbox-lifetime cleanup completes, preserving the relay identity while retirement finishes.
 It waits through the worker deadline and uses the additional two-second allowance only after timely `shutdown_started` acceptance or a pre-retirement failure.
-It then closes the sandbox process-group lifetime and reaps the relay, including when the relay stalls or has already exited.
+It then asks the lifetime owner to stop and join the relay root and observed descendants and reaps the relay, including when the relay stalls or has already exited.
+The background manager has a separate one-second cleanup timeout, and its owner allows one additional second for manager exit and reaping.
+If the manager misses that allowance, the owner sends exact-identity `SIGKILL`, keeps the relay root waitable while it reaps the manager, and may use one additional one-second cleanup interval to reconstruct and retire the root's current process tree.
+Those manager bounds can extend past the relay allowance when the outer stop begins only at that allowance's deadline.
+The server does not start the replacement sandbox lifetime until that retirement barrier completes.
 Concurrent or repeated retirement reuses the recorded result and never signals a retired PID or process group again.
-macOS provides no child subreaper or atomic descendant-tracking spawn, so a process that detaches before the relay's post-spawn scan or a fork observation remains outside this guarantee.
+macOS provides no child subreaper or atomic descendant-tracking spawn, so a process that detaches before the manager's post-spawn observation remains outside this guarantee.
+The built-in relay's startup gate prevents it from launching the worker before manager observation and ownership are confirmed; a custom relay has no equivalent cooperative gate.
 
 ## Retirement and failure
 
@@ -205,9 +220,10 @@ This preserves exact bytes and per-stream order through retirement.
 
 Relay stdout EOF is a clean retirement only after the expected stream closures and final worker process outcome.
 `worker_exited` distinguishes ordinary exit, including status zero, from `worker_signaled` signal termination.
+Neither event says that the host-side manager has completed sandbox-lifetime cleanup.
 Public rendering of these outcomes belongs to the server and is described at the console level in [Built-in runtime](BUILTIN_RUNTIME.md).
 
 Malformed relay JSON, invalid byte-form base64, an unexpected command, a fatal event, or unexpected relay EOF fails the worker transport.
 Worker-sideband EOF has its own relay event; other worker-sideband read failures become fatal relay events.
-For a relay-owned protocol or I/O failure, the relay requests worker termination immediately but retains the failure until the worker transports have stopped and the raw-output readers have drained and joined.
-The server preserves that failure, processes the remaining closure and process-outcome events in order, and then retires the generation.
+For a relay-owned protocol or I/O failure, the relay requests direct-worker termination immediately but retains the failure until the worker transports have stopped and the raw-output readers have drained and joined.
+The server preserves that failure, processes the remaining closure and process-outcome events in order, and then waits for host-side sandbox-lifetime retirement before replacing the generation.

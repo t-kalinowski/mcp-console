@@ -1,0 +1,55 @@
+---
+!same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
+---
+send:
+  r: |
+    crash_child <- processx::process$new(
+      "/bin/sleep",
+      "60",
+      stdout = "|",
+      stderr = "|",
+      cleanup = FALSE
+    )
+    writeLines(c(
+      sprintf("worker=%d", Sys.getpid()),
+      sprintf("relay=%d", ps::ps_ppid()),
+      sprintf("child=%d", crash_child$get_pid()),
+      sprintf("temp=%s", Sys.getenv("TMPDIR"))
+    ))
+  requirements:
+    r:
+      - processx
+result:
+  content:
+    - type: text
+      text: |
+        worker=<worker pid>
+        relay=<relay pid>
+        child=<processx child pid>
+        temp=<sandbox temp>
+  isError: false
+transcript_normalization:
+  target: result.content[0].text
+  process_ids: omitted
+  sandbox_temporary_directory: omitted
+---
+relay_signal: SIGKILL
+---
+send: {}
+result:
+  content:
+    - type: text
+      text: |-
+        [worker relay stdout closed before retirement completed]
+        [worker stopped: in-memory state lost]
+  isError: true
+---
+send:
+  r: writeLines("replacement ready")
+result:
+  content:
+    - type: text
+      text: |
+        [starting new worker]
+        replacement ready
+  isError: false
