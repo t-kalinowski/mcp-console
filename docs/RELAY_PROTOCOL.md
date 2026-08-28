@@ -29,7 +29,7 @@ The framed event is authoritative; stderr diagnostics are best effort because th
 The relay creates the worker's private full-duplex sideband socket pair and its standard-input, standard-output, and standard-error pipes after entering the sandbox.
 It passes one worker sideband endpoint through `MCP_CONSOLE_SIDEBAND_FD` together with the fd-0/1/2 contract documented in [`WORKER_PROTOCOL.md`](WORKER_PROTOCOL.md).
 
-The relay owns the worker process and its local transports, translation between this protocol and the worker sideband, signal delivery, bounded termination, and reaping.
+The relay owns the worker process and its local transports, translation between this protocol and the worker sideband, signal delivery, observed-descendant tracking, bounded termination, and reaping.
 The server owns generation state and host-side dependency resolution; see [Requirements and environments](REQUIREMENTS.md) for that trust boundary.
 
 ## Framing and raw bytes
@@ -174,8 +174,17 @@ For non-intentional startup or runtime failure, the server sends zero worker gra
 The failure retirement marker and physical relay wait share one absolute two-second allowance measured from that zero-grace deadline.
 This keeps the relay reader alive for drained raw output, stream closures, and the final process outcome before the outer fail-safe runs.
 
+The relay begins tracking the worker immediately after spawn, before starting its transport tasks.
+It records each observed process by PID and start time, follows fork events with process-tree snapshots, and retains those identities when descendants enter another process group or session.
+Before spawning the worker, the built-in relay adopts the sandbox's private temporary-directory guard over a private inherited socket and reports readiness.
+The server relinquishes its guard and commits the transfer before the relay proceeds, leaving the relay as the sole owner.
+Successful descendant cleanup removes that directory even after server loss; tracker failure retains the guard in relay memory before the relay reports failure.
+
 The relay closes worker stdin and sends the unchanged worker-sideband `shutdown` message without waiting for one path before attempting the other.
-If the worker remains live at its deadline, the relay first sends `SIGKILL` to the direct worker, then repeatedly stops every other live process whose current process group is exactly the relay's group while leaving the relay alive as group leader, and finally reaps the direct worker.
+If the worker remains live at its deadline, the relay sends `SIGKILL` to the direct worker and stops the remaining members of the relay process group while leaving the relay alive as group leader.
+When the worker exits, whether naturally or after forced termination, the descendant tracker sends `SIGKILL` to every still-live observed identity and waits up to one second for those identities to disappear before the relay reports the worker outcome.
+Natural exit keeps the direct worker waitable until that cleanup completes; forced retirement may reap it while enforcing the worker deadline.
+In both paths, the relay joins the tracker and finishes descendant cleanup before it reports the worker outcome.
 Clean relay-stdin EOF does not emit `shutdown_started`; it performs the same worker shutdown with a new one-second grace period measured from EOF.
 EOF midway through a command frame is a transport failure instead.
 
@@ -183,7 +192,7 @@ The server leaves an exited relay waitable until cleanup, preserving the process
 It waits through the worker deadline and uses the additional two-second allowance only after timely `shutdown_started` acceptance or a pre-retirement failure.
 It then closes the sandbox process-group lifetime and reaps the relay, including when the relay stalls or has already exited.
 Concurrent or repeated retirement reuses the recorded result and never signals a retired PID or process group again.
-Descendants that leave the group remain unsupported.
+macOS provides no child subreaper or atomic descendant-tracking spawn, so a process that detaches before the relay's post-spawn scan or a fork observation remains outside this guarantee.
 
 ## Retirement and failure
 

@@ -8,7 +8,9 @@ command:
   - -e
   - |
     child <- processx::process$new(
-      "/bin/sleep", "60", cleanup = FALSE
+      "/bin/sleep",
+      "60",
+      cleanup = FALSE
     )
     writeLines(c(
       as.character(Sys.getpid()),
@@ -28,4 +30,3 @@ stdout: |
 signal: SIGINT
 exit_code: 130
 stderr: ""
-...

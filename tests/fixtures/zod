@@ -17,16 +17,24 @@ from pathlib import Path
 from typing import Any, TextIO
 
 SIDEBAND_FD_ENV = "MCP_CONSOLE_SIDEBAND_FD"
-TEST_EVENT_FD_ENV = "ZOD_TEST_EVENT_FD"
-TEST_CONTROL_FD_ENV = "ZOD_TEST_CONTROL_FD"
-TEST_FIXTURE_CLEANUP_FD_ENV = "ZOD_TEST_FIXTURE_CLEANUP_FD"
-TEST_RESPONSE_SOCKET_FD_ENV = "ZOD_TEST_RESPONSE_SOCKET_FD"
+TEST_CHANNEL_ENV = "ZOD_TEST_CHANNEL"
 LARGE_OUTPUT_SIZE = 2 * 1024 * 1024
 PENDING_TEXT_BUDGET = 8 * 1024 * 1024
 PNG_1X1 = (
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42Y"
     "AAAAASUVORK5CYII="
 )
+
+test_control_offset = 0
+test_control_buffer = bytearray()
+
+
+def test_channel_path(kind: str) -> Path | None:
+    channel = os.environ.get(TEST_CHANNEL_ENV)
+    if channel is None:
+        return None
+    suffix = ".jsonl" if kind in {"events", "control"} else ""
+    return Path(os.environ["TMPDIR"]) / f"zod-test-{kind}-{channel}{suffix}"
 
 
 class ConsoleKind(StrEnum):
@@ -35,8 +43,8 @@ class ConsoleKind(StrEnum):
 
 
 def emit_test_event(operation: int, kind: str, **details: object) -> None:
-    descriptor_text = os.environ.get(TEST_EVENT_FD_ENV)
-    if descriptor_text is None:
+    path = test_channel_path("events")
+    if path is None:
         return
     event = {
         "operation": operation,
@@ -46,16 +54,34 @@ def emit_test_event(operation: int, kind: str, **details: object) -> None:
     }
     payload = json.dumps(event, separators=(",", ":")).encode() + b"\n"
     assert len(payload) <= 512
-    assert os.write(int(descriptor_text), payload) == len(payload)
+    descriptor = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+    try:
+        assert os.write(descriptor, payload) == len(payload)
+    finally:
+        os.close(descriptor)
 
 
 def wait_for_test_control(operation: int, kind: str) -> dict[str, object]:
-    descriptor = int(os.environ[TEST_CONTROL_FD_ENV])
-    payload = bytearray()
-    while not payload.endswith(b"\n"):
-        chunk = os.read(descriptor, 1)
-        assert chunk, f"test control closed before {kind!r} for request {operation}"
-        payload.extend(chunk)
+    global test_control_buffer, test_control_offset
+    path = test_channel_path("control")
+    assert path is not None
+    deadline = time.monotonic() + 15
+    while b"\n" not in test_control_buffer:
+        try:
+            with path.open("rb") as stream:
+                stream.seek(test_control_offset)
+                chunk = stream.read()
+        except FileNotFoundError:
+            chunk = b""
+        test_control_offset += len(chunk)
+        test_control_buffer.extend(chunk)
+        assert time.monotonic() < deadline, (
+            f"test control did not provide {kind!r} for request {operation}"
+        )
+        if b"\n" not in test_control_buffer:
+            time.sleep(0.01)
+    payload, _, remainder = test_control_buffer.partition(b"\n")
+    test_control_buffer = bytearray(remainder)
     command = json.loads(payload)
     assert command.get("operation") == operation, command
     assert command.get("kind") == kind, command
@@ -69,17 +95,7 @@ def queued_stdin_bytes() -> int:
 
 
 def response_gate_completed() -> bool:
-    if Path(os.environ["ZOD_TEST_RESPONSE_GATE_RELEASED"]).is_file():
-        return True
-    descriptor = int(os.environ[TEST_RESPONSE_SOCKET_FD_ENV])
-    stream = socket.socket(fileno=descriptor)
-    try:
-        queued = stream.recv(64 * 1024, socket.MSG_PEEK | socket.MSG_DONTWAIT)
-        return b"\n" in queued
-    except BlockingIOError:
-        return False
-    finally:
-        stream.detach()
+    return Path(os.environ["ZOD_TEST_RESPONSE_GATE_RELEASED"]).is_file()
 
 
 def discard_stdin_bytes(length: int) -> None:
@@ -266,6 +282,8 @@ def main() -> None:
     """Run the deterministic sideband fixture until the server shuts it down."""
     endpoint, reader, writer = open_sideband()
     temporary = Path(os.environ["TMPDIR"])
+    if event_path := test_channel_path("events"):
+        event_path.touch()
     if started_marker := os.environ.get("MCP_CONSOLE_TEST_ZOD_STARTED"):
         Path(started_marker).touch()
     received_sigint = False
@@ -753,21 +771,19 @@ def main() -> None:
             os._exit(86)
 
         if source == "wait after readable frame and partial tail":
-            cleanup_source = int(os.environ.pop(TEST_FIXTURE_CLEANUP_FD_ENV))
+            cleanup = test_channel_path("cleanup")
+            assert cleanup is not None
             child = os.fork()
             if child == 0:
                 os.setsid()
-                cleanup = os.dup(cleanup_source)
-                os.close(cleanup_source)
                 reader.close()
                 for descriptor in (0, 1, 2):
                     os.close(descriptor)
-                assert os.read(cleanup, 1) in {b"", b"1"}
-                os.close(cleanup)
+                while not cleanup.exists():
+                    time.sleep(0.01)
                 writer.close()
                 endpoint.close()
                 os._exit(0)
-            os.close(cleanup_source)
             (temporary / "zod-sideband-descendant-pid").write_text(
                 str(child),
                 encoding="utf-8",
@@ -808,10 +824,8 @@ def main() -> None:
                 retained_stdin = os.dup(0)
                 assert os.fstat(retained_stdin) == os.fstat(0)
                 os.close(0)
-                cleanup_source = int(os.environ[TEST_FIXTURE_CLEANUP_FD_ENV])
-                cleanup = os.dup(cleanup_source)
-                os.close(cleanup_source)
-                os.close(int(os.environ[TEST_CONTROL_FD_ENV]))
+                cleanup = test_channel_path("cleanup")
+                assert cleanup is not None
                 close_sideband(endpoint, reader, writer)
                 os.close(1)
                 os.close(2)
@@ -825,15 +839,14 @@ def main() -> None:
                 )
                 assert os.write(acknowledge, b"1") == 1
                 os.close(acknowledge)
-                assert os.read(cleanup, 1) in {b"", b"1"}
-                os.close(cleanup)
+                while not cleanup.exists():
+                    time.sleep(0.01)
                 os.close(retained_stdin)
                 emit_test_event(operation, "fixture_cleanup_completed", pid=os.getpid())
                 os._exit(0)
             os.close(acknowledge)
             assert os.read(acknowledged, 1) == b"1"
             os.close(acknowledged)
-            os.close(int(os.environ[TEST_FIXTURE_CLEANUP_FD_ENV]))
             consumed_bytes = 0
             emit_test_event(operation, "parent_waiting_for_stdin")
             while True:

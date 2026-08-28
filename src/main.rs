@@ -30,6 +30,11 @@ mod worker_protocol;
 mod worker_relay;
 
 fn main() -> ExitCode {
+    #[cfg(target_os = "macos")]
+    if let Err(error) = sandbox::configure_child_reaping() {
+        return exit_with_error(error);
+    }
+
     match cli::Cli::parse().command {
         cli::Command::Serve { worker, relay } => match run_server(worker, relay) {
             Ok(()) => ExitCode::SUCCESS,
@@ -40,6 +45,10 @@ fn main() -> ExitCode {
             Err(error) => exit_with_error(error),
         },
         cli::Command::WorkerRelay { command } => match worker_relay::run(&command) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => exit_with_error(error),
+        },
+        cli::Command::SandboxGuardian => match sandbox::run_guardian() {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => exit_with_error(error),
         },

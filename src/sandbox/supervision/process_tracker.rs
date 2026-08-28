@@ -12,7 +12,7 @@ const TRACKER_EVENT_CAPACITY: usize = 32;
 #[allow(deprecated)]
 const PROCESS_REAP_EVENT: u32 = libc::NOTE_REAP;
 
-pub(super) struct DescendantTracker {
+pub(crate) struct DescendantTracker {
     kqueue: OwnedFd,
     state: TrackerState,
 }
@@ -24,7 +24,21 @@ pub(super) enum EventWait {
 }
 
 impl DescendantTracker {
-    pub(super) fn start(root_pid: libc::pid_t, signal_relay: &SignalRelay) -> Result<Self, String> {
+    pub(crate) fn start(root_pid: libc::pid_t) -> Result<Self, String> {
+        Self::start_inner(root_pid, None)
+    }
+
+    pub(super) fn start_with_signal_relay(
+        root_pid: libc::pid_t,
+        signal_relay: &SignalRelay,
+    ) -> Result<Self, String> {
+        Self::start_inner(root_pid, Some(signal_relay))
+    }
+
+    fn start_inner(
+        root_pid: libc::pid_t,
+        signal_relay: Option<&SignalRelay>,
+    ) -> Result<Self, String> {
         let kqueue_descriptor = unsafe { libc::kqueue() };
         if kqueue_descriptor < 0 {
             return Err(format!(
@@ -40,13 +54,21 @@ impl DescendantTracker {
         // be paired with a libproc snapshot, is therefore an intentional boundary
         // of the initial launcher. Once observed, descendants that call setsid(),
         // such as processx children, remain tracked by their PID and start time.
-        let root = process_identity(root_pid)?;
+        let root = process_identity(root_pid)?
+            .ok_or_else(|| format!("sandbox root {root_pid} exited before descendant tracking"))?;
         let mut state = TrackerState {
-            root,
+            root: Some(root),
             active: HashMap::new(),
         };
         add_process_tree(kqueue.as_raw_fd(), root_pid, None, &mut state)?;
-        watch_signals(kqueue.as_raw_fd(), signal_relay)?;
+        if state.active.get(&root_pid) != Some(&root) {
+            return Err(format!(
+                "sandbox root {root_pid} changed before descendant tracking"
+            ));
+        }
+        if let Some(signal_relay) = signal_relay {
+            watch_signals(kqueue.as_raw_fd(), signal_relay)?;
+        }
 
         Ok(Self { kqueue, state })
     }
@@ -134,18 +156,49 @@ impl DescendantTracker {
         })
     }
 
-    pub(super) fn terminate_after_root_exit(mut self) -> Result<(), String> {
-        let deadline = Instant::now() + PROCESS_EXIT_TIMEOUT;
+    pub(crate) fn supervise(mut self, timeout: Duration) -> Result<(), String> {
+        let observation = match self.root_has_exited() {
+            Ok(true) => Ok(()),
+            Ok(false) => loop {
+                match self.wait_for_events(None) {
+                    Ok(EventWait::RootExited) => break Ok(()),
+                    Ok(EventWait::Events | EventWait::TimedOut) => {}
+                    Err(error) => break Err(error),
+                }
+            },
+            Err(error) => Err(error),
+        };
+
+        match observation {
+            Ok(()) => self.terminate(true, timeout),
+            Err(error) => match self.terminate(false, timeout) {
+                Ok(()) => Err(error),
+                Err(cleanup_error) => Err(format!("{error}; additionally, {cleanup_error}")),
+            },
+        }
+    }
+
+    pub(super) fn terminate_after_root_exit(self) -> Result<(), String> {
+        self.terminate(true, PROCESS_EXIT_TIMEOUT)
+    }
+
+    fn terminate(mut self, mut root_exited: bool, timeout: Duration) -> Result<(), String> {
+        let deadline = Instant::now() + timeout;
         loop {
             // The root may have exited before wait_for_root() blocked. Consume
             // any queued fork event before removing the root from the snapshot.
-            self.wait_for_events(Some(Duration::ZERO))?;
+            root_exited |= matches!(
+                self.wait_for_events(Some(Duration::ZERO))?,
+                EventWait::RootExited
+            );
 
             // Re-snapshot before each signal pass to narrow the teardown fork
             // window. A child that becomes orphaned before observation remains
             // outside the documented supervision boundary.
             discover_active_children(self.kqueue.as_raw_fd(), &mut self.state)?;
-            if let Some(root) = self.state.root
+            root_exited |= self.root_has_exited()?;
+            if root_exited
+                && let Some(root) = self.state.root
                 && self.state.active.get(&root.pid) == Some(&root)
             {
                 self.state.active.remove(&root.pid);
@@ -175,6 +228,16 @@ impl DescendantTracker {
                 }
             }
         }
+    }
+
+    fn root_has_exited(&self) -> Result<bool, String> {
+        let Some(root) = self.state.root else {
+            return Ok(true);
+        };
+        let Some(info) = process_info(root.pid)? else {
+            return Ok(true);
+        };
+        Ok(info.identity != root || info.is_zombie)
     }
 }
 

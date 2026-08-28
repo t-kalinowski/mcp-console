@@ -56,6 +56,10 @@ pub enum Command {
         command: Vec<OsString>,
     },
 
+    /// Guard one standalone sandbox lifetime
+    #[command(hide = true)]
+    SandboxGuardian,
+
     /// Run a command with the MCP Console sandbox policy
     #[command(after_help = SANDBOX_EXAMPLES)]
     Sandbox {

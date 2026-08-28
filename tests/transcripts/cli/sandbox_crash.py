@@ -52,6 +52,26 @@ def _kill_survivors(pids: list[int]) -> list[int]:
     return survivors
 
 
+def _child_pid_by_name(parent_pid: int, name: str) -> int:
+    result = subprocess.run(
+        ["/bin/ps", "-axo", "pid=,ppid=,comm="],
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=TIMEOUT,
+    )
+    matches = []
+    for line in result.stdout.splitlines():
+        fields = line.split(maxsplit=2)
+        if len(fields) != 3:
+            continue
+        pid, parent, command = fields
+        if int(parent) == parent_pid and Path(command).name == name:
+            matches.append(int(pid))
+    assert len(matches) == 1, (parent_pid, name, matches)
+    return matches[0]
+
+
 def _read_lines(stream: object, count: int, description: str) -> list[str]:
     descriptor = stream.fileno()  # type: ignore[attr-defined]
     output = bytearray()
@@ -149,6 +169,8 @@ def test_launcher_crash_retires_the_sandbox_lifetime(binary: Path) -> Transcript
             "the sandbox root, processx child, and temporary directory",
         )
         pids = [int(lines[0]), int(lines[1])]
+        guardian_pid = _child_pid_by_name(process.pid, "mcp-console")
+        pids.append(guardian_pid)
         temporary_directory = Path(lines[2])
 
         os.kill(process.pid, signal.SIGKILL)
@@ -179,6 +201,7 @@ def test_launcher_crash_retires_the_sandbox_lifetime(binary: Path) -> Transcript
         {
             "launcher_signal": "SIGKILL",
             "launcher_returncode": returncode,
+            "verified_cleanup": "sandbox root, processx child, guardian, and temp",
         },
     ]
 

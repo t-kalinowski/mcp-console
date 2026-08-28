@@ -1,7 +1,9 @@
 #!/usr/bin/env -S uv run --script
 
+import fcntl
 import os
 import re
+import shutil
 import signal
 import sys
 from pathlib import Path
@@ -23,17 +25,32 @@ def _last_text(client: McpClient) -> str:
     return content[0]["text"]
 
 
-def _normalize_processx_pid(client: McpClient) -> int:
+def _normalize_generation(client: McpClient) -> tuple[int, int, int, Path]:
     result = client.transcript[-1]["result"]
     text = _last_text(client)
-    matches = list(re.finditer(r"(?m)^\[1\] (\d+)\n$", text))
-    assert len(matches) == 1, text
-    match = matches[0]
-    pid = int(match.group(1))
-    result["content"][0]["text"] = (
-        text[: match.start()] + "[1] <processx child pid>\n" + text[match.end() :]
+    pattern = re.compile(r"(?m)^worker=(\d+)\nrelay=(\d+)\nchild=(\d+)\ntemp=(.+)\n$")
+    match = pattern.search(text)
+    assert match is not None, text
+    worker_pid, relay_pid, child_pid = map(int, match.group(1, 2, 3))
+    assert os.getpgid(child_pid) != os.getpgid(worker_pid), (
+        "processx child did not leave the worker process group"
     )
-    return pid
+    temporary_directory = Path(match.group(4))
+    normalized = (
+        "worker=<worker pid>\n"
+        "relay=<relay pid>\n"
+        "child=<processx child pid>\n"
+        "temp=<sandbox temp>\n"
+    )
+    result["content"][0]["text"] = (
+        text[: match.start()] + normalized + text[match.end() :]
+    )
+    client.transcript[-1]["transcript_normalization"] = {
+        "target": "result.content[0].text",
+        "process_ids": "omitted",
+        "sandbox_temporary_directory": "omitted",
+    }
+    return relay_pid, worker_pid, child_pid, temporary_directory
 
 
 def _pid_is_alive(pid: int) -> bool:
@@ -46,8 +63,8 @@ def _pid_is_alive(pid: int) -> bool:
     return True
 
 
-def _kill_if_alive(pid: int | None) -> bool:
-    if pid is None or not _pid_is_alive(pid):
+def _kill_if_alive(pid: int) -> bool:
+    if not _pid_is_alive(pid):
         return False
     try:
         os.kill(pid, signal.SIGKILL)
@@ -56,7 +73,20 @@ def _kill_if_alive(pid: int | None) -> bool:
     return True
 
 
-def _spawn_processx_child(client: McpClient) -> int:
+def _kill_generation(generation: tuple[int, int, int, Path]) -> list[str]:
+    relay_pid, worker_pid, child_pid, _ = generation
+    survivors = []
+    for name, pid in (
+        ("relay", relay_pid),
+        ("worker", worker_pid),
+        ("processx child", child_pid),
+    ):
+        if _kill_if_alive(pid):
+            survivors.append(name)
+    return survivors
+
+
+def _spawn_processx_generation(client: McpClient) -> tuple[int, int, int, Path]:
     # processx calls setsid() for this child, so it leaves the relay and worker
     # process group while remaining a descendant of the worker generation.
     # fmt: r
@@ -68,44 +98,61 @@ def _spawn_processx_child(client: McpClient) -> int:
           stderr = "|",
           cleanup = FALSE
         )
-        sandbox_child$get_pid()
+        writeLines(c(
+          sprintf("worker=%d", Sys.getpid()),
+          sprintf("relay=%d", ps::ps_ppid()),
+          sprintf("child=%d", sandbox_child$get_pid()),
+          sprintf("temp=%s", Sys.getenv("TMPDIR"))
+        ))
         """)
     client.send(r=r, requirements={"r": ["processx"]})
-    return _normalize_processx_pid(client)
+    return _normalize_generation(client)
 
 
 def test_restart_retires_descendants_outside_the_worker_group(
     binary: Path,
 ) -> Transcript:
     client = McpClient(binary, ("serve",))
-    pid: int | None = None
+    generation: tuple[int, int, int, Path] | None = None
     try:
         client._initialize_and_list_tools()
-        pid = _spawn_processx_child(client)
+        generation = _spawn_processx_generation(client)
         client.send(control="restart")
-        survived = _kill_if_alive(pid)
-        assert not survived, f"processx child {pid} survived worker restart"
+        survivors = _kill_generation(generation)
+        temporary_directory = generation[3]
+        assert survivors == [], f"old worker generation survived restart: {survivors}"
+        assert not temporary_directory.exists(), (
+            f"old worker temporary directory survived restart: {temporary_directory}"
+        )
         return client._finish()
     finally:
         stop_client(client)
-        _kill_if_alive(pid)
+        if generation is not None:
+            _kill_generation(generation)
+            shutil.rmtree(generation[3], ignore_errors=True)
 
 
 def test_server_shutdown_retires_descendants_outside_the_worker_group(
     binary: Path,
 ) -> Transcript:
     client = McpClient(binary, ("serve",))
-    pid: int | None = None
+    generation: tuple[int, int, int, Path] | None = None
     try:
         client._initialize_and_list_tools()
-        pid = _spawn_processx_child(client)
+        generation = _spawn_processx_generation(client)
         transcript = client._finish()
-        survived = _kill_if_alive(pid)
-        assert not survived, f"processx child {pid} survived server shutdown"
+        survivors = _kill_generation(generation)
+        temporary_directory = generation[3]
+        assert survivors == [], f"worker generation survived shutdown: {survivors}"
+        assert not temporary_directory.exists(), (
+            f"worker temporary directory survived shutdown: {temporary_directory}"
+        )
         return transcript
     finally:
         stop_client(client)
-        _kill_if_alive(pid)
+        if generation is not None:
+            _kill_generation(generation)
+            shutil.rmtree(generation[3], ignore_errors=True)
 
 
 def test_worker_closes_unlisted_server_descriptors(binary: Path) -> Transcript:
@@ -129,7 +176,7 @@ def test_worker_closes_unlisted_server_descriptors(binary: Path) -> Transcript:
         host_file = Path(directory) / "host.txt"
         host_file.write_bytes(b"")
         with host_file.open("ab", buffering=0) as stream:
-            descriptor = os.dup(stream.fileno())
+            descriptor = fcntl.fcntl(stream.fileno(), fcntl.F_DUPFD, 64)
             os.set_inheritable(descriptor, True)
             environment = os.environ.copy()
             environment["MCP_CONSOLE_TEST_INHERITED_FD"] = str(descriptor)

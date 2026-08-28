@@ -54,7 +54,7 @@ They are not MCP, relay, sideband, or worker-stream records.
 
 ## Process and ownership boundaries
 
-MCP Console has three process boundaries:
+The MCP server has three process boundaries:
 
 1. The client and server communicate through MCP JSON-RPC over stdio.
 2. The server and one per-generation relay communicate through the private, ordered JSONL protocol in `docs/RELAY_PROTOCOL.md`.
@@ -63,7 +63,7 @@ MCP Console has three process boundaries:
 Keep these ownership rules intact:
 
 - The relay is a thin ordered transport and worker supervisor.
-  It owns local worker transports, sideband translation, signal delivery, bounded termination, and reaping.
+  It owns local worker transports, sideband translation, signal delivery, observed-descendant tracking, the committed private temporary-directory guard, bounded termination, and reaping.
   It preserves each producer's order and supplies serialized observation order; it does not reconstruct chronology across independent sideband, stdout, and stderr transports.
 - The server owns worker-generation state, operation admission, output cuts, pending-output budgets, response assembly, delivery ownership, retained requirements, and host resolvers.
   Do not move these responsibilities into the relay.
@@ -106,7 +106,7 @@ Keep these ownership rules intact:
 
 - `src/resolver.rs`, `src/resolver/` — retained host environments, validation, platform implementations, and resolver process-group lifecycle.
 - `src/resolver/programs/` — compile-time R programs for managed Python, Python-version selection, DuckDB extensions, and R-library discovery.
-- `src/sandbox.rs`, `src/sandbox/` — platform dispatch and macOS Seatbelt policy.
+- `src/sandbox.rs`, `src/sandbox/` — platform dispatch, macOS Seatbelt policy, standalone job control and guardian, descriptor inheritance, and observed-descendant tracking.
 
 ### Tests and development scripts
 

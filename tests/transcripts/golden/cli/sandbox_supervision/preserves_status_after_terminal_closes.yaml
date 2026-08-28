@@ -6,13 +6,16 @@ command:
   - python
   - -c
   - |
+    import os
     import signal
+    import sys
     import time
 
     signal.signal(signal.SIGHUP, signal.SIG_IGN)
     print("ready", flush=True)
-    time.sleep(0.1)
+    while not os.path.exists(sys.argv[1]):
+        time.sleep(0.01)
     raise SystemExit(23)
+  - <release gate>
 terminal: closed after readiness
 exit_code: 23
-...

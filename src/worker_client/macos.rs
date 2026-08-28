@@ -145,6 +145,7 @@ impl WorkerRuntime {
         );
         if use_builtin_relay {
             command.arg("worker-relay");
+            command.transfer_temporary_directory()?;
         }
         command
             .arg(executable.as_os_str())

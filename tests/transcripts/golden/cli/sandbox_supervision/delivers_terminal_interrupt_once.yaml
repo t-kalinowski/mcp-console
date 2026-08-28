@@ -11,9 +11,11 @@ command:
 
     interrupts = 0
 
+
     def handle_interrupt(_signal, _frame):
         global interrupts
         interrupts += 1
+
 
     signal.signal(signal.SIGINT, handle_interrupt)
     print("ready", flush=True)
@@ -27,4 +29,3 @@ stdin: |-
   <Ctrl-C>
 stdout: |
   1
-...

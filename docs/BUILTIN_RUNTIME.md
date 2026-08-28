@@ -475,7 +475,7 @@ The [implemented architecture](ARCHITECTURE.md) describes the session record and
 - SQL cannot query Python objects until they are bound as R data.
 - SQL previews do not include affected-row counts or total result counts.
 - Only default-device R graphics and open pyplot figures are captured automatically.
-- Descendants that leave the relay's process group are unsupported.
+- The relay supervises descendants it observes from the worker, including processes that enter another process group or session; a descendant that detaches before the macOS tracker observes it remains outside this guarantee.
 - Linux and Windows are not supported.
 
 The [architecture](ARCHITECTURE.md) explains lifecycle and process ownership.

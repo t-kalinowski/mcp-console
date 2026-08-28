@@ -23,4 +23,3 @@ exit_code: 23
 stdout: |
   <pipeline stage pid>
   <pipeline stage pid>
-...

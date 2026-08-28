@@ -9,7 +9,7 @@ The material under `design-sketches/` is future or exploratory design, not evide
 
 ## Process layout
 
-MCP Console has three communication boundaries and one host-only resolver path:
+The MCP server has three communication boundaries and one host-only resolver path:
 
 ```text
 MCP client
@@ -36,6 +36,20 @@ The server is the MCP stdio process.
 It starts one relay as its direct sandbox child for each worker lifetime.
 The relay is the sandbox process-group leader and starts the configured worker inside the same sandbox and process group.
 Submitted R, Python, and SQL cells run in the worker, not in the server or a host resolver.
+
+The standalone development command has a separate host-side guardian:
+
+```text
+mcp-console sandbox launcher             host, outside the sandbox
+    ├── lifetime guardian                host, separate process group
+    └── sandbox root and descendants     macOS sandbox
+```
+
+The launcher and guardian independently observe the sandbox process tree.
+The guardian receives the root PID and private temporary-directory path over a private inherited socket, then derives and validates the process identity before the launcher begins its normal wait.
+After the guardian reports readiness, the launcher relinquishes its directory guard and commits sole ownership to the guardian.
+If the launcher exits or crashes after that committed handshake, socket closure makes the guardian terminate the observed lifetime and remove the private directory after successful cleanup.
+macOS provides no child subreaper or atomic descendant-tracking spawn, so a process that detaches before either post-spawn tracker observes it remains outside this guarantee.
 
 R, Python, and DuckDB dependency resolution follows a separate path.
 The server launches resolver subprocesses on the host, outside the worker sandbox, because they need normal installation, cache, and network access.
@@ -88,7 +102,9 @@ The server does not execute submitted cells or ask the relay to interpret MCP ca
 ### Relay
 
 The relay is a thin ordered transport and worker supervisor.
-It owns the worker's local descriptors, translates applicable relay commands to worker-sideband messages, forwards worker observations, delivers signals, bounds shutdown, drains streams, and reaps the direct worker.
+It owns the worker's local descriptors, translates applicable relay commands to worker-sideband messages, forwards worker observations, delivers signals, tracks observed worker descendants across process-group and session changes, bounds shutdown, drains streams, and reaps the direct worker.
+Before the relay starts the worker, it adopts the sandbox's private temporary-directory guard over a private inherited socket, reports readiness, and waits for the server to relinquish its guard and commit the transfer.
+The relay is then the sole owner: it removes the directory after successful descendant cleanup even if the server has crashed, and retains the guard in memory on containment failure so it does not remove files beneath a surviving descendant.
 Its producers preserve their own order, and one relay writer serializes their observations for the server.
 That serialization does not reconstruct chronology across the independent sideband, stdout, and stderr transports.
 
@@ -137,7 +153,7 @@ The worker itself starts lazily when an operation first needs it; preparing reta
 An explicit restart starts its replacement eagerly, including when the session had not started a worker before.
 
 For each worker start, the server configures a sandboxed relay from the retained environment.
-The relay creates the worker sideband and standard streams, launches the worker, and forwards its startup events.
+The relay creates the worker sideband and standard streams, launches the worker, begins descendant tracking before it starts transport tasks, and forwards its startup events.
 The server admits the worker only after the required readiness exchange succeeds.
 
 ### Evaluation
@@ -250,6 +266,7 @@ A successful replacement starts with fresh in-memory state and the retained envi
 
 Closing MCP input begins shutdown of the implicit console session.
 The server stops accepting generation work, requests bounded retirement of the active relay and worker, cancels an active host resolver, joins the remaining relay I/O tasks, and reaps owned processes.
+The relay does not report the worker generation retired until its observed descendants have also disappeared.
 The protocol documents define the exact closure and retirement order.
 
 ## Output ownership

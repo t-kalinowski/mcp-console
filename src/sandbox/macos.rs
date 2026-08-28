@@ -392,7 +392,7 @@ pub(super) fn sandboxed_command() -> Result<(Command, TemporaryDirectory), Strin
     Ok((launcher, temporary_directory))
 }
 
-pub(super) struct TemporaryDirectory(PathBuf);
+pub(crate) struct TemporaryDirectory(PathBuf);
 
 impl TemporaryDirectory {
     fn new() -> Result<Self, String> {
@@ -425,6 +425,42 @@ impl TemporaryDirectory {
 
     pub(super) fn path(&self) -> &Path {
         &self.0
+    }
+
+    pub(crate) fn adopt(path: PathBuf, owner_pid: libc::pid_t) -> Result<Self, String> {
+        if owner_pid <= 0 {
+            return Err("sandbox temporary directory has invalid ownership".to_string());
+        }
+
+        let path = path.canonicalize().map_err(|error| {
+            format!(
+                "failed to resolve sandbox temporary directory {}: {error}",
+                path.display()
+            )
+        })?;
+        let expected_prefix = format!("mcp-console-tmp-{owner_pid}-");
+        let valid_name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.starts_with(&expected_prefix));
+        if !valid_name {
+            return Err("sandbox temporary directory has invalid ownership".to_string());
+        }
+        if !path.is_dir() {
+            return Err(format!(
+                "sandbox temporary directory {} is not a directory",
+                path.display()
+            ));
+        }
+        Ok(Self(path))
+    }
+
+    pub(crate) fn preserve(self) {
+        std::mem::forget(self);
+    }
+
+    pub(crate) fn relinquish(self) {
+        std::mem::forget(self);
     }
 }
 

@@ -401,7 +401,7 @@ The shutdown frame may arrive while the worker is waiting for a nested resolver 
 
 Fd-0 closure and the `shutdown` frame are both generation-retirement signals, not evaluation or stdin-payload delimiters.
 A worker must not require both in a particular order.
-If it does not exit within the relay's supplied grace period, the relay forcibly terminates it and its supported process-group descendants.
+If it does not exit within the relay's supplied grace period, the relay forcibly terminates it and every descendant identity observed by the macOS tracker, including observed descendants in another process group or session.
 The exact server-relay acceptance and retirement sequence is specified in [`RELAY_PROTOCOL.md`](RELAY_PROTOCOL.md).
 
 During retirement, the relay forwards every complete worker-sideband frame already buffered or immediately readable.

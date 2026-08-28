@@ -21,4 +21,3 @@ command:
   - <inherited fd>
 stdout: |
   closed
-...

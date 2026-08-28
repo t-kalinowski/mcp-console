@@ -10,7 +10,12 @@ send:
       stderr = "|",
       cleanup = FALSE
     )
-    sandbox_child$get_pid()
+    writeLines(c(
+      sprintf("worker=%d", Sys.getpid()),
+      sprintf("relay=%d", ps::ps_ppid()),
+      sprintf("child=%d", sandbox_child$get_pid()),
+      sprintf("temp=%s", Sys.getenv("TMPDIR"))
+    ))
   requirements:
     r:
       - processx
@@ -18,6 +23,12 @@ result:
   content:
     - type: text
       text: |
-        [1] <processx child pid>
+        worker=<worker pid>
+        relay=<relay pid>
+        child=<processx child pid>
+        temp=<sandbox temp>
   isError: false
-...
+transcript_normalization:
+  target: result.content[0].text
+  process_ids: omitted
+  sandbox_temporary_directory: omitted

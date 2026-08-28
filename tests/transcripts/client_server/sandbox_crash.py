@@ -2,6 +2,7 @@
 
 import os
 import re
+import shutil
 import signal
 import sys
 import time
@@ -24,7 +25,7 @@ def _last_text(client: McpClient) -> str:
     return content[0]["text"]
 
 
-def _spawn_processx_child(client: McpClient) -> int:
+def _spawn_processx_generation(client: McpClient) -> tuple[int, int, int, Path]:
     # fmt: r
     r = code(r"""
         crash_child <- processx::process$new(
@@ -34,20 +35,40 @@ def _spawn_processx_child(client: McpClient) -> int:
           stderr = "|",
           cleanup = FALSE
         )
-        crash_child$get_pid()
+        writeLines(c(
+          sprintf("worker=%d", Sys.getpid()),
+          sprintf("relay=%d", ps::ps_ppid()),
+          sprintf("child=%d", crash_child$get_pid()),
+          sprintf("temp=%s", Sys.getenv("TMPDIR"))
+        ))
         """)
     client.send(r=r, requirements={"r": ["processx"]})
 
     result = client.transcript[-1]["result"]
     text = _last_text(client)
-    matches = list(re.finditer(r"(?m)^\[1\] (\d+)\n$", text))
-    assert len(matches) == 1, text
-    match = matches[0]
-    pid = int(match.group(1))
-    result["content"][0]["text"] = (
-        text[: match.start()] + "[1] <processx child pid>\n" + text[match.end() :]
+    pattern = re.compile(r"(?m)^worker=(\d+)\nrelay=(\d+)\nchild=(\d+)\ntemp=(.+)\n$")
+    match = pattern.search(text)
+    assert match is not None, text
+    worker_pid, relay_pid, child_pid = map(int, match.group(1, 2, 3))
+    assert os.getpgid(child_pid) != os.getpgid(worker_pid), (
+        "processx child did not leave the worker process group"
     )
-    return pid
+    temporary_directory = Path(match.group(4))
+    normalized = (
+        "worker=<worker pid>\n"
+        "relay=<relay pid>\n"
+        "child=<processx child pid>\n"
+        "temp=<sandbox temp>\n"
+    )
+    result["content"][0]["text"] = (
+        text[: match.start()] + normalized + text[match.end() :]
+    )
+    client.transcript[-1]["transcript_normalization"] = {
+        "target": "result.content[0].text",
+        "process_ids": "omitted",
+        "sandbox_temporary_directory": "omitted",
+    }
+    return relay_pid, worker_pid, child_pid, temporary_directory
 
 
 def _pid_is_alive(pid: int) -> bool:
@@ -60,11 +81,14 @@ def _pid_is_alive(pid: int) -> bool:
     return True
 
 
-def _wait_for_survivor(pid: int, timeout: float) -> bool:
+def _wait_for_survivors(pids: tuple[int, ...], timeout: float) -> list[int]:
     deadline = time.monotonic() + timeout
-    while _pid_is_alive(pid) and time.monotonic() < deadline:
-        time.sleep(0.01)
-    return _pid_is_alive(pid)
+    survivors = list(pids)
+    while survivors and time.monotonic() < deadline:
+        survivors = [pid for pid in survivors if _pid_is_alive(pid)]
+        if survivors:
+            time.sleep(0.01)
+    return [pid for pid in survivors if _pid_is_alive(pid)]
 
 
 def _kill_if_alive(pid: int | None) -> bool:
@@ -91,17 +115,20 @@ def test_server_crash_retires_the_worker_generation(binary: Path) -> Transcript:
     # merely because the server received an uncatchable signal before it could
     # run its normal shutdown path.
     client = McpClient(binary, ("serve",))
-    child_pid: int | None = None
+    generation: tuple[int, int, int, Path] | None = None
     try:
         client._initialize_and_list_tools()
-        child_pid = _spawn_processx_child(client)
+        generation = _spawn_processx_generation(client)
 
         os.kill(client.process.pid, signal.SIGKILL)
         returncode = client.process.wait(timeout=TIMEOUT)
-        survived = _wait_for_survivor(child_pid, timeout=5)
+        survivors = _wait_for_survivors(generation[:3], timeout=5)
 
         assert returncode == -signal.SIGKILL, returncode
-        assert not survived, f"processx child {child_pid} survived server crash"
+        assert survivors == [], f"worker-generation processes survived: {survivors}"
+        assert not generation[3].exists(), (
+            f"worker temporary directory survived server crash: {generation[3]}"
+        )
         client.transcript.append(
             {
                 "server_signal": "SIGKILL",
@@ -111,7 +138,10 @@ def test_server_crash_retires_the_worker_generation(binary: Path) -> Transcript:
         return client.transcript
     finally:
         stop_client(client)
-        _kill_if_alive(child_pid)
+        if generation is not None:
+            for pid in generation[:3]:
+                _kill_if_alive(pid)
+            shutil.rmtree(generation[3], ignore_errors=True)
         _close_client_streams(client)
 
 
