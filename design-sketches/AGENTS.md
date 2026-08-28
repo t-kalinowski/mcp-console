@@ -166,6 +166,7 @@ Update this map whenever ownership moves.
 - `README.md` — user-facing overview, status, examples, installation, and document index.
 - `VISION.md` — product purpose, goals, non-goals, and success criteria.
 - `AGENTS.md` — durable agent context, settled decisions, repository map, and working rules.
+- `CONFIGURATION.md` — aspirational progressive `.mcp-console/config.yaml` format, including profiles, permissions, execution targets, environments, and policy layering.
 - `docs/MCP_INTERFACE.md` — normative agent-facing schema and observable behavior.
 - `docs/TOOL_DESCRIPTIONS.md` — exact registered tool and property descriptions.
 - `docs/CLI.md` — standalone binary, installation, diagnostics, viewer, watch, and sidecar-control commands.
