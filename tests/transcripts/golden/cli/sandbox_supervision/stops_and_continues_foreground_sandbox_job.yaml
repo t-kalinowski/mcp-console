@@ -6,6 +6,7 @@ command:
   - python
   - -c
   - |
+    import os
     import signal
 
     def continued(_signal, _frame):
@@ -16,7 +17,7 @@ command:
 
     signal.signal(signal.SIGCONT, continued)
     signal.signal(signal.SIGINT, interrupted)
-    print("ready", flush=True)
+    print(f"ready:{os.getpgrp()}", flush=True)
     while True:
         signal.pause()
 stdout: |
