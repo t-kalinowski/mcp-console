@@ -1,41 +1,70 @@
 base::local(
   {
-    finish_python_initialization <- function(...) {
+    rust_owned <- FALSE
+
+    finish_python_initialization <- function() {
       invisible(.Call("mcp_console_finish_python_initialization"))
+    }
+
+    configure_python_input <- function() {
+      if (!rust_owned || !interactive()) {
+        return(invisible())
+      }
+      # Reticulate remaps input only when its own C layer initialized CPython.
+      namespace <- asNamespace("reticulate")
+      builtins <- reticulate::import_builtins(convert = TRUE)
+      input <- function(prompt = "") readline(prompt)
+      globals <- get(".globals", envir = namespace)
+      globals$og_input_builtin <- builtins[["input"]]
+      builtins[["input"]] <- input
+      invisible()
     }
 
     install_python_initializer <- function(...) {
       namespace <- asNamespace("reticulate")
+      replace_binding <- function(name, value) {
+        was_locked <- bindingIsLocked(name, namespace)
+        if (was_locked) {
+          unlockBinding(name, namespace)
+        }
+        assign(name, value, envir = namespace)
+        if (was_locked) {
+          lockBinding(name, namespace)
+        }
+      }
+
       original_initialize <- get("py_initialize", envir = namespace)
       initialize <- function(python, libpython, pythonhome, ...) {
-        invisible(.Call(
+        rust_owned <<- isTRUE(.Call(
           "mcp_console_initialize_python",
           python,
           libpython,
           pythonhome
         ))
+        if (rust_owned) {
+          # Do not strand the initial GIL when reticulate errors or interrupts.
+          on.exit(finish_python_initialization(), add = TRUE)
+        }
         original_initialize(python, libpython, pythonhome, ...)
       }
-      was_locked <- bindingIsLocked("py_initialize", namespace)
-      if (was_locked) {
-        unlockBinding("py_initialize", namespace)
-      }
-      assign("py_initialize", initialize, envir = namespace)
-      if (was_locked) {
-        lockBinding("py_initialize", namespace)
-      }
+      replace_binding("py_initialize", initialize)
 
-      setHook(
-        "reticulate.onPyInit",
-        finish_python_initialization,
-        action = "append"
-      )
+      original_inject_hooks <- get("py_inject_hooks", envir = namespace)
+      inject_hooks <- function() {
+        configure_python_input()
+        original_inject_hooks()
+      }
+      replace_binding("py_inject_hooks", inject_hooks)
+
       if (get("is_python_initialized", envir = namespace)()) {
-        invisible(.Call(
+        rust_owned <<- isTRUE(.Call(
           "mcp_console_load_python_library",
           reticulate::py_config()$libpython
         ))
-        finish_python_initialization()
+        if (rust_owned) {
+          finish_python_initialization()
+          configure_python_input()
+        }
       }
       invisible()
     }

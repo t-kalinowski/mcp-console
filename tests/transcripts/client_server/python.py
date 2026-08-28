@@ -3162,6 +3162,103 @@ def test_recovers_from_python_errors(binary: Path) -> Transcript:
     return client._finish()
 
 
+def test_releases_python_threads_before_running_init_hooks(
+    binary: Path,
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        environment = os.environ.copy()
+        environment["TMPDIR"] = temporary_directory
+        client = McpClient(binary, ("serve",), environment)
+        release: Path | None = None
+        try:
+            client._initialize_and_list_tools()
+            # fmt: r
+            r = code(r"""
+                invisible(loadNamespace("reticulate"))
+                hook_failed <- FALSE
+                setHook(
+                  "reticulate.onPyInit",
+                  function() {
+                    if (!hook_failed) {
+                      hook_failed <<- TRUE
+                      stop("synthetic Python initialization hook failure")
+                    }
+                  },
+                  action = "prepend"
+                )
+                message <- tryCatch(
+                  {
+                    invisible(reticulate::py_config())
+                    "Python initialization unexpectedly succeeded"
+                  },
+                  error = conditionMessage
+                )
+                cat(message, "\n", sep = "")
+                """)
+            client.send(r=r)
+            output = last_tool_text(client)
+            assert output == "synthetic Python initialization hook failure\n", repr(
+                output
+            )
+
+            # fmt: python
+            python = code("""
+                import os
+                import threading
+                import time
+                from pathlib import Path
+
+                directory = Path(os.environ["TMPDIR"])
+                started = directory / "python-init-hook-thread-started"
+                release = directory / "release-python-init-hook-thread"
+                completed = directory / "python-init-hook-thread-completed"
+
+
+                def complete_after_release():
+                    started.touch()
+                    while not release.exists():
+                        time.sleep(0.01)
+                    completed.touch()
+
+
+                initialization_thread = threading.Thread(
+                    target=complete_after_release,
+                    daemon=True,
+                )
+                initialization_thread.start()
+                while not started.exists():
+                    time.sleep(0.01)
+                """)
+            client.send(python=python)
+            assert last_tool_text(client) == "[done]"
+
+            started = wait_for_worker_file(
+                Path(temporary_directory),
+                "python-init-hook-thread-started",
+                client,
+            )
+            release = started.parent / "release-python-init-hook-thread"
+            release.touch()
+            wait_for_worker_file(
+                Path(temporary_directory),
+                "python-init-hook-thread-completed",
+                client,
+            )
+
+            client.send(
+                python='hook_input = input("hook> "); hook_input',
+                stdin="after hook\n",
+            )
+            assert last_tool_text(client) == (
+                "[input requested: \"hook> \"]\n'after hook'\n"
+            )
+            return client._finish()
+        finally:
+            if release is not None and release.parent.exists():
+                release.touch(exist_ok=True)
+            stop_client(client)
+
+
 def test_routes_python_input(binary: Path) -> Transcript:
     client = McpClient(binary, ("serve",))
     client._initialize_and_list_tools()

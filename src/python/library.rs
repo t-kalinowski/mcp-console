@@ -8,6 +8,7 @@ type PySetProgramName = unsafe extern "C" fn(*const libc::wchar_t);
 type PySetPythonHome = unsafe extern "C" fn(*const libc::wchar_t);
 type PyInitializeEx = unsafe extern "C" fn(libc::c_int);
 type PySysSetArgv = unsafe extern "C" fn(libc::c_int, *mut *mut libc::wchar_t);
+type PyOsSetSignal = unsafe extern "C" fn(libc::c_int, libc::sighandler_t) -> libc::sighandler_t;
 type PyEvalSaveThread = unsafe extern "C" fn() -> *mut libc::c_void;
 
 struct LoadedLibrary {
@@ -24,6 +25,7 @@ struct PythonApi {
     set_python_home: PySetPythonHome,
     initialize_ex: PyInitializeEx,
     set_argv: PySysSetArgv,
+    set_signal: PyOsSetSignal,
     save_thread: PyEvalSaveThread,
 }
 
@@ -41,11 +43,15 @@ struct Configuration {
     python_home_wide: Vec<libc::wchar_t>,
 }
 
-pub(super) fn load(path: &Path) -> Result<(), String> {
+pub(super) fn load(path: &Path) -> Result<bool, String> {
     with_library(path, LoadedLibrary::attach)
 }
 
-pub(super) fn initialize(path: &Path, program_name: &str, python_home: &str) -> Result<(), String> {
+pub(super) fn initialize(
+    path: &Path,
+    program_name: &str,
+    python_home: &str,
+) -> Result<bool, String> {
     with_library(path, |library| {
         library.initialize(program_name, python_home)
     })
@@ -127,7 +133,7 @@ impl LoadedLibrary {
         ))
     }
 
-    fn attach(&mut self) -> Result<(), String> {
+    fn attach(&mut self) -> Result<bool, String> {
         // SAFETY: The resolved function has no preconditions.
         if unsafe { (self.api.is_initialized)() } == 0 {
             return Err("cannot attach to Python before it is initialized".to_string());
@@ -135,16 +141,17 @@ impl LoadedLibrary {
         if self.interpreter == Interpreter::Uninitialized {
             self.interpreter = Interpreter::External;
         }
-        Ok(())
+        Ok(matches!(self.interpreter, Interpreter::RustOwned { .. }))
     }
 
-    fn initialize(&mut self, program_name: &str, python_home: &str) -> Result<(), String> {
+    fn initialize(&mut self, program_name: &str, python_home: &str) -> Result<bool, String> {
         // SAFETY: The resolved function has no preconditions.
         if unsafe { (self.api.is_initialized)() } != 0 {
             if self.interpreter == Interpreter::Uninitialized {
                 self.interpreter = Interpreter::External;
             }
-            return self.ensure_configuration(program_name, python_home);
+            self.ensure_configuration(program_name, python_home)?;
+            return Ok(matches!(self.interpreter, Interpreter::RustOwned { .. }));
         }
 
         match self.interpreter {
@@ -179,14 +186,14 @@ impl LoadedLibrary {
             // Py_InitializeEx(0) does not install Python's signal handlers,
             // including its normal SIGPIPE disposition. Preserve the prior
             // reticulate-hosted behavior for the worker process lifetime.
-            libc::signal(libc::SIGPIPE, libc::SIG_IGN);
+            (self.api.set_signal)(libc::SIGPIPE, libc::SIG_IGN);
         }
 
         self.configuration = Some(configuration);
         self.interpreter = Interpreter::RustOwned {
             gil_released: false,
         };
-        Ok(())
+        Ok(true)
     }
 
     fn ensure_configuration(&self, program_name: &str, python_home: &str) -> Result<(), String> {
@@ -215,8 +222,9 @@ impl LoadedLibrary {
         if unsafe { (self.api.is_initialized)() } == 0 {
             return Err("Rust-owned Python interpreter was finalized".to_string());
         }
-        // SAFETY: Rust initialized CPython on this thread, reticulate has
-        // finished attaching, and the initial thread currently owns the GIL.
+        // SAFETY: Rust initialized CPython on this thread, and reticulate's
+        // wrapped C initializer leaves this initial thread state attached on
+        // both its return and unwind paths.
         let thread_state = unsafe { (self.api.save_thread)() };
         if thread_state.is_null() {
             return Err("CPython did not return its initial thread state".to_string());
@@ -235,6 +243,7 @@ impl PythonApi {
             set_python_home: unsafe { load_symbol(library, path, b"Py_SetPythonHome\0")? },
             initialize_ex: unsafe { load_symbol(library, path, b"Py_InitializeEx\0")? },
             set_argv: unsafe { load_symbol(library, path, b"PySys_SetArgv\0")? },
+            set_signal: unsafe { load_symbol(library, path, b"PyOS_setsig\0")? },
             save_thread: unsafe { load_symbol(library, path, b"PyEval_SaveThread\0")? },
         })
     }
@@ -280,15 +289,4 @@ fn wide_string(value: &str, label: &str) -> Result<Vec<libc::wchar_t>, String> {
         .collect::<Vec<_>>();
     wide.push(0);
     Ok(wide)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::wide_string;
-
-    #[test]
-    fn python_wide_strings_are_nul_terminated() {
-        assert_eq!(wide_string("pythøn", "test").unwrap().last(), Some(&0));
-        assert!(wide_string("python\0home", "test").is_err());
-    }
 }

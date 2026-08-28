@@ -50,9 +50,10 @@ pub extern "C-unwind" fn mcp_console_initialize_python(
     let libpython = Option::<String>::try_from(harp::object::RObject::view(libpython))?
         .ok_or_else(|| harp::anyhow!("Python-hosted R is not supported"))?;
     let python_home = String::try_from(harp::object::RObject::view(python_home))?;
-    super::library::initialize(std::path::Path::new(&libpython), &python, &python_home)
-        .map_err(|error| harp::anyhow!("{error}"))?;
-    unsafe { Ok(libr::R_NilValue) }
+    let rust_owned =
+        super::library::initialize(std::path::Path::new(&libpython), &python, &python_home)
+            .map_err(|error| harp::anyhow!("{error}"))?;
+    Ok(harp::object::RObject::from(rust_owned).sexp)
 }
 
 // If Python was initialized before the direct initializer was installed,
@@ -62,12 +63,13 @@ pub extern "C-unwind" fn mcp_console_initialize_python(
 pub extern "C-unwind" fn mcp_console_load_python_library(path: SEXP) -> harp::Result<SEXP> {
     let path = Option::<String>::try_from(harp::object::RObject::view(path))?
         .ok_or_else(|| harp::anyhow!("Python-hosted R is not supported"))?;
-    super::library::load(std::path::Path::new(&path)).map_err(|error| harp::anyhow!("{error}"))?;
-    unsafe { Ok(libr::R_NilValue) }
+    let rust_owned = super::library::load(std::path::Path::new(&path))
+        .map_err(|error| harp::anyhow!("{error}"))?;
+    Ok(harp::object::RObject::from(rust_owned).sexp)
 }
 
-// Reticulate has finished attaching and installed its event and interrupt
-// machinery. Release the initial GIL held by the Rust-initialized interpreter.
+// Release the initial GIL when control leaves reticulate's C initializer,
+// including its error paths. Later reticulate calls acquire the GIL normally.
 #[allow(clippy::result_large_err)]
 #[harp::register]
 pub extern "C-unwind" fn mcp_console_finish_python_initialization() -> harp::Result<SEXP> {
