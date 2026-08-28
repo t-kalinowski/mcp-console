@@ -1,6 +1,7 @@
 use std::cmp::Ordering;
 use std::collections::BTreeSet;
 
+use pep508_rs::pep440_rs::{Version, VersionSpecifier};
 use serde::Deserialize;
 
 pub(super) struct PythonVersions {
@@ -10,6 +11,7 @@ pub(super) struct PythonVersions {
 
 struct Candidate {
     version: String,
+    parsed_version: Version,
     major: u64,
     minor: u64,
     patch: u64,
@@ -48,12 +50,13 @@ enum ConstraintOperator {
 
 struct Constraint<'a> {
     operator: ConstraintOperator,
-    version: Option<Vec<u64>>,
+    numeric_version: Option<Vec<u64>>,
+    specifier: Option<VersionSpecifier>,
     version_string: &'a str,
 }
 
 impl PythonVersions {
-    pub(super) fn parse(output: &[u8]) -> Result<Self, String> {
+    pub(super) fn parse(output: &[u8], prefer_managed: bool) -> Result<Self, String> {
         let rows = serde_json::from_slice::<Vec<UvPython>>(output)
             .map_err(|error| format!("uv returned invalid Python inventory JSON: {error}"))?;
         let raw_empty = rows.is_empty();
@@ -62,7 +65,7 @@ impl PythonVersions {
             .filter_map(Candidate::from_uv)
             .collect::<Vec<_>>();
         if !candidates.is_empty() {
-            rank(&mut candidates)?;
+            rank(&mut candidates, prefer_managed)?;
         }
         Ok(Self {
             raw_empty,
@@ -103,10 +106,9 @@ impl PythonVersions {
             .map(|constraint| Constraint::parse(constraint))
             .collect::<Vec<_>>();
         if let Some(candidate) = self.candidates.iter().find(|candidate| {
-            !candidate.prerelease
-                && constraints
-                    .iter()
-                    .all(|constraint| constraint.matches(candidate))
+            constraints
+                .iter()
+                .all(|constraint| constraint.matches(candidate))
         }) {
             return Ok(candidate.version.clone());
         }
@@ -133,6 +135,7 @@ impl Candidate {
             minor,
             patch,
         } = row.version_parts;
+        let parsed_version = row.version.parse().ok()?;
         let prerelease = row.version != format!("{major}.{minor}.{patch}");
         let downloaded = row
             .path
@@ -140,6 +143,7 @@ impl Candidate {
             .is_some_and(|path| path.replace('\\', "/").contains("/uv/python/"));
         Some(Self {
             version: row.version,
+            parsed_version,
             major,
             minor,
             patch,
@@ -157,32 +161,40 @@ impl Candidate {
 
 impl<'a> Constraint<'a> {
     fn parse(value: &'a str) -> Self {
-        let (operator, version_string) = if let Some(version) = value.strip_prefix(">=") {
-            (ConstraintOperator::GreaterThanEqual, version)
-        } else if let Some(version) = value.strip_prefix("<=") {
-            (ConstraintOperator::LessThanEqual, version)
-        } else if let Some(version) = value.strip_prefix("==") {
-            (ConstraintOperator::Equal, version)
-        } else if let Some(version) = value.strip_prefix("!=") {
-            (ConstraintOperator::NotEqual, version)
-        } else if let Some(version) = value.strip_prefix('>') {
-            (ConstraintOperator::GreaterThan, version)
-        } else if let Some(version) = value.strip_prefix('<') {
-            (ConstraintOperator::LessThan, version)
-        } else {
-            (ConstraintOperator::Equal, value)
-        };
+        let (operator, version_string, explicit_operator) =
+            if let Some(version) = value.strip_prefix(">=") {
+                (ConstraintOperator::GreaterThanEqual, version, true)
+            } else if let Some(version) = value.strip_prefix("<=") {
+                (ConstraintOperator::LessThanEqual, version, true)
+            } else if let Some(version) = value.strip_prefix("==") {
+                (ConstraintOperator::Equal, version, true)
+            } else if let Some(version) = value.strip_prefix("!=") {
+                (ConstraintOperator::NotEqual, version, true)
+            } else if let Some(version) = value.strip_prefix('>') {
+                (ConstraintOperator::GreaterThan, version, true)
+            } else if let Some(version) = value.strip_prefix('<') {
+                (ConstraintOperator::LessThan, version, true)
+            } else {
+                (ConstraintOperator::Equal, value, false)
+            };
         let version_string = version_string.trim().trim_end_matches(".*");
-        let version = parse_numeric_version(version_string);
+        let numeric_version = parse_numeric_version(version_string);
+        let specifier = (numeric_version.is_none() && explicit_operator)
+            .then(|| value.parse::<VersionSpecifier>().ok())
+            .flatten();
         Self {
             operator,
-            version,
+            numeric_version,
+            specifier,
             version_string,
         }
     }
 
     fn matches(&self, candidate: &Candidate) -> bool {
-        let Some(version) = self.version.as_ref() else {
+        if let Some(specifier) = self.specifier.as_ref() {
+            return specifier.contains(&candidate.parsed_version);
+        }
+        let Some(version) = self.numeric_version.as_ref() else {
             return candidate.version == self.version_string;
         };
         let mut candidate = vec![candidate.major, candidate.minor, candidate.patch];
@@ -222,8 +234,8 @@ fn parse_numeric_version(version: &str) -> Option<Vec<u64>> {
         .ok()
 }
 
-fn rank(candidates: &mut [Candidate]) -> Result<(), String> {
-    candidates.sort_by(initial_order);
+fn rank(candidates: &mut [Candidate], prefer_managed: bool) -> Result<(), String> {
+    candidates.sort_by(|left, right| initial_order(left, right, prefer_managed));
     let mut seen = BTreeSet::new();
     for candidate in candidates.iter_mut() {
         candidate.latest_patch = seen.insert((candidate.major, candidate.minor));
@@ -235,23 +247,38 @@ fn rank(candidates: &mut [Candidate]) -> Result<(), String> {
         .max()
         .ok_or_else(|| "uv did not report a stable CPython interpreter".to_string())?;
     let preferred_minor = i128::from(latest_minor) - 2;
-    candidates.sort_by(|left, right| final_order(left, right, preferred_minor));
+    candidates.sort_by(|left, right| {
+        final_order(left, right, preferred_minor, prefer_managed)
+    });
     Ok(())
 }
 
-fn initial_order(left: &Candidate, right: &Candidate) -> Ordering {
+fn source_order(left: &Candidate, right: &Candidate, prefer_managed: bool) -> Ordering {
+    if prefer_managed {
+        right.uv_python.cmp(&left.uv_python)
+    } else {
+        left.uv_python.cmp(&right.uv_python)
+    }
+}
+
+fn initial_order(left: &Candidate, right: &Candidate, prefer_managed: bool) -> Ordering {
     left.prerelease
         .cmp(&right.prerelease)
-        .then_with(|| right.uv_python.cmp(&left.uv_python))
+        .then_with(|| source_order(left, right, prefer_managed))
         .then_with(|| right.major.cmp(&left.major))
         .then_with(|| right.minor.cmp(&left.minor))
         .then_with(|| right.patch.cmp(&left.patch))
 }
 
-fn final_order(left: &Candidate, right: &Candidate, preferred_minor: i128) -> Ordering {
+fn final_order(
+    left: &Candidate,
+    right: &Candidate,
+    preferred_minor: i128,
+    prefer_managed: bool,
+) -> Ordering {
     left.prerelease
         .cmp(&right.prerelease)
-        .then_with(|| right.uv_python.cmp(&left.uv_python))
+        .then_with(|| source_order(left, right, prefer_managed))
         .then_with(|| right.latest_patch.cmp(&left.latest_patch))
         .then_with(|| {
             right
@@ -280,7 +307,7 @@ mod tests {
             row("3.10.19", 3, 10, 19, true),
             row("3.9.25", 3, 9, 25, true),
         ];
-        PythonVersions::parse(serde_json::to_vec(&rows).unwrap().as_slice()).unwrap()
+        PythonVersions::parse(serde_json::to_vec(&rows).unwrap().as_slice(), true).unwrap()
     }
 
     fn row(
@@ -307,6 +334,20 @@ mod tests {
     }
 
     #[test]
+    fn respects_system_python_preference() {
+        let rows = [
+            row("3.12.12", 3, 12, 12, true),
+            row("3.11.14", 3, 11, 14, false),
+        ];
+        let output = serde_json::to_vec(&rows).unwrap();
+        let managed = PythonVersions::parse(&output, true).unwrap();
+        let system = PythonVersions::parse(&output, false).unwrap();
+
+        assert_eq!(managed.resolve(&[]).unwrap(), "3.12.12");
+        assert_eq!(system.resolve(&[]).unwrap(), "3.11.14");
+    }
+
+    #[test]
     fn applies_reticulate_style_version_constraints() {
         let versions = versions();
         for (constraints, expected) in [
@@ -316,6 +357,9 @@ mod tests {
             (&["<=3.11"], "3.11.14"),
             (&[">3.11"], "3.12.12"),
             (&["!=3.12"], "3.11.14"),
+            (&["==3.15.0a5"], "3.15.0a5"),
+            (&["!=3.15.0a5"], "3.12.12"),
+            (&[">=3.14.0a1"], "3.14.3"),
         ] {
             let constraints = constraints
                 .iter()
