@@ -235,7 +235,9 @@ where
     output.write_result.map_err(|error| {
         format!("failed to prepare managed Python version resolver input: {error}")
     })?;
-    super::python_version::PythonVersions::parse(&output.stdout).map_err(|error| {
+    let prefer_managed =
+        preference != OsStr::new("system") && preference != OsStr::new("only-system");
+    super::python_version::PythonVersions::parse(&output.stdout, prefer_managed).map_err(|error| {
         format!("managed Python version resolver returned invalid output: {error}")
     })
 }
