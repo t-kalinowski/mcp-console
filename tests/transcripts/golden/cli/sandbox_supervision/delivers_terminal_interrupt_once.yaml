@@ -1,0 +1,30 @@
+---
+command:
+  - mcp-console
+  - sandbox
+  - --
+  - python
+  - -c
+  - |
+    import signal
+    import time
+
+    interrupts = 0
+
+    def handle_interrupt(_signal, _frame):
+        global interrupts
+        interrupts += 1
+
+    signal.signal(signal.SIGINT, handle_interrupt)
+    print("ready", flush=True)
+    print(input(), flush=True)
+    deadline = time.monotonic() + 0.25
+    while time.monotonic() < deadline:
+        time.sleep(0.01)
+    print(interrupts)
+stdin: |-
+  sandbox input
+  <Ctrl-C>
+stdout: |
+  1
+...
