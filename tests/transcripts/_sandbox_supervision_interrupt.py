@@ -1,9 +1,13 @@
 import os
-import signal
 import subprocess
 from pathlib import Path
 
-from _sandbox_supervision_helpers import TIMEOUT, _command, _kill_process_groups, _open_controlling_terminal, _wait_for_stop
+from _sandbox_supervision_helpers import (
+    TIMEOUT,
+    _command,
+    _kill_process_groups,
+    _open_controlling_terminal,
+)
 from _support import Transcript, code
 
 
@@ -43,6 +47,7 @@ def test_delivers_terminal_interrupt_once(binary: Path) -> Transcript:
         assert process.stdout is not None
         assert process.stdout.readline() == "ready\n"
         sandbox_group = os.tcgetpgrp(master)
+        assert sandbox_group == process.pid
         os.write(master, b"sandbox input\n")
         assert process.stdout.readline() == "sandbox input\n"
         os.write(master, b"\x03")

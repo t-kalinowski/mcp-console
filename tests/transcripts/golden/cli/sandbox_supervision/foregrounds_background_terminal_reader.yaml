@@ -1,0 +1,18 @@
+---
+command:
+  - mcp-console
+  - sandbox
+  - --
+  - python
+  - -c
+  - <script>
+launch: background terminal job
+state: stopped with SIGTTIN
+---
+control: foreground and SIGCONT
+stdin: |
+  hello
+stdout: |
+  received:hello
+exit_code: 0
+...

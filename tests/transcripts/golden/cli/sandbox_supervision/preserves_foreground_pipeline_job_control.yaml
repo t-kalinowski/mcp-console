@@ -6,8 +6,18 @@ pipeline:
     - python
     - -c
     - <script>
-  - - sleep
-    - <duration>
-stdin: <Ctrl-C>
-result: both pipeline stages exited
+  - - cat
+stdin: |-
+  hello
+  <SIGWINCH>
+  <SIGINFO>
+  <Ctrl-C>
+stdout: |
+  ready
+  input:hello
+  winch
+  info
+  interrupt
+  __pipeline_done__
+exit_code: 0
 ...
