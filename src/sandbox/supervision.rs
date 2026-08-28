@@ -9,23 +9,22 @@ mod process_tracker;
 
 use self::file_descriptors::configure as configure_file_descriptors;
 use self::job_control::{ForegroundTerminal, SignalRelay};
+use self::process::process_info;
 use self::process_tracker::{DescendantTracker, EventWait};
 use super::platform;
 use std::process::{Child, Command, ExitCode, ExitStatus};
 use std::time::Duration;
 
-pub(super) fn configure_command(command: &mut Command) -> Result<(), String> {
-    configure_file_descriptors(command, Vec::new())
-}
+const JOB_CONTROL_POLL_INTERVAL: Duration = Duration::from_millis(50);
 
 pub(super) fn status(
     mut sandbox_command: Command,
     temporary_directory: platform::TemporaryDirectory,
 ) -> Result<ExitCode, String> {
-    configure_command(&mut sandbox_command)?;
+    configure_file_descriptors(&mut sandbox_command)?;
 
-    let signal_relay = SignalRelay::install()?;
-    let mut foreground_terminal = ForegroundTerminal::detect();
+    let mut foreground_terminal = ForegroundTerminal::detect()?;
+    let signal_relay = SignalRelay::install(foreground_terminal.manages_job_control())?;
     signal_relay.configure_child(&mut sandbox_command, foreground_terminal.descriptor());
 
     let mut child = sandbox_command
@@ -33,21 +32,33 @@ pub(super) fn status(
         .map_err(|error| format!("failed to launch `{}`: {error}", platform::SANDBOX_EXEC))?;
     let mut tracker = match DescendantTracker::start(child.id() as libc::pid_t, &signal_relay) {
         Ok(tracker) => tracker,
-        Err(error) => {
-            let error = match kill_root(&mut child) {
-                Ok(_) => error,
-                Err(kill_error) => additional_error(error, kill_error),
-            };
-            let error = match foreground_terminal.restore() {
-                Ok(()) => error,
-                Err(terminal_error) => additional_error(error, terminal_error),
-            };
+        Err(failure) => {
+            let (mut error, tracker) = failure.into_parts();
+            let root_result = kill_root(&mut child);
+            let root_reaped = root_result.is_ok();
+            if let Err(kill_error) = root_result {
+                error = additional_error(error, kill_error);
+            }
+            if root_reaped
+                && let Some(tracker) = tracker
+                && let Err(tracker_error) = tracker.terminate_after_root_exit()
+            {
+                error = additional_error(error, tracker_error);
+            }
+            if let Err(terminal_error) = foreground_terminal.restore() {
+                error = additional_error(error, terminal_error);
+            }
             preserve(temporary_directory);
             return Err(error);
         }
     };
 
-    if let Err(error) = wait_for_root_exit(&child, &signal_relay, &mut tracker) {
+    if let Err(error) = wait_for_root_exit(
+        &child,
+        &signal_relay,
+        &mut tracker,
+        &mut foreground_terminal,
+    ) {
         preserve(temporary_directory);
         let root_result = kill_root(&mut child);
         let root_reaped = root_result.is_ok();
@@ -100,7 +111,9 @@ fn wait_for_root_exit(
     child: &Child,
     signal_relay: &SignalRelay,
     tracker: &mut DescendantTracker,
+    foreground_terminal: &mut ForegroundTerminal,
 ) -> Result<(), String> {
+    let process_group = child.id() as libc::pid_t;
     loop {
         if platform::wait_for_process_exit_without_reaping(child.id(), Duration::ZERO).map_err(
             |error| {
@@ -113,9 +126,13 @@ fn wait_for_root_exit(
             return Ok(());
         }
 
-        let process_group = child.id() as libc::pid_t;
+        if foreground_terminal.manages_job_control()
+            && process_info(process_group)?.is_some_and(|process| process.is_stopped)
+        {
+            foreground_terminal.suspend(process_group)?;
+        }
         signal_relay.relay_pending(process_group)?;
-        match tracker.wait_for_events(None) {
+        match tracker.wait_for_events(Some(JOB_CONTROL_POLL_INTERVAL)) {
             Ok(EventWait::RootExited) => return Ok(()),
             Ok(EventWait::Events | EventWait::TimedOut) => {}
             Err(error) => return Err(error),

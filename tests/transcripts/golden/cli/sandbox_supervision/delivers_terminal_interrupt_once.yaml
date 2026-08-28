@@ -7,24 +7,26 @@ command:
   - -c
   - |
     import signal
-    import time
 
     interrupts = 0
+
 
     def handle_interrupt(_signal, _frame):
         global interrupts
         interrupts += 1
+        print("interrupted", flush=True)
+
 
     signal.signal(signal.SIGINT, handle_interrupt)
     print("ready", flush=True)
     print(input(), flush=True)
-    deadline = time.monotonic() + 0.25
-    while time.monotonic() < deadline:
-        time.sleep(0.01)
+    while interrupts == 0:
+        signal.pause()
+    input()
     print(interrupts)
-stdin: |-
+stdin: |
   sandbox input
   <Ctrl-C>
+  report count
 stdout: |
   1
-...

@@ -1,0 +1,40 @@
+---
+command:
+  - mcp-console
+  - sandbox
+  - --
+  - python
+  - -c
+  - |
+    import ctypes
+    import os
+    import signal
+
+    libc = ctypes.CDLL(None, use_errno=True)
+    libc.sem_open.restype = ctypes.c_void_p
+    libc.sem_open.argtypes = [ctypes.c_char_p, ctypes.c_int]
+    libc.sem_post.argtypes = [ctypes.c_void_p]
+    semaphore = libc.sem_open(
+        os.environ["MCP_CONSOLE_TEST_TRACKER_SEMAPHORE"].encode(),
+        0,
+    )
+    assert semaphore != ctypes.c_void_p(-1).value
+
+    child = os.fork()
+    if child == 0:
+        os.setsid()
+        print(os.getpid(), flush=True)
+        os.close(1)
+        os.close(2)
+        assert libc.sem_post(semaphore) == 0
+        while True:
+            signal.pause()
+
+    while True:
+        signal.pause()
+tracker_setup: signal watch fails after descendant observation
+exit_code: 1
+stdout: |
+  <observed descendant pid>
+stderr: |
+  failed to watch sandbox launcher signals: Input/output error (os error 5)

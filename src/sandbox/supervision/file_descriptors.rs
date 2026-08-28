@@ -2,14 +2,14 @@ use std::os::fd::RawFd;
 use std::os::unix::process::CommandExt as _;
 use std::process::Command;
 
-pub(super) fn configure(command: &mut Command, allowed: Vec<RawFd>) -> Result<(), String> {
+pub(super) fn configure(command: &mut Command) -> Result<(), String> {
     // Compute the bound in the parent, then change flags only in the child.
     // Rust's private exec-error pipe remains open on failure and closes on exec.
     let descriptor_limit = descriptor_limit()?;
     unsafe {
         command.pre_exec(move || {
             for descriptor in (libc::STDERR_FILENO + 1)..descriptor_limit {
-                configure_descriptor(descriptor, allowed.contains(&descriptor))?;
+                configure_descriptor(descriptor)?;
             }
             Ok(())
         });
@@ -80,7 +80,7 @@ fn open_descriptors() -> Result<Vec<RawFd>, String> {
     }
 }
 
-fn configure_descriptor(descriptor: RawFd, allowed: bool) -> std::io::Result<()> {
+fn configure_descriptor(descriptor: RawFd) -> std::io::Result<()> {
     let flags = loop {
         let flags = unsafe { libc::fcntl(descriptor, libc::F_GETFD) };
         if flags >= 0 {
@@ -93,11 +93,7 @@ fn configure_descriptor(descriptor: RawFd, allowed: bool) -> std::io::Result<()>
             _ => return Err(error),
         }
     };
-    let desired = if allowed {
-        flags & !libc::FD_CLOEXEC
-    } else {
-        flags | libc::FD_CLOEXEC
-    };
+    let desired = flags | libc::FD_CLOEXEC;
     if desired == flags {
         return Ok(());
     }

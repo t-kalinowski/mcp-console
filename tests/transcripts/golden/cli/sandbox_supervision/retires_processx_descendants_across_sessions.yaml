@@ -37,4 +37,3 @@ stdout: |
   <processx child pid>
   <processx grandchild pid>
   <sandbox temp>
-...

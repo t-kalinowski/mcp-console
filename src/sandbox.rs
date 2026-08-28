@@ -6,7 +6,7 @@ use std::ffi::OsStr;
 #[cfg(target_os = "macos")]
 use std::os::unix::process::CommandExt as _;
 #[cfg(target_os = "macos")]
-use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, ExitStatus, Stdio};
+use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, Stdio};
 #[cfg(target_os = "macos")]
 use std::time::Duration;
 
@@ -100,7 +100,7 @@ pub fn run(command_line: &[OsString]) -> Result<ExitCode, String> {
 /// stdin
 ///     .write_all(b"EXIT\n")
 ///     .expect("EXIT should be written");
-/// assert!(child.wait().expect("child should exit").success());
+/// child.force_stop().expect("child should retire");
 /// ```
 pub(crate) struct SandboxedCommand {
     command: Command,
@@ -110,12 +110,10 @@ pub(crate) struct SandboxedCommand {
 #[cfg(target_os = "macos")]
 /// A direct sandboxed child that retains its private temporary directory.
 ///
-/// Retain this owner until the child exits, then call `wait`. Dropping it does
-/// not terminate the child and removes the private directory. `wait` does not
-/// stop background descendants; use `force_stop` when retiring a process-group
-/// lifetime. Piped streams can be taken and moved to independent I/O tasks
-/// before waiting.
-#[must_use = "retain the sandboxed child until it is explicitly waited"]
+/// Retain this owner until the child is retired with `force_stop`. Dropping it
+/// does not terminate the child and removes the private directory. Piped
+/// streams can be taken and moved to independent I/O tasks before retirement.
+#[must_use = "retain the sandboxed child until it is explicitly retired"]
 pub(crate) struct SandboxedChild {
     child: Child,
     retirement: SandboxedChildRetirement,
@@ -201,7 +199,6 @@ impl SandboxedCommand {
     /// guard to the returned child.
     pub(crate) fn spawn(mut self) -> Result<SandboxedChild, String> {
         self.command.env("TMPDIR", self.temporary_directory.path());
-        supervision::configure_command(&mut self.command)?;
         let child = self
             .command
             .spawn()
@@ -234,16 +231,6 @@ impl SandboxedChild {
     #[allow(dead_code, reason = "used by spawned callers with piped stderr")]
     pub(crate) fn take_stderr(&mut self) -> Option<ChildStderr> {
         self.child.stderr.take()
-    }
-
-    #[allow(
-        dead_code,
-        reason = "retained for spawned callers awaiting normal exit"
-    )]
-    pub(crate) fn wait(mut self) -> Result<ExitStatus, String> {
-        self.child
-            .wait()
-            .map_err(|error| format!("failed to launch `{}`: {error}", platform::SANDBOX_EXEC))
     }
 
     /// Waits at most `timeout` for the direct sandbox process to exit without

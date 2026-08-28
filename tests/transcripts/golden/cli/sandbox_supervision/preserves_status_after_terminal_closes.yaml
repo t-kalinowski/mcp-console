@@ -6,13 +6,15 @@ command:
   - python
   - -c
   - |
+    import os
     import signal
-    import time
 
     signal.signal(signal.SIGHUP, signal.SIG_IGN)
     print("ready", flush=True)
-    time.sleep(0.1)
+    try:
+        os.read(0, 1)
+    except OSError:
+        pass
     raise SystemExit(23)
 terminal: closed after readiness
 exit_code: 23
-...

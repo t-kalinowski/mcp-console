@@ -23,14 +23,42 @@ pub(super) enum EventWait {
     TimedOut,
 }
 
+pub(super) struct StartFailure {
+    error: String,
+    tracker: Option<DescendantTracker>,
+}
+
+impl StartFailure {
+    fn new(error: String) -> Self {
+        Self {
+            error,
+            tracker: None,
+        }
+    }
+
+    fn with_tracker(error: String, tracker: DescendantTracker) -> Self {
+        Self {
+            error,
+            tracker: Some(tracker),
+        }
+    }
+
+    pub(super) fn into_parts(self) -> (String, Option<DescendantTracker>) {
+        (self.error, self.tracker)
+    }
+}
+
 impl DescendantTracker {
-    pub(super) fn start(root_pid: libc::pid_t, signal_relay: &SignalRelay) -> Result<Self, String> {
+    pub(super) fn start(
+        root_pid: libc::pid_t,
+        signal_relay: &SignalRelay,
+    ) -> Result<Self, StartFailure> {
         let kqueue_descriptor = unsafe { libc::kqueue() };
         if kqueue_descriptor < 0 {
-            return Err(format!(
+            return Err(StartFailure::new(format!(
                 "failed to create the sandbox process tracker: {}",
                 std::io::Error::last_os_error()
-            ));
+            )));
         }
         let kqueue = unsafe { OwnedFd::from_raw_fd(kqueue_descriptor) };
 
@@ -40,15 +68,25 @@ impl DescendantTracker {
         // be paired with a libproc snapshot, is therefore an intentional boundary
         // of the initial launcher. Once observed, descendants that call setsid(),
         // such as processx children, remain tracked by their PID and start time.
-        let root = process_identity(root_pid)?;
-        let mut state = TrackerState {
+        let root = process_identity(root_pid).map_err(StartFailure::new)?;
+        let state = TrackerState {
             root,
             active: HashMap::new(),
         };
-        add_process_tree(kqueue.as_raw_fd(), root_pid, None, &mut state)?;
-        watch_signals(kqueue.as_raw_fd(), signal_relay)?;
+        let mut tracker = Self { kqueue, state };
+        if let Err(error) = add_process_tree(
+            tracker.kqueue.as_raw_fd(),
+            root_pid,
+            None,
+            &mut tracker.state,
+        ) {
+            return Err(StartFailure::with_tracker(error, tracker));
+        }
+        if let Err(error) = watch_signals(tracker.kqueue.as_raw_fd(), signal_relay) {
+            return Err(StartFailure::with_tracker(error, tracker));
+        }
 
-        Ok(Self { kqueue, state })
+        Ok(tracker)
     }
 
     pub(super) fn wait_for_events(
@@ -136,42 +174,65 @@ impl DescendantTracker {
 
     pub(super) fn terminate_after_root_exit(mut self) -> Result<(), String> {
         let deadline = Instant::now() + PROCESS_EXIT_TIMEOUT;
+        let mut cleanup_error = None;
         loop {
             // The root may have exited before wait_for_root() blocked. Consume
             // any queued fork event before removing the root from the snapshot.
-            self.wait_for_events(Some(Duration::ZERO))?;
+            if let Err(error) = self.wait_for_events(Some(Duration::ZERO)) {
+                record_first_error(&mut cleanup_error, error);
+            }
 
             // Re-snapshot before each signal pass to narrow the teardown fork
             // window. A child that becomes orphaned before observation remains
             // outside the documented supervision boundary.
-            discover_active_children(self.kqueue.as_raw_fd(), &mut self.state)?;
+            if let Err(error) = discover_active_children(self.kqueue.as_raw_fd(), &mut self.state) {
+                record_first_error(&mut cleanup_error, error);
+            }
             if let Some(root) = self.state.root
                 && self.state.active.get(&root.pid) == Some(&root)
             {
                 self.state.active.remove(&root.pid);
             }
-            remove_stale_processes(&mut self.state.active)?;
+            if let Err(error) = remove_stale_processes(&mut self.state.active) {
+                record_first_error(&mut cleanup_error, error);
+            }
 
             // The root command has exited, so its background work has no
             // remaining lifetime to preserve.
             for identity in self.state.active.values().copied() {
-                signal_process(identity, libc::SIGKILL)?;
+                if let Err(error) = signal_process(identity, libc::SIGKILL) {
+                    record_first_error(&mut cleanup_error, error);
+                }
             }
-            remove_stale_processes(&mut self.state.active)?;
+            if let Err(error) = remove_stale_processes(&mut self.state.active) {
+                record_first_error(&mut cleanup_error, error);
+            }
 
             if self.state.active.is_empty() {
-                return Ok(());
+                return cleanup_error.map_or(Ok(()), Err);
             }
 
             if Instant::now() >= deadline {
-                return Err("timed out waiting for sandbox descendants to be reaped".to_string());
+                let timeout = "timed out waiting for sandbox descendants to be reaped".to_string();
+                return Err(cleanup_error.map_or(timeout.clone(), |error| {
+                    format!("{error}; additionally, {timeout}")
+                }));
             }
             let remaining = deadline.saturating_duration_since(Instant::now());
             let wait = remaining.min(PROCESS_REAP_CHECK_INTERVAL);
-            if matches!(self.wait_for_events(Some(wait))?, EventWait::TimedOut) {
-                remove_stale_processes(&mut self.state.active)?;
-                if self.state.active.is_empty() {
-                    return Ok(());
+            match self.wait_for_events(Some(wait)) {
+                Ok(EventWait::TimedOut) => {
+                    if let Err(error) = remove_stale_processes(&mut self.state.active) {
+                        record_first_error(&mut cleanup_error, error);
+                    }
+                    if self.state.active.is_empty() {
+                        return cleanup_error.map_or(Ok(()), Err);
+                    }
+                }
+                Ok(EventWait::Events | EventWait::RootExited) => {}
+                Err(error) => {
+                    record_first_error(&mut cleanup_error, error);
+                    std::thread::sleep(wait);
                 }
             }
         }
@@ -187,12 +248,23 @@ fn remove_stale_processes(
     active: &mut HashMap<libc::pid_t, ProcessIdentity>,
 ) -> Result<(), String> {
     let identities: Vec<_> = active.values().copied().collect();
+    let mut error = None;
     for identity in identities {
-        if process_identity(identity.pid)? != Some(identity) {
-            active.remove(&identity.pid);
+        match process_identity(identity.pid) {
+            Ok(Some(current)) if current == identity => {}
+            Ok(Some(_) | None) => {
+                active.remove(&identity.pid);
+            }
+            Err(process_error) => record_first_error(&mut error, process_error),
         }
     }
-    Ok(())
+    error.map_or(Ok(()), Err)
+}
+
+fn record_first_error(current: &mut Option<String>, error: String) {
+    if current.is_none() {
+        *current = Some(error);
+    }
 }
 
 fn add_process_tree(

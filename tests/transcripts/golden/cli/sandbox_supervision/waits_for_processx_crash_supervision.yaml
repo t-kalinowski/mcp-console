@@ -26,11 +26,13 @@ command:
     )
     stopifnot(child$poll_io(5000)[["output"]] == "ready")
     stopifnot(identical(child$read_output_lines(), "ready"))
-    writeLines(as.character(child$get_pid()))
+    writeLines(c(as.character(Sys.getpid()), as.character(child$get_pid())))
     flush.console()
-    tools::pskill(Sys.getpid(), 9L)
     Sys.sleep(60)
 exit_code: 137
 stdout: |
+  <sandbox root pid>
   <processx-supervised child pid>
-...
+verified_descendants:
+  - processx child outside root process group
+  - processx crash supervisor outside root process group

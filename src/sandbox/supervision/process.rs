@@ -8,6 +8,7 @@ pub(super) struct ProcessIdentity {
 pub(super) struct ProcessInfo {
     pub(super) identity: ProcessIdentity,
     pub(super) parent_pid: libc::pid_t,
+    pub(super) is_stopped: bool,
     pub(super) is_zombie: bool,
 }
 
@@ -86,6 +87,7 @@ pub(super) fn process_info(pid: libc::pid_t) -> Result<Option<ProcessInfo>, Stri
                     started_microseconds: info.pbi_start_tvusec,
                 },
                 parent_pid: info.pbi_ppid as libc::pid_t,
+                is_stopped: info.pbi_status == libc::SSTOP,
                 // A zombie cannot execute, but its PID remains present until
                 // its parent reaps it. Keep that identity available so the
                 // tracker can wait for NOTE_REAP before returning.
