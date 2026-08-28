@@ -139,7 +139,10 @@ fn is_uv_environment_variable(name: &OsStr) -> bool {
 mod tests {
     use super::*;
 
-    fn configuration(reticulate_uv: Option<&str>, uv: Option<&str>) -> ManagedPythonResolverConfiguration {
+    fn configuration(
+        reticulate_uv: Option<&str>,
+        uv: Option<&str>,
+    ) -> ManagedPythonResolverConfiguration {
         ManagedPythonResolverConfiguration {
             environment: Arc::new(BTreeMap::new()),
             reticulate_uv: reticulate_uv.map(OsString::from),
@@ -156,7 +159,10 @@ mod tests {
 
         assert!(configuration.has_uv());
         assert_eq!(configuration.uv().unwrap(), OsStr::new("/managed/uv"));
-        assert_eq!(configuration.reticulate_uv().unwrap(), OsStr::new("managed"));
+        assert_eq!(
+            configuration.reticulate_uv().unwrap(),
+            OsStr::new("managed")
+        );
     }
 
     #[test]
@@ -165,7 +171,10 @@ mod tests {
         configuration.set_default_uv("/path/uv");
 
         assert_eq!(configuration.uv().unwrap(), OsStr::new("/path/uv"));
-        assert_eq!(configuration.reticulate_uv().unwrap(), OsStr::new("/path/uv"));
+        assert_eq!(
+            configuration.reticulate_uv().unwrap(),
+            OsStr::new("/path/uv")
+        );
     }
 }
 
