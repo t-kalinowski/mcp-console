@@ -187,11 +187,13 @@ impl<'a> Constraint<'a> {
         };
         let mut candidate = vec![candidate.major, candidate.minor, candidate.patch];
         let mut version = version.clone();
-        for level in [2, 1] {
-            if version.len() <= level {
-                version.resize(level + 1, 0);
-                candidate[level] = 0;
-            }
+        let specified_levels = version.len();
+        if specified_levels < 3 {
+            version.resize(3, 0);
+            candidate[2] = 0;
+        }
+        if specified_levels < 2 {
+            candidate[1] = 0;
         }
         let length = candidate.len().max(version.len());
         candidate.resize(length, 0);
@@ -310,6 +312,7 @@ mod tests {
     fn applies_reticulate_style_version_constraints() {
         let versions = versions();
         for (constraints, expected) in [
+            (&["3"], "3.12.12"),
             (&["3.11"], "3.11.14"),
             (&[">=3.9,<3.13"], "3.12.12"),
             (&["<=3.11"], "3.11.14"),
