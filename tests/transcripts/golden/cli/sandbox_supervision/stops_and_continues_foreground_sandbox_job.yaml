@@ -1,0 +1,33 @@
+---
+command:
+  - mcp-console
+  - sandbox
+  - --
+  - python
+  - -c
+  - |
+    import signal
+
+    def continued(_signal, _frame):
+        print("continued", flush=True)
+
+    def interrupted(_signal, _frame):
+        raise SystemExit(0)
+
+    signal.signal(signal.SIGCONT, continued)
+    signal.signal(signal.SIGINT, interrupted)
+    print("ready", flush=True)
+    while True:
+        signal.pause()
+stdout: |
+  ready
+stdin: <Ctrl-Z>
+---
+launcher: stopped
+---
+signal: SIGCONT
+stdout: |
+  continued
+stdin: <Ctrl-C>
+exit_code: 0
+...

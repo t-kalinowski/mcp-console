@@ -1,8 +1,8 @@
 //! Configures process groups and signal delivery for one foreground sandbox job.
 //!
-//! A controlling terminal, including a PTY slave, sends terminal-generated signals
-//! directly to the foreground child group. Signals addressed to the launcher
-//! are consumed synchronously and relayed to that group.
+//! A controlling terminal sends signals directly to an exclusively owned child
+//! group. When the launcher shares its foreground group with pipeline peers, it
+//! retains terminal ownership and relays those signals to the child group.
 
 use std::os::unix::process::CommandExt;
 use std::process::Command;
@@ -13,23 +13,78 @@ const FORWARDED_SIGNALS: [libc::c_int; 4] =
 pub(super) struct ForegroundTerminal {
     descriptor: Option<libc::c_int>,
     launcher_process_group: libc::pid_t,
+    transfer_to_child: bool,
 }
 
 impl ForegroundTerminal {
-    pub(super) fn detect() -> Self {
+    pub(super) fn detect() -> Result<Self, String> {
         let launcher_process_group = unsafe { libc::getpgrp() };
+        let launcher_process_id = unsafe { libc::getpid() };
         let descriptor = [libc::STDIN_FILENO, libc::STDOUT_FILENO, libc::STDERR_FILENO]
             .into_iter()
             .find(|descriptor| unsafe { libc::tcgetpgrp(*descriptor) } == launcher_process_group);
+        let transfer_to_child = descriptor.is_some()
+            && !process_group_has_peer(launcher_process_group, launcher_process_id)?;
 
-        Self {
+        Ok(Self {
             descriptor,
             launcher_process_group,
-        }
+            transfer_to_child,
+        })
     }
 
     pub(super) fn descriptor(&self) -> Option<libc::c_int> {
-        self.descriptor
+        if self.transfer_to_child {
+            self.descriptor
+        } else {
+            None
+        }
+    }
+
+    pub(super) fn manages_job_control(&self) -> bool {
+        self.descriptor.is_some()
+    }
+
+    pub(super) fn suspend(&mut self, child_process_group: libc::pid_t) -> Result<(), String> {
+        let Some(descriptor) = self.descriptor else {
+            return Ok(());
+        };
+
+        if self.transfer_to_child {
+            set_foreground_process_group(descriptor, self.launcher_process_group).map_err(|error| {
+                format!(
+                    "failed to restore the launcher before stopping the sandbox job: {error}"
+                )
+            })?;
+        }
+        if unsafe { libc::kill(libc::getpid(), libc::SIGSTOP) } != 0 {
+            return Err(format!(
+                "failed to stop the sandbox launcher: {}",
+                std::io::Error::last_os_error()
+            ));
+        }
+
+        if self.transfer_to_child {
+            let foreground = unsafe { libc::tcgetpgrp(descriptor) };
+            if foreground == self.launcher_process_group {
+                set_foreground_process_group(descriptor, child_process_group).map_err(|error| {
+                    format!("failed to continue the sandbox job in the foreground: {error}")
+                })?;
+            } else if foreground < 0 {
+                let error = std::io::Error::last_os_error();
+                if error.raw_os_error() != Some(libc::ENOTTY) {
+                    return Err(format!(
+                        "failed to inspect terminal ownership after continuing the sandbox job: {error}"
+                    ));
+                }
+                self.descriptor = None;
+            } else {
+                // `bg` leaves the shell in the foreground. Do not steal its
+                // terminal later when this background job exits.
+                self.descriptor = None;
+            }
+        }
+        signal_process_group(child_process_group, libc::SIGCONT)
     }
 
     pub(super) fn restore(&mut self) -> Result<(), String> {
@@ -37,9 +92,9 @@ impl ForegroundTerminal {
             return Ok(());
         };
 
-        // A revoked or hung-up controlling terminal no longer has foreground
-        // ownership to restore. Preserve the command's actual exit status.
-        if let Err(error) = set_foreground_process_group(descriptor, self.launcher_process_group)
+        if self.transfer_to_child
+            && let Err(error) =
+                set_foreground_process_group(descriptor, self.launcher_process_group)
             && error.raw_os_error() != Some(libc::ENOTTY)
         {
             return Err(format!(
@@ -54,6 +109,52 @@ impl ForegroundTerminal {
 impl Drop for ForegroundTerminal {
     fn drop(&mut self) {
         let _ = self.restore();
+    }
+}
+
+fn process_group_has_peer(
+    process_group: libc::pid_t,
+    process_id: libc::pid_t,
+) -> Result<bool, String> {
+    let mut capacity = 16;
+    loop {
+        let mut processes = vec![0; capacity];
+        unsafe { *libc::__error() = 0 };
+        let count = unsafe {
+            libc::proc_listpgrppids(
+                process_group,
+                processes.as_mut_ptr().cast(),
+                std::mem::size_of_val(processes.as_slice()) as libc::c_int,
+            )
+        };
+        if count == 0 {
+            let error_code = unsafe { *libc::__error() };
+            if error_code == 0 || error_code == libc::ESRCH {
+                return Ok(false);
+            }
+            if error_code == libc::EINTR {
+                continue;
+            }
+            return Err(format!(
+                "failed to inspect the foreground process group: {}",
+                std::io::Error::from_raw_os_error(error_code)
+            ));
+        }
+        if count < 0 {
+            return Err(format!(
+                "failed to inspect the foreground process group: \
+                 proc_listpgrppids returned {count}"
+            ));
+        }
+
+        let count = count as usize;
+        if count < capacity {
+            processes.truncate(count);
+            return Ok(processes
+                .into_iter()
+                .any(|candidate| candidate > 0 && candidate != process_id));
+        }
+        capacity = capacity.saturating_mul(2).max(count + 16);
     }
 }
 
@@ -87,14 +188,29 @@ fn set_foreground_process_group(
     Ok(())
 }
 
+fn signal_process_group(process_group: libc::pid_t, signal: libc::c_int) -> Result<(), String> {
+    if unsafe { libc::kill(-process_group, signal) } == 0 {
+        return Ok(());
+    }
+    let error = std::io::Error::last_os_error();
+    if error.raw_os_error() == Some(libc::ESRCH) {
+        Ok(())
+    } else {
+        Err(format!(
+            "failed to signal the sandbox process group with {signal}: {error}"
+        ))
+    }
+}
+
 pub(super) struct SignalRelay {
     wait_set: libc::sigset_t,
     previous_mask: libc::sigset_t,
+    forward_job_control: bool,
 }
 
 impl SignalRelay {
-    pub(super) fn install() -> Result<Self, String> {
-        let signal_set = forwarded_signal_set();
+    pub(super) fn install(forward_job_control: bool) -> Result<Self, String> {
+        let signal_set = forwarded_signal_set(forward_job_control);
         let mut previous_mask: libc::sigset_t = unsafe { std::mem::zeroed() };
         let mask_result =
             unsafe { libc::pthread_sigmask(libc::SIG_BLOCK, &signal_set, &mut previous_mask) };
@@ -111,7 +227,7 @@ impl SignalRelay {
         // the inherited mask before exec.
         let mut wait_set: libc::sigset_t = unsafe { std::mem::zeroed() };
         unsafe { libc::sigemptyset(&mut wait_set) };
-        for signal in FORWARDED_SIGNALS {
+        for signal in configured_signals(forward_job_control) {
             if unsafe { libc::sigismember(&previous_mask, signal) } == 0 {
                 unsafe { libc::sigaddset(&mut wait_set, signal) };
             }
@@ -120,6 +236,7 @@ impl SignalRelay {
         Ok(Self {
             wait_set,
             previous_mask,
+            forward_job_control,
         })
     }
 
@@ -132,12 +249,6 @@ impl SignalRelay {
 
         unsafe {
             command.pre_exec(move || {
-                // Give the command a dedicated process group. If this launcher
-                // owns a terminal, hand foreground control to that group before
-                // exec so terminal signals reach it directly and exactly once.
-                // Stopped/continued job-control state is intentionally not
-                // proxied; supporting Ctrl-Z requires a separate wait state
-                // machine that restores and later reassigns the terminal.
                 if libc::setpgid(0, 0) != 0 {
                     return Err(std::io::Error::last_os_error());
                 }
@@ -155,8 +266,7 @@ impl SignalRelay {
     }
 
     pub(super) fn relayed_signals(&self) -> impl Iterator<Item = libc::c_int> + '_ {
-        FORWARDED_SIGNALS
-            .into_iter()
+        configured_signals(self.forward_job_control)
             .filter(|signal| unsafe { libc::sigismember(&self.wait_set, *signal) } == 1)
     }
 
@@ -169,9 +279,9 @@ impl SignalRelay {
                     std::io::Error::last_os_error()
                 ));
             }
-            if !FORWARDED_SIGNALS.iter().any(|signal| {
-                (unsafe { libc::sigismember(&self.wait_set, *signal) } == 1)
-                    && (unsafe { libc::sigismember(&pending, *signal) } == 1)
+            if !configured_signals(self.forward_job_control).any(|signal| {
+                (unsafe { libc::sigismember(&self.wait_set, signal) } == 1)
+                    && (unsafe { libc::sigismember(&pending, signal) } == 1)
             }) {
                 return Ok(());
             }
@@ -184,23 +294,21 @@ impl SignalRelay {
                     std::io::Error::from_raw_os_error(wait_result)
                 ));
             }
-            let result = unsafe { libc::kill(-process_group, signal) };
-            if result != 0 {
-                let error = std::io::Error::last_os_error();
-                if error.raw_os_error() != Some(libc::ESRCH) {
-                    return Err(format!(
-                        "failed to relay signal {signal} to the sandbox process group: {error}"
-                    ));
-                }
-            }
+            signal_process_group(process_group, signal)?;
         }
     }
 }
 
-fn forwarded_signal_set() -> libc::sigset_t {
+fn configured_signals(forward_job_control: bool) -> impl Iterator<Item = libc::c_int> {
+    FORWARDED_SIGNALS
+        .into_iter()
+        .chain(forward_job_control.then_some(libc::SIGTSTP))
+}
+
+fn forwarded_signal_set(forward_job_control: bool) -> libc::sigset_t {
     let mut signal_set: libc::sigset_t = unsafe { std::mem::zeroed() };
     unsafe { libc::sigemptyset(&mut signal_set) };
-    for signal in FORWARDED_SIGNALS {
+    for signal in configured_signals(forward_job_control) {
         unsafe { libc::sigaddset(&mut signal_set, signal) };
     }
     signal_set

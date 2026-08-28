@@ -1,0 +1,23 @@
+---
+command:
+  - mcp-console
+  - sandbox
+  - --
+  - python
+  - -c
+  - |
+    import os
+    import time
+
+    child = os.fork()
+    if child == 0:
+        os.close(1)
+        os.close(2)
+        time.sleep(60)
+        os._exit(0)
+
+    os.write(1, f"{child}\n".encode())
+    os._exit(0)
+stdout: |
+  <same-group child pid>
+...

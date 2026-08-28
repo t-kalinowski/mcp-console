@@ -1,0 +1,13 @@
+---
+pipeline:
+  - - mcp-console
+    - sandbox
+    - --
+    - python
+    - -c
+    - <script>
+  - - sleep
+    - <duration>
+stdin: <Ctrl-C>
+result: both pipeline stages exited
+...

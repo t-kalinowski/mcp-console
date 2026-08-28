@@ -14,6 +14,8 @@ use super::platform;
 use std::process::{Child, Command, ExitCode, ExitStatus};
 use std::time::Duration;
 
+const JOB_CONTROL_POLL_INTERVAL: Duration = Duration::from_millis(50);
+
 pub(super) fn configure_command(command: &mut Command) -> Result<(), String> {
     configure_file_descriptors(command, Vec::new())
 }
@@ -24,8 +26,8 @@ pub(super) fn status(
 ) -> Result<ExitCode, String> {
     configure_command(&mut sandbox_command)?;
 
-    let signal_relay = SignalRelay::install()?;
-    let mut foreground_terminal = ForegroundTerminal::detect();
+    let mut foreground_terminal = ForegroundTerminal::detect()?;
+    let signal_relay = SignalRelay::install(foreground_terminal.manages_job_control())?;
     signal_relay.configure_child(&mut sandbox_command, foreground_terminal.descriptor());
 
     let mut child = sandbox_command
@@ -47,7 +49,12 @@ pub(super) fn status(
         }
     };
 
-    if let Err(error) = wait_for_root_exit(&child, &signal_relay, &mut tracker) {
+    if let Err(error) = wait_for_root_exit(
+        &child,
+        &signal_relay,
+        &mut tracker,
+        &mut foreground_terminal,
+    ) {
         preserve(temporary_directory);
         let root_result = kill_root(&mut child);
         let root_reaped = root_result.is_ok();
@@ -65,9 +72,18 @@ pub(super) fn status(
     }
     let terminal_result = foreground_terminal.restore();
 
-    // Keep the exited root waitable through descendant teardown. Its process
-    // table entry reserves the process-group ID for fallback group signaling.
-    if let Err(error) = tracker.terminate_after_root_exit() {
+    // Keep the exited root waitable while its pinned process group and every
+    // observed identity are retired. The group pass closes the fork-and-exit
+    // window for same-group children that orphaned before NOTE_FORK was handled.
+    let group_result = platform::kill_process_group(child.id())
+        .map_err(|error| format!("failed to stop the sandbox process group: {error}"));
+    let tracker_result = tracker.terminate_after_root_exit();
+    let retirement_result = match (group_result, tracker_result) {
+        (Ok(()), Ok(())) => Ok(()),
+        (Err(error), Ok(())) | (Ok(()), Err(error)) => Err(error),
+        (Err(error), Err(tracker_error)) => Err(additional_error(error, tracker_error)),
+    };
+    if let Err(error) = retirement_result {
         preserve(temporary_directory);
         let mut error = match kill_root(&mut child) {
             Ok(_) => error,
@@ -100,7 +116,9 @@ fn wait_for_root_exit(
     child: &Child,
     signal_relay: &SignalRelay,
     tracker: &mut DescendantTracker,
+    foreground_terminal: &mut ForegroundTerminal,
 ) -> Result<(), String> {
+    let process_group = child.id() as libc::pid_t;
     loop {
         if platform::wait_for_process_exit_without_reaping(child.id(), Duration::ZERO).map_err(
             |error| {
@@ -112,14 +130,55 @@ fn wait_for_root_exit(
         )? {
             return Ok(());
         }
+        if foreground_terminal.manages_job_control() && root_is_stopped(process_group)? {
+            foreground_terminal.suspend(process_group)?;
+        }
 
-        let process_group = child.id() as libc::pid_t;
         signal_relay.relay_pending(process_group)?;
-        match tracker.wait_for_events(None) {
+        match tracker.wait_for_events(Some(JOB_CONTROL_POLL_INTERVAL)) {
             Ok(EventWait::RootExited) => return Ok(()),
             Ok(EventWait::Events | EventWait::TimedOut) => {}
             Err(error) => return Err(error),
         }
+    }
+}
+
+fn root_is_stopped(process_id: libc::pid_t) -> Result<bool, String> {
+    let expected_size = std::mem::size_of::<libc::proc_bsdinfo>();
+    loop {
+        let mut information = std::mem::MaybeUninit::<libc::proc_bsdinfo>::zeroed();
+        unsafe { *libc::__error() = 0 };
+        let size = unsafe {
+            libc::proc_pidinfo(
+                process_id,
+                libc::PROC_PIDTBSDINFO,
+                1,
+                information.as_mut_ptr().cast(),
+                expected_size as libc::c_int,
+            )
+        };
+        if size as usize == expected_size {
+            let information = unsafe { information.assume_init() };
+            return Ok(information.pbi_status == libc::SSTOP);
+        }
+
+        let error_code = unsafe { *libc::__error() };
+        if size == 0 && error_code == libc::ESRCH {
+            return Ok(false);
+        }
+        if size == 0 && error_code == libc::EINTR {
+            continue;
+        }
+        if size == 0 && error_code != 0 {
+            return Err(format!(
+                "failed to inspect sandbox root job-control state: {}",
+                std::io::Error::from_raw_os_error(error_code)
+            ));
+        }
+        return Err(format!(
+            "failed to inspect sandbox root job-control state: \
+             proc_pidinfo returned {size} bytes, expected {expected_size}"
+        ));
     }
 }
 
