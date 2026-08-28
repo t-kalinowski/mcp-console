@@ -123,10 +123,7 @@ fn wait_for_root_exit(
     }
 }
 
-fn terminate_after_root_exit(
-    child: &Child,
-    tracker: DescendantTracker,
-) -> Result<(), String> {
+fn terminate_after_root_exit(child: &Child, tracker: DescendantTracker) -> Result<(), String> {
     // Close the post-spawn observation gap while the root remains waitable and
     // therefore pins its process-group ID. Tracker cleanup still covers every
     // observed descendant that moved to another process group or session.
