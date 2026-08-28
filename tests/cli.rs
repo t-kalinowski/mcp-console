@@ -489,12 +489,16 @@ fn stdio_console_uses_reticulate_managed_uv_for_python_versions() {
         .args([
             "--vanilla",
             "-e",
-            "cat(reticulate:::reticulate_cache_dir('uv', 'bin', 'uv'))",
+            "cat(file.path(tools::R_user_dir('reticulate', 'cache'), 'uv', 'bin', 'uv'))",
         ])
         .env("R_USER_CACHE_DIR", &r_user_cache)
         .output()
         .expect("reticulate managed uv path should resolve");
-    assert!(managed_uv.status.success());
+    assert!(
+        managed_uv.status.success(),
+        "failed to resolve reticulate managed uv path: {}",
+        String::from_utf8_lossy(&managed_uv.stderr)
+    );
     let managed_uv =
         String::from_utf8(managed_uv.stdout).expect("managed uv path should be valid UTF-8");
     let managed_uv = PathBuf::from(managed_uv);
