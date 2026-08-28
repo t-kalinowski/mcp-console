@@ -33,6 +33,17 @@ impl Runtime {
     }
 }
 
+// Reticulate calls this with the exact library selected for initialization.
+// Rust owns the process-lifetime handle; reticulate still initializes CPython.
+#[allow(clippy::result_large_err)]
+#[harp::register]
+pub extern "C-unwind" fn mcp_console_load_python_library(path: SEXP) -> harp::Result<SEXP> {
+    let path = String::try_from(harp::object::RObject::view(path))?;
+    super::library::load(std::path::Path::new(&path))
+        .map_err(|error| harp::anyhow!("{error}"))?;
+    unsafe { Ok(libr::R_NilValue) }
+}
+
 // The process-lifetime R bridge calls this once during initialization,
 // before any reticulate hook can initialize Python.
 #[allow(clippy::result_large_err)]
