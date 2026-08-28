@@ -1,0 +1,22 @@
+---
+!same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
+---
+send:
+  r: |
+    request <- jsonlite::toJSON(
+      list(
+        constraints = I(character())
+      ),
+      auto_unbox = TRUE
+    )
+    resolved <- tryCatch(
+      .Call("mcp_console_resolve_python_version", request),
+      error = conditionMessage
+    )
+    cat(resolved, "\n", sep = "")
+result:
+  content:
+    - type: text
+      text: |
+        3.11.14
+  isError: false

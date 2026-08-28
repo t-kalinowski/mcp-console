@@ -17,7 +17,6 @@ EXPECTED_SOURCES = {
     "src/r_graphics/bridge.R",
     "src/resolver/programs/duckdb_extensions.R",
     "src/resolver/programs/managed_python.R",
-    "src/resolver/programs/python_version.R",
     "src/resolver/programs/r_library.R",
     "src/resolver/programs/uv_binary.R",
     "src/sql/bridge.R",

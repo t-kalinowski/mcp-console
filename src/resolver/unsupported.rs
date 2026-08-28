@@ -111,7 +111,7 @@ pub(crate) fn resolve_python_host(
 pub(crate) fn resolve_python_version(
     constraints: Vec<String>,
     _configuration: &super::ManagedPythonResolverConfiguration,
-    _managed_r: Option<&ManagedR>,
+    _managed_r: &ManagedR,
     _on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
 ) -> Result<String, String> {
     crate::python_requirement::validate_version_constraints(&constraints)?;

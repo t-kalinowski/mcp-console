@@ -16,6 +16,8 @@ mod managed_python;
 mod managed_r;
 #[cfg(target_os = "macos")]
 mod process;
+#[cfg(target_os = "macos")]
+mod python_version;
 #[cfg(not(target_os = "macos"))]
 mod unsupported;
 
@@ -23,6 +25,7 @@ mod unsupported;
 pub(crate) struct ManagedPythonResolverConfiguration {
     environment: Arc<BTreeMap<OsString, OsString>>,
     reticulate_uv: Option<OsString>,
+    uv: Option<OsString>,
 }
 
 impl ManagedPythonResolverConfiguration {
@@ -31,9 +34,14 @@ impl ManagedPythonResolverConfiguration {
             .filter(|(name, _)| is_uv_environment_variable(name) && name != "UV_OFFLINE")
             .collect();
         let reticulate_uv = std::env::var_os("RETICULATE_UV");
+        let uv = reticulate_uv
+            .as_ref()
+            .filter(|uv| uv.as_os_str() != OsStr::new("managed"))
+            .cloned();
         Self {
             environment: Arc::new(environment),
             reticulate_uv,
+            uv,
         }
     }
 
@@ -43,14 +51,49 @@ impl ManagedPythonResolverConfiguration {
     }
 
     #[cfg(target_os = "macos")]
+    fn uv(&self) -> Result<&OsStr, String> {
+        self.uv
+            .as_deref()
+            .ok_or_else(|| "managed Python resolver has no `uv` executable".to_string())
+    }
+
+    #[cfg(target_os = "macos")]
+    fn reticulate_uv(&self) -> Result<&OsStr, String> {
+        self.reticulate_uv
+            .as_deref()
+            .or(self.uv.as_deref())
+            .ok_or_else(|| "managed Python resolver has no reticulate `uv` selection".to_string())
+    }
+
+    #[cfg(target_os = "macos")]
+    fn python_preference(&self) -> Option<&OsStr> {
+        self.environment.iter().find_map(|(name, value)| {
+            (name.as_os_str() == OsStr::new("UV_PYTHON_PREFERENCE")).then_some(value.as_os_str())
+        })
+    }
+
+    #[cfg(target_os = "macos")]
     pub(crate) fn has_uv(&self) -> bool {
-        self.reticulate_uv.is_some()
+        self.uv.is_some()
     }
 
     #[cfg(target_os = "macos")]
     pub(crate) fn set_default_uv(&mut self, uv: impl Into<OsString>) {
+        let uv = uv.into();
         if self.reticulate_uv.is_none() {
-            self.reticulate_uv = Some(uv.into());
+            self.reticulate_uv = Some(uv.clone());
+            self.uv = Some(uv);
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    pub(crate) fn set_resolved_uv(&mut self, uv: impl Into<OsString>) {
+        let uv = uv.into();
+        if self.uv.is_none() {
+            self.uv = Some(uv.clone());
+        }
+        if self.reticulate_uv.is_none() {
+            self.reticulate_uv = Some(uv);
         }
     }
 
@@ -77,11 +120,30 @@ impl ManagedPythonResolverConfiguration {
         command: &mut std::process::Command,
     ) -> Result<(), String> {
         managed_r.configure_resolver(command)?;
-        let uv = self
-            .reticulate_uv
-            .as_deref()
-            .ok_or_else(|| "managed Python resolver has no `uv` executable".to_string())?;
+        let uv = self.reticulate_uv()?;
         self.configure_uv(command, uv);
+        Ok(())
+    }
+
+    #[cfg(target_os = "macos")]
+    fn configure_direct(&self, command: &mut std::process::Command) -> Result<(), String> {
+        let uv = self.reticulate_uv()?;
+        self.configure_uv(command, uv);
+        if uv == OsStr::new("managed") {
+            let executable = std::path::Path::new(self.uv()?);
+            let root = executable
+                .parent()
+                .and_then(std::path::Path::parent)
+                .ok_or_else(|| {
+                    format!(
+                        "reticulate managed `uv` executable has no cache root: `{}`",
+                        executable.display()
+                    )
+                })?;
+            command
+                .env("UV_CACHE_DIR", root.join("cache"))
+                .env("UV_PYTHON_INSTALL_DIR", root.join("python"));
+        }
         Ok(())
     }
 }

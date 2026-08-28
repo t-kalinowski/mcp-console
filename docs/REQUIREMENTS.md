@@ -346,7 +346,8 @@ That validator is separate from explicit `requirements.r`, so restricting runtim
 The built-in server uses `$R_HOME/bin/Rscript` when `R_HOME` is set.
 Otherwise it runs `R RHOME` using `R` from `PATH` and uses the reported home's `bin/Rscript`.
 It passes that exact `Rscript` to `ir` and uses it for DuckDB resolution.
-When Python is server-managed, the same `Rscript` also runs managed-Python resolution.
+When Python is server-managed, the same `Rscript` creates and updates the reticulate environment.
+Python version inventory and selection run directly through the server-selected `uv` executable.
 The server prepends the resolved managed library to inherited `R_LIBS`, preserving its nonempty path entries after the managed library.
 
 The server prefers `ir` from `PATH`.
@@ -449,7 +450,8 @@ Use only trusted requirements and trusted resolver configuration.
 Resolver inputs do not contain submitted cells or `send` stdin:
 
 - Explicit R requirements and validated automatic package names become individual process arguments to `ir`, which receives a constant R program.
-- Python manifests, including bare distributions inferred from imports, and version constraints are JSON data on resolver standard input.
+- Python manifests, including bare distributions inferred from imports, are JSON data on the managed-environment resolver's standard input.
+- Validated Python version constraints remain in server memory; Rust filters the JSON inventory returned by direct `uv python list`, whose standard input is closed.
 - DuckDB extension names are validated JSON data and are not submitted SQL.
 
 Evaluated R code can trigger managed R resolution through the built-in `library()` and `loadNamespace()` bridge.
@@ -463,10 +465,14 @@ Host resolution and managed-environment startup may run accepted distributions' 
 An explicit `RETICULATE_UV` startup value is retained.
 Otherwise the server selects `uv` from `PATH`, from the managed R library's reticulate installation, or from ambient reticulate.
 Managed-Python resolvers receive that stable selection.
+When `RETICULATE_UV=managed`, the server resolves reticulate's managed executable and uses that same executable, cache directory, and Python installation directory for direct version inventory.
 The reticulate bootstrap probe receives `RETICULATE_UV=managed`, so reticulate validates or installs its managed `uv` rather than recursively selecting an absent `PATH` command.
 When the server starts, it captures inherited `UV_*` variables except `UV_OFFLINE`.
 Before each managed-Python or bootstrap resolver starts, it removes the current `UV_*` environment, restores that startup snapshot, and removes `UV_OFFLINE`.
 Changes made later by evaluated R or Python code therefore cannot configure host resolution.
+
+Direct version discovery uses `uv`'s managed and system inventories under the server's startup `PATH`.
+It does not add reticulate's separately registered virtualenv directories to `PATH`, so a system interpreter must be discoverable by `uv` there.
 
 The built-in worker has the opposite network policy: it forces `UV_OFFLINE=1` before user code runs inside the network-denied sandbox.
 
