@@ -3,6 +3,7 @@ use libr::SEXP;
 use super::PreparationOutcome;
 
 const PYTHON_BRIDGE_SOURCE: &str = include_str!("bridge.R");
+const PYTHON_INITIALIZER_SOURCE: &str = include_str!("initialize.R");
 const PYTHON_RUNTIME_SOURCE: &str = include_str!("runtime.py");
 
 /// The current Python backend, hosted by reticulate inside embedded R.
@@ -14,7 +15,10 @@ pub(super) fn configure_worker_environment() -> std::io::Result<()> {
 
 impl Runtime {
     pub(super) fn initialize() -> Result<Self, String> {
-        crate::r_bridge::Bridge::initialize(PYTHON_BRIDGE_SOURCE, "Python").map(Self)
+        let source = format!(
+            "base::local(\n  {{\n    state <- ({PYTHON_BRIDGE_SOURCE})\n{PYTHON_INITIALIZER_SOURCE}\n    state\n  }},\n  envir = base::new.env(parent = base::baseenv())\n)"
+        );
+        crate::r_bridge::Bridge::initialize(&source, "Python").map(Self)
     }
 
     pub(super) fn evaluate(&mut self, source: &str) -> Result<(), String> {
@@ -33,14 +37,45 @@ impl Runtime {
     }
 }
 
-// Reticulate calls this with the exact library selected for initialization.
-// Rust owns the process-lifetime handle; reticulate still initializes CPython.
+// Rust initializes the exact interpreter selected by reticulate. Reticulate
+// then observes the running interpreter and attaches its conversion runtime.
+#[allow(clippy::result_large_err)]
+#[harp::register]
+pub extern "C-unwind" fn mcp_console_initialize_python(
+    python: SEXP,
+    libpython: SEXP,
+    python_home: SEXP,
+) -> harp::Result<SEXP> {
+    let python = String::try_from(harp::object::RObject::view(python))?;
+    let libpython = Option::<String>::try_from(harp::object::RObject::view(libpython))?
+        .ok_or_else(|| harp::anyhow!("Python-hosted R is not supported"))?;
+    let python_home = String::try_from(harp::object::RObject::view(python_home))?;
+    super::library::initialize(
+        std::path::Path::new(&libpython),
+        &python,
+        &python_home,
+    )
+    .map_err(|error| harp::anyhow!("{error}"))?;
+    unsafe { Ok(libr::R_NilValue) }
+}
+
+// If Python was initialized before the direct initializer was installed,
+// attach the Rust-owned process-lifetime handle to that interpreter.
 #[allow(clippy::result_large_err)]
 #[harp::register]
 pub extern "C-unwind" fn mcp_console_load_python_library(path: SEXP) -> harp::Result<SEXP> {
     let path = Option::<String>::try_from(harp::object::RObject::view(path))?
         .ok_or_else(|| harp::anyhow!("Python-hosted R is not supported"))?;
     super::library::load(std::path::Path::new(&path)).map_err(|error| harp::anyhow!("{error}"))?;
+    unsafe { Ok(libr::R_NilValue) }
+}
+
+// Reticulate has finished attaching and installed its event and interrupt
+// machinery. Release the initial GIL held by the Rust-initialized interpreter.
+#[allow(clippy::result_large_err)]
+#[harp::register]
+pub extern "C-unwind" fn mcp_console_finish_python_initialization() -> harp::Result<SEXP> {
+    super::library::finish_initialization().map_err(|error| harp::anyhow!("{error}"))?;
     unsafe { Ok(libr::R_NilValue) }
 }
 
