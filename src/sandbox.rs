@@ -14,6 +14,10 @@ use std::time::Duration;
 #[path = "sandbox/macos.rs"]
 mod platform;
 
+#[cfg(target_os = "macos")]
+#[path = "sandbox/supervision.rs"]
+mod supervision;
+
 #[cfg(not(target_os = "macos"))]
 #[path = "sandbox/unsupported.rs"]
 mod platform;
@@ -197,6 +201,7 @@ impl SandboxedCommand {
     /// guard to the returned child.
     pub(crate) fn spawn(mut self) -> Result<SandboxedChild, String> {
         self.command.env("TMPDIR", self.temporary_directory.path());
+        supervision::configure_command(&mut self.command)?;
         let child = self
             .command
             .spawn()
@@ -208,9 +213,9 @@ impl SandboxedCommand {
         })
     }
 
-    pub(crate) fn status(self) -> Result<ExitCode, String> {
-        let status = self.spawn()?.wait()?;
-        Ok(platform::exit_code(status))
+    pub(crate) fn status(mut self) -> Result<ExitCode, String> {
+        self.command.env("TMPDIR", self.temporary_directory.path());
+        supervision::status(self.command, self.temporary_directory)
     }
 }
 
