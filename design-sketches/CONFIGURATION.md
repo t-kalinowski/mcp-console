@@ -442,8 +442,8 @@ filesystem:
     - .git/config
 ```
 
-`writable_roots`, `unreadable`, and `unwritable` accept one scalar, a sequence,
-or a list patch.
+`writable_roots`, `unreadable`, and `unwritable` accept one scalar, a sequence, or a
+list patch.
 
 `workspace_write` already grants the working directory. `writable_roots` adds
 other recursive roots; users do not need to restate the workspace. In an
@@ -473,9 +473,16 @@ Relative paths are resolved from the worker's target-side working directory.
 are remote paths. Log paths are an exception and are supervisor-side unless an
 expanded log destination says otherwise.
 
-When path sets overlap, the most specific matching declaration wins. At equal
-specificity, `unreadable` wins over `readable_roots`, and `unwritable` wins over
-the workspace grant or `writable_roots`. List order has no authority meaning.
+When path sets overlap within one trust layer, the more specific matching
+declaration wins. Specificity is defined by matcher containment: a matcher is
+more specific only when every path it can match is also matched by the broader
+matcher, and not vice versa. An exact path is therefore narrower than a
+containing root or glob, and a nested root is narrower than its ancestor. If two
+conflicting matchers overlap but neither contains the other, or MCP Console
+cannot prove the containment, the profile is rejected rather than relying on
+provider-specific ordering. At equal specificity, `unreadable` wins over
+`readable_roots`, and `unwritable` wins over the workspace grant or
+`writable_roots`. List order has no authority meaning.
 
 The implementation must resolve symlinks and hard links safely. A backend that
 cannot enforce a selected path or glob rejects the profile rather than silently
@@ -508,8 +515,9 @@ some_list:
 ```
 
 `replace` cannot be combined with `add` or `remove`. A lower-trust project file
-cannot remove a denial imposed by a user, administrator, or organization policy
-layer.
+cannot remove or reopen a denial imposed by any higher-trust layer. Higher-trust
+denials are applied as non-overridable constraints before same-layer matcher
+specificity is considered.
 
 ### Advanced rule form
 
@@ -545,10 +553,13 @@ The simple fields normalize into the same rule model:
 Simple fields and explicit `rules` may therefore coexist. Authorization is
 resolved independently for reads and writes:
 
-1. the most specific matching rule wins;
-2. at equal specificity, `deny` wins over `allow`;
-3. effective write access requires effective read access; and
-4. administrator or organization constraints remain non-overridable.
+1. denials from every higher-trust layer are non-overridable;
+2. within one trust layer, the matching rule whose matcher is a strict subset
+   of the others is the most specific;
+3. conflicting overlapping matchers that cannot be ordered by containment are
+   rejected;
+4. at equal specificity, `deny` wins over `allow`; and
+5. effective write access requires effective read access.
 
 Rule sequence order has no authorization meaning. A stable optional `id` may be
 used to replace or remove an inherited advanced rule through the list-patch
@@ -582,17 +593,28 @@ network: full
 ```
 
 The built-in profiles begin with an empty outbound allowlist. A scalar endpoint
-or sequence grants only the listed destinations. `full` allows unrestricted
-outbound networking but does not implicitly grant filesystem access, listener
-ports, or local IPC sockets; those remain separate capabilities. It is still a
-powerful setting requiring a trusted profile.
+or sequence grants only the listed worker destinations. A destination authored
+by an automatically discovered project configuration requires project trust
+unless it is already approved by a user, administrator, or organization policy.
+This trust check changes no YAML syntax. `full` allows unrestricted worker
+networking but does not implicitly grant filesystem access, listener ports, or
+local IPC sockets; those remain separate capabilities. It is still a powerful
+setting requiring a trusted profile.
 
 Writing `network: none` in a selected profile is stronger than merely inheriting
-the built-in empty allowlist: it is an explicit prohibition on outbound
-connections, listeners, and local sockets. It conflicts with sibling settings
-that request a derived network grant, such as `sql.allow_network: true` or a
-package source with `worker_access: true`. To allow exactly one database or
-package source, omit `network: none` and use that explicit narrow grant.
+the built-in empty allowlist: it prohibits outbound connections, listeners, and
+local sockets for the worker and its descendants. It conflicts with sibling
+settings that request a derived worker-network grant, such as
+`sql.allow_network: true` or a package source with `worker_access: true`. To
+allow exactly one database or package source, omit `network: none` and use that
+explicit narrow grant.
+
+The `network` node does not govern the trusted host-side package resolver, which
+runs outside the worker boundary. Resolver egress is controlled by
+`package_resolution`, package sources, project trust, and higher-trust source
+and requirement policy. A fully offline session combines `network: none` with
+`package_resolution: off` and explicit `existing` or disabled language
+runtimes.
 
 The expanded form is:
 
@@ -728,12 +750,11 @@ network:
       local_port: 8383
 ```
 
-If an exact target or published port is occupied, startup fails clearly.
-Automatic ports are intentionally deferred from the initial format. A future
-`port: auto` form must let the application bind port `0` first and report the
-actual bound port through a supported runtime or relay channel before MCP
-Console publishes it; MCP Console must not reserve and then release a numeric
-port.
+Version 1 supports exact target ports. If an exact target or published port is
+occupied, startup fails clearly. A future `port: auto` form must let the
+application bind port `0` first and report its actual bound port before MCP
+Console publishes it; MCP Console must not release a temporary reservation and
+race the application for the port.
 
 ### Local sockets
 
@@ -1013,11 +1034,12 @@ sandbox:
         - resources
 ```
 
-MCP Console writes a generated policy file and passes its path and provider
-configuration to the relay. The relay applies the provider when it launches the
-worker, and MCP Console verifies the provider's advertised capabilities. This
-preserves a portable top-level policy while allowing a long tail of enforcement
-backends.
+The server compiles and validates the policy, then sends the policy contents and
+provider configuration through the server-relay transport. The relay writes a
+protected target-local temporary policy file, passes that target-side path to
+the wrapper when it launches the worker, and removes the file during cleanup.
+This works the same for local, SSH, and nested-container targets while keeping
+policy compilation and capability validation with the server.
 
 `run_on` and `sandbox` are separate because they answer different questions:
 where the session runs, and what enforces its permissions there. They remain
@@ -1055,6 +1077,14 @@ rejects those combinations rather than depending on a pre-existing cache. Use
 `existing` or `false` with `off`; use `declared_only` when a managed or project
 environment should still be prepared but runtime-triggered installation should
 be disabled.
+
+Project-authored package names and manifests are resolver inputs, not ordinary
+sandboxed data. An automatically discovered project may not cause the
+server-owned resolver to install them until the project is trusted, unless each
+requirement is admitted by a higher-trust requirement allowlist or manifest.
+Syntax validation and an approved registry URL do not by themselves approve a
+package's installation or build code. This rule applies equally to `automatic`
+and `declared_only` and requires no additional common-case YAML.
 
 A future `frozen` value may require a complete lockfile and prohibit any
 resolution that would change it.
@@ -1136,7 +1166,9 @@ dependency resolution remains in server-owned host resolvers. Under the current
 contract, only validated registry references are accepted; local paths, VCS or
 source references, and arbitrary installer or build hooks are rejected.
 Supporting those forms later requires a separate sandboxed resolver boundary,
-not routing resolver work through the worker.
+not routing resolver work through the worker. The project-trust and
+higher-trust requirement-allowlist rule above still applies to accepted registry
+requirements.
 
 An exact existing installation is:
 
@@ -1230,9 +1262,11 @@ python:
   executable: .venv/bin/python
 ```
 
-The same resolver contract applies to Python lockfiles and project metadata:
-project mode may select supported metadata, but it cannot introduce local, VCS,
-source, or arbitrary build inputs into the host resolver.
+The same resolver and trust contract applies to Python lockfiles, project
+metadata, package lists, and manifests: project mode may select supported
+metadata, but an untrusted project cannot trigger host-side installation unless
+its requirements are approved by higher-trust policy, and local, VCS, source,
+or arbitrary build inputs remain unsupported by the current resolver boundary.
 
 Because MCP Console uses reticulate for object translation, the selected Python
 must also be compatible with the runtime architecture used by the worker.
@@ -1269,10 +1303,13 @@ Declaring a source authorizes MCP Console's package resolver to use that source;
 it does not automatically give evaluated code general network access. A source
 URL authored by a project configuration is not passed to the server-owned
 resolver until the project is trusted, unless it matches a source approved by
-user, administrator, or organization configuration. `worker_access: true`
-derives a corresponding narrow worker allowlist for an explicitly supported
-worker-side operation; it does not move MCP Console's dependency resolver into
-the worker. Derived access must be shown by `config explain`.
+user, administrator, or organization configuration. Source approval is distinct
+from requirement approval: an untrusted project also needs each requested
+package or manifest entry admitted by higher-trust requirement policy.
+`worker_access: true` derives a corresponding narrow worker allowlist for an
+explicitly supported worker-side operation; it does not move MCP Console's
+dependency resolver into the worker. Derived access must be shown by `config
+explain`.
 
 A larger configuration may extract a source under
 `definitions.package_sources` and refer to it explicitly:
@@ -1553,10 +1590,13 @@ supply a documented minimal target baseline needed to start the relay, such as
 its target-side home, temporary directory, and executable search path; that
 baseline is separate from `env.inherit` and is shown by `config explain`.
 
-`secret` marks inherited or set names for mandatory redaction. Secret values
-must not appear in project YAML. Forwarding a secret-bearing inherited value to
-a remote target requires project trust. A future secret-provider form can
-expand an entry without changing callers that already reference an environment
+Every `env.inherit` name authored by an automatically discovered project
+configuration requires project trust unless that exact name is approved for
+forwarding by a higher-trust configuration. MCP Console does not try to infer
+which arbitrary variable names contain secrets. `secret` marks inherited or set
+names for mandatory redaction, but it is not an authorization mechanism. Secret
+values must not appear in project YAML. A future secret-provider form can expand
+an entry without changing callers that already reference an environment
 variable name.
 
 The default inheritance policy must be conservative, documented, and visible in
@@ -1581,17 +1621,20 @@ profiles:
 
 Merge rules are predictable:
 
-- scalars replace inherited scalars;
-- mappings merge by key unless a field below defines whole-node replacement;
-- a scalar or sequence assigned to `network` replaces the complete inherited
-  network policy, while a `network` mapping merges by key;
+- ordinary scalars replace inherited scalars;
+- mappings merge by key only when they retain the same variant;
+- a scalar or sequence assigned to a progressive variant node replaces that
+  complete inherited node before shorthand normalization. This applies to
+  `network`, `run_on`, `sandbox`, `r`, `python`, `sql`, `logs`, and `cache`;
+- an expanded mapping that changes a discriminator such as `type`, `mode`, or
+  `provider` also replaces the complete inherited node rather than retaining
+  incompatible sibling fields;
 - a scalar or sequence assigned to a list-valued field replaces that inherited
   field;
 - `{ add, remove }` patches an inherited list;
 - `{ replace }` explicitly replaces an inherited list;
-- `run_on` replaces the complete inherited runner;
 - the advanced filesystem `rules` list replaces the inherited list unless it
-  uses an explicit list patch;
+  uses an explicit list patch; and
 - provider-specific `options` merge only within the same provider type.
 
 This is more explicit than silently appending every list and safer than a
@@ -1624,6 +1667,15 @@ A higher-trust policy may:
 
 A project file cannot weaken those constraints. Security policy should not be
 encoded by relying on ordinary profile merge order alone.
+
+Named `profiles` and entries under `definitions` share one resolved namespace
+per kind across configuration layers. Built-in names are reserved, and defining
+the same name in more than one file layer is an error rather than an implicit
+merge or shadow. This keeps a trusted `server.agent_profiles` reference bound to
+one unambiguous object without adding source-qualified names. Ordinary top-level
+defaults follow their documented layer precedence, while security constraints
+accumulate and cannot be replaced by a lower-trust value. List patches operate
+only within the object defined in their own layer.
 
 ### Configuration discovery and path namespaces
 
@@ -1673,8 +1725,12 @@ Some declarations imply a narrow supporting permission:
   make the source writable.
 
 Derived permissions must be explicit in `config explain`, labeled by their
-source, and included in enforcement tests. Hidden broad grants are not
-acceptable.
+source, and included in enforcement tests. They pass through the same trust and
+higher-trust policy checks as directly authored permissions. In particular, an
+automatically discovered project cannot derive a writable path outside the
+project root through SQL, cache, logs, mounts, or another supporting declaration
+without project trust or higher-trust approval; nor can it derive access inside
+a region denied by a higher-trust layer. Hidden broad grants are not acceptable.
 
 ## Agent-selectable profiles
 
@@ -1702,14 +1758,17 @@ the transcript may remain according to normal session lifecycle rules.
 Project configuration can request powerful behavior. At minimum, these require
 an explicitly trusted project or a higher-trust configuration source:
 
-- `full_access` or `network: full`;
+- `full_access`, `network: full`, or project-authored outbound destinations
+  not approved by higher-trust policy;
 - SSH, Docker, Docker Sandbox, nested execution, or custom command runners;
 - third-party sandbox providers;
 - high-authority Unix sockets or named pipes;
-- `writable_roots` outside the project root;
-- project-defined package source URLs not approved by a higher-trust source;
+- explicit or derived writable paths outside the project root;
+- project-defined package source URLs or package requirements not approved by a
+  higher-trust source or requirement policy;
 - arbitrary executable paths outside the project;
-- inherited secret-bearing environment variables;
+- every project-authored `env.inherit` name not approved by higher-trust
+  configuration; and
 - provider-specific options that weaken isolation.
 
 Editing the project file inside a running worker must not increase that
@@ -1793,7 +1852,7 @@ version: 1
 profile: full_access
 ```
 
-### No network
+### No worker network
 
 ```yaml
 profile:
@@ -1801,8 +1860,10 @@ profile:
   network: none
 ```
 
-`network: none` is already the built-in default and is shown here only for
-explicitness.
+`network: none` is already the built-in worker-network default and is shown here
+only for explicitness. To prohibit host-resolver network access as well, use
+`package_resolution: off` together with explicit `existing` or disabled R and
+Python runtimes.
 
 ### Approved package mirrors with no runtime-triggered installation
 
@@ -2159,8 +2220,7 @@ an advanced command escape hatch.
    forms, and implement `config validate`, `config explain`, and schema output.
 2. Implement `profile`, built-ins, named profiles, one-parent inheritance, and
    list patches.
-3. Implement local `writable_roots`, `readable_roots`, `unreadable`, and
-   `unwritable`.
+3. Implement local `writable_roots`, `readable_roots`, `unreadable`, and `unwritable`.
 4. Implement `network: none`, outbound endpoint allowlists, exact TCP listeners,
    and Unix socket paths through a managed proxy.
 5. Implement package policy, compact/expanded R and Python environments, package
