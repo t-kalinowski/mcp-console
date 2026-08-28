@@ -1,6 +1,10 @@
+#[path = "supervision/file_descriptors.rs"]
 mod file_descriptors;
+#[path = "supervision/job_control.rs"]
 mod job_control;
+#[path = "supervision/process.rs"]
 mod process;
+#[path = "supervision/process_tracker.rs"]
 mod process_tracker;
 
 use self::file_descriptors::configure as configure_file_descriptors;
