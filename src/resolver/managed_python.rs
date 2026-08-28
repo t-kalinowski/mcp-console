@@ -294,11 +294,11 @@ where
     })?;
     let stdout = read_output(child.stdout.take().expect("resolver stdout is piped"));
     let stderr = read_output(child.stderr.take().expect("resolver stderr is piped"));
-    if let Some(on_started) = on_started.take() {
-        if let Err(error) = on_started(resolver.stop_handle()) {
-            let _ = stop_resolver(&mut child, program, kind);
-            return Err(error);
-        }
+    if let Some(on_started) = on_started.take()
+        && let Err(error) = on_started(resolver.stop_handle())
+    {
+        let _ = stop_resolver(&mut child, program, kind);
+        return Err(error);
     }
     resolver.watch_exit(child.id());
     resolver.wait(&mut child, completed_write(), stdout, stderr, program, kind)
