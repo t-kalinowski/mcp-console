@@ -8,6 +8,7 @@ use self::job_control::{ForegroundTerminal, SignalRelay};
 use self::process_tracker::{DescendantTracker, EventWait};
 use super::platform;
 use std::process::{Child, Command, ExitCode, ExitStatus};
+use std::time::Duration;
 
 pub(super) fn configure_command(command: &mut Command) -> Result<(), String> {
     configure_file_descriptors(command, Vec::new())
@@ -97,7 +98,14 @@ fn wait_for_root_exit(
     tracker: &mut DescendantTracker,
 ) -> Result<(), String> {
     loop {
-        if root_has_exited(child.id() as libc::pid_t)? {
+        if platform::wait_for_process_exit_without_reaping(child.id(), Duration::ZERO).map_err(
+            |error| {
+                format!(
+                    "failed to inspect `{}` exit status: {error}",
+                    platform::SANDBOX_EXEC
+                )
+            },
+        )? {
             return Ok(());
         }
 
@@ -107,32 +115,6 @@ fn wait_for_root_exit(
             Ok(EventWait::RootExited) => return Ok(()),
             Ok(EventWait::Events | EventWait::TimedOut) => {}
             Err(error) => return Err(error),
-        }
-    }
-}
-
-fn root_has_exited(pid: libc::pid_t) -> Result<bool, String> {
-    loop {
-        let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
-        // WNOWAIT observes exit without releasing the PID or process-group ID.
-        let result = unsafe {
-            libc::waitid(
-                libc::P_PID,
-                pid as libc::id_t,
-                &mut info,
-                libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
-            )
-        };
-        if result == 0 {
-            return Ok(info.si_pid != 0);
-        }
-
-        let error = std::io::Error::last_os_error();
-        if error.kind() != std::io::ErrorKind::Interrupted {
-            return Err(format!(
-                "failed to inspect `{}` exit status: {error}",
-                platform::SANDBOX_EXEC
-            ));
         }
     }
 }
