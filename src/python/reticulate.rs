@@ -38,9 +38,9 @@ impl Runtime {
 #[allow(clippy::result_large_err)]
 #[harp::register]
 pub extern "C-unwind" fn mcp_console_load_python_library(path: SEXP) -> harp::Result<SEXP> {
-    let path = String::try_from(harp::object::RObject::view(path))?;
-    super::library::load(std::path::Path::new(&path))
-        .map_err(|error| harp::anyhow!("{error}"))?;
+    let path = Option::<String>::try_from(harp::object::RObject::view(path))?
+        .ok_or_else(|| harp::anyhow!("Python-hosted R is not supported"))?;
+    super::library::load(std::path::Path::new(&path)).map_err(|error| harp::anyhow!("{error}"))?;
     unsafe { Ok(libr::R_NilValue) }
 }
 

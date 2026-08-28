@@ -58,36 +58,41 @@ mod tests {
 
 #[cfg(target_os = "macos")]
 mod library {
-    use std::ffi::OsStr;
     use std::path::{Path, PathBuf};
-    use std::sync::OnceLock;
+    use std::sync::Mutex;
 
-    static PYTHON_LIBRARY: OnceLock<LoadedLibrary> = OnceLock::new();
+    static PYTHON_LIBRARY: Mutex<Option<LoadedLibrary>> = Mutex::new(None);
 
     struct LoadedLibrary {
-        identity: LibraryIdentity,
+        path: PathBuf,
         _library: libloading::os::unix::Library,
     }
 
-    #[derive(Eq, PartialEq)]
-    enum LibraryIdentity {
-        Process,
-        Path(PathBuf),
-    }
-
     pub(super) fn load(path: &Path) -> Result<(), String> {
-        let identity = LibraryIdentity::resolve(path)?;
-        if let Some(loaded) = PYTHON_LIBRARY.get() {
-            return loaded.ensure_identity(&identity);
+        let path = path.canonicalize().map_err(|error| {
+            format!(
+                "failed to resolve Python shared library `{}`: {error}",
+                path.display()
+            )
+        })?;
+        let mut library_slot = PYTHON_LIBRARY
+            .lock()
+            .map_err(|_| "Python shared library state is unavailable".to_string())?;
+        if let Some(loaded) = library_slot.as_ref() {
+            return loaded.ensure_path(&path);
         }
 
-        let description = identity.description();
         // SAFETY: The selected path comes from reticulate's interpreter
         // discovery. Global, eager loading exposes the CPython API before
         // reticulate initializes the interpreter.
-        let library = unsafe { identity.open() }.map_err(|error| {
-            format!("failed to load Python shared library `{description}`: {error}")
-        })?;
+        let flags = libc::RTLD_NOW | libc::RTLD_GLOBAL;
+        let library = unsafe { libloading::os::unix::Library::open(Some(path.as_os_str()), flags) }
+            .map_err(|error| {
+                format!(
+                    "failed to load Python shared library `{}`: {error}",
+                    path.display()
+                )
+            })?;
 
         // SAFETY: Resolving a symbol does not call it. The handle remains owned
         // by `LoadedLibrary` for the process lifetime.
@@ -96,66 +101,28 @@ mod library {
                 .get::<unsafe extern "C" fn() -> libc::c_int>(b"Py_IsInitialized\0")
                 .map_err(|error| {
                     format!(
-                        "Python shared library `{description}` does not export Py_IsInitialized: {error}"
+                        "Python shared library `{}` does not export Py_IsInitialized: {error}",
+                        path.display()
                     )
                 })?;
         }
 
-        let candidate = LoadedLibrary {
-            identity,
+        *library_slot = Some(LoadedLibrary {
+            path,
             _library: library,
-        };
-        match PYTHON_LIBRARY.set(candidate) {
-            Ok(()) => Ok(()),
-            Err(candidate) => PYTHON_LIBRARY
-                .get()
-                .expect("Python library should be set after a concurrent load")
-                .ensure_identity(&candidate.identity),
-        }
-    }
-
-    impl LibraryIdentity {
-        fn resolve(path: &Path) -> Result<Self, String> {
-            if path.as_os_str() == OsStr::new("NA") {
-                return Ok(Self::Process);
-            }
-            path.canonicalize().map(Self::Path).map_err(|error| {
-                format!(
-                    "failed to resolve Python shared library `{}`: {error}",
-                    path.display()
-                )
-            })
-        }
-
-        unsafe fn open(&self) -> Result<libloading::os::unix::Library, libloading::Error> {
-            let flags = libc::RTLD_NOW | libc::RTLD_GLOBAL;
-            match self {
-                Self::Process => unsafe {
-                    libloading::os::unix::Library::open(None::<&OsStr>, flags)
-                },
-                Self::Path(path) => unsafe {
-                    libloading::os::unix::Library::open(Some(path.as_os_str()), flags)
-                },
-            }
-        }
-
-        fn description(&self) -> String {
-            match self {
-                Self::Process => "current process".to_string(),
-                Self::Path(path) => path.display().to_string(),
-            }
-        }
+        });
+        Ok(())
     }
 
     impl LoadedLibrary {
-        fn ensure_identity(&self, requested: &LibraryIdentity) -> Result<(), String> {
-            if self.identity == *requested {
+        fn ensure_path(&self, requested: &Path) -> Result<(), String> {
+            if self.path == requested {
                 return Ok(());
             }
             Err(format!(
                 "Python shared library is already loaded from `{}` and cannot switch to `{}`",
-                self.identity.description(),
-                requested.description()
+                self.path.display(),
+                requested.display()
             ))
         }
     }
