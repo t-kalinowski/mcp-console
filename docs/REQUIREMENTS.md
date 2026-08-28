@@ -449,7 +449,8 @@ Use only trusted requirements and trusted resolver configuration.
 Resolver inputs do not contain submitted cells or `send` stdin:
 
 - Explicit R requirements and validated automatic package names become individual process arguments to `ir`, which receives a constant R program.
-- Python manifests, including bare distributions inferred from imports, and version constraints are JSON data on resolver standard input.
+- Python manifests, including bare distributions inferred from imports, are JSON data on the managed-environment resolver's standard input.
+- Validated Python version constraints remain in server memory; Rust filters the JSON inventory returned by direct `uv python list`, whose standard input is closed.
 - DuckDB extension names are validated JSON data and are not submitted SQL.
 
 Evaluated R code can trigger managed R resolution through the built-in `library()` and `loadNamespace()` bridge.
