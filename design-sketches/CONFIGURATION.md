@@ -181,8 +181,6 @@ python:
   packages:
     - pandas
     - pyarrow
-  indexes:
-    - https://pypi.org/simple
 ```
 
 ### 5. Use patch forms only when modifying inherited collections
@@ -444,11 +442,15 @@ filesystem:
     - .git/config
 ```
 
-`writable_roots`, `unreadable`, and `unwritable` accept one scalar, a sequence, or a
-list patch.
+`writable_roots`, `unreadable`, and `unwritable` accept one scalar, a sequence,
+or a list patch.
 
 `workspace_write` already grants the working directory. `writable_roots` adds
-other recursive roots; users do not need to restate the workspace.
+other recursive roots; users do not need to restate the workspace. In an
+automatically discovered project configuration, a writable root outside the
+project root requires project trust or a user, administrator, or organization
+configuration. Roots inside the project do not require an additional trust
+decision.
 
 Stronger read isolation uses `readable_roots`:
 
@@ -592,11 +594,6 @@ that request a derived network grant, such as `sql.allow_network: true` or a
 package source with `worker_access: true`. To allow exactly one database or
 package source, omit `network: none` and use that explicit narrow grant.
 
-A scalar or sequence assigned to `network` replaces the complete inherited
-network node before normalization. In particular, `network: none` clears
-inherited endpoints, listeners, local sockets, and proxy settings. Constraints
-from administrator or organization policy still apply.
-
 The expanded form is:
 
 ```yaml
@@ -720,8 +717,7 @@ The worker may then run:
 shiny::runApp(host = "127.0.0.1", port = 3838)
 ```
 
-A listener expands when the target and published ports differ or an automatic
-port is needed:
+A listener expands when the target and published ports differ:
 
 ```yaml
 network:
@@ -730,17 +726,14 @@ network:
       protocol: tcp
       publish: loopback
       local_port: 8383
-
-    - name: preview
-      port: auto
-      protocol: tcp
-      publish: loopback
-      env: MCP_CONSOLE_PREVIEW_PORT
 ```
 
-For an automatic port, MCP Console reserves the target port, exposes it through
-the named environment variable, and reports the published URL. If an exact
-published port is occupied, startup fails clearly.
+If an exact target or published port is occupied, startup fails clearly.
+Automatic ports are intentionally deferred from the initial format. A future
+`port: auto` form must let the application bind port `0` first and report the
+actual bound port through a supported runtime or relay channel before MCP
+Console publishes it; MCP Console must not reserve and then release a numeric
+port.
 
 ### Local sockets
 
@@ -1057,6 +1050,12 @@ package_resolution:
   python: off
 ```
 
+`off` is incompatible with `managed` and `project` language modes. Validation
+rejects those combinations rather than depending on a pre-existing cache. Use
+`existing` or `false` with `off`; use `declared_only` when a managed or project
+environment should still be prepared but runtime-triggered installation should
+be disabled.
+
 A future `frozen` value may require a complete lockfile and prohibit any
 resolution that would change it.
 
@@ -1082,10 +1081,28 @@ r:
 r: false
 ```
 
-A package sequence means a managed R environment with those packages available
-from startup. Packages are not attached automatically.
+The bare scalar has one canonical expansion:
 
-Managed R expands to:
+```yaml
+r:
+  mode: managed
+```
+
+A package sequence means the same managed mode plus the listed packages:
+
+```yaml
+r:
+  mode: managed
+  packages:
+    - tidyverse
+    - arrow
+```
+
+Packages are available from startup but are not attached automatically.
+Built-in environment defaults may contribute additional baseline packages; they
+are separate from the shorthand and must be shown by `config explain`.
+
+A fuller managed configuration may add version, manifest, and source settings:
 
 ```yaml
 r:
@@ -1114,11 +1131,12 @@ r:
 ```
 
 `manager: auto` reports the supported project metadata it selected. Detection
-alone never authorizes project metadata to execute or to drive an unrestricted
-server-owned installation. In an untrusted checkout, host-side resolution is
-limited to validated registry references. Local, VCS, or source references and
-installer or build hooks require project trust and must run inside the selected
-worker sandbox rather than in the server-owned resolver.
+alone never authorizes that metadata to execute or broaden resolver inputs. All
+dependency resolution remains in server-owned host resolvers. Under the current
+contract, only validated registry references are accepted; local paths, VCS or
+source references, and arbitrary installer or build hooks are rejected.
+Supporting those forms later requires a separate sandboxed resolver boundary,
+not routing resolver work through the worker.
 
 An exact existing installation is:
 
@@ -1156,7 +1174,28 @@ python:
 python: false
 ```
 
-The expanded managed form is:
+The bare scalar has one canonical expansion:
+
+```yaml
+python:
+  mode: managed
+```
+
+A package sequence means the same managed mode plus the listed packages:
+
+```yaml
+python:
+  mode: managed
+  packages:
+    - numpy
+    - pandas
+    - polars
+```
+
+Built-in environment defaults may contribute additional baseline packages; they
+are separate from the shorthand and must be shown by `config explain`.
+
+A fuller managed configuration may add version, manifest, and source settings:
 
 ```yaml
 python:
@@ -1183,9 +1222,6 @@ python:
   manager: auto
 ```
 
-The same trust rule applies to Python lockfiles and project metadata: an
-untrusted project cannot trigger unrestricted host-side installation.
-
 An exact existing interpreter is:
 
 ```yaml
@@ -1193,6 +1229,10 @@ python:
   mode: existing
   executable: .venv/bin/python
 ```
+
+The same resolver contract applies to Python lockfiles and project metadata:
+project mode may select supported metadata, but it cannot introduce local, VCS,
+source, or arbitrary build inputs into the host resolver.
 
 Because MCP Console uses reticulate for object translation, the selected Python
 must also be compatible with the runtime architecture used by the worker.
@@ -1226,10 +1266,13 @@ python:
 ```
 
 Declaring a source authorizes MCP Console's package resolver to use that source;
-it does not automatically give evaluated code general network access.
-`worker_access: true` derives the corresponding narrow worker allowlist when a
-package manager must run inside the sandbox. Derived access must be shown by
-`config explain`.
+it does not automatically give evaluated code general network access. A source
+URL authored by a project configuration is not passed to the server-owned
+resolver until the project is trusted, unless it matches a source approved by
+user, administrator, or organization configuration. `worker_access: true`
+derives a corresponding narrow worker allowlist for an explicitly supported
+worker-side operation; it does not move MCP Console's dependency resolver into
+the worker. Derived access must be shown by `config explain`.
 
 A larger configuration may extract a source under
 `definitions.package_sources` and refer to it explicitly:
@@ -1503,10 +1546,18 @@ env:
     - WAREHOUSE_PASSWORD
 ```
 
+`inherit` always reads the named value from the MCP Console supervisor process
+and forwards that exact value to the selected target. It never means "inherit
+whatever happens to be set on the SSH host or in the container." The runner may
+supply a documented minimal target baseline needed to start the relay, such as
+its target-side home, temporary directory, and executable search path; that
+baseline is separate from `env.inherit` and is shown by `config explain`.
+
 `secret` marks inherited or set names for mandatory redaction. Secret values
-must not appear in project YAML. A future secret-provider form can expand an
-entry without changing callers that already reference an environment variable
-name.
+must not appear in project YAML. Forwarding a secret-bearing inherited value to
+a remote target requires project trust. A future secret-provider form can
+expand an entry without changing callers that already reference an environment
+variable name.
 
 The default inheritance policy must be conservative, documented, and visible in
 `config explain`.
@@ -1588,16 +1639,21 @@ project checkout.
 Every path belongs to a documented namespace:
 
 - **project/supervisor paths** include the config file, Docker build context,
-  Dockerfile, mount sources, sync sources, and the compact top-level log path;
+  Dockerfile, sync sources, the compact top-level log path, and mount sources
+  for a top-level local Docker runner;
 - **target paths** include `run_on.directory`, filesystem roots, runtime
-  executables and project roots, SQL database paths, and target caches; and
+  executables and project roots, SQL database paths, target caches, and mount
+  sources for a container nested under an outer runner; and
 - **container paths** include mount targets and an `inside.directory`.
 
 Relative project/supervisor paths resolve from the project root. Relative target
 paths resolve from the target working directory. `~` expands for the relevant
-target-side user. For Docker, a mount `source` is transport-host-visible and its
-`target` is container-visible. A field that crosses namespaces must name both
-sides rather than relying on implicit path rewriting.
+target-side user. For a top-level local Docker runner, a relative mount `source`
+resolves from the local project root. For `run_on: ssh` with `inside: docker`, a
+relative mount `source` resolves from the outer SSH target's working directory
+and must be visible to the remote Docker daemon. A mount `target` is always
+container-visible. A field that crosses namespaces must name both sides rather
+than relying on implicit path rewriting.
 
 `config explain` must label resolved paths as supervisor, remote-host, or
 container paths. Diagnostics preserve both the authored and resolved values
@@ -1650,6 +1706,8 @@ an explicitly trusted project or a higher-trust configuration source:
 - SSH, Docker, Docker Sandbox, nested execution, or custom command runners;
 - third-party sandbox providers;
 - high-authority Unix sockets or named pipes;
+- `writable_roots` outside the project root;
+- project-defined package source URLs not approved by a higher-trust source;
 - arbitrary executable paths outside the project;
 - inherited secret-bearing environment variables;
 - provider-specific options that weaken isolation.
@@ -1717,7 +1775,7 @@ form that would be accepted.
 
 ## Common recipes
 
-### Add one writable root and two read denials
+### Add one writable root and two unreadable paths
 
 ```yaml
 version: 1
@@ -2101,7 +2159,8 @@ an advanced command escape hatch.
    forms, and implement `config validate`, `config explain`, and schema output.
 2. Implement `profile`, built-ins, named profiles, one-parent inheritance, and
    list patches.
-3. Implement local `writable_roots`, `readable_roots`, `unreadable`, and `unwritable`.
+3. Implement local `writable_roots`, `readable_roots`, `unreadable`, and
+   `unwritable`.
 4. Implement `network: none`, outbound endpoint allowlists, exact TCP listeners,
    and Unix socket paths through a managed proxy.
 5. Implement package policy, compact/expanded R and Python environments, package
