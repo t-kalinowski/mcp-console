@@ -51,11 +51,13 @@ impl ForegroundTerminal {
         };
 
         if self.transfer_to_child {
-            set_foreground_process_group(descriptor, self.launcher_process_group).map_err(|error| {
-                format!(
-                    "failed to restore the launcher before stopping the sandbox job: {error}"
-                )
-            })?;
+            set_foreground_process_group(descriptor, self.launcher_process_group).map_err(
+                |error| {
+                    format!(
+                        "failed to restore the launcher before stopping the sandbox job: {error}"
+                    )
+                },
+            )?;
         }
         if unsafe { libc::kill(libc::getpid(), libc::SIGSTOP) } != 0 {
             return Err(format!(
