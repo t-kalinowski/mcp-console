@@ -1,4 +1,59 @@
 #[cfg(target_os = "macos")]
+mod reticulate;
+
+#[cfg(target_os = "macos")]
+#[derive(serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub(crate) enum PreparationOutcome {
+    #[serde(deserialize_with = "crate::worker_protocol::deserialize_payload_free")]
+    Prepared,
+    Failed {
+        message: String,
+    },
+}
+
+/// Rust-owned Python runtime boundary.
+///
+/// The current implementation delegates to the reticulate backend, while the
+/// worker depends only on this facade for evaluation and preparation.
+#[cfg(target_os = "macos")]
+pub(crate) struct Runtime(reticulate::Runtime);
+
+#[cfg(target_os = "macos")]
+pub(crate) type Bridge = Runtime;
+
+#[cfg(target_os = "macos")]
+impl Runtime {
+    pub(crate) fn initialize() -> Result<Self, String> {
+        reticulate::Runtime::initialize().map(Self)
+    }
+
+    pub(crate) fn evaluate(&mut self, source: &str) -> Result<(), String> {
+        self.0.evaluate(source)
+    }
+
+    pub(crate) fn prepare(&self, packages: Vec<String>) -> Result<PreparationOutcome, String> {
+        self.0.prepare(packages)
+    }
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod tests {
+    use super::PreparationOutcome;
+
+    #[test]
+    fn python_preparation_outcome_rejects_unknown_fields() {
+        assert!(serde_json::from_str::<PreparationOutcome>(r#"{"kind":"prepared"}"#).is_ok());
+        assert!(
+            serde_json::from_str::<PreparationOutcome>(
+                r#"{"kind":"prepared","checkpoint":{"packages":[]}}"#
+            )
+            .is_err()
+        );
+    }
+}
+
+#[cfg(target_os = "macos")]
 mod platform {
     use std::ffi::{CStr, CString};
     use std::fs;
@@ -8,62 +63,8 @@ mod platform {
     use std::path::{Path, PathBuf};
     use std::sync::OnceLock;
 
-    use libr::SEXP;
-
     static MATPLOTLIB_DIRECTORY: OnceLock<PathBuf> = OnceLock::new();
     static INHERITED_MATPLOTLIB_DIRECTORY: OnceLock<PathBuf> = OnceLock::new();
-
-    const PYTHON_BRIDGE_SOURCE: &str = include_str!("python/bridge.R");
-    const PYTHON_RUNTIME_SOURCE: &str = include_str!("python/runtime.py");
-
-    #[derive(serde::Deserialize)]
-    #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-    pub(crate) enum PreparationOutcome {
-        #[serde(deserialize_with = "crate::worker_protocol::deserialize_payload_free")]
-        Prepared,
-        Failed {
-            message: String,
-        },
-    }
-
-    #[cfg(test)]
-    mod tests {
-        use super::PreparationOutcome;
-
-        #[test]
-        fn python_preparation_outcome_rejects_unknown_fields() {
-            assert!(serde_json::from_str::<PreparationOutcome>(r#"{"kind":"prepared"}"#).is_ok());
-            assert!(
-                serde_json::from_str::<PreparationOutcome>(
-                    r#"{"kind":"prepared","checkpoint":{"packages":[]}}"#
-                )
-                .is_err()
-            );
-        }
-    }
-
-    pub(crate) struct Bridge(crate::r_bridge::Bridge);
-
-    impl Bridge {
-        pub(crate) fn initialize() -> Result<Self, String> {
-            crate::r_bridge::Bridge::initialize(PYTHON_BRIDGE_SOURCE, "Python").map(Self)
-        }
-
-        pub(crate) fn evaluate(&mut self, source: &str) -> Result<(), String> {
-            self.0.evaluate(source)
-        }
-
-        pub(crate) fn prepare(&self, packages: Vec<String>) -> Result<PreparationOutcome, String> {
-            let request = serde_json::to_string(&packages)
-                .map_err(|error| format!("failed to serialize Python preparation: {error}"))?;
-            let response = self
-                .0
-                .call1_string(c"prepare", &request)?
-                .ok_or_else(|| "Python preparation bridge returned no response".to_string())?;
-            serde_json::from_str(&response)
-                .map_err(|error| format!("invalid Python preparation response: {error}"))
-        }
-    }
 
     pub(crate) fn configure_worker_environment() -> io::Result<()> {
         let matplotlib_cache_directory = inherited_matplotlib_directory();
@@ -174,60 +175,7 @@ mod platform {
         }
         Ok(())
     }
-
-    // The process-lifetime R bridge calls this once during initialization,
-    // before any reticulate hook can initialize Python.
-    #[allow(clippy::result_large_err)]
-    #[harp::register]
-    pub extern "C-unwind" fn mcp_console_python_runtime_source() -> harp::Result<SEXP> {
-        Ok(harp::object::RObject::from(PYTHON_RUNTIME_SOURCE).sexp)
-    }
-
-    #[allow(clippy::result_large_err)]
-    #[harp::register]
-    pub extern "C-unwind" fn mcp_console_publish_python_plot(data: SEXP) -> harp::Result<SEXP> {
-        let data = String::try_from(harp::object::RObject::view(data))?;
-        crate::worker::publish_plot(Ok(data));
-        unsafe { Ok(libr::R_NilValue) }
-    }
-
-    #[allow(clippy::result_large_err)]
-    #[harp::register]
-    pub extern "C-unwind" fn mcp_console_resolve_python(request: SEXP) -> harp::Result<SEXP> {
-        let request = String::try_from(harp::object::RObject::view(request))?;
-        let request = serde_json::from_str(&request).map_err(|error| harp::anyhow!("{error}"))?;
-        let python =
-            crate::worker::resolve_python(request).map_err(|error| harp::anyhow!("{error}"))?;
-        Ok(harp::object::RObject::from(python).sexp)
-    }
-
-    #[allow(clippy::result_large_err)]
-    #[harp::register]
-    pub extern "C-unwind" fn mcp_console_python_activated(
-        requirements: SEXP,
-    ) -> harp::Result<SEXP> {
-        let requirements = String::try_from(harp::object::RObject::view(requirements))?;
-        let requirements =
-            serde_json::from_str(&requirements).map_err(|error| harp::anyhow!("{error}"))?;
-        crate::worker::publish_python_activation(requirements)
-            .map_err(|error| harp::anyhow!("{error}"))?;
-        unsafe { Ok(libr::R_NilValue) }
-    }
-
-    #[allow(clippy::result_large_err)]
-    #[harp::register]
-    pub extern "C-unwind" fn mcp_console_resolve_python_version(
-        request: SEXP,
-    ) -> harp::Result<SEXP> {
-        let request = String::try_from(harp::object::RObject::view(request))?;
-        let request = serde_json::from_str(&request).map_err(|error| harp::anyhow!("{error}"))?;
-        let version = crate::worker::resolve_python_version(request)
-            .map_err(|error| harp::anyhow!("{error}"))?;
-        Ok(harp::object::RObject::from(version).sexp)
-    }
 }
 
 #[cfg(target_os = "macos")]
-pub(crate) use platform::{
-    Bridge, PreparationOutcome, configure_worker_environment, link_matplotlib_caches,
-};
+pub(crate) use platform::{configure_worker_environment, link_matplotlib_caches};
