@@ -393,26 +393,55 @@ class ReleaseScriptTests(unittest.TestCase):
         self.assertIn("GITHUB_PAT: ${{ github.token }}", release_source)
         self.assertIn('install.libs("gettext")', release_source)
         self.assertEqual(ci_source.count('UV_VERSION: "0.12.4"'), 1)
-        self.assertEqual(ci_source.count("version: ${{ env.UV_VERSION }}"), 2)
+        self.assertEqual(ci_source.count("version: ${{ env.UV_VERSION }}"), 1)
         self.assertEqual(release_source.count('version: "0.12.4"'), 2)
 
-    def test_ci_prefers_binary_r_packages_and_installs_uv_tools_first(self) -> None:
+    def test_ci_uses_one_macos_runner_and_installs_tools_first(self) -> None:
         ci_source = (ROOT / ".github" / "workflows" / "ci.yaml").read_text()
-        checks, transcripts = ci_source.split("\n  transcripts:\n", 1)
 
-        self.assertEqual(ci_source.count("use-public-rspm: always"), 2)
-        self.assertIn('upgrade: "FALSE"', transcripts)
+        self.assertEqual(ci_source.count("runs-on: macos-latest"), 1)
+        self.assertEqual(ci_source.count("actions/checkout@v7"), 1)
+        self.assertEqual(ci_source.count("actions/setup-python@v7"), 1)
+        self.assertEqual(ci_source.count("r-lib/actions/setup-r@v2"), 1)
+        self.assertEqual(ci_source.count("dtolnay/rust-toolchain@stable"), 1)
+        self.assertEqual(ci_source.count("Swatinem/rust-cache@v2"), 1)
+        self.assertEqual(ci_source.count("use-public-rspm: always"), 1)
+        self.assertIn('upgrade: "FALSE"', ci_source)
         self.assertLess(
-            checks.index("- name: Install IR"), checks.index("- name: Install R\n")
+            ci_source.index("- name: Install tools"),
+            ci_source.index("- name: Install R\n"),
         )
         self.assertLess(
-            transcripts.index("- name: Install transcript tools"),
-            transcripts.index("- name: Install R\n"),
+            ci_source.index("- name: Run core checks"),
+            ci_source.index("- name: Install R package dependencies"),
+        )
+        self.assertLess(
+            ci_source.index("- name: Check R package"),
+            ci_source.index("- name: Install transcript dependencies"),
+        )
+        package_dependencies_start = ci_source.index(
+            "- name: Install R package dependencies"
+        )
+        package_dependencies_end = ci_source.index("- name: Check R package")
+        package_dependencies = ci_source[
+            package_dependencies_start:package_dependencies_end
+        ]
+        self.assertIn(
+            "cache: false",
+            package_dependencies,
+        )
+        self.assertLess(
+            ci_source.index("- name: Install transcript dependencies"),
+            ci_source.index("- name: Prewarm default R environment"),
+        )
+        self.assertLess(
+            ci_source.index("- name: Prewarm default R environment"),
+            ci_source.index("- name: Run transcripts"),
         )
         self.assertIn(
             '-e \'sessionInfo(package = c("tidyverse", "reticulate", '
             '"DBI", "duckdb", "arrow", "nanoarrow"))\'',
-            transcripts,
+            ci_source,
         )
 
 
