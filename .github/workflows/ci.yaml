@@ -126,6 +126,8 @@ jobs:
       - name: Install R package dependencies
         uses: r-lib/actions/setup-r-dependencies@v2
         with:
+          # A post-job save would capture the later transcript dependency state.
+          cache: false
           working-directory: r
           upgrade: "FALSE"
           packages: |

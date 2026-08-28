@@ -310,7 +310,7 @@ class ReleaseScriptTests(unittest.TestCase):
                 str(wheel),
                 str(cargo_bin),
                 "--target",
-                      "aarch64-apple-darwin",
+                "aarch64-apple-darwin",
                 "--startup-timeout-seconds",
                 "0.2",
                 "--response-timeout-seconds",
@@ -418,6 +418,17 @@ class ReleaseScriptTests(unittest.TestCase):
         self.assertLess(
             ci_source.index("- name: Check R package"),
             ci_source.index("- name: Install transcript dependencies"),
+        )
+        package_dependencies_start = ci_source.index(
+            "- name: Install R package dependencies"
+        )
+        package_dependencies_end = ci_source.index("- name: Check R package")
+        package_dependencies = ci_source[
+            package_dependencies_start:package_dependencies_end
+        ]
+        self.assertIn(
+            "cache: false",
+            package_dependencies,
         )
         self.assertLess(
             ci_source.index("- name: Install transcript dependencies"),
