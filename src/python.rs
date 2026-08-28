@@ -14,8 +14,8 @@ pub(crate) enum PreparationOutcome {
 
 /// Rust-owned Python runtime boundary.
 ///
-/// The current implementation delegates to the reticulate backend, while the
-/// worker depends only on this facade for evaluation and preparation.
+/// Rust owns the selected interpreter library and initialization, while the
+/// current backend delegates conversion and evaluation to reticulate.
 #[cfg(target_os = "macos")]
 pub(crate) struct Runtime(reticulate::Runtime);
 
@@ -57,76 +57,7 @@ mod tests {
 }
 
 #[cfg(target_os = "macos")]
-mod library {
-    use std::path::{Path, PathBuf};
-    use std::sync::Mutex;
-
-    static PYTHON_LIBRARY: Mutex<Option<LoadedLibrary>> = Mutex::new(None);
-
-    struct LoadedLibrary {
-        path: PathBuf,
-        _library: libloading::os::unix::Library,
-    }
-
-    pub(super) fn load(path: &Path) -> Result<(), String> {
-        let path = path.canonicalize().map_err(|error| {
-            format!(
-                "failed to resolve Python shared library `{}`: {error}",
-                path.display()
-            )
-        })?;
-        let mut library_slot = PYTHON_LIBRARY
-            .lock()
-            .map_err(|_| "Python shared library state is unavailable".to_string())?;
-        if let Some(loaded) = library_slot.as_ref() {
-            return loaded.ensure_path(&path);
-        }
-
-        // SAFETY: The selected path comes from reticulate's interpreter
-        // discovery. Global, eager loading exposes the CPython API before
-        // reticulate initializes the interpreter.
-        let flags = libc::RTLD_NOW | libc::RTLD_GLOBAL;
-        let library = unsafe { libloading::os::unix::Library::open(Some(path.as_os_str()), flags) }
-            .map_err(|error| {
-                format!(
-                    "failed to load Python shared library `{}`: {error}",
-                    path.display()
-                )
-            })?;
-
-        // SAFETY: Resolving a symbol does not call it. The handle remains owned
-        // by `LoadedLibrary` for the process lifetime.
-        unsafe {
-            library
-                .get::<unsafe extern "C" fn() -> libc::c_int>(b"Py_IsInitialized\0")
-                .map_err(|error| {
-                    format!(
-                        "Python shared library `{}` does not export Py_IsInitialized: {error}",
-                        path.display()
-                    )
-                })?;
-        }
-
-        *library_slot = Some(LoadedLibrary {
-            path,
-            _library: library,
-        });
-        Ok(())
-    }
-
-    impl LoadedLibrary {
-        fn ensure_path(&self, requested: &Path) -> Result<(), String> {
-            if self.path == requested {
-                return Ok(());
-            }
-            Err(format!(
-                "Python shared library is already loaded from `{}` and cannot switch to `{}`",
-                self.path.display(),
-                requested.display()
-            ))
-        }
-    }
-}
+mod library;
 
 #[cfg(target_os = "macos")]
 mod platform {

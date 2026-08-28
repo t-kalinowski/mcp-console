@@ -11,6 +11,7 @@ ROOT = Path(__file__).resolve().parent.parent
 SOURCE_ROOT = ROOT / "src"
 EXPECTED_SOURCES = {
     "src/python/bridge.R",
+    "src/python/initialize.R",
     "src/python/runtime.py",
     "src/r_environment/bridge.R",
     "src/r_graphics/bridge.R",
