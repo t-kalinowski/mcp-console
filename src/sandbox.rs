@@ -236,6 +236,7 @@ impl SandboxedChild {
         self.child.stderr.take()
     }
 
+    #[allow(dead_code, reason = "retained for spawned callers awaiting normal exit")]
     pub(crate) fn wait(mut self) -> Result<ExitStatus, String> {
         self.child
             .wait()
