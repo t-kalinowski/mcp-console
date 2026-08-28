@@ -1,0 +1,85 @@
+---
+!same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
+---
+send:
+  r: |
+    request <- jsonlite::toJSON(
+      list(
+        constraints = I(c("v3.12.12"))
+      ),
+      auto_unbox = TRUE
+    )
+    resolved <- tryCatch(
+      .Call("mcp_console_resolve_python_version", request),
+      error = conditionMessage
+    )
+    cat(resolved, "\n", sep = "")
+result:
+  content:
+    - type: text
+      text: |
+        3.12.12
+  isError: false
+---
+send:
+  r: |
+    request <- jsonlite::toJSON(
+      list(
+        constraints = I(c("==3.15.0a5"))
+      ),
+      auto_unbox = TRUE
+    )
+    resolved <- tryCatch(
+      .Call("mcp_console_resolve_python_version", request),
+      error = conditionMessage
+    )
+    cat(resolved, "\n", sep = "")
+result:
+  content:
+    - type: text
+      text: |
+        3.15.0a5
+  isError: false
+---
+send:
+  r: |
+    request <- jsonlite::toJSON(
+      list(
+        constraints = I(c("==3.12.0"))
+      ),
+      auto_unbox = TRUE
+    )
+    resolved <- tryCatch(
+      .Call("mcp_console_resolve_python_version", request),
+      error = conditionMessage
+    )
+    cat(resolved, "\n", sep = "")
+result:
+  content:
+    - type: text
+      text: |
+        managed Python version resolution failed: Requested Python version constraints could not be satisfied.
+          constraints: "==3.12.0"
+        Hint: Call `py_require(python_version = <string>, action = "set")` to replace constraints.
+        Available Python versions found: 3.11.14, 3.12.0a5
+  isError: false
+---
+send:
+  r: |
+    request <- jsonlite::toJSON(
+      list(
+        constraints = I(c(">=3.12.0a1", "!=3.12.0"))
+      ),
+      auto_unbox = TRUE
+    )
+    resolved <- tryCatch(
+      .Call("mcp_console_resolve_python_version", request),
+      error = conditionMessage
+    )
+    cat(resolved, "\n", sep = "")
+result:
+  content:
+    - type: text
+      text: |
+        3.12.0a5
+  isError: false

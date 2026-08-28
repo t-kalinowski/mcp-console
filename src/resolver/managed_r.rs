@@ -214,7 +214,7 @@ fn discover_r_resolver_with(
         else {
             return Ok(None);
         };
-        python.set_default_uv(uv.clone());
+        python.set_resolved_uv(uv.clone());
         IrCommand::through_uv(uv)
     };
     validate_ir_version(resolver, on_started, &ir)?;

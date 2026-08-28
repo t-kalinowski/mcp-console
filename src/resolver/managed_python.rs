@@ -134,17 +134,14 @@ pub(crate) fn resolve_python_manifest(
 pub(crate) fn resolve_python_version(
     constraints: Vec<String>,
     configuration: &super::ManagedPythonResolverConfiguration,
-    managed_r: Option<&super::ManagedR>,
+    _managed_r: &super::ManagedR,
     on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
 ) -> Result<String, String> {
     crate::python_requirement::validate_version_constraints(&constraints)?;
-    let versions = resolve_python_versions(configuration, managed_r, on_started)?;
-    versions.resolve(&constraints).map_err(|error| {
-        format!(
-            "managed Python version resolution failed with exit status: 1: {}",
-            error.trim()
-        )
-    })
+    let versions = resolve_python_versions(configuration, on_started)?;
+    versions
+        .resolve(&constraints)
+        .map_err(|error| format!("managed Python version resolution failed: {}", error.trim()))
 }
 
 pub(crate) fn resolve_python_host(
@@ -158,7 +155,6 @@ pub(crate) fn resolve_python_host(
 
 fn resolve_python_versions<F>(
     configuration: &super::ManagedPythonResolverConfiguration,
-    managed_r: Option<&super::ManagedR>,
     on_started: F,
 ) -> Result<super::python_version::PythonVersions, String>
 where
@@ -167,32 +163,68 @@ where
     let resolver = ResolverProcess::new();
     let mut on_started = Some(on_started);
     let configured_preference = configuration.python_preference();
-    let preference = configured_preference.unwrap_or_else(|| OsStr::new("only-managed"));
-    let versions = run_uv_python_list(
-        configuration,
-        managed_r,
-        &resolver,
-        &mut on_started,
-        preference,
-    )?;
-    if versions.raw_empty() && configured_preference.is_none() {
-        return run_uv_python_list(
-            configuration,
-            managed_r,
-            &resolver,
-            &mut on_started,
-            OsStr::new("only-system"),
-        );
+    let managed = OsStr::new("only-managed");
+    let system = OsStr::new("only-system");
+    match configured_preference {
+        None => {
+            let versions =
+                run_uv_python_list(configuration, &resolver, &mut on_started, managed, true)?;
+            if versions.is_empty() {
+                return Ok(run_uv_python_list(
+                    configuration,
+                    &resolver,
+                    &mut on_started,
+                    system,
+                    false,
+                )?
+                .rank(false));
+            }
+            Ok(versions.rank(true))
+        }
+        Some(preference) if preference == OsStr::new("managed") => {
+            let mut versions =
+                run_uv_python_list(configuration, &resolver, &mut on_started, managed, true)?;
+            versions.extend(run_uv_python_list(
+                configuration,
+                &resolver,
+                &mut on_started,
+                system,
+                false,
+            )?);
+            Ok(versions.rank(true))
+        }
+        Some(preference) if preference == OsStr::new("system") => {
+            let mut versions =
+                run_uv_python_list(configuration, &resolver, &mut on_started, managed, true)?;
+            versions.extend(run_uv_python_list(
+                configuration,
+                &resolver,
+                &mut on_started,
+                system,
+                false,
+            )?);
+            Ok(versions.rank(false))
+        }
+        Some(preference) => {
+            let prefer_managed = preference != system;
+            Ok(run_uv_python_list(
+                configuration,
+                &resolver,
+                &mut on_started,
+                preference,
+                prefer_managed,
+            )?
+            .rank(prefer_managed))
+        }
     }
-    Ok(versions)
 }
 
 fn run_uv_python_list<F>(
     configuration: &super::ManagedPythonResolverConfiguration,
-    managed_r: Option<&super::ManagedR>,
     resolver: &ResolverProcess,
     on_started: &mut Option<F>,
     preference: &OsStr,
+    managed: bool,
 ) -> Result<super::python_version::PythonVersions, String>
 where
     F: FnOnce(ResolverStopHandle) -> Result<(), String>,
@@ -216,7 +248,7 @@ where
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .env_remove("VIRTUAL_ENV");
-    configuration.configure_direct(managed_r, &mut command)?;
+    configuration.configure_direct(&mut command)?;
     let output = run_resolver_command(
         command,
         resolver,
@@ -225,57 +257,16 @@ where
         "managed Python version",
     )?;
     if !output.status.success() {
-        return Err(python_list_failure(
-            program,
-            preference,
-            &output,
-            managed_r.is_some(),
-        ));
-    }
-    output.write_result.map_err(|error| {
-        format!("failed to prepare managed Python version resolver input: {error}")
-    })?;
-    let prefer_managed =
-        preference != OsStr::new("system") && preference != OsStr::new("only-system");
-    super::python_version::PythonVersions::parse(&output.stdout, prefer_managed).map_err(|error| {
-        format!("managed Python version resolver returned invalid output: {error}")
-    })
-}
-
-fn python_list_failure(
-    program: &Path,
-    preference: &OsStr,
-    output: &ResolverOutput,
-    preserve_reticulate_diagnostic: bool,
-) -> String {
-    let error = String::from_utf8_lossy(&output.stderr);
-    let status = output
-        .status
-        .code()
-        .map_or_else(|| output.status.to_string(), |status| status.to_string());
-    let mut message = format!(
-        "managed Python version resolution failed with exit status: 1: {}",
-        error.trim()
-    );
-    if !preserve_reticulate_diagnostic {
-        return format!(
+        let error = String::from_utf8_lossy(&output.stderr);
+        return Err(format!(
             "managed Python version resolution failed with {}: {}",
             output.status,
             error.trim()
-        );
+        ));
     }
-    // Keep the existing R/jsonlite failure transcript stable in full mode while
-    // process ownership moves from the R helper to this direct `uv` invocation.
-    if output.stdout.is_empty() {
-        message.push_str("\nparse error: premature EOF\n\n                             ");
-        message.push_str("(right here) ------^\n\n");
-    }
-    message.push_str(&format!(
-        "Warning message:\nIn system2(uv, args, ...) :\n  running command ''{}' python list --all-versions --color never --output-format json --python-preference  {}' had status {status}",
-        program.display(),
-        preference.to_string_lossy()
-    ));
-    message
+    super::python_version::PythonVersions::parse(&output.stdout, managed).map_err(|error| {
+        format!("managed Python version resolver returned invalid output: {error}")
+    })
 }
 
 fn run_resolver_command<F>(

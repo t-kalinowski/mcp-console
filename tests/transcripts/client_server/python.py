@@ -3,6 +3,7 @@
 import json
 import os
 import plistlib
+import re
 import select
 import shutil
 import signal
@@ -33,6 +34,7 @@ from _support import (
 )
 
 PLATFORMS = {"darwin"}
+PYTHON_DOWNLOAD_URL = "https://example.invalid/python.tar.zst"
 
 
 def named_requirement_error(requirement: str) -> str:
@@ -81,6 +83,106 @@ def matplotlib_test_environment(cache_home: Path) -> dict[str, str]:
     environment["XDG_CACHE_HOME"] = str(cache_home)
     assert ir_cache_directory(environment) == cache
     return environment
+
+
+def python_inventory_client(
+    binary: Path,
+    directory: Path,
+    *,
+    preference: str | None = None,
+    install_directory: Path | None = None,
+) -> tuple[McpClient, Path, Path]:
+    real_uv = shutil.which("uv")
+    assert real_uv is not None, "real uv is required"
+    environment = os.environ.copy()
+    environment.pop("RETICULATE_PYTHON", None)
+    environment.pop("UV_PYTHON_PREFERENCE", None)
+    environment["RETICULATE_UV"] = str(
+        Path(__file__).parents[2] / "fixtures" / "record_uv_environment"
+    )
+    environment["MCP_CONSOLE_TEST_REAL_UV"] = real_uv
+    environment["MCP_CONSOLE_TEST_UV_RECORD"] = str(directory / "uv.jsonl")
+    arguments = directory / "uv-arguments.jsonl"
+    environment["MCP_CONSOLE_TEST_UV_ARGUMENTS_RECORD"] = str(arguments)
+    inventories = directory / "uv-python-inventories.json"
+    environment["MCP_CONSOLE_TEST_UV_PYTHON_INVENTORIES"] = str(inventories)
+    if preference is not None:
+        environment["UV_PYTHON_PREFERENCE"] = preference
+    if install_directory is not None:
+        environment["UV_PYTHON_INSTALL_DIR"] = str(install_directory)
+    client = McpClient(
+        binary,
+        ("serve",),
+        environment,
+        current_directory=directory,
+    )
+    client._initialize_and_list_tools()
+    arguments.write_text("", encoding="utf-8")
+    return client, inventories, arguments
+
+
+def uv_python_row(
+    version: str,
+    *,
+    path: str | Path | None = None,
+    url: str | None = PYTHON_DOWNLOAD_URL,
+    variant: str = "default",
+    implementation: str = "cpython",
+) -> dict[str, object]:
+    match = re.match(r"^(\d+)\.(\d+)\.(\d+)", version)
+    assert match is not None, version
+    major, minor, patch = (int(part) for part in match.groups())
+    return {
+        "key": f"{implementation}-{version}-macos-aarch64-none",
+        "version": version,
+        "version_parts": {"major": major, "minor": minor, "patch": patch},
+        "path": None if path is None else str(path),
+        "symlink": None,
+        "url": url,
+        "variant": variant,
+        "implementation": implementation,
+    }
+
+
+def write_uv_python_inventories(path: Path, inventories: dict[str, object]) -> None:
+    path.write_text(json.dumps(inventories), encoding="utf-8")
+
+
+def recorded_python_preferences(arguments: Path) -> list[str]:
+    invocations = [
+        json.loads(line) for line in arguments.read_text(encoding="utf-8").splitlines()
+    ]
+    return [
+        invocation[invocation.index("--python-preference") + 1]
+        for invocation in invocations
+        if invocation[:2] == ["python", "list"]
+    ]
+
+
+def resolve_python_version(client: McpClient, constraints: list[str]) -> str:
+    constraints = (
+        "character()"
+        if not constraints
+        else f"c({', '.join(json.dumps(constraint) for constraint in constraints)})"
+    )
+    # fmt: r
+    r = code(rf"""
+        request <- jsonlite::toJSON(
+          list(
+            constraints = I({
+              constraints
+            })
+          ),
+          auto_unbox = TRUE
+        )
+        resolved <- tryCatch(
+          .Call("mcp_console_resolve_python_version", request),
+          error = conditionMessage
+        )
+        cat(resolved, "\n", sep = "")
+        """)
+    client.send(r=r)
+    return last_tool_text(client)
 
 
 def test_preserves_configured_python_environment(binary: Path) -> Transcript:
@@ -1130,6 +1232,136 @@ def test_recovers_from_python_version_resolution_failure(binary: Path) -> Transc
 
         client.send(r="identical(Sys.getpid(), worker_pid)")
         assert last_tool_text(client) == "[1] TRUE\n"
+        return client._finish()
+
+
+def test_resolves_python_version_inventory_semantics(binary: Path) -> Transcript:
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        temporary = Path(temporary_directory)
+        client, inventories, _ = python_inventory_client(binary, temporary)
+
+        write_uv_python_inventories(
+            inventories,
+            {
+                "only-managed": [
+                    uv_python_row("3.12.12"),
+                    uv_python_row("3.11.14"),
+                ]
+            },
+        )
+        normalized = resolve_python_version(client, ["v3.12.12"])
+
+        write_uv_python_inventories(
+            inventories,
+            {"only-managed": [uv_python_row("3.15.0a5")]},
+        )
+        prerelease = resolve_python_version(client, ["==3.15.0a5"])
+
+        write_uv_python_inventories(
+            inventories,
+            {
+                "only-managed": [
+                    uv_python_row("3.12.0a5"),
+                    uv_python_row("3.11.14"),
+                ]
+            },
+        )
+        numeric_equal = resolve_python_version(client, ["==3.12.0"])
+        numeric_not_equal = resolve_python_version(
+            client,
+            [">=3.12.0a1", "!=3.12.0"],
+        )
+
+        assert normalized == "3.12.12\n", normalized
+        assert prerelease == "3.15.0a5\n", prerelease
+        assert 'constraints: "==3.12.0"' in numeric_equal, numeric_equal
+        assert numeric_not_equal == "3.12.0a5\n", numeric_not_equal
+        return client._finish()
+
+
+def test_falls_back_after_filtering_unsupported_python_versions(
+    binary: Path,
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        temporary = Path(temporary_directory)
+        client, inventories, arguments = python_inventory_client(binary, temporary)
+        write_uv_python_inventories(
+            inventories,
+            {
+                "only-managed": [
+                    uv_python_row(
+                        "3.13.14",
+                        variant="freethreaded",
+                    ),
+                    uv_python_row(
+                        "3.11.15",
+                        implementation="pypy",
+                    ),
+                ],
+                "only-system": [
+                    uv_python_row(
+                        "3.11.14",
+                        path="/usr/bin/python3.11",
+                        url=None,
+                    )
+                ],
+            },
+        )
+
+        selected = resolve_python_version(client, [])
+        preferences = recorded_python_preferences(arguments)
+        assert (selected, preferences) == (
+            "3.11.14\n",
+            ["only-managed", "only-system"],
+        ), (selected, preferences)
+        return client._finish()
+
+
+def test_respects_system_python_preference_with_custom_install_directory(
+    binary: Path,
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        temporary = Path(temporary_directory)
+        install_directory = temporary / "managed-python"
+        install_directory.mkdir()
+        client, inventories, arguments = python_inventory_client(
+            binary,
+            temporary,
+            preference="system",
+            install_directory=install_directory,
+        )
+        write_uv_python_inventories(
+            inventories,
+            {
+                "only-managed": [
+                    uv_python_row("3.14.3"),
+                    uv_python_row(
+                        "3.12.12",
+                        path=install_directory / "cpython-3.12/bin/python3.12",
+                        url=None,
+                    ),
+                ],
+                "only-system": [
+                    uv_python_row(
+                        "3.13.11",
+                        path="/usr/local/bin/python3.13",
+                        url=None,
+                    ),
+                    uv_python_row(
+                        "3.9.6",
+                        path="/usr/bin/python3",
+                        url=None,
+                    ),
+                ],
+            },
+        )
+
+        selected = resolve_python_version(client, [])
+        preferences = recorded_python_preferences(arguments)
+        assert (selected, preferences) == (
+            "3.13.11\n",
+            ["only-managed", "only-system"],
+        ), (selected, preferences)
         return client._finish()
 
 

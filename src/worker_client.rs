@@ -327,7 +327,7 @@ impl Client {
                         && !python_resolver.has_uv()
                     {
                         let uv = r_resolver.resolve_uv(&r, &python_resolver, |_| Ok(()))?;
-                        python_resolver.set_default_uv(uv);
+                        python_resolver.set_resolved_uv(uv);
                     }
                     let duckdb_extensions = DEFAULT_DUCKDB_EXTENSIONS
                         .iter()

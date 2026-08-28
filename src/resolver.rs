@@ -80,6 +80,15 @@ impl ManagedPythonResolverConfiguration {
     #[cfg(target_os = "macos")]
     pub(crate) fn set_default_uv(&mut self, uv: impl Into<OsString>) {
         let uv = uv.into();
+        if self.reticulate_uv.is_none() {
+            self.reticulate_uv = Some(uv.clone());
+            self.uv = Some(uv);
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    pub(crate) fn set_resolved_uv(&mut self, uv: impl Into<OsString>) {
+        let uv = uv.into();
         if self.uv.is_none() {
             self.uv = Some(uv.clone());
         }
@@ -117,65 +126,30 @@ impl ManagedPythonResolverConfiguration {
     }
 
     #[cfg(target_os = "macos")]
-    fn configure_direct(
-        &self,
-        managed_r: Option<&ManagedR>,
-        command: &mut std::process::Command,
-    ) -> Result<(), String> {
-        if let Some(managed_r) = managed_r {
-            managed_r.configure_resolver(command)?;
-        }
+    fn configure_direct(&self, command: &mut std::process::Command) -> Result<(), String> {
         let uv = self.reticulate_uv()?;
         self.configure_uv(command, uv);
+        if uv == OsStr::new("managed") {
+            let executable = std::path::Path::new(self.uv()?);
+            let root = executable
+                .parent()
+                .and_then(std::path::Path::parent)
+                .ok_or_else(|| {
+                    format!(
+                        "reticulate managed `uv` executable has no cache root: `{}`",
+                        executable.display()
+                    )
+                })?;
+            command
+                .env("UV_CACHE_DIR", root.join("cache"))
+                .env("UV_PYTHON_INSTALL_DIR", root.join("python"));
+        }
         Ok(())
     }
 }
 
 fn is_uv_environment_variable(name: &OsStr) -> bool {
     name.as_encoded_bytes().starts_with(b"UV_")
-}
-
-#[cfg(all(test, target_os = "macos"))]
-mod tests {
-    use super::*;
-
-    fn configuration(
-        reticulate_uv: Option<&str>,
-        uv: Option<&str>,
-    ) -> ManagedPythonResolverConfiguration {
-        ManagedPythonResolverConfiguration {
-            environment: Arc::new(BTreeMap::new()),
-            reticulate_uv: reticulate_uv.map(OsString::from),
-            uv: uv.map(OsString::from),
-        }
-    }
-
-    #[test]
-    fn preserves_managed_reticulate_selector_with_resolved_executable() {
-        let mut configuration = configuration(Some("managed"), None);
-        assert!(!configuration.has_uv());
-
-        configuration.set_default_uv("/managed/uv");
-
-        assert!(configuration.has_uv());
-        assert_eq!(configuration.uv().unwrap(), OsStr::new("/managed/uv"));
-        assert_eq!(
-            configuration.reticulate_uv().unwrap(),
-            OsStr::new("managed")
-        );
-    }
-
-    #[test]
-    fn uses_default_executable_as_reticulate_selection() {
-        let mut configuration = configuration(None, None);
-        configuration.set_default_uv("/path/uv");
-
-        assert_eq!(configuration.uv().unwrap(), OsStr::new("/path/uv"));
-        assert_eq!(
-            configuration.reticulate_uv().unwrap(),
-            OsStr::new("/path/uv")
-        );
-    }
 }
 
 #[cfg(target_os = "macos")]

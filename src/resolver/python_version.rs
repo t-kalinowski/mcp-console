@@ -5,7 +5,6 @@ use pep508_rs::pep440_rs::{Version, VersionSpecifier};
 use serde::Deserialize;
 
 pub(super) struct PythonVersions {
-    raw_empty: bool,
     candidates: Vec<Candidate>,
 }
 
@@ -16,7 +15,7 @@ struct Candidate {
     minor: u64,
     patch: u64,
     prerelease: bool,
-    uv_python: bool,
+    managed: bool,
     latest_patch: bool,
 }
 
@@ -24,9 +23,7 @@ struct Candidate {
 struct UvPython {
     version: String,
     version_parts: VersionParts,
-    path: Option<String>,
     symlink: Option<String>,
-    url: Option<String>,
     variant: String,
     implementation: String,
 }
@@ -52,29 +49,34 @@ struct Constraint<'a> {
     operator: ConstraintOperator,
     numeric_version: Option<Vec<u64>>,
     specifier: Option<VersionSpecifier>,
+    exact_version: Option<Version>,
     version_string: &'a str,
 }
 
 impl PythonVersions {
-    pub(super) fn parse(output: &[u8], prefer_managed: bool) -> Result<Self, String> {
+    pub(super) fn parse(output: &[u8], managed: bool) -> Result<Self, String> {
         let rows = serde_json::from_slice::<Vec<UvPython>>(output)
             .map_err(|error| format!("uv returned invalid Python inventory JSON: {error}"))?;
-        let raw_empty = rows.is_empty();
-        let mut candidates = rows
+        let candidates = rows
             .into_iter()
-            .filter_map(Candidate::from_uv)
+            .filter_map(|row| Candidate::from_uv(row, managed))
             .collect::<Vec<_>>();
-        if !candidates.is_empty() {
-            rank(&mut candidates, prefer_managed)?;
-        }
-        Ok(Self {
-            raw_empty,
-            candidates,
-        })
+        Ok(Self { candidates })
     }
 
-    pub(super) fn raw_empty(&self) -> bool {
-        self.raw_empty
+    pub(super) fn is_empty(&self) -> bool {
+        self.candidates.is_empty()
+    }
+
+    pub(super) fn extend(&mut self, other: Self) {
+        self.candidates.extend(other.candidates);
+    }
+
+    pub(super) fn rank(mut self, prefer_managed: bool) -> Self {
+        if !self.candidates.is_empty() {
+            rank(&mut self.candidates, prefer_managed);
+        }
+        self
     }
 
     pub(super) fn resolve(&self, constraints: &[String]) -> Result<String, String> {
@@ -126,7 +128,7 @@ impl PythonVersions {
 }
 
 impl Candidate {
-    fn from_uv(row: UvPython) -> Option<Self> {
+    fn from_uv(row: UvPython, managed: bool) -> Option<Self> {
         if row.symlink.is_some() || row.variant != "default" || row.implementation != "cpython" {
             return None;
         }
@@ -137,10 +139,6 @@ impl Candidate {
         } = row.version_parts;
         let parsed_version = row.version.parse().ok()?;
         let prerelease = row.version != format!("{major}.{minor}.{patch}");
-        let downloaded = row
-            .path
-            .as_deref()
-            .is_some_and(|path| path.replace('\\', "/").contains("/uv/python/"));
         Some(Self {
             version: row.version,
             parsed_version,
@@ -148,7 +146,7 @@ impl Candidate {
             minor,
             patch,
             prerelease,
-            uv_python: row.url.is_some() || downloaded,
+            managed,
             latest_patch: false,
         })
     }
@@ -179,24 +177,39 @@ impl<'a> Constraint<'a> {
             };
         let version_string = version_string.trim().trim_end_matches(".*");
         let numeric_version = parse_numeric_version(version_string);
-        let specifier = (numeric_version.is_none() && explicit_operator)
+        let specifier = explicit_operator
             .then(|| value.parse::<VersionSpecifier>().ok())
+            .flatten();
+        let exact_version = (!explicit_operator && numeric_version.is_none())
+            .then(|| version_string.parse::<Version>().ok())
             .flatten();
         Self {
             operator,
             numeric_version,
             specifier,
+            exact_version,
             version_string,
         }
     }
 
     fn matches(&self, candidate: &Candidate) -> bool {
-        if let Some(specifier) = self.specifier.as_ref() {
+        if candidate.prerelease
+            && let Some(specifier) = self.specifier.as_ref()
+        {
             return specifier.contains(&candidate.parsed_version);
         }
+        if let Some(version) = self.exact_version.as_ref() {
+            return candidate.parsed_version == *version;
+        }
         let Some(version) = self.numeric_version.as_ref() else {
-            return candidate.version == self.version_string;
+            return self.specifier.as_ref().map_or_else(
+                || candidate.version == self.version_string,
+                |specifier| specifier.contains(&candidate.parsed_version),
+            );
         };
+        if candidate.prerelease {
+            return false;
+        }
         let mut candidate = vec![candidate.major, candidate.minor, candidate.patch];
         let mut version = version.clone();
         let specified_levels = version.len();
@@ -234,7 +247,7 @@ fn parse_numeric_version(version: &str) -> Option<Vec<u64>> {
         .ok()
 }
 
-fn rank(candidates: &mut [Candidate], prefer_managed: bool) -> Result<(), String> {
+fn rank(candidates: &mut [Candidate], prefer_managed: bool) {
     candidates.sort_by(|left, right| initial_order(left, right, prefer_managed));
     let mut seen = BTreeSet::new();
     for candidate in candidates.iter_mut() {
@@ -245,17 +258,17 @@ fn rank(candidates: &mut [Candidate], prefer_managed: bool) -> Result<(), String
         .filter(|candidate| !candidate.prerelease)
         .map(|candidate| candidate.minor)
         .max()
-        .ok_or_else(|| "uv did not report a stable CPython interpreter".to_string())?;
+        .or_else(|| candidates.iter().map(|candidate| candidate.minor).max())
+        .expect("ranked Python candidates should not be empty");
     let preferred_minor = i128::from(latest_minor) - 2;
     candidates.sort_by(|left, right| final_order(left, right, preferred_minor, prefer_managed));
-    Ok(())
 }
 
 fn source_order(left: &Candidate, right: &Candidate, prefer_managed: bool) -> Ordering {
     if prefer_managed {
-        right.uv_python.cmp(&left.uv_python)
+        right.managed.cmp(&left.managed)
     } else {
-        left.uv_python.cmp(&right.uv_python)
+        left.managed.cmp(&right.managed)
     }
 }
 
@@ -286,99 +299,4 @@ fn final_order(
         .then_with(|| (right.major == 3).cmp(&(left.major == 3)))
         .then_with(|| right.minor.cmp(&left.minor))
         .then_with(|| right.patch.cmp(&left.patch))
-}
-
-#[cfg(test)]
-mod tests {
-    use serde_json::json;
-
-    use super::PythonVersions;
-
-    fn versions() -> PythonVersions {
-        let rows = [
-            row("3.15.0a5", 3, 15, 0, true),
-            row("3.14.3", 3, 14, 3, true),
-            row("3.13.12", 3, 13, 12, true),
-            row("3.12.12", 3, 12, 12, true),
-            row("3.12.11", 3, 12, 11, true),
-            row("3.11.14", 3, 11, 14, true),
-            row("3.10.19", 3, 10, 19, true),
-            row("3.9.25", 3, 9, 25, true),
-        ];
-        PythonVersions::parse(serde_json::to_vec(&rows).unwrap().as_slice(), true).unwrap()
-    }
-
-    fn row(
-        version: &str,
-        major: u64,
-        minor: u64,
-        patch: u64,
-        downloadable: bool,
-    ) -> serde_json::Value {
-        json!({
-            "version": version,
-            "version_parts": {"major": major, "minor": minor, "patch": patch},
-            "path": null,
-            "symlink": null,
-            "url": downloadable.then_some("https://example.invalid/python.tar.zst"),
-            "variant": "default",
-            "implementation": "cpython"
-        })
-    }
-
-    #[test]
-    fn preserves_reticulates_default_preference() {
-        assert_eq!(versions().resolve(&[]).unwrap(), "3.12.12");
-    }
-
-    #[test]
-    fn respects_system_python_preference() {
-        let rows = [
-            row("3.12.12", 3, 12, 12, true),
-            row("3.11.14", 3, 11, 14, false),
-        ];
-        let output = serde_json::to_vec(&rows).unwrap();
-        let managed = PythonVersions::parse(&output, true).unwrap();
-        let system = PythonVersions::parse(&output, false).unwrap();
-
-        assert_eq!(managed.resolve(&[]).unwrap(), "3.12.12");
-        assert_eq!(system.resolve(&[]).unwrap(), "3.11.14");
-    }
-
-    #[test]
-    fn applies_reticulate_style_version_constraints() {
-        let versions = versions();
-        for (constraints, expected) in [
-            (&["3"], "3.12.12"),
-            (&["3.11"], "3.11.14"),
-            (&[">=3.9,<3.13"], "3.12.12"),
-            (&["<=3.11"], "3.11.14"),
-            (&[">3.11"], "3.12.12"),
-            (&["!=3.12"], "3.11.14"),
-            (&["==3.15.0a5"], "3.15.0a5"),
-            (&["!=3.15.0a5"], "3.12.12"),
-            (&[">=3.14.0a1"], "3.14.3"),
-        ] {
-            let constraints = constraints
-                .iter()
-                .map(|constraint| (*constraint).to_string())
-                .collect::<Vec<_>>();
-            assert_eq!(versions.resolve(&constraints).unwrap(), expected);
-        }
-    }
-
-    #[test]
-    fn reflects_an_exact_prerelease() {
-        assert_eq!(
-            versions().resolve(&["3.15.0a5".to_string()]).unwrap(),
-            "3.15.0a5"
-        );
-    }
-
-    #[test]
-    fn reports_unsatisfied_constraints_with_available_versions() {
-        let error = versions().resolve(&["<3".to_string()]).unwrap_err();
-        assert!(error.contains("constraints: \"<3\""), "{error}");
-        assert!(error.contains("3.12.12, 3.11.14"), "{error}");
-    }
 }

@@ -33,8 +33,18 @@ if (
     print("synthetic uv failure", file=sys.stderr)
     raise SystemExit(99)
 
-uv = os.environ["MCP_CONSOLE_TEST_REAL_UV"]
 arguments = sys.argv[1:]
+inventories = os.environ.get("MCP_CONSOLE_TEST_UV_PYTHON_INVENTORIES")
+if inventories and os.path.exists(inventories) and arguments[:2] == ["python", "list"]:
+    with open(inventories, encoding="utf-8") as stream:
+        inventories_by_preference = json.load(stream)
+    preference_index = arguments.index("--python-preference") + 1
+    preference = arguments[preference_index]
+    json.dump(inventories_by_preference[preference], sys.stdout)
+    sys.stdout.write("\n")
+    raise SystemExit(0)
+
+uv = os.environ["MCP_CONSOLE_TEST_REAL_UV"]
 substitute = os.environ.get("MCP_CONSOLE_TEST_UV_SUBSTITUTE_REQUIREMENT")
 replacement = os.environ.get("MCP_CONSOLE_TEST_UV_REPLACEMENT_REQUIREMENT")
 assert (substitute is None) == (replacement is None)

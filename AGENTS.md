@@ -104,7 +104,7 @@ Keep these ownership rules intact:
 
 ### Resolvers and sandbox
 
-- `src/resolver.rs`, `src/resolver/`, `src/resolver/python_version.rs` — retained host environments, Python-version selection, validation, platform implementations, and resolver process-group lifecycle.
+- `src/resolver.rs`, `src/resolver/` — retained host environments, direct Python-version selection, validation, platform implementations, and resolver process-group lifecycle.
 - `src/resolver/programs/` — compile-time R programs for managed Python environments, DuckDB extensions, and R-library and `uv` discovery.
 - `src/sandbox.rs`, `src/sandbox/` — platform dispatch and macOS Seatbelt policy.
 

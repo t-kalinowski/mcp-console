@@ -445,6 +445,152 @@ exec "$MCP_CONSOLE_REAL_UV" "$@"
 
 #[cfg(target_os = "macos")]
 #[test]
+fn stdio_console_uses_reticulate_managed_uv_for_python_versions() {
+    let original_path = std::env::var_os("PATH").unwrap_or_default();
+    let real_uv = std::env::split_paths(&original_path)
+        .map(|directory| directory.join("uv"))
+        .find(|candidate| candidate.is_file())
+        .expect("test `uv` should be discoverable");
+    let real_uv_cache = Command::new(&real_uv)
+        .args(["cache", "dir"])
+        .output()
+        .expect("test `uv` cache should be discoverable");
+    assert!(real_uv_cache.status.success());
+    let real_uv_cache = String::from_utf8(real_uv_cache.stdout)
+        .expect("test `uv` cache path should be valid UTF-8");
+    let real_uv_python = Command::new(&real_uv)
+        .args(["python", "dir"])
+        .output()
+        .expect("test `uv` Python directory should be discoverable");
+    assert!(real_uv_python.status.success());
+    let real_uv_python = String::from_utf8(real_uv_python.stdout)
+        .expect("test `uv` Python path should be valid UTF-8");
+    let test_directory = TestDirectory::new("reticulate-managed-uv-selection");
+    let fake_bin = test_directory.path().join("bin");
+    let path_uv = fake_bin.join("uv");
+    let path_uv_log = test_directory.path().join("path-uv.log");
+    let r_user_cache = test_directory.path().join("r-user-cache");
+    let managed_uv_log = test_directory.path().join("managed-uv.log");
+    let intercept_marker = test_directory.path().join("intercept-version-list");
+    let ir_cache = Command::new("ir")
+        .args(["cache", "dir"])
+        .output()
+        .expect("test ir cache should be discoverable");
+    assert!(ir_cache.status.success());
+    let ir_cache = String::from_utf8(ir_cache.stdout).expect("ir cache path should be valid UTF-8");
+    let r_home = Command::new("R")
+        .arg("RHOME")
+        .output()
+        .expect("test R should be discoverable");
+    assert!(r_home.status.success());
+    let r_home = String::from_utf8(r_home.stdout).expect("test R home should be valid UTF-8");
+    let real_rscript = Path::new(r_home.trim()).join("bin/Rscript");
+    let managed_uv = Command::new(&real_rscript)
+        .args([
+            "--vanilla",
+            "-e",
+            "cat(reticulate:::reticulate_cache_dir('uv', 'bin', 'uv'))",
+        ])
+        .env("R_USER_CACHE_DIR", &r_user_cache)
+        .output()
+        .expect("reticulate managed uv path should resolve");
+    assert!(managed_uv.status.success());
+    let managed_uv =
+        String::from_utf8(managed_uv.stdout).expect("managed uv path should be valid UTF-8");
+    let managed_uv = PathBuf::from(managed_uv);
+    let managed_root = managed_uv
+        .parent()
+        .and_then(Path::parent)
+        .expect("managed uv should have a cache root");
+
+    fs::create_dir(&fake_bin).expect("fake bin should be created");
+    fs::create_dir_all(
+        managed_uv
+            .parent()
+            .expect("managed uv should have a bin directory"),
+    )
+    .expect("managed uv bin should be created");
+    fs::write(
+        &path_uv,
+        "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$MCP_CONSOLE_PATH_UV_LOG\"\nexit 97\n",
+    )
+    .expect("PATH uv should be written");
+    fs::write(
+        &managed_uv,
+        r#"#!/bin/sh
+if [ "$1" = "--version" ]; then
+  printf '%s\n' 'uv 0.12.3'
+  exit 0
+fi
+if [ -e "$MCP_CONSOLE_UV_INTERCEPT_MARKER" ] && [ "$1" = "python" ] && [ "$2" = "list" ]; then
+  {
+    printf 'RETICULATE_UV=%s\n' "${RETICULATE_UV-unset}"
+    printf 'UV_CACHE_DIR=%s\n' "${UV_CACHE_DIR-unset}"
+    printf 'UV_PYTHON_INSTALL_DIR=%s\n' "${UV_PYTHON_INSTALL_DIR-unset}"
+    printf '%s\n' "$@"
+  } > "$MCP_CONSOLE_MANAGED_UV_LOG"
+  printf '%s\n' '[{"version":"3.12.9","version_parts":{"major":3,"minor":12,"patch":9},"symlink":null,"variant":"default","implementation":"cpython"}]'
+  exit 0
+fi
+UV_CACHE_DIR="$MCP_CONSOLE_REAL_UV_CACHE_DIR" \
+  UV_PYTHON_INSTALL_DIR="$MCP_CONSOLE_REAL_UV_PYTHON_DIR" \
+  exec "$MCP_CONSOLE_REAL_UV" "$@"
+"#,
+    )
+    .expect("managed uv should be written");
+    for program in [&path_uv, &managed_uv] {
+        fs::set_permissions(program, fs::Permissions::from_mode(0o755))
+            .expect("fixture program should be executable");
+    }
+    let path = std::env::join_paths(
+        std::iter::once(fake_bin).chain(std::env::split_paths(&original_path)),
+    )
+    .expect("test PATH should be valid");
+
+    let mut command = Command::new(env!("CARGO_BIN_EXE_mcp-console"));
+    command
+        .arg("serve")
+        .env_remove("RETICULATE_PYTHON")
+        .env("RETICULATE_UV", "managed")
+        .env("R_USER_CACHE_DIR", &r_user_cache)
+        .env("IR_CACHE_DIR", ir_cache.trim())
+        .env("UV_CACHE_DIR", test_directory.path().join("wrong-cache"))
+        .env(
+            "UV_PYTHON_INSTALL_DIR",
+            test_directory.path().join("wrong-python"),
+        )
+        .env("PATH", path)
+        .env("MCP_CONSOLE_PATH_UV_LOG", &path_uv_log)
+        .env("MCP_CONSOLE_MANAGED_UV_LOG", &managed_uv_log)
+        .env("MCP_CONSOLE_UV_INTERCEPT_MARKER", &intercept_marker)
+        .env("MCP_CONSOLE_REAL_UV", &real_uv)
+        .env("MCP_CONSOLE_REAL_UV_CACHE_DIR", real_uv_cache.trim())
+        .env("MCP_CONSOLE_REAL_UV_PYTHON_DIR", real_uv_python.trim());
+    let mut client = McpClient::spawn(command);
+    fs::write(&intercept_marker, "").expect("version-list interception should be enabled");
+    let output = client.call_console(
+        2,
+        json!({
+            "r": r#"request <- jsonlite::toJSON(list(constraints = I(character())), auto_unbox = TRUE)
+.Call("mcp_console_resolve_python_version", request)"#
+        }),
+    );
+
+    assert_eq!(output, "[1] \"3.12.9\"\n");
+    assert!(!path_uv_log.exists(), "PATH uv handled version resolution");
+    let managed_log = fs::read_to_string(managed_uv_log).expect("managed uv should run");
+    assert!(
+        managed_log.starts_with(&format!(
+            "RETICULATE_UV=managed\nUV_CACHE_DIR={}\nUV_PYTHON_INSTALL_DIR={}\npython\nlist\n",
+            managed_root.join("cache").display(),
+            managed_root.join("python").display()
+        )),
+        "{managed_log}"
+    );
+}
+
+#[cfg(target_os = "macos")]
+#[test]
 fn stdio_console_uses_managed_r_to_resolve_uv_when_only_ir_is_on_path() {
     let original_path = std::env::var_os("PATH").unwrap_or_default();
     let real_ir = std::env::split_paths(&original_path)
