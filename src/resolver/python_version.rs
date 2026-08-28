@@ -247,9 +247,7 @@ fn rank(candidates: &mut [Candidate], prefer_managed: bool) -> Result<(), String
         .max()
         .ok_or_else(|| "uv did not report a stable CPython interpreter".to_string())?;
     let preferred_minor = i128::from(latest_minor) - 2;
-    candidates.sort_by(|left, right| {
-        final_order(left, right, preferred_minor, prefer_managed)
-    });
+    candidates.sort_by(|left, right| final_order(left, right, preferred_minor, prefer_managed));
     Ok(())
 }
 
