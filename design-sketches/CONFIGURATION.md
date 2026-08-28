@@ -162,10 +162,10 @@ becomes:
 run_on:
   type: ssh
   host: lab-gpu
-  directory: ~/work/analysis
 ```
 
-Likewise:
+A working directory is an additional customization, not part of the scalar
+shorthand. Likewise:
 
 ```yaml
 python:
@@ -444,8 +444,8 @@ filesystem:
     - .git/config
 ```
 
-`writable_roots`, `unreadable`, and `unwritable` accept one scalar, a sequence,
-or a list patch.
+`writable_roots`, `unreadable`, and `unwritable` accept one scalar, a sequence, or a
+list patch.
 
 `workspace_write` already grants the working directory. `writable_roots` adds
 other recursive roots; users do not need to restate the workspace.
@@ -471,11 +471,9 @@ Relative paths are resolved from the worker's target-side working directory.
 are remote paths. Log paths are an exception and are supervisor-side unless an
 expanded log destination says otherwise.
 
-Simple permission precedence is fixed:
-
-- `unreadable` overrides readable roots;
-- `unwritable` overrides the workspace grant and `writable_roots`;
-- list order does not change authority.
+When path sets overlap, the most specific matching declaration wins. At equal
+specificity, `unreadable` wins over `readable_roots`, and `unwritable` wins over
+the workspace grant or `writable_roots`. List order has no authority meaning.
 
 The implementation must resolve symlinks and hard links safely. A backend that
 cannot enforce a selected path or glob rejects the profile rather than silently
@@ -593,6 +591,11 @@ connections, listeners, and local sockets. It conflicts with sibling settings
 that request a derived network grant, such as `sql.allow_network: true` or a
 package source with `worker_access: true`. To allow exactly one database or
 package source, omit `network: none` and use that explicit narrow grant.
+
+A scalar or sequence assigned to `network` replaces the complete inherited
+network node before normalization. In particular, `network: none` clears
+inherited endpoints, listeners, local sockets, and proxy settings. Constraints
+from administrator or organization policy still apply.
 
 The expanded form is:
 
@@ -992,8 +995,11 @@ sandbox:
       - --
 ```
 
-MCP Console appends the relay command. Without a policy contract, the external
-sandbox owns the entire isolation boundary, so the profile must extend
+MCP Console passes this wrapper configuration to the relay. The relay launches
+only the worker and its descendants through the wrapper; the relay itself stays
+outside that provider boundary so it can retain transport, signal delivery,
+bounded termination, cleanup, and reaping. Without a policy contract, the
+external sandbox owns the worker isolation boundary, so the profile must extend
 `full_access`; MCP Console cannot claim that its portable rules were enforced.
 
 A provider that can consume compiled MCP Console policy may declare the
@@ -1014,9 +1020,11 @@ sandbox:
         - resources
 ```
 
-MCP Console writes a generated policy file, passes its path through the declared
-argument, and verifies the provider's advertised capabilities. This preserves a
-portable top-level policy while allowing a long tail of enforcement backends.
+MCP Console writes a generated policy file and passes its path and provider
+configuration to the relay. The relay applies the provider when it launches the
+worker, and MCP Console verifies the provider's advertised capabilities. This
+preserves a portable top-level policy while allowing a long tail of enforcement
+backends.
 
 `run_on` and `sandbox` are separate because they answer different questions:
 where the session runs, and what enforces its permissions there. They remain
@@ -1105,8 +1113,12 @@ r:
   manager: auto
 ```
 
-`manager: auto` may detect an `ir` manifest, `renv.lock`, `DESCRIPTION`, or other
-supported project metadata and must report what it selected.
+`manager: auto` reports the supported project metadata it selected. Detection
+alone never authorizes project metadata to execute or to drive an unrestricted
+server-owned installation. In an untrusted checkout, host-side resolution is
+limited to validated registry references. Local, VCS, or source references and
+installer or build hooks require project trust and must run inside the selected
+worker sandbox rather than in the server-owned resolver.
 
 An exact existing installation is:
 
@@ -1170,6 +1182,9 @@ python:
   root: .
   manager: auto
 ```
+
+The same trust rule applies to Python lockfiles and project metadata: an
+untrusted project cannot trigger unrestricted host-side installation.
 
 An exact existing interpreter is:
 
@@ -1516,7 +1531,9 @@ profiles:
 Merge rules are predictable:
 
 - scalars replace inherited scalars;
-- mappings merge by key;
+- mappings merge by key unless a field below defines whole-node replacement;
+- a scalar or sequence assigned to `network` replaces the complete inherited
+  network policy, while a `network` mapping merges by key;
 - a scalar or sequence assigned to a list-valued field replaces that inherited
   field;
 - `{ add, remove }` patches an inherited list;
@@ -1562,7 +1579,9 @@ encoded by relying on ordinary profile merge order alone.
 For the project-level experience, MCP Console searches from the working
 directory toward the filesystem root and uses the nearest
 `.mcp-console/config.yaml`. The parent of `.mcp-console` is the project root. An
-explicit `--config` path disables that search. User and organization
+explicit `--config` path disables that search. If it points to
+`<root>/.mcp-console/config.yaml`, `<root>` remains the project root; otherwise
+the current working directory is the project root. User and organization
 configuration use platform-appropriate configuration directories rather than a
 project checkout.
 
@@ -1698,7 +1717,7 @@ form that would be accepted.
 
 ## Common recipes
 
-### Add one writable root and two unreadable paths
+### Add one writable root and two read denials
 
 ```yaml
 version: 1
@@ -2082,8 +2101,7 @@ an advanced command escape hatch.
    forms, and implement `config validate`, `config explain`, and schema output.
 2. Implement `profile`, built-ins, named profiles, one-parent inheritance, and
    list patches.
-3. Implement local `writable_roots`, `readable_roots`, `unreadable`, and
-   `unwritable`.
+3. Implement local `writable_roots`, `readable_roots`, `unreadable`, and `unwritable`.
 4. Implement `network: none`, outbound endpoint allowlists, exact TCP listeners,
    and Unix socket paths through a managed proxy.
 5. Implement package policy, compact/expanded R and Python environments, package
