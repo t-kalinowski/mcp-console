@@ -7,17 +7,11 @@ mcptools_mcp_console <- function() {
     "mcptools::mcp_server(%s, session_tools = FALSE)",
     encodeString(tools_file, quote = '"')
   )
-  interrupt_gate <- tempfile("mcp-console-interrupt-gate-")
   launcher <- tempfile("mcptools-mcp-console-")
   writeLines(
     c(
       "#!/bin/sh",
       "unset R_TESTS",
-      sprintf("export MCP_CONSOLE_TEST_PARENT=%d", Sys.getpid()),
-      sprintf(
-        "export MCP_CONSOLE_TEST_INTERRUPT_GATE=%s",
-        shQuote(interrupt_gate)
-      ),
       sprintf(
         "exec %s --vanilla -e %s \"$@\"",
         shQuote(file.path(R.home("bin"), "Rscript")),
@@ -27,7 +21,6 @@ mcptools_mcp_console <- function() {
     launcher
   )
   Sys.chmod(launcher, "0755")
-  attr(launcher, "interrupt_gate") <- interrupt_gate
   launcher
 }
 
@@ -227,28 +220,7 @@ test_that("console_tool validates path and version", {
   expect_error(console_tool(path = tempdir()), "existing file")
 })
 
-test_that("console_tool continues after an R interrupt", {
-  binary <- mcptools_mcp_console()
-  gate <- attr(binary, "interrupt_gate")
-  on.exit(unlink(gate), add = TRUE)
-  tool <- console_tool(path = binary)
-
-  condition <- tryCatch(
-    tool(r = "interrupt()"),
-    interrupt = function(condition) {
-      stopifnot(file.create(gate))
-      condition
-    }
-  )
-
-  expect_s3_class(condition, "interrupt")
-  expect_equal(format(tool(r = "1 + 1")), "1 + 1")
-
-  rm(tool)
-  gc()
-})
-
-test_that("console_tool cancels an interrupted checkout request", {
+test_that("console_tool cancels an interrupted checkout request and continues", {
   binary <- bare_mcp_console()
   watcher_file <- normalizePath(
     testthat::test_path("fixtures", "watch-cancellation.R"),
