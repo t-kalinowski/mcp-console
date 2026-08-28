@@ -20,7 +20,7 @@ env:
 
 jobs:
   checks:
-    name: Core checks (macos-latest)
+    name: Core and package checks (macos-latest)
     runs-on: macos-latest
 
     steps:
@@ -117,6 +117,22 @@ jobs:
             smoke-wheel \
             dist/*.whl \
             target/debug/mcp-console
+
+      - name: Install R package dependencies
+        uses: r-lib/actions/setup-r-dependencies@v2
+        with:
+          working-directory: r
+          upgrade: "FALSE"
+          packages: |
+            deps::.
+
+      - name: Check R package
+        env:
+          MCP_CONSOLE_TEST_BINARY: ${{ github.workspace }}/target/debug/mcp-console
+        working-directory: r
+        run: |
+          R CMD build .
+          R CMD check --no-manual mcp.console_*.tar.gz
 
   transcripts:
     name: Transcripts (macos-latest)
