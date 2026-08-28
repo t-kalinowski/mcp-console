@@ -50,15 +50,14 @@ pub extern "C-unwind" fn mcp_console_publish_python_plot(data: SEXP) -> harp::Re
 pub extern "C-unwind" fn mcp_console_resolve_python(request: SEXP) -> harp::Result<SEXP> {
     let request = String::try_from(harp::object::RObject::view(request))?;
     let request = serde_json::from_str(&request).map_err(|error| harp::anyhow!("{error}"))?;
-    let python = crate::worker::resolve_python(request).map_err(|error| harp::anyhow!("{error}"))?;
+    let python =
+        crate::worker::resolve_python(request).map_err(|error| harp::anyhow!("{error}"))?;
     Ok(harp::object::RObject::from(python).sexp)
 }
 
 #[allow(clippy::result_large_err)]
 #[harp::register]
-pub extern "C-unwind" fn mcp_console_python_activated(
-    requirements: SEXP,
-) -> harp::Result<SEXP> {
+pub extern "C-unwind" fn mcp_console_python_activated(requirements: SEXP) -> harp::Result<SEXP> {
     let requirements = String::try_from(harp::object::RObject::view(requirements))?;
     let requirements =
         serde_json::from_str(&requirements).map_err(|error| harp::anyhow!("{error}"))?;
@@ -69,9 +68,7 @@ pub extern "C-unwind" fn mcp_console_python_activated(
 
 #[allow(clippy::result_large_err)]
 #[harp::register]
-pub extern "C-unwind" fn mcp_console_resolve_python_version(
-    request: SEXP,
-) -> harp::Result<SEXP> {
+pub extern "C-unwind" fn mcp_console_resolve_python_version(request: SEXP) -> harp::Result<SEXP> {
     let request = String::try_from(harp::object::RObject::view(request))?;
     let request = serde_json::from_str(&request).map_err(|error| harp::anyhow!("{error}"))?;
     let version =
