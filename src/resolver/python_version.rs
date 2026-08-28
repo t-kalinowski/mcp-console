@@ -240,8 +240,7 @@ fn rank(candidates: &mut [Candidate]) -> Result<(), String> {
 }
 
 fn initial_order(left: &Candidate, right: &Candidate) -> Ordering {
-    left
-        .prerelease
+    left.prerelease
         .cmp(&right.prerelease)
         .then_with(|| right.uv_python.cmp(&left.uv_python))
         .then_with(|| right.major.cmp(&left.major))
@@ -250,8 +249,7 @@ fn initial_order(left: &Candidate, right: &Candidate) -> Ordering {
 }
 
 fn final_order(left: &Candidate, right: &Candidate, preferred_minor: i128) -> Ordering {
-    left
-        .prerelease
+    left.prerelease
         .cmp(&right.prerelease)
         .then_with(|| right.uv_python.cmp(&left.uv_python))
         .then_with(|| right.latest_patch.cmp(&left.latest_patch))

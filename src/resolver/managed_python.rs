@@ -301,14 +301,7 @@ where
         }
     }
     resolver.watch_exit(child.id());
-    resolver.wait(
-        &mut child,
-        completed_write(),
-        stdout,
-        stderr,
-        program,
-        kind,
-    )
+    resolver.wait(&mut child, completed_write(), stdout, stderr, program, kind)
 }
 
 fn run_python_resolver(

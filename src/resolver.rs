@@ -54,8 +54,7 @@ impl ManagedPythonResolverConfiguration {
     #[cfg(target_os = "macos")]
     fn python_preference(&self) -> Option<&OsStr> {
         self.environment.iter().find_map(|(name, value)| {
-            (name.as_os_str() == OsStr::new("UV_PYTHON_PREFERENCE"))
-                .then_some(value.as_os_str())
+            (name.as_os_str() == OsStr::new("UV_PYTHON_PREFERENCE")).then_some(value.as_os_str())
         })
     }
 
