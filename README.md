@@ -171,8 +171,10 @@ mcp-console --version
 ```
 
 `mcp-console serve` communicates with its MCP client over standard input and output.
-The standalone `sandbox` command supervises descendants it observes from the command root, including processes that enter another process group or session.
-It also retires remaining members of the root's dedicated process group before returning; a descendant that both orphans before observation and leaves that group remains outside this boundary.
+Terminal-attached `sandbox` launches remain in the shell-created job process group, preserving terminal input, pipelines, and stop/continue behavior.
+Non-terminal launches use a dedicated process group, which is retired before the command returns.
+In both modes, the standalone command also retires descendants it observes from the root, including processes that enter another process group or session.
+An unobserved orphan is outside this boundary for terminal-attached launches; for isolated launches, the pinned root group still catches it unless it also leaves that group.
 Use the MCP server for the supported worker-generation lifecycle.
 
 Run development commands from the repository root:
