@@ -50,12 +50,8 @@ pub extern "C-unwind" fn mcp_console_initialize_python(
     let libpython = Option::<String>::try_from(harp::object::RObject::view(libpython))?
         .ok_or_else(|| harp::anyhow!("Python-hosted R is not supported"))?;
     let python_home = String::try_from(harp::object::RObject::view(python_home))?;
-    super::library::initialize(
-        std::path::Path::new(&libpython),
-        &python,
-        &python_home,
-    )
-    .map_err(|error| harp::anyhow!("{error}"))?;
+    super::library::initialize(std::path::Path::new(&libpython), &python, &python_home)
+        .map_err(|error| harp::anyhow!("{error}"))?;
     unsafe { Ok(libr::R_NilValue) }
 }
 

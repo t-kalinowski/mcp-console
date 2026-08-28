@@ -45,11 +45,7 @@ pub(super) fn load(path: &Path) -> Result<(), String> {
     with_library(path, LoadedLibrary::attach)
 }
 
-pub(super) fn initialize(
-    path: &Path,
-    program_name: &str,
-    python_home: &str,
-) -> Result<(), String> {
+pub(super) fn initialize(path: &Path, program_name: &str, python_home: &str) -> Result<(), String> {
     with_library(path, |library| {
         library.initialize(program_name, python_home)
     })
@@ -94,14 +90,13 @@ impl LoadedLibrary {
         // discovery. Global, eager loading exposes the CPython API before
         // either runtime initializes the interpreter.
         let flags = libc::RTLD_NOW | libc::RTLD_GLOBAL;
-        let library =
-            unsafe { libloading::os::unix::Library::open(Some(path.as_os_str()), flags) }
-                .map_err(|error| {
-                    format!(
-                        "failed to load Python shared library `{}`: {error}",
-                        path.display()
-                    )
-                })?;
+        let library = unsafe { libloading::os::unix::Library::open(Some(path.as_os_str()), flags) }
+            .map_err(|error| {
+                format!(
+                    "failed to load Python shared library `{}`: {error}",
+                    path.display()
+                )
+            })?;
         // SAFETY: Each requested symbol is a process-lifetime CPython API
         // function. The owning library handle is retained beside the copied
         // function pointers.
@@ -232,10 +227,7 @@ impl LoadedLibrary {
 }
 
 impl PythonApi {
-    unsafe fn load(
-        library: &libloading::os::unix::Library,
-        path: &Path,
-    ) -> Result<Self, String> {
+    unsafe fn load(library: &libloading::os::unix::Library, path: &Path) -> Result<Self, String> {
         Ok(Self {
             // SAFETY: Symbol types match the documented CPython C API.
             is_initialized: unsafe { load_symbol(library, path, b"Py_IsInitialized\0")? },
@@ -253,8 +245,8 @@ unsafe fn load_symbol<T: Copy>(
     path: &Path,
     name: &'static [u8],
 ) -> Result<T, String> {
-    let display_name = std::str::from_utf8(&name[..name.len() - 1])
-        .expect("CPython symbol names should be UTF-8");
+    let display_name =
+        std::str::from_utf8(&name[..name.len() - 1]).expect("CPython symbol names should be UTF-8");
     // SAFETY: The caller supplies the documented function-pointer type for
     // the named CPython C API symbol, and the library handle outlives it.
     unsafe { library.get::<T>(name) }
