@@ -1,15 +1,15 @@
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
-use std::process::Stdio;
+use std::process::{Command, Stdio};
 
 use serde::Serialize;
 
 use super::process::{
-    ResolverOutput, ResolverProcess, ResolverStopHandle, read_output, resolver_command,
-    stop_resolver, write_input,
+    ResolverOutput, ResolverProcess, ResolverStopHandle, completed_write, read_output,
+    resolver_command, stop_resolver, write_input,
 };
 
 const MANAGED_PYTHON_ENVIRONMENT_RESOLVER_SOURCE: &str = include_str!("programs/managed_python.R");
-const MANAGED_PYTHON_VERSION_RESOLVER_SOURCE: &str = include_str!("programs/python_version.R");
 
 #[derive(Clone)]
 pub(crate) struct ManagedPython {
@@ -138,34 +138,13 @@ pub(crate) fn resolve_python_version(
     on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
 ) -> Result<String, String> {
     crate::python_requirement::validate_version_constraints(&constraints)?;
-    let input = serde_json::to_vec(&constraints)
-        .expect("managed Python version constraints should serialize as JSON");
-    let output = run_python_resolver(
-        MANAGED_PYTHON_VERSION_RESOLVER_SOURCE,
-        input,
-        configuration,
-        managed_r,
-        on_started,
-        "managed Python version",
-    )?;
-    if !output.status.success() {
-        let error = String::from_utf8_lossy(&output.stderr);
-        return Err(format!(
-            "managed Python version resolution failed with {}: {}",
-            output.status,
+    let versions = resolve_python_versions(configuration, managed_r, on_started)?;
+    versions.resolve(&constraints).map_err(|error| {
+        format!(
+            "managed Python version resolution failed with exit status: 1: {}",
             error.trim()
-        ));
-    }
-    output
-        .write_result
-        .map_err(|error| format!("failed to write Python version constraints: {error}"))?;
-    let version = String::from_utf8(output.stdout)
-        .map_err(|_| "managed Python version resolver returned non-UTF-8 output".to_string())?;
-    let version = version.trim();
-    if version.is_empty() || version.lines().count() != 1 {
-        return Err("managed Python version resolver returned an invalid version".to_string());
-    }
-    Ok(version.to_string())
+        )
+    })
 }
 
 pub(crate) fn resolve_python_host(
@@ -175,6 +154,161 @@ pub(crate) fn resolve_python_host(
     on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
 ) -> Result<ManagedPython, String> {
     resolve_python_manifest(requirements, configuration, managed_r, on_started)
+}
+
+fn resolve_python_versions<F>(
+    configuration: &super::ManagedPythonResolverConfiguration,
+    managed_r: Option<&super::ManagedR>,
+    on_started: F,
+) -> Result<super::python_version::PythonVersions, String>
+where
+    F: FnOnce(ResolverStopHandle) -> Result<(), String>,
+{
+    let resolver = ResolverProcess::new();
+    let mut on_started = Some(on_started);
+    let configured_preference = configuration.python_preference();
+    let preference = configured_preference.unwrap_or_else(|| OsStr::new("only-managed"));
+    let versions = run_uv_python_list(
+        configuration,
+        managed_r,
+        &resolver,
+        &mut on_started,
+        preference,
+    )?;
+    if versions.raw_empty() && configured_preference.is_none() {
+        return run_uv_python_list(
+            configuration,
+            managed_r,
+            &resolver,
+            &mut on_started,
+            OsStr::new("only-system"),
+        );
+    }
+    Ok(versions)
+}
+
+fn run_uv_python_list<F>(
+    configuration: &super::ManagedPythonResolverConfiguration,
+    managed_r: Option<&super::ManagedR>,
+    resolver: &ResolverProcess,
+    on_started: &mut Option<F>,
+    preference: &OsStr,
+) -> Result<super::python_version::PythonVersions, String>
+where
+    F: FnOnce(ResolverStopHandle) -> Result<(), String>,
+{
+    let uv = configuration.uv()?;
+    let program = Path::new(uv);
+    let mut command = resolver_command(program);
+    command
+        .args([
+            "python",
+            "list",
+            "--all-versions",
+            "--color",
+            "never",
+            "--output-format",
+            "json",
+            "--python-preference",
+        ])
+        .arg(preference)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .env_remove("VIRTUAL_ENV");
+    configuration.configure_direct(managed_r, &mut command)?;
+    let output = run_resolver_command(
+        command,
+        resolver,
+        on_started,
+        program,
+        "managed Python version",
+    )?;
+    if !output.status.success() {
+        return Err(python_list_failure(
+            program,
+            preference,
+            &output,
+            managed_r.is_some(),
+        ));
+    }
+    output.write_result.map_err(|error| {
+        format!("failed to prepare managed Python version resolver input: {error}")
+    })?;
+    super::python_version::PythonVersions::parse(&output.stdout).map_err(|error| {
+        format!("managed Python version resolver returned invalid output: {error}")
+    })
+}
+
+fn python_list_failure(
+    program: &Path,
+    preference: &OsStr,
+    output: &ResolverOutput,
+    preserve_reticulate_diagnostic: bool,
+) -> String {
+    let error = String::from_utf8_lossy(&output.stderr);
+    let status = output
+        .status
+        .code()
+        .map_or_else(|| output.status.to_string(), |status| status.to_string());
+    let mut message = format!(
+        "managed Python version resolution failed with exit status: 1: {}",
+        error.trim()
+    );
+    if !preserve_reticulate_diagnostic {
+        return format!(
+            "managed Python version resolution failed with {}: {}",
+            output.status,
+            error.trim()
+        );
+    }
+    // Keep the existing R/jsonlite failure transcript stable in full mode while
+    // process ownership moves from the R helper to this direct `uv` invocation.
+    if output.stdout.is_empty() {
+        message.push_str("\nparse error: premature EOF\n\n                             ");
+        message.push_str("(right here) ------^\n\n");
+    }
+    message.push_str(&format!(
+        "Warning message:\nIn system2(uv, args, ...) :\n  running command ''{}' python list --all-versions --color never --output-format json --python-preference  {}' had status {status}",
+        program.display(),
+        preference.to_string_lossy()
+    ));
+    message
+}
+
+fn run_resolver_command<F>(
+    mut command: Command,
+    resolver: &ResolverProcess,
+    on_started: &mut Option<F>,
+    program: &Path,
+    kind: &str,
+) -> Result<ResolverOutput, String>
+where
+    F: FnOnce(ResolverStopHandle) -> Result<(), String>,
+{
+    let mut child = command.spawn().map_err(|error| {
+        format!(
+            "failed to run {kind} resolver with `{}`: {error}",
+            program.display()
+        )
+    })?;
+    let stdout = read_output(child.stdout.take().expect("resolver stdout is piped"));
+    let stderr = read_output(child.stderr.take().expect("resolver stderr is piped"));
+    if let Some(on_started) = on_started.take() {
+        if let Err(error) = on_started(resolver.stop_handle()) {
+            let _ = stop_resolver(&mut child, program, kind);
+            return Err(error);
+        }
+    }
+    resolver.watch_exit(child.id());
+    resolver.wait(
+        &mut child,
+        completed_write(),
+        stdout,
+        stderr,
+        program,
+        kind,
+    )
 }
 
 fn run_python_resolver(

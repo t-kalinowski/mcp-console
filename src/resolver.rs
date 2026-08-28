@@ -16,6 +16,8 @@ mod managed_python;
 mod managed_r;
 #[cfg(target_os = "macos")]
 mod process;
+#[cfg(target_os = "macos")]
+mod python_version;
 #[cfg(not(target_os = "macos"))]
 mod unsupported;
 
@@ -40,6 +42,21 @@ impl ManagedPythonResolverConfiguration {
     #[cfg(target_os = "macos")]
     fn explicit_uv(&self) -> Option<&OsStr> {
         self.reticulate_uv.as_deref()
+    }
+
+    #[cfg(target_os = "macos")]
+    fn uv(&self) -> Result<&OsStr, String> {
+        self.reticulate_uv
+            .as_deref()
+            .ok_or_else(|| "managed Python resolver has no `uv` executable".to_string())
+    }
+
+    #[cfg(target_os = "macos")]
+    fn python_preference(&self) -> Option<&OsStr> {
+        self.environment.iter().find_map(|(name, value)| {
+            (name.as_os_str() == OsStr::new("UV_PYTHON_PREFERENCE"))
+                .then_some(value.as_os_str())
+        })
     }
 
     #[cfg(target_os = "macos")]
@@ -77,10 +94,21 @@ impl ManagedPythonResolverConfiguration {
         command: &mut std::process::Command,
     ) -> Result<(), String> {
         managed_r.configure_resolver(command)?;
-        let uv = self
-            .reticulate_uv
-            .as_deref()
-            .ok_or_else(|| "managed Python resolver has no `uv` executable".to_string())?;
+        let uv = self.uv()?;
+        self.configure_uv(command, uv);
+        Ok(())
+    }
+
+    #[cfg(target_os = "macos")]
+    fn configure_direct(
+        &self,
+        managed_r: Option<&ManagedR>,
+        command: &mut std::process::Command,
+    ) -> Result<(), String> {
+        if let Some(managed_r) = managed_r {
+            managed_r.configure_resolver(command)?;
+        }
+        let uv = self.uv()?;
         self.configure_uv(command, uv);
         Ok(())
     }
