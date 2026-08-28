@@ -67,7 +67,7 @@ pub(super) fn status(
 
     // Keep the exited root waitable through descendant teardown. Its process
     // table entry reserves the process-group ID for fallback group signaling.
-    if let Err(error) = tracker.terminate_after_root_exit() {
+    if let Err(error) = terminate_after_root_exit(&child, tracker) {
         preserve(temporary_directory);
         let mut error = match kill_root(&mut child) {
             Ok(_) => error,
@@ -120,6 +120,31 @@ fn wait_for_root_exit(
             Ok(EventWait::Events | EventWait::TimedOut) => {}
             Err(error) => return Err(error),
         }
+    }
+}
+
+fn terminate_after_root_exit(
+    child: &Child,
+    tracker: DescendantTracker,
+) -> Result<(), String> {
+    // Close the post-spawn observation gap while the root remains waitable and
+    // therefore pins its process-group ID. Tracker cleanup still covers every
+    // observed descendant that moved to another process group or session.
+    let group_result = platform::kill_process_group(child.id()).map_err(|error| {
+        format!(
+            "failed to stop `{}` process group after root exit: {error}",
+            platform::SANDBOX_EXEC
+        )
+    });
+
+    // Once the root has exited, there is no command left to receive forwarded
+    // terminal signals. Keep teardown forceful, bounded, and non-interruptible
+    // so a second signal cannot abandon descendants.
+    let tracker_result = tracker.terminate_after_root_exit();
+    match (group_result, tracker_result) {
+        (Ok(()), Ok(())) => Ok(()),
+        (Err(error), Ok(())) | (Ok(()), Err(error)) => Err(error),
+        (Err(error), Err(tracker_error)) => Err(additional_error(error, tracker_error)),
     }
 }
 
