@@ -206,5 +206,79 @@ def test_launcher_crash_retires_the_sandbox_lifetime(binary: Path) -> Transcript
     ]
 
 
+def test_manager_crash_retires_the_sandbox_lifetime(binary: Path) -> Transcript:
+    # This is macOS-backend fault injection. While the launcher and sandbox
+    # root remain live, the launcher must recover from loss of the committed
+    # host-side manager and retire the observed lifetime itself.
+    # fmt: r
+    script = code(r"""
+        child <- processx::process$new(
+          "/bin/sleep", "60", cleanup = FALSE
+        )
+        writeLines(c(
+          as.character(Sys.getpid()),
+          as.character(child$get_pid()),
+          Sys.getenv("TMPDIR")
+        ))
+        flush.console()
+        Sys.sleep(60)
+        """)
+    arguments = ("sandbox", "--", "Rscript", "--vanilla", "-e", script)
+    process = subprocess.Popen(
+        [binary, *arguments],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    assert process.stdout is not None
+    assert process.stderr is not None
+
+    pids: list[int] = []
+    temporary_directory: Path | None = None
+    try:
+        lines = _read_lines(
+            process.stdout,
+            3,
+            "the sandbox root, processx child, and temporary directory",
+        )
+        pids = [int(lines[0]), int(lines[1])]
+        manager_pid = _child_pid_by_name(process.pid, "mcp-console")
+        pids.append(manager_pid)
+        temporary_directory = Path(lines[2])
+
+        os.kill(manager_pid, signal.SIGKILL)
+        returncode = process.wait(timeout=TIMEOUT)
+        stderr = process.stderr.read().decode("utf-8")
+        survivors = _wait_for_survivors(pids, timeout=5)
+        temporary_directory_survived = temporary_directory.exists()
+
+        assert returncode == 128 + signal.SIGKILL, returncode
+        assert stderr == "", stderr
+        assert survivors == [], f"manager crash leaked sandbox processes: {survivors}"
+        assert not temporary_directory_survived, (
+            f"manager crash leaked sandbox temporary directory: {temporary_directory}"
+        )
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait(timeout=TIMEOUT)
+        _kill_survivors(pids)
+        process.stdout.close()
+        process.stderr.close()
+        if temporary_directory is not None:
+            shutil.rmtree(temporary_directory, ignore_errors=True)
+
+    return [
+        {
+            "command": _command(*arguments),
+            "stdout": "<sandbox root pid>\n<processx child pid>\n<sandbox temp>\n",
+        },
+        {
+            "manager_signal": "SIGKILL",
+            "launcher_returncode": returncode,
+            "verified_cleanup": "sandbox root, processx child, manager, and temp",
+        },
+    ]
+
+
 if __name__ == "__main__":
     run_this_suite(__file__)

@@ -1,0 +1,27 @@
+---
+command:
+  - mcp-console
+  - sandbox
+  - --
+  - Rscript
+  - --vanilla
+  - -e
+  - |
+    child <- processx::process$new(
+      "/bin/sleep", "60", cleanup = FALSE
+    )
+    writeLines(c(
+      as.character(Sys.getpid()),
+      as.character(child$get_pid()),
+      Sys.getenv("TMPDIR")
+    ))
+    flush.console()
+    Sys.sleep(60)
+stdout: |
+  <sandbox root pid>
+  <processx child pid>
+  <sandbox temp>
+---
+manager_signal: SIGKILL
+launcher_returncode: 137
+verified_cleanup: sandbox root, processx child, manager, and temp
