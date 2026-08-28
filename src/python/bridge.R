@@ -405,6 +405,23 @@ base::local(
     console_width <- getOption("width")
     install_python_hooks <- function(...) {
       namespace <- asNamespace("reticulate")
+      load_python_library <- function(libpython) {
+        invisible(.Call("mcp_console_load_python_library", libpython))
+      }
+      original_initialize <- get("py_initialize", envir = namespace)
+      initialize <- function(python, libpython, ...) {
+        load_python_library(libpython)
+        original_initialize(python, libpython, ...)
+      }
+      was_locked <- bindingIsLocked("py_initialize", namespace)
+      if (was_locked) {
+        unlockBinding("py_initialize", namespace)
+      }
+      assign("py_initialize", initialize, envir = namespace)
+      if (was_locked) {
+        lockBinding("py_initialize", namespace)
+      }
+
       configure_numpy <- function() {
         numpy <- reticulate::import("numpy", convert = FALSE)
         numpy$set_printoptions(linewidth = console_width)
@@ -425,6 +442,7 @@ base::local(
         action = "append"
       )
       if (get("is_python_initialized", envir = namespace)()) {
+        load_python_library(reticulate::py_config()$libpython)
         on_python_init()
       }
       invisible()
