@@ -140,7 +140,7 @@ mod platform {
         writer: crate::sideband::Writer,
         graphics: crate::r_graphics::Bridge,
         r_environment: crate::r_environment::Bridge,
-        python: crate::python::Bridge,
+        python: crate::python::Runtime,
         sql: crate::sql::Bridge,
     }
 
@@ -201,7 +201,7 @@ mod platform {
             .map_err(|_| io::Error::other("R worker sideband was already initialized"))?;
         let graphics = crate::r_graphics::Bridge::initialize()?;
         let r_environment = crate::r_environment::Bridge::initialize()?;
-        let python = crate::python::Bridge::initialize()?;
+        let python = crate::python::Runtime::initialize()?;
         let sql = crate::sql::Bridge::initialize()?;
         writer.send(&WorkerMessage::Ready)?;
 
@@ -604,7 +604,7 @@ mod platform {
     fn evaluate_cell(
         cell: Cell,
         graphics: &crate::r_graphics::Bridge,
-        python: &mut crate::python::Bridge,
+        python: &mut crate::python::Runtime,
         sql: &mut crate::sql::Bridge,
     ) -> Result<(), String> {
         run_ready_handlers(graphics)?;
@@ -659,7 +659,7 @@ mod platform {
     fn evaluate_python_cell(
         source: String,
         graphics: &crate::r_graphics::Bridge,
-        python: &mut crate::python::Bridge,
+        python: &mut crate::python::Runtime,
     ) -> Result<(), String> {
         if source.contains('\0') {
             emit_output(

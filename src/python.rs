@@ -20,7 +20,10 @@ pub(crate) enum PreparationOutcome {
 pub(crate) struct Runtime(reticulate::Runtime);
 
 #[cfg(target_os = "macos")]
-pub(crate) type Bridge = Runtime;
+pub(crate) fn configure_worker_environment() -> std::io::Result<()> {
+    platform::configure_worker_environment()?;
+    reticulate::configure_worker_environment()
+}
 
 #[cfg(target_os = "macos")]
 impl Runtime {
@@ -87,7 +90,6 @@ mod platform {
 
         for (name, value, overwrite) in [
             (c"COLUMNS", c"200", true),
-            (c"RETICULATE_REMAP_OUTPUT_STREAMS", c"1", true),
             (c"UV_OFFLINE", c"1", true),
             (c"MPLBACKEND", c"agg", false),
         ] {
@@ -169,7 +171,7 @@ mod platform {
         path.is_file().then_some(path)
     }
 
-    fn set_environment(name: &CStr, value: &CStr, overwrite: bool) -> io::Result<()> {
+    pub(super) fn set_environment(name: &CStr, value: &CStr, overwrite: bool) -> io::Result<()> {
         if unsafe { libc::setenv(name.as_ptr(), value.as_ptr(), overwrite.into()) } != 0 {
             return Err(io::Error::last_os_error());
         }
@@ -178,4 +180,4 @@ mod platform {
 }
 
 #[cfg(target_os = "macos")]
-pub(crate) use platform::{configure_worker_environment, link_matplotlib_caches};
+pub(crate) use platform::link_matplotlib_caches;

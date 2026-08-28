@@ -8,6 +8,10 @@ const PYTHON_RUNTIME_SOURCE: &str = include_str!("runtime.py");
 /// The current Python backend, hosted by reticulate inside embedded R.
 pub(super) struct Runtime(crate::r_bridge::Bridge);
 
+pub(super) fn configure_worker_environment() -> std::io::Result<()> {
+    super::platform::set_environment(c"RETICULATE_REMAP_OUTPUT_STREAMS", c"1", true)
+}
+
 impl Runtime {
     pub(super) fn initialize() -> Result<Self, String> {
         crate::r_bridge::Bridge::initialize(PYTHON_BRIDGE_SOURCE, "Python").map(Self)
