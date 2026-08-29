@@ -475,7 +475,8 @@ Changes made later by evaluated R or Python code therefore cannot configure host
 
 Direct version discovery uses `uv`'s managed and system inventories under the server's startup `PATH`.
 It does not add reticulate's separately registered virtualenv directories to `PATH`, so a system interpreter must be discoverable by `uv` there.
-Enabled `UV_MANAGED_PYTHON` and `UV_NO_MANAGED_PYTHON` settings are normalized to their equivalent `UV_PYTHON_PREFERENCE` values before direct calls, avoiding conflicting command-line and environment selectors while preserving the requested source policy.
+Enabled `UV_MANAGED_PYTHON` and `UV_NO_MANAGED_PYTHON` settings are normalized to their equivalent `UV_PYTHON_PREFERENCE` values before direct calls, and recognized disabled aliases are removed.
+This avoids conflicting command-line and environment selectors while preserving the requested source policy.
 Conflicting or invalid source settings remain unchanged so `uv` reports them normally.
 Managed-environment creation passes each validated requirement as its own argument, inherits the current managed R library through `R_LIBS` when available, and removes its server-created interpreter-path output file after the resolver call.
 It removes `UV_NO_CACHE` after restoring the trusted startup snapshot because `uv tool run` deletes a no-cache tool environment when that command exits; Python version inventory and the other resolver calls retain the setting.

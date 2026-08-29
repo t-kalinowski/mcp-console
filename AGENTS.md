@@ -134,9 +134,6 @@ Keep these ownership rules intact:
 - For a public behavior change, first add a public acceptance or regression test and confirm it fails.
   Verify an internal-only refactor with the existing public suite.
   Test public interfaces, not private helpers.
-  Prefer Python `client_server` transcript cases for server behavior and Python fixtures when practical.
-  Reserve Rust integration tests for CLI, operating-system, or process-lifecycle invariants that cannot be asserted through MCP.
-  Public transcript cases must not call private `.Call("mcp_console_*")` seams.
 - Preserve client-visible runtime output in transcript snapshots, including complete errors and tracebacks.
   Normalize only incidental values such as run-specific temporary paths; do not replace behavior with summaries or placeholders.
 - Keep embedded R, Python, SQL, and shell fixture programs as readable multiline strings.

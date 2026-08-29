@@ -92,8 +92,6 @@ def python_inventory_client(
     preference: str | None = None,
     install_directory: Path | None = None,
     resolver_python: Path | None = None,
-    fail_tool_run: bool = False,
-    intercept_marker: Path | None = None,
     resolver_record: Path | None = None,
     extra_environment: dict[str, str] | None = None,
 ) -> tuple[McpClient, Path, Path]:
@@ -117,10 +115,6 @@ def python_inventory_client(
         environment["UV_PYTHON_INSTALL_DIR"] = str(install_directory)
     if resolver_python is not None:
         environment["MCP_CONSOLE_TEST_UV_PYTHON"] = str(resolver_python)
-    if fail_tool_run:
-        environment["MCP_CONSOLE_TEST_UV_FAIL_TOOL_RUN"] = "1"
-    if intercept_marker is not None:
-        environment["MCP_CONSOLE_TEST_UV_INTERCEPT_MARKER"] = str(intercept_marker)
     if resolver_record is not None:
         environment["MCP_CONSOLE_TEST_UV_RESOLVER_RECORD"] = str(resolver_record)
     if extra_environment is not None:
@@ -189,6 +183,38 @@ def recorded_tool_run_pythons(arguments: Path) -> list[str]:
 
 def read_uv_resolver_records(path: Path) -> list[dict[str, object]]:
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+
+
+def resolve_public_python_version(
+    client: McpClient,
+    constraints: list[str],
+) -> str:
+    constraints_r = (
+        "character()"
+        if not constraints
+        else f"c({', '.join(json.dumps(value) for value in constraints)})"
+    )
+    # fmt: r
+    r = code(rf"""
+        reticulate::py_require(
+          python_version = {
+            constraints_r
+          },
+          action = "set"
+        )
+        result <- tryCatch(
+          reticulate::py_write_requirements(
+            NULL,
+            NULL,
+            freeze = FALSE,
+            python = NULL
+          )$python_version,
+          error = conditionMessage
+        )
+        cat(result, "\n", sep = "")
+        """)
+    client.send(r=r)
+    return last_tool_text(client)
 
 
 def write_python_executable(path: Path, source: str) -> None:
@@ -921,6 +947,18 @@ def test_uses_current_r_library_for_managed_python_resolution(
         prepared_r_library = current_r_library()
         uv_record.write_text("", encoding="utf-8")
         r_libs_record.write_text("", encoding="utf-8")
+        # Printing unconstrained requirements asks the host for the default
+        # Python version without creating a new environment.
+        # fmt: r
+        r = code(r"""
+            invisible(capture.output(print(reticulate::py_require())))
+            """)
+        client.send(r=r)
+        assert last_tool_text(client) == "[done]", client.transcript[-1]
+        assert_resolver_used(prepared_r_library)
+
+        uv_record.write_text("", encoding="utf-8")
+        r_libs_record.write_text("", encoding="utf-8")
         # fmt: r
         r = code(r"""
             reticulate::py_require("py-yaml12")
@@ -1182,7 +1220,9 @@ def test_validates_registry_only_python_requirements(binary: Path) -> Transcript
         uv_record.write_text("", encoding="utf-8")
         # fmt: r
         r = code(rf"""
-            reticulate::py_require({json.dumps(runtime_rejected)})
+            reticulate::py_require({
+              json.dumps(runtime_rejected)
+            })
             invisible(reticulate::py_config())
             """)
         client.send(r=r)
@@ -1270,6 +1310,50 @@ def test_resolves_python_version_inventory_semantics(binary: Path) -> Transcript
         assert last_tool_text(client) == "[prepared]"
         assert recorded_python_preferences(arguments) == ["only-managed"]
         assert recorded_tool_run_pythons(arguments) == ["3.12.12"]
+        return client._finish()
+
+
+def test_resolves_python_version_constraint_semantics(binary: Path) -> Transcript:
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        temporary = Path(temporary_directory)
+        client, inventories, _ = python_inventory_client(binary, temporary)
+
+        write_uv_python_inventories(
+            inventories,
+            {
+                "only-managed": [
+                    uv_python_row("3.12.12"),
+                    uv_python_row("3.11.14"),
+                ]
+            },
+        )
+        normalized = resolve_public_python_version(client, ["v3.12.12"])
+        assert normalized == "3.12.12\n", normalized
+
+        write_uv_python_inventories(
+            inventories,
+            {"only-managed": [uv_python_row("3.15.0a5")]},
+        )
+        prerelease = resolve_public_python_version(client, ["==3.15.0a5"])
+        assert prerelease == "3.15.0a5\n", prerelease
+
+        write_uv_python_inventories(
+            inventories,
+            {
+                "only-managed": [
+                    uv_python_row("3.12.0a5"),
+                    uv_python_row("3.11.14"),
+                ]
+            },
+        )
+        numeric_equal = resolve_public_python_version(client, ["==3.12.0"])
+        assert 'constraints: "==3.12.0"' in numeric_equal, numeric_equal
+
+        numeric_not_equal = resolve_public_python_version(
+            client,
+            [">=3.12.0a1", "!=3.12.0"],
+        )
+        assert numeric_not_equal == "3.12.0a5\n", numeric_not_equal
         return client._finish()
 
 
@@ -1522,6 +1606,32 @@ def test_retains_managed_python_when_uv_caching_is_disabled(
         return client._finish()
 
 
+def test_removes_disabled_uv_python_source_aliases(binary: Path) -> Transcript:
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        temporary = Path(temporary_directory)
+        resolver_record = temporary / "uv-resolver.jsonl"
+        client, _, _ = python_inventory_client(
+            binary,
+            temporary,
+            resolver_python=Path(sys.executable),
+            resolver_record=resolver_record,
+            extra_environment={
+                "UV_MANAGED_PYTHON": "false",
+                "UV_NO_MANAGED_PYTHON": "n",
+            },
+        )
+
+        client.send(requirements={"python": ["py-yaml12"]})
+        assert last_tool_text(client) == "[prepared]"
+        records = read_uv_resolver_records(resolver_record)
+        assert records, "managed Python resolution did not invoke uv"
+        assert all(record["UV_MANAGED_PYTHON"] is None for record in records), records
+        assert all(record["UV_NO_MANAGED_PYTHON"] is None for record in records), (
+            records
+        )
+        return client._finish()
+
+
 def test_interrupts_python_cache_warmup_without_committing(
     binary: Path,
 ) -> Transcript:
@@ -1602,6 +1712,97 @@ def test_interrupts_python_cache_warmup_without_committing(
         interrupt_result = interrupt["result"]
         assert interrupt_result.get("isError") is not True, interrupt_result
 
+        client.send(requirements={"python": ["py-yaml12"]})
+        assert last_tool_text(client) == "[prepared]"
+        assert len(recorded_tool_run_pythons(arguments)) == 2
+        return client._finish()
+
+
+def test_stops_before_cache_warmup_after_python_resolver_interrupt(
+    binary: Path,
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        temporary = Path(temporary_directory)
+        fake_python = temporary / "python"
+        block_tool_run = temporary / "block-tool-run"
+        tool_run_started = temporary / "tool-run-started"
+        unexpected_warmup = temporary / "unexpected-warmup"
+        write_python_executable(
+            fake_python,
+            code("""                #!/usr/bin/env python3
+                import os
+                import sys
+                import time
+                from pathlib import Path
+
+
+                def main() -> None:
+                    arguments = sys.argv[1:]
+                    blocked = Path(os.environ["MCP_CONSOLE_TEST_BLOCK_TOOL_RUN"])
+                    if arguments and arguments[0] == "-c":
+                        if blocked.exists():
+                            Path(
+                                os.environ["MCP_CONSOLE_TEST_TOOL_RUN_STARTED"]
+                            ).touch()
+                            try:
+                                time.sleep(30)
+                            except KeyboardInterrupt:
+                                pass
+                        Path(arguments[-1]).write_text(
+                            os.environ["MCP_CONSOLE_TEST_UV_PYTHON"],
+                            encoding="utf-8",
+                        )
+                        return
+                    if arguments[:2] == ["-I", "-c"]:
+                        if blocked.exists():
+                            Path(
+                                os.environ["MCP_CONSOLE_TEST_UNEXPECTED_WARMUP"]
+                            ).touch()
+                        return
+                    raise SystemExit(f"unexpected fake Python arguments: {arguments!r}")
+
+
+                if __name__ == "__main__":
+                    main()
+                """),
+        )
+        client, _, arguments = python_inventory_client(
+            binary,
+            temporary,
+            resolver_python=fake_python,
+            extra_environment={
+                "MCP_CONSOLE_TEST_BLOCK_TOOL_RUN": str(block_tool_run),
+                "MCP_CONSOLE_TEST_TOOL_RUN_STARTED": str(tool_run_started),
+                "MCP_CONSOLE_TEST_UNEXPECTED_WARMUP": str(unexpected_warmup),
+            },
+        )
+        block_tool_run.touch()
+        preparation = client._start_send(requirements={"python": ["py-yaml12"]})
+        deadline = time.monotonic() + 5
+        while not tool_run_started.exists():
+            assert client.process.poll() is None, (
+                "mcp-console stopped before Python resolver started"
+            )
+            assert time.monotonic() < deadline, "Python resolver did not start"
+            time.sleep(0.01)
+
+        interrupt = client._start_send(
+            control="interrupt",
+            timeout_ms=30_000,
+        )
+        client._receive_many([preparation, interrupt])
+        preparation_result = preparation["result"]
+        assert preparation_result["isError"] is True, preparation_result
+        preparation_text = preparation_result["content"][0]["text"]
+        assert "managed Python" in preparation_text, preparation_text
+        assert "interrupt" in preparation_text, preparation_text
+        interrupt_result = interrupt["result"]
+        assert interrupt_result.get("isError") is not True, interrupt_result
+        assert not unexpected_warmup.exists(), (
+            "cache warmup started after the resolver accepted an interrupt"
+        )
+
+        block_tool_run.unlink()
         client.send(requirements={"python": ["py-yaml12"]})
         assert last_tool_text(client) == "[prepared]"
         assert len(recorded_tool_run_pythons(arguments)) == 2

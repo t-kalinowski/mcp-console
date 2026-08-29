@@ -138,33 +138,41 @@ impl ManagedPythonResolverConfiguration {
 }
 
 fn normalize_python_preference(environment: &mut BTreeMap<OsString, OsString>) {
+    let managed_name = OsStr::new("UV_MANAGED_PYTHON");
+    let system_name = OsStr::new("UV_NO_MANAGED_PYTHON");
+    let managed = uv_flag_value(environment, managed_name);
+    let system = uv_flag_value(environment, system_name);
+    if managed == Some(false) {
+        environment.remove(managed_name);
+    }
+    if system == Some(false) {
+        environment.remove(system_name);
+    }
     if environment.contains_key(OsStr::new("UV_PYTHON_PREFERENCE")) {
         return;
     }
-    let managed = uv_flag_enabled(environment, "UV_MANAGED_PYTHON");
-    let system = uv_flag_enabled(environment, "UV_NO_MANAGED_PYTHON");
-    let preference = match (managed, system) {
-        (true, false) => "only-managed",
-        (false, true) => "only-system",
-        (false, false) | (true, true) => return,
+    let (name, preference) = if managed == Some(true) && !environment.contains_key(system_name) {
+        (managed_name, "only-managed")
+    } else if system == Some(true) && !environment.contains_key(managed_name) {
+        (system_name, "only-system")
+    } else {
+        return;
     };
-    environment.remove(OsStr::new("UV_MANAGED_PYTHON"));
-    environment.remove(OsStr::new("UV_NO_MANAGED_PYTHON"));
+    environment.remove(name);
     environment.insert(
         OsString::from("UV_PYTHON_PREFERENCE"),
         OsString::from(preference),
     );
 }
 
-fn uv_flag_enabled(environment: &BTreeMap<OsString, OsString>, name: &str) -> bool {
+fn uv_flag_value(environment: &BTreeMap<OsString, OsString>, name: &OsStr) -> Option<bool> {
     environment
-        .get(OsStr::new(name))
+        .get(name)
         .and_then(|value| value.to_str())
-        .is_some_and(|value| {
-            matches!(
-                value.to_ascii_lowercase().as_str(),
-                "1" | "true" | "yes" | "on"
-            )
+        .and_then(|value| match value.to_ascii_lowercase().as_str() {
+            "1" | "true" | "t" | "yes" | "y" | "on" => Some(true),
+            "0" | "false" | "f" | "no" | "n" | "off" => Some(false),
+            _ => None,
         })
 }
 
@@ -191,56 +199,3 @@ pub(crate) use unsupported::{
     resolve_duckdb_extensions, resolve_python, resolve_python_host, resolve_python_manifest,
     resolve_python_version, resolve_r, resolve_r_with,
 };
-
-#[cfg(test)]
-mod tests {
-    use std::collections::BTreeMap;
-    use std::ffi::{OsStr, OsString};
-
-    use super::normalize_python_preference;
-
-    fn environment(entries: &[(&str, &str)]) -> BTreeMap<OsString, OsString> {
-        entries
-            .iter()
-            .map(|&(name, value)| (OsString::from(name), OsString::from(value)))
-            .collect()
-    }
-
-    #[test]
-    fn normalizes_enabled_uv_python_source_flags() {
-        for (name, value, expected) in [
-            ("UV_MANAGED_PYTHON", "1", "only-managed"),
-            ("UV_NO_MANAGED_PYTHON", "on", "only-system"),
-        ] {
-            let mut environment = environment(&[(name, value)]);
-            normalize_python_preference(&mut environment);
-            assert_eq!(
-                environment
-                    .get(OsStr::new("UV_PYTHON_PREFERENCE"))
-                    .map(OsString::as_os_str),
-                Some(OsStr::new(expected))
-            );
-            assert!(!environment.contains_key(OsStr::new("UV_MANAGED_PYTHON")));
-            assert!(!environment.contains_key(OsStr::new("UV_NO_MANAGED_PYTHON")));
-        }
-    }
-
-    #[test]
-    fn preserves_conflicting_uv_python_source_configuration() {
-        for entries in [
-            &[
-                ("UV_MANAGED_PYTHON", "1"),
-                ("UV_PYTHON_PREFERENCE", "system"),
-            ][..],
-            &[
-                ("UV_MANAGED_PYTHON", "true"),
-                ("UV_NO_MANAGED_PYTHON", "true"),
-            ][..],
-        ] {
-            let mut environment = environment(entries);
-            let original = environment.clone();
-            normalize_python_preference(&mut environment);
-            assert_eq!(environment, original);
-        }
-    }
-}

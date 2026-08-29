@@ -32,7 +32,10 @@ if resolver_record := os.environ.get("MCP_CONSOLE_TEST_UV_RESOLVER_RECORD"):
         "arguments": arguments,
         "RETICULATE_UV": os.environ.get("RETICULATE_UV"),
         "UV_CACHE_DIR": os.environ.get("UV_CACHE_DIR"),
+        "UV_MANAGED_PYTHON": os.environ.get("UV_MANAGED_PYTHON"),
+        "UV_NO_MANAGED_PYTHON": os.environ.get("UV_NO_MANAGED_PYTHON"),
         "UV_PYTHON_INSTALL_DIR": os.environ.get("UV_PYTHON_INSTALL_DIR"),
+        "UV_PYTHON_PREFERENCE": os.environ.get("UV_PYTHON_PREFERENCE"),
         "UV_NO_CACHE": os.environ.get("UV_NO_CACHE"),
     }
     with open(resolver_record, "a", encoding="utf-8") as stream:
@@ -69,9 +72,6 @@ if intercept and arguments[:2] == ["tool", "run"] and "--" in arguments:
     separator = arguments.index("--")
     command = arguments[separator + 1 :]
     if command and command[0] == "python":
-        if os.environ.get("MCP_CONSOLE_TEST_UV_FAIL_TOOL_RUN"):
-            print("synthetic uv tool-run failure", file=sys.stderr)
-            raise SystemExit(99)
         if python := os.environ.get("MCP_CONSOLE_TEST_UV_PYTHON"):
             os.execv(python, [python, *command[1:]])
 

@@ -11,8 +11,12 @@ use super::process::{
     resolver_command, stop_resolver,
 };
 
-const PYTHON_PATH_SOURCE: &str =
-    "import sys; f=open(sys.argv[-1], chr(119)); f.write(sys.executable); f.close();";
+const PYTHON_PATH_SOURCE: &str = r#"
+import sys
+
+with open(sys.argv[-1], "w", encoding="utf-8") as stream:
+    stream.write(sys.executable)
+"#;
 static PYTHON_PATH_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone)]
@@ -172,6 +176,7 @@ pub(crate) fn resolve_python_manifest(
             "managed Python resolution failed:\nresolver input:\n{input}\nuv output:\n{error}"
         ));
     }
+    check_resolver_control(&resolver, "managed Python resolution")?;
 
     let python = output_path.python()?;
     warm_matplotlib(&python, &resolver, &mut on_started)?;
@@ -184,11 +189,11 @@ pub(crate) fn resolve_python_manifest(
 pub(crate) fn resolve_python_version(
     constraints: Vec<String>,
     configuration: &super::ManagedPythonResolverConfiguration,
-    _managed_r: &super::ManagedR,
+    managed_r: &super::ManagedR,
     on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
 ) -> Result<String, String> {
     crate::python_requirement::validate_version_constraints(&constraints)?;
-    let versions = resolve_python_versions(configuration, None, on_started)?;
+    let versions = resolve_python_versions(configuration, Some(managed_r), on_started)?;
     versions
         .resolve(&constraints)
         .map_err(|error| format!("managed Python version resolution failed: {}", error.trim()))
@@ -349,6 +354,7 @@ where
             resolver_error(&output)
         ));
     }
+    check_resolver_control(resolver, "managed Python version resolution")?;
     super::python_version::PythonVersions::parse(&output.stdout, managed).map_err(|error| {
         format!("managed Python version resolver returned invalid output: {error}")
     })
@@ -413,11 +419,16 @@ where
         python,
         "managed Python cache warmup",
     )?;
-    if resolver.stop_handle().control_outcome() == Some(super::ResolverControlOutcome::Interrupted)
-    {
-        return Err("managed Python cache warmup interrupted".to_string());
-    }
+    check_resolver_control(resolver, "managed Python cache warmup")?;
     Ok(())
+}
+
+fn check_resolver_control(resolver: &ResolverProcess, operation: &str) -> Result<(), String> {
+    match resolver.stop_handle().control_outcome() {
+        Some(super::ResolverControlOutcome::Interrupted) => Err(format!("{operation} interrupted")),
+        Some(super::ResolverControlOutcome::Cancelled) => Err(format!("{operation} cancelled")),
+        None => Ok(()),
+    }
 }
 
 fn configure_python_resolver(
