@@ -11,7 +11,7 @@ name: Release
 on:
   push:
     tags:
-      - "v[0-9]+.[0-9]+.[0-9]+"
+      - v[0-9]+.[0-9]+.[0-9]+
   workflow_dispatch:
 
 permissions:
@@ -48,6 +48,17 @@ jobs:
         with:
           python-version: "3.13"
 
+      - name: Read sandbox-runner.json
+        id: sandbox-pin
+        run: scripts/stage-sandbox-runner --github-output "$GITHUB_OUTPUT"
+
+      - name: Check out private sandbox source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ steps.sandbox-pin.outputs.repository }}
+          ref: ${{ steps.sandbox-pin.outputs.commit }}
+          path: target/codex-sandbox-source
+
       - name: Set up R
         uses: r-lib/actions/setup-r@d3c5be51b12e724e68f33216ca3c148b66d5f0b6 # v2.12.1
 
@@ -61,15 +72,27 @@ jobs:
       - name: Set up uv
         uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
-          version: "0.12.4"
+          version: 0.12.4
+
+      - name: Install private sandbox Rust toolchain
+        run: >-
+          rustup toolchain install
+          "${{ steps.sandbox-pin.outputs.rust_toolchain }}"
+          --profile minimal
+
+      - name: Stage private sandbox runner
+        run: >-
+          scripts/stage-sandbox-runner
+          target/codex-sandbox-source
+          --target "${{ matrix.target }}"
 
       - name: Build wheel
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
           maturin-version: v1.14.1
-          rust-toolchain: "1.95.0"
+          rust-toolchain: ${{ steps.sandbox-pin.outputs.rust_toolchain }}
           target: ${{ matrix.target }}
-          manylinux: "off"
+          manylinux: off
           args: --release --locked --compatibility pypi --out dist
 
       - name: Smoke-test wheel
@@ -138,7 +161,7 @@ jobs:
       - name: Set up uv
         uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
-          version: "0.12.4"
+          version: 0.12.4
 
       - name: Publish wheels to PyPI
         run: |

@@ -171,17 +171,16 @@ mcp-console --version
 ```
 
 `mcp-console serve` communicates with its MCP client over standard input and output.
-Each server worker generation has a host-side sandbox manager that treats its relay and worker process tree as one lifetime.
-The manager supervises descendants it observes from the relay root, including processes that enter another process group or session, and retires the lifetime if the server or relay exits unexpectedly.
-If the manager itself exits unsuccessfully while the relay root remains live and pinned, the server reconstructs its current process tree and performs bounded cleanup before replacing that worker generation.
-It cannot reconstruct a descendant that had already detached from that ancestry before the manager failed.
-The standalone `sandbox` development command uses the same manager and remains covered if its launcher crashes after manager ownership is committed.
-On macOS, a descendant that detaches before the post-spawn tracker observes it remains outside this guarantee.
+Each server worker generation uses a private, installation-relative sandbox runner that treats its relay and worker process tree as one lifetime.
+The runner retires descendants it observes, including those that enter another process group or session, if the server or relay exits unexpectedly.
+The standalone `sandbox` development command uses the same runner boundary and remains covered if its launcher crashes after launch acceptance.
+The private executable is installed under `libexec` and is not searched on `PATH`.
 Use the MCP server for the supported worker-generation lifecycle.
 
 Run development commands from the repository root:
 
 ```text
+scripts/stage-sandbox-runner ~/github/t-kalinowski/codex
 scripts/format
 scripts/check
 scripts/test [BOUNDARY/SUITE[::CASE]]
@@ -189,6 +188,8 @@ scripts/test --list
 scripts/test --update BOUNDARY/SUITE[::CASE]
 ```
 
+The staging command verifies and builds the exact private-runner revision recorded in `sandbox-runner.json`.
+The check and transcript scripts use that staged executable without searching `PATH`.
 `scripts/format` attempts each installed formatter and leaves failures visible while continuing with the remaining formatters.
 `scripts/check` validates extracted runtime sources, checks Rust formatting and Clippy, runs Rust tests, and runs the complete transcript suite.
 

@@ -34,8 +34,7 @@ The sideband has no protocol negotiation, capability exchange, session name, req
 Interrupt delivery is a process signal managed by the relay.
 Response cuts, output budgets, and MCP response assembly are server state and never appear on this boundary.
 
-The sideband transport implementation is compiled for macOS and Linux.
-The complete protocol execution stack is currently supported only on macOS because the worker relay and sandbox runtime are macOS-only.
+The complete protocol execution stack is currently supported only on macOS.
 
 ## Launch contract
 
@@ -403,7 +402,7 @@ Fd-0 closure and the `shutdown` frame are both generation-retirement signals, no
 A worker must not require both in a particular order.
 If it does not exit within the relay's supplied grace period, the relay forcibly terminates and reaps that direct child.
 This is a local relay-worker protocol mechanism, not whole-sandbox containment.
-The host-side sandbox manager owns primary cleanup of the relay-and-worker lifetime, including observed descendants that enter another process group or session, and the server waits for the sandbox-lifetime retirement barrier before replacement.
+The private sandbox runner owns cleanup of the relay-and-worker lifetime, including descendants that enter another process group or session, and the server waits for the runner's retirement barrier before replacement.
 The exact server-relay acceptance and retirement sequence is specified in [`RELAY_PROTOCOL.md`](RELAY_PROTOCOL.md).
 
 During retirement, the relay forwards every complete worker-sideband frame already buffered or immediately readable.

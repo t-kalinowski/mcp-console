@@ -6,10 +6,12 @@ import os
 import re
 import select
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
 import time
+import zipfile
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +21,11 @@ TARGET_ARCHITECTURES = {
     "aarch64-apple-darwin": "arm64",
     "x86_64-apple-darwin": "x86_64",
 }
+PRIVATE_DATA = (
+    "libexec/mcp-console-sandbox",
+    "share/licenses/mcp-console/Codex-LICENSE",
+    "share/licenses/mcp-console/Codex-NOTICE",
+)
 
 
 class ReleaseError(RuntimeError):
@@ -191,6 +198,39 @@ def smoke_mcp(
     require(not standard_error, f"MCP server wrote to stderr: {standard_error}")
 
 
+def inspect_private_wheel_data(wheel: Path, version: str) -> None:
+    data_root = f"mcp_console-{version}.data/data"
+    try:
+        with zipfile.ZipFile(wheel) as archive:
+            members = {member.filename: member for member in archive.infolist()}
+    except zipfile.BadZipFile as error:
+        raise ReleaseError(f"wheel is not a valid ZIP archive: {wheel}") from error
+
+    for relative_path in PRIVATE_DATA:
+        member_name = f"{data_root}/{relative_path}"
+        require(
+            member_name in members,
+            f"wheel is missing private sandbox runner data: {relative_path}",
+        )
+
+    runner = members[f"{data_root}/libexec/mcp-console-sandbox"]
+    runner_mode = runner.external_attr >> 16
+    require(
+        stat.S_ISREG(runner_mode) and runner_mode & 0o111,
+        "private sandbox runner in wheel is not executable",
+    )
+    public_runner = [
+        name
+        for name in members
+        if name.endswith(".data/scripts/mcp-console-sandbox")
+        or name == "mcp-console-sandbox"
+    ]
+    require(
+        not public_runner,
+        "wheel installs the private sandbox runner as a public command",
+    )
+
+
 def smoke_wheel(args: argparse.Namespace) -> None:
     wheel = Path(args.wheel).resolve()
     cargo_bin = Path(args.cargo_bin).resolve()
@@ -207,6 +247,7 @@ def smoke_wheel(args: argparse.Namespace) -> None:
     )
     require("-macosx_" in wheel.name, f"wheel must be macOS-specific: {wheel.name}")
     require(not wheel.name.endswith("-none-any.whl"), "wheel must be platform-specific")
+    inspect_private_wheel_data(wheel, version)
 
     if args.target is not None:
         architecture = TARGET_ARCHITECTURES[args.target]
@@ -245,7 +286,28 @@ def smoke_wheel(args: argparse.Namespace) -> None:
         command_output([str(installed), "--help"], strip=False) == cargo_help,
         "`uv` tool and Cargo help output differ",
     )
-    run_command([str(installed), "sandbox", "--", "/usr/bin/true"])
+
+    private_runner = (
+        installed.resolve().parent.parent / "libexec" / "mcp-console-sandbox"
+    )
+    require(
+        private_runner.is_file(),
+        f"installed private sandbox runner does not exist: {private_runner}",
+    )
+    require(
+        os.access(private_runner, os.X_OK),
+        f"installed private sandbox runner is not executable: {private_runner}",
+    )
+    public_runner = tool_bin / "mcp-console-sandbox"
+    require(
+        not public_runner.exists(),
+        f"private sandbox runner was installed as a public command: {public_runner}",
+    )
+
+    with tempfile.TemporaryDirectory(prefix="mcp-console-empty-path-") as directory:
+        sandbox_env = os.environ.copy()
+        sandbox_env["PATH"] = directory
+        run_command([str(installed), "sandbox", "--", "/usr/bin/true"], env=sandbox_env)
 
     internal_ir = installed.resolve().with_name("ir")
     require(not internal_ir.exists(), f"wheel contains sibling `ir`: {internal_ir}")

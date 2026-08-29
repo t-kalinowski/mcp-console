@@ -16,7 +16,7 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   IR_LATEST_RESOLUTION_MAX_AGE_SECONDS: "604800"
-  UV_VERSION: "0.12.4"
+  UV_VERSION: 0.12.4
 
 jobs:
   macos:
@@ -26,6 +26,17 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
+
+      - name: Read sandbox-runner.json
+        id: sandbox-pin
+        run: scripts/stage-sandbox-runner --github-output "$GITHUB_OUTPUT"
+
+      - name: Check out private sandbox source
+        uses: actions/checkout@v7
+        with:
+          repository: ${{ steps.sandbox-pin.outputs.repository }}
+          ref: ${{ steps.sandbox-pin.outputs.commit }}
+          path: target/codex-sandbox-source
 
       - name: Install Python
         uses: actions/setup-python@v7
@@ -66,6 +77,12 @@ jobs:
         with:
           components: clippy, rustfmt
 
+      - name: Install private sandbox Rust toolchain
+        run: >-
+          rustup toolchain install
+          "${{ steps.sandbox-pin.outputs.rust_toolchain }}"
+          --profile minimal
+
       - name: Select R cache epoch
         id: cache-epoch
         run: printf 'value=%s\n' "$(date -u +%G-%V)" >> "$GITHUB_OUTPUT"
@@ -92,6 +109,9 @@ jobs:
         with:
           shared-key: debug
           save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Stage private sandbox runner
+        run: scripts/stage-sandbox-runner target/codex-sandbox-source
 
       - name: Run core checks
         env:
@@ -174,8 +194,8 @@ jobs:
 
       - name: Save R environments
         if: >-
-          github.ref == 'refs/heads/main' &&
-          steps.ir-cache.outputs.cache-hit != 'true'
+          github.ref == 'refs/heads/main' && steps.ir-cache.outputs.cache-hit !=
+          'true'
         uses: actions/cache/save@v6
         with:
           path: ${{ runner.temp }}/mcp-console-r-cache

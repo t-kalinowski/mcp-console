@@ -3577,7 +3577,7 @@ def test_restarts_after_unexpected_sideband_message(binary: Path) -> Transcript:
                 "server did not reap the failed generation's relay"
             )
             assert not process_group_exists(worker_group), (
-                "failed worker generation survived sandbox manager retirement"
+                "failed worker generation survived private runner retirement"
             )
             result = failed_call["result"]
             assert result["isError"] is True
@@ -3699,7 +3699,7 @@ def test_replaces_worker_after_relay_exit(binary: Path) -> Transcript:
         assert not process_exists(launcher_pid), "worker launcher outlived its relay"
         assert not process_exists(relay_pid), "server did not reap the relay"
         assert not process_group_exists(relay_pid), (
-            "relay process group outlived sandbox manager retirement"
+            "relay process group outlived private runner retirement"
         )
 
         client.send(r="echo echo")
@@ -3923,7 +3923,7 @@ def test_restart_outer_force_stops_unresponsive_relay(binary: Path) -> Transcrip
                     "mcp-console stopped while retiring the sandbox lifetime"
                 )
                 assert time.monotonic() < retirement_deadline, (
-                    "sandbox manager did not retire the stopped relay, its process "
+                    "private runner did not retire the stopped relay, its process "
                     "group, and its detached descendant within the deadline"
                 )
                 time.sleep(0.01)

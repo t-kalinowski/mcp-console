@@ -4,8 +4,23 @@ MCP Console releases are built from tags and published as binary-only PyPI wheel
 The initial release publishes native Apple Silicon and Intel macOS wheels.
 It does not publish a source distribution, Linux or Windows wheels, or GitHub release archives.
 
+Each wheel includes the private sandbox runner below `libexec/`.
+The runner is built from the exact Codex release and commit recorded in `sandbox-runner.json`; it is not installed as a public command.
+The wheel also includes the required license and notice material.
+
 `Cargo.toml` is the package-version source of truth.
 Keep the root `mcp-console` entry in `Cargo.lock` synchronized with it.
+
+## Build the private runner locally
+
+Check out the commit recorded in `sandbox-runner.json` in a clean Codex checkout, then run:
+
+```sh
+scripts/stage-sandbox-runner ~/github/t-kalinowski/codex
+```
+
+The script verifies the checkout's exact clean `HEAD`, builds with the recorded Rust toolchain and Codex lockfile, and stages Maturin wheel data below `target/private-wheel-data/data/`.
+It does not download source or select a mutable branch.
 
 ## One-time PyPI setup
 
@@ -40,6 +55,7 @@ git push origin v0.0.2
 ```
 
 The tag-triggered Release workflow verifies that the tag matches `Cargo.toml`, builds both native wheels, install-tests them with `uv`, and publishes them through PyPI Trusted Publishing.
+It checks out the exact sandbox source revision from `sandbox-runner.json` before building either wheel.
 
 ## Verify the publication
 
@@ -68,6 +84,7 @@ UV_TOOL_BIN_DIR="$bin_dir" \
 "$bin_dir/mcp-console" --version
 "$bin_dir/mcp-console" --help
 "$bin_dir/mcp-console" sandbox -- /usr/bin/true
+test ! -e "$bin_dir/mcp-console-sandbox"
 ```
 
 Verify these commands on both Apple Silicon and Intel macOS.

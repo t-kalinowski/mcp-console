@@ -111,22 +111,28 @@ def _wait_for_generation_failure(client: McpClient) -> None:
         time.sleep(0.01)
 
 
-def _manager_pid(server_pid: int) -> int:
+def _child_pid_by_name(parent_pid: int, name: str) -> int:
     processes = subprocess.check_output(
-        ["ps", "-axo", "pid=,ppid=,command="],
+        ["ps", "-axo", "pid=,ppid=,comm="],
         text=True,
     )
-    managers = []
+    matches = []
     for process in processes.splitlines():
         fields = process.strip().split(None, 2)
         if (
             len(fields) == 3
-            and int(fields[1]) == server_pid
-            and "sandbox-manager" in fields[2]
+            and int(fields[1]) == parent_pid
+            and Path(fields[2]).name == name
         ):
-            managers.append(int(fields[0]))
-    assert len(managers) == 1, managers
-    return managers[0]
+            matches.append(int(fields[0]))
+    assert len(matches) == 1, (parent_pid, name, matches)
+    return matches[0]
+
+
+def _runner_lifetime_processes(server_pid: int) -> tuple[int, int]:
+    runner_pid = _child_pid_by_name(server_pid, "mcp-console-sandbox")
+    manager_pid = _child_pid_by_name(runner_pid, "mcp-console-sandbox")
+    return runner_pid, manager_pid
 
 
 def _kill_if_alive(pid: int | None) -> bool:
@@ -148,19 +154,21 @@ def _close_client_streams(client: McpClient) -> None:
 
 
 def test_server_crash_retires_the_worker_generation(binary: Path) -> Transcript:
-    # The host-side sandbox manager must treat loss of the server as retirement
+    # The private sandbox runner must treat loss of the server as retirement
     # of the entire worker generation. A detached processx child must not
     # survive merely because the server received an uncatchable signal before
     # it could run its normal shutdown path.
     client = McpClient(binary, ("serve",))
     generation: tuple[int, int, int, Path] | None = None
+    lifetime: tuple[int, int] | None = None
     try:
         client._initialize_and_list_tools()
         generation = _spawn_processx_generation(client)
+        lifetime = _runner_lifetime_processes(client.process.pid)
 
         os.kill(client.process.pid, signal.SIGKILL)
         returncode = client.process.wait(timeout=TIMEOUT)
-        survivors = _wait_for_survivors(generation[:3], timeout=5)
+        survivors = _wait_for_survivors((*generation[:3], *lifetime), timeout=5)
 
         assert returncode == -signal.SIGKILL, returncode
         assert survivors == [], f"worker-generation processes survived: {survivors}"
@@ -180,6 +188,9 @@ def test_server_crash_retires_the_worker_generation(binary: Path) -> Transcript:
             for pid in generation[:3]:
                 _kill_if_alive(pid)
             shutil.rmtree(generation[3], ignore_errors=True)
+        if lifetime is not None:
+            for pid in lifetime:
+                _kill_if_alive(pid)
         _close_client_streams(client)
 
 
@@ -189,9 +200,11 @@ def test_relay_crash_retires_the_worker_generation(binary: Path) -> Transcript:
     # code running inside the relay.
     client = McpClient(binary, ("serve",))
     generation: tuple[int, int, int, Path] | None = None
+    lifetime: tuple[int, int] | None = None
     try:
         client._initialize_and_list_tools()
         generation = _spawn_processx_generation(client)
+        lifetime = _runner_lifetime_processes(client.process.pid)
 
         os.kill(generation[0], signal.SIGKILL)
         client.transcript.append({"relay_signal": "SIGKILL"})
@@ -201,7 +214,7 @@ def test_relay_crash_retires_the_worker_generation(binary: Path) -> Transcript:
         assert replacement == "[starting new worker]\nreplacement ready\n", repr(
             replacement
         )
-        survivors = _wait_for_survivors(generation[:3], timeout=5)
+        survivors = _wait_for_survivors((*generation[:3], *lifetime), timeout=5)
         survivor_names = [
             name
             for name, pid in zip(("relay", "worker", "processx child"), generation[:3])
@@ -221,19 +234,23 @@ def test_relay_crash_retires_the_worker_generation(binary: Path) -> Transcript:
             for pid in generation[:3]:
                 _kill_if_alive(pid)
             shutil.rmtree(generation[3], ignore_errors=True)
+        if lifetime is not None:
+            for pid in lifetime:
+                _kill_if_alive(pid)
         _close_client_streams(client)
 
 
 def test_manager_crash_retires_the_worker_generation(binary: Path) -> Transcript:
-    # While the relay root remains live and pinned, the server-side owner must
-    # reconstruct its current process tree if the committed manager exits.
+    # The outer private runner must retire the live target generation if its
+    # internal lifetime process exits unexpectedly.
     client = McpClient(binary, ("serve",))
     generation: tuple[int, int, int, Path] | None = None
+    runner_pid: int | None = None
     manager_pid: int | None = None
     try:
         client._initialize_and_list_tools()
         generation = _spawn_processx_generation(client)
-        manager_pid = _manager_pid(client.process.pid)
+        runner_pid, manager_pid = _runner_lifetime_processes(client.process.pid)
 
         os.kill(manager_pid, signal.SIGKILL)
         client.transcript.append({"manager_signal": "SIGKILL"})
@@ -243,7 +260,7 @@ def test_manager_crash_retires_the_worker_generation(binary: Path) -> Transcript
         assert replacement == "[starting new worker]\nreplacement ready\n", repr(
             replacement
         )
-        survivors = _wait_for_survivors(generation[:3], timeout=5)
+        survivors = _wait_for_survivors((*generation[:3], runner_pid), timeout=5)
         survivor_names = [
             name
             for name, pid in zip(("relay", "worker", "processx child"), generation[:3])
@@ -264,6 +281,7 @@ def test_manager_crash_retires_the_worker_generation(binary: Path) -> Transcript
                 _kill_if_alive(pid)
             shutil.rmtree(generation[3], ignore_errors=True)
         _kill_if_alive(manager_pid)
+        _kill_if_alive(runner_pid)
         _close_client_streams(client)
 
 

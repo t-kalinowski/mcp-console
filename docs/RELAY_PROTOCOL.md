@@ -11,17 +11,14 @@ The [worker protocol](WORKER_PROTOCOL.md) defines the relay's other interface.
 ## Process boundary
 
 The server remains outside the sandbox.
-For each worker generation it starts one relay as the direct sandbox child, and the relay starts the configured worker inside the same sandbox:
+For each worker generation it starts one private sandbox runner, which launches the relay as its target root; the relay then starts the configured worker inside the same sandbox lifetime:
 
 ```text
-server <--> (worker relay <--> worker)
-   \----> sandbox lifetime manager
+server <--> private sandbox runner <--> (worker relay <--> worker)
 ```
 
 The parentheses mark the sandbox boundary.
-The relay is also the dedicated sandbox process-group leader, and the worker inherits that group.
-The sandbox lifetime manager is a separate host-side process outside the parentheses.
-It observes and retires the relay, worker, and their observed descendants as one sandbox lifetime.
+The runner observes and retires the relay, worker, and their observed descendants as one sandbox lifetime.
 
 The relay's standard input, standard output, and standard error cross the server/sandbox boundary.
 Standard input and output carry the framed relay protocol described below.
@@ -29,18 +26,15 @@ Relay standard error is inherited from the server and is not part of the protoco
 Runtime failures are also represented by a `fatal` event when relay stdout remains usable.
 The framed event is authoritative; stderr diagnostics are best effort because the server's outer fail-safe can terminate a failed relay before its final diagnostic is written.
 
-The built-in relay also receives an optional private startup-gate descriptor.
-It reports readiness and waits at that gate before it starts the worker.
-The server releases the gate only after the host-side manager has begun observing the relay root and confirmed its ownership commit for the private temporary directory.
-This gate is not part of the JSONL relay protocol, and the manager's private control channel never enters the sandbox.
-Custom relays do not participate in this optional gate.
+The runner holds the relay behind its own launch gate until native confinement and lifetime ownership are ready.
+That gate and the runner control channel are separate from this JSONL protocol and never enter the relay or worker.
 
 The relay creates the worker's private full-duplex sideband socket pair and its standard-input, standard-output, and standard-error pipes after entering the sandbox.
 It passes one worker sideband endpoint through `MCP_CONSOLE_SIDEBAND_FD` together with the fd-0/1/2 contract documented in [`WORKER_PROTOCOL.md`](WORKER_PROTOCOL.md).
 
 The relay owns the direct worker process and its local transports, translation between this protocol and the worker sideband, direct-worker signal delivery, deadline-bounded direct-worker termination, and direct-worker reaping.
-The host-side manager owns primary tracking and termination of the relay root and observed descendants across process-group and session changes, along with private-directory cleanup.
-The server retains a backup directory guard and a manager monitor outside the sandbox.
+The private runner owns tracking and termination of the relay root and observed descendants across process-group and session changes, along with private-directory cleanup.
+The server owns the runner control channel and reaps the runner process.
 The server owns generation state and host-side dependency resolution; see [Requirements and environments](REQUIREMENTS.md) for that trust boundary.
 
 ## Framing and raw bytes
@@ -191,23 +185,16 @@ The resulting `worker_exited` or `worker_signaled` event describes only that dir
 Clean relay-stdin EOF does not emit `shutdown_started`; it performs the same worker shutdown with a new one-second grace period measured from EOF.
 EOF midway through a command frame is a transport failure instead.
 
-The host-side manager tracks the relay root and every descendant identity it observes by PID and start time, retaining those identities across process-group and session changes.
-It adopts a private temporary-directory guard and removes the directory only after successful lifetime cleanup; a cleanup failure preserves the directory.
-If the relay exits or crashes, the manager treats root exit as retirement of the remaining observed lifetime.
-If the server exits or crashes, closure of the manager's owner channel makes the manager stop the relay root and complete the same cleanup independently.
-If the manager exits unsuccessfully while the server still owns a live, waitable relay root, the server reconstructs bounded tracking from that root's current process tree and completes cleanup before replacement.
-That fallback cannot recover a descendant that had already detached from the root's ancestry before the manager failed.
+The private sandbox runner tracks the relay root and every descendant identity it observes by PID and start time, retaining those identities across process-group and session changes.
+It removes the target-facing private temporary directory only after successful lifetime cleanup; a cleanup failure preserves the directory for diagnosis.
+If the relay exits or crashes, the runner treats root exit as retirement of the remaining observed lifetime.
+If the server exits or crashes, closure of the private control channel makes the runner stop the relay root and complete the same cleanup independently.
 
-The server leaves an exited relay waitable until sandbox-lifetime cleanup completes, preserving the relay identity while retirement finishes.
-It waits through the worker deadline and uses the additional two-second allowance only after timely `shutdown_started` acceptance or a pre-retirement failure.
-It then asks the lifetime owner to stop and join the relay root and observed descendants and reaps the relay, including when the relay stalls or has already exited.
-The background manager has a separate one-second cleanup timeout, and its owner allows one additional second for manager exit and reaping.
-If the manager misses that allowance, the owner sends exact-identity `SIGKILL`, keeps the relay root waitable while it reaps the manager, and may use one additional one-second cleanup interval to reconstruct and retire the root's current process tree.
-Those manager bounds can extend past the relay allowance when the outer stop begins only at that allowance's deadline.
+The server waits through the worker deadline and uses the additional two-second allowance only after timely `shutdown_started` acceptance or a pre-retirement failure.
+It then asks the runner to stop and wait for the relay root and observed descendants, including when the relay stalls or has already exited.
+The server also closes and reaps the runner on every exit path.
 The server does not start the replacement sandbox lifetime until that retirement barrier completes.
 Concurrent or repeated retirement reuses the recorded result and never signals a retired PID or process group again.
-macOS provides no child subreaper or atomic descendant-tracking spawn, so a process that detaches before the manager's post-spawn observation remains outside this guarantee.
-The built-in relay's startup gate prevents it from launching the worker before manager observation and ownership are confirmed; a custom relay has no equivalent cooperative gate.
 
 ## Retirement and failure
 

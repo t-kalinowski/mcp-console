@@ -63,9 +63,8 @@ The MCP server has three application protocol boundaries:
 Keep these ownership rules intact:
 
 - Treat each relay and its worker process tree as one sandboxed lifetime.
-  A host-side sandbox manager owns primary observed-descendant tracking, bounded force termination, and private-directory cleanup for that lifetime.
-  Its host owner retains a backup directory guard and takes over bounded cleanup if the manager exits unsuccessfully while the sandbox root remains live and pinned.
-  That fallback can reconstruct only descendants still reachable from the root's current ancestry.
+  The private sandbox runner owns native confinement, observed-descendant tracking, bounded force termination, and target-directory cleanup for that lifetime.
+  MCP Console owns protocol adaptation, the runner control channel, and runner reaping.
 - The relay is a thin ordered transport inside the sandboxed lifetime.
   It owns worker-local descriptors, sideband translation, direct signal forwarding, stream draining, and direct-child status collection and reaping.
   It preserves each producer's order and supplies serialized observation order; it does not reconstruct chronology across independent sideband, stdout, and stderr transports.
@@ -110,7 +109,7 @@ Keep these ownership rules intact:
 
 - `src/resolver.rs`, `src/resolver/` — retained host environments, validation, platform implementations, and resolver process-group lifecycle.
 - `src/resolver/programs/` — compile-time R programs for managed Python, Python-version selection, DuckDB extensions, and R-library discovery.
-- `src/sandbox.rs`, `src/sandbox/` — platform dispatch, macOS Seatbelt policy, host-side sandbox manager, standalone job control, descriptor inheritance, and observed-descendant tracking.
+- `src/sandbox.rs`, `src/sandbox/` — private-runner protocol adaptation, installation-relative resolution, target streams, cleanup guards, and standalone job control.
 
 ### Tests and development scripts
 

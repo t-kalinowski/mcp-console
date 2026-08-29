@@ -72,6 +72,12 @@ def _child_pid_by_name(parent_pid: int, name: str) -> int:
     return matches[0]
 
 
+def _runner_lifetime_processes(launcher_pid: int) -> tuple[int, int]:
+    runner_pid = _child_pid_by_name(launcher_pid, "mcp-console-sandbox")
+    manager_pid = _child_pid_by_name(runner_pid, "mcp-console-sandbox")
+    return runner_pid, manager_pid
+
+
 def _read_lines(stream: object, count: int, description: str) -> list[str]:
     descriptor = stream.fileno()  # type: ignore[attr-defined]
     output = bytearray()
@@ -169,8 +175,8 @@ def test_launcher_crash_retires_the_sandbox_lifetime(binary: Path) -> Transcript
             "the sandbox root, processx child, and temporary directory",
         )
         pids = [int(lines[0]), int(lines[1])]
-        manager_pid = _child_pid_by_name(process.pid, "mcp-console")
-        pids.append(manager_pid)
+        runner_pid, manager_pid = _runner_lifetime_processes(process.pid)
+        pids.extend((runner_pid, manager_pid))
         temporary_directory = Path(lines[2])
 
         os.kill(process.pid, signal.SIGKILL)
@@ -241,8 +247,8 @@ def test_manager_crash_retires_the_sandbox_lifetime(binary: Path) -> Transcript:
             "the sandbox root, processx child, and temporary directory",
         )
         pids = [int(lines[0]), int(lines[1])]
-        manager_pid = _child_pid_by_name(process.pid, "mcp-console")
-        pids.append(manager_pid)
+        runner_pid, manager_pid = _runner_lifetime_processes(process.pid)
+        pids.extend((runner_pid, manager_pid))
         temporary_directory = Path(lines[2])
 
         os.kill(manager_pid, signal.SIGKILL)

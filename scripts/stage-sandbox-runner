@@ -1,0 +1,137 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+PIN_PATH = ROOT / "sandbox-runner.json"
+STAGE_ROOT = ROOT / "target" / "private-wheel-data"
+
+
+def fail(message: str) -> None:
+    raise SystemExit(f"stage-sandbox-runner: {message}")
+
+
+def run(command: list[str], *, cwd: Path, env: dict[str, str] | None = None) -> str:
+    result = subprocess.run(
+        command,
+        cwd=cwd,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        detail = result.stderr.strip() or result.stdout.strip()
+        fail(f"{' '.join(command)} failed: {detail}")
+    return result.stdout.strip()
+
+
+def pin() -> dict[str, object]:
+    value = json.loads(PIN_PATH.read_text(encoding="utf-8"))
+    required = {
+        "repository": str,
+        "release": str,
+        "commit": str,
+        "protocol_version": int,
+        "rust_toolchain": str,
+    }
+    if any(not isinstance(value.get(key), kind) for key, kind in required.items()):
+        fail(f"invalid pin file: {PIN_PATH}")
+    return value
+
+
+def emit_github_output(path: Path, value: dict[str, object]) -> None:
+    with path.open("a", encoding="utf-8") as output:
+        for key in ("repository", "commit", "rust_toolchain"):
+            output.write(f"{key}={value[key]}\n")
+
+
+def build(checkout: Path, target: str | None, value: dict[str, object]) -> None:
+    checkout = checkout.resolve()
+    codex_rs = checkout / "codex-rs"
+    if not (codex_rs / "mcp-console-sandbox" / "Cargo.toml").is_file():
+        fail(f"not a Codex sandbox-runner checkout: {checkout}")
+
+    head = run(["git", "rev-parse", "HEAD"], cwd=checkout)
+    if head != value["commit"]:
+        fail(f"Codex checkout is at {head}, expected {value['commit']}")
+    dirty = run(["git", "status", "--porcelain", "--untracked-files=all"], cwd=checkout)
+    if dirty:
+        fail(f"Codex checkout is not clean:\n{dirty}")
+
+    cargo = ["cargo", f"+{value['rust_toolchain']}", "build", "--locked"]
+    target_args = ["--target", target] if target else []
+    build_env = os.environ.copy()
+    build_env["CARGO_TARGET_DIR"] = str(codex_rs / "target")
+    build_env["STABLE_GIT_COMMIT"] = str(value["commit"])
+    build_dir = Path(build_env["CARGO_TARGET_DIR"])
+    if target:
+        build_dir /= target
+
+    if sys.platform != "darwin":
+        fail(f"building private runner artifacts is unsupported on {sys.platform}")
+
+    run(
+        cargo
+        + [
+            "-p",
+            "codex-mcp-console-sandbox",
+            "--bin",
+            "mcp-console-sandbox",
+            "--release",
+        ]
+        + target_args,
+        cwd=codex_rs,
+        env=build_env,
+    )
+    runner = build_dir / "release" / "mcp-console-sandbox"
+    if not runner.is_file():
+        fail(f"built sandbox runner is missing: {runner}")
+
+    if STAGE_ROOT.exists():
+        shutil.rmtree(STAGE_ROOT)
+    libexec = STAGE_ROOT / "data" / "libexec"
+    licenses = STAGE_ROOT / "data" / "share" / "licenses" / "mcp-console"
+    libexec.mkdir(parents=True)
+    licenses.mkdir(parents=True)
+
+    shutil.copyfile(runner, libexec / "mcp-console-sandbox")
+    (libexec / "mcp-console-sandbox").chmod(0o755)
+    license_sources = {
+        checkout / "LICENSE": licenses / "Codex-LICENSE",
+        checkout / "NOTICE": licenses / "Codex-NOTICE",
+    }
+    for source, destination in license_sources.items():
+        if not source.is_file():
+            fail(f"required license material is missing: {source}")
+        shutil.copyfile(source, destination)
+        destination.chmod(0o644)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "checkout",
+        nargs="?",
+        type=Path,
+        default=Path.home() / "github" / "t-kalinowski" / "codex",
+    )
+    parser.add_argument("--target")
+    parser.add_argument("--github-output", type=Path)
+    args = parser.parse_args()
+    value = pin()
+    if args.github_output is not None:
+        emit_github_output(args.github_output, value)
+        return
+    build(args.checkout, args.target, value)
+
+
+if __name__ == "__main__":
+    main()
