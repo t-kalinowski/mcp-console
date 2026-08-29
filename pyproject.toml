@@ -27,4 +27,5 @@ Issues = "https://github.com/t-kalinowski/mcp-console/issues"
 [tool.maturin]
 bindings = "bin"
 compatibility = "pypi"
+data = "target/private-wheel-data"
 locked = true

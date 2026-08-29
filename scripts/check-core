@@ -2,6 +2,13 @@
 
 set -eu
 
+sandbox_runner="$PWD/target/private-wheel-data/data/libexec/mcp-console-sandbox"
+if [ ! -x "$sandbox_runner" ]; then
+    echo "private sandbox runner is not staged; run scripts/stage-sandbox-runner" >&2
+    exit 1
+fi
+export MCP_CONSOLE_TEST_SANDBOX_RUNNER="$sandbox_runner"
+
 python3 scripts/validate_runtime_sources.py
 python3 tests/release.py
 cargo fmt --all --check

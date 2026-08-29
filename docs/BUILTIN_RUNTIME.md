@@ -475,7 +475,7 @@ The [implemented architecture](ARCHITECTURE.md) describes the session record and
 - SQL cannot query Python objects until they are bound as R data.
 - SQL previews do not include affected-row counts or total result counts.
 - Only default-device R graphics and open pyplot figures are captured automatically.
-- The host-side sandbox manager supervises descendants it observes from the relay and worker lifetime, including processes that enter another process group or session; a descendant that detaches before the macOS tracker observes it remains outside this guarantee.
+- The private sandbox runner supervises the relay and worker lifetime, including observed descendants that enter another process group or session.
 - Linux and Windows are not supported.
 
 The [architecture](ARCHITECTURE.md) explains lifecycle and process ownership.

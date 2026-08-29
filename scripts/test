@@ -4,6 +4,13 @@ set -eu
 
 cd "$(dirname "$0")/.."
 
+sandbox_runner="$PWD/target/private-wheel-data/data/libexec/mcp-console-sandbox"
+if [ ! -x "$sandbox_runner" ]; then
+    echo "private sandbox runner is not staged; run scripts/stage-sandbox-runner" >&2
+    exit 1
+fi
+export MCP_CONSOLE_TEST_SANDBOX_RUNNER="$sandbox_runner"
+
 cargo build --target-dir target
 
 uv run --script tests/transcripts/_run.py "$@"

@@ -9,7 +9,7 @@ The material under `design-sketches/` is future or exploratory design, not evide
 
 ## Process layout
 
-The MCP server has three runtime protocol boundaries, one host-only resolver path, and one private management channel for each sandbox lifetime:
+The MCP server has three application protocol boundaries, one host-only resolver path, and one versioned control channel for each sandbox lifetime:
 
 ```text
 MCP client
@@ -23,39 +23,36 @@ mcp-console server                         host, outside the sandbox
     ├──── host resolver processes          outside the sandbox
     │     R, Python, and DuckDB setup
     │
-    ├──── sandbox manager                  host, outside Seatbelt
-    │     private lifecycle control socket
-    │     observed lifetime and private directory
-    │
-    │ private JSONL over relay fd 0 and 1
-    ▼
-worker relay                               macOS sandbox
-    │ worker sideband plus fd 0, 1, and 2
-    ▼
-worker                                     same sandbox and process group
-    └── built-in R, Python, and DuckDB runtime
+    └──── private sandbox runner           host supervisor
+          │ versioned framed control
+          │ direct relay fd 0, 1, and 2
+          ▼
+        worker relay                       native sandbox
+          │ worker sideband plus fd 0, 1, and 2
+          ▼
+        worker                             same sandbox lifetime
+          └── built-in R, Python, and DuckDB runtime
 ```
 
 The server is the MCP stdio process.
-For each worker lifetime, it starts one host-side sandbox manager and one relay as sibling child processes.
-The manager runs in a separate process group outside Seatbelt; the relay is the root of the managed sandbox lifetime.
-The relay is the sandbox process-group leader and starts the configured worker inside the same sandbox and process group.
+For each worker lifetime, it starts one private sandbox runner from the installation's `libexec` directory.
+The runner constructs the native sandbox and launches the relay as its target root.
+The relay starts the configured worker inside the same sandbox lifetime.
 The relay and its worker tree are one sandboxed unit for lifetime cleanup.
 Submitted R, Python, and SQL cells run in the worker, not in the server or a host resolver.
 
-The standalone development command uses the same host-side manager:
+The standalone development command uses the same runner boundary:
 
 ```text
-mcp-console sandbox launcher             host, outside the sandbox
-    ├── sandbox manager                  host, separate process group
-    └── sandbox root and descendants     macOS sandbox
+mcp-console sandbox launcher             host
+    └── private sandbox runner           host supervisor
+          └── target and descendants     native sandbox
 ```
 
-The standalone launcher retains terminal job control, the command's exit status, and a backup private-directory guard, while the manager owns primary descendant cleanup.
-The manager receives the root PID, private temporary-directory path, and cleanup timeout over a private inherited socket, then derives and validates the root process identity.
-After the manager reports readiness, the launcher commits primary cleanup ownership to the manager and waits for confirmation.
-If the launcher exits or crashes after that committed handshake, socket closure makes the manager terminate the exact recorded root and its observed lifetime, then remove the private directory after successful cleanup.
-macOS provides no child subreaper or atomic descendant-tracking spawn, so a process that detaches before the manager's post-spawn observation remains outside this guarantee.
+The launcher retains terminal-signal forwarding and the command's exit status.
+The runner owns native policy construction, target launch, observed-descendant retirement, and target-directory cleanup.
+It keeps its state directory separate from the target-facing temporary directory and removes the latter only after successful lifetime retirement.
+Control-channel loss retires the target generation, so cleanup does not depend on the MCP Console launcher running its normal shutdown path.
 
 R, Python, and DuckDB dependency resolution follows a separate path.
 The server launches resolver subprocesses on the host, outside the worker sandbox, because they need normal installation, cache, and network access.
@@ -73,20 +70,23 @@ One `send` can poll, provide stdin, prepare requirements, evaluate a cell, inter
 This is the only public protocol boundary.
 The client does not communicate directly with a relay, worker, or resolver.
 
-### Sandbox owner and manager
+### MCP Console and sandbox runner
 
-The server, or the launcher for a standalone command, exchanges private lifecycle controls with the sandbox manager over an inherited Unix socket.
-The owner supplies the root PID, private-directory path, and cleanup timeout, then commits primary cleanup ownership only after the manager has validated the root and reported readiness.
-It keeps the direct sandbox child waitable and retains a backup directory guard while a host thread monitors the manager.
-If the manager exits unsuccessfully while the root remains live and pinned, that thread starts bounded fallback tracking from the root's current process tree and removes the directory only after successful cleanup.
-The fallback cannot reconstruct a descendant that had already detached from that ancestry before the manager failed.
-This channel is not part of the relay or worker protocol and is not inherited by the sandbox root.
+MCP Console starts the pinned private runner with an absolute target path, a private state directory, a target cleanup directory, one control descriptor, and separately declared target-stream descriptors.
+It verifies protocol version 1, the exact source revision and release, the native backend, required capabilities, setup state, and companion layout before sending one launch request.
+It then maps target observation and retirement to `status`, `interrupt`, `terminate`, and `wait` requests.
+Target stdin, stdout, stderr, relay frames, and sideband bytes never enter the control channel.
+
+The runner owns the target generation after launch acceptance.
+MCP Console closes the control channel on every failure path and reaps the runner itself.
+The runner's lifetime process continues observed-descendant retirement if the outer runner or MCP Console process exits unexpectedly.
+This control protocol is private, versioned, and independent of the relay and worker protocols.
 
 ### Server and relay
 
 The server sends commands to the relay's standard input and receives JSONL events from the relay's standard output.
 Relay standard error is inherited separately and is not part of that protocol.
-The transport is private and keeps worker-local connections inside the sandbox while the separate manager owns the sandbox lifetime from the host.
+The transport is private and keeps worker-local connections inside the sandbox while the runner owns the sandbox lifetime from the host.
 [`RELAY_PROTOCOL.md`](RELAY_PROTOCOL.md) defines its commands, events, framing, and retirement behavior.
 
 ### Relay and worker
@@ -94,7 +94,7 @@ The transport is private and keeps worker-local connections inside the sandbox w
 The relay launches the worker with standard input, standard output, standard error, and a dedicated sideband.
 Complete cells and other worker-protocol messages travel over the sideband, interactive input uses worker fd 0, and direct worker output remains on fd 1 and fd 2.
 The relay forwards direct worker signals, applies its local direct-child shutdown mechanics, and collects the direct child's status.
-The host-side manager owns cleanup of the relay root and every descendant it observed.
+The private runner owns cleanup of the relay root and its observed descendants.
 [`WORKER_PROTOCOL.md`](WORKER_PROTOCOL.md) defines the launch descriptors, framing, messages, ordering rules, closure behavior, and custom-worker contract.
 
 ## Responsibility boundaries
@@ -115,29 +115,28 @@ The server owns the logical console session and all state that must survive a wo
 These responsibilities remain on the host side of the sandbox boundary.
 The server does not execute submitted cells or ask the relay to interpret MCP calls.
 
-### Sandbox manager
+### Private sandbox runner
 
-Each server worker lifetime and standalone sandbox command has one manager process outside Seatbelt and outside the sandbox root's process group.
-The manager validates the root by PID, parent, and start time, then observes descendants by PID and start time across process-group and session changes.
-It adopts the private temporary-directory guard and owns the configured cleanup timeout for that lifetime.
+Each server worker lifetime and standalone sandbox command has one private runner process.
+The runner validates MCP Console's fixed policy, constructs the native sandbox, launches the target behind a startup gate, and owns bounded retirement and cleanup.
+On macOS, an internal lifetime process records descendants by PID and start time across process-group and session changes and survives loss of the outer runner.
+The runner monitors that process and performs bounded recovery if it exits unsuccessfully while the exact root remains live.
 
-After the root exits, the manager terminates the remaining observed identities and waits for them to disappear within the configured cleanup timeout.
-On forced retirement or owner-socket closure, it first signals the exact recorded root and then runs the same cleanup.
-It removes the private directory only after successful cleanup; a tracking, signaling, or cleanup failure preserves the directory rather than deleting files beneath a possible survivor.
-The host owner retains an independent guard and uses the same remove-on-success, preserve-on-failure rule if it can recover from an unsuccessful manager exit while the root remains live.
-The manager does not interpret MCP calls, relay frames, worker messages, or runtime output.
+After the root exits, the runner retires remaining members of the target lifetime before reporting its final outcome.
+It removes the target-facing temporary directory only after successful retirement and preserves diagnostic state when cleanup cannot be claimed.
+The runner does not interpret MCP calls, relay frames, worker messages, or runtime output.
 
 ### Relay
 
 The relay is a thin ordered transport and local worker adapter.
 It owns the worker's local descriptors, translates applicable relay commands to worker-sideband messages, forwards worker observations, delivers direct signals, applies local direct-child shutdown mechanics, drains streams, and collects and reaps the direct worker's status.
-The built-in relay also waits at a private startup gate before it launches the worker.
-That gate does not transfer lifetime ownership to the relay; it only prevents worker launch until the host manager has begun tracking the relay root and confirmed its temporary-directory ownership commit.
+The runner holds its target behind a private startup gate until native confinement and lifetime ownership are ready.
+The relay no longer has a separate application startup gate.
 Its producers preserve their own order, and one relay writer serializes their observations for the server.
 That serialization does not reconstruct chronology across the independent sideband, stdout, and stderr transports.
 
 The relay does not own the logical session, retained requirements, evaluation admission, output budgets, response assembly, MCP delivery, observed-descendant cleanup, or the private temporary directory.
-Processes that leave the relay process group or session remain part of the manager's observed sandbox lifetime, not a separate relay-owned lifetime.
+Processes that leave the relay process group or session remain part of the runner's observed sandbox lifetime, not a separate relay-owned lifetime.
 
 ### Worker
 
@@ -181,10 +180,10 @@ If no resolver bootstrap is available, it accepts MCP input with an empty retain
 The worker itself starts lazily when an operation first needs it; preparing retained requirements can happen without launching a worker.
 An explicit restart starts its replacement eagerly, including when the session had not started a worker before.
 
-For each worker start, the server configures a sandboxed relay from the retained environment and starts its host-side manager.
-The manager validates and begins tracking the relay root, adopts the private temporary-directory guard, reports readiness, and waits for the server to commit that ownership.
-The built-in relay waits at its startup gate until this commit, then creates the worker sideband and standard streams, launches the worker, and forwards its startup events.
-The server admits the worker only after the required readiness exchange succeeds.
+For each worker start, the server configures a sandboxed relay from the retained environment and starts the private sandbox runner.
+The server validates the runner before sending one launch request, and the runner establishes native confinement and lifetime ownership before releasing the relay target.
+The relay then creates the worker sideband and standard streams, launches the worker, and forwards its startup events.
+The server admits the worker only after the runner launch and relay readiness exchanges succeed.
 
 ### Evaluation
 
@@ -352,6 +351,5 @@ This includes a server working directory that cannot be represented as UTF-8 bec
 
 ## Platform support
 
-The implemented sandbox command, sandbox manager, relay, built-in worker, and managed resolvers are supported only on macOS.
-The complete CI check runs on macOS.
-Linux and Windows have unsupported-platform paths but no working execution stack yet.
+The sandbox command, relay, built-in worker, and managed resolvers are supported only on macOS, where the complete check runs.
+Linux and Windows are not supported.

@@ -33,7 +33,6 @@ mod platform {
     const CHILD_CONTINUED: libc::c_int = 6;
 
     pub(super) fn run(command_line: &[std::ffi::OsString]) -> Result<(), String> {
-        crate::sandbox::await_sandbox_startup()?;
         let (program, arguments) = command_line
             .split_first()
             .ok_or_else(|| "worker relay command must include an executable".to_string())?;

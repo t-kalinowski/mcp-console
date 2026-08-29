@@ -1,6 +1,5 @@
 use std::collections::HashMap;
-use std::io::BufReader;
-use std::process::Stdio;
+use std::io::{BufReader, Read, Write};
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -131,7 +130,7 @@ impl WorkerRuntime {
                 format!("failed to locate the worker relay executable: {error}")
             })?,
         };
-        let mut command = crate::sandbox::SandboxedCommand::new(relay_executable.as_os_str())
+        let mut command = crate::sandbox::SandboxedCommand::service(relay_executable.as_os_str())
             .map_err(|error| format!("failed to prepare worker sandbox: {error}"))?;
         if let Some(python) = python {
             python.configure_worker(&mut command);
@@ -145,14 +144,13 @@ impl WorkerRuntime {
         );
         if use_builtin_relay {
             command.arg("worker-relay");
-            command.gate_startup()?;
         }
         command
             .arg(executable.as_os_str())
             .args(arguments)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::inherit());
+            .stdin_piped()
+            .stdout_piped()
+            .stderr_inherited();
 
         let (worker_events, worker_event_receiver) = mpsc::channel();
 
@@ -391,10 +389,13 @@ fn receive_operation(
         .map_err(|_| "worker event dispatcher stopped".to_string())?
 }
 
-fn start_relay_command_writer(
-    relay_stdin: std::process::ChildStdin,
+fn start_relay_command_writer<W>(
+    relay_stdin: W,
     events: mpsc::Sender<WorkerEvent>,
-) -> (RelayCommandSender, RelayCommandThread) {
+) -> (RelayCommandSender, RelayCommandThread)
+where
+    W: Write + Send + 'static,
+{
     let (writer, receiver) = mpsc::channel();
     let sender = RelayCommandSender {
         writer,
@@ -434,10 +435,13 @@ fn start_relay_command_writer(
     (sender.clone(), RelayCommandThread { sender, thread })
 }
 
-fn start_relay_event_reader(
-    relay_stdout: std::process::ChildStdout,
+fn start_relay_event_reader<R>(
+    relay_stdout: R,
     events: mpsc::Sender<WorkerEvent>,
-) -> thread::JoinHandle<()> {
+) -> thread::JoinHandle<()>
+where
+    R: Read + Send + 'static,
+{
     thread::spawn(move || {
         let mut reader = JsonlReader::new(BufReader::new(relay_stdout));
         let result = (|| -> Result<(), String> {
