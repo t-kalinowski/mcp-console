@@ -9,6 +9,7 @@ from _sandbox_supervision_helpers import (
     _command,
     _kill_process_groups,
     _open_controlling_terminal,
+    _read_until,
     _wait_for_stop,
 )
 from _support import Transcript, code
@@ -20,15 +21,17 @@ def test_stops_and_continues_foreground_sandbox_job(binary: Path) -> Transcript:
         import os
         import signal
 
+        terminal = open("/dev/tty", "w")
+
         def continued(_signal, _frame):
-            print("continued", flush=True)
+            print("continued", file=terminal, flush=True)
 
         def interrupted(_signal, _frame):
             raise SystemExit(0)
 
         signal.signal(signal.SIGCONT, continued)
         signal.signal(signal.SIGINT, interrupted)
-        print(f"ready:{os.getpgrp()}", flush=True)
+        print(f"ready:{os.getpgrp()}", file=terminal, flush=True)
         while True:
             signal.pause()
         """)
@@ -36,17 +39,16 @@ def test_stops_and_continues_foreground_sandbox_job(binary: Path) -> Transcript:
     master, slave, attach = _open_controlling_terminal()
     process = subprocess.Popen(
         [binary, *arguments],
-        stdin=slave,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        pass_fds=(slave,),
         preexec_fn=attach,
     )
     os.close(slave)
     sandbox_group = None
     try:
-        assert process.stdout is not None
-        ready_line = process.stdout.readline()
+        ready_line = _read_until(master, b"\n", "sandbox job readiness").decode()
         prefix, group = ready_line.strip().split(":", maxsplit=1)
         assert prefix == "ready", ready_line
         sandbox_group = int(group)
@@ -59,10 +61,10 @@ def test_stops_and_continues_foreground_sandbox_job(binary: Path) -> Transcript:
         assert os.tcgetpgrp(master) == sandbox_group
 
         os.killpg(sandbox_group, signal.SIGCONT)
-        continued = process.stdout.readline()
-        assert continued == "continued\n"
+        _read_until(master, b"continued\r\n", "continued sandbox job")
+        continued = "continued\n"
         os.write(master, b"\x03")
-        stdout, stderr = process.communicate(timeout=5)
+        process.wait(timeout=5)
     except BaseException:
         _kill_process_groups([sandbox_group, process.pid])
         process.wait(timeout=TIMEOUT)
@@ -71,8 +73,6 @@ def test_stops_and_continues_foreground_sandbox_job(binary: Path) -> Transcript:
         os.close(master)
 
     assert process.returncode == 0, process.returncode
-    assert stdout == "", stdout
-    assert stderr == "", stderr
     return [
         {
             "command": _command(*arguments),

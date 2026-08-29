@@ -7,12 +7,12 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from _sandbox_supervision_helpers import TIMEOUT, _command, _kill_survivors, _pid_is_alive, _read_lines
+from _sandbox_supervision_helpers import _open_controlling_terminal
 from _support import Transcript, code
 
 
 def test_retires_processx_descendants_across_sessions(binary: Path) -> Transcript:
-    # Each processx child calls setsid() on Unix. This fixture creates two nested
-    # processx generations so neither descendant remains in the root group.
+    # Nested processx generations both call setsid(), leaving the root group.
     # fmt: r
     script = code(r"""
         child_script <- '
@@ -130,11 +130,15 @@ def test_relays_interrupt_then_retires_descendants(binary: Path) -> Transcript:
         )
         """)
     arguments = ("sandbox", "--", "Rscript", "--vanilla", "-e", script)
+    master, slave, attach = _open_controlling_terminal()
     process = subprocess.Popen(
         [binary, *arguments],
+        stdin=slave,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
+        preexec_fn=attach,
     )
+    os.close(slave)
     assert process.stdout is not None
     assert process.stderr is not None
 
@@ -163,6 +167,7 @@ def test_relays_interrupt_then_retires_descendants(binary: Path) -> Transcript:
         _kill_survivors(pids)
         process.stdout.close()
         process.stderr.close()
+        os.close(master)
 
     return [
         {
