@@ -12,6 +12,8 @@ with open(os.environ["MCP_CONSOLE_TEST_UV_RECORD"], "a", encoding="utf-8") as st
     json.dump(record, stream, sort_keys=True)
     stream.write("\n")
 
+arguments = sys.argv[1:]
+
 if arguments_record := os.environ.get("MCP_CONSOLE_TEST_UV_ARGUMENTS_RECORD"):
     with open(arguments_record, "a", encoding="utf-8") as stream:
         json.dump(sys.argv[1:], stream)
@@ -20,6 +22,24 @@ if arguments_record := os.environ.get("MCP_CONSOLE_TEST_UV_ARGUMENTS_RECORD"):
 if r_libs_record := os.environ.get("MCP_CONSOLE_TEST_R_LIBS_RECORD"):
     with open(r_libs_record, "a", encoding="utf-8") as stream:
         json.dump(os.environ.get("R_LIBS"), stream)
+        stream.write("\n")
+
+intercept_marker = os.environ.get("MCP_CONSOLE_TEST_UV_INTERCEPT_MARKER")
+intercept = intercept_marker is None or os.path.exists(intercept_marker)
+
+if resolver_record := os.environ.get("MCP_CONSOLE_TEST_UV_RESOLVER_RECORD"):
+    resolver_state = {
+        "arguments": arguments,
+        "RETICULATE_UV": os.environ.get("RETICULATE_UV"),
+        "UV_CACHE_DIR": os.environ.get("UV_CACHE_DIR"),
+        "UV_MANAGED_PYTHON": os.environ.get("UV_MANAGED_PYTHON"),
+        "UV_NO_MANAGED_PYTHON": os.environ.get("UV_NO_MANAGED_PYTHON"),
+        "UV_PYTHON_INSTALL_DIR": os.environ.get("UV_PYTHON_INSTALL_DIR"),
+        "UV_PYTHON_PREFERENCE": os.environ.get("UV_PYTHON_PREFERENCE"),
+        "UV_NO_CACHE": os.environ.get("UV_NO_CACHE"),
+    }
+    with open(resolver_record, "a", encoding="utf-8") as stream:
+        json.dump(resolver_state, stream, sort_keys=True)
         stream.write("\n")
 
 failure_marker = os.environ.get("MCP_CONSOLE_TEST_UV_FAILURE_MARKER")
@@ -33,9 +53,13 @@ if (
     print("synthetic uv failure", file=sys.stderr)
     raise SystemExit(99)
 
-arguments = sys.argv[1:]
 inventories = os.environ.get("MCP_CONSOLE_TEST_UV_PYTHON_INVENTORIES")
-if inventories and os.path.exists(inventories) and arguments[:2] == ["python", "list"]:
+if (
+    intercept
+    and inventories
+    and os.path.exists(inventories)
+    and arguments[:2] == ["python", "list"]
+):
     with open(inventories, encoding="utf-8") as stream:
         inventories_by_preference = json.load(stream)
     preference_index = arguments.index("--python-preference") + 1
@@ -43,6 +67,13 @@ if inventories and os.path.exists(inventories) and arguments[:2] == ["python", "
     json.dump(inventories_by_preference[preference], sys.stdout)
     sys.stdout.write("\n")
     raise SystemExit(0)
+
+if intercept and arguments[:2] == ["tool", "run"] and "--" in arguments:
+    separator = arguments.index("--")
+    command = arguments[separator + 1 :]
+    if command and command[0] == "python":
+        if python := os.environ.get("MCP_CONSOLE_TEST_UV_PYTHON"):
+            os.execv(python, [python, *command[1:]])
 
 uv = os.environ["MCP_CONSOLE_TEST_REAL_UV"]
 substitute = os.environ.get("MCP_CONSOLE_TEST_UV_SUBSTITUTE_REQUIREMENT")

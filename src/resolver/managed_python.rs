@@ -1,15 +1,23 @@
 use std::ffi::OsStr;
+use std::fs::{self, OpenOptions};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{self, Command, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use serde::Serialize;
 
 use super::process::{
     ResolverOutput, ResolverProcess, ResolverStopHandle, completed_write, read_output,
-    resolver_command, stop_resolver, write_input,
+    resolver_command, stop_resolver,
 };
 
-const MANAGED_PYTHON_ENVIRONMENT_RESOLVER_SOURCE: &str = include_str!("programs/managed_python.R");
+const PYTHON_PATH_SOURCE: &str = r#"
+import sys
+
+with open(sys.argv[-1], "w", encoding="utf-8") as stream:
+    stream.write(sys.executable)
+"#;
+static PYTHON_PATH_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone)]
 pub(crate) struct ManagedPython {
@@ -25,6 +33,60 @@ struct ResolverInput<'a> {
     python_version: Vec<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     exclude_newer: Option<&'a str>,
+}
+
+struct PythonPathOutput(PathBuf);
+
+impl PythonPathOutput {
+    fn create() -> Result<Self, String> {
+        for _ in 0..100 {
+            let sequence = PYTHON_PATH_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+            let path = std::env::temp_dir().join(format!(
+                "mcp-console-managed-python-{}-{sequence}",
+                process::id()
+            ));
+            match OpenOptions::new().write(true).create_new(true).open(&path) {
+                Ok(_) => return Ok(Self(path)),
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+                Err(error) => {
+                    return Err(format!(
+                        "failed to create managed Python resolver output `{}`: {error}",
+                        path.display()
+                    ));
+                }
+            }
+        }
+        Err("failed to allocate managed Python resolver output path".to_string())
+    }
+
+    fn path(&self) -> &Path {
+        &self.0
+    }
+
+    fn python(&self) -> Result<PathBuf, String> {
+        let output = fs::read(&self.0).map_err(|error| {
+            format!(
+                "failed to read managed Python resolver output `{}`: {error}",
+                self.0.display()
+            )
+        })?;
+        let output = String::from_utf8(output)
+            .map_err(|_| "managed Python resolver returned a non-UTF-8 path".to_string())?;
+        let python = PathBuf::from(output.trim());
+        if !python.is_absolute() || !python.is_file() {
+            return Err(format!(
+                "managed Python resolver returned invalid interpreter `{}`",
+                python.display()
+            ));
+        }
+        Ok(python)
+    }
+}
+
+impl Drop for PythonPathOutput {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.0);
+    }
 }
 
 impl ManagedPython {
@@ -73,58 +135,51 @@ pub(crate) fn resolve_python_manifest(
     crate::python_requirement::validate_all(&requirements.packages)?;
     crate::python_requirement::validate_version_constraints(&requirements.python_version)?;
     let requirements = requirements.normalized();
-    let input = serde_json::to_vec(&requirements)
-        .expect("managed Python requirements should serialize as JSON");
-    let output = run_python_resolver(
-        MANAGED_PYTHON_ENVIRONMENT_RESOLVER_SOURCE,
-        input,
+    let resolver = ResolverProcess::new();
+    let mut on_started = Some(on_started);
+    let versions =
+        resolve_python_versions_with(configuration, managed_r, &resolver, &mut on_started)?;
+    let resolved_python = versions
+        .resolve(&requirements.python_version)
+        .map_err(|error| format!("managed Python version resolution failed: {}", error.trim()))?;
+    let output_path = PythonPathOutput::create()?;
+    let output = run_managed_python_resolver(
+        &requirements,
+        &resolved_python,
+        output_path.path(),
         configuration,
         managed_r,
-        on_started,
-        "managed Python",
+        &resolver,
+        &mut on_started,
     )?;
     if !output.status.success() {
-        let python = String::from_utf8_lossy(&output.stdout);
-        let error = String::from_utf8_lossy(&output.stderr);
-        let python = python.trim();
-        let error = error.trim();
-        return if python.is_empty() {
-            Err(format!(
-                "managed Python resolution failed with {}: {error}",
-                output.status
-            ))
+        let error = resolver_error(&output);
+        let python = if requirements.python_version.is_empty() {
+            format!("{resolved_python} (reticulate default)")
         } else {
-            let packages = requirements.packages.iter().map(String::as_str).collect();
-            let python_version = requirements
-                .python_version
-                .iter()
-                .map(String::as_str)
-                .collect();
-            let input = serde_json::to_string_pretty(&ResolverInput {
-                python,
-                packages,
-                python_version,
-                exclude_newer: requirements.exclude_newer.as_deref(),
-            })
-            .expect("resolver input strings should serialize as JSON");
-            Err(format!(
-                "managed Python resolution failed:\nresolver input:\n{input}\nuv output:\n{error}"
-            ))
+            requirements.python_version.join(", ")
         };
-    }
-    output
-        .write_result
-        .map_err(|error| format!("failed to write Python requirements: {error}"))?;
-
-    let output = String::from_utf8(output.stdout)
-        .map_err(|_| "managed Python resolver returned a non-UTF-8 path".to_string())?;
-    let python = PathBuf::from(output.trim());
-    if !python.is_absolute() || !python.is_file() {
+        let packages = requirements.packages.iter().map(String::as_str).collect();
+        let python_version = requirements
+            .python_version
+            .iter()
+            .map(String::as_str)
+            .collect();
+        let input = serde_json::to_string_pretty(&ResolverInput {
+            python: &python,
+            packages,
+            python_version,
+            exclude_newer: requirements.exclude_newer.as_deref(),
+        })
+        .expect("resolver input strings should serialize as JSON");
         return Err(format!(
-            "managed Python resolver returned invalid interpreter `{}`",
-            python.display()
+            "managed Python resolution failed:\nresolver input:\n{input}\nuv output:\n{error}"
         ));
     }
+    check_resolver_control(&resolver, "managed Python resolution")?;
+
+    let python = output_path.python()?;
+    warm_matplotlib(&python, &resolver, &mut on_started)?;
     Ok(ManagedPython {
         python,
         requirements,
@@ -134,11 +189,11 @@ pub(crate) fn resolve_python_manifest(
 pub(crate) fn resolve_python_version(
     constraints: Vec<String>,
     configuration: &super::ManagedPythonResolverConfiguration,
-    _managed_r: &super::ManagedR,
+    managed_r: &super::ManagedR,
     on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
 ) -> Result<String, String> {
     crate::python_requirement::validate_version_constraints(&constraints)?;
-    let versions = resolve_python_versions(configuration, on_started)?;
+    let versions = resolve_python_versions(configuration, Some(managed_r), on_started)?;
     versions
         .resolve(&constraints)
         .map_err(|error| format!("managed Python version resolution failed: {}", error.trim()))
@@ -155,6 +210,7 @@ pub(crate) fn resolve_python_host(
 
 fn resolve_python_versions<F>(
     configuration: &super::ManagedPythonResolverConfiguration,
+    managed_r: Option<&super::ManagedR>,
     on_started: F,
 ) -> Result<super::python_version::PythonVersions, String>
 where
@@ -162,18 +218,37 @@ where
 {
     let resolver = ResolverProcess::new();
     let mut on_started = Some(on_started);
+    resolve_python_versions_with(configuration, managed_r, &resolver, &mut on_started)
+}
+
+fn resolve_python_versions_with<F>(
+    configuration: &super::ManagedPythonResolverConfiguration,
+    managed_r: Option<&super::ManagedR>,
+    resolver: &ResolverProcess,
+    on_started: &mut Option<F>,
+) -> Result<super::python_version::PythonVersions, String>
+where
+    F: FnOnce(ResolverStopHandle) -> Result<(), String>,
+{
     let configured_preference = configuration.python_preference();
     let managed = OsStr::new("only-managed");
     let system = OsStr::new("only-system");
     match configured_preference {
         None => {
-            let versions =
-                run_uv_python_list(configuration, &resolver, &mut on_started, managed, true)?;
+            let versions = run_uv_python_list(
+                configuration,
+                managed_r,
+                resolver,
+                on_started,
+                managed,
+                true,
+            )?;
             if versions.is_empty() {
                 return Ok(run_uv_python_list(
                     configuration,
-                    &resolver,
-                    &mut on_started,
+                    managed_r,
+                    resolver,
+                    on_started,
                     system,
                     false,
                 )?
@@ -182,24 +257,38 @@ where
             Ok(versions.rank(true))
         }
         Some(preference) if preference == OsStr::new("managed") => {
-            let mut versions =
-                run_uv_python_list(configuration, &resolver, &mut on_started, managed, true)?;
+            let mut versions = run_uv_python_list(
+                configuration,
+                managed_r,
+                resolver,
+                on_started,
+                managed,
+                true,
+            )?;
             versions.extend(run_uv_python_list(
                 configuration,
-                &resolver,
-                &mut on_started,
+                managed_r,
+                resolver,
+                on_started,
                 system,
                 false,
             )?);
             Ok(versions.rank(true))
         }
         Some(preference) if preference == OsStr::new("system") => {
-            let mut versions =
-                run_uv_python_list(configuration, &resolver, &mut on_started, managed, true)?;
+            let mut versions = run_uv_python_list(
+                configuration,
+                managed_r,
+                resolver,
+                on_started,
+                managed,
+                true,
+            )?;
             versions.extend(run_uv_python_list(
                 configuration,
-                &resolver,
-                &mut on_started,
+                managed_r,
+                resolver,
+                on_started,
                 system,
                 false,
             )?);
@@ -209,8 +298,9 @@ where
             let prefer_managed = preference != system;
             Ok(run_uv_python_list(
                 configuration,
-                &resolver,
-                &mut on_started,
+                managed_r,
+                resolver,
+                on_started,
                 preference,
                 prefer_managed,
             )?
@@ -221,6 +311,7 @@ where
 
 fn run_uv_python_list<F>(
     configuration: &super::ManagedPythonResolverConfiguration,
+    managed_r: Option<&super::ManagedR>,
     resolver: &ResolverProcess,
     on_started: &mut Option<F>,
     preference: &OsStr,
@@ -248,7 +339,7 @@ where
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .env_remove("VIRTUAL_ENV");
-    configuration.configure_direct(&mut command)?;
+    configure_python_resolver(&mut command, configuration, managed_r)?;
     let output = run_resolver_command(
         command,
         resolver,
@@ -257,16 +348,107 @@ where
         "managed Python version",
     )?;
     if !output.status.success() {
-        let error = String::from_utf8_lossy(&output.stderr);
         return Err(format!(
             "managed Python version resolution failed with {}: {}",
             output.status,
-            error.trim()
+            resolver_error(&output)
         ));
     }
+    check_resolver_control(resolver, "managed Python version resolution")?;
     super::python_version::PythonVersions::parse(&output.stdout, managed).map_err(|error| {
         format!("managed Python version resolver returned invalid output: {error}")
     })
+}
+
+fn run_managed_python_resolver<F>(
+    requirements: &crate::worker_protocol::PythonRequirementManifest,
+    resolved_python: &str,
+    output_path: &Path,
+    configuration: &super::ManagedPythonResolverConfiguration,
+    managed_r: Option<&super::ManagedR>,
+    resolver: &ResolverProcess,
+    on_started: &mut Option<F>,
+) -> Result<ResolverOutput, String>
+where
+    F: FnOnce(ResolverStopHandle) -> Result<(), String>,
+{
+    let uv = configuration.uv()?;
+    let program = Path::new(uv);
+    let mut command = resolver_command(program);
+    command
+        .args(["tool", "run", "--isolated", "--python"])
+        .arg(resolved_python);
+    if let Some(exclude_newer) = requirements.exclude_newer.as_deref() {
+        command.args(["--exclude-newer", exclude_newer]);
+    }
+    for package in &requirements.packages {
+        command.arg("--with").arg(package);
+    }
+    command
+        .args(["--", "python", "-c", PYTHON_PATH_SOURCE])
+        .arg(output_path)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .env_remove("VIRTUAL_ENV");
+    configure_python_resolver(&mut command, configuration, managed_r)?;
+    // A no-cache tool environment is deleted when `uv tool run` exits,
+    // so it cannot back a retained MCP Console session.
+    command.env_remove("UV_NO_CACHE");
+    run_resolver_command(command, resolver, on_started, program, "managed Python")
+}
+
+fn warm_matplotlib<F>(
+    python: &Path,
+    resolver: &ResolverProcess,
+    on_started: &mut Option<F>,
+) -> Result<(), String>
+where
+    F: FnOnce(ResolverStopHandle) -> Result<(), String>,
+{
+    let mut command = resolver_command(python);
+    command
+        .args(["-I", "-c", "import matplotlib.font_manager"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    run_resolver_command(
+        command,
+        resolver,
+        on_started,
+        python,
+        "managed Python cache warmup",
+    )?;
+    check_resolver_control(resolver, "managed Python cache warmup")?;
+    Ok(())
+}
+
+fn check_resolver_control(resolver: &ResolverProcess, operation: &str) -> Result<(), String> {
+    match resolver.stop_handle().control_outcome() {
+        Some(super::ResolverControlOutcome::Interrupted) => Err(format!("{operation} interrupted")),
+        Some(super::ResolverControlOutcome::Cancelled) => Err(format!("{operation} cancelled")),
+        None => Ok(()),
+    }
+}
+
+fn configure_python_resolver(
+    command: &mut Command,
+    configuration: &super::ManagedPythonResolverConfiguration,
+    managed_r: Option<&super::ManagedR>,
+) -> Result<(), String> {
+    if let Some(managed_r) = managed_r {
+        managed_r.configure_resolver(command)?;
+    }
+    configuration.configure_direct(command)
+}
+
+fn resolver_error(output: &ResolverOutput) -> String {
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stderr = stderr.trim();
+    if !stderr.is_empty() {
+        return stderr.to_string();
+    }
+    String::from_utf8_lossy(&output.stdout).trim().to_string()
 }
 
 fn run_resolver_command<F>(
@@ -295,47 +477,6 @@ where
     }
     resolver.watch_exit(child.id());
     resolver.wait(&mut child, completed_write(), stdout, stderr, program, kind)
-}
-
-fn run_python_resolver(
-    source: &str,
-    input: Vec<u8>,
-    configuration: &super::ManagedPythonResolverConfiguration,
-    managed_r: Option<&super::ManagedR>,
-    on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
-    kind: &str,
-) -> Result<ResolverOutput, String> {
-    let managed_r = managed_r
-        .ok_or_else(|| "managed Python resolver requires a managed R environment".to_string())?;
-    let rscript = managed_r.rscript();
-    let mut command = resolver_command(rscript);
-    command
-        .args(["--vanilla", "-e", source])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    configuration.configure(managed_r, &mut command)?;
-    // Managed resolution intentionally runs outside the sandbox because
-    // reticulate and `uv` need normal host network and cache access. Resolver
-    // inputs are JSON standard-input data, never R source.
-    let mut child = command.spawn().map_err(|error| {
-        format!(
-            "failed to run {kind} resolver with `{}`: {error}",
-            rscript.display()
-        )
-    })?;
-    let stdout = read_output(child.stdout.take().expect("resolver stdout is piped"));
-    let stderr = read_output(child.stderr.take().expect("resolver stderr is piped"));
-    let stdin = child.stdin.take().expect("resolver stdin is piped");
-    let resolver = ResolverProcess::new();
-    let stop_handle = resolver.stop_handle();
-    if let Err(error) = on_started(stop_handle) {
-        let _ = stop_resolver(&mut child, rscript, kind);
-        return Err(error);
-    }
-    resolver.watch_exit(child.id());
-    let input = write_input(stdin, input);
-    resolver.wait(&mut child, input, stdout, stderr, rscript, kind)
 }
 
 fn manifest_from_packages(

@@ -105,12 +105,12 @@ Keep these ownership rules intact:
 ### Resolvers and sandbox
 
 - `src/resolver.rs`, `src/resolver/` — retained host environments, direct Python-version selection, validation, platform implementations, and resolver process-group lifecycle.
-- `src/resolver/programs/` — compile-time R programs for managed Python environments, DuckDB extensions, and R-library and `uv` discovery.
+- `src/resolver/programs/` — compile-time R programs for DuckDB extension preparation, R-library resolution, and `uv` discovery.
 - `src/sandbox.rs`, `src/sandbox/` — platform dispatch and macOS Seatbelt policy.
 
 ### Tests and development scripts
 
-- `tests/cli.rs` — public CLI acceptance tests.
+- `tests/cli.rs` — public CLI and narrow OS/process-lifecycle acceptance tests that cannot be expressed at the MCP boundary.
 - `tests/fixtures/` — deterministic workers, relays, resolvers, and package fixtures.
 - `tests/transcripts/client_server/` — public MCP client-server behavior.
 - `tests/transcripts/server_relay/` — private server-relay wire behavior.

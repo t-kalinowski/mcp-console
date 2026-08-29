@@ -30,6 +30,15 @@ result:
 ---
 send:
   r: |
+    invisible(capture.output(print(reticulate::py_require())))
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+send:
+  r: |
     reticulate::py_require("py-yaml12")
     invisible(reticulate::py_config())
 result:
