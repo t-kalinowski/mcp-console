@@ -775,8 +775,13 @@ network:
       operations: [connect]
 ```
 
-Windows named pipes can later use a parallel `named_pipes` field. High-authority
-sockets such as `/var/run/docker.sock` require explicit project trust.
+Windows named pipes can later use a parallel `named_pipes` field. Any
+pre-existing socket or named pipe selected by an automatically discovered
+project requires project trust unless the exact endpoint is approved by
+higher-trust policy. The exception is a worker-owned socket created inside the
+session's private runtime directory. MCP Console does not infer authority from a
+pathname: database, SSH-agent, desktop-bus, container-daemon, and other host
+sockets all use the same rule.
 
 ## Where the relay and worker run
 
@@ -1091,6 +1096,18 @@ rejects those combinations rather than depending on a pre-existing cache. Use
 `existing` or `false` with `off`; use `declared_only` when a managed or project
 environment should still be prepared but runtime-triggered installation should
 be disabled.
+
+Environment preparation is always target-local. The server owns the
+resolution policy, validates every input, and controls the operation. For a
+remote target, it sends a compiled resolution request through the existing relay
+protocol; the relay launches MCP Console's fixed resolver subcommand on that
+target and returns its bounded result, but does not choose requirements,
+sources, credentials, or policy. For a nested container, resolution runs in the
+innermost environment that will host the worker. The prepared environment is
+stored in an immutable target-local cache and activated before worker startup. A
+target without a compatible resolver subcommand fails preflight. This remains
+server-owned resolution; it does not move dependency policy into the relay or
+worker.
 
 Project-authored package names and manifests are resolver inputs, not ordinary
 sandboxed data. An automatically discovered project may not cause the
@@ -1468,9 +1485,19 @@ resources:
   priority: background
 ```
 
-`memory` is a maximum resident-memory budget where enforceable. `cpu: 2` means
-at most two logical CPUs or the closest enforceable equivalent. `background`
-asks the OS to prefer interactive user work over the agent.
+`memory` is a maximum memory budget where enforceable. `cpu: 2` means at most
+two logical CPUs or the closest enforceable equivalent. `background` asks the
+OS to prefer interactive user work over the agent.
+
+Hard limits apply to the worker and its complete descendant process tree as one
+session budget, not independently to each process. Memory and CPU are aggregate
+process-tree limits; `processes` counts the worker and descendants; `open_files`
+counts open handles across the tree; `writable_storage` covers all
+session-writable storage; and `max_runtime` runs from worker startup until the
+entire tree exits. Descendants inherit scheduling priority. A provider that can
+enforce only per-process limits, or cannot prevent descendants from escaping the
+accounted process group, job, container, or cgroup, does not satisfy the hard
+limit and the profile fails preflight.
 
 The expanded form supports the long tail:
 
@@ -1809,7 +1836,9 @@ an explicitly trusted project or a higher-trust configuration source:
   not approved by higher-trust policy;
 - SSH, Docker, Docker Sandbox, nested execution, or custom command runners;
 - third-party sandbox providers;
-- high-authority Unix sockets or named pipes;
+- project-selected pre-existing Unix sockets or named pipes outside the
+  worker-owned session directory, unless the exact endpoint is approved by
+  higher-trust policy;
 - explicit or derived writable paths outside the project root;
 - project-defined package requirements and their ordered source policy when not
   approved together by higher-trust resolver policy;
@@ -1870,7 +1899,7 @@ than a best-effort downgrade.
 - outbound endpoints, listeners, forwards, and local sockets;
 - the selected sandbox provider and its advertised capabilities;
 - R, Python, SQL, manifests, packages, and package sources;
-- resource limits and whether each is hard or advisory;
+- resource limits, their aggregate process-tree scope, and whether each is hard or advisory;
 - log and cache paths in their correct host/target namespaces;
 - the source file and trust level that contributed every nondefault value;
 - warnings, redactions, and any unenforceable request.
