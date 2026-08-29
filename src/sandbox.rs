@@ -11,6 +11,10 @@ use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, ExitSta
 use std::time::Duration;
 
 #[cfg(target_os = "macos")]
+#[path = "sandbox/file_descriptors.rs"]
+mod file_descriptors;
+
+#[cfg(target_os = "macos")]
 #[path = "sandbox/macos.rs"]
 mod platform;
 
@@ -208,7 +212,12 @@ impl SandboxedCommand {
         })
     }
 
-    pub(crate) fn status(self) -> Result<ExitCode, String> {
+    pub(crate) fn status(mut self) -> Result<ExitCode, String> {
+        // The standalone path has no private transport descriptors. Keep this
+        // policy out of `spawn()`: server callers also use that generic path and
+        // need an explicit allowlist before their inherited descriptors can be
+        // closed safely.
+        file_descriptors::close_unlisted(&mut self.command)?;
         let status = self.spawn()?.wait()?;
         Ok(platform::exit_code(status))
     }
