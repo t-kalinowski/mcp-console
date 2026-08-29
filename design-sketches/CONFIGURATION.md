@@ -413,7 +413,10 @@ profiles:
     cache: {}
 ```
 
-A profile may have one parent. One-parent inheritance keeps security precedence
+A profile mapping may have one explicit parent. Before other normalization, a
+mapping without `extends` is treated as if it contained `extends: read_only`;
+profiles never begin from an empty or unrestricted policy. This keeps small
+inline profiles safe while one-parent inheritance keeps security precedence
 predictable. Most composition is achieved by expanding the relevant node rather
 than combining several opaque parents.
 
@@ -732,6 +735,12 @@ The compact listener form means:
 - publish it on supervisor-side loopback port `3838`;
 - create SSH forwarding or a container mapping when necessary;
 - never expose it on a non-loopback interface.
+
+A listener authored by an automatically discovered project requires project
+trust unless its exact normalized listener is approved by higher-trust policy.
+Approval covers the protocol, target-side port, publish mode, and
+supervisor-side port; `listen: 3838` therefore requests the exact pair `3838` to
+`3838`. This authorization rule adds no extra YAML to a trusted project.
 
 The worker may then run:
 
@@ -1097,17 +1106,17 @@ rejects those combinations rather than depending on a pre-existing cache. Use
 environment should still be prepared but runtime-triggered installation should
 be disabled.
 
-Environment preparation is always target-local. The server owns the
-resolution policy, validates every input, and controls the operation. For a
-remote target, it sends a compiled resolution request through the existing relay
-protocol; the relay launches MCP Console's fixed resolver subcommand on that
-target and returns its bounded result, but does not choose requirements,
-sources, credentials, or policy. For a nested container, resolution runs in the
-innermost environment that will host the worker. The prepared environment is
-stored in an immutable target-local cache and activated before worker startup. A
-target without a compatible resolver subcommand fails preflight. This remains
-server-owned resolution; it does not move dependency policy into the relay or
-worker.
+Environment preparation is always target-local, but it is separate from the
+worker relay. The server owns resolver launch, cancellation, bounded termination,
+reaping, generation scoping, policy, and cache commit. For a remote target, the
+server opens a separate, short-lived resolver transport through the selected
+`run_on` mechanism and launches a fixed MCP Console resolver helper directly on
+that target. The helper executes only the compiled request and returns a
+bounded structured result; the worker relay neither launches nor supervises it.
+For a nested container, the resolver transport enters the innermost environment
+that will host the worker. The prepared environment is committed to an immutable
+target-local cache before the server gives activation paths to the worker relay.
+A target without a compatible resolver helper fails preflight.
 
 Project-authored package names and manifests are resolver inputs, not ordinary
 sandboxed data. An automatically discovered project may not cause the
@@ -1834,6 +1843,8 @@ an explicitly trusted project or a higher-trust configuration source:
 
 - `full_access`, `network: full`, or project-authored outbound destinations
   not approved by higher-trust policy;
+- project-authored listeners, unless the exact protocol, target-side port,
+  publish mode, and supervisor-side port are approved by higher-trust policy;
 - SSH, Docker, Docker Sandbox, nested execution, or custom command runners;
 - third-party sandbox providers;
 - project-selected pre-existing Unix sockets or named pipes outside the
