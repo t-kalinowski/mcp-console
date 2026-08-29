@@ -334,10 +334,11 @@ logs: {}
 cache: {}
 ```
 
-Only `version` is required. With no configuration file, MCP Console should use
-`read_only` and its default managed runtime. `definitions` is optional and is
-intended for larger configurations after repetition appears. Unknown fields and
-duplicate YAML keys are errors.
+Only `version` is required. If `profile` is omitted—including a file containing
+only `version: 1`—MCP Console selects `read_only` and its default managed
+runtime. The same default applies when no configuration file exists.
+`definitions` is optional and is intended for larger configurations after
+repetition appears. Unknown fields and duplicate YAML keys are errors.
 
 A CLI selection overrides the configured default:
 
@@ -869,6 +870,11 @@ run_on:
       - .git
       - .mcp-console/cache
 ```
+
+A project-authored `sync.source` inside the project tree needs no additional
+trust. A source outside the project root requires project trust or exact
+higher-trust approval before the supervisor reads or copies it. Synchronization
+also remains subject to higher-trust read restrictions.
 
 Version 1 may reasonably require the remote directory to exist and defer
 `sync`.
@@ -1566,6 +1572,12 @@ logs:
     max_files: 1000
 ```
 
+A log destination is supervisor-owned even when its path lies under a writable
+project workspace. MCP Console derives an effective worker-write denial for the
+log tree, or uses an equivalent protected supervisor handle, and all log
+creation and reopening must be symlink-safe. `config explain` shows this derived
+protection.
+
 Logs are distinct from session transcripts and generated artifacts. Remote
 relay diagnostics are collected into supervisor-side logs unless an advanced
 destination explicitly says otherwise. Active session files are never removed
@@ -1718,8 +1730,12 @@ This is more explicit than silently appending every list and safer than a
 fully general YAML merge language. Missing and empty remain distinct: an omitted
 field inherits or defaults, while an explicit empty sequence means deliberately
 empty. YAML `null` is rejected unless a field defines a specific reset meaning.
-YAML anchors may reduce text, but YAML merge keys are not a second inheritance
-system; `extends`, `use`, and list patches define the configuration semantics.
+YAML anchors are accepted only within fixed parser limits on source bytes,
+nesting depth, alias count, and expanded node count. These limits are enforced
+during parsing before unbounded alias materialization; exceeding one is a
+validation error. Within those bounds, anchors may reduce text, but YAML merge
+keys are not a second inheritance system; `extends`, `use`, and list patches
+define the configuration semantics.
 
 Sizes and durations use strict values such as `512MiB`, `8GiB`, `250ms`, `30s`,
 `24h`, and `30d`. Ambiguous bare units are rejected.
@@ -1801,6 +1817,8 @@ Some declarations imply a narrow supporting permission:
 - resolver-owned package and environment caches imply resolver write and worker
   read access, never worker write access;
 - a per-session runtime cache implies one isolated worker-writable root;
+- a supervisor-side log destination implies an effective worker-write denial
+  for that destination;
 - a listener implies one target bind and one supervisor-side loopback forward;
 - a container mount implies target-side visibility but does not automatically
   make the source writable.
@@ -1851,6 +1869,8 @@ an explicitly trusted project or a higher-trust configuration source:
   worker-owned session directory, unless the exact endpoint is approved by
   higher-trust policy;
 - explicit or derived writable paths outside the project root;
+- project-authored synchronization sources outside the project root, unless
+  exactly approved by higher-trust policy;
 - project-defined package requirements and their ordered source policy when not
   approved together by higher-trust resolver policy;
 - arbitrary executable paths outside the project;
@@ -1911,7 +1931,8 @@ than a best-effort downgrade.
 - the selected sandbox provider and its advertised capabilities;
 - R, Python, SQL, manifests, packages, and package sources;
 - resource limits, their aggregate process-tree scope, and whether each is hard or advisory;
-- log and cache paths in their correct host/target namespaces;
+- log and cache paths in their correct host/target namespaces, including
+  supervisor log protections;
 - the source file and trust level that contributed every nondefault value;
 - warnings, redactions, and any unenforceable request.
 
