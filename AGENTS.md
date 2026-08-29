@@ -98,7 +98,7 @@ Keep these ownership rules intact:
 
 - `src/r_bridge.rs` — shared Rust FFI for process-lifetime private R bridge environments.
 - `src/python.rs`, `src/python/library.rs`, `src/python/reticulate.rs`, `src/python/initialize.R`, `src/python/bridge.R`, `src/python/runtime.py` — Rust-owned Python runtime facade, CPython initialization, current reticulate backend, R bridges, and Python evaluator runtime.
-- `src/sql.rs`, `src/sql/bridge.R` — persistent DuckDB/DBI orchestration and R bridge.
+- `src/sql.rs`, `src/sql/dbi.rs`, `src/sql/bridge.R` — worker-facing SQL runtime facade, current DuckDB/DBI backend, and R bridge.
 - `src/r_graphics.rs`, `src/r_graphics.c`, `src/r_graphics/bridge.R` — managed graphics orchestration, C callback boundary, and R bridge.
 - `src/r_environment.rs`, `src/r_environment/bridge.R` — live R-library bridge.
 
