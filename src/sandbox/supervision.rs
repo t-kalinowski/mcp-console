@@ -13,6 +13,32 @@ use std::time::Duration;
 
 const PROCESS_REAP_GRACE: Duration = Duration::from_secs(1);
 
+/// A sandbox process tree observed from one direct root.
+///
+/// Darwin cannot atomically install a descendant observer at spawn time. A
+/// descendant that becomes orphaned before the post-spawn root watch or a
+/// corresponding fork observation remains outside this lifetime. Once a
+/// process is observed, retirement follows its PID and start time across
+/// process-group and session changes.
+pub(crate) struct ObservedLifetime(process_tracker::DescendantTracker);
+
+impl ObservedLifetime {
+    pub(crate) fn start(root_pid: u32) -> Result<Self, String> {
+        let root_pid = libc::pid_t::try_from(root_pid)
+            .ok()
+            .filter(|pid| *pid > 0)
+            .ok_or_else(|| "sandbox process tracker received an invalid root PID".to_string())?;
+        process_tracker::DescendantTracker::start(root_pid)
+            .map(Self)
+            .map_err(|failure| failure.retire(PROCESS_REAP_GRACE))
+    }
+
+    /// Stops the root and every descendant observed from it.
+    pub(crate) fn stop(self) -> Result<(), String> {
+        self.0.terminate(false, PROCESS_REAP_GRACE)
+    }
+}
+
 pub(super) fn status(
     mut sandbox_command: Command,
     temporary_directory: platform::TemporaryDirectory,
@@ -28,13 +54,13 @@ pub(super) fn status(
         Ok(tracker) => tracker,
         Err(failure) => {
             let error = failure.retire(PROCESS_REAP_GRACE);
-            let error = stop_direct_child(&mut child, error, PROCESS_REAP_GRACE);
+            let error = stop_direct_child(&mut child, error);
             preserve(temporary_directory);
             return Err(error);
         }
     };
     if let Err(error) = tracker.supervise(PROCESS_REAP_GRACE) {
-        let error = stop_direct_child(&mut child, error, PROCESS_REAP_GRACE);
+        let error = stop_direct_child(&mut child, error);
         preserve(temporary_directory);
         return Err(error);
     }
@@ -45,7 +71,7 @@ pub(super) fn status(
     Ok(platform::exit_code(status))
 }
 
-fn stop_direct_child(child: &mut Child, primary: String, timeout: Duration) -> String {
+pub(super) fn stop_direct_child(child: &mut Child, primary: String) -> String {
     let mut error = primary;
     match child.try_wait() {
         Ok(Some(_)) => return error,
@@ -73,7 +99,7 @@ fn stop_direct_child(child: &mut Child, primary: String, timeout: Duration) -> S
         );
     }
 
-    match platform::wait_for_process_exit_without_reaping(child.id(), timeout) {
+    match platform::wait_for_process_exit_without_reaping(child.id(), PROCESS_REAP_GRACE) {
         Ok(true) => {}
         Ok(false) => {
             return additional_error(
