@@ -79,6 +79,7 @@ Use `--update` only to accept an intentional transcript change.
 A full `scripts/test --update` also removes goldens for deleted suites and cases, as well as obsolete companion goldens for cases that ran; selected updates leave other goldens alone.
 A suite may set `PLATFORMS = {"darwin"}` to restrict execution and snapshot updates to those `sys.platform` values.
 Restricted cases remain visible under `scripts/test --list` and are skipped on other platforms.
+A suite may set `CASE_PLATFORMS = {"case_name": {"darwin"}}` to apply the same restriction to individual cases without hiding them from discovery or allowing another platform's full update to remove their snapshots.
 A suite may set `REQUIRED_COMMANDS = {"ir"}` to skip when a required executable is not on `PATH`.
 
 Server cases create an `McpClient`, perform their `send` interactions, and return `client._finish()`.
