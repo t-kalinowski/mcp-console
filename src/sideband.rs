@@ -1,4 +1,5 @@
 use std::io::{self, Read, Write};
+use std::net::Shutdown;
 use std::os::fd::{AsRawFd, FromRawFd, RawFd};
 use std::os::unix::net::UnixStream;
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
@@ -190,6 +191,11 @@ impl Writer {
         serde_json::to_writer(&mut endpoint, message)?;
         endpoint.write_all(b"\n")?;
         endpoint.flush()
+    }
+
+    /// Interrupts an in-flight write while preserving the read half for draining.
+    pub(crate) fn shutdown(&self) -> io::Result<()> {
+        self.endpoint.shutdown(Shutdown::Write)
     }
 }
 
