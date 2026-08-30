@@ -3,34 +3,21 @@ use std::os::unix::process::CommandExt as _;
 use std::process::Command;
 
 pub(super) fn close_unlisted(command: &mut Command) -> Result<(), String> {
-    // Compute the bound in the parent, then change flags only in the child.
-    // Rust's private exec-error pipe remains open on failure and closes on exec.
-    let descriptor_limit = descriptor_limit()?;
+    // The standalone path reaches this point before starting any threads, so
+    // this snapshot contains every inherited descriptor that can reach the
+    // child. Change flags only after fork to leave the launcher unchanged.
+    // Rust creates its later exec-error pipe with close-on-exec already set.
+    let mut descriptors = open_descriptors()?;
+    descriptors.retain(|descriptor| *descriptor > libc::STDERR_FILENO);
     unsafe {
         command.pre_exec(move || {
-            for descriptor in (libc::STDERR_FILENO + 1)..descriptor_limit {
-                set_close_on_exec(descriptor)?;
+            for descriptor in &descriptors {
+                set_close_on_exec(*descriptor)?;
             }
             Ok(())
         });
     }
     Ok(())
-}
-
-fn descriptor_limit() -> Result<RawFd, String> {
-    let table_size = unsafe { libc::getdtablesize() };
-    if table_size <= 0 {
-        return Err(format!(
-            "failed to read the launcher file-descriptor limit: {}",
-            std::io::Error::last_os_error()
-        ));
-    }
-    Ok(open_descriptors()?
-        .into_iter()
-        .max()
-        .map_or(table_size, |descriptor| {
-            table_size.max(descriptor.saturating_add(1))
-        }))
 }
 
 fn open_descriptors() -> Result<Vec<RawFd>, String> {

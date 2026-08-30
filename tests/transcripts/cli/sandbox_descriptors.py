@@ -18,6 +18,16 @@ TIMEOUT = 10
 
 def test_closes_unlisted_inherited_descriptors(binary: Path) -> Transcript:
     # fmt: python
+    launcher_script = code(r"""
+        import os
+        import resource
+        import sys
+
+        _, hard_limit = resource.getrlimit(resource.RLIMIT_NOFILE)
+        resource.setrlimit(resource.RLIMIT_NOFILE, (32, hard_limit))
+        os.execv(sys.argv[1], sys.argv[1:])
+        """)
+    # fmt: python
     sandboxed_script = code(r"""
         import errno
         import os
@@ -42,7 +52,14 @@ def test_closes_unlisted_inherited_descriptors(binary: Path) -> Transcript:
             os.set_inheritable(descriptor, True)
             try:
                 result = subprocess.run(
-                    [binary, *arguments, str(descriptor)],
+                    [
+                        sys.executable,
+                        "-c",
+                        launcher_script,
+                        binary,
+                        *arguments,
+                        str(descriptor),
+                    ],
                     pass_fds=(descriptor,),
                     capture_output=True,
                     text=True,

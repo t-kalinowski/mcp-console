@@ -11,7 +11,7 @@ use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, ExitSta
 use std::time::Duration;
 
 #[cfg(target_os = "macos")]
-#[path = "sandbox/supervision/file_descriptors.rs"]
+#[path = "sandbox/file_descriptors.rs"]
 mod file_descriptors;
 
 #[cfg(target_os = "macos")]
