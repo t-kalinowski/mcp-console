@@ -122,10 +122,13 @@ jobs:
       - name: Commit validated slice
         run: |
           set -euo pipefail
+          rm -f \
+            .github/codex/apply_sql_slice.py \
+            .github/workflows/codex-sql-slice.yml
           git reset --soft "$BASE_SHA"
           git add -A
           git diff --cached --check
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git commit -m "Allow selecting a DBI connection for SQL cells"
-          git push origin HEAD:refs/heads/feat/sql-dbi-connection
+          git push --force origin HEAD:refs/heads/feat/sql-dbi-connection
