@@ -30,6 +30,11 @@ mod worker_protocol;
 mod worker_relay;
 
 fn main() -> ExitCode {
+    #[cfg(target_os = "macos")]
+    if let Err(error) = configure_child_reaping() {
+        return exit_with_error(error);
+    }
+
     match cli::Cli::parse().command {
         cli::Command::Serve { worker, relay } => match run_server(worker, relay) {
             Ok(()) => ExitCode::SUCCESS,
@@ -47,6 +52,26 @@ fn main() -> ExitCode {
             Ok(exit_code) => exit_code,
             Err(error) => exit_with_error(error),
         },
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn configure_child_reaping() -> Result<(), String> {
+    // An ignored signal disposition survives exec. Restore SIGCHLD before any
+    // command starts managed children so their exit statuses remain waitable.
+    // SAFETY: zeroed sigaction storage is initialized below before use.
+    let mut action = unsafe { std::mem::zeroed::<libc::sigaction>() };
+    action.sa_sigaction = libc::SIG_DFL;
+    // SAFETY: action.sa_mask points to initialized writable storage.
+    unsafe { libc::sigemptyset(&mut action.sa_mask) };
+    // SAFETY: action is fully initialized and the old action is not requested.
+    if unsafe { libc::sigaction(libc::SIGCHLD, &action, std::ptr::null_mut()) } == 0 {
+        Ok(())
+    } else {
+        Err(format!(
+            "failed to configure child-process reaping: {}",
+            std::io::Error::last_os_error()
+        ))
     }
 }
 
