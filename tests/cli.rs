@@ -1,9 +1,13 @@
 use std::fs;
+#[cfg(target_os = "macos")]
+use std::fs::OpenOptions;
 use std::io::{BufRead, BufReader, Read, Write};
 #[cfg(target_os = "macos")]
 use std::net::TcpListener;
 #[cfg(target_os = "macos")]
-use std::os::unix::fs::PermissionsExt;
+use std::os::fd::AsRawFd;
+#[cfg(target_os = "macos")]
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -15,6 +19,12 @@ struct TestDirectory(PathBuf);
 
 #[cfg(target_os = "macos")]
 struct KillOnDrop(libc::pid_t);
+
+#[cfg(target_os = "macos")]
+struct FifoCheckpoint {
+    path: PathBuf,
+    descriptor: fs::File,
+}
 
 impl TestDirectory {
     fn new(name: &str) -> Self {
@@ -48,6 +58,46 @@ impl Drop for KillOnDrop {
         // SAFETY: the fixture records the child PID immediately after `fork`, and
         // this guard lives only for that test invocation.
         let _ = unsafe { libc::kill(self.0, libc::SIGKILL) };
+    }
+}
+
+#[cfg(target_os = "macos")]
+impl FifoCheckpoint {
+    fn new(path: PathBuf) -> Self {
+        let status = Command::new("mkfifo")
+            .arg(&path)
+            .status()
+            .expect("mkfifo should run");
+        assert!(status.success(), "mkfifo failed for {}", path.display());
+        let descriptor = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .custom_flags(libc::O_NONBLOCK)
+            .open(&path)
+            .expect("checkpoint FIFO should open");
+        Self { path, descriptor }
+    }
+
+    fn path(&self) -> &Path {
+        &self.path
+    }
+
+    fn wait(&mut self, description: &str) {
+        let mut descriptor = libc::pollfd {
+            fd: self.descriptor.as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        // SAFETY: `descriptor` points to one initialized `pollfd` for the
+        // duration of this call.
+        let ready = unsafe { libc::poll(&mut descriptor, 1, 10_000) };
+        assert_eq!(ready, 1, "checkpoint was not reached: {description}");
+        assert_ne!(descriptor.revents & libc::POLLIN, 0, "{description}");
+        let mut signal = [0];
+        self.descriptor
+            .read_exact(&mut signal)
+            .expect("checkpoint signal should be readable");
+        assert_eq!(signal, [b'1'], "unexpected checkpoint signal");
     }
 }
 
@@ -774,8 +824,9 @@ fn stdio_console_shutdown_is_bounded_during_r_preparation() {
     let test_directory = TestDirectory::new("r-preparation-shutdown");
     let fake_bin = test_directory.path().join("bin");
     let fake_ir = fake_bin.join("ir");
-    let resolver_started = test_directory.path().join("resolver-started");
-    let preflight_complete = test_directory.path().join("preflight-complete");
+    let resolver_group = test_directory.path().join("resolver-group");
+    let mut resolver_started = FifoCheckpoint::new(test_directory.path().join("resolver-started"));
+    let resolver_lifetime = FifoCheckpoint::new(test_directory.path().join("resolver-lifetime"));
     fs::create_dir(&fake_bin).expect("fake bin directory should be created");
     let original_path = std::env::var_os("PATH").unwrap_or_default();
     let real_ir = std::env::split_paths(&original_path)
@@ -785,16 +836,16 @@ fn stdio_console_shutdown_is_bounded_during_r_preparation() {
     fs::write(
         &fake_ir,
         r#"#!/bin/sh
-if [ "$1" = "--version" ]; then
-  exec "$MCP_CONSOLE_REAL_IR" "$@"
-fi
-if [ ! -e "$MCP_CONSOLE_PREFLIGHT_COMPLETE" ]; then
-  : > "$MCP_CONSOLE_PREFLIGHT_COMPLETE"
-  exec "$MCP_CONSOLE_REAL_IR" "$@"
-fi
-printf '%s\n' "$$" > "${MCP_CONSOLE_RESOLVER_STARTED}.tmp"
-/bin/mv "${MCP_CONSOLE_RESOLVER_STARTED}.tmp" "$MCP_CONSOLE_RESOLVER_STARTED"
-exec /bin/sleep 4
+for argument in "$@"; do
+  if [ "$argument" = "praise" ]; then
+    exec 3< "$MCP_CONSOLE_RESOLVER_LIFETIME"
+    printf '%s\n' "$$" > "$MCP_CONSOLE_RESOLVER_GROUP"
+    printf 1 > "$MCP_CONSOLE_RESOLVER_STARTED"
+    IFS= read -r _ <&3
+    exit 99
+  fi
+done
+exec "$MCP_CONSOLE_REAL_IR" "$@"
 "#,
     )
     .expect("fake `ir` should be written");
@@ -820,9 +871,10 @@ exec /bin/sleep 4
         .env("R_HOME", &real_r_home)
         .env("RETICULATE_PYTHON", "/usr/bin/python3")
         .env("PATH", path)
-        .env("MCP_CONSOLE_PREFLIGHT_COMPLETE", &preflight_complete)
         .env("MCP_CONSOLE_REAL_IR", &real_ir)
-        .env("MCP_CONSOLE_RESOLVER_STARTED", &resolver_started);
+        .env("MCP_CONSOLE_RESOLVER_GROUP", &resolver_group)
+        .env("MCP_CONSOLE_RESOLVER_STARTED", resolver_started.path())
+        .env("MCP_CONSOLE_RESOLVER_LIFETIME", resolver_lifetime.path());
     let mut client = McpClient::spawn(command);
     client.send_tool(
         2,
@@ -832,15 +884,8 @@ exec /bin/sleep 4
         }),
     );
 
-    let started = Instant::now();
-    while !resolver_started.exists() {
-        assert!(
-            started.elapsed() < Duration::from_secs(2),
-            "R package resolver did not start"
-        );
-        std::thread::sleep(Duration::from_millis(10));
-    }
-    let resolver_group = fs::read_to_string(&resolver_started)
+    resolver_started.wait("R package resolver");
+    let resolver_group = fs::read_to_string(&resolver_group)
         .expect("resolver process group should be recorded")
         .trim()
         .parse::<libc::pid_t>()
@@ -923,9 +968,12 @@ fn stdio_console_stops_resolver_descendants_when_leader_exits() {
     let fake_bin = test_directory.path().join("bin");
     let fake_ir = fake_bin.join("ir");
     let fake_rscript = fake_bin.join("Rscript");
+    let fake_uv = fake_bin.join("uv");
     let fake_python = test_directory.path().join("python");
-    let python_preflight_complete = test_directory.path().join("python-preflight-complete");
-    let resolver_started = test_directory.path().join("resolver-started");
+    let resolver_group = test_directory.path().join("resolver-group");
+    let mut resolver_started = FifoCheckpoint::new(test_directory.path().join("resolver-started"));
+    let descendant_started = FifoCheckpoint::new(test_directory.path().join("descendant-started"));
+    let resolver_lifetime = FifoCheckpoint::new(test_directory.path().join("resolver-lifetime"));
     fs::create_dir(&fake_bin).expect("fake bin directory should be created");
     fs::write(
         &fake_ir,
@@ -938,38 +986,57 @@ fi
 "#,
     )
     .expect("fake `ir` should be written");
-    fs::write(&fake_python, "").expect("fake Python should be written");
     fs::write(
         &fake_rscript,
         r#"#!/bin/sh
 input=$(/bin/cat)
 case "$input" in
-  *'"extensions"'*)
-    exit 0
-    ;;
-  *'"packages"'*)
-    ;;
-  *)
-    exit 99
-    ;;
+  *'"extensions"'*) exit 0 ;;
+  *) exit 99 ;;
 esac
-if [ ! -e "$MCP_CONSOLE_PYTHON_PREFLIGHT_COMPLETE" ]; then
-  : > "$MCP_CONSOLE_PYTHON_PREFLIGHT_COMPLETE"
-  printf '%s\n' "$MCP_CONSOLE_TEST_PYTHON"
-  exit 0
-fi
-/bin/sleep 30 &
-printf '%s\n' "$$" > "${MCP_CONSOLE_RESOLVER_STARTED}.tmp"
-/bin/mv "${MCP_CONSOLE_RESOLVER_STARTED}.tmp" "$MCP_CONSOLE_RESOLVER_STARTED"
-printf '%s\n' "$MCP_CONSOLE_TEST_PYTHON"
-exit 0
 "#,
     )
     .expect("fake Rscript should be written");
-    fs::set_permissions(&fake_rscript, fs::Permissions::from_mode(0o755))
-        .expect("fake Rscript should be executable");
-    fs::set_permissions(&fake_ir, fs::Permissions::from_mode(0o755))
-        .expect("fake `ir` should be executable");
+    fs::write(
+        &fake_uv,
+        r#"#!/bin/sh
+if [ "$1" = "python" ] && [ "$2" = "list" ]; then
+  printf '%s\n' '[{"version":"3.12.12","version_parts":{"major":3,"minor":12,"patch":12},"symlink":null,"variant":"default","implementation":"cpython"}]'
+  exit 0
+fi
+if [ "$1" = "tool" ] && [ "$2" = "run" ]; then
+  output=
+  resolve=
+  for argument in "$@"; do
+    output=$argument
+    if [ "$argument" = "py-yaml12" ]; then
+      resolve=1
+    fi
+  done
+  if [ -z "$resolve" ]; then
+    printf '%s' "$MCP_CONSOLE_TEST_PYTHON" > "$output"
+    exit 0
+  fi
+  exec 3< "$MCP_CONSOLE_RESOLVER_LIFETIME"
+  (
+    printf '1\n' > "$MCP_CONSOLE_DESCENDANT_STARTED"
+    IFS= read -r _ <&3
+  ) &
+  IFS= read -r _ < "$MCP_CONSOLE_DESCENDANT_STARTED"
+  printf '%s\n' "$$" > "$MCP_CONSOLE_RESOLVER_GROUP"
+  printf 1 > "$MCP_CONSOLE_RESOLVER_STARTED"
+  printf '%s' "$MCP_CONSOLE_TEST_PYTHON" > "$output"
+  exit 0
+fi
+exit 99
+"#,
+    )
+    .expect("fake `uv` should be written");
+    fs::write(&fake_python, "#!/bin/sh\nexit 0\n").expect("fake Python should be written");
+    for program in [&fake_rscript, &fake_ir, &fake_uv, &fake_python] {
+        fs::set_permissions(program, fs::Permissions::from_mode(0o755))
+            .expect("fake program should be executable");
+    }
     let path = std::env::join_paths(std::iter::once(fake_bin.clone()).chain(
         std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
     ))
@@ -982,11 +1049,10 @@ exit 0
         .env("PATH", path)
         .env("RETICULATE_PYTHON", "")
         .env("MCP_CONSOLE_FAKE_R_LIBRARY", test_directory.path())
-        .env(
-            "MCP_CONSOLE_PYTHON_PREFLIGHT_COMPLETE",
-            &python_preflight_complete,
-        )
-        .env("MCP_CONSOLE_RESOLVER_STARTED", &resolver_started)
+        .env("MCP_CONSOLE_RESOLVER_GROUP", &resolver_group)
+        .env("MCP_CONSOLE_RESOLVER_STARTED", resolver_started.path())
+        .env("MCP_CONSOLE_DESCENDANT_STARTED", descendant_started.path())
+        .env("MCP_CONSOLE_RESOLVER_LIFETIME", resolver_lifetime.path())
         .env("MCP_CONSOLE_TEST_PYTHON", &fake_python);
     let mut client = McpClient::spawn(command);
     client.send_tool(
@@ -997,15 +1063,8 @@ exit 0
         }),
     );
 
-    let started = Instant::now();
-    while !resolver_started.exists() {
-        assert!(
-            started.elapsed() < Duration::from_secs(2),
-            "Python resolver did not start"
-        );
-        std::thread::sleep(Duration::from_millis(10));
-    }
-    let resolver_group = fs::read_to_string(&resolver_started)
+    resolver_started.wait("Python resolver descendant");
+    let resolver_group = fs::read_to_string(&resolver_group)
         .expect("resolver process group should be recorded")
         .trim()
         .parse::<libc::pid_t>()
@@ -1044,9 +1103,11 @@ fn stdio_console_shutdown_is_bounded_during_python_preparation() {
     let fake_bin = test_directory.path().join("bin");
     let fake_ir = fake_bin.join("ir");
     let fake_rscript = fake_bin.join("Rscript");
+    let fake_uv = fake_bin.join("uv");
     let fake_python = test_directory.path().join("python");
-    let python_preflight_complete = test_directory.path().join("python-preflight-complete");
-    let resolver_started = test_directory.path().join("resolver-started");
+    let resolver_starts = test_directory.path().join("resolver-starts");
+    let mut resolver_started = FifoCheckpoint::new(test_directory.path().join("resolver-started"));
+    let resolver_lifetime = FifoCheckpoint::new(test_directory.path().join("resolver-lifetime"));
     fs::create_dir(&fake_bin).expect("fake bin directory should be created");
     fs::write(
         &fake_ir,
@@ -1059,35 +1120,52 @@ fi
 "#,
     )
     .expect("fake `ir` should be written");
-    fs::write(&fake_python, "").expect("fake Python should be written");
     fs::write(
         &fake_rscript,
         r#"#!/bin/sh
 input=$(/bin/cat)
 case "$input" in
-  *'"extensions"'*)
-    exit 0
-    ;;
-  *'"packages"'*)
-    ;;
-  *)
-    exit 99
-    ;;
+  *'"extensions"'*) exit 0 ;;
+  *) exit 99 ;;
 esac
-if [ ! -e "$MCP_CONSOLE_PYTHON_PREFLIGHT_COMPLETE" ]; then
-  : > "$MCP_CONSOLE_PYTHON_PREFLIGHT_COMPLETE"
-  printf '%s\n' "$MCP_CONSOLE_TEST_PYTHON"
-  exit 0
-fi
-printf '%s\n' "$$" >> "$MCP_CONSOLE_RESOLVER_STARTED"
-exec /bin/sleep 3
 "#,
     )
     .expect("fake Rscript should be written");
-    fs::set_permissions(&fake_rscript, fs::Permissions::from_mode(0o755))
-        .expect("fake Rscript should be executable");
-    fs::set_permissions(&fake_ir, fs::Permissions::from_mode(0o755))
-        .expect("fake `ir` should be executable");
+    fs::write(
+        &fake_uv,
+        r#"#!/bin/sh
+if [ "$1" = "python" ] && [ "$2" = "list" ]; then
+  printf '%s\n' '[{"version":"3.12.12","version_parts":{"major":3,"minor":12,"patch":12},"symlink":null,"variant":"default","implementation":"cpython"}]'
+  exit 0
+fi
+if [ "$1" = "tool" ] && [ "$2" = "run" ]; then
+  output=
+  resolve=
+  for argument in "$@"; do
+    output=$argument
+    case "$argument" in
+      py-yaml12|scipy) resolve=1 ;;
+    esac
+  done
+  if [ -z "$resolve" ]; then
+    printf '%s' "$MCP_CONSOLE_TEST_PYTHON" > "$output"
+    exit 0
+  fi
+  exec 3< "$MCP_CONSOLE_RESOLVER_LIFETIME"
+  printf '%s\n' "$$" >> "$MCP_CONSOLE_RESOLVER_STARTS"
+  printf 1 > "$MCP_CONSOLE_RESOLVER_STARTED"
+  IFS= read -r _ <&3
+  exit 99
+fi
+exit 99
+"#,
+    )
+    .expect("fake `uv` should be written");
+    fs::write(&fake_python, "#!/bin/sh\nexit 0\n").expect("fake Python should be written");
+    for program in [&fake_rscript, &fake_ir, &fake_uv, &fake_python] {
+        fs::set_permissions(program, fs::Permissions::from_mode(0o755))
+            .expect("fake program should be executable");
+    }
     let path = std::env::join_paths(std::iter::once(fake_bin.clone()).chain(
         std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
     ))
@@ -1100,11 +1178,9 @@ exec /bin/sleep 3
         .env("PATH", path)
         .env_remove("RETICULATE_PYTHON")
         .env("MCP_CONSOLE_FAKE_R_LIBRARY", test_directory.path())
-        .env(
-            "MCP_CONSOLE_PYTHON_PREFLIGHT_COMPLETE",
-            &python_preflight_complete,
-        )
-        .env("MCP_CONSOLE_RESOLVER_STARTED", &resolver_started)
+        .env("MCP_CONSOLE_RESOLVER_STARTS", &resolver_starts)
+        .env("MCP_CONSOLE_RESOLVER_STARTED", resolver_started.path())
+        .env("MCP_CONSOLE_RESOLVER_LIFETIME", resolver_lifetime.path())
         .env("MCP_CONSOLE_TEST_PYTHON", &fake_python);
     let mut client = McpClient::spawn(command);
     client.send_tool(
@@ -1115,15 +1191,8 @@ exec /bin/sleep 3
         }),
     );
 
-    let started = Instant::now();
-    while !resolver_started.exists() {
-        assert!(
-            started.elapsed() < Duration::from_secs(2),
-            "Python resolver did not start"
-        );
-        std::thread::sleep(Duration::from_millis(10));
-    }
-    let resolver_group = fs::read_to_string(&resolver_started)
+    resolver_started.wait("Python resolver");
+    let resolver_group = fs::read_to_string(&resolver_starts)
         .expect("resolver process group should be recorded")
         .trim()
         .parse::<libc::pid_t>()
@@ -1150,7 +1219,7 @@ exec /bin/sleep 3
         "resolver process group outlived server shutdown"
     );
     assert_eq!(
-        fs::read_to_string(&resolver_started)
+        fs::read_to_string(&resolver_starts)
             .expect("resolver starts should be recorded")
             .lines()
             .count(),

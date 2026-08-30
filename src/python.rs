@@ -2,6 +2,9 @@
 mod reticulate;
 
 #[cfg(target_os = "macos")]
+const RUNTIME_SOURCE: &str = include_str!("python/runtime.py");
+
+#[cfg(target_os = "macos")]
 #[derive(serde::Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum PreparationOutcome {
@@ -14,8 +17,9 @@ pub(crate) enum PreparationOutcome {
 
 /// Rust-owned Python runtime boundary.
 ///
-/// Rust owns the selected interpreter library and initialization, while the
-/// current backend delegates conversion and evaluation to reticulate.
+/// Rust owns the selected interpreter library, initialization, and private
+/// evaluator source, while the current backend delegates object conversion and
+/// evaluation dispatch to reticulate.
 #[cfg(target_os = "macos")]
 pub(crate) struct Runtime(reticulate::Runtime);
 

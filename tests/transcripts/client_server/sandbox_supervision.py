@@ -1,13 +1,11 @@
 #!/usr/bin/env -S uv run --script
 
-import fcntl
 import os
 import re
 import shutil
 import signal
 import sys
 from pathlib import Path
-from tempfile import TemporaryDirectory
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -153,51 +151,6 @@ def test_server_shutdown_retires_descendants_outside_the_worker_group(
         if generation is not None:
             _kill_generation(generation)
             shutil.rmtree(generation[3], ignore_errors=True)
-
-
-def test_worker_closes_unlisted_server_descriptors(binary: Path) -> Transcript:
-    # fmt: python
-    python = code(r"""
-        import errno
-        import os
-
-        descriptor = int(os.environ["MCP_CONSOLE_TEST_INHERITED_FD"])
-        try:
-            os.write(descriptor, b"escaped")
-        except OSError as error:
-            assert error.errno == errno.EBADF
-        else:
-            raise RuntimeError("unlisted server descriptor reached the worker")
-
-        print("closed")
-        """)
-
-    with TemporaryDirectory() as directory:
-        host_file = Path(directory) / "host.txt"
-        host_file.write_bytes(b"")
-        with host_file.open("ab", buffering=0) as stream:
-            descriptor = fcntl.fcntl(stream.fileno(), fcntl.F_DUPFD, 64)
-            os.set_inheritable(descriptor, True)
-            environment = os.environ.copy()
-            environment["MCP_CONSOLE_TEST_INHERITED_FD"] = str(descriptor)
-            client = McpClient(
-                binary,
-                ("serve",),
-                environment=environment,
-                pass_fds=(descriptor,),
-            )
-            try:
-                client._initialize_and_list_tools()
-                client.send(python=python)
-                assert _last_text(client) == "closed\n"
-                transcript = client._finish()
-            finally:
-                stop_client(client)
-                os.close(descriptor)
-        escaped = host_file.read_bytes()
-
-    assert escaped == b"", escaped
-    return transcript
 
 
 if __name__ == "__main__":

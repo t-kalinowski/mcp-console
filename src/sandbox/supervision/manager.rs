@@ -1,6 +1,6 @@
-use super::file_descriptors::configure as configure_file_descriptors;
 use super::process::{ProcessIdentity, process_info, signal_process};
 use super::process_tracker::DescendantTracker;
+use crate::sandbox::file_descriptors::configure as configure_file_descriptors;
 use crate::sandbox::platform;
 use std::ffi::OsString;
 use std::io::{ErrorKind, Read, Write};

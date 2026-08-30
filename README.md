@@ -177,6 +177,7 @@ If the manager itself exits unsuccessfully while the relay root remains live and
 It cannot reconstruct a descendant that had already detached from that ancestry before the manager failed.
 The standalone `sandbox` development command uses the same manager and remains covered if its launcher crashes after manager ownership is committed.
 On macOS, a descendant that detaches before the post-spawn tracker observes it remains outside this guarantee.
+The standalone command inherits standard input, output, and error while closing other inherited file descriptors before the target runs.
 Use the MCP server for the supported worker-generation lifecycle.
 
 Run development commands from the repository root:

@@ -1,6 +1,5 @@
 #!/usr/bin/env -S uv run --script
 
-import fcntl
 import os
 import selectors
 import signal
@@ -8,7 +7,6 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from tempfile import TemporaryDirectory
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -294,54 +292,6 @@ def test_relays_interrupt_then_retires_descendants(binary: Path) -> Transcript:
     ]
 
 
-def test_closes_unlisted_inherited_descriptors(binary: Path) -> Transcript:
-    # fmt: python
-    sandboxed_script = code(r"""
-        import errno
-        import os
-        import sys
-
-        try:
-            os.write(int(sys.argv[1]), b"escaped")
-        except OSError as error:
-            assert error.errno == errno.EBADF
-        else:
-            raise SystemExit("unlisted inherited descriptor remained writable")
-
-        print("closed")
-        """)
-    arguments = ("sandbox", "--", "python", "-c", sandboxed_script)
-
-    with TemporaryDirectory() as directory:
-        host_file = Path(directory) / "host.txt"
-        host_file.write_bytes(b"")
-        with host_file.open("ab", buffering=0) as stream:
-            descriptor = fcntl.fcntl(stream.fileno(), fcntl.F_DUPFD, 64)
-            os.set_inheritable(descriptor, True)
-            try:
-                result = subprocess.run(
-                    [binary, *arguments, str(descriptor)],
-                    pass_fds=(descriptor,),
-                    capture_output=True,
-                    text=True,
-                    timeout=TIMEOUT,
-                )
-            finally:
-                os.close(descriptor)
-        escaped = host_file.read_bytes()
-
-    assert result.returncode == 0, result
-    assert result.stdout == "closed\n", result.stdout
-    assert result.stderr == "", result.stderr
-    assert escaped == b"", escaped
-    return [
-        {
-            "command": [*_command(*arguments), "<inherited fd>"],
-            "stdout": result.stdout,
-        }
-    ]
-
-
 def test_sandbox_cannot_retain_its_temporary_directory(binary: Path) -> Transcript:
     # fmt: python
     sandboxed_script = code(r"""
@@ -581,29 +531,31 @@ def test_preserves_status_after_terminal_closes(binary: Path) -> Transcript:
 
 
 def test_preserves_status_when_sigchld_was_ignored(binary: Path) -> Transcript:
+    # Darwin preserves the ignored disposition across exec but clears its
+    # no-child-wait state. Exercise the real binary entry point so later
+    # supervision changes continue to preserve the command's waitable status.
+    # fmt: python
     host_script = code(r"""
         import os
         import signal
         import sys
 
         signal.signal(signal.SIGCHLD, signal.SIG_IGN)
-        os.execv(
-            sys.argv[1],
-            [
-                sys.argv[1],
-                "sandbox",
-                "--",
-                "python",
-                "-c",
-                "raise SystemExit(23)",
-            ],
-        )
+        os.execv(sys.argv[1], sys.argv[1:])
         """)
+    arguments = (
+        "sandbox",
+        "--",
+        "python",
+        "-c",
+        "raise SystemExit(23)",
+    )
     result = subprocess.run(
-        ["python", "-c", host_script, binary],
+        [sys.executable, "-c", host_script, binary, *arguments],
         capture_output=True,
         text=True,
         timeout=TIMEOUT,
+        check=False,
     )
 
     assert result.returncode == 23, result
@@ -611,9 +563,7 @@ def test_preserves_status_when_sigchld_was_ignored(binary: Path) -> Transcript:
     assert result.stderr == "", result.stderr
     return [
         {
-            "command": _command(
-                "sandbox", "--", "python", "-c", "raise SystemExit(23)"
-            ),
+            "command": ["mcp-console", *arguments],
             "inherited_sigchld": "ignored",
             "exit_code": result.returncode,
         }

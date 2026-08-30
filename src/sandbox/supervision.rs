@@ -1,5 +1,3 @@
-#[path = "supervision/file_descriptors.rs"]
-mod file_descriptors;
 #[path = "supervision/job_control.rs"]
 mod job_control;
 #[path = "supervision/manager.rs"]
@@ -9,10 +7,10 @@ mod process;
 #[path = "supervision/process_tracker.rs"]
 mod process_tracker;
 
-use self::file_descriptors::configure as configure_file_descriptors;
 use self::job_control::{ForegroundTerminal, SignalRelay};
 pub(crate) use self::manager::SandboxManager;
 use self::process_tracker::{EventWait, RootExitWaiter};
+use super::file_descriptors::configure as configure_file_descriptors;
 use super::platform;
 use std::os::fd::RawFd;
 use std::process::{Child, Command, ExitCode, ExitStatus};
@@ -33,12 +31,13 @@ pub(super) fn status(
     mut sandbox_command: Command,
     temporary_directory: platform::TemporaryDirectory,
 ) -> Result<ExitCode, String> {
-    configure_command(&mut sandbox_command, Vec::new())?;
-
     let mut manager = SandboxManager::spawn(Duration::from_secs(5))?;
     let signal_relay = SignalRelay::install()?;
     let mut foreground_terminal = ForegroundTerminal::detect();
     signal_relay.configure_child(&mut sandbox_command, foreground_terminal.descriptor());
+    // The standalone launcher is single-threaded. Take the descriptor snapshot
+    // after opening manager and signal state so none of it reaches the target.
+    super::file_descriptors::close_unlisted(&mut sandbox_command)?;
 
     let mut child = sandbox_command
         .spawn()

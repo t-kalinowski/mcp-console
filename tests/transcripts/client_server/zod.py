@@ -40,25 +40,74 @@ PNG_1X1 = (
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42Y"
     "AAAAASUVORK5CYII="
 )
+TEST_EVENT_FIFO_NAME = "zod-test-events"
+TEST_CONTROL_FIFO_NAME = "zod-test-control"
+TEST_CLEANUP_FIFO_NAME = "zod-test-cleanup"
+TEST_RESPONSE_QUERY_FIFO_NAME = "zod-test-response-query"
+TEST_RESPONSE_RESULT_FIFO_NAME = "zod-test-response-result"
+TEST_CONTROL_READY_NAME = "zod-test-control-ready"
 
 
 class ZodFixtureControl:
-    def __init__(self) -> None:
-        self.channel = f"{os.getpid()}-{time.time_ns()}"
-        self.base_directory: Path | None = None
-        self.fixture_directory: Path | None = None
-        self.event_path: Path | None = None
-        self.event_offset = 0
-        self.pending_controls: list[bytes] = []
+    def __init__(self, root: Path | None = None) -> None:
+        self.temporary_directory = (
+            tempfile.TemporaryDirectory() if root is None else None
+        )
+        if root is None:
+            assert self.temporary_directory is not None
+            root = Path(self.temporary_directory.name)
+        self.root = root
+        self.event_reader: int | None = None
+        self.control_writer: int | None = None
+        self.cleanup_writer: int | None = None
         self.events: list[dict[str, object]] = []
         self.buffer = bytearray()
         self.cleanup_released = False
 
     def configure(self, environment: dict[str, str]) -> None:
-        self.base_directory = Path(environment.get("TMPDIR", tempfile.gettempdir()))
-        environment["ZOD_TEST_CHANNEL"] = self.channel
+        environment["TMPDIR"] = str(self.root)
+        environment["ZOD_TEST_FIXTURE_CONTROL"] = "1"
+
+    def connect(self, client: McpClient) -> None:
+        if self.event_reader is not None:
+            return
+        deadline = time.monotonic() + 15
+        while True:
+            ready = list(self.root.glob(f"**/{TEST_CONTROL_READY_NAME}"))
+            assert len(ready) <= 1, (
+                f"found multiple Zod fixture control channels: {ready!r}"
+            )
+            if ready:
+                directory = ready[0].parent
+                event_reader = os.open(
+                    directory / TEST_EVENT_FIFO_NAME,
+                    os.O_RDONLY | os.O_NONBLOCK,
+                )
+                control_writer = os.open(
+                    directory / TEST_CONTROL_FIFO_NAME,
+                    os.O_WRONLY | os.O_NONBLOCK,
+                )
+                cleanup_writer = os.open(
+                    directory / TEST_CLEANUP_FIFO_NAME,
+                    os.O_WRONLY | os.O_NONBLOCK,
+                )
+                os.set_blocking(control_writer, True)
+                os.set_blocking(cleanup_writer, True)
+                self.event_reader = event_reader
+                self.control_writer = control_writer
+                self.cleanup_writer = cleanup_writer
+                return
+            assert client.process.poll() is None, (
+                "mcp-console stopped before Zod created its fixture controls; "
+                + self.diagnostics()
+            )
+            assert time.monotonic() < deadline, (
+                "Zod did not create its fixture controls; " + self.diagnostics()
+            )
+            time.sleep(0.01)
 
     def send_control(self, operation: int, kind: str, **details: object) -> None:
+        assert self.control_writer is not None
         payload = (
             json.dumps(
                 {"operation": operation, "kind": kind, **details},
@@ -66,18 +115,18 @@ class ZodFixtureControl:
             ).encode()
             + b"\n"
         )
-        directory = self._discover_fixture_directory(required=False)
-        if directory is None:
-            self.pending_controls.append(payload)
-        else:
-            self._write_controls(directory, [payload])
+        assert os.write(self.control_writer, payload) == len(payload)
 
     def release_cleanup(self) -> None:
         if self.cleanup_released:
             return
-        directory = self._discover_fixture_directory(required=False)
-        if directory is not None and directory.exists():
-            (directory / f"zod-test-cleanup-{self.channel}").touch()
+        if self.cleanup_writer is not None:
+            try:
+                os.write(self.cleanup_writer, b"1")
+            except BrokenPipeError:
+                pass
+            os.close(self.cleanup_writer)
+            self.cleanup_writer = None
         self.cleanup_released = True
 
     def wait_for(self, operation: int, kind: str) -> dict[str, object]:
@@ -107,56 +156,12 @@ class ZodFixtureControl:
                     f"Zod did not emit one of {sorted(kinds)!r} for request "
                     f"{operation}; " + self.diagnostics()
                 )
-            self._read_events()
-            time.sleep(min(0.01, remaining))
-
-    def _discover_fixture_directory(self, *, required: bool = True) -> Path | None:
-        if self.fixture_directory is not None:
-            return self.fixture_directory
-        assert self.base_directory is not None, "fixture control was not configured"
-        deadline = time.monotonic() + 15
-        pattern = f"mcp-console-tmp-*/zod-test-events-{self.channel}.jsonl"
-        while True:
-            matches = list(self.base_directory.glob(pattern))
-            if matches:
-                assert len(matches) == 1, matches
-                self.event_path = matches[0]
-                self.fixture_directory = matches[0].parent
-                self._write_controls(
-                    self.fixture_directory,
-                    self.pending_controls,
-                )
-                self.pending_controls.clear()
-                return self.fixture_directory
-            if not required or time.monotonic() >= deadline:
-                if required:
-                    raise AssertionError(
-                        "Zod fixture channel did not start; " + self.diagnostics()
-                    )
-                return None
-            time.sleep(0.01)
-
-    def _write_controls(self, directory: Path, payloads: list[bytes]) -> None:
-        if not payloads:
-            return
-        path = directory / f"zod-test-control-{self.channel}.jsonl"
-        with path.open("ab", buffering=0) as stream:
-            for payload in payloads:
-                assert stream.write(payload) == len(payload)
-
-    def _read_events(self) -> None:
-        directory = self._discover_fixture_directory()
-        assert directory is not None
-        event_path = self.event_path
-        assert event_path is not None
-        try:
-            with event_path.open("rb") as stream:
-                stream.seek(self.event_offset)
-                chunk = stream.read()
-        except FileNotFoundError:
-            return
-        self.event_offset += len(chunk)
-        if chunk:
+            assert self.event_reader is not None
+            readable, _, _ = select.select([self.event_reader], [], [], remaining)
+            if not readable:
+                continue
+            chunk = os.read(self.event_reader, 4096)
+            assert chunk, "Zod event channel closed; " + self.diagnostics()
             self.record_events(chunk)
 
     def record_events(self, chunk: bytes) -> None:
@@ -205,30 +210,123 @@ class ZodFixtureControl:
         return f"outstanding requests: {sorted(started - completed)}; event trace:\n{trace}"
 
     def wait_for_eof(self) -> None:
+        assert self.event_reader is not None
         deadline = time.monotonic() + 15
-        directory = self._discover_fixture_directory()
-        assert directory is not None
         while True:
-            self._read_events()
-            if not directory.exists():
-                assert not self.buffer, self.diagnostics()
-                return
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise AssertionError(
-                    "Zod fixture directory remained after cleanup; "
+                    "Zod event channel remained open after fixture cleanup; "
                     + self.diagnostics()
                 )
-            time.sleep(min(0.01, remaining))
+            readable, _, _ = select.select([self.event_reader], [], [], remaining)
+            if not readable:
+                continue
+            chunk = os.read(self.event_reader, 4096)
+            if not chunk:
+                assert not self.buffer, self.diagnostics()
+                return
+            self.record_events(chunk)
 
     def close(self) -> None:
         self.release_cleanup()
+        if self.control_writer is not None:
+            os.close(self.control_writer)
+        if self.event_reader is not None:
+            os.close(self.event_reader)
+        if self.temporary_directory is not None:
+            self.temporary_directory.cleanup()
 
     def __enter__(self) -> Self:
         return self
 
     def __exit__(self, *_error: object) -> None:
         self.close()
+
+
+class ResponseGateObserver:
+    def __init__(
+        self,
+        root: Path,
+        stream: socket.socket,
+        release: Path,
+    ) -> None:
+        self.root = root
+        self.stream = stream
+        self.release = release
+        self.stop_requested = threading.Event()
+        self.error: Exception | None = None
+        self.responded = False
+        self.thread = threading.Thread(target=self._run, daemon=True)
+        self.thread.start()
+
+    def _run(self) -> None:
+        query_reader: int | None = None
+        result_writer: int | None = None
+        try:
+            deadline = time.monotonic() + 15
+            while True:
+                ready = list(self.root.glob(f"**/{TEST_CONTROL_READY_NAME}"))
+                assert len(ready) <= 1, (
+                    f"found multiple Zod fixture control channels: {ready!r}"
+                )
+                if ready:
+                    directory = ready[0].parent
+                    break
+                if self.stop_requested.wait(0.01):
+                    return
+                assert time.monotonic() < deadline, (
+                    "Zod did not create its response gate controls"
+                )
+
+            query_reader = os.open(
+                directory / TEST_RESPONSE_QUERY_FIFO_NAME,
+                os.O_RDONLY | os.O_NONBLOCK,
+            )
+            result_writer = os.open(
+                directory / TEST_RESPONSE_RESULT_FIFO_NAME,
+                os.O_WRONLY | os.O_NONBLOCK,
+            )
+            os.set_blocking(result_writer, True)
+            while True:
+                try:
+                    query = os.read(query_reader, 1)
+                    break
+                except BlockingIOError:
+                    if self.stop_requested.wait(0.01):
+                        return
+            assert query == b"1", query
+            completed = self.release.is_file()
+            if not completed:
+                try:
+                    queued = self.stream.recv(
+                        64 * 1024,
+                        socket.MSG_PEEK | socket.MSG_DONTWAIT,
+                    )
+                    completed = b"\n" in queued
+                except BlockingIOError:
+                    pass
+            assert os.write(result_writer, b"1" if completed else b"0") == 1
+            self.responded = True
+        except Exception as error:
+            self.error = error
+        finally:
+            if query_reader is not None:
+                os.close(query_reader)
+            if result_writer is not None:
+                os.close(result_writer)
+
+    def finish(self) -> None:
+        self.thread.join(15)
+        assert not self.thread.is_alive(), "Zod did not query the response gate"
+        if self.error is not None:
+            raise self.error
+        assert self.responded
+
+    def close(self) -> None:
+        self.stop_requested.set()
+        self.thread.join(1)
+        assert not self.thread.is_alive(), "response gate observer did not stop"
 
 
 def queued_socket_bytes(stream: socket.socket) -> int:
@@ -2022,19 +2120,27 @@ def test_orders_queued_cancellation_behind_incomplete_response(
     zod = Path(__file__).resolve().parents[2] / "fixtures" / "zod"
     environment = os.environ.copy()
     with tempfile.TemporaryDirectory() as temporary_directory:
-        release = Path(temporary_directory) / "response-gate-released"
+        temporary = Path(temporary_directory)
+        release = temporary / "response-gate-released"
+        environment["TMPDIR"] = temporary_directory
         environment["ZOD_TEST_RESPONSE_GATE_RELEASED"] = str(release)
-        with ZodFixtureControl() as control:
+        with ZodFixtureControl(temporary) as control:
             control.configure(environment)
             client = SocketGateMcpClient(
                 binary,
                 ("serve", "--worker", str(zod)),
                 environment,
-                Path(temporary_directory),
+                temporary,
             )
+            observer: ResponseGateObserver | None = None
             finished = False
             try:
                 client._initialize_and_list_tools()
+                observer = ResponseGateObserver(
+                    temporary,
+                    client.stdout.stream,
+                    release,
+                )
 
                 invalid_requirement = (
                     "https://invalid.example/" + "x" * TEST_GATED_RESPONSE_SIZE
@@ -2095,6 +2201,7 @@ def test_orders_queued_cancellation_behind_incomplete_response(
                     release,
                     control.diagnostics(),
                 )
+                observer.finish()
                 control.record_client_event(first_id, "response_write_completed")
                 client._receive(first)
                 expected_error = (
@@ -2113,6 +2220,7 @@ def test_orders_queued_cancellation_behind_incomplete_response(
                     "<large invalid Python requirement rejected>"
                 )
 
+                control.connect(client)
                 started = control.wait_for(live_id, "worker_operation_started")
                 assert started["response_gate_released"] is True, control.diagnostics()
                 control.wait_for(live_id, "worker_operation_completed")
@@ -2148,6 +2256,8 @@ def test_orders_queued_cancellation_behind_incomplete_response(
             finally:
                 if not finished:
                     stop_client(client)
+                if observer is not None:
+                    observer.close()
                 client.close_test_stdio()
 
 
@@ -2172,6 +2282,7 @@ def test_interrupts_running_worker_with_sigint(binary: Path) -> Transcript:
             )
             assert client.transcript[-1]["id"] == target_id
             assert last_tool_text(client) == "\n[running; poll with an empty send]"
+            control.connect(client)
             control.wait_for(target_id, "worker_operation_started")
 
             interrupt_id = client._next_request_id
@@ -2307,7 +2418,7 @@ def test_supervises_stopped_and_continued_workers(binary: Path) -> Transcript:
 
 def resolver_interrupt_permission_environment(
     temporary_path: Path,
-) -> tuple[dict[str, str], Path, Path]:
+) -> tuple[dict[str, str], FifoCheckpoint, FifoCheckpoint, Path, Path]:
     environment, _ = r_test_environment()
     environment["RETICULATE_PYTHON"] = ""
     fake_bin = temporary_path / "bin"
@@ -2322,8 +2433,10 @@ def resolver_interrupt_permission_environment(
               printf 'ir 0.4.0\n'
               exit 0
             fi
-            printf '%s\n' "$$" > "$MCP_CONSOLE_TEST_RESOLVER_STARTED"
-            exec /bin/sleep 30
+            exec 3< "$MCP_CONSOLE_TEST_RESOLVER_LIFETIME"
+            printf '%s\n' "$$" > "$MCP_CONSOLE_TEST_RESOLVER_GROUP"
+            printf 1 > "$MCP_CONSOLE_TEST_RESOLVER_STARTED"
+            IFS= read -r _ <&3
             """),
         encoding="utf-8",
     )
@@ -2334,24 +2447,38 @@ def resolver_interrupt_permission_environment(
     environment["PATH"] = os.pathsep.join((str(fake_bin), path))
     environment["TMPDIR"] = str(temporary_path)
     denied_interrupt = temporary_path / "resolver-sigint-denied"
-    resolver_started = temporary_path / "resolver-started"
+    resolver_group = temporary_path / "resolver-group"
+    resolver_started = FifoCheckpoint(temporary_path / "resolver-started")
+    resolver_lifetime = FifoCheckpoint(temporary_path / "resolver-lifetime")
     environment["MCP_CONSOLE_TEST_DENIED_SIGINT"] = str(denied_interrupt)
-    environment["MCP_CONSOLE_TEST_RESOLVER_STARTED"] = str(resolver_started)
+    environment["MCP_CONSOLE_TEST_RESOLVER_GROUP"] = str(resolver_group)
+    environment["MCP_CONSOLE_TEST_RESOLVER_STARTED"] = str(resolver_started.path)
+    environment["MCP_CONSOLE_TEST_RESOLVER_LIFETIME"] = str(resolver_lifetime.path)
     # The interposer removes its loader variable after reaching the server, so
     # the resolver and Zod do not inherit it.
     environment["DYLD_INSERT_LIBRARIES"] = str(
         build_killpg_denial_interposer(temporary_path)
     )
-    return environment, resolver_started, denied_interrupt
+    return (
+        environment,
+        resolver_started,
+        resolver_lifetime,
+        resolver_group,
+        denied_interrupt,
+    )
 
 
 def test_reports_resolver_interrupt_permission_error(binary: Path) -> Transcript:
     zod = Path(__file__).resolve().parents[2] / "fixtures" / "zod"
     with tempfile.TemporaryDirectory() as temporary_directory:
         temporary_path = Path(temporary_directory)
-        environment, resolver_started, denied_interrupt = (
-            resolver_interrupt_permission_environment(temporary_path)
-        )
+        (
+            environment,
+            resolver_started,
+            resolver_lifetime,
+            resolver_group_record,
+            denied_interrupt,
+        ) = resolver_interrupt_permission_environment(temporary_path)
 
         client = McpClient(
             binary,
@@ -2365,13 +2492,8 @@ def test_reports_resolver_interrupt_permission_error(binary: Path) -> Transcript
             preparation = client._start_send(
                 requirements={"r": ["blocked-resolver"]},
             )
-            resolver_group = int(
-                wait_for_marker(
-                    temporary_path,
-                    resolver_started.name,
-                    client,
-                ).read_text(encoding="utf-8")
-            )
+            resolver_started.wait("permission-denied R resolver")
+            resolver_group = int(resolver_group_record.read_text(encoding="utf-8"))
             assert resolver_group != os.getpgrp(), (
                 "resolver did not enter a dedicated process group"
             )
@@ -2393,13 +2515,7 @@ def test_reports_resolver_interrupt_permission_error(binary: Path) -> Transcript
                 responses_returned.set()
                 watchdog.join()
 
-            denied_group = int(
-                wait_for_marker(
-                    temporary_path,
-                    denied_interrupt.name,
-                    client,
-                ).read_text(encoding="utf-8")
-            )
+            denied_group = int(denied_interrupt.read_text(encoding="utf-8"))
             assert denied_group == resolver_group, (
                 "SIGINT denial targeted a different process group"
             )
@@ -2441,6 +2557,8 @@ def test_reports_resolver_interrupt_permission_error(binary: Path) -> Transcript
             if not passed:
                 stop_process_group(resolver_group)
                 stop_client(client)
+            resolver_started.close()
+            resolver_lifetime.close()
 
 
 def test_reports_runtime_r_resolver_interrupt_permission_error(
@@ -2449,9 +2567,13 @@ def test_reports_runtime_r_resolver_interrupt_permission_error(
     zod = Path(__file__).resolve().parents[2] / "fixtures" / "zod"
     with tempfile.TemporaryDirectory() as temporary_directory:
         temporary_path = Path(temporary_directory)
-        environment, resolver_started, denied_interrupt = (
-            resolver_interrupt_permission_environment(temporary_path)
-        )
+        (
+            environment,
+            resolver_started,
+            resolver_lifetime,
+            resolver_group_record,
+            denied_interrupt,
+        ) = resolver_interrupt_permission_environment(temporary_path)
         client = McpClient(
             binary,
             ("serve", "--worker", str(zod)),
@@ -2464,13 +2586,8 @@ def test_reports_runtime_r_resolver_interrupt_permission_error(
             evaluation = client._start_send(
                 r="report runtime R resolution failure",
             )
-            resolver_group = int(
-                wait_for_marker(
-                    temporary_path,
-                    resolver_started.name,
-                    client,
-                ).read_text(encoding="utf-8")
-            )
+            resolver_started.wait("permission-denied runtime R resolver")
+            resolver_group = int(resolver_group_record.read_text(encoding="utf-8"))
             assert resolver_group != os.getpgrp(), (
                 "resolver did not enter a dedicated process group"
             )
@@ -2492,13 +2609,7 @@ def test_reports_runtime_r_resolver_interrupt_permission_error(
                 responses_returned.set()
                 watchdog.join()
 
-            denied_group = int(
-                wait_for_marker(
-                    temporary_path,
-                    denied_interrupt.name,
-                    client,
-                ).read_text(encoding="utf-8")
-            )
+            denied_group = int(denied_interrupt.read_text(encoding="utf-8"))
             assert denied_group == resolver_group, (
                 "SIGINT denial targeted a different process group"
             )
@@ -2534,6 +2645,8 @@ def test_reports_runtime_r_resolver_interrupt_permission_error(
             if not passed:
                 stop_process_group(resolver_group)
                 stop_client(client)
+            resolver_started.close()
+            resolver_lifetime.close()
 
 
 def test_accepts_idle_stdin(binary: Path) -> Transcript:
@@ -4235,7 +4348,7 @@ def test_shuts_down_stalled_worker(binary: Path) -> Transcript:
     zod = Path(__file__).resolve().parents[2] / "fixtures" / "zod"
     with (
         tempfile.TemporaryDirectory() as temporary_directory,
-        ZodFixtureControl() as control,
+        ZodFixtureControl(Path(temporary_directory)) as control,
     ):
         environment = os.environ.copy()
         environment["TMPDIR"] = temporary_directory
@@ -4256,6 +4369,7 @@ def test_shuts_down_stalled_worker(binary: Path) -> Transcript:
             )
             stalled["send"]["r"] = "stall"
             stalled["send"]["stdin"] = "<large stdin>"
+            control.connect(client)
             event = control.wait_for(operation, "parent_operation_stalled")
             worker_group = event["process_group"]
             assert isinstance(worker_group, int) and worker_group > 0, event
@@ -4301,6 +4415,7 @@ def test_shutdown_is_bounded_with_detached_stdin_descendant(
             client._initialize_and_list_tools()
             client.send(r="echo ready")
             assert last_tool_text(client) == "zod: ready\n"
+            control.connect(client)
 
             operation = client._next_request_id
             client.send(
@@ -4700,7 +4815,10 @@ def test_restart_drains_readable_frame_before_abandoning_partial_tail(
     interposer_source = (
         Path(__file__).resolve().parents[2] / "fixtures" / "delay_sideband_poll.c"
     )
-    with tempfile.TemporaryDirectory() as temporary_directory:
+    with (
+        tempfile.TemporaryDirectory() as temporary_directory,
+        ZodFixtureControl(Path(temporary_directory)) as control,
+    ):
         temporary = Path(temporary_directory)
         interposer = temporary / "delay-sideband-poll.dylib"
         subprocess.run(
@@ -4723,8 +4841,6 @@ def test_restart_drains_readable_frame_before_abandoning_partial_tail(
         arm_name = "delay-sideband-poll-arm"
         socket_ready_name = "delay-sideband-poll-socket-ready"
         partial_tail_name = "zod-sideband-partial-tail-written"
-        channel = f"{os.getpid()}-{time.time_ns()}"
-        cleanup_path: Path | None = None
         environment = os.environ.copy()
         environment["TMPDIR"] = temporary_directory
         environment["MCP_CONSOLE_TEST_RELAY_BINARY"] = str(binary)
@@ -4732,18 +4848,12 @@ def test_restart_drains_readable_frame_before_abandoning_partial_tail(
         environment["MCP_CONSOLE_TEST_POLL_LOADED_NAME"] = loaded_name
         environment["MCP_CONSOLE_TEST_POLL_ARM_NAME"] = arm_name
         environment["MCP_CONSOLE_TEST_POLL_SOCKET_READY_NAME"] = socket_ready_name
-        environment["ZOD_TEST_CHANNEL"] = channel
+        control.configure(environment)
         client = McpClient(
             binary,
             ("serve", "--worker", str(zod), "--relay", str(relay)),
             environment,
         )
-
-        def release_descendant() -> None:
-            nonlocal cleanup_path
-            if cleanup_path is not None and cleanup_path.parent.exists():
-                cleanup_path.touch()
-                cleanup_path = None
 
         descendant_group = None
         passed = False
@@ -4751,6 +4861,7 @@ def test_restart_drains_readable_frame_before_abandoning_partial_tail(
             client._initialize_and_list_tools()
             client.send(r="complete silently")
             assert last_tool_text(client) == "[done]"
+            control.connect(client)
             loaded = wait_for_marker(temporary, loaded_name, client)
             (loaded.parent / arm_name).touch()
 
@@ -4762,7 +4873,6 @@ def test_restart_drains_readable_frame_before_abandoning_partial_tail(
                 "zod-sideband-descendant-pid",
                 client,
             )
-            cleanup_path = marker.parent / f"zod-test-cleanup-{channel}"
             descendant_group = int(marker.read_text(encoding="utf-8"))
             wait_for_marker(temporary, socket_ready_name, client)
             wait_for_marker(temporary, partial_tail_name, client)
@@ -4797,7 +4907,6 @@ def test_restart_drains_readable_frame_before_abandoning_partial_tail(
             assert not process_group_exists(descendant_group), (
                 "partial-sideband descendant outlived sandbox retirement"
             )
-            cleanup_path = None
             descendant_group = None
             client.send(r="echo replacement ready")
             assert last_tool_text(client) == "zod: replacement ready\n"
@@ -4805,7 +4914,7 @@ def test_restart_drains_readable_frame_before_abandoning_partial_tail(
             passed = True
             return transcript
         finally:
-            release_descendant()
+            control.release_cleanup()
             stop_process_group(descendant_group)
             if not passed:
                 stop_process(client.process)
@@ -4870,7 +4979,7 @@ def test_shutdown_deadline_does_not_wait_for_sideband_writer(
     zod = Path(__file__).resolve().parents[2] / "fixtures" / "zod"
     with (
         tempfile.TemporaryDirectory() as temporary_directory,
-        ZodFixtureControl() as control,
+        ZodFixtureControl(Path(temporary_directory)) as control,
     ):
         environment = os.environ.copy()
         environment["TMPDIR"] = temporary_directory
@@ -4886,13 +4995,16 @@ def test_shutdown_deadline_does_not_wait_for_sideband_writer(
         try:
             client._initialize_and_list_tools()
             target_operation = client._next_request_id
+            # This starts the lazy worker; Zod waits for the control below
+            # before reading any byte of the evaluation from its sideband.
+            entry = client._start_send(r="x" * (2 * 1024 * 1024))
+            assert entry["id"] == target_operation, entry
+            control.connect(client)
             control.send_control(
                 0,
                 "block_next_sideband_write",
                 target_operation=target_operation,
             )
-            entry = client._start_send(r="x" * (2 * 1024 * 1024))
-            assert entry["id"] == target_operation, entry
             event = control.wait_for(target_operation, "sideband_reader_stalled")
             worker_group = event["process_group"]
             assert isinstance(worker_group, int) and worker_group > 0, event

@@ -96,25 +96,25 @@ Keep these ownership rules intact:
 - `src/relay_protocol.rs` — server-relay JSONL message and framing contract.
 - `src/worker_relay.rs` — sandboxed worker launch, I/O forwarding, signaling, shutdown, and reaping.
 - `src/worker_client.rs`, `src/worker_client/` — server-owned environment, evaluation, lifecycle, ordered event dispatch, output tape, and macOS relay transport.
-- `src/worker.rs`, `src/r_repl.c` — embedded-R worker, cell dispatch, console callbacks, and the C-owned DLL-REPL boundary.
+- `src/worker.rs`, `src/worker/embedded_r.rs`, `src/r_repl.c` — worker-facing facade, current embedded-R backend, cell dispatch, console callbacks, and the C-owned DLL-REPL boundary.
 
 ### Language adapters
 
 - `src/r_bridge.rs` — shared Rust FFI for process-lifetime private R bridge environments.
 - `src/python.rs`, `src/python/library.rs`, `src/python/reticulate.rs`, `src/python/initialize.R`, `src/python/bridge.R`, `src/python/runtime.py` — Rust-owned Python runtime facade, CPython initialization, current reticulate backend, R bridges, and Python evaluator runtime.
-- `src/sql.rs`, `src/sql/bridge.R` — persistent DuckDB/DBI orchestration and R bridge.
+- `src/sql.rs`, `src/sql/dbi.rs`, `src/sql/bridge.R` — worker-facing SQL runtime facade, current DuckDB/DBI backend, and R bridge.
 - `src/r_graphics.rs`, `src/r_graphics.c`, `src/r_graphics/bridge.R` — managed graphics orchestration, C callback boundary, and R bridge.
 - `src/r_environment.rs`, `src/r_environment/bridge.R` — live R-library bridge.
 
 ### Resolvers and sandbox
 
-- `src/resolver.rs`, `src/resolver/` — retained host environments, validation, platform implementations, and resolver process-group lifecycle.
-- `src/resolver/programs/` — compile-time R programs for managed Python, Python-version selection, DuckDB extensions, and R-library discovery.
-- `src/sandbox.rs`, `src/sandbox/` — platform dispatch, macOS Seatbelt policy, host-side sandbox manager, standalone job control, descriptor inheritance, and observed-descendant tracking.
+- `src/resolver.rs`, `src/resolver/` — retained host environments, direct Python-version selection, validation, platform implementations, and resolver process-group lifecycle.
+- `src/resolver/programs/` — compile-time R programs for DuckDB extension preparation, R-library resolution, and `uv` discovery.
+- `src/sandbox.rs`, `src/sandbox/` — platform dispatch, macOS Seatbelt policy, inherited-descriptor closure, host-side sandbox manager, standalone job control, and observed-descendant tracking.
 
 ### Tests and development scripts
 
-- `tests/cli.rs` — public CLI acceptance tests.
+- `tests/cli.rs` — public CLI and narrow OS/process-lifecycle acceptance tests that cannot be expressed at the MCP boundary.
 - `tests/fixtures/` — deterministic workers, relays, resolvers, and package fixtures.
 - `tests/transcripts/client_server/` — public MCP client-server behavior.
 - `tests/transcripts/server_relay/` — private server-relay wire behavior.

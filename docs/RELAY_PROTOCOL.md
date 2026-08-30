@@ -28,6 +28,7 @@ Standard input and output carry the framed relay protocol described below.
 Relay standard error is inherited from the server and is not part of the protocol; it is normally empty and is reserved for fatal or infrastructure diagnostics.
 Runtime failures are also represented by a `fatal` event when relay stdout remains usable.
 The framed event is authoritative; stderr diagnostics are best effort because the server's outer fail-safe can terminate a failed relay before its final diagnostic is written.
+The server marks every other inherited descriptor except the built-in relay's optional startup gate close-on-exec in the forked child before it executes `sandbox-exec`, so a descriptor opened by another server thread cannot cross this boundary.
 
 The built-in relay also receives an optional private startup-gate descriptor.
 It reports readiness and waits at that gate before it starts the worker.

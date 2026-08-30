@@ -2,9 +2,29 @@ use std::os::fd::RawFd;
 use std::os::unix::process::CommandExt as _;
 use std::process::Command;
 
+pub(super) fn close_unlisted(command: &mut Command) -> Result<(), String> {
+    // The standalone path reaches this point before starting any threads, so
+    // this snapshot contains every inherited descriptor that can reach the
+    // child. Change flags only after fork to leave the launcher unchanged.
+    // Rust creates its later exec-error pipe with close-on-exec already set.
+    let mut descriptors = open_descriptors()?;
+    descriptors.retain(|descriptor| *descriptor > libc::STDERR_FILENO);
+    unsafe {
+        command.pre_exec(move || {
+            for descriptor in &descriptors {
+                configure_descriptor(*descriptor, false)?;
+            }
+            Ok(())
+        });
+    }
+    Ok(())
+}
+
 pub(super) fn configure(command: &mut Command, allowed: Vec<RawFd>) -> Result<(), String> {
-    // Compute the bound in the parent, then change flags only in the child.
-    // Rust's private exec-error pipe remains open on failure and closes on exec.
+    // A server thread can open a descriptor after any parent-side snapshot.
+    // Scan every possible child slot after fork instead. Descriptors created by
+    // Rust for spawn failure reporting already carry close-on-exec and remain
+    // usable until a successful exec closes them.
     let descriptor_limit = descriptor_limit()?;
     unsafe {
         command.pre_exec(move || {

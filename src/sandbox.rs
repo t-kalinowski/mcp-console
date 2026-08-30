@@ -26,6 +26,9 @@ const STARTUP_GO: u8 = 2;
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(5);
 #[cfg(target_os = "macos")]
 const BACKGROUND_CLEANUP_TIMEOUT: Duration = Duration::from_secs(1);
+#[cfg(target_os = "macos")]
+#[path = "sandbox/file_descriptors.rs"]
+mod file_descriptors;
 
 #[cfg(target_os = "macos")]
 #[path = "sandbox/macos.rs"]
@@ -56,25 +59,6 @@ pub fn run(command_line: &[OsString]) -> Result<ExitCode, String> {
 #[cfg(target_os = "macos")]
 pub(crate) fn run_manager() -> Result<(), String> {
     supervision::run_manager()
-}
-
-#[cfg(target_os = "macos")]
-pub(crate) fn configure_child_reaping() -> Result<(), String> {
-    // SAFETY: a zeroed sigaction is a valid starting value before every field
-    // used by sigaction(2) is initialized below.
-    let mut action = unsafe { std::mem::zeroed::<libc::sigaction>() };
-    action.sa_sigaction = libc::SIG_DFL;
-    // SAFETY: action.sa_mask points to initialized writable storage.
-    unsafe { libc::sigemptyset(&mut action.sa_mask) };
-    // SAFETY: action is fully initialized and the old action is not requested.
-    if unsafe { libc::sigaction(libc::SIGCHLD, &action, std::ptr::null_mut()) } == 0 {
-        Ok(())
-    } else {
-        Err(format!(
-            "failed to configure child-process reaping: {}",
-            std::io::Error::last_os_error()
-        ))
-    }
 }
 
 #[cfg(target_os = "macos")]

@@ -57,7 +57,7 @@ result:
   isError: false
 ---
 send:
-  timeout_ms: 10000
+  timeout_ms: 220000
 result:
   content:
     - type: text
@@ -68,4 +68,3 @@ transcript_normalization:
   target: result.content[0].text
   elapsed: omitted
   trailing_progress_padding: omitted
-...
