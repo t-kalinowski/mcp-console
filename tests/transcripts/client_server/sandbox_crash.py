@@ -11,11 +11,27 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from _support import McpClient, Transcript, code, run_this_suite, stop_client
-
+from _support import (
+    DarwinProcessIdentity,
+    McpClient,
+    Transcript,
+    capture_darwin_process_identity,
+    code,
+    kill_darwin_processes,
+    live_darwin_processes,
+    run_this_suite,
+    signal_darwin_process,
+    stop_client,
+)
 
 PLATFORMS = {"darwin"}
 TIMEOUT = 10
+Generation = tuple[
+    DarwinProcessIdentity,
+    DarwinProcessIdentity,
+    DarwinProcessIdentity,
+    Path,
+]
 
 
 def _last_text(client: McpClient) -> str:
@@ -26,7 +42,7 @@ def _last_text(client: McpClient) -> str:
     return content[0]["text"]
 
 
-def _spawn_processx_generation(client: McpClient) -> tuple[int, int, int, Path]:
+def _spawn_processx_generation(client: McpClient) -> Generation:
     # fmt: r
     r = code(r"""
         crash_child <- processx::process$new(
@@ -69,29 +85,20 @@ def _spawn_processx_generation(client: McpClient) -> tuple[int, int, int, Path]:
         "process_ids": "omitted",
         "sandbox_temporary_directory": "omitted",
     }
-    return relay_pid, worker_pid, child_pid, temporary_directory
+    relay_identity = capture_darwin_process_identity(relay_pid)
+    worker_identity = capture_darwin_process_identity(worker_pid)
+    child_identity = capture_darwin_process_identity(child_pid)
+    return relay_identity, worker_identity, child_identity, temporary_directory
 
 
-def _pid_is_alive(pid: int) -> bool:
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    return True
-
-
-def _wait_for_generation_cleanup(
-    generation: tuple[int, int, int, Path], timeout: float
-) -> list[int]:
+def _wait_for_generation_cleanup(generation: Generation, timeout: float) -> list[int]:
     deadline = time.monotonic() + timeout
-    survivors = list(generation[:3])
+    survivors = live_darwin_processes(generation[:3])
     while (survivors or generation[3].exists()) and time.monotonic() < deadline:
-        survivors = [pid for pid in generation[:3] if _pid_is_alive(pid)]
+        survivors = live_darwin_processes(generation[:3])
         if survivors or generation[3].exists():
             time.sleep(0.01)
-    return [pid for pid in survivors if _pid_is_alive(pid)]
+    return live_darwin_processes(generation[:3])
 
 
 def _wait_for_generation_failure(client: McpClient) -> None:
@@ -131,16 +138,6 @@ def _manager_pid(server_pid: int) -> int:
     return managers[0]
 
 
-def _kill_if_alive(pid: int | None) -> bool:
-    if pid is None or not _pid_is_alive(pid):
-        return False
-    try:
-        os.kill(pid, signal.SIGKILL)
-    except ProcessLookupError:
-        return False
-    return True
-
-
 def _close_client_streams(client: McpClient) -> None:
     for stream in (client.stdin, client.stdout, client.stderr):
         try:
@@ -155,12 +152,12 @@ def test_server_crash_retires_the_worker_generation(binary: Path) -> Transcript:
     # survive merely because the server received an uncatchable signal before
     # it could run its normal shutdown path.
     client = McpClient(binary, ("serve",))
-    generation: tuple[int, int, int, Path] | None = None
+    generation: Generation | None = None
     try:
         client._initialize_and_list_tools()
         generation = _spawn_processx_generation(client)
 
-        os.kill(client.process.pid, signal.SIGKILL)
+        client.process.kill()
         returncode = client.process.wait(timeout=TIMEOUT)
         survivors = _wait_for_generation_cleanup(generation, timeout=5)
 
@@ -179,8 +176,7 @@ def test_server_crash_retires_the_worker_generation(binary: Path) -> Transcript:
     finally:
         stop_client(client)
         if generation is not None:
-            for pid in generation[:3]:
-                _kill_if_alive(pid)
+            kill_darwin_processes(generation[:3])
             shutil.rmtree(generation[3], ignore_errors=True)
         _close_client_streams(client)
 
@@ -190,12 +186,14 @@ def test_relay_crash_retires_the_worker_generation(binary: Path) -> Transcript:
     # observed descendant when the relay itself exits. Cleanup cannot depend on
     # code running inside the relay.
     client = McpClient(binary, ("serve",))
-    generation: tuple[int, int, int, Path] | None = None
+    generation: Generation | None = None
     try:
         client._initialize_and_list_tools()
         generation = _spawn_processx_generation(client)
 
-        os.kill(generation[0], signal.SIGKILL)
+        assert signal_darwin_process(generation[0], signal.SIGKILL), (
+            "relay exited before crash injection"
+        )
         client.transcript.append({"relay_signal": "SIGKILL"})
         _wait_for_generation_failure(client)
         client.send(r=code('writeLines("replacement ready")'))
@@ -206,8 +204,10 @@ def test_relay_crash_retires_the_worker_generation(binary: Path) -> Transcript:
         survivors = _wait_for_generation_cleanup(generation, timeout=5)
         survivor_names = [
             name
-            for name, pid in zip(("relay", "worker", "processx child"), generation[:3])
-            if pid in survivors
+            for name, identity in zip(
+                ("relay", "worker", "processx child"), generation[:3]
+            )
+            if identity[0] in survivors
         ]
 
         assert survivors == [], (
@@ -220,8 +220,7 @@ def test_relay_crash_retires_the_worker_generation(binary: Path) -> Transcript:
     finally:
         stop_client(client)
         if generation is not None:
-            for pid in generation[:3]:
-                _kill_if_alive(pid)
+            kill_darwin_processes(generation[:3])
             shutil.rmtree(generation[3], ignore_errors=True)
         _close_client_streams(client)
 
@@ -230,14 +229,17 @@ def test_manager_crash_retires_the_worker_generation(binary: Path) -> Transcript
     # While the relay root remains live and pinned, the server-side owner must
     # reconstruct its current process tree if the committed manager exits.
     client = McpClient(binary, ("serve",))
-    generation: tuple[int, int, int, Path] | None = None
-    manager_pid: int | None = None
+    generation: Generation | None = None
+    manager_identity: DarwinProcessIdentity | None = None
     try:
         client._initialize_and_list_tools()
         generation = _spawn_processx_generation(client)
         manager_pid = _manager_pid(client.process.pid)
+        manager_identity = capture_darwin_process_identity(manager_pid)
 
-        os.kill(manager_pid, signal.SIGKILL)
+        assert signal_darwin_process(manager_identity, signal.SIGKILL), (
+            "manager exited before crash injection"
+        )
         client.transcript.append({"manager_signal": "SIGKILL"})
         _wait_for_generation_failure(client)
         client.send(r=code('writeLines("replacement ready")'))
@@ -248,8 +250,10 @@ def test_manager_crash_retires_the_worker_generation(binary: Path) -> Transcript
         survivors = _wait_for_generation_cleanup(generation, timeout=5)
         survivor_names = [
             name
-            for name, pid in zip(("relay", "worker", "processx child"), generation[:3])
-            if pid in survivors
+            for name, identity in zip(
+                ("relay", "worker", "processx child"), generation[:3]
+            )
+            if identity[0] in survivors
         ]
 
         assert survivors == [], (
@@ -262,10 +266,10 @@ def test_manager_crash_retires_the_worker_generation(binary: Path) -> Transcript
     finally:
         stop_client(client)
         if generation is not None:
-            for pid in generation[:3]:
-                _kill_if_alive(pid)
+            kill_darwin_processes(generation[:3])
             shutil.rmtree(generation[3], ignore_errors=True)
-        _kill_if_alive(manager_pid)
+        if manager_identity is not None:
+            kill_darwin_processes((manager_identity,))
         _close_client_streams(client)
 
 

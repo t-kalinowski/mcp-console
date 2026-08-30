@@ -398,8 +398,10 @@ fn finish_manager_failure(
             return Err(error);
         }
     };
-    let cleanup =
-        DescendantTracker::start(root_pid).and_then(|tracker| tracker.stop(cleanup_timeout));
+    let cleanup = match DescendantTracker::start(root_pid) {
+        Ok(tracker) => tracker.stop(cleanup_timeout),
+        Err(failure) => Err(failure.retire(cleanup_timeout)),
+    };
     if let Err(cleanup_error) = cleanup {
         error = with_prior_error(Some(error), cleanup_error);
         if let Err(signal_error) = signal_process(root, libc::SIGKILL) {
@@ -462,7 +464,8 @@ pub(super) fn run() -> Result<(), String> {
         ));
     }
 
-    let tracker = DescendantTracker::start(root_pid)?;
+    let tracker =
+        DescendantTracker::start(root_pid).map_err(|failure| failure.retire(cleanup_timeout))?;
     let temporary_directory = platform::TemporaryDirectory::adopt(temporary_directory, owner_pid)?;
     let root = info.identity;
 

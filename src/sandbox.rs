@@ -169,6 +169,9 @@ pub(crate) fn run_manager() -> Result<(), String> {
 /// stdin
 ///     .write_all(b"EXIT\n")
 ///     .expect("EXIT should be written");
+/// assert!(child
+///     .wait_timeout_without_reaping(Duration::from_secs(1))
+///     .expect("child exit should be observable"));
 /// child.force_stop().expect("child should be retired");
 /// ```
 pub(crate) struct SandboxedCommand {

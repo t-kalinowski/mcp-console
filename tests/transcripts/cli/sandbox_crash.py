@@ -11,8 +11,16 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from _support import Transcript, code, run_this_suite
-
+from _support import (
+    DarwinProcessIdentity,
+    Transcript,
+    capture_darwin_process_identity,
+    code,
+    kill_darwin_processes,
+    live_darwin_processes,
+    run_this_suite,
+    signal_darwin_process,
+)
 
 PLATFORMS = {"darwin"}
 TIMEOUT = 10
@@ -22,34 +30,16 @@ def _command(*arguments: str) -> list[str]:
     return ["mcp-console", *arguments]
 
 
-def _pid_is_alive(pid: int) -> bool:
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    return True
-
-
-def _wait_for_survivors(pids: list[int], timeout: float) -> list[int]:
+def _wait_for_survivors(
+    identities: list[DarwinProcessIdentity], timeout: float
+) -> list[int]:
     deadline = time.monotonic() + timeout
-    survivors = list(pids)
+    survivors = live_darwin_processes(identities)
     while survivors and time.monotonic() < deadline:
-        survivors = [pid for pid in survivors if _pid_is_alive(pid)]
+        survivors = live_darwin_processes(identities)
         if survivors:
             time.sleep(0.01)
-    return [pid for pid in survivors if _pid_is_alive(pid)]
-
-
-def _kill_survivors(pids: list[int]) -> list[int]:
-    survivors = [pid for pid in pids if _pid_is_alive(pid)]
-    for pid in survivors:
-        try:
-            os.kill(pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-    return survivors
+    return live_darwin_processes(identities)
 
 
 def _child_pid_by_name(parent_pid: int, name: str) -> int:
@@ -107,27 +97,66 @@ def test_retires_every_processx_pipeline_stage(binary: Path) -> Transcript:
         )
         writeLines(as.character(pipeline$get_pids()))
         flush.console()
+        stopifnot(identical(readLines("stdin", n = 1L), "exit"))
         quit(save = "no", status = 23L, runLast = FALSE)
         """)
     arguments = ("sandbox", "--", "Rscript", "--vanilla", "-e", script)
-    result = subprocess.run(
+    process = subprocess.Popen(
         [binary, *arguments],
-        capture_output=True,
-        text=True,
-        timeout=TIMEOUT,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
     )
+    assert process.stdin is not None
+    assert process.stdout is not None
+    assert process.stderr is not None
 
-    pids = [int(line) for line in result.stdout.splitlines()]
-    survivors = _kill_survivors(pids)
+    identities: list[DarwinProcessIdentity] = []
+    try:
+        pids = [
+            int(line)
+            for line in _read_lines(
+                process.stdout,
+                2,
+                "the processx pipeline stage PIDs",
+            )
+        ]
+        for pid in pids:
+            identities.append(capture_darwin_process_identity(pid))
 
-    assert result.returncode == 23, result
-    assert result.stderr == "", result.stderr
-    assert len(pids) == 2, pids
-    assert survivors == [], f"processx pipeline stages survived: {survivors}"
+        process.stdin.write(b"exit\n")
+        process.stdin.close()
+        returncode = process.wait(timeout=TIMEOUT)
+        stderr = process.stderr.read().decode("utf-8")
+        survivors = kill_darwin_processes(identities)
+
+        assert returncode == 23, returncode
+        assert stderr == "", stderr
+        assert len(identities) == 2, identities
+        assert survivors == [], f"processx pipeline stages survived: {survivors}"
+    finally:
+        if process.poll() is None:
+            if not process.stdin.closed:
+                try:
+                    process.stdin.write(b"exit\n")
+                    process.stdin.close()
+                except BrokenPipeError:
+                    pass
+            try:
+                process.wait(timeout=TIMEOUT)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=TIMEOUT)
+        kill_darwin_processes(identities)
+        if not process.stdin.closed:
+            process.stdin.close()
+        process.stdout.close()
+        process.stderr.close()
+
     return [
         {
             "command": _command(*arguments),
-            "exit_code": result.returncode,
+            "exit_code": returncode,
             "stdout": "<pipeline stage pid>\n<pipeline stage pid>\n",
         }
     ]
@@ -160,7 +189,7 @@ def test_launcher_crash_retires_the_sandbox_lifetime(binary: Path) -> Transcript
     assert process.stdout is not None
     assert process.stderr is not None
 
-    pids: list[int] = []
+    identities: list[DarwinProcessIdentity] = []
     temporary_directory: Path | None = None
     try:
         lines = _read_lines(
@@ -168,14 +197,15 @@ def test_launcher_crash_retires_the_sandbox_lifetime(binary: Path) -> Transcript
             3,
             "the sandbox root, processx child, and temporary directory",
         )
-        pids = [int(lines[0]), int(lines[1])]
+        for pid in map(int, lines[:2]):
+            identities.append(capture_darwin_process_identity(pid))
         manager_pid = _child_pid_by_name(process.pid, "mcp-console")
-        pids.append(manager_pid)
+        identities.append(capture_darwin_process_identity(manager_pid))
         temporary_directory = Path(lines[2])
 
-        os.kill(process.pid, signal.SIGKILL)
+        process.kill()
         returncode = process.wait(timeout=TIMEOUT)
-        survivors = _wait_for_survivors(pids, timeout=5)
+        survivors = _wait_for_survivors(identities, timeout=5)
         temporary_directory_survived = temporary_directory.exists()
 
         assert returncode == -signal.SIGKILL, returncode
@@ -187,7 +217,7 @@ def test_launcher_crash_retires_the_sandbox_lifetime(binary: Path) -> Transcript
         if process.poll() is None:
             process.kill()
             process.wait(timeout=TIMEOUT)
-        _kill_survivors(pids)
+        kill_darwin_processes(identities)
         process.stdout.close()
         process.stderr.close()
         if temporary_directory is not None:
@@ -232,7 +262,7 @@ def test_manager_crash_retires_the_sandbox_lifetime(binary: Path) -> Transcript:
     assert process.stdout is not None
     assert process.stderr is not None
 
-    pids: list[int] = []
+    identities: list[DarwinProcessIdentity] = []
     temporary_directory: Path | None = None
     try:
         lines = _read_lines(
@@ -240,15 +270,19 @@ def test_manager_crash_retires_the_sandbox_lifetime(binary: Path) -> Transcript:
             3,
             "the sandbox root, processx child, and temporary directory",
         )
-        pids = [int(lines[0]), int(lines[1])]
+        for pid in map(int, lines[:2]):
+            identities.append(capture_darwin_process_identity(pid))
         manager_pid = _child_pid_by_name(process.pid, "mcp-console")
-        pids.append(manager_pid)
+        manager_identity = capture_darwin_process_identity(manager_pid)
+        identities.append(manager_identity)
         temporary_directory = Path(lines[2])
 
-        os.kill(manager_pid, signal.SIGKILL)
+        assert signal_darwin_process(manager_identity, signal.SIGKILL), (
+            "manager exited before crash injection"
+        )
         returncode = process.wait(timeout=TIMEOUT)
         stderr = process.stderr.read().decode("utf-8")
-        survivors = _wait_for_survivors(pids, timeout=5)
+        survivors = _wait_for_survivors(identities, timeout=5)
         temporary_directory_survived = temporary_directory.exists()
 
         assert returncode == 128 + signal.SIGKILL, returncode
@@ -261,7 +295,7 @@ def test_manager_crash_retires_the_sandbox_lifetime(binary: Path) -> Transcript:
         if process.poll() is None:
             process.kill()
             process.wait(timeout=TIMEOUT)
-        _kill_survivors(pids)
+        kill_darwin_processes(identities)
         process.stdout.close()
         process.stderr.close()
         if temporary_directory is not None:

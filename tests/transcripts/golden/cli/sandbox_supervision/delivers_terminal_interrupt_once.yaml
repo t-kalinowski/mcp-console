@@ -6,8 +6,8 @@ command:
   - python
   - -c
   - |
+    import os
     import signal
-    import time
 
     interrupts = 0
 
@@ -18,11 +18,14 @@ command:
 
 
     signal.signal(signal.SIGINT, handle_interrupt)
-    print("ready", flush=True)
+    previous_mask = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT})
+    assert signal.SIGINT not in previous_mask
+    print(f"ready {os.getpgrp()}", flush=True)
     print(input(), flush=True)
-    deadline = time.monotonic() + 0.25
-    while time.monotonic() < deadline:
-        time.sleep(0.01)
+    print("interrupt ready", flush=True)
+    signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
+    while interrupts == 0:
+        signal.pause()
     print(interrupts)
 stdin: |-
   sandbox input

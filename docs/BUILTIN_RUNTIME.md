@@ -3,7 +3,7 @@
 **Status:** Implemented current behavior
 
 This document describes the console behavior visible to users of the built-in worker.
-It covers R, Python, DuckDB SQL, input, output, plots, and interoperability.
+It covers R, Python, SQL, input, output, plots, and interoperability.
 The [worker protocol](WORKER_PROTOCOL.md) defines the lower-level contract for built-in and custom workers, while [requirements and environments](REQUIREMENTS.md) owns dependency preparation.
 The [registered tool descriptions](TOOL_DESCRIPTIONS.md) mirror the current agent-facing MCP text.
 
@@ -14,7 +14,9 @@ Each worker generation contains:
 
 - one persistent R global environment;
 - one persistent Python `__main__` namespace embedded through reticulate; and
-- one persistent in-memory DuckDB connection and catalog.
+- one persistent in-memory DuckDB connection and catalog, used as the default SQL backend.
+
+SQL cells can be redirected to a user-owned DBI connection without changing the R or Python runtime.
 
 Objects, imports, options, attached packages, database objects, and unread standard input remain available across cells in the same worker generation.
 Language errors do not reset the worker, and changes made before an error remain applied.
@@ -32,7 +34,7 @@ Code-free `send` calls poll, supply stdin, prepare requirements, interrupt, or r
 A code-bearing `send` call accepts exactly one complete `r`, `python`, or `sql` cell.
 It may instead contain only control or stdin, or contain none of those fields as an ordinary poll.
 The source is not an interactive fragment assembled across calls.
-R uses its native top-level evaluation behavior; Python parses the entire submitted source before executing it; SQL passes the complete string to DuckDB.
+R uses its native top-level evaluation behavior; Python parses the entire submitted source before executing it; SQL passes the complete string to the active SQL backend.
 
 Use a REPL-style workflow: submit one coherent cell, inspect its result, then submit the next cell based on what the result showed.
 One assistant turn can make several sequential calls.
@@ -241,9 +243,12 @@ An unchanged restart or shutdown cancels an active resolver and discards candida
 A restart that adds requirements waits for active environment resolution before preparing its additions and replacing the worker; generation checks still prevent an unactivated old candidate from committing.
 Transport, protocol, and bridge-infrastructure failures retain the normal worker-failure behavior.
 
-The worker installs `py` and `sql_connection()` in `tools:mcp-console` at search position 2.
-R can read Python globals through `py$name` and use the borrowed DuckDB connection through DBI or dplyr.
-Do not disconnect the connection returned by `sql_connection()`.
+The worker installs `py`, `sql_connection()`, and `console_sql_connection()` in `tools:mcp-console` at search position 2.
+R can read Python globals through `py$name` and use the active SQL connection through DBI or dplyr.
+`sql_connection()` returns the active connection.
+`console_sql_connection(connection)` selects any valid user-owned `DBIConnection`, and `console_sql_connection(NULL)` restores the managed DuckDB connection and its catalog.
+Do not disconnect the managed DuckDB connection.
+Restore it before disconnecting a custom connection that is still selected.
 
 ## Python
 
@@ -331,15 +336,33 @@ The two languages share reticulate's live bridge:
 - R reads and writes Python globals through `py$name`; and
 - objects converted or proxied by reticulate remain subject to reticulate's conversion rules.
 
-An R data frame can be queried by name from SQL.
-A Python data frame is not automatically visible to SQL; bind or convert it to an R global first.
+With the managed DuckDB backend, an R data frame can be queried by name from SQL.
+A Python data frame is not automatically visible to managed DuckDB SQL; bind or convert it to an R global first before querying it there.
 Objects and proxies tied to a worker generation become invalid when that generation ends.
 
-## DuckDB SQL
+## SQL and DuckDB
 
-The first SQL cell or call to `sql_connection()` lazily creates one in-memory DuckDB connection.
-Later SQL cells, DBI calls, and dplyr relations reuse its catalog.
+The managed in-memory DuckDB connection is the default SQL backend and is created lazily.
+Later managed SQL cells, DBI calls, and dplyr relations reuse its catalog.
 DuckDB CLI dot commands are not supported.
+
+R can redirect later SQL cells to another DBI backend:
+
+```r
+connection <- DBI::dbConnect(RSQLite::SQLite(), ":memory:")
+console_sql_connection(connection)
+```
+
+The selected connection remains owned by user code.
+`sql_connection()` returns it, while `console_sql_connection(NULL)` restores the managed DuckDB connection without discarding its catalog.
+Restore the managed connection before disconnecting a selected connection.
+
+The worker submits SQL cells on a selected connection through `DBI::dbSendQuery()`.
+Results that report columns use the bounded preview path below, while results without columns return `[done]` when they produce no console output.
+The selected driver supplies the SQL dialect, transaction state, and type mappings, and determines whether its query interface accepts statements or multiple commands.
+Use `DBI::dbExecute()` or `DBI::dbSendStatement()` from an R cell for commands that require the DBI statement interface.
+The adapter does not retry a failed cell through another DBI method because the first attempt may already have changed database state.
+DuckDB extension requirements and the conveniences below apply only to the managed DuckDB backend.
 
 Environment scanning lets an unqualified relation name refer to an R data frame in global state.
 A DuckDB table or view with the same name takes precedence.
@@ -358,9 +381,9 @@ The preview:
 The renderer reports omitted rows, columns, and truncated cells.
 It does not count the complete query result.
 Queries with result columns but zero rows still return column names, Arrow types, and `[0 rows]`.
-Statements with no result columns, including DDL and DML, return no preview and do not report affected-row counts.
+Results with no columns return no preview and do not report affected-row counts.
 
-DuckDB and DBI errors are printed as ordinary console errors and leave the connection available for later cells.
+SQL backend and DBI errors are printed as ordinary console errors and leave the selected connection available for later cells.
 Extension preparation and sandbox constraints are documented in [Requirements and environments](REQUIREMENTS.md).
 
 ## Plots and images
@@ -412,7 +435,7 @@ When one controlled `send` stops or completes an earlier operation and then runs
 The server transfers ownership between those logical regions instead of delivering the earlier response separately.
 
 Bracketed records such as `[running; poll with an empty send]`, `[waiting for stdin]`, `[idle]`, mapped Python import resolutions, and worker-replacement notices are server state, not language output.
-R errors, Python exceptions, and DuckDB errors are ordinary console text and normally leave the worker reusable.
+R errors, Python exceptions, and SQL backend errors are ordinary console text and normally leave the worker reusable.
 Warnings are ordinary runtime output too.
 Host dependency-resolver failures during explicit preparation are MCP tool errors, but preserve any current worker and its in-memory state.
 An ordinary automatic R resolver failure is instead reported inside the running R evaluation.

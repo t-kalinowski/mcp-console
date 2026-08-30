@@ -4,12 +4,19 @@ mod job_control;
 mod manager;
 #[path = "supervision/process.rs"]
 mod process;
+#[path = "supervision/process_retirement.rs"]
+mod process_retirement;
 #[path = "supervision/process_tracker.rs"]
 mod process_tracker;
+#[path = "supervision/process_tree.rs"]
+mod process_tree;
+#[path = "supervision/root_exit_waiter.rs"]
+mod root_exit_waiter;
 
 use self::job_control::{ForegroundTerminal, SignalRelay};
 pub(crate) use self::manager::SandboxManager;
-use self::process_tracker::{EventWait, RootExitWaiter};
+use self::process_tracker::EventWait;
+use self::root_exit_waiter::RootExitWaiter;
 use super::file_descriptors::configure as configure_file_descriptors;
 use super::platform;
 use std::os::fd::RawFd;
