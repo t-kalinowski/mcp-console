@@ -16,7 +16,6 @@ env:
   CARGO_TERM_COLOR: always
   IR_LATEST_RESOLUTION_MAX_AGE_SECONDS: "604800"
   UV_VERSION: "0.12.4"
-  BASE_SHA: "0bb7db0842961e95edad05996df02877bce5b4da"
 
 jobs:
   bootstrap:
@@ -125,10 +124,8 @@ jobs:
           rm -f \
             .github/codex/apply_sql_slice.py \
             .github/workflows/codex-sql-slice.yml
-          git reset --soft "$BASE_SHA"
           git add -A
-          git diff --cached --check
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git commit -m "Allow selecting a DBI connection for SQL cells"
-          git push --force origin HEAD:refs/heads/feat/sql-dbi-connection
+          git push origin HEAD:refs/heads/feat/select-sql-dbi-connection
