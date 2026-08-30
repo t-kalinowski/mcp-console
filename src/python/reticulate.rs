@@ -4,7 +4,6 @@ use super::PreparationOutcome;
 
 const PYTHON_BRIDGE_SOURCE: &str = include_str!("bridge.R");
 const PYTHON_INITIALIZER_SOURCE: &str = include_str!("initialize.R");
-const PYTHON_RUNTIME_SOURCE: &str = include_str!("runtime.py");
 
 /// The current Python backend, hosted by reticulate inside embedded R.
 pub(super) struct Runtime(crate::r_bridge::Bridge);
@@ -68,6 +67,22 @@ pub extern "C-unwind" fn mcp_console_load_python_library(path: SEXP) -> harp::Re
     Ok(harp::object::RObject::from(rust_owned).sexp)
 }
 
+// Install the private evaluator through the Rust-owned CPython API while
+// retaining reticulate's existing post-initialization lifecycle point.
+#[allow(clippy::result_large_err)]
+#[harp::register]
+pub extern "C-unwind" fn mcp_console_install_python_runtime(
+    libpython: SEXP,
+) -> harp::Result<SEXP> {
+    let libpython = Option::<String>::try_from(harp::object::RObject::view(libpython))?
+        .ok_or_else(|| harp::anyhow!("Python-hosted R is not supported"))?;
+    super::library::load(std::path::Path::new(&libpython))
+        .map_err(|error| harp::anyhow!("{error}"))?;
+    super::library::install_runtime(super::RUNTIME_SOURCE)
+        .map_err(|error| harp::anyhow!("{error}"))?;
+    unsafe { Ok(libr::R_NilValue) }
+}
+
 // Release the initial GIL when control leaves reticulate's C initializer,
 // including its error paths. Later reticulate calls acquire the GIL normally.
 #[allow(clippy::result_large_err)]
@@ -75,14 +90,6 @@ pub extern "C-unwind" fn mcp_console_load_python_library(path: SEXP) -> harp::Re
 pub extern "C-unwind" fn mcp_console_finish_python_initialization() -> harp::Result<SEXP> {
     super::library::finish_initialization().map_err(|error| harp::anyhow!("{error}"))?;
     unsafe { Ok(libr::R_NilValue) }
-}
-
-// The process-lifetime R bridge calls this once during initialization,
-// before any reticulate hook can initialize Python.
-#[allow(clippy::result_large_err)]
-#[harp::register]
-pub extern "C-unwind" fn mcp_console_python_runtime_source() -> harp::Result<SEXP> {
-    Ok(harp::object::RObject::from(PYTHON_RUNTIME_SOURCE).sexp)
 }
 
 #[allow(clippy::result_large_err)]

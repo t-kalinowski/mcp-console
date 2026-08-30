@@ -35,8 +35,6 @@ base::local(
         "Console with managed Python enabled."
       )
     }
-    # Capture the embedded runtime once before reticulate hooks can initialize Python.
-    python_runtime_source <- .Call("mcp_console_python_runtime_source")
 
     manifest <- function(packages, python_version, exclude_newer) {
       list(
@@ -355,11 +353,10 @@ base::local(
           call. = FALSE
         )
       }
-      reticulate::py_run_string(
-        python_runtime_source,
-        local = TRUE,
-        convert = FALSE
-      )
+      invisible(.Call(
+        "mcp_console_install_python_runtime",
+        python_config$libpython
+      ))
       python_module <<- reticulate::import("_mcp_console", convert = FALSE)
       configured <- FALSE
       on.exit(
