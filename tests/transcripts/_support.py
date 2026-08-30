@@ -355,40 +355,42 @@ def collect_running_output(
     client: "McpClient",
     description: str,
     *,
-    timeout_ms: int,
-    attempts: int = 5,
-) -> str:
-    """Poll a running evaluation and retain every public output delta."""
-    assert timeout_ms > 0 and attempts > 0
+    timeouts_ms: tuple[int, ...],
+    initial_cuts: tuple[str, ...] = (),
+) -> tuple[str, ...]:
+    """Poll a running evaluation and retain its public output cuts."""
+    assert timeouts_ms and all(timeout_ms > 0 for timeout_ms in timeouts_ms)
     running = "\n[running; poll with an empty send]"
     poll_start = len(client.transcript)
-    chunks = []
-    for attempt in range(attempts):
+    cuts = [cut for cut in initial_cuts if cut]
+    for attempt, timeout_ms in enumerate(timeouts_ms):
         result = client.send(timeout_ms=timeout_ms)
         assert result.get("isError") is not True, result
         content = result["content"]
         assert len(content) == 1 and content[0]["type"] == "text", content
         output = content[0]["text"]
         if output.endswith(running):
-            chunk = output.removesuffix(running)
-            if chunk:
-                chunks.append(chunk)
-            if attempt + 1 == attempts:
+            cut = output.removesuffix(running)
+            if cut:
+                cuts.append(cut)
+            if attempt + 1 == len(timeouts_ms):
                 raise AssertionError(
-                    f"{description} remained running after {attempts} polls: "
-                    f"collected={''.join(chunks)!r}, last={output!r}"
+                    f"{description} remained running after {len(timeouts_ms)} polls: "
+                    f"collected={''.join(cuts)!r}, last={output!r}"
                 )
             continue
 
-        if output != "[done]" or not chunks:
-            chunks.append(output)
+        if output != "[done]" or not cuts:
+            cuts.append(output)
         break
 
-    collected = "".join(chunks)
+    collected = "".join(cuts)
     content[0]["text"] = collected
     polls = client.transcript[poll_start:]
-    client.transcript[poll_start:] = [polls[-1]]
-    return collected
+    submitted = polls[0]
+    submitted["result"] = polls[-1]["result"]
+    client.transcript[poll_start:] = [submitted]
+    return tuple(cuts)
 
 
 def run_this_suite(suite_path: str) -> None:

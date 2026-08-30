@@ -302,10 +302,13 @@ def main() -> None:
         )
         response = json.loads(reader.readline())
         assert response["kind"] == "python_version_resolution_failed", response
-        (temporary / "zod-startup-callback-response").write_text(
+        callback_marker = temporary / "zod-startup-callback-response"
+        pending_callback_marker = callback_marker.with_suffix(".pending")
+        pending_callback_marker.write_text(
             response["message"],
             encoding="utf-8",
         )
+        pending_callback_marker.replace(callback_marker)
     prepared_r_library: str | None = None
     fail_next_r_preparation = False
     emit_output_before_r_preparation_failure = False

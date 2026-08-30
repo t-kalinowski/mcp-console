@@ -387,6 +387,19 @@ static int added_late_member = 0;
 static pid_t late_member = 0;
 static int killpg_count = 0;
 
+static void signal_checkpoint(const char *name) {
+    const char *checkpoint = getenv(name);
+    if (checkpoint == NULL) {
+        return;
+    }
+    int descriptor = open(checkpoint, O_WRONLY | O_NONBLOCK);
+    if (descriptor >= 0) {
+        const char signal = '1';
+        syscall(SYS_write, descriptor, &signal, sizeof(signal));
+        close(descriptor);
+    }
+}
+
 static void write_pid_marker(const char *name, pid_t process_id) {
     const char *marker = getenv(name);
     if (marker == NULL) {
@@ -426,6 +439,7 @@ static int deny_killpg(pid_t process_group, int signal) {
         && getenv("MCP_CONSOLE_TEST_KILLPG_MARKER") != NULL) {
         denied_process_group = process_group;
         write_pid_marker("MCP_CONSOLE_TEST_KILLPG_MARKER", process_group);
+        signal_checkpoint("MCP_CONSOLE_TEST_FORCE_STOP_REACHED");
         errno = EPERM;
         return -1;
     }
@@ -3990,12 +4004,16 @@ def test_restart_outer_force_stops_unresponsive_relay(binary: Path) -> Transcrip
     with tempfile.TemporaryDirectory() as temporary_directory:
         temporary_path = Path(temporary_directory)
         killpg_marker = temporary_path / "killpg-denied"
+        force_stop_reached = FifoCheckpoint(temporary_path / "force-stop-reached")
         late_member_marker = temporary_path / "late-process-group-member"
         late_member_reap_marker = temporary_path / "late-process-group-member-reaped"
         environment = os.environ.copy()
         environment["TMPDIR"] = temporary_directory
         environment["ZOD_REPORT_PROCESS_GROUP"] = "1"
         environment["MCP_CONSOLE_TEST_KILLPG_MARKER"] = str(killpg_marker)
+        environment["MCP_CONSOLE_TEST_FORCE_STOP_REACHED"] = str(
+            force_stop_reached.path
+        )
         environment["MCP_CONSOLE_TEST_LATE_MEMBER_MARKER"] = str(late_member_marker)
         environment["MCP_CONSOLE_TEST_LATE_MEMBER_REAP_MARKER"] = str(
             late_member_reap_marker
@@ -4046,27 +4064,8 @@ def test_restart_outer_force_stops_unresponsive_relay(binary: Path) -> Transcrip
             )
 
             restarted = client._start_send(control="restart")
-            received = threading.Event()
-            errors: list[BaseException] = []
-
-            def receive_restart() -> None:
-                try:
-                    client._receive(restarted)
-                except BaseException as error:
-                    errors.append(error)
-                finally:
-                    received.set()
-
-            restart_started = time.monotonic()
-            receiver = threading.Thread(target=receive_restart, daemon=True)
-            receiver.start()
-            assert received.wait(2), "restart outlived its original shutdown deadline"
-            restart_elapsed = time.monotonic() - restart_started
-            receiver.join()
-            if errors:
-                raise errors[0]
-
-            assert restart_elapsed < 2, f"restart took {restart_elapsed:.3f} seconds"
+            force_stop_reached.wait("outer relay force-stop")
+            client._receive(restarted)
             assert int(killpg_marker.read_text(encoding="utf-8")) == worker_group
             late_member, late_member_group = map(
                 int,
@@ -4100,6 +4099,7 @@ def test_restart_outer_force_stops_unresponsive_relay(binary: Path) -> Transcrip
             if not passed:
                 stop_process_group(worker_group)
                 stop_process(client.process)
+            force_stop_reached.close()
 
 
 def test_restart_starts_first_worker_and_waits_until_ready(

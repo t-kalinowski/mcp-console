@@ -172,6 +172,7 @@ mcp-console --version
 
 `mcp-console serve` communicates with its MCP client over standard input and output.
 The standalone `sandbox` command is available for development, but it supervises only its direct child.
+It inherits standard input, output, and error while closing other inherited file descriptors before the target runs.
 Use the MCP server for the supported worker-generation lifecycle.
 
 Run development commands from the repository root:

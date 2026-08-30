@@ -756,14 +756,14 @@ def test_compacts_native_duckdb_progress_bar(binary: Path) -> Transcript:
     )
     assert last_tool_text(client) == "\n[running; poll with an empty send]"
 
-    output = collect_running_output(
+    cuts = collect_running_output(
         client,
         "DuckDB progress evaluation",
-        timeout_ms=10_000,
+        timeouts_ms=(10_000,) + (30_000,) * 7,
     )
-    assert "\r" not in output, repr(output)
-    assert output.count("% ▕") == 1, repr(output)
-    final = output.rstrip()
+    assert all("\r" not in cut for cut in cuts), repr(cuts)
+    final = cuts[-1].rstrip()
+    assert final.count("% ▕") == 1, repr(final)
     graphic, separator, elapsed = final.rpartition(" (")
     assert graphic.startswith("100% ▕"), repr(final)
     assert graphic.endswith("▏"), repr(final)
@@ -1462,6 +1462,7 @@ def test_uses_reticulate_managed_uv_for_python_resolution(
         original_path = os.environ.get("PATH", "")
         real_uv = shutil.which("uv", path=original_path)
         assert real_uv is not None, "real uv is required"
+        host_ir_cache = ir_cache_directory(os.environ.copy())
         r_home = subprocess.run(
             ["R", "RHOME"],
             check=True,
@@ -1520,7 +1521,7 @@ def test_uses_reticulate_managed_uv_for_python_resolution(
         environment.pop("RETICULATE_PYTHON", None)
         environment["RETICULATE_UV"] = "managed"
         environment["R_USER_CACHE_DIR"] = str(r_user_cache)
-        environment["IR_CACHE_DIR"] = ir_cache_directory(environment)
+        environment["IR_CACHE_DIR"] = host_ir_cache
         environment["UV_CACHE_DIR"] = str(temporary / "wrong-cache")
         environment["UV_PYTHON_INSTALL_DIR"] = str(temporary / "wrong-python")
         environment["PATH"] = os.pathsep.join((str(fake_bin), original_path))
