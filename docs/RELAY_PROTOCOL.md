@@ -189,6 +189,8 @@ Descendants that leave the group remain unsupported.
 ## Retirement and failure
 
 On worker exit or relay failure, the relay first stops the worker transports and drains and joins the stdout and stderr reader threads.
+Before joining the worker-sideband writer, it shuts down only its local write half, interrupting an in-flight command even when a detached worker descendant retains the peer endpoint without reading.
+The relay read half remains available for retirement draining.
 Cancellation of an already-started worker-sideband reader drains every complete buffered or immediately readable frame with per-call nonblocking receives, then abandons an incomplete frame rather than waiting on a descendant that retained the endpoint.
 If transport setup fails before that reader starts, the relay discards pending sideband frames so `fatal` remains the first semantic event; raw stdout and stderr are still drained.
 It then emits `stdout_closed` and `stderr_closed`, the retained `fatal` event when present, `worker_sideband_closed`, and the structured worker process outcome when one is available.
