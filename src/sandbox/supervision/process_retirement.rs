@@ -93,9 +93,9 @@ impl DescendantTracker {
     pub(super) fn terminate(
         mut self,
         mut root_exited: bool,
-        timeout: Duration,
+        reap_grace: Duration,
     ) -> Result<(), String> {
-        let deadline = Instant::now() + timeout;
+        let mut reap_deadline = None;
         let mut cleanup_error = None;
         loop {
             // The root may have exited before the event wait blocked. Consume
@@ -142,6 +142,10 @@ impl DescendantTracker {
                 return cleanup_error.map_or(Ok(()), Err);
             }
 
+            // Discovery and signaling scale with the number of observed
+            // processes. Never abandon known identities mid-pass. Once every
+            // identity has received a signal pass, bound the grace for reaping.
+            let deadline = *reap_deadline.get_or_insert_with(|| Instant::now() + reap_grace);
             if Instant::now() >= deadline {
                 let timeout = "timed out waiting for sandbox descendants to be reaped".to_string();
                 return Err(cleanup_error.map_or(timeout.clone(), |error| {

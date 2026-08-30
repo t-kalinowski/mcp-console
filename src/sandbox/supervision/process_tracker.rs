@@ -29,9 +29,9 @@ impl StartFailure {
         }
     }
 
-    pub(super) fn retire(self, timeout: Duration) -> String {
+    pub(super) fn retire(self, reap_grace: Duration) -> String {
         match self.tracker {
-            Some(tracker) => match tracker.terminate(false, timeout) {
+            Some(tracker) => match tracker.terminate(false, reap_grace) {
                 Ok(()) => self.error,
                 Err(cleanup_error) => {
                     format!("{}; additionally, {cleanup_error}", self.error)
@@ -107,7 +107,7 @@ impl DescendantTracker {
         Ok(tracker)
     }
 
-    pub(super) fn supervise(mut self, timeout: Duration) -> Result<(), String> {
+    pub(super) fn supervise(mut self, reap_grace: Duration) -> Result<(), String> {
         let observation = match self.root_has_exited() {
             Ok(true) => Ok(()),
             Ok(false) => loop {
@@ -121,8 +121,8 @@ impl DescendantTracker {
         };
 
         match observation {
-            Ok(()) => self.terminate(true, timeout),
-            Err(error) => match self.terminate(false, timeout) {
+            Ok(()) => self.terminate(true, reap_grace),
+            Err(error) => match self.terminate(false, reap_grace) {
                 Ok(()) => Err(error),
                 Err(cleanup_error) => Err(format!("{error}; additionally, {cleanup_error}")),
             },

@@ -29,11 +29,20 @@ command:
     stopifnot(child$poll_io(5000)[["output"]] == "ready")
     child_output <- child$read_output_lines()
     stopifnot(length(child_output) == 2L)
-    writeLines(c(as.character(child$get_pid()), child_output))
+    writeLines(c(
+      as.character(Sys.getpid()),
+      as.character(child$get_pid()),
+      child_output
+    ))
     flush.console()
+    stopifnot(identical(readLines("stdin", n = 1L), "exit"))
     quit(save = "no", status = 23L, runLast = FALSE)
 exit_code: 23
 stdout: |
+  <sandbox root pid>
   <processx child pid>
   <processx grandchild pid>
   <sandbox temp>
+verified_descendants:
+  - processx child outside root session
+  - processx grandchild outside child session

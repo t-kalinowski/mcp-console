@@ -11,7 +11,7 @@ use super::{file_descriptors, platform};
 use std::process::{Child, Command, ExitCode};
 use std::time::Duration;
 
-const DESCENDANT_RETIREMENT_TIMEOUT: Duration = Duration::from_secs(1);
+const PROCESS_REAP_GRACE: Duration = Duration::from_secs(1);
 
 pub(super) fn status(
     mut sandbox_command: Command,
@@ -27,32 +27,25 @@ pub(super) fn status(
     let tracker = match process_tracker::DescendantTracker::start(child.id() as libc::pid_t) {
         Ok(tracker) => tracker,
         Err(failure) => {
-            let error = failure.retire(DESCENDANT_RETIREMENT_TIMEOUT);
-            let error = stop_direct_child(&mut child, error);
+            let error = failure.retire(PROCESS_REAP_GRACE);
+            let error = stop_direct_child(&mut child, error, PROCESS_REAP_GRACE);
             preserve(temporary_directory);
             return Err(error);
         }
     };
-    if let Err(error) = tracker.supervise(DESCENDANT_RETIREMENT_TIMEOUT) {
-        let error = stop_direct_child(&mut child, error);
+    if let Err(error) = tracker.supervise(PROCESS_REAP_GRACE) {
+        let error = stop_direct_child(&mut child, error, PROCESS_REAP_GRACE);
         preserve(temporary_directory);
         return Err(error);
     }
 
-    let status = match child.wait() {
-        Ok(status) => status,
-        Err(error) => {
-            preserve(temporary_directory);
-            return Err(format!(
-                "failed to wait for `{}`: {error}",
-                platform::SANDBOX_EXEC
-            ));
-        }
-    };
+    let status = child
+        .wait()
+        .map_err(|error| format!("failed to wait for `{}`: {error}", platform::SANDBOX_EXEC))?;
     Ok(platform::exit_code(status))
 }
 
-fn stop_direct_child(child: &mut Child, primary: String) -> String {
+fn stop_direct_child(child: &mut Child, primary: String, timeout: Duration) -> String {
     let mut error = primary;
     match child.try_wait() {
         Ok(Some(_)) => return error,
@@ -78,6 +71,28 @@ fn stop_direct_child(child: &mut Child, primary: String) -> String {
                 platform::SANDBOX_EXEC
             ),
         );
+    }
+
+    match platform::wait_for_process_exit_without_reaping(child.id(), timeout) {
+        Ok(true) => {}
+        Ok(false) => {
+            return additional_error(
+                error,
+                format!(
+                    "timed out waiting for direct `{}` to stop",
+                    platform::SANDBOX_EXEC
+                ),
+            );
+        }
+        Err(wait_error) => {
+            return additional_error(
+                error,
+                format!(
+                    "failed to observe direct `{}` during cleanup: {wait_error}",
+                    platform::SANDBOX_EXEC
+                ),
+            );
+        }
     }
     if let Err(wait_error) = child.wait() {
         error = additional_error(

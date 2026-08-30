@@ -6,7 +6,7 @@ use std::ffi::OsStr;
 #[cfg(target_os = "macos")]
 use std::os::unix::process::CommandExt as _;
 #[cfg(target_os = "macos")]
-use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, ExitStatus, Stdio};
+use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, Stdio};
 #[cfg(target_os = "macos")]
 use std::time::Duration;
 
@@ -58,6 +58,7 @@ pub fn run(command_line: &[OsString]) -> Result<ExitCode, String> {
 /// use std::ffi::OsStr;
 /// use std::io::{Read, Write};
 /// use std::process::Stdio;
+/// use std::time::Duration;
 ///
 /// fn read_echo(mut stream: impl Read) -> [u8; 6] {
 ///     let mut output = [0; 6];
@@ -83,6 +84,7 @@ pub fn run(command_line: &[OsString]) -> Result<ExitCode, String> {
 /// let mut command =
 ///     SandboxedCommand::new(OsStr::new("python")).expect("sandbox should be configured");
 /// command
+///     .new_process_group()
 ///     .args(["-c", script])
 ///     .stdin(Stdio::piped())
 ///     .stdout(Stdio::piped())
@@ -104,7 +106,10 @@ pub fn run(command_line: &[OsString]) -> Result<ExitCode, String> {
 /// stdin
 ///     .write_all(b"EXIT\n")
 ///     .expect("EXIT should be written");
-/// assert!(child.wait().expect("child should exit").success());
+/// assert!(child
+///     .wait_timeout_without_reaping(Duration::from_secs(1))
+///     .expect("child exit should be observable"));
+/// child.force_stop().expect("child should be retired");
 /// ```
 pub(crate) struct SandboxedCommand {
     command: Command,
@@ -114,12 +119,11 @@ pub(crate) struct SandboxedCommand {
 #[cfg(target_os = "macos")]
 /// A direct sandboxed child that retains its private temporary directory.
 ///
-/// Retain this owner until the child exits, then call `wait`. Dropping it does
-/// not terminate the child and removes the private directory. `wait` does not
-/// stop background descendants; use `force_stop` when retiring a process-group
-/// lifetime. Piped streams can be taken and moved to independent I/O tasks
-/// before waiting.
-#[must_use = "retain the sandboxed child until it is explicitly waited"]
+/// Retain this owner until its process-group lifetime is explicitly retired.
+/// Dropping it does not terminate the child and removes the private directory.
+/// Piped streams can be taken and moved to independent I/O tasks before
+/// retirement.
+#[must_use = "retain the sandboxed child until it is explicitly retired"]
 pub(crate) struct SandboxedChild {
     child: Child,
     retirement: SandboxedChildRetirement,
@@ -229,8 +233,8 @@ impl SandboxedCommand {
     ///
     /// Darwin cannot atomically attach a descendant observer at spawn time. A
     /// process that detaches before the post-spawn root watch or a fork event is
-    /// observed remains outside this command's guarantee. Launcher crashes and
-    /// terminal signal handling are intentionally left to later supervision work.
+    /// observed remains outside this command's guarantee. Termination or failure
+    /// of the launcher itself is intentionally outside this command's scope.
     pub(crate) fn status(mut self) -> Result<ExitCode, String> {
         self.command.env("TMPDIR", self.temporary_directory.path());
         supervision::status(self.command, self.temporary_directory)
@@ -252,16 +256,6 @@ impl SandboxedChild {
     #[allow(dead_code, reason = "used by spawned callers with piped stderr")]
     pub(crate) fn take_stderr(&mut self) -> Option<ChildStderr> {
         self.child.stderr.take()
-    }
-
-    #[allow(
-        dead_code,
-        reason = "available to spawned callers that await normal completion"
-    )]
-    pub(crate) fn wait(mut self) -> Result<ExitStatus, String> {
-        self.child
-            .wait()
-            .map_err(|error| format!("failed to launch `{}`: {error}", platform::SANDBOX_EXEC))
     }
 
     /// Waits at most `timeout` for the direct sandbox process to exit without
