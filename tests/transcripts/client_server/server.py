@@ -104,7 +104,7 @@ def test_initializes_and_lists_tools(binary: Path) -> Transcript:
     send = tools["send"]
     send_description = " ".join(send["description"].split())
     for guidance in (
-        "Persistent R, Python, and DuckDB SQL workbench",
+        "Persistent R, Python, and SQL workbench",
         "State persists across sequential calls",
         "Reassess the language for each cell and switch whenever another language is a better fit",
         "do not stay in one language solely because state already exists there",
@@ -136,8 +136,9 @@ def test_initializes_and_lists_tools(binary: Path) -> Transcript:
         "Send `stdin` without code to answer an active prompt or debugger",
         "`r.name`",
         "`py$name`",
-        "SQL can query R data frames by name",
+        "managed DuckDB SQL can query R data frames by name",
         "`sql_connection()`",
+        "`console_sql_connection(connection)`",
         "resolves ordinary CRAN packages and missing imports",
         "Use `requirements` for explicit R references, exact Python distribution metadata, or DuckDB extensions",
         "preparation makes dependencies available but does not import, attach, or load them",
@@ -173,9 +174,12 @@ def test_initializes_and_lists_tools(binary: Path) -> Transcript:
         "`loadNamespace()`",
         "do not probe package availability or call `install.packages()`",
         "`py$name`",
-        "R data frames are directly queryable by name from later SQL cells",
-        "borrowed `sql_connection()`",
-        "do not disconnect it",
+        "With managed DuckDB active, R data frames are directly queryable by name from later SQL cells",
+        "`sql_connection()` returns the active SQL connection",
+        "`console_sql_connection(connection)`",
+        "`console_sql_connection(NULL)`",
+        "Do not disconnect the managed DuckDB connection",
+        "restore a selected connection before disconnecting it",
         "Default-device plots return as PNG images",
         "`options(console.plot.width",
         "Omit this field for polling or stdin-only calls",
@@ -197,7 +201,7 @@ def test_initializes_and_lists_tools(binary: Path) -> Transcript:
         "exact registry metadata is needed",
         "user-selected Python environment or bare runtime disables both automatic resolution and managed requirements",
         "`r.name`",
-        "bind them to an R name first",
+        "bind them to an R name before querying them there",
         "open `matplotlib.pyplot` figure returns once as a PNG image and is closed",
         "Omit this field for polling or stdin-only calls",
     ):
@@ -206,11 +210,15 @@ def test_initializes_and_lists_tools(binary: Path) -> Transcript:
         send["inputSchema"]["properties"]["sql"]["description"].split()
     )
     for guidance in (
-        "One complete DuckDB SQL cell",
+        "One complete SQL cell evaluated through the active connection",
+        "managed DuckDB backend is active by default",
         "persistent catalog",
-        "final query result returns a bounded preview",
+        "result with columns returns a bounded preview",
+        "`DBI::dbSendQuery()`",
+        "commands that require the statement interface",
         "unqualified relation name can query a data frame in R global state",
         "DuckDB table or view with the same name takes precedence",
+        "DuckDB conveniences apply only to the managed backend",
         "`SHOW TABLES`",
         "outside the worker's private temporary directory",
         "`ATTACH 'path' AS name (READ_ONLY)`",
@@ -345,6 +353,7 @@ def test_initializes_and_lists_tools(binary: Path) -> Transcript:
     assert (
         "JSON and ICU are already prepared for built-in workers" in duckdb_description
     )
+    assert "for the managed DuckDB backend" in duckdb_description
     transcript = client._finish()
     assert not (workspace / ".mcp-console").exists(), workspace
     return transcript
