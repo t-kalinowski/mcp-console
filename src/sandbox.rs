@@ -325,9 +325,10 @@ impl SandboxedChild {
     /// Stops the root and descendants observed across process-group and session
     /// changes, then reaps the direct sandbox process.
     ///
-    /// If observed-tree retirement fails, process-group and direct-child cleanup
-    /// still run as a fallback. The private temporary directory is preserved on
-    /// any cleanup error because an unobserved process may remain live.
+    /// Process-group cleanup always runs as a backstop for unobserved same-group
+    /// forks; direct-child cleanup also runs after any retirement error. The
+    /// private temporary directory is preserved on any cleanup error because an
+    /// unobserved process may remain live.
     pub(crate) fn force_stop(&mut self) -> Result<(), String> {
         match &self.retirement {
             SandboxedChildRetirement::Retired { error } => return stored_retirement_result(error),
@@ -343,34 +344,37 @@ impl SandboxedChild {
             .take()
             .expect("active sandbox child should retain its observed lifetime");
         let mut error = observed_lifetime.stop().err();
-        if error.is_some() {
-            if self.separate_process_group
-                && let Err(group_error) = platform::kill_process_group(self.child.id())
-            {
-                error = Some(append_retirement_error(
-                    error,
-                    format!(
-                        "failed to stop `{}` process group: {group_error}",
-                        platform::SANDBOX_EXEC
-                    ),
-                ));
-            }
-            if let Err(kill_error) = self.child.kill()
-                && kill_error.raw_os_error() != Some(libc::ESRCH)
-            {
-                let error = append_retirement_error(
-                    error,
-                    format!(
-                        "failed to stop direct `{}` process: {kill_error}",
-                        platform::SANDBOX_EXEC
-                    ),
-                );
-                self.preserve_temporary_directory();
-                self.retirement = SandboxedChildRetirement::Failed {
-                    error: error.clone(),
-                };
-                return Err(error);
-            }
+        // Process-group cleanup remains an independent backstop for the narrow
+        // interval between a fork and its observation. Run it even when tracked
+        // retirement succeeds so a same-group process cannot survive merely
+        // because its parent exited before the fork event was resolved.
+        if self.separate_process_group
+            && let Err(group_error) = platform::kill_process_group(self.child.id())
+        {
+            error = Some(append_retirement_error(
+                error,
+                format!(
+                    "failed to stop `{}` process group: {group_error}",
+                    platform::SANDBOX_EXEC
+                ),
+            ));
+        }
+        if error.is_some()
+            && let Err(kill_error) = self.child.kill()
+            && kill_error.raw_os_error() != Some(libc::ESRCH)
+        {
+            let error = append_retirement_error(
+                error,
+                format!(
+                    "failed to stop direct `{}` process: {kill_error}",
+                    platform::SANDBOX_EXEC
+                ),
+            );
+            self.preserve_temporary_directory();
+            self.retirement = SandboxedChildRetirement::Failed {
+                error: error.clone(),
+            };
+            return Err(error);
         }
 
         self.retirement = SandboxedChildRetirement::AwaitingReap {
