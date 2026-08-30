@@ -103,7 +103,8 @@ It reports readiness, accepts complete cells and supported preparation operation
 The built-in worker embeds R on its main thread.
 Its language adapters provide persistent Python and DuckDB SQL within that worker process.
 Its private R environment bridge conditionally wraps `base::library` and `base::loadNamespace`, applies accepted managed libraries, and reports activation outcomes.
-The Rust Python facade loads, retains, and initializes the selected file-backed `libpython`, or attaches its own handle if CPython was already initialized; reticulate attaches to the interpreter and continues to own conversion, evaluation, its manifest, event handling, and interrupts.
+The Rust Python facade loads, retains, and initializes the selected file-backed `libpython`, or attaches its own handle if CPython was already initialized.
+It embeds and installs the private evaluator through that CPython API; reticulate attaches to the interpreter and continues to own object conversion, evaluation dispatch, its manifest, event handling, and interrupts.
 Its private Python runtime conditionally appends a last-chance import finder, while the R Python bridge owns the reticulate manifest and the callback into the existing managed-Python resolver.
 Bare sessions leave both resolution adapters disabled.
 Their user-visible behavior belongs in the [built-in runtime guide](BUILTIN_RUNTIME.md), while the sideband contract remains independent of the interpreter implementation.

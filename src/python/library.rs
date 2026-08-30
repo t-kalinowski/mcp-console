@@ -1,3 +1,4 @@
+use std::ffi::{CStr, CString};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
@@ -10,6 +11,24 @@ type PyInitializeEx = unsafe extern "C" fn(libc::c_int);
 type PySysSetArgv = unsafe extern "C" fn(libc::c_int, *mut *mut libc::wchar_t);
 type PyOsSetSignal = unsafe extern "C" fn(libc::c_int, libc::sighandler_t) -> libc::sighandler_t;
 type PyEvalSaveThread = unsafe extern "C" fn() -> *mut libc::c_void;
+type PyObject = libc::c_void;
+type PyGilState = libc::c_int;
+type PyGilStateEnsure = unsafe extern "C" fn() -> PyGilState;
+type PyGilStateRelease = unsafe extern "C" fn(PyGilState);
+type PyImportAddModule = unsafe extern "C" fn(*const libc::c_char) -> *mut PyObject;
+type PyModuleGetDict = unsafe extern "C" fn(*mut PyObject) -> *mut PyObject;
+type PyDictNew = unsafe extern "C" fn() -> *mut PyObject;
+type PyRunStringFlags = unsafe extern "C" fn(
+    *const libc::c_char,
+    libc::c_int,
+    *mut PyObject,
+    *mut PyObject,
+    *mut libc::c_void,
+) -> *mut PyObject;
+type PyDecRef = unsafe extern "C" fn(*mut PyObject);
+type PyErrPrint = unsafe extern "C" fn();
+
+const PY_FILE_INPUT: libc::c_int = 257;
 
 struct LoadedLibrary {
     path: PathBuf,
@@ -27,6 +46,14 @@ struct PythonApi {
     set_argv: PySysSetArgv,
     set_signal: PyOsSetSignal,
     save_thread: PyEvalSaveThread,
+    gil_state_ensure: PyGilStateEnsure,
+    gil_state_release: PyGilStateRelease,
+    import_add_module: PyImportAddModule,
+    module_get_dict: PyModuleGetDict,
+    dict_new: PyDictNew,
+    run_string_flags: PyRunStringFlags,
+    dec_ref: PyDecRef,
+    err_print: PyErrPrint,
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -55,6 +82,16 @@ pub(super) fn initialize(
     with_library(path, |library| {
         library.initialize(program_name, python_home)
     })
+}
+
+pub(super) fn install_runtime(source: &str) -> Result<(), String> {
+    let mut library_slot = PYTHON_LIBRARY
+        .lock()
+        .map_err(|_| "Python shared library state is unavailable".to_string())?;
+    let library = library_slot
+        .as_mut()
+        .ok_or_else(|| "Python shared library is not loaded".to_string())?;
+    library.install_runtime(source)
 }
 
 pub(super) fn finish_initialization() -> Result<(), String> {
@@ -206,6 +243,25 @@ impl LoadedLibrary {
         Err("Python interpreter is already initialized with different configuration".to_string())
     }
 
+    fn install_runtime(&self, source: &str) -> Result<(), String> {
+        // SAFETY: The resolved function has no preconditions.
+        if unsafe { (self.api.is_initialized)() } == 0 {
+            return Err("Python interpreter is not initialized".to_string());
+        }
+        let source = CString::new(source)
+            .map_err(|_| "embedded Python runtime source contains NUL".to_string())?;
+
+        // SAFETY: CPython is initialized. PyGILState_Ensure permits this call
+        // both while reticulate holds the GIL and after it has released it.
+        let gil_state = unsafe { (self.api.gil_state_ensure)() };
+        // SAFETY: The GIL is held and the source is a valid NUL-terminated
+        // buffer for the duration of the call.
+        let result = unsafe { self.api.run_runtime(&source) };
+        // SAFETY: This state was returned by the matching ensure call above.
+        unsafe { (self.api.gil_state_release)(gil_state) };
+        result
+    }
+
     fn finish_initialization(&mut self) -> Result<(), String> {
         match self.interpreter {
             Interpreter::Uninitialized => {
@@ -235,6 +291,48 @@ impl LoadedLibrary {
 }
 
 impl PythonApi {
+    unsafe fn run_runtime(&self, source: &CStr) -> Result<(), String> {
+        // Match reticulate::py_run_string(local = TRUE): definitions are
+        // isolated in a fresh locals dictionary while functions retain the
+        // persistent __main__ globals used by Python cells.
+        let main = unsafe { (self.import_add_module)(c"__main__".as_ptr()) };
+        if main.is_null() {
+            unsafe { (self.err_print)() };
+            return Err("failed to access Python's main module".to_string());
+        }
+        let globals = unsafe { (self.module_get_dict)(main) };
+        if globals.is_null() {
+            unsafe { (self.err_print)() };
+            return Err("failed to access Python's main namespace".to_string());
+        }
+        let locals = unsafe { (self.dict_new)() };
+        if locals.is_null() {
+            unsafe { (self.err_print)() };
+            return Err("failed to create the private Python runtime namespace".to_string());
+        }
+        let result = unsafe {
+            (self.run_string_flags)(
+                source.as_ptr(),
+                PY_FILE_INPUT,
+                globals,
+                locals,
+                std::ptr::null_mut(),
+            )
+        };
+        if result.is_null() {
+            unsafe {
+                (self.err_print)();
+                (self.dec_ref)(locals);
+            }
+            return Err("failed to install MCP Console's private Python runtime".to_string());
+        }
+        unsafe {
+            (self.dec_ref)(result);
+            (self.dec_ref)(locals);
+        }
+        Ok(())
+    }
+
     unsafe fn load(library: &libloading::os::unix::Library, path: &Path) -> Result<Self, String> {
         Ok(Self {
             // SAFETY: Symbol types match the documented CPython C API.
@@ -245,6 +343,14 @@ impl PythonApi {
             set_argv: unsafe { load_symbol(library, path, b"PySys_SetArgv\0")? },
             set_signal: unsafe { load_symbol(library, path, b"PyOS_setsig\0")? },
             save_thread: unsafe { load_symbol(library, path, b"PyEval_SaveThread\0")? },
+            gil_state_ensure: unsafe { load_symbol(library, path, b"PyGILState_Ensure\0")? },
+            gil_state_release: unsafe { load_symbol(library, path, b"PyGILState_Release\0")? },
+            import_add_module: unsafe { load_symbol(library, path, b"PyImport_AddModule\0")? },
+            module_get_dict: unsafe { load_symbol(library, path, b"PyModule_GetDict\0")? },
+            dict_new: unsafe { load_symbol(library, path, b"PyDict_New\0")? },
+            run_string_flags: unsafe { load_symbol(library, path, b"PyRun_StringFlags\0")? },
+            dec_ref: unsafe { load_symbol(library, path, b"Py_DecRef\0")? },
+            err_print: unsafe { load_symbol(library, path, b"PyErr_Print\0")? },
         })
     }
 }
