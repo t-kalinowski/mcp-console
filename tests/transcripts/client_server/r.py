@@ -14,6 +14,7 @@ from _support import (
     Transcript,
     assert_result_content,
     build_r_input_handler,
+    collect_running_output,
     code,
     r_test_environment,
     reference_plots,
@@ -1496,17 +1497,22 @@ def test_preserves_fd0_order_between_readers(binary: Path) -> Transcript:
         stdin="callback\ndirect\n",
         timeout_ms=1_000,
     )
-    deadline = time.monotonic() + 3
-    while last_tool_text(client) != expected:
-        output = last_tool_text(client)
-        assert output == "\n[running; poll with an empty send]", output
-        if time.monotonic() >= deadline:
-            raise AssertionError("ordered fd 0 readers did not finish")
-        client.send(timeout_ms=1_000)
+    running = "\n[running; poll with an empty send]"
+    output = last_tool_text(client)
+    if output.endswith(running):
+        cuts = collect_running_output(
+            client,
+            "ordered fd 0 readers",
+            timeouts_ms=(1_000,) * 3,
+            initial_cuts=(output.removesuffix(running),),
+        )
+        output = "".join(cuts)
+    assert output == expected, repr(output)
 
     calls = client.transcript[call_start:]
     final_call = calls[-1]
     final_call["send"] = calls[0]["send"]
+    final_call["result"]["content"][0]["text"] = output
     client.transcript[call_start:] = [final_call]
     return client._finish()
 
@@ -1567,11 +1573,14 @@ def test_keeps_stdin_open_after_partial_payload(binary: Path) -> Transcript:
     client.send(r=r, stdin="without newline", timeout_ms=0)
     assert last_tool_text(client) == "\n[running; poll with an empty send]"
 
-    client.send(timeout_ms=3_000)
-    output = last_tool_text(client)
-    assert output == 'before\n[input requested: "partial> "]\n[waiting for stdin]', (
-        output
+    cuts = collect_running_output(
+        client,
+        "partial stdin input request",
+        timeouts_ms=(3_000,) * 5,
     )
+    output = "".join(cuts)
+    expected = 'before\n[input requested: "partial> "]\n[waiting for stdin]'
+    assert output == expected, repr(output)
 
     client.send(stdin="\n")
     assert last_tool_text(client) == '[1] "without newline"\n'
