@@ -1,11 +1,25 @@
 # `.mcp-console/config.yaml`
 
-**Status:** aspirational design sketch
+**Status:** exploratory, aspirational design spike
 
-This document proposes a configuration format for MCP Console. It is intended to
-remain useful as MCP Console grows from one local macOS sandbox into a
+This document proposes a direction for MCP Console configuration. It is intended
+to remain useful as MCP Console grows from one local macOS sandbox into a
 cross-platform system that can run locally, over SSH, in containers, in Docker
 Sandboxes, or through another sandbox provider.
+
+This is not a normative schema or a frozen implementation contract. It is a spike
+used to explore the problem space, establish user-facing concepts and terminology,
+and provide a sequence of implementable slices. Review should focus primarily on
+the simple user journey, progressive disclosure, and major architectural
+boundaries. Exact parser behavior, provider protocols, proxy canonicalization,
+cache identity, and platform-specific enforcement will be settled and tested in
+incremental implementation PRs. Aspirational examples may be revised, deferred,
+or removed as those PRs expose better designs.
+
+Security-sensitive behavior is still fail-closed: until a feature has a concrete
+implementation and tests, MCP Console must reject unsupported combinations rather
+than infer a broader permission. That invariant lets the design remain iterative
+without requiring this sketch to pre-specify every edge case.
 
 The central design rule is:
 
@@ -472,6 +486,11 @@ package trees, certificates, device nodes, and implementation files required to
 start the selected runtime. `config explain` must show those derived runtime
 grants separately from user-declared roots.
 
+A `readable_roots` boundary contributed by a higher-trust layer is a
+non-widenable ceiling. Lower-trust configuration may narrow that set, but it may
+not add roots or otherwise reopen reads outside it. This security constraint is
+applied separately from ordinary same-layer list replacement and patch semantics.
+
 Relative paths are resolved from the worker's target-side working directory.
 `~` is the target user's home. Container paths are container paths; SSH paths
 are remote paths. Log paths are an exception and are supervisor-side unless an
@@ -657,9 +676,12 @@ Portable endpoint strings use an explicit scheme:
 DNS wildcards may cover subdomains, such as `*.pythonhosted.org`. Overly broad
 patterns such as `*` or `*.com` should be rejected in an allowlist.
 
-A URL path pattern requires request inspection. If a selected provider can
-filter only by host, it must reject a path-constrained profile rather than turn
-it into a host-wide grant.
+URL path and method filtering are aspirational in this sketch. Until a provider
+has one tested canonicalization and redirect contract, a selected path- or
+method-constrained profile fails preflight; an initial implementation may support
+only scheme, host, and port. The implementation PR should define and test those
+mechanics rather than this spike attempting to prescribe every proxy parser edge
+case.
 
 An endpoint can expand to a mapping when methods, several ports, or a denial
 reason are needed:
@@ -987,6 +1009,11 @@ MCP Console appends its internal relay command after the command prefix and does
 not invoke an implicit shell. `relay_stdio` means the provider preserves the
 relay's framed standard-input and standard-output contract.
 
+The initial command-runner contract covers relay launch only. A command runner
+combined with `managed` or `project` R/Python is rejected unless a later provider
+contract explicitly supports the server-owned resolver-helper lifecycle. Until
+then, command-runner profiles use `existing` or disabled language runtimes.
+
 This is an escape hatch, not the common remote-host model.
 
 ## Sandbox provider
@@ -1097,6 +1124,11 @@ Supported values are:
   missing package;
 - `off` — perform no installation or managed environment construction.
 
+`automatic` is not an authorization bypass. A requirement discovered while code
+is running is attributed to the active project and session, and no resolver starts
+until it passes the same project-trust or exact higher-trust
+requirement-and-ordered-source approval as a declared requirement.
+
 The policy can expand when R and Python differ:
 
 ```yaml
@@ -1124,6 +1156,12 @@ that will host the worker. The prepared environment is committed to an immutable
 target-local cache before the server gives activation paths to the worker relay.
 A target without a compatible resolver helper fails preflight.
 
+In this sketch, `resolution-identity-keyed` is shorthand for a complete immutable resolution
+identity, not merely package names and versions. Reusable cache identity includes
+normalized requirements, ordered source policy, target/runtime ABI and provenance,
+resolver version, and relevant build inputs. The exact digest fields are an
+implementation detail to finalize with the cache code and tests.
+
 Project-authored package names and manifests are resolver inputs, not ordinary
 sandboxed data. An automatically discovered project may not cause the
 server-owned resolver to install them until the project is trusted, unless each
@@ -1138,6 +1176,12 @@ installation or build code. These rules apply equally to `automatic` and
 
 A future `frozen` value may require a complete lockfile and prohibit any
 resolution that would change it.
+
+A managed `manifest` path is a project/supervisor path. The server reads and
+validates it in the project namespace, then sends normalized requirements and a
+content digest in the compiled resolver request. A remote helper does not
+reinterpret the authored path in its own filesystem. A future target-local
+manifest would need a distinct, explicit form.
 
 ### R
 
@@ -1197,7 +1241,7 @@ r:
 ```
 
 A managed environment may also set `lifetime: session` for a fresh
-ephemeral library or `lifetime: cached` for a manifest-keyed reusable library.
+ephemeral library or `lifetime: cached` for a resolution-identity-keyed reusable library.
 The default should be `cached`; the cache remains disposable and is not treated
 as project state.
 
@@ -1293,7 +1337,7 @@ python:
 ```
 
 As with R, `lifetime: session` requests an ephemeral environment and
-`lifetime: cached` requests a reusable manifest-keyed environment.
+`lifetime: cached` requests a reusable resolution-identity-keyed environment.
 
 A project environment is:
 
@@ -1628,7 +1672,7 @@ cache:
 ```
 
 Resolver-owned downloads, package libraries, wheels, extensions, and
-manifest-keyed managed environments are immutable from the worker's point of
+resolution-identity-keyed managed environments are immutable from the worker's point of
 view. The resolver may populate them outside the worker boundary; the worker
 receives only the read access needed to use an activated environment. Evaluated
 code must never be able to modify a reusable environment that a later session or
@@ -1784,9 +1828,9 @@ project checkout.
 
 Every path belongs to a documented namespace:
 
-- **project/supervisor paths** include the config file, sync sources, the compact
-  top-level log path, and mount or Docker build sources for a top-level local
-  Docker runner;
+- **project/supervisor paths** include the config file, managed R/Python
+  manifests, sync sources, the compact top-level log path, and mount or Docker
+  build sources for a top-level local Docker runner;
 - **target paths** include `run_on.directory`, filesystem roots, runtime
   executables and project roots, SQL database paths, target caches, and mount or
   Docker build sources for a container nested under an outer runner; and
