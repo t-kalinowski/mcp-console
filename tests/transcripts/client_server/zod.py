@@ -5206,9 +5206,7 @@ def test_shutdown_deadline_does_not_wait_for_sideband_writer(
                 "zod-blocked-sideband-holder-pid",
                 client,
             )
-            sideband_holder = int(
-                holder_marker.read_text(encoding="utf-8")
-            )
+            sideband_holder = int(holder_marker.read_text(encoding="utf-8"))
             assert os.getpgid(sideband_holder) == sideband_holder, (
                 "sideband holder did not detach from the worker process group"
             )

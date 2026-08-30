@@ -384,9 +384,7 @@ def main() -> None:
         target_operation = command.get("target_operation")
         assert isinstance(target_operation, int), command
         block_next_sideband_write = target_operation
-        retain_blocked_sideband = (
-            os.environ.get("ZOD_RETAIN_BLOCKED_SIDEBAND") == "1"
-        )
+        retain_blocked_sideband = os.environ.get("ZOD_RETAIN_BLOCKED_SIDEBAND") == "1"
 
     def receive_resolver_response(expected_kind: str) -> dict[str, Any]:
         nonlocal queued_message
@@ -406,12 +404,13 @@ def main() -> None:
                     os.setsid()
                     for descriptor in (0, 1, 2):
                         os.close(descriptor)
-                    (
-                        temporary / "zod-blocked-sideband-holder-pid"
-                    ).write_text(
+                    holder_marker = temporary / "zod-blocked-sideband-holder-pid"
+                    pending_holder_marker = holder_marker.with_suffix(".pending")
+                    pending_holder_marker.write_text(
                         str(os.getpid()),
                         encoding="utf-8",
                     )
+                    pending_holder_marker.replace(holder_marker)
                     while True:
                         signal.pause()
             emit_test_event(
