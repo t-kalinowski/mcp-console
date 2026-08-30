@@ -8,9 +8,9 @@ SPDX-License-Identifier: LGPL-2.0-or-later
 The license terms are reproduced in Bubblewrap-COPYING.
 
 Exact corresponding source and build materials:
-https://github.com/t-kalinowski/codex/archive/6693430d98f7ab98378210497a324eb6d2440996.tar.gz
+https://github.com/t-kalinowski/codex/archive/7ecfbdb5c9bc267484be6f2eaad572aa433cf296.tar.gz
 
-Source revision: 6693430d98f7ab98378210497a324eb6d2440996
+Source revision: 7ecfbdb5c9bc267484be6f2eaad572aa433cf296
 Bubblewrap C source: codex-rs/vendor/bubblewrap
 Build integration: codex-rs/bwrap
 

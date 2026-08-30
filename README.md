@@ -25,7 +25,7 @@ Windows is not supported.
 Linux requires unprivileged user namespaces.
 The host's security policy must allow the wheel's private Bubblewrap companion to create them; a system Bubblewrap installation is not required.
 Linux also requires kernel 5.11 or newer.
-The exact corresponding source and build materials for the bundled private runner and companion are available in the [pinned source archive](https://github.com/t-kalinowski/codex/archive/6693430d98f7ab98378210497a324eb6d2440996.tar.gz).
+The exact corresponding source and build materials for the bundled private runner and companion are available in the [pinned source archive](https://github.com/t-kalinowski/codex/archive/7ecfbdb5c9bc267484be6f2eaad572aa433cf296.tar.gz).
 
 A working R installation is required.
 Set `R_HOME` or make `R` discoverable on `PATH`.

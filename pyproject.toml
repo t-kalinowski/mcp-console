@@ -24,7 +24,7 @@ classifiers = [
 Homepage = "https://github.com/t-kalinowski/mcp-console"
 Repository = "https://github.com/t-kalinowski/mcp-console"
 Issues = "https://github.com/t-kalinowski/mcp-console/issues"
-"Private runner source" = "https://github.com/t-kalinowski/codex/archive/6693430d98f7ab98378210497a324eb6d2440996.tar.gz"
+"Private runner source" = "https://github.com/t-kalinowski/codex/archive/7ecfbdb5c9bc267484be6f2eaad572aa433cf296.tar.gz"
 
 [tool.maturin]
 bindings = "bin"
