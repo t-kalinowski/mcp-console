@@ -188,6 +188,7 @@ jobs:
       - name: Check R package
         env:
           MCP_CONSOLE_TEST_BINARY: ${{ github.workspace }}/target/debug/mcp-console
+          MCP_CONSOLE_TEST_SANDBOX_RUNNER: ${{ github.workspace }}/target/private-wheel-data/data/libexec/mcp-console-sandbox
         working-directory: r
         run: |
           R CMD build .
