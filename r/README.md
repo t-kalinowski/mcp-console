@@ -2,7 +2,13 @@
 
 `mcp.console` adds MCP Console to an [ellmer](https://ellmer.tidyverse.org/) chat as a persistent workbench for R, Python, and DuckDB.
 
-MCP Console currently supports macOS only.
+MCP Console source supports macOS and x86-64 Linux.
+The currently published 0.0.2 release contains only macOS wheels; Linux publication will begin with the next release.
+Windows is not supported.
+
+Linux requires unprivileged user namespaces.
+The host's security policy must allow the wheel's private Bubblewrap companion to create them; a system Bubblewrap installation is not required.
+Linux also requires kernel 5.11 or newer.
 
 ## Install
 
@@ -36,7 +42,8 @@ Use a specific executable directly:
 tool <- console_tool(path = Sys.which("mcp-console"))
 ```
 
-Use a specific published release, regardless of what is on `PATH`:
+Use a specific published release, regardless of what is on `PATH`.
+The current 0.0.2 release is macOS-only:
 
 ```r
 tool <- console_tool(version = "0.0.2")

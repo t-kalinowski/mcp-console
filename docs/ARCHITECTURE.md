@@ -49,8 +49,10 @@ mcp-console sandbox launcher             host
           └── target and descendants     native sandbox
 ```
 
-The launcher retains terminal-signal forwarding and the command's exit status.
-The runner owns native policy construction, target launch, observed-descendant retirement, and target-directory cleanup.
+The launcher retains the command's exit status.
+On macOS it also forwards terminal signals and transfers terminal foreground ownership.
+The Linux runner does not project interrupt or graceful termination through the Bubblewrap session boundary; launcher control loss still forces target-tree retirement.
+The runner owns native policy construction, target launch, target-tree retirement, and target-directory cleanup.
 It keeps its state directory separate from the target-facing temporary directory and removes the latter only after successful lifetime retirement.
 Control-channel loss retires the target generation, so cleanup does not depend on the MCP Console launcher running its normal shutdown path.
 
@@ -74,12 +76,13 @@ The client does not communicate directly with a relay, worker, or resolver.
 
 MCP Console starts the pinned private runner with an absolute target path, a private state directory, a target cleanup directory, one control descriptor, and separately declared target-stream descriptors.
 It verifies protocol version 1, the exact source revision and release, the native backend, required capabilities, setup state, and companion layout before sending one launch request.
-It then maps target observation and retirement to `status`, `interrupt`, `terminate`, and `wait` requests.
+It then maps target observation and retirement to the platform-supported subset of `status`, `interrupt`, `terminate`, and `wait` requests.
 Target stdin, stdout, stderr, relay frames, and sideband bytes never enter the control channel.
 
 The runner owns the target generation after launch acceptance.
 MCP Console closes the control channel on every failure path and reaps the runner itself.
-The runner's lifetime process continues observed-descendant retirement if the outer runner or MCP Console process exits unexpectedly.
+On macOS an independent lifetime process continues observed-descendant retirement if the outer runner or MCP Console process exits unexpectedly.
+On Linux the runner uses Bubblewrap PID and session namespaces, an outer process group, and a parent-death signal for target-tree ownership.
 This control protocol is private, versioned, and independent of the relay and worker protocols.
 
 ### Server and relay
@@ -295,7 +298,7 @@ A successful replacement starts with fresh in-memory state and the retained envi
 
 Closing MCP input begins shutdown of the implicit console session.
 The server stops accepting generation work, requests bounded retirement of the active relay and worker, cancels an active host resolver, joins the remaining relay I/O tasks, and reaps owned processes.
-The manager, or the owner-side recovery monitor after manager failure, stops the remaining observed lifetime within its configured cleanup timeout and completes private-directory cleanup before the server treats the generation as retired.
+The runner stops the remaining sandbox lifetime within its configured cleanup timeout and completes private-directory cleanup before the server treats the generation as retired.
 The protocol documents define the exact closure and retirement order.
 
 ## Output ownership
@@ -351,5 +354,7 @@ This includes a server working directory that cannot be represented as UTF-8 bec
 
 ## Platform support
 
-The sandbox command, relay, built-in worker, and managed resolvers are supported only on macOS, where the complete check runs.
-Linux and Windows are not supported.
+The sandbox command, relay, built-in worker, and managed resolvers are supported on macOS and Linux, where the complete check runs.
+Linux requires kernel 5.11 or newer and a host policy that permits unprivileged user namespaces.
+On Linux the standalone sandbox command does not forward terminal signals or transfer terminal foreground ownership; these runner limitations do not affect built-in console interrupts, which the relay delivers from inside the sandbox.
+Windows is not supported.
