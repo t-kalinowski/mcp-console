@@ -1,0 +1,145 @@
+--- a/src/server.rs
++++ b/src/server.rs
+@@ -105,8 +105,8 @@
+     /// already be installed and these operations keep their ordinary R behavior. R source is not
+     /// scanned in advance. Read Python globals through `py$name`. With managed DuckDB active, R data
+     /// frames are directly queryable by name from later SQL cells. `sql_connection()` returns the
+-    /// active SQL connection for DBI or dplyr use. Select a user-owned connection for later SQL cells
+-    /// with `console_sql_connection(connection)` and restore managed DuckDB with
++    /// active SQL connection for DBI or dplyr use. Select a user-owned DBI connection for later SQL
++    /// cells with `console_sql_connection(connection)` and restore managed DuckDB with
+     /// `console_sql_connection(NULL)`. Do not disconnect the managed DuckDB connection, and restore a
+     /// selected connection before disconnecting it. Default-device plots return as PNG images. Keep
+     /// all drawing operations for one plot in the same cell. Set persistent dimensions with
+@@ -123,8 +123,11 @@
+     /// metadata is needed, or the package should be prepared before the cell. A user-selected Python
+     /// environment or bare runtime disables both automatic resolution and managed requirements;
+     /// import packages already installed there directly. Read R globals and call R functions through
+-    /// `r.name`. Python data frames are not automatically visible to managed DuckDB SQL; bind them to
+-    /// an R name before querying them there. At cell end, including after a Python error, every open
++    /// `r.name`. Select a user-owned Python DB-API connection for later SQL cells with
++    /// `console_sql_connection(connection)` and restore managed DuckDB with
++    /// `console_sql_connection(None)`. Restore managed DuckDB before closing a selected connection.
++    /// Python data frames are not automatically visible to managed DuckDB SQL; bind them to an R name
++    /// before querying them there. At cell end, including after a Python error, every open
+     /// `matplotlib.pyplot` figure returns once as a PNG image and is closed. `show()` is optional. R
+     /// plots called through `r` follow the R plot rules. Omit this field for polling or stdin-only
+     /// calls.
+@@ -132,10 +135,12 @@
+     /// One complete SQL cell evaluated through the active connection. The managed DuckDB backend is
+     /// active by default and keeps a persistent catalog. A result with columns returns a bounded
+     /// preview. With managed DuckDB, an unqualified relation name can query a data frame in R global
+-    /// state, and a DuckDB table or view with the same name takes precedence. A user-selected
+-    /// connection receives cells through `DBI::dbSendQuery()` and supplies its own SQL dialect and type
+-    /// mappings. Use DBI from an R cell for commands that require the statement interface. DuckDB
+-    /// conveniences apply only to the managed backend. When attaching an existing DuckDB database
++    /// state, and a DuckDB table or view with the same name takes precedence. A user-selected R DBI
++    /// connection receives cells through `DBI::dbSendQuery()`, while a selected Python DB-API
++    /// connection receives them through `cursor.execute()`. Each driver supplies its own SQL dialect
++    /// and type mappings. Use DBI from R for commands that require its statement interface, or call the
++    /// Python connection directly for operations outside a single SQL cell. DuckDB conveniences apply
++    /// only to the managed backend. When attaching an existing DuckDB database
+     /// outside the worker's private temporary directory, use `ATTACH 'path' AS name (READ_ONLY)`; the
+     /// sandbox blocks DuckDB's default writable mode for those paths. Use `SHOW TABLES`, `DESCRIBE`,
+     /// `SUMMARIZE`, and `EXPLAIN` for DuckDB discovery. DuckDB CLI dot commands are not supported. Omit
+@@ -309,7 +314,7 @@
+ #[tool_router]
+ impl ConsoleServer {
+     #[tool(
+-        description = r#"Persistent R, Python, and SQL workbench for exact computation, file and data inspection, transformation, visualization, statistics, simulation, and modeling. State persists across sequential calls. Reassess the language for each cell and switch whenever another language is a better fit; do not stay in one language solely because state already exists there. Use the available live bridges when switching: Python reads R globals through `r.name`, R reads Python globals through `py$name`, managed DuckDB SQL can query R data frames by name, R accesses the active SQL connection through `sql_connection()`, and R selects a user-owned DBI connection for later SQL cells with `console_sql_connection(connection)`.
++        description = r#"Persistent R, Python, and SQL workbench for exact computation, file and data inspection, transformation, visualization, statistics, simulation, and modeling. State persists across sequential calls. Reassess the language for each cell and switch whenever another language is a better fit; do not stay in one language solely because state already exists there. Use the available live bridges when switching: Python reads R globals through `r.name`, R reads Python globals through `py$name`, managed DuckDB SQL can query R data frames by name, R accesses the active SQL connection through `sql_connection()`, and R or Python selects a user-owned DBI or DB-API connection for later SQL cells with `console_sql_connection(connection)`.
+ 
+ Send one complete `r`, `python`, or `sql` cell per call. Code-bearing calls must be sequential because only one evaluation can be active. A control-only interrupt may overlap a pending `send` while that call resolves or prepares requirements, including for restart. When an intermediate result affects the next step, inspect it before sending another cell. R and Python display a final visible top-level expression, and SQL returns a bounded preview, so leave the primary result last and print only when additional output is needed. Cells are not transactional; changes made before an error may remain.
+ 
+--- a/docs/BUILTIN_RUNTIME.md
++++ b/docs/BUILTIN_RUNTIME.md
+@@ -244,11 +244,12 @@
+ Transport, protocol, and bridge-infrastructure failures retain the normal worker-failure behavior.
+ 
+ The worker installs `py`, `sql_connection()`, and `console_sql_connection()` in `tools:mcp-console` at search position 2.
++After Python initializes, it also installs `console_sql_connection()` in Python builtins so it is available in every Python cell.
+ R can read Python globals through `py$name` and use the active SQL connection through DBI or dplyr.
+-`sql_connection()` returns the active connection.
+-`console_sql_connection(connection)` selects any valid user-owned `DBIConnection`, and `console_sql_connection(NULL)` restores the managed DuckDB connection and its catalog.
++`sql_connection()` returns the active connection to R.
++`console_sql_connection(connection)` selects any valid user-owned `DBIConnection` or Python DB-API connection; `console_sql_connection(NULL)` in R and `console_sql_connection(None)` in Python restore the managed DuckDB connection and its catalog.
+ Do not disconnect the managed DuckDB connection.
+-Restore it before disconnecting a custom connection that is still selected.
++Restore it before disconnecting or closing a custom connection that is still selected.
+ 
+ ## Python
+ 
+@@ -256,6 +257,9 @@
+ Imports, assignments, functions, and objects remain available across cells and through R's `py$name` bridge.
+ The final expression of a cell is displayed through Python's normal display hook; source is not echoed.
+ 
++`console_sql_connection(connection)` selects a user-owned Python DB-API connection for later SQL cells.
++`console_sql_connection(None)` restores the managed DuckDB connection; restore it before closing a selected connection.
++
+ An uncaught exception prints its traceback and completes as a language outcome.
+ The Python session remains usable, including state established before the exception.
+ Python 3.10 or later is required.
+@@ -353,15 +357,23 @@
+ console_sql_connection(connection)
+ ```
+ 
++Python can redirect them to a DB-API connection:
++
++```python
++import sqlite3
++connection = sqlite3.connect(":memory:")
++console_sql_connection(connection)
++```
++
+ The selected connection remains owned by user code.
+-`sql_connection()` returns it, while `console_sql_connection(NULL)` restores the managed DuckDB connection without discarding its catalog.
+-Restore the managed connection before disconnecting a selected connection.
++`sql_connection()` returns an R-selected connection to R, while `console_sql_connection(NULL)` in R or `console_sql_connection(None)` in Python restores the managed DuckDB connection without discarding its catalog.
++Restore the managed connection before disconnecting or closing a selected connection.
+ 
+-The worker submits SQL cells on a selected connection through `DBI::dbSendQuery()`.
++The worker submits SQL cells on a selected R connection through `DBI::dbSendQuery()` and on a selected Python connection through `cursor.execute()`.
+ Results that report columns use the bounded preview path below, while results without columns return `[done]` when they produce no console output.
+ The selected driver supplies the SQL dialect, transaction state, and type mappings, and determines whether its query interface accepts statements or multiple commands.
+-Use `DBI::dbExecute()` or `DBI::dbSendStatement()` from an R cell for commands that require the DBI statement interface.
+-The adapter does not retry a failed cell through another DBI method because the first attempt may already have changed database state.
++Use `DBI::dbExecute()` or `DBI::dbSendStatement()` from an R cell for commands that require the DBI statement interface, or call the Python connection directly for operations outside a single SQL cell.
++The adapter does not retry a failed cell through another method because the first attempt may already have changed database state.
+ DuckDB extension requirements and the conveniences below apply only to the managed DuckDB backend.
+ 
+ Environment scanning lets an unqualified relation name refer to an R data frame in global state.
+--- a/tests/transcripts/client_server/server.py
++++ b/tests/transcripts/client_server/server.py
+@@ -138,6 +138,7 @@
+         "`py$name`",
+         "managed DuckDB SQL can query R data frames by name",
+         "`sql_connection()`",
++        "R or Python selects a user-owned DBI or DB-API connection",
+         "`console_sql_connection(connection)`",
+         "resolves ordinary CRAN packages and missing imports",
+         "Use `requirements` for explicit R references, exact Python distribution metadata, or DuckDB extensions",
+@@ -201,6 +202,10 @@
+         "exact registry metadata is needed",
+         "user-selected Python environment or bare runtime disables both automatic resolution and managed requirements",
+         "`r.name`",
++        "user-owned Python DB-API connection",
++        "`console_sql_connection(connection)`",
++        "`console_sql_connection(None)`",
++        "Restore managed DuckDB before closing a selected connection",
+         "bind them to an R name before querying them there",
+         "open `matplotlib.pyplot` figure returns once as a PNG image and is closed",
+         "Omit this field for polling or stdin-only calls",
+@@ -214,8 +219,12 @@
+         "managed DuckDB backend is active by default",
+         "persistent catalog",
+         "result with columns returns a bounded preview",
++        "user-selected R DBI connection",
+         "`DBI::dbSendQuery()`",
+-        "commands that require the statement interface",
++        "selected Python DB-API connection",
++        "`cursor.execute()`",
++        "commands that require its statement interface",
++        "call the Python connection directly",
+         "unqualified relation name can query a data frame in R global state",
+         "DuckDB table or view with the same name takes precedence",
+         "DuckDB conveniences apply only to the managed backend",
