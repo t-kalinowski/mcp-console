@@ -24,7 +24,7 @@ def test_routes_sql_cells_to_a_selected_dbi_connection(
     # fmt: r
     r = code(r"""
         sqlite <- DBI::dbConnect(RSQLite::SQLite(), ":memory:")
-        console_sql_connection(sqlite)
+        console_sql_connection(connection = sqlite)
         cat(
           "selected: ",
           identical(sql_connection(), sqlite),

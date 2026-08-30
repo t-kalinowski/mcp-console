@@ -12,7 +12,7 @@ result:
 send:
   r: |
     sqlite <- DBI::dbConnect(RSQLite::SQLite(), ":memory:")
-    console_sql_connection(sqlite)
+    console_sql_connection(connection = sqlite)
     cat(
       "selected: ",
       identical(sql_connection(), sqlite),
