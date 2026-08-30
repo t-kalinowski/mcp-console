@@ -986,8 +986,8 @@ def test_restart_skips_direct_stdin_boundary_callback(binary: Path) -> Transcrip
         client._initialize_and_list_tools()
 
         # A direct fd-0 read bypasses the worker's ReadConsole callback.
-        # Restart still must prevent the submitted cell from running after EOF
-        # releases it.
+        # Restart must prevent the submitted cell from running whether EOF
+        # unwinding completes or bounded retirement force-stops the worker.
         # fmt: r
         r = code(r"""
             dyn.load("./mcp_test_input_handler.so")
@@ -1002,7 +1002,6 @@ def test_restart_skips_direct_stdin_boundary_callback(binary: Path) -> Transcrip
                   "direct-stdin-boundary-checkpoint"
                 )))
                 readLines(connection, n = 1)
-                cat("direct callback released\n")
               }
             ))
             """)
@@ -1028,7 +1027,6 @@ def test_restart_skips_direct_stdin_boundary_callback(binary: Path) -> Transcrip
         restarted = client._start_send(control="restart")
         client._receive(waiting)
         client._receive(restarted)
-        assert "direct callback released" in waiting["result"]["content"][0]["text"]
         assert "direct stdin cell ran" not in waiting["result"]["content"][0]["text"]
         assert "direct stdin cell ran" not in restarted["result"]["content"][0]["text"]
         return client._finish()

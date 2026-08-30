@@ -15,7 +15,6 @@ send:
           "direct-stdin-boundary-checkpoint"
         )))
         readLines(connection, n = 1)
-        cat("direct callback released\n")
       }
     ))
 result:
@@ -31,7 +30,6 @@ result:
   content:
     - type: text
       text: |-
-        direct callback released
         [stopped by session restart request before evaluation finished]
         [worker stopped: in-memory state lost]
   isError: true
