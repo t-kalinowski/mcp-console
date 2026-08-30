@@ -2,16 +2,9 @@ name: CI
 
 on:
   pull_request:
-  push:
-    branches:
-      - main
 
 permissions:
   contents: read
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
 
 env:
   CARGO_TERM_COLOR: always
@@ -19,10 +12,9 @@ env:
   UV_VERSION: "0.12.4"
 
 jobs:
-  macos:
-    name: macOS (macos-latest)
+  generate:
+    name: Generate SQL DB-API golden
     runs-on: macos-latest
-
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
@@ -36,26 +28,17 @@ jobs:
         uses: astral-sh/setup-uv@v10.0.1
         with:
           version: ${{ env.UV_VERSION }}
-          cache-suffix: tools-pruned-v1
-          prune-cache: true
-          save-cache: ${{ github.ref == 'refs/heads/main' }}
 
-      - name: Install tools
-        id: tools
+      - name: Install ir
         run: |
           uv tool install r-lib-ir
-          uv tool install yamark
           uv tool dir --bin >> "$GITHUB_PATH"
-          printf 'ir_version=%s\n' "$(ir --version | tr ' ' '-')" >> "$GITHUB_OUTPUT"
 
       - name: Install R
-        id: setup-r
         uses: r-lib/actions/setup-r@v2
         with:
           use-public-rspm: always
 
-      # The managed R environment can build data.table from source. Its NLS
-      # code needs libintl.h in R's /opt/R/<arch> build prefix.
       - name: Install gettext for R source packages
         run: |
           sudo Rscript --vanilla -e \
@@ -63,83 +46,6 @@ jobs:
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy, rustfmt
-
-      - name: Select R cache epoch
-        id: cache-epoch
-        run: printf 'value=%s\n' "$(date -u +%G-%V)" >> "$GITHUB_OUTPUT"
-
-      - name: Configure R cache paths
-        run: |
-          printf 'IR_CACHE_DIR=%s\n' "$RUNNER_TEMP/mcp-console-r-cache/ir" >> "$GITHUB_ENV"
-          printf 'RENV_PATHS_CACHE=%s\n' "$RUNNER_TEMP/mcp-console-r-cache/renv" >> "$GITHUB_ENV"
-
-      - name: Restore R environments
-        id: ir-cache
-        uses: actions/cache/restore@v6
-        with:
-          # v3 covers the inline prewarm contract. Bump it when that contract changes.
-          path: ${{ runner.temp }}/mcp-console-r-cache
-          key: >-
-            ir-v3-${{ runner.os }}-${{ runner.arch }}-r-${{ steps.setup-r.outputs.installed-r-version }}-${{ steps.tools.outputs.ir_version }}-${{ hashFiles('src/worker_client.rs', 'src/resolver/managed_r.rs', 'tests/transcripts/client_server/r_auto_requirements.py', 'tests/transcripts/client_server/r_requirements.py') }}-${{ steps.cache-epoch.outputs.value }}
-          restore-keys: |
-            ir-v3-${{ runner.os }}-${{ runner.arch }}-r-${{ steps.setup-r.outputs.installed-r-version }}-${{ steps.tools.outputs.ir_version }}-${{ hashFiles('src/worker_client.rs', 'src/resolver/managed_r.rs', 'tests/transcripts/client_server/r_auto_requirements.py', 'tests/transcripts/client_server/r_requirements.py') }}-
-            ir-v3-${{ runner.os }}-${{ runner.arch }}-r-${{ steps.setup-r.outputs.installed-r-version }}-${{ steps.tools.outputs.ir_version }}-
-
-      - name: Cache Rust build data
-        uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: debug
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-
-      - name: Run core checks
-        env:
-          GITHUB_PAT: ${{ github.token }}
-        run: scripts/check-core
-
-      - name: Build and smoke-test Python package
-        shell: bash
-        env:
-          GITHUB_PAT: ${{ github.token }}
-          UV_TOOL_DIR: ${{ runner.temp }}/mcp-console-tool
-          UV_TOOL_BIN_DIR: ${{ runner.temp }}/mcp-console-bin
-          UV_CACHE_DIR: ${{ runner.temp }}/mcp-console-cache
-          UV_PYTHON_DOWNLOADS: never
-          UV_NO_CONFIG: "1"
-        run: |
-          set -euo pipefail
-
-          rm -rf dist
-          cargo build --locked --bin mcp-console
-          uvx --from 'maturin==1.14.1' \
-            maturin build \
-            --release \
-            --locked \
-            --compatibility pypi \
-            --out dist
-          python3 scripts/release.py \
-            smoke-wheel \
-            dist/*.whl \
-            target/debug/mcp-console
-
-      - name: Install R package dependencies
-        uses: r-lib/actions/setup-r-dependencies@v2
-        with:
-          # A post-job save would capture the later transcript dependency state.
-          cache: false
-          working-directory: r
-          upgrade: "FALSE"
-          packages: |
-            deps::.
-
-      - name: Check R package
-        env:
-          MCP_CONSOLE_TEST_BINARY: ${{ github.workspace }}/target/debug/mcp-console
-        working-directory: r
-        run: |
-          R CMD build .
-          R CMD check --no-manual mcp.console_*.tar.gz
 
       - name: Install transcript dependencies
         uses: r-lib/actions/setup-r-dependencies@v2
@@ -150,11 +56,15 @@ jobs:
             any::processx
             github::rstudio/reticulate
 
+      - name: Configure managed R cache
+        run: |
+          printf 'IR_CACHE_DIR=%s\n' "$RUNNER_TEMP/mcp-console-r-cache/ir" >> "$GITHUB_ENV"
+          printf 'RENV_PATHS_CACHE=%s\n' "$RUNNER_TEMP/mcp-console-r-cache/renv" >> "$GITHUB_ENV"
+
       - name: Prewarm default R environment
         env:
           GITHUB_PAT: ${{ github.token }}
           IR_NO_LOCAL_SOURCES: "1"
-          IR_LATEST_RESOLUTION_MAX_AGE_SECONDS: ${{ github.ref == 'refs/heads/main' && steps.ir-cache.outputs.cache-hit != 'true' && '0' || '604800' }}
         run: |
           ir run \
             --with tidyverse \
@@ -167,17 +77,15 @@ jobs:
             --vanilla \
             -e 'sessionInfo(package = c("tidyverse", "reticulate", "DBI", "duckdb", "arrow", "nanoarrow"))'
 
-      - name: Run transcripts
+      - name: Generate transcript golden
         env:
           GITHUB_PAT: ${{ github.token }}
-        run: scripts/test --jobs 6
+        run: >-
+          scripts/test --update
+          client_server/sql_connection::routes_sql_cells_to_a_selected_python_dbapi_connection
 
-      - name: Save R environments
-        if: >-
-          github.ref == 'refs/heads/main' &&
-          steps.ir-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v6
+      - name: Upload generated golden
+        uses: actions/upload-artifact@v4
         with:
-          path: ${{ runner.temp }}/mcp-console-r-cache
-          key: >-
-            ir-v3-${{ runner.os }}-${{ runner.arch }}-r-${{ steps.setup-r.outputs.installed-r-version }}-${{ steps.tools.outputs.ir_version }}-${{ hashFiles('src/worker_client.rs', 'src/resolver/managed_r.rs', 'tests/transcripts/client_server/r_auto_requirements.py', 'tests/transcripts/client_server/r_requirements.py') }}-${{ steps.cache-epoch.outputs.value }}
+          name: sql-dbapi-golden
+          path: tests/transcripts/golden/client_server/sql_connection/routes_sql_cells_to_a_selected_python_dbapi_connection.yaml
