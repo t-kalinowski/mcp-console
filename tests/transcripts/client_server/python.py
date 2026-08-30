@@ -755,8 +755,34 @@ def test_compacts_native_duckdb_progress_bar(binary: Path) -> Transcript:
     )
     assert last_tool_text(client) == "\n[running; poll with an empty send]"
 
-    client.send(timeout_ms=10_000)
-    output = last_tool_text(client)
+    poll_start = len(client.transcript)
+    running = "\n[running; poll with an empty send]"
+    chunks = []
+    for attempt in range(8):
+        client.send(timeout_ms=10_000 if attempt == 0 else 30_000)
+        output = last_tool_text(client)
+        if output.endswith(running):
+            chunks.append(output.removesuffix(running))
+            if attempt == 7:
+                raise AssertionError(
+                    "DuckDB progress query remained running after eight responses"
+                )
+            continue
+
+        if output != "[done]" or not chunks:
+            chunks.append(output)
+        output = "".join(chunks)
+
+        polls = client.transcript[poll_start:]
+        first_poll = polls[0]
+        final_result = polls[-1]["result"]
+        final_result["content"][0]["text"] = output
+        first_poll["result"] = final_result
+        client.transcript[poll_start:] = [first_poll]
+        break
+    else:
+        raise AssertionError("unreachable")
+
     assert "\r" not in output, repr(output)
     assert output.count("% ▕") == 1, repr(output)
     final = output.rstrip()
@@ -1458,6 +1484,7 @@ def test_uses_reticulate_managed_uv_for_python_resolution(
         original_path = os.environ.get("PATH", "")
         real_uv = shutil.which("uv", path=original_path)
         assert real_uv is not None, "real uv is required"
+        host_ir_cache = ir_cache_directory(os.environ.copy())
         r_home = subprocess.run(
             ["R", "RHOME"],
             check=True,
@@ -1516,7 +1543,7 @@ def test_uses_reticulate_managed_uv_for_python_resolution(
         environment.pop("RETICULATE_PYTHON", None)
         environment["RETICULATE_UV"] = "managed"
         environment["R_USER_CACHE_DIR"] = str(r_user_cache)
-        environment["IR_CACHE_DIR"] = ir_cache_directory(environment)
+        environment["IR_CACHE_DIR"] = host_ir_cache
         environment["UV_CACHE_DIR"] = str(temporary / "wrong-cache")
         environment["UV_PYTHON_INSTALL_DIR"] = str(temporary / "wrong-python")
         environment["PATH"] = os.pathsep.join((str(fake_bin), original_path))

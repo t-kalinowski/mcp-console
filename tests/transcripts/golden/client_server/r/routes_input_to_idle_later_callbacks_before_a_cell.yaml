@@ -33,6 +33,15 @@ result:
         <worker callback checkpoint>
   isError: false
 ---
+send: {}
+result:
+  content:
+    - type: text
+      text: |-
+        [input requested: "later> "]
+        [waiting for stdin]
+  isError: false
+---
 send:
   r: 'cat("cell: ", idle_answer, "\n", sep = "")'
   stdin: |
@@ -41,7 +50,5 @@ result:
   content:
     - type: text
       text: |
-        [input requested: "later> "]
-        [output produced while idle]
         cell: yes
   isError: false
