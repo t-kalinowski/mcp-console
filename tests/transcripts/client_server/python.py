@@ -755,37 +755,11 @@ def test_compacts_native_duckdb_progress_bar(binary: Path) -> Transcript:
     )
     assert last_tool_text(client) == "\n[running; poll with an empty send]"
 
-    poll_start = len(client.transcript)
-    running = "\n[running; poll with an empty send]"
-    chunks = []
-    for attempt in range(8):
-        client.send(timeout_ms=10_000 if attempt == 0 else 30_000)
-        output = last_tool_text(client)
-        if output.endswith(running):
-            chunks.append(output.removesuffix(running))
-            if attempt == 7:
-                raise AssertionError(
-                    "DuckDB progress query remained running after eight responses"
-                )
-            continue
-
-        if output != "[done]" or not chunks:
-            chunks.append(output)
-        output = "".join(chunks)
-
-        polls = client.transcript[poll_start:]
-        first_poll = polls[0]
-        final_result = polls[-1]["result"]
-        final_result["content"][0]["text"] = output
-        first_poll["result"] = final_result
-        client.transcript[poll_start:] = [first_poll]
-        break
-    else:
-        raise AssertionError("unreachable")
-
+    client.send(timeout_ms=220_000)
+    output = last_tool_text(client)
     assert "\r" not in output, repr(output)
-    assert output.count("% ▕") == 1, repr(output)
     final = output.rstrip()
+    assert final.count("% ▕") == 1, repr(final)
     graphic, separator, elapsed = final.rpartition(" (")
     assert graphic.startswith("100% ▕"), repr(final)
     assert graphic.endswith("▏"), repr(final)
@@ -3973,8 +3947,13 @@ def test_routes_python_input(binary: Path) -> Transcript:
         """)
     client.send(python=python)
     assert last_tool_text(client) == '[input requested: "name> "]\n[waiting for stdin]'
-    client.send(stdin="Ada\n")
-    assert last_tool_text(client) == "'Ada'\n"
+    wait_for_evaluation_output(
+        client,
+        "'Ada'\n",
+        "Python stdin routing",
+        stdin="Ada\n",
+        timeout_ms=0,
+    )
 
     # fmt: python
     python = code("""

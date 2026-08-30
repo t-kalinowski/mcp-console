@@ -387,6 +387,19 @@ static int added_late_member = 0;
 static pid_t late_member = 0;
 static int killpg_count = 0;
 
+static void signal_checkpoint(const char *name) {
+    const char *checkpoint = getenv(name);
+    if (checkpoint == NULL) {
+        return;
+    }
+    int descriptor = open(checkpoint, O_WRONLY | O_NONBLOCK);
+    if (descriptor >= 0) {
+        const char signal = '1';
+        syscall(SYS_write, descriptor, &signal, sizeof(signal));
+        close(descriptor);
+    }
+}
+
 static void write_pid_marker(const char *name, pid_t process_id) {
     const char *marker = getenv(name);
     if (marker == NULL) {
@@ -426,6 +439,7 @@ static int deny_killpg(pid_t process_group, int signal) {
         && getenv("MCP_CONSOLE_TEST_KILLPG_MARKER") != NULL) {
         denied_process_group = process_group;
         write_pid_marker("MCP_CONSOLE_TEST_KILLPG_MARKER", process_group);
+        signal_checkpoint("MCP_CONSOLE_TEST_FORCE_STOP_REACHED");
         errno = EPERM;
         return -1;
     }
@@ -2413,7 +2427,7 @@ def test_supervises_stopped_and_continued_workers(binary: Path) -> Transcript:
 
 def resolver_interrupt_permission_environment(
     temporary_path: Path,
-) -> tuple[dict[str, str], Path, Path]:
+) -> tuple[dict[str, str], FifoCheckpoint, FifoCheckpoint, Path, Path]:
     environment, _ = r_test_environment()
     environment["RETICULATE_PYTHON"] = ""
     fake_bin = temporary_path / "bin"
@@ -2428,8 +2442,10 @@ def resolver_interrupt_permission_environment(
               printf 'ir 0.4.0\n'
               exit 0
             fi
-            printf '%s\n' "$$" > "$MCP_CONSOLE_TEST_RESOLVER_STARTED"
-            exec /bin/sleep 30
+            exec 3< "$MCP_CONSOLE_TEST_RESOLVER_LIFETIME"
+            printf '%s\n' "$$" > "$MCP_CONSOLE_TEST_RESOLVER_GROUP"
+            printf 1 > "$MCP_CONSOLE_TEST_RESOLVER_STARTED"
+            IFS= read -r _ <&3
             """),
         encoding="utf-8",
     )
@@ -2440,24 +2456,38 @@ def resolver_interrupt_permission_environment(
     environment["PATH"] = os.pathsep.join((str(fake_bin), path))
     environment["TMPDIR"] = str(temporary_path)
     denied_interrupt = temporary_path / "resolver-sigint-denied"
-    resolver_started = temporary_path / "resolver-started"
+    resolver_group = temporary_path / "resolver-group"
+    resolver_started = FifoCheckpoint(temporary_path / "resolver-started")
+    resolver_lifetime = FifoCheckpoint(temporary_path / "resolver-lifetime")
     environment["MCP_CONSOLE_TEST_DENIED_SIGINT"] = str(denied_interrupt)
-    environment["MCP_CONSOLE_TEST_RESOLVER_STARTED"] = str(resolver_started)
+    environment["MCP_CONSOLE_TEST_RESOLVER_GROUP"] = str(resolver_group)
+    environment["MCP_CONSOLE_TEST_RESOLVER_STARTED"] = str(resolver_started.path)
+    environment["MCP_CONSOLE_TEST_RESOLVER_LIFETIME"] = str(resolver_lifetime.path)
     # The interposer removes its loader variable after reaching the server, so
     # the resolver and Zod do not inherit it.
     environment["DYLD_INSERT_LIBRARIES"] = str(
         build_killpg_denial_interposer(temporary_path)
     )
-    return environment, resolver_started, denied_interrupt
+    return (
+        environment,
+        resolver_started,
+        resolver_lifetime,
+        resolver_group,
+        denied_interrupt,
+    )
 
 
 def test_reports_resolver_interrupt_permission_error(binary: Path) -> Transcript:
     zod = Path(__file__).resolve().parents[2] / "fixtures" / "zod"
     with tempfile.TemporaryDirectory() as temporary_directory:
         temporary_path = Path(temporary_directory)
-        environment, resolver_started, denied_interrupt = (
-            resolver_interrupt_permission_environment(temporary_path)
-        )
+        (
+            environment,
+            resolver_started,
+            resolver_lifetime,
+            resolver_group_record,
+            denied_interrupt,
+        ) = resolver_interrupt_permission_environment(temporary_path)
 
         client = McpClient(
             binary,
@@ -2471,13 +2501,8 @@ def test_reports_resolver_interrupt_permission_error(binary: Path) -> Transcript
             preparation = client._start_send(
                 requirements={"r": ["blocked-resolver"]},
             )
-            resolver_group = int(
-                wait_for_marker(
-                    temporary_path,
-                    resolver_started.name,
-                    client,
-                ).read_text(encoding="utf-8")
-            )
+            resolver_started.wait("permission-denied R resolver")
+            resolver_group = int(resolver_group_record.read_text(encoding="utf-8"))
             assert resolver_group != os.getpgrp(), (
                 "resolver did not enter a dedicated process group"
             )
@@ -2499,13 +2524,7 @@ def test_reports_resolver_interrupt_permission_error(binary: Path) -> Transcript
                 responses_returned.set()
                 watchdog.join()
 
-            denied_group = int(
-                wait_for_marker(
-                    temporary_path,
-                    denied_interrupt.name,
-                    client,
-                ).read_text(encoding="utf-8")
-            )
+            denied_group = int(denied_interrupt.read_text(encoding="utf-8"))
             assert denied_group == resolver_group, (
                 "SIGINT denial targeted a different process group"
             )
@@ -2547,6 +2566,8 @@ def test_reports_resolver_interrupt_permission_error(binary: Path) -> Transcript
             if not passed:
                 stop_process_group(resolver_group)
                 stop_client(client)
+            resolver_started.close()
+            resolver_lifetime.close()
 
 
 def test_reports_runtime_r_resolver_interrupt_permission_error(
@@ -2555,9 +2576,13 @@ def test_reports_runtime_r_resolver_interrupt_permission_error(
     zod = Path(__file__).resolve().parents[2] / "fixtures" / "zod"
     with tempfile.TemporaryDirectory() as temporary_directory:
         temporary_path = Path(temporary_directory)
-        environment, resolver_started, denied_interrupt = (
-            resolver_interrupt_permission_environment(temporary_path)
-        )
+        (
+            environment,
+            resolver_started,
+            resolver_lifetime,
+            resolver_group_record,
+            denied_interrupt,
+        ) = resolver_interrupt_permission_environment(temporary_path)
         client = McpClient(
             binary,
             ("serve", "--worker", str(zod)),
@@ -2570,13 +2595,8 @@ def test_reports_runtime_r_resolver_interrupt_permission_error(
             evaluation = client._start_send(
                 r="report runtime R resolution failure",
             )
-            resolver_group = int(
-                wait_for_marker(
-                    temporary_path,
-                    resolver_started.name,
-                    client,
-                ).read_text(encoding="utf-8")
-            )
+            resolver_started.wait("permission-denied runtime R resolver")
+            resolver_group = int(resolver_group_record.read_text(encoding="utf-8"))
             assert resolver_group != os.getpgrp(), (
                 "resolver did not enter a dedicated process group"
             )
@@ -2598,13 +2618,7 @@ def test_reports_runtime_r_resolver_interrupt_permission_error(
                 responses_returned.set()
                 watchdog.join()
 
-            denied_group = int(
-                wait_for_marker(
-                    temporary_path,
-                    denied_interrupt.name,
-                    client,
-                ).read_text(encoding="utf-8")
-            )
+            denied_group = int(denied_interrupt.read_text(encoding="utf-8"))
             assert denied_group == resolver_group, (
                 "SIGINT denial targeted a different process group"
             )
@@ -2640,6 +2654,8 @@ def test_reports_runtime_r_resolver_interrupt_permission_error(
             if not passed:
                 stop_process_group(resolver_group)
                 stop_client(client)
+            resolver_started.close()
+            resolver_lifetime.close()
 
 
 def test_accepts_idle_stdin(binary: Path) -> Transcript:
@@ -3988,12 +4004,16 @@ def test_restart_outer_force_stops_unresponsive_relay(binary: Path) -> Transcrip
     with tempfile.TemporaryDirectory() as temporary_directory:
         temporary_path = Path(temporary_directory)
         killpg_marker = temporary_path / "killpg-denied"
+        force_stop_reached = FifoCheckpoint(temporary_path / "force-stop-reached")
         late_member_marker = temporary_path / "late-process-group-member"
         late_member_reap_marker = temporary_path / "late-process-group-member-reaped"
         environment = os.environ.copy()
         environment["TMPDIR"] = temporary_directory
         environment["ZOD_REPORT_PROCESS_GROUP"] = "1"
         environment["MCP_CONSOLE_TEST_KILLPG_MARKER"] = str(killpg_marker)
+        environment["MCP_CONSOLE_TEST_FORCE_STOP_REACHED"] = str(
+            force_stop_reached.path
+        )
         environment["MCP_CONSOLE_TEST_LATE_MEMBER_MARKER"] = str(late_member_marker)
         environment["MCP_CONSOLE_TEST_LATE_MEMBER_REAP_MARKER"] = str(
             late_member_reap_marker
@@ -4055,16 +4075,15 @@ def test_restart_outer_force_stops_unresponsive_relay(binary: Path) -> Transcrip
                 finally:
                     received.set()
 
-            restart_started = time.monotonic()
             receiver = threading.Thread(target=receive_restart, daemon=True)
             receiver.start()
-            assert received.wait(2), "restart outlived its original shutdown deadline"
-            restart_elapsed = time.monotonic() - restart_started
+            force_stop_reached.wait("outer relay force-stop")
+            assert received.wait(2), (
+                "restart did not complete within two seconds of outer relay force-stop"
+            )
             receiver.join()
             if errors:
                 raise errors[0]
-
-            assert restart_elapsed < 2, f"restart took {restart_elapsed:.3f} seconds"
             assert int(killpg_marker.read_text(encoding="utf-8")) == worker_group
             late_member, late_member_group = map(
                 int,
@@ -4098,6 +4117,7 @@ def test_restart_outer_force_stops_unresponsive_relay(binary: Path) -> Transcrip
             if not passed:
                 stop_process_group(worker_group)
                 stop_process(client.process)
+            force_stop_reached.close()
 
 
 def test_restart_starts_first_worker_and_waits_until_ready(

@@ -16,6 +16,7 @@ result:
 send:
   stdin: |
     Ada
+  timeout_ms: 0
 result:
   content:
     - type: text
@@ -51,4 +52,3 @@ result:
       text: |
         'fd 0\n'
   isError: false
-...
