@@ -22,13 +22,10 @@ fn builtin_worker_closes_unlisted_server_descriptors() {
     let descriptor = duplicate_inheritable(&host_file, 64);
 
     let mut command = Command::new(env!("CARGO_BIN_EXE_mcp-console"));
-    command
-        .arg("serve")
-        .current_dir(directory.path())
-        .env(
-            "MCP_CONSOLE_TEST_INHERITED_FD",
-            descriptor.as_raw_fd().to_string(),
-        );
+    command.arg("serve").current_dir(directory.path()).env(
+        "MCP_CONSOLE_TEST_INHERITED_FD",
+        descriptor.as_raw_fd().to_string(),
+    );
 
     let mut client = McpClient::spawn(command);
     let output = client.call_python(
@@ -92,10 +89,7 @@ impl TestDirectory {
         let sequence = NEXT_DIRECTORY.fetch_add(1, Ordering::Relaxed);
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("target/sandbox-tests")
-            .join(format!(
-                "{name}-{}-{unique}-{sequence}",
-                std::process::id()
-            ));
+            .join(format!("{name}-{}-{unique}-{sequence}", std::process::id()));
         fs::create_dir_all(&path).expect("test directory should be created");
         Self(path)
     }
