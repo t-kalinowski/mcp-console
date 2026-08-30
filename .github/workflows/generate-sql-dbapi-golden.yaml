@@ -1,0 +1,92 @@
+name: Generate SQL DB-API golden
+
+on:
+  push:
+    branches:
+      - tmp/sql-dbapi-golden
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  IR_LATEST_RESOLUTION_MAX_AGE_SECONDS: "604800"
+  UV_VERSION: "0.12.4"
+
+jobs:
+  generate:
+    runs-on: macos-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Install Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v10.0.1
+        with:
+          version: ${{ env.UV_VERSION }}
+
+      - name: Install ir
+        run: |
+          uv tool install r-lib-ir
+          uv tool dir --bin >> "$GITHUB_PATH"
+
+      - name: Install R
+        uses: r-lib/actions/setup-r@v2
+        with:
+          use-public-rspm: always
+
+      - name: Install gettext for R source packages
+        run: |
+          sudo Rscript --vanilla -e \
+            'source("https://mac.R-project.org/bin/install.R"); install.libs("gettext"); stopifnot(file.exists(file.path("/opt/R", Sys.info()[["machine"]], "include", "libintl.h")))'
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install transcript dependencies
+        uses: r-lib/actions/setup-r-dependencies@v2
+        with:
+          install-quarto: true
+          upgrade: "FALSE"
+          packages: |
+            any::processx
+            github::rstudio/reticulate
+
+      - name: Configure managed R cache
+        run: |
+          printf 'IR_CACHE_DIR=%s\n' "$RUNNER_TEMP/mcp-console-r-cache/ir" >> "$GITHUB_ENV"
+          printf 'RENV_PATHS_CACHE=%s\n' "$RUNNER_TEMP/mcp-console-r-cache/renv" >> "$GITHUB_ENV"
+
+      - name: Prewarm default R environment
+        env:
+          GITHUB_PAT: ${{ github.token }}
+          IR_NO_LOCAL_SOURCES: "1"
+        run: |
+          ir run \
+            --with tidyverse \
+            --with github::rstudio/reticulate \
+            --with DBI \
+            --with duckdb \
+            --with arrow \
+            --with nanoarrow \
+            --isolated \
+            --vanilla \
+            -e 'sessionInfo(package = c("tidyverse", "reticulate", "DBI", "duckdb", "arrow", "nanoarrow"))'
+
+      - name: Generate transcript golden
+        env:
+          GITHUB_PAT: ${{ github.token }}
+        run: >-
+          scripts/test --update
+          client_server/sql_connection::routes_sql_cells_to_a_selected_python_dbapi_connection
+
+      - name: Upload generated golden
+        uses: actions/upload-artifact@v4
+        with:
+          name: sql-dbapi-golden
+          path: tests/transcripts/golden/client_server/sql_connection/routes_sql_cells_to_a_selected_python_dbapi_connection.yaml
