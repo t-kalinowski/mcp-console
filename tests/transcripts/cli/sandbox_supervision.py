@@ -1,7 +1,5 @@
 #!/usr/bin/env -S uv run --script
 
-import os
-import signal
 import subprocess
 import sys
 from pathlib import Path
@@ -16,8 +14,9 @@ TIMEOUT = 10
 
 
 def test_preserves_status_when_sigchld_was_ignored(binary: Path) -> Transcript:
-    # POSIX exec preserves ignored signal dispositions. Exercise the real binary
-    # entry point rather than setting SIGCHLD after MCP Console has initialized.
+    # Darwin preserves the ignored disposition across exec but clears its
+    # no-child-wait state. Exercise the real binary entry point so later
+    # supervision changes continue to preserve the command's waitable status.
     # fmt: python
     host_script = code(r"""
         import os
@@ -25,23 +24,21 @@ def test_preserves_status_when_sigchld_was_ignored(binary: Path) -> Transcript:
         import sys
 
         signal.signal(signal.SIGCHLD, signal.SIG_IGN)
-        os.execv(
-            sys.argv[1],
-            [
-                sys.argv[1],
-                "sandbox",
-                "--",
-                "python",
-                "-c",
-                "raise SystemExit(23)",
-            ],
-        )
+        os.execv(sys.argv[1], sys.argv[1:])
         """)
+    arguments = (
+        "sandbox",
+        "--",
+        "python",
+        "-c",
+        "raise SystemExit(23)",
+    )
     result = subprocess.run(
-        ["python", "-c", host_script, binary],
+        [sys.executable, "-c", host_script, binary, *arguments],
         capture_output=True,
         text=True,
         timeout=TIMEOUT,
+        check=False,
     )
 
     assert result.returncode == 23, result
@@ -49,14 +46,7 @@ def test_preserves_status_when_sigchld_was_ignored(binary: Path) -> Transcript:
     assert result.stderr == "", result.stderr
     return [
         {
-            "command": [
-                "mcp-console",
-                "sandbox",
-                "--",
-                "python",
-                "-c",
-                "raise SystemExit(23)",
-            ],
+            "command": ["mcp-console", *arguments],
             "inherited_sigchld": "ignored",
             "exit_code": result.returncode,
         }
