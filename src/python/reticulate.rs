@@ -71,9 +71,7 @@ pub extern "C-unwind" fn mcp_console_load_python_library(path: SEXP) -> harp::Re
 // retaining reticulate's existing post-initialization lifecycle point.
 #[allow(clippy::result_large_err)]
 #[harp::register]
-pub extern "C-unwind" fn mcp_console_install_python_runtime(
-    libpython: SEXP,
-) -> harp::Result<SEXP> {
+pub extern "C-unwind" fn mcp_console_install_python_runtime(libpython: SEXP) -> harp::Result<SEXP> {
     let libpython = Option::<String>::try_from(harp::object::RObject::view(libpython))?
         .ok_or_else(|| harp::anyhow!("Python-hosted R is not supported"))?;
     super::library::load(std::path::Path::new(&libpython))
