@@ -84,8 +84,12 @@ jobs:
           scripts/test --update
           client_server/sql_connection::routes_sql_cells_to_a_selected_python_dbapi_connection
 
-      - name: Upload generated golden
+      - name: Upload generated golden and source snapshot
         uses: actions/upload-artifact@v4
         with:
           name: sql-dbapi-golden
-          path: tests/transcripts/golden/client_server/sql_connection/routes_sql_cells_to_a_selected_python_dbapi_connection.yaml
+          path: |
+            tests/transcripts/golden/client_server/sql_connection/routes_sql_cells_to_a_selected_python_dbapi_connection.yaml
+            src/server.rs
+            docs/TOOL_DESCRIPTIONS.md
+            docs/BUILTIN_RUNTIME.md
