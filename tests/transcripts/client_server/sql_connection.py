@@ -18,9 +18,7 @@ def test_routes_sql_cells_to_a_selected_dbi_connection(
     client = McpClient(binary, ("serve",), environment)
     client._initialize_and_list_tools()
 
-    client.send(
-        sql="CREATE TABLE managed_values AS SELECT 'managed' AS origin"
-    )
+    client.send(sql="CREATE TABLE managed_values AS SELECT 'managed' AS origin")
     assert last_tool_text(client) == "[done]"
 
     # fmt: r
@@ -28,24 +26,62 @@ def test_routes_sql_cells_to_a_selected_dbi_connection(
         sqlite <- DBI::dbConnect(RSQLite::SQLite(), ":memory:")
         console_sql_connection(sqlite)
         cat(
-          "selected: ", identical(sql_connection(), sqlite), "\n",
-          "valid: ", DBI::dbIsValid(console_sql_connection()), "\n",
+          "selected: ",
+          identical(sql_connection(), sqlite),
+          "\n",
+          "valid: ",
+          DBI::dbIsValid(sql_connection()),
+          "\n",
           sep = ""
         )
         """)
     client.send(r=r, requirements={"r": ["RSQLite"]})
     assert last_tool_text(client) == "selected: TRUE\nvalid: TRUE\n"
 
+    # fmt: r
+    r = code(r"""
+        selected <- sql_connection()
+        message <- tryCatch(
+          console_sql_connection("not a connection"),
+          error = conditionMessage
+        )
+        cat(
+          "rejected: ",
+          message,
+          "\n",
+          "unchanged: ",
+          identical(sql_connection(), selected),
+          "\n",
+          sep = ""
+        )
+        """)
+    client.send(r=r)
+    assert last_tool_text(client) == (
+        "rejected: `connection` must be a valid DBIConnection or NULL\n"
+        "unchanged: TRUE\n"
+    )
+
+    client.send(
+        sql=("CREATE TABLE custom_values (label TEXT NOT NULL, value INTEGER NOT NULL)")
+    )
+    assert last_tool_text(client) == "[done]"
+    client.send(sql="INSERT INTO custom_values VALUES ('a', 2), ('b', 5)")
+    assert last_tool_text(client) == "[done]"
+
+    client.send(r="previous_warn <- getOption('warn'); options(warn = 2); invisible()")
+    assert last_tool_text(client) == "[done]"
+    client.send(sql="INSERT INTO custom_values VALUES ('RETURNING', 7)")
+    assert last_tool_text(client) == "[done]"
     client.send(
         sql=(
-            "CREATE TABLE custom_values ("
-            "label TEXT NOT NULL, value INTEGER NOT NULL)"
+            "WITH incoming(label, value) AS (VALUES ('cte', 9)) "
+            "INSERT INTO custom_values SELECT label, value FROM incoming"
         )
     )
     assert last_tool_text(client) == "[done]"
-    client.send(
-        sql="INSERT INTO custom_values VALUES ('a', 2), ('b', 5)"
-    )
+    client.send(sql="PRAGMA user_version = 3")
+    assert last_tool_text(client) == "[done]"
+    client.send(r="invisible(options(warn = previous_warn))")
     assert last_tool_text(client) == "[done]"
 
     sql = code(r"""
@@ -58,26 +94,66 @@ def test_routes_sql_cells_to_a_selected_dbi_connection(
     preview = last_tool_text(client)
     assert '"a"' in preview and "2" in preview
     assert '"b"' in preview and "5" in preview
+    assert '"RETURNING"' in preview and "7" in preview
+    assert '"cte"' in preview and "9" in preview
     assert '"managed"' not in preview
 
-    client.send(
-        sql=(
-            "INSERT INTO custom_values VALUES ('c', 11) "
-            "RETURNING label, value"
+    client.send(sql="SELECT missing FROM missing_values")
+    assert last_tool_text(client) == "Error: no such table: missing_values\n"
+
+    client.send(sql="SELECT value FROM custom_values WHERE FALSE")
+    preview = last_tool_text(client)
+    assert "value" in preview and "<int32>" in preview, preview
+    assert "[0 rows]" in preview
+
+    sql = code(r"""
+        WITH RECURSIVE sequence(value) AS (
+          SELECT 1
+          UNION ALL
+          SELECT value + 1 FROM sequence WHERE value < 25
         )
+        SELECT value FROM sequence
+        """)
+    client.send(sql=sql)
+    preview = last_tool_text(client)
+    assert "20" in preview
+    assert "[additional rows omitted]" in preview
+
+    client.send(
+        sql=("INSERT INTO custom_values VALUES ('c', 11) RETURNING label, value")
     )
     preview = last_tool_text(client)
     assert '"c"' in preview and "11" in preview
 
     # fmt: r
     r = code(r"""
-        selected <- console_sql_connection()
-        console_sql_connection(NULL)
+        selected <- sql_connection()
+        invisible(DBI::dbDisconnect(selected))
         cat(
-          "restored: ", !identical(sql_connection(), selected), "\n",
+          "disconnected: ",
+          !DBI::dbIsValid(selected),
+          "\n",
           sep = ""
         )
-        invisible(DBI::dbDisconnect(selected))
+        """)
+    client.send(r=r)
+    assert last_tool_text(client) == "disconnected: TRUE\n"
+
+    client.send(sql="SELECT label FROM custom_values")
+    assert last_tool_text(client) == (
+        "Error: The selected SQL connection is no longer valid; "
+        "call console_sql_connection(NULL) to restore DuckDB\n"
+    )
+
+    # fmt: r
+    r = code(r"""
+        console_sql_connection(NULL)
+        cat(
+          "restored: ",
+          !identical(sql_connection(), selected),
+          "\n",
+          sep = ""
+        )
         """)
     client.send(r=r)
     assert last_tool_text(client) == "restored: TRUE\n"

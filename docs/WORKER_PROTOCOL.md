@@ -228,7 +228,7 @@ All sideband output belonging to the evaluation must precede `completed`.
 Later sideband output is idle activity.
 Raw fd-1 or fd-2 bytes remain subject to the independent-source ordering rule above.
 
-Language parse errors, runtime errors, Python exceptions, and DuckDB errors are ordinary console results: a worker reports their text and then `completed` if it remains usable.
+Language parse errors, runtime errors, Python exceptions, and SQL backend errors are ordinary console results: a worker reports their text and then `completed` if it remains usable.
 The protocol has no structured language-error message.
 Infrastructure failure instead closes or invalidates the worker boundary.
 

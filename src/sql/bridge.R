@@ -57,24 +57,21 @@ base::local(
       ensure_connection()
     }
 
-    console_sql_connection <- function(value) {
-      if (missing(value)) {
-        return(ensure_connection())
-      }
-      if (is.null(value)) {
+    console_sql_connection <- function(new_connection) {
+      if (is.null(new_connection)) {
         connection <<- ensure_managed_connection()
         return(invisible(connection))
       }
       if (
-        !inherits(value, "DBIConnection") ||
+        !inherits(new_connection, "DBIConnection") ||
           !isTRUE(tryCatch(
-            DBI::dbIsValid(value),
+            DBI::dbIsValid(new_connection),
             error = function(...) FALSE
           ))
       ) {
-        stop("`value` must be a valid DBIConnection or NULL")
+        stop("`connection` must be a valid DBIConnection or NULL")
       }
-      connection <<- value
+      connection <<- new_connection
       invisible(connection)
     }
     tools <- base::attach(
@@ -171,61 +168,15 @@ base::local(
       )
     }
 
-    leading_sql_keyword <- function(source) {
-      source <- sub("^\ufeff", "", source)
-      repeat {
-        previous <- source
-        source <- sub("^[[:space:]]+", "", source)
-        source <- sub(
-          "^--[^\r\n]*(?:\r\n|\r|\n|$)",
-          "",
-          source,
-          perl = TRUE
-        )
-        source <- sub("^/\\*(?s:.*?)\\*/", "", source, perl = TRUE)
-        if (identical(source, previous)) {
-          break
-        }
-      }
-      match <- regexpr("^[[:alpha:]]+", source, perl = TRUE)
-      if (match[[1L]] < 0L) {
-        return("")
-      }
-      toupper(regmatches(source, match))
-    }
-
-    dbi_query_source <- function(source) {
-      keyword <- leading_sql_keyword(source)
-      if (
-        keyword %in% c(
-          "SELECT",
-          "WITH",
-          "VALUES",
-          "TABLE",
-          "SHOW",
-          "DESCRIBE",
-          "DESC",
-          "EXPLAIN",
-          "PRAGMA",
-          "CALL"
-        )
-      ) {
-        return(TRUE)
-      }
-      keyword %in% c("INSERT", "UPDATE", "DELETE", "MERGE") &&
-        grepl("\\bRETURNING\\b", source, ignore.case = TRUE, perl = TRUE)
-    }
-
     fetch_dbi <- function() {
-      if (!dbi_query_source(source)) {
-        result <- DBI::dbSendStatement(connection, source)
-        tryCatch(NULL, finally = DBI::dbClearResult(result))
-        return(NULL)
-      }
-
+      # DBI has no dialect-neutral way to classify a cell before dispatch.
+      # Commands that need the statement interface run through DBI from R.
       result <- DBI::dbSendQuery(connection, source)
       tryCatch(
         {
+          if (nrow(DBI::dbColumnInfo(result)) == 0L) {
+            return(NULL)
+          }
           data <- DBI::dbFetch(result, n = preview_rows + 1L)
           schema <- nanoarrow::infer_nanoarrow_schema(data)
           batch <- nanoarrow::as_nanoarrow_array(data, schema = schema)
