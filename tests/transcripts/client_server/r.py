@@ -432,13 +432,18 @@ def test_routes_input_to_idle_later_callbacks_before_a_cell(binary: Path) -> Tra
         """)
     client.send(r=r)
     release_worker_callback_gate(client, "idle input callback")
-    client.send(
+    wait_for_idle_output(
+        client,
+        '[input requested: "later> "]\n[waiting for stdin]',
+        "idle callback input request",
+    )
+    wait_for_evaluation_output(
+        client,
+        "cell: yes\n",
+        "idle callback input before cell",
         r='cat("cell: ", idle_answer, "\\n", sep = "")',
         stdin="yes\n",
     )
-    assert last_tool_text(client) == (
-        '[input requested: "later> "]\n[output produced while idle]\ncell: yes\n'
-    ), repr(last_tool_text(client))
     return client._finish()
 
 
