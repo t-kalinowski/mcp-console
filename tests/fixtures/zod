@@ -378,11 +378,15 @@ def main() -> None:
     controlled_restart_evaluations = 0
     queued_message: dict[str, Any] | None = None
     block_next_sideband_write: int | None = None
+    retain_blocked_sideband = False
     if os.environ.get("ZOD_BLOCK_NEXT_SIDEBAND_WRITE") == "1":
         command = wait_for_test_control(0, "block_next_sideband_write")
         target_operation = command.get("target_operation")
         assert isinstance(target_operation, int), command
         block_next_sideband_write = target_operation
+        retain_blocked_sideband = (
+            os.environ.get("ZOD_RETAIN_BLOCKED_SIDEBAND") == "1"
+        )
 
     def receive_resolver_response(expected_kind: str) -> dict[str, Any]:
         nonlocal queued_message
@@ -396,6 +400,20 @@ def main() -> None:
     while True:
         if block_next_sideband_write is not None:
             assert reader.read(1) != ""
+            if retain_blocked_sideband:
+                holder = os.fork()
+                if holder == 0:
+                    os.setsid()
+                    for descriptor in (0, 1, 2):
+                        os.close(descriptor)
+                    (
+                        temporary / "zod-blocked-sideband-holder-pid"
+                    ).write_text(
+                        str(os.getpid()),
+                        encoding="utf-8",
+                    )
+                    while True:
+                        signal.pause()
             emit_test_event(
                 block_next_sideband_write,
                 "sideband_reader_stalled",

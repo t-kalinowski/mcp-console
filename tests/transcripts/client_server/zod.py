@@ -5175,6 +5175,7 @@ def test_shutdown_deadline_does_not_wait_for_sideband_writer(
         environment = os.environ.copy()
         environment["TMPDIR"] = temporary_directory
         environment["ZOD_BLOCK_NEXT_SIDEBAND_WRITE"] = "1"
+        environment["ZOD_RETAIN_BLOCKED_SIDEBAND"] = "1"
         control.configure(environment)
         client = McpClient(
             binary,
@@ -5182,6 +5183,7 @@ def test_shutdown_deadline_does_not_wait_for_sideband_writer(
             environment,
         )
         worker_group = None
+        sideband_holder = None
         passed = False
         try:
             client._initialize_and_list_tools()
@@ -5199,6 +5201,17 @@ def test_shutdown_deadline_does_not_wait_for_sideband_writer(
             event = control.wait_for(target_operation, "sideband_reader_stalled")
             worker_group = event["process_group"]
             assert isinstance(worker_group, int) and worker_group > 0, event
+            holder_marker = wait_for_marker(
+                Path(temporary_directory),
+                "zod-blocked-sideband-holder-pid",
+                client,
+            )
+            sideband_holder = int(
+                holder_marker.read_text(encoding="utf-8")
+            )
+            assert os.getpgid(sideband_holder) == sideband_holder, (
+                "sideband holder did not detach from the worker process group"
+            )
             entry["send"]["r"] = "<large cell>"
             shutdown_started = time.monotonic()
             client.stdin.close()
@@ -5218,9 +5231,15 @@ def test_shutdown_deadline_does_not_wait_for_sideband_writer(
             client.stdout.read()
             assert client.stderr.read() == ""
             assert not process_group_exists(worker_group), "Zod outlived mcp-console"
+            assert process_exists(sideband_holder), (
+                "fixture did not retain the worker-side socket beyond worker retirement"
+            )
+            stop_process_id(sideband_holder)
+            sideband_holder = None
             passed = True
             return client.transcript
         finally:
+            stop_process_id(sideband_holder)
             if not passed:
                 stop_process_group(worker_group)
                 stop_process(client.process)
