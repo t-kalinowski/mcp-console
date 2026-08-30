@@ -57,7 +57,8 @@ def test_routes_sql_cells_to_a_selected_dbi_connection(
         """)
     client.send(r=r)
     assert last_tool_text(client) == (
-        "rejected: `connection` must be a valid DBIConnection or NULL\n"
+        "rejected: `connection` must be a valid DBIConnection, "
+        "a Python DB-API connection, or NULL\n"
         "unchanged: TRUE\n"
     )
 
@@ -158,6 +159,95 @@ def test_routes_sql_cells_to_a_selected_dbi_connection(
     client.send(r=r)
     assert last_tool_text(client) == "restored: TRUE\n"
 
+    client.send(sql="SELECT origin FROM managed_values")
+    preview = last_tool_text(client)
+    assert '"managed"' in preview
+    assert '"a"' not in preview
+    return client._finish()
+
+
+def test_routes_sql_cells_to_a_selected_python_dbapi_connection(
+    binary: Path,
+) -> Transcript:
+    environment, _ = r_test_environment()
+    client = McpClient(binary, ("serve",), environment)
+    client._initialize_and_list_tools()
+
+    client.send(sql="CREATE TABLE managed_values AS SELECT 'managed' AS origin")
+    assert last_tool_text(client) == "[done]"
+
+    python = code("""
+        import sqlite3
+
+        connection = sqlite3.connect(":memory:")
+        console_sql_connection(connection)
+        print(type(connection).__module__, type(connection).__name__, sep=".")
+        """)
+    client.send(python=python)
+    assert last_tool_text(client) == "sqlite3.Connection\n"
+
+    client.send(
+        sql=("CREATE TABLE custom_values (label TEXT NOT NULL, value INTEGER NOT NULL)")
+    )
+    assert last_tool_text(client) == "[done]"
+    client.send(
+        sql=(
+            "INSERT INTO custom_values VALUES "
+            "('a', 2), ('b', 5), ('RETURNING', 7)"
+        )
+    )
+    assert last_tool_text(client) == "[done]"
+
+    sql = code("""
+        -- The selected Python DB-API backend handles this query.
+        SELECT label, value
+        FROM custom_values
+        ORDER BY label
+        """)
+    client.send(sql=sql)
+    preview = last_tool_text(client)
+    assert '"a"' in preview and "2" in preview
+    assert '"b"' in preview and "5" in preview
+    assert '"RETURNING"' in preview and "7" in preview
+    assert "<string>" in preview and "<int64>" in preview
+    assert '"managed"' not in preview
+
+    client.send(sql="SELECT missing FROM missing_values")
+    assert last_tool_text(client) == "Error: no such table: missing_values\n"
+
+    client.send(sql="SELECT value FROM custom_values WHERE FALSE")
+    preview = last_tool_text(client)
+    assert "value" in preview and "<unknown>" in preview, preview
+    assert "[0 rows]" in preview
+
+    sql = code("""
+        WITH RECURSIVE sequence(value) AS (
+          SELECT 1
+          UNION ALL
+          SELECT value + 1 FROM sequence WHERE value < 25
+        )
+        SELECT value FROM sequence
+        """)
+    client.send(sql=sql)
+    preview = last_tool_text(client)
+    assert "20" in preview
+    assert "[additional rows omitted]" in preview
+
+    client.send(
+        sql=("INSERT INTO custom_values VALUES ('c', 11) RETURNING label, value")
+    )
+    preview = last_tool_text(client)
+    assert '"c"' in preview and "11" in preview
+
+    client.send(python="connection.close()")
+    assert last_tool_text(client) == "[done]"
+    client.send(sql="SELECT label FROM custom_values")
+    assert last_tool_text(client) == (
+        "Error: Cannot operate on a closed database.\n"
+    )
+
+    client.send(python="console_sql_connection(None)")
+    assert last_tool_text(client) == "[done]"
     client.send(sql="SELECT origin FROM managed_values")
     preview = last_tool_text(client)
     assert '"managed"' in preview
