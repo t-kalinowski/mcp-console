@@ -3,6 +3,8 @@ use std::io::{BufRead, BufReader, Read, Write};
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 use std::net::TcpListener;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
+use std::os::unix::ffi::OsStringExt;
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -1642,6 +1644,29 @@ print("blocked")
         String::from_utf8_lossy(&output.stderr)
     );
     assert_eq!(output.stdout, b"blocked\n");
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[test]
+fn sandbox_preserves_non_utf8_target_arguments() {
+    let script = r#"
+import os
+import sys
+
+assert os.fsencode(sys.argv[1]) == b"argument-\xff"
+"#;
+    let output = Command::new(env!("CARGO_BIN_EXE_mcp-console"))
+        .args(["sandbox", "--", "python", "-c", script])
+        .arg(std::ffi::OsString::from_vec(b"argument-\xff".to_vec()))
+        .output()
+        .expect("mcp-console sandbox should run");
+
+    assert!(
+        output.status.success(),
+        "sandboxed Python failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stdout.is_empty());
 }
 
 #[cfg(any(target_os = "macos", target_os = "linux"))]

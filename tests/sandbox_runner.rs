@@ -5,7 +5,6 @@ use std::fs;
 #[cfg(target_os = "macos")]
 use std::io::Read as _;
 use std::io::Write as _;
-#[cfg(target_os = "macos")]
 use std::os::unix::ffi::OsStringExt as _;
 use std::os::unix::fs::PermissionsExt as _;
 use std::os::unix::fs::symlink;
@@ -547,7 +546,6 @@ fn resolves_bare_targets_with_executable_path_semantics() {
 }
 
 #[test]
-#[cfg(target_os = "macos")]
 fn preserves_non_utf8_target_arguments() {
     let (mut command, _directory, log_path) = fake_runner_process("success", "/usr/bin/true");
     command.arg(std::ffi::OsString::from_vec(b"argument-\xff".to_vec()));
