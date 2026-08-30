@@ -244,17 +244,21 @@ A restart that adds requirements waits for active environment resolution before 
 Transport, protocol, and bridge-infrastructure failures retain the normal worker-failure behavior.
 
 The worker installs `py`, `sql_connection()`, and `console_sql_connection()` in `tools:mcp-console` at search position 2.
+After Python initializes, it also installs `console_sql_connection()` in Python builtins so it is available in every Python cell.
 R can read Python globals through `py$name` and use the active SQL connection through DBI or dplyr.
-`sql_connection()` returns the active connection.
-`console_sql_connection(connection)` selects any valid user-owned `DBIConnection`, and `console_sql_connection(NULL)` restores the managed DuckDB connection and its catalog.
+`sql_connection()` returns the active connection to R.
+`console_sql_connection(connection)` selects any valid user-owned `DBIConnection` or Python DB-API connection; `console_sql_connection(NULL)` in R and `console_sql_connection(None)` in Python restore the managed DuckDB connection and its catalog.
 Do not disconnect the managed DuckDB connection.
-Restore it before disconnecting a custom connection that is still selected.
+Restore it before disconnecting or closing a custom connection that is still selected.
 
 ## Python
 
 Python cells execute in one persistent `__main__.__dict__`.
 Imports, assignments, functions, and objects remain available across cells and through R's `py$name` bridge.
 The final expression of a cell is displayed through Python's normal display hook; source is not echoed.
+
+`console_sql_connection(connection)` selects a user-owned Python DB-API connection for later SQL cells.
+`console_sql_connection(None)` restores the managed DuckDB connection; restore it before closing a selected connection.
 
 An uncaught exception prints its traceback and completes as a language outcome.
 The Python session remains usable, including state established before the exception.
@@ -353,15 +357,23 @@ connection <- DBI::dbConnect(RSQLite::SQLite(), ":memory:")
 console_sql_connection(connection)
 ```
 
-The selected connection remains owned by user code.
-`sql_connection()` returns it, while `console_sql_connection(NULL)` restores the managed DuckDB connection without discarding its catalog.
-Restore the managed connection before disconnecting a selected connection.
+Python can redirect them to a DB-API connection:
 
-The worker submits SQL cells on a selected connection through `DBI::dbSendQuery()`.
+```python
+import sqlite3
+connection = sqlite3.connect(":memory:")
+console_sql_connection(connection)
+```
+
+The selected connection remains owned by user code.
+`sql_connection()` returns an R-selected connection to R, while `console_sql_connection(NULL)` in R or `console_sql_connection(None)` in Python restores the managed DuckDB connection without discarding its catalog.
+Restore the managed connection before disconnecting or closing a selected connection.
+
+The worker submits SQL cells on a selected R connection through `DBI::dbSendQuery()` and on a selected Python connection through `cursor.execute()`.
 Results that report columns use the bounded preview path below, while results without columns return `[done]` when they produce no console output.
 The selected driver supplies the SQL dialect, transaction state, and type mappings, and determines whether its query interface accepts statements or multiple commands.
-Use `DBI::dbExecute()` or `DBI::dbSendStatement()` from an R cell for commands that require the DBI statement interface.
-The adapter does not retry a failed cell through another DBI method because the first attempt may already have changed database state.
+Use `DBI::dbExecute()` or `DBI::dbSendStatement()` from an R cell for commands that require the DBI statement interface, or call the Python connection directly for operations outside a single SQL cell.
+The adapter does not retry a failed cell through another method because the first attempt may already have changed database state.
 DuckDB extension requirements and the conveniences below apply only to the managed DuckDB backend.
 
 Environment scanning lets an unqualified relation name refer to an R data frame in global state.
