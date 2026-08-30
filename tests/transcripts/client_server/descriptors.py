@@ -1,5 +1,7 @@
 #!/usr/bin/env -S uv run --script
 
+from __future__ import annotations
+
 import fcntl
 import os
 import sys
@@ -13,8 +15,10 @@ from _support import McpClient, Transcript, code, run_this_suite, stop_client
 PLATFORMS = {"darwin"}
 
 
-def test_builtin_worker_closes_unlisted_server_descriptors(
+def descriptor_transcript(
     binary: Path,
+    serve_arguments: tuple[str, ...],
+    environment_updates: dict[str, str] | None = None,
 ) -> Transcript:
     # fmt: python
     launcher = code(r"""
@@ -47,13 +51,14 @@ def test_builtin_worker_closes_unlisted_server_descriptors(
         host_path = temporary / "host.txt"
         host_path.write_bytes(b"")
         environment = os.environ.copy()
+        environment.update(environment_updates or {})
         with host_path.open("ab", buffering=0) as stream:
             descriptor = fcntl.fcntl(stream.fileno(), fcntl.F_DUPFD, 64)
             os.set_inheritable(descriptor, True)
             environment["MCP_CONSOLE_TEST_INHERITED_FD"] = str(descriptor)
             client = McpClient(
                 Path(sys.executable),
-                ("-c", launcher, str(binary), "serve"),
+                ("-c", launcher, str(binary), "serve", *serve_arguments),
                 environment,
                 current_directory=temporary,
                 pass_fds=(descriptor,),
@@ -75,6 +80,30 @@ def test_builtin_worker_closes_unlisted_server_descriptors(
 
         assert host_path.read_bytes() == b""
         return transcript
+
+
+def test_builtin_worker_closes_unlisted_server_descriptors(
+    binary: Path,
+) -> Transcript:
+    return descriptor_transcript(binary, ())
+
+
+def test_custom_worker_closes_unlisted_server_descriptors(
+    binary: Path,
+) -> Transcript:
+    probe = Path(__file__).resolve().parents[2] / "fixtures" / "descriptor_probe"
+    return descriptor_transcript(binary, ("--worker", str(probe)))
+
+
+def test_custom_relay_closes_unlisted_server_descriptors(
+    binary: Path,
+) -> Transcript:
+    probe = Path(__file__).resolve().parents[2] / "fixtures" / "descriptor_probe"
+    return descriptor_transcript(
+        binary,
+        ("--worker", str(probe), "--relay", str(probe)),
+        {"MCP_CONSOLE_TEST_BUILTIN_RELAY": str(binary)},
+    )
 
 
 if __name__ == "__main__":

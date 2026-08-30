@@ -20,13 +20,12 @@ server <--> (worker relay <--> worker)
 The parentheses mark the sandbox boundary.
 The relay is also the dedicated sandbox process-group leader, and the worker inherits that group.
 
-In the fully built-in worker chain, only the relay's standard input, standard output, and standard error cross the server/sandbox boundary.
+Only the relay's standard input, standard output, and standard error cross the server/sandbox boundary.
 Standard input and output carry the framed relay protocol described below.
 Relay standard error is inherited from the server and is not part of the protocol; it is normally empty and is reserved for fatal or infrastructure diagnostics.
 Runtime failures are also represented by a `fatal` event when relay stdout remains usable.
 The framed event is authoritative; stderr diagnostics are best effort because the server's outer fail-safe can terminate a failed relay before its final diagnostic is written.
 The server marks every other inherited descriptor close-on-exec in the forked child before it executes `sandbox-exec`, so a descriptor opened by another server thread cannot cross this boundary.
-The hidden custom-worker and custom-relay development seams retain their existing descriptor inheritance because they do not define an explicit descriptor allowlist.
 
 The relay creates the worker's private full-duplex sideband socket pair and its standard-input, standard-output, and standard-error pipes after entering the sandbox.
 It passes one worker sideband endpoint through `MCP_CONSOLE_SIDEBAND_FD` together with the fd-0/1/2 contract documented in [`WORKER_PROTOCOL.md`](WORKER_PROTOCOL.md).

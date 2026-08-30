@@ -98,7 +98,6 @@ struct WorkerSpec<'a> {
     executable: &'a std::path::Path,
     arguments: &'a [OsString],
     relay: Option<&'a std::path::Path>,
-    builtin_worker: bool,
     python: Option<&'a PythonEnvironment>,
     managed_r: Option<&'a crate::resolver::ManagedR>,
     dynamic_resolution: bool,
@@ -1412,9 +1411,6 @@ impl Client {
             let python = environment
                 .as_ref()
                 .and_then(|environment| environment.python.as_ref());
-            let builtin_worker = environment
-                .as_ref()
-                .is_some_and(|environment| !environment.custom_worker);
             let managed_r = environment
                 .as_ref()
                 .and_then(|environment| environment.r.as_ref());
@@ -1422,7 +1418,6 @@ impl Client {
                 executable: &self.0.program,
                 arguments: &self.0.arguments,
                 relay: self.0.relay.as_deref(),
-                builtin_worker,
                 python,
                 managed_r,
                 dynamic_resolution: self.dynamic_resolution(),
