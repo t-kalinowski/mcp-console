@@ -2413,7 +2413,7 @@ def test_supervises_stopped_and_continued_workers(binary: Path) -> Transcript:
 
 def resolver_interrupt_permission_environment(
     temporary_path: Path,
-) -> tuple[dict[str, str], Path, Path]:
+) -> tuple[dict[str, str], FifoCheckpoint, FifoCheckpoint, Path, Path]:
     environment, _ = r_test_environment()
     environment["RETICULATE_PYTHON"] = ""
     fake_bin = temporary_path / "bin"
@@ -2428,8 +2428,10 @@ def resolver_interrupt_permission_environment(
               printf 'ir 0.4.0\n'
               exit 0
             fi
-            printf '%s\n' "$$" > "$MCP_CONSOLE_TEST_RESOLVER_STARTED"
-            exec /bin/sleep 30
+            exec 3< "$MCP_CONSOLE_TEST_RESOLVER_LIFETIME"
+            printf '%s\n' "$$" > "$MCP_CONSOLE_TEST_RESOLVER_GROUP"
+            printf 1 > "$MCP_CONSOLE_TEST_RESOLVER_STARTED"
+            IFS= read -r _ <&3
             """),
         encoding="utf-8",
     )
@@ -2440,24 +2442,38 @@ def resolver_interrupt_permission_environment(
     environment["PATH"] = os.pathsep.join((str(fake_bin), path))
     environment["TMPDIR"] = str(temporary_path)
     denied_interrupt = temporary_path / "resolver-sigint-denied"
-    resolver_started = temporary_path / "resolver-started"
+    resolver_group = temporary_path / "resolver-group"
+    resolver_started = FifoCheckpoint(temporary_path / "resolver-started")
+    resolver_lifetime = FifoCheckpoint(temporary_path / "resolver-lifetime")
     environment["MCP_CONSOLE_TEST_DENIED_SIGINT"] = str(denied_interrupt)
-    environment["MCP_CONSOLE_TEST_RESOLVER_STARTED"] = str(resolver_started)
+    environment["MCP_CONSOLE_TEST_RESOLVER_GROUP"] = str(resolver_group)
+    environment["MCP_CONSOLE_TEST_RESOLVER_STARTED"] = str(resolver_started.path)
+    environment["MCP_CONSOLE_TEST_RESOLVER_LIFETIME"] = str(resolver_lifetime.path)
     # The interposer removes its loader variable after reaching the server, so
     # the resolver and Zod do not inherit it.
     environment["DYLD_INSERT_LIBRARIES"] = str(
         build_killpg_denial_interposer(temporary_path)
     )
-    return environment, resolver_started, denied_interrupt
+    return (
+        environment,
+        resolver_started,
+        resolver_lifetime,
+        resolver_group,
+        denied_interrupt,
+    )
 
 
 def test_reports_resolver_interrupt_permission_error(binary: Path) -> Transcript:
     zod = Path(__file__).resolve().parents[2] / "fixtures" / "zod"
     with tempfile.TemporaryDirectory() as temporary_directory:
         temporary_path = Path(temporary_directory)
-        environment, resolver_started, denied_interrupt = (
-            resolver_interrupt_permission_environment(temporary_path)
-        )
+        (
+            environment,
+            resolver_started,
+            resolver_lifetime,
+            resolver_group_record,
+            denied_interrupt,
+        ) = resolver_interrupt_permission_environment(temporary_path)
 
         client = McpClient(
             binary,
@@ -2471,13 +2487,8 @@ def test_reports_resolver_interrupt_permission_error(binary: Path) -> Transcript
             preparation = client._start_send(
                 requirements={"r": ["blocked-resolver"]},
             )
-            resolver_group = int(
-                wait_for_marker(
-                    temporary_path,
-                    resolver_started.name,
-                    client,
-                ).read_text(encoding="utf-8")
-            )
+            resolver_started.wait("permission-denied R resolver")
+            resolver_group = int(resolver_group_record.read_text(encoding="utf-8"))
             assert resolver_group != os.getpgrp(), (
                 "resolver did not enter a dedicated process group"
             )
@@ -2499,13 +2510,7 @@ def test_reports_resolver_interrupt_permission_error(binary: Path) -> Transcript
                 responses_returned.set()
                 watchdog.join()
 
-            denied_group = int(
-                wait_for_marker(
-                    temporary_path,
-                    denied_interrupt.name,
-                    client,
-                ).read_text(encoding="utf-8")
-            )
+            denied_group = int(denied_interrupt.read_text(encoding="utf-8"))
             assert denied_group == resolver_group, (
                 "SIGINT denial targeted a different process group"
             )
@@ -2547,6 +2552,8 @@ def test_reports_resolver_interrupt_permission_error(binary: Path) -> Transcript
             if not passed:
                 stop_process_group(resolver_group)
                 stop_client(client)
+            resolver_started.close()
+            resolver_lifetime.close()
 
 
 def test_reports_runtime_r_resolver_interrupt_permission_error(
@@ -2555,9 +2562,13 @@ def test_reports_runtime_r_resolver_interrupt_permission_error(
     zod = Path(__file__).resolve().parents[2] / "fixtures" / "zod"
     with tempfile.TemporaryDirectory() as temporary_directory:
         temporary_path = Path(temporary_directory)
-        environment, resolver_started, denied_interrupt = (
-            resolver_interrupt_permission_environment(temporary_path)
-        )
+        (
+            environment,
+            resolver_started,
+            resolver_lifetime,
+            resolver_group_record,
+            denied_interrupt,
+        ) = resolver_interrupt_permission_environment(temporary_path)
         client = McpClient(
             binary,
             ("serve", "--worker", str(zod)),
@@ -2570,13 +2581,8 @@ def test_reports_runtime_r_resolver_interrupt_permission_error(
             evaluation = client._start_send(
                 r="report runtime R resolution failure",
             )
-            resolver_group = int(
-                wait_for_marker(
-                    temporary_path,
-                    resolver_started.name,
-                    client,
-                ).read_text(encoding="utf-8")
-            )
+            resolver_started.wait("permission-denied runtime R resolver")
+            resolver_group = int(resolver_group_record.read_text(encoding="utf-8"))
             assert resolver_group != os.getpgrp(), (
                 "resolver did not enter a dedicated process group"
             )
@@ -2598,13 +2604,7 @@ def test_reports_runtime_r_resolver_interrupt_permission_error(
                 responses_returned.set()
                 watchdog.join()
 
-            denied_group = int(
-                wait_for_marker(
-                    temporary_path,
-                    denied_interrupt.name,
-                    client,
-                ).read_text(encoding="utf-8")
-            )
+            denied_group = int(denied_interrupt.read_text(encoding="utf-8"))
             assert denied_group == resolver_group, (
                 "SIGINT denial targeted a different process group"
             )
@@ -2640,6 +2640,8 @@ def test_reports_runtime_r_resolver_interrupt_permission_error(
             if not passed:
                 stop_process_group(resolver_group)
                 stop_client(client)
+            resolver_started.close()
+            resolver_lifetime.close()
 
 
 def test_accepts_idle_stdin(binary: Path) -> Transcript:
