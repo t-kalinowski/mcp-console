@@ -65,8 +65,7 @@ impl ObservedLifetime {
                     }
                 }
                 Some(ObservationResult { tracker, error })
-            })
-        {
+            }) {
             Ok(observer) => observer,
             Err(spawn_error) => {
                 return Err(retire_after_observer_failure(
@@ -101,9 +100,7 @@ impl ObservedLifetime {
         let observation = observer
             .join()
             .map_err(|_| "sandbox process observer panicked".to_string())?
-            .ok_or_else(|| {
-                "sandbox process observer stopped before tracker handoff".to_string()
-            })?;
+            .ok_or_else(|| "sandbox process observer stopped before tracker handoff".to_string())?;
         let cleanup = observation.tracker.terminate(false, PROCESS_REAP_GRACE);
         match (observation.error, cleanup) {
             (None, Ok(())) => Ok(()),
