@@ -34,7 +34,7 @@ The sideband has no protocol negotiation, capability exchange, session name, req
 Interrupt delivery is a process signal managed by the relay.
 Response cuts, output budgets, and MCP response assembly are server state and never appear on this boundary.
 
-The complete protocol execution stack is currently supported only on macOS.
+The complete protocol execution stack is supported on macOS and Linux.
 
 ## Launch contract
 

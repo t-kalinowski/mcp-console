@@ -15,16 +15,28 @@ import zipfile
 from pathlib import Path
 from typing import Any
 
+ROOT = Path(__file__).resolve().parent.parent
+LIBCAP_ARCHIVES_PATH = ROOT / "licenses" / "libcap-archives.json"
+LIBCAP_LICENSE_PATH = ROOT / "licenses" / "libcap-LICENSE"
 STABLE_TAG = re.compile(r"v[0-9]+\.[0-9]+\.[0-9]+")
 PACKAGE_VERSION = re.compile(r'^version\s*=\s*"([^"]+)"\s*$')
-TARGET_ARCHITECTURES = {
-    "aarch64-apple-darwin": "arm64",
-    "x86_64-apple-darwin": "x86_64",
+TARGET_WHEEL_TAGS = {
+    "aarch64-apple-darwin": ("macosx_", "arm64"),
+    "x86_64-apple-darwin": ("macosx_", "x86_64"),
+    "x86_64-unknown-linux-gnu": ("manylinux_", "x86_64"),
 }
 PRIVATE_DATA = (
     "libexec/mcp-console-sandbox",
     "share/licenses/mcp-console/Codex-LICENSE",
     "share/licenses/mcp-console/Codex-NOTICE",
+)
+LINUX_PRIVATE_DATA = (
+    "libexec/codex-resources/bwrap",
+    "share/licenses/mcp-console/Bubblewrap-COPYING",
+    "share/licenses/mcp-console/Bubblewrap-NOTICE",
+    "share/licenses/mcp-console/libcap-LICENSE",
+    "share/licenses/mcp-console/libcap-DISTRIBUTION-COPYRIGHT",
+    "share/licenses/mcp-console/libcap-PROVENANCE.json",
 )
 
 
@@ -198,7 +210,7 @@ def smoke_mcp(
     require(not standard_error, f"MCP server wrote to stderr: {standard_error}")
 
 
-def inspect_private_wheel_data(wheel: Path, version: str) -> None:
+def inspect_private_wheel_data(wheel: Path, version: str, linux: bool) -> None:
     data_root = f"mcp_console-{version}.data/data"
     try:
         with zipfile.ZipFile(wheel) as archive:
@@ -230,6 +242,77 @@ def inspect_private_wheel_data(wheel: Path, version: str) -> None:
         "wheel installs the private sandbox runner as a public command",
     )
 
+    if linux:
+        bwrap_name = f"{data_root}/{LINUX_PRIVATE_DATA[0]}"
+        require(
+            bwrap_name in members,
+            "wheel is missing private bwrap companion data: codex-resources/bwrap",
+        )
+        bubblewrap_license = f"{data_root}/{LINUX_PRIVATE_DATA[1]}"
+        require(
+            bubblewrap_license in members,
+            "wheel is missing Bubblewrap license data: Bubblewrap-COPYING",
+        )
+        bubblewrap_notice = f"{data_root}/{LINUX_PRIVATE_DATA[2]}"
+        require(
+            bubblewrap_notice in members,
+            "wheel is missing Bubblewrap notice data: Bubblewrap-NOTICE",
+        )
+        libcap_license = f"{data_root}/{LINUX_PRIVATE_DATA[3]}"
+        require(
+            libcap_license in members,
+            "wheel is missing libcap license data: libcap-LICENSE",
+        )
+        libcap_copyright = f"{data_root}/{LINUX_PRIVATE_DATA[4]}"
+        require(
+            libcap_copyright in members,
+            "wheel is missing libcap distribution copyright data: "
+            "libcap-DISTRIBUTION-COPYRIGHT",
+        )
+        libcap_provenance = f"{data_root}/{LINUX_PRIVATE_DATA[5]}"
+        require(
+            libcap_provenance in members,
+            "wheel is missing libcap provenance data: libcap-PROVENANCE.json",
+        )
+        with zipfile.ZipFile(wheel) as archive:
+            try:
+                provenance = json.loads(archive.read(libcap_provenance))
+            except json.JSONDecodeError as error:
+                raise ReleaseError("libcap provenance is not valid JSON") from error
+            approved = json.loads(LIBCAP_ARCHIVES_PATH.read_text(encoding="utf-8"))[
+                "archives"
+            ]
+            require(
+                provenance in approved,
+                "libcap provenance does not match an approved archive",
+            )
+            expected_copyright = (
+                ROOT / "licenses" / provenance["copyright"]
+            ).read_bytes()
+            require(
+                archive.read(libcap_copyright) == expected_copyright,
+                "libcap distribution copyright does not match the selected "
+                "libcap package",
+            )
+            require(
+                archive.read(libcap_license) == LIBCAP_LICENSE_PATH.read_bytes(),
+                "libcap license does not match the repository license record",
+            )
+        bwrap_mode = members[bwrap_name].external_attr >> 16
+        require(
+            stat.S_ISREG(bwrap_mode) and bwrap_mode & 0o111,
+            "private bwrap companion in wheel is not executable",
+        )
+        public_bwrap = [
+            name
+            for name in members
+            if name.endswith(".data/scripts/bwrap") or name == "bwrap"
+        ]
+        require(
+            not public_bwrap,
+            "wheel installs the private bwrap companion as a public command",
+        )
+
 
 def smoke_wheel(args: argparse.Namespace) -> None:
     wheel = Path(args.wheel).resolve()
@@ -245,12 +328,21 @@ def smoke_wheel(args: argparse.Namespace) -> None:
         wheel.name.startswith(f"mcp_console-{version}-"),
         f"wheel version does not match {version}: {wheel.name}",
     )
-    require("-macosx_" in wheel.name, f"wheel must be macOS-specific: {wheel.name}")
+    is_macos = "-macosx_" in wheel.name
+    is_linux = "-manylinux_" in wheel.name
+    require(
+        is_macos or is_linux,
+        f"wheel must be macOS- or Linux-specific: {wheel.name}",
+    )
     require(not wheel.name.endswith("-none-any.whl"), "wheel must be platform-specific")
-    inspect_private_wheel_data(wheel, version)
+    inspect_private_wheel_data(wheel, version, is_linux)
 
     if args.target is not None:
-        architecture = TARGET_ARCHITECTURES[args.target]
+        platform, architecture = TARGET_WHEEL_TAGS[args.target]
+        require(
+            f"-{platform}" in wheel.name,
+            f"wheel does not match {args.target}: {wheel.name}",
+        )
         require(
             wheel.name.endswith(f"_{architecture}.whl"),
             f"wheel does not match {args.target}: {wheel.name}",
@@ -303,6 +395,21 @@ def smoke_wheel(args: argparse.Namespace) -> None:
         not public_runner.exists(),
         f"private sandbox runner was installed as a public command: {public_runner}",
     )
+    if is_linux:
+        private_bwrap = private_runner.parent / "codex-resources" / "bwrap"
+        require(
+            private_bwrap.is_file(),
+            f"installed private bwrap companion does not exist: {private_bwrap}",
+        )
+        require(
+            os.access(private_bwrap, os.X_OK),
+            f"installed private bwrap companion is not executable: {private_bwrap}",
+        )
+        public_bwrap = tool_bin / "bwrap"
+        require(
+            not public_bwrap.exists(),
+            f"private bwrap companion was installed as a public command: {public_bwrap}",
+        )
 
     with tempfile.TemporaryDirectory(prefix="mcp-console-empty-path-") as directory:
         sandbox_env = os.environ.copy()
@@ -410,12 +517,14 @@ def verify_wheel_set(args: argparse.Namespace) -> None:
     wheels = sorted(directory.glob("*.whl"))
     arm64 = list(directory.glob("mcp_console-*-macosx_*_arm64.whl"))
     x86_64 = list(directory.glob("mcp_console-*-macosx_*_x86_64.whl"))
+    linux = list(directory.glob("mcp_console-*-manylinux_*_x86_64.whl"))
     universal = list(directory.glob("*-none-any.whl"))
     sdists = list(directory.glob("*.tar.gz"))
 
-    require(len(wheels) == 2, f"expected exactly two wheels, found {len(wheels)}")
+    require(len(wheels) == 3, f"expected exactly three wheels, found {len(wheels)}")
     require(len(arm64) == 1, "expected exactly one Apple Silicon wheel")
     require(len(x86_64) == 1, "expected exactly one Intel macOS wheel")
+    require(len(linux) == 1, "expected exactly one x86-64 Linux wheel")
     require(not universal, "a platform-independent wheel must not be published")
     require(not sdists, "a source distribution must not be published")
 
@@ -431,7 +540,7 @@ def parser() -> argparse.ArgumentParser:
     smoke = commands.add_parser("smoke-wheel")
     smoke.add_argument("wheel")
     smoke.add_argument("cargo_bin")
-    smoke.add_argument("--target", choices=sorted(TARGET_ARCHITECTURES))
+    smoke.add_argument("--target", choices=sorted(TARGET_WHEEL_TAGS))
     smoke.add_argument("--startup-timeout-seconds", type=float, default=1200.0)
     smoke.add_argument("--response-timeout-seconds", type=float, default=30.0)
     smoke.set_defaults(function=smoke_wheel)

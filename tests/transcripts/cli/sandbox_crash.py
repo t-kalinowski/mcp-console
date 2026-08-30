@@ -11,10 +11,20 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from _support import Transcript, code, run_this_suite
+from _support import (
+    Transcript,
+    code,
+    host_child_pid_by_name,
+    linux_host_pid,
+    linux_host_process_tree,
+    run_this_suite,
+)
 
 
-PLATFORMS = {"darwin"}
+PLATFORMS = {"darwin", "linux"}
+CASE_PLATFORMS = {
+    "manager_crash_retires_the_sandbox_lifetime": {"darwin"},
+}
 TIMEOUT = 10
 
 
@@ -52,29 +62,11 @@ def _kill_survivors(pids: list[int]) -> list[int]:
     return survivors
 
 
-def _child_pid_by_name(parent_pid: int, name: str) -> int:
-    result = subprocess.run(
-        ["/bin/ps", "-axo", "pid=,ppid=,comm="],
-        capture_output=True,
-        text=True,
-        check=True,
-        timeout=TIMEOUT,
-    )
-    matches = []
-    for line in result.stdout.splitlines():
-        fields = line.split(maxsplit=2)
-        if len(fields) != 3:
-            continue
-        pid, parent, command = fields
-        if int(parent) == parent_pid and Path(command).name == name:
-            matches.append(int(pid))
-    assert len(matches) == 1, (parent_pid, name, matches)
-    return matches[0]
-
-
-def _runner_lifetime_processes(launcher_pid: int) -> tuple[int, int]:
-    runner_pid = _child_pid_by_name(launcher_pid, "mcp-console-sandbox")
-    manager_pid = _child_pid_by_name(runner_pid, "mcp-console-sandbox")
+def _runner_lifetime_processes(launcher_pid: int) -> tuple[int, ...]:
+    runner_pid = host_child_pid_by_name(launcher_pid, "mcp-console-sandbox")
+    if sys.platform == "linux":
+        return linux_host_process_tree(runner_pid)
+    manager_pid = host_child_pid_by_name(runner_pid, "mcp-console-sandbox")
     return runner_pid, manager_pid
 
 
@@ -113,27 +105,58 @@ def test_retires_every_processx_pipeline_stage(binary: Path) -> Transcript:
         )
         writeLines(as.character(pipeline$get_pids()))
         flush.console()
+        stopifnot(identical(readLines(file("stdin"), n = 1L), "release"))
         quit(save = "no", status = 23L, runLast = FALSE)
         """)
     arguments = ("sandbox", "--", "Rscript", "--vanilla", "-e", script)
-    result = subprocess.run(
+    process = subprocess.Popen(
         [binary, *arguments],
-        capture_output=True,
-        text=True,
-        timeout=TIMEOUT,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
     )
+    assert process.stdin is not None
+    assert process.stdout is not None
+    assert process.stderr is not None
 
-    pids = [int(line) for line in result.stdout.splitlines()]
-    survivors = _kill_survivors(pids)
+    pids: list[int] = []
+    try:
+        sandbox_pids = [
+            int(line)
+            for line in _read_lines(process.stdout, 2, "the processx pipeline PIDs")
+        ]
+        runner_pid = host_child_pid_by_name(process.pid, "mcp-console-sandbox")
+        if sys.platform == "linux":
+            pids = [
+                linux_host_pid(runner_pid, sandbox_pid) for sandbox_pid in sandbox_pids
+            ]
+        else:
+            pids = sandbox_pids
 
-    assert result.returncode == 23, result
-    assert result.stderr == "", result.stderr
-    assert len(pids) == 2, pids
-    assert survivors == [], f"processx pipeline stages survived: {survivors}"
+        process.stdin.write(b"release\n")
+        process.stdin.flush()
+        returncode = process.wait(timeout=TIMEOUT)
+        stdout = process.stdout.read().decode("utf-8")
+        stderr = process.stderr.read().decode("utf-8")
+        survivors = _kill_survivors(pids)
+
+        assert returncode == 23, returncode
+        assert stdout == "", stdout
+        assert stderr == "", stderr
+        assert len(pids) == 2, pids
+        assert survivors == [], f"processx pipeline stages survived: {survivors}"
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait(timeout=TIMEOUT)
+        _kill_survivors(pids)
+        process.stdin.close()
+        process.stdout.close()
+        process.stderr.close()
     return [
         {
             "command": _command(*arguments),
-            "exit_code": result.returncode,
+            "exit_code": returncode,
             "stdout": "<pipeline stage pid>\n<pipeline stage pid>\n",
         }
     ]
@@ -174,9 +197,21 @@ def test_launcher_crash_retires_the_sandbox_lifetime(binary: Path) -> Transcript
             3,
             "the sandbox root, processx child, and temporary directory",
         )
-        pids = [int(lines[0]), int(lines[1])]
-        runner_pid, manager_pid = _runner_lifetime_processes(process.pid)
-        pids.extend((runner_pid, manager_pid))
+        sandbox_pids = [int(lines[0]), int(lines[1])]
+        lifetime_pids = _runner_lifetime_processes(process.pid)
+        if sys.platform == "linux":
+            sandbox_pids = [
+                linux_host_pid(lifetime_pids[0], sandbox_pid)
+                for sandbox_pid in sandbox_pids
+            ]
+            unnamed_lifetime_pids = set(lifetime_pids) - {
+                lifetime_pids[0],
+                *sandbox_pids,
+            }
+            assert unnamed_lifetime_pids, (
+                "Linux sandbox lifetime omitted its helper processes"
+            )
+        pids = sorted({*sandbox_pids, *lifetime_pids})
         temporary_directory = Path(lines[2])
 
         os.kill(process.pid, signal.SIGKILL)
@@ -207,7 +242,7 @@ def test_launcher_crash_retires_the_sandbox_lifetime(binary: Path) -> Transcript
         {
             "launcher_signal": "SIGKILL",
             "launcher_returncode": returncode,
-            "verified_cleanup": "sandbox root, processx child, manager, and temp",
+            "verified_cleanup": "sandbox target, descendants, lifetime owner, and temp",
         },
     ]
 

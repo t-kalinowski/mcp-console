@@ -1,0 +1,20 @@
+{
+  "archives": [
+    {
+      "archive_sha256": "3bc005dd63ac0a1d17fcaa7394fbcdcbe93aa94f876b54f98c2810c312233250",
+      "copyright": "libcap-jammy-copyright",
+      "distribution": "Ubuntu 22.04",
+      "package_version": "1:2.44-1ubuntu0.22.04.3",
+      "source": "https://launchpad.net/ubuntu/+source/libcap2/1%3A2.44-1ubuntu0.22.04.3",
+      "version": "2.44"
+    },
+    {
+      "archive_sha256": "0e635425dd8186c44ccd5bb4363d5bf37d66595f4caa40046bd602c2981eff5b",
+      "copyright": "libcap-noble-copyright",
+      "distribution": "Ubuntu 24.04",
+      "package_version": "1:2.66-5ubuntu2.4",
+      "source": "https://launchpad.net/ubuntu/+source/libcap2/1%3A2.66-5ubuntu2.4",
+      "version": "2.66"
+    }
+  ]
+}

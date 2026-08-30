@@ -22,18 +22,24 @@ send:
 
     import psutil
 
-    mib = (ctypes.c_int * 3)(1, 14, 0)
-    size = ctypes.c_size_t()
-    ctypes.set_errno(0)
-    result = ctypes.CDLL(None, use_errno=True).sysctl(
-        mib,
-        len(mib),
-        None,
-        ctypes.byref(size),
-        None,
-        0,
-    )
-    denied = result == -1 and ctypes.get_errno() == errno.EPERM
+    if sys.platform == "darwin":
+        mib = (ctypes.c_int * 3)(1, 14, 0)
+        size = ctypes.c_size_t()
+        ctypes.set_errno(0)
+        result = ctypes.CDLL(None, use_errno=True).sysctl(
+            mib,
+            len(mib),
+            None,
+            ctypes.byref(size),
+            None,
+            0,
+        )
+        process_table_isolated = (
+            result == -1 and ctypes.get_errno() == errno.EPERM
+        )
+    else:
+        host_pid = int(os.environ["MCP_CONSOLE_TEST_HOST_PID"])
+        process_table_isolated = not os.path.exists(f"/proc/{host_pid}")
 
     command = [sys.executable, "-c", "import time; time.sleep(30)"]
     child = subprocess.Popen(command)
@@ -47,12 +53,19 @@ send:
         child.terminate()
         child.wait()
 
+    sandbox_scope = (
+        1 not in visible
+        if sys.platform == "darwin"
+        else host_pid not in visible
+    )
+    worker_scope = all(group == process_group for group in visible_groups)
+
     (
         initial_executable != sys.executable,
-        denied,
-        1 not in visible,
+        process_table_isolated,
+        sandbox_scope,
         visible == sorted(visible),
-        all(group == process_group for group in visible_groups),
+        worker_scope,
         child.pid in visible,
         child.pid in observed,
     )
@@ -62,4 +75,3 @@ result:
       text: |
         (True, True, True, True, True, True, True)
   isError: false
-...

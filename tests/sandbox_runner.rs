@@ -1,8 +1,10 @@
-#![cfg(target_os = "macos")]
+#![cfg(any(target_os = "macos", target_os = "linux"))]
 
 use std::collections::BTreeSet;
 use std::fs;
-use std::io::{Read as _, Write as _};
+#[cfg(target_os = "macos")]
+use std::io::Read as _;
+use std::io::Write as _;
 use std::os::unix::ffi::OsStringExt as _;
 use std::os::unix::fs::PermissionsExt as _;
 use std::os::unix::fs::symlink;
@@ -161,6 +163,49 @@ fn discovers_and_launches_the_exact_private_runner() {
 }
 
 #[test]
+#[cfg(target_os = "linux")]
+fn closes_an_inheritable_descriptor_opened_while_forking() {
+    let (mut command, directory, log) =
+        fake_runner_process("late_inherited_descriptor", "/usr/bin/true");
+    let interposer = directory.0.join("open-fd-at-fork.so");
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/open_fd_at_fork.c");
+    let compilation = Command::new("cc")
+        .args([
+            "-shared", "-fPIC", "-std=c11", "-Wall", "-Wextra", "-Werror", "-o",
+        ])
+        .arg(&interposer)
+        .arg(source)
+        .output()
+        .expect("compile at-fork descriptor fixture");
+    assert!(
+        compilation.status.success(),
+        "{}",
+        String::from_utf8_lossy(&compilation.stderr)
+    );
+    let marker = directory.0.join("inherited-descriptor");
+    let output = command
+        .env("LD_PRELOAD", interposer)
+        .env("MCP_CONSOLE_TEST_AT_FORK_FD_PATH", &marker)
+        .env("MCP_CONSOLE_TEST_AT_FORK_FD", "211")
+        .output()
+        .expect("run mcp-console");
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        request_types(&runner_log(&log)),
+        ["discover", "launch", "status", "wait"]
+    );
+    assert_eq!(
+        fs::read(marker).expect("read inherited descriptor marker"),
+        b""
+    );
+}
+
+#[test]
 fn resolves_the_private_runner_from_a_symlinked_installation() {
     let directory = TestDirectory::new("symlinked-installation");
     let tool = directory.0.join("tool");
@@ -212,6 +257,7 @@ fn rejects_mismatched_runner_identity_and_capabilities_before_launch() {
         ("wrong_frame_size", "maximum_frame_size mismatch"),
         ("wrong_revision", "codex_source_revision mismatch"),
         ("unsupported_backend", "backend mismatch"),
+        ("wrong_lifecycle", "capability lifecycle.interrupt"),
         ("unexpected_companion", "companion layout"),
     ] {
         let (output, log) = fake_runner_command(behavior, "/usr/bin/true");
@@ -238,6 +284,22 @@ fn rejects_a_launch_response_from_the_wrong_backend() {
     assert_eq!(request_types(&log), ["discover", "launch"]);
     assert!(
         String::from_utf8_lossy(&output.stderr).contains("launch backend mismatch"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(!cleanup_path(&log).exists());
+}
+
+#[test]
+#[cfg(target_os = "macos")]
+fn rejects_a_launch_response_without_a_root_process_identifier() {
+    let (output, log) = fake_runner_command("missing_root_process_id", "/usr/bin/true");
+
+    assert!(!output.status.success());
+    assert_eq!(request_types(&log), ["discover", "launch"]);
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("launch omitted the target process identifier"),
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
@@ -340,6 +402,7 @@ fn rejects_an_unknown_status_phase_before_waiting() {
 }
 
 #[test]
+#[cfg(target_os = "macos")]
 fn rejects_an_interrupt_acknowledgment_for_another_operation() {
     let (mut command, _directory, log_path) =
         fake_runner_process("wrong_interrupt_ack", "/usr/bin/true");

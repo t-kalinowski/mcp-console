@@ -24,4 +24,4 @@ stdout: |
 ---
 launcher_signal: SIGKILL
 launcher_returncode: -9
-verified_cleanup: sandbox root, processx child, manager, and temp
+verified_cleanup: sandbox target, descendants, lifetime owner, and temp

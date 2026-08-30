@@ -15,6 +15,7 @@ classifiers = [
     "Environment :: Console",
     "License :: OSI Approved :: MIT License",
     "Operating System :: MacOS",
+    "Operating System :: POSIX :: Linux",
     "Programming Language :: Rust",
     "Topic :: Scientific/Engineering",
 ]
@@ -23,6 +24,7 @@ classifiers = [
 Homepage = "https://github.com/t-kalinowski/mcp-console"
 Repository = "https://github.com/t-kalinowski/mcp-console"
 Issues = "https://github.com/t-kalinowski/mcp-console/issues"
+"Private runner source" = "https://github.com/t-kalinowski/codex/archive/b4de42be4e329fd6df06e6755b99f37f4a7ff5c6.tar.gz"
 
 [tool.maturin]
 bindings = "bin"

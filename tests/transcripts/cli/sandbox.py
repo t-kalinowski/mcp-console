@@ -14,7 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from _support import Transcript, TranscriptEntry, code, run_this_suite
 
 
-PLATFORMS = {"darwin"}
+PLATFORMS = {"darwin", "linux"}
 
 
 def record(
@@ -240,12 +240,17 @@ def test_allows_processx_pty_processes(binary: Path) -> Transcript:
     # fmt: r
     script = code(r"""
         {
-          p <- processx::process$new("/bin/cat", pty = TRUE)
+          p <- processx::process$new(
+            "/bin/sh",
+            c("-c", 'IFS= read -r line; printf "%s" "$line"'),
+            pty = TRUE
+          )
           on.exit(if (p$is_alive()) p$kill())
           p$write_input("sandboxed pty\n")
-          stopifnot(p$poll_io(5000)[["output"]] == "ready")
-          cat(p$read_output())
-          invisible(p$kill())
+          output <- p$read_all_output()
+          stopifnot(identical(output, "sandboxed pty"))
+          stopifnot(identical(p$get_exit_status(), 0L))
+          cat(output)
         }
         """)
     return [record(binary, "sandbox", "--", "Rscript", "-e", script)]

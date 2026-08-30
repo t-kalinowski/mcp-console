@@ -11,6 +11,18 @@ export MCP_CONSOLE_TEST_POLL_PID="$$"
 export MCP_CONSOLE_TEST_POLL_LOADED="$TMPDIR/$MCP_CONSOLE_TEST_POLL_LOADED_NAME"
 export MCP_CONSOLE_TEST_POLL_ARM="$TMPDIR/$MCP_CONSOLE_TEST_POLL_ARM_NAME"
 export MCP_CONSOLE_TEST_POLL_SOCKET_READY="$TMPDIR/$MCP_CONSOLE_TEST_POLL_SOCKET_READY_NAME"
-export DYLD_INSERT_LIBRARIES="$MCP_CONSOLE_TEST_POLL_DYLIB"
+
+case "$(uname -s)" in
+    Darwin)
+        export DYLD_INSERT_LIBRARIES="$MCP_CONSOLE_TEST_POLL_DYLIB"
+        ;;
+    Linux)
+        export LD_PRELOAD="$MCP_CONSOLE_TEST_POLL_DYLIB"
+        ;;
+    *)
+        echo "unsupported preload platform: $(uname -s)" >&2
+        exit 1
+        ;;
+esac
 
 exec "$MCP_CONSOLE_TEST_RELAY_BINARY" worker-relay "$@"

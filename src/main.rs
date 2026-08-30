@@ -6,11 +6,11 @@ mod cell;
 mod cli;
 mod python;
 mod python_requirement;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 mod r_bridge;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 mod r_environment;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 mod r_graphics;
 mod r_package_name;
 mod relay_protocol;
@@ -19,9 +19,8 @@ mod sandbox;
 mod server;
 mod server_transport;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
-#[cfg_attr(target_os = "linux", allow(dead_code))]
 mod sideband;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 mod sql;
 mod transcript;
 mod worker;

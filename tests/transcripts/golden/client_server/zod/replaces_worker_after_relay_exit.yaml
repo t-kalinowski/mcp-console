@@ -2,7 +2,7 @@
 !same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
 ---
 send:
-  r: kill relay and remain live
+  r: "kill relay and remain live: 3"
   timeout_ms: 5000
 result:
   content:
@@ -23,4 +23,3 @@ result:
       text: |
         zod: echo
   isError: false
-...

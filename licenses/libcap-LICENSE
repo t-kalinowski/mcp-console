@@ -1,0 +1,49 @@
+libcap notice
+
+The Linux private Bubblewrap companion statically links libcap. MCP Console
+redistributes that libcap code under the BSD 3-clause option offered by
+libcap's upstream License file.
+
+Source: https://git.kernel.org/pub/scm/libs/libcap/libcap.git
+Verified revisions: libcap-2.44 (2fa105aacc656d415ca90c33ea6fbb5ddc407b9a)
+and libcap-2.66 (4f96e6788d535da5f57a3452a54b8d92bd41cd8e).
+
+Copyright notices for the libcap source files and headers used by the static
+library:
+
+Copyright (c) 1997-8,2019,2021 Andrew G Morgan <morgan@kernel.org>
+Copyright (c) 1997-8,2007,11,19-21 Andrew G Morgan <morgan@kernel.org>
+Copyright (c) 1997-8,2021 Andrew G. Morgan <morgan@kernel.org>
+Copyright (c) 1997-8,2008,20-21 Andrew G. Morgan <morgan@kernel.org>
+Copyright (c) 1997-8,2007-8,2019,2021 Andrew G Morgan <morgan@kernel.org>
+Copyright (c) 1997 Andrew Main <zefram@dcs.warwick.ac.uk>
+Copyright (c) 1997,2007,2016 Andrew G Morgan <morgan@kernel.org>
+Copyright (c) 1997,2020 Andrew G Morgan <morgan@kernel.org>
+Copyright (C) 1997 Aleph One
+Copyright (C) 1997,8, 2008,19-22 Andrew G. Morgan <morgan@kernel.org>
+Copyright (C) 2010 Serge Hallyn <serue@us.ibm.com>
+
+Redistribution and use in source and binary forms of libcap, with or without
+modification, are permitted provided that the following conditions are met:
+
+1. Redistributions of source code must retain any existing copyright notice,
+   and this entire permission notice in its entirety, including the disclaimer
+   of warranties.
+
+2. Redistributions in binary form must reproduce all prior and current
+   copyright notices, this list of conditions, and the following disclaimer in
+   the documentation and/or other materials provided with the distribution.
+
+3. The name of any author may not be used to endorse or promote products
+   derived from this software without their specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED ``AS IS'' AND ANY EXPRESS OR IMPLIED WARRANTIES,
+INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND
+FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE
+AUTHOR(S) BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY,
+OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+POSSIBILITY OF SUCH DAMAGE.

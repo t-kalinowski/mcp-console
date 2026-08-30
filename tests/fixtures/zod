@@ -4,12 +4,14 @@
 # ///
 
 import array
+import errno
 import fcntl
 import json
 import os
 import select
 import signal
 import socket
+import sys
 import termios
 import time
 from enum import StrEnum
@@ -88,10 +90,14 @@ def wait_for_test_control(operation: int, kind: str) -> dict[str, object]:
     return command
 
 
-def queued_stdin_bytes() -> int:
+def queued_descriptor_bytes(descriptor: int) -> int:
     available = array.array("i", [0])
-    fcntl.ioctl(0, termios.FIONREAD, available, True)
+    fcntl.ioctl(descriptor, termios.FIONREAD, available, True)
     return available[0]
+
+
+def queued_stdin_bytes() -> int:
+    return queued_descriptor_bytes(0)
 
 
 def response_gate_completed() -> bool:
@@ -480,10 +486,13 @@ def main() -> None:
             while os.read(0, 8192) != b"":
                 pass
             expected = b'{"kind":"shutdown"}\n'
-            queued = endpoint.recv(
-                len(expected),
-                socket.MSG_PEEK | socket.MSG_WAITALL,
-            )
+            deadline = time.monotonic() + 10
+            while queued_descriptor_bytes(endpoint.fileno()) < len(expected):
+                assert time.monotonic() < deadline, (
+                    "relay did not queue the complete shutdown message"
+                )
+                time.sleep(0.01)
+            queued = endpoint.recv(len(expected), socket.MSG_PEEK)
             assert queued == expected, queued
             endpoint.shutdown(socket.SHUT_WR)
             close_sideband(endpoint, reader, writer)
@@ -608,7 +617,8 @@ def main() -> None:
         if source == "exit zero":
             os._exit(0)
 
-        if source == "kill relay and remain live":
+        if source.startswith("kill relay and remain live: "):
+            operation = int(source.removeprefix("kill relay and remain live: "))
             worker_pid = os.getpid()
             launcher_pid = os.getppid()
             relay_pid = os.getpgrp()
@@ -623,7 +633,14 @@ def main() -> None:
                 ),
             )
             wait_for_server_to_process_sideband(reader, writer)
-            os.kill(relay_pid, signal.SIGKILL)
+            assert test_channel_path("events") is not None
+            emit_test_event(
+                operation,
+                "relay_exit_ready",
+                worker_pid=worker_pid,
+                launcher_pid=launcher_pid,
+                relay_process_group=relay_pid,
+            )
             while True:
                 signal.pause()
 
@@ -650,6 +667,7 @@ def main() -> None:
             # stream's sequence in one atomic pipe write.
             write_all(1, b"\rstdout old\rstdout final\n")
             write_all(2, b"\rstderr old\rstderr final\n")
+            assert input() == "complete independent streams"
             send(writer, {"kind": "completed"})
             continue
 
@@ -988,7 +1006,9 @@ def main() -> None:
                     "escaped",
                     encoding="utf-8",
                 )
-            except PermissionError:
+            except OSError as error:
+                expected_errno = errno.EROFS if sys.platform == "linux" else errno.EPERM
+                assert error.errno == expected_errno
                 output = "sandbox blocked host write\n"
             else:
                 output = "worker escaped sandbox\n"

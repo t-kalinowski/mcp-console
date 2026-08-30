@@ -1,3 +1,5 @@
+#define _GNU_SOURCE
+
 #include <errno.h>
 #include <fcntl.h>
 #include <poll.h>
@@ -9,6 +11,10 @@
 #include <sys/un.h>
 #include <unistd.h>
 
+#ifndef __APPLE__
+#include <dlfcn.h>
+#endif
+
 static atomic_bool claimed = false;
 static atomic_bool reset_claimed = false;
 static atomic_int sideband_descriptor = -1;
@@ -18,15 +24,27 @@ typedef ssize_t (*read_function)(int, void *, size_t);
 typedef ssize_t (*recv_function)(int, void *, size_t, int);
 
 static poll_function next_poll(void) {
+#ifdef __APPLE__
   return poll;
+#else
+  return (poll_function)dlsym(RTLD_NEXT, "poll");
+#endif
 }
 
 static read_function next_read(void) {
+#ifdef __APPLE__
   return read;
+#else
+  return (read_function)dlsym(RTLD_NEXT, "read");
+#endif
 }
 
 static recv_function next_recv(void) {
+#ifdef __APPLE__
   return recv;
+#else
+  return (recv_function)dlsym(RTLD_NEXT, "recv");
+#endif
 }
 
 static bool target_process(void) {
@@ -134,10 +152,15 @@ static ssize_t reset_recv(int descriptor, void *buffer, size_t length,
 __attribute__((constructor)) static void prevent_worker_injection(void) {
   if (target_process()) {
     mark("MCP_CONSOLE_TEST_POLL_LOADED");
+#ifdef __APPLE__
     unsetenv("DYLD_INSERT_LIBRARIES");
+#else
+    unsetenv("LD_PRELOAD");
+#endif
   }
 }
 
+#ifdef __APPLE__
 #define DYLD_INTERPOSE(replacement, replacee)                                  \
   __attribute__((used)) static struct {                                        \
     const void *replacement;                                                   \
@@ -149,3 +172,16 @@ __attribute__((constructor)) static void prevent_worker_injection(void) {
 DYLD_INTERPOSE(delayed_poll, poll)
 DYLD_INTERPOSE(reset_read, read)
 DYLD_INTERPOSE(reset_recv, recv)
+#else
+int poll(struct pollfd *descriptors, nfds_t count, int timeout) {
+  return delayed_poll(descriptors, count, timeout);
+}
+
+ssize_t read(int descriptor, void *buffer, size_t length) {
+  return reset_read(descriptor, buffer, length);
+}
+
+ssize_t recv(int descriptor, void *buffer, size_t length, int flags) {
+  return reset_recv(descriptor, buffer, length, flags);
+}
+#endif

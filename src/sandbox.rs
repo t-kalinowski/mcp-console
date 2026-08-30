@@ -4,17 +4,17 @@ use std::process::ExitCode;
 #[cfg(target_os = "macos")]
 #[path = "sandbox/job_control.rs"]
 mod job_control;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 #[path = "sandbox/protocol.rs"]
 mod protocol;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 #[path = "sandbox/runner.rs"]
 mod runner;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 #[path = "sandbox/temporary_directory.rs"]
 mod temporary_directory;
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 pub(crate) use runner::{SandboxedChild, SandboxedCommand};
 
 #[cfg(target_os = "macos")]
@@ -50,12 +50,34 @@ pub fn run(command_line: &[OsString]) -> Result<ExitCode, String> {
     child.finish_exit_code()
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "linux")]
+pub fn run(command_line: &[OsString]) -> Result<ExitCode, String> {
+    let (program, arguments) = command_line
+        .split_first()
+        .expect("sandbox command must include a program");
+    let mut command = SandboxedCommand::command(program)?;
+    command
+        .args(arguments)
+        .stdin_inherited()
+        .stdout_inherited()
+        .stderr_inherited();
+    let mut child = command.spawn()?;
+    loop {
+        match child.wait_timeout_without_reaping(std::time::Duration::from_millis(100)) {
+            Ok(true) => break,
+            Ok(false) => {}
+            Err(error) => return Err(stop_after_error(&mut child, error)),
+        }
+    }
+    child.finish_exit_code()
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
 pub fn run(_command_line: &[OsString]) -> Result<ExitCode, String> {
     Err("sandbox execution is unavailable on this platform".to_string())
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn stop_after_error(child: &mut SandboxedChild, error: String) -> String {
     let stop = child.force_stop();
     [Some(error), stop.err()]
@@ -65,7 +87,7 @@ fn stop_after_error(child: &mut SandboxedChild, error: String) -> String {
         .join("; additionally ")
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 pub(crate) fn configure_child_reaping() -> Result<(), String> {
     // SAFETY: a zeroed sigaction is a valid starting value before every field
     // used by sigaction(2) is initialized below.
@@ -84,7 +106,7 @@ pub(crate) fn configure_child_reaping() -> Result<(), String> {
     }
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
 pub(crate) fn configure_child_reaping() -> Result<(), String> {
     Ok(())
 }

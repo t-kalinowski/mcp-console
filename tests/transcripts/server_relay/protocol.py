@@ -21,7 +21,7 @@ from _support import (
     stop_client,
 )
 
-PLATFORMS = {"darwin"}
+PLATFORMS = {"darwin", "linux"}
 SCENARIO_ENV = "MCP_CONSOLE_TEST_RELAY_SCENARIO"
 CAPTURE_NAME = "mcp-console-server-relay-wire.jsonl"
 DONE_NAME = "mcp-console-scripted-relay-done"
@@ -281,19 +281,24 @@ def _wait_for_recorded_tool_result(
     session = next((workspace / ".mcp-console" / "sessions").iterdir())
     journal = session / "internal" / "events.jsonl"
     with journal.open(encoding="utf-8") as journal_stream:
-        journal_events = select.kqueue()
-        journal_events.control(
-            [
-                select.kevent(
-                    journal_stream.fileno(),
-                    filter=select.KQ_FILTER_VNODE,
-                    flags=select.KQ_EV_ADD | select.KQ_EV_CLEAR,
-                    fflags=select.KQ_NOTE_WRITE,
-                )
-            ],
-            0,
-            0,
-        )
+        journal_events = None
+        if sys.platform == "darwin":
+            journal_events = select.kqueue()
+            journal_events.control(
+                [
+                    select.kevent(
+                        journal_stream.fileno(),
+                        filter=select.KQ_FILTER_VNODE,
+                        flags=select.KQ_EV_ADD | select.KQ_EV_CLEAR,
+                        fflags=select.KQ_NOTE_WRITE,
+                    )
+                ],
+                0,
+                0,
+            )
+        else:
+            assert sys.platform == "linux", sys.platform
+        deadline = time.monotonic() + 10
         try:
             while True:
                 journal_stream.seek(0)
@@ -322,11 +327,18 @@ def _wait_for_recorded_tool_result(
                 assert client.process.poll() is None, (
                     "mcp-console stopped before recording the tool result"
                 )
-                assert journal_events.control(None, 1, 10), (
-                    "mcp-console did not record the tool result"
-                )
+                if journal_events is None:
+                    assert time.monotonic() < deadline, (
+                        "mcp-console did not record the tool result"
+                    )
+                    time.sleep(0.01)
+                else:
+                    assert journal_events.control(None, 1, 10), (
+                        "mcp-console did not record the tool result"
+                    )
         finally:
-            journal_events.close()
+            if journal_events is not None:
+                journal_events.close()
 
 
 def test_starts_and_reports_ready(binary: Path) -> Transcript:

@@ -258,6 +258,7 @@ impl SandboxedCommand {
                 command.env(key, value);
             }
         }
+        #[cfg(target_os = "macos")]
         let descriptor_limit = descriptor_limit()?;
         let inherited_descriptors = endpoint_descriptors
             .iter()
@@ -267,9 +268,12 @@ impl SandboxedCommand {
         let inherited_signal_mask = self.inherited_signal_mask;
         unsafe {
             command.pre_exec(move || {
+                #[cfg(target_os = "macos")]
                 for descriptor in (libc::STDERR_FILENO + 1)..descriptor_limit {
                     configure_descriptor(descriptor, inherited_descriptors.contains(&descriptor))?;
                 }
+                #[cfg(target_os = "linux")]
+                close_undeclared_descriptors(&inherited_descriptors)?;
                 if let Some(mask) = inherited_signal_mask {
                     let result =
                         libc::pthread_sigmask(libc::SIG_SETMASK, &mask, std::ptr::null_mut());
@@ -424,6 +428,7 @@ impl SandboxedChild {
         }
     }
 
+    #[cfg(target_os = "macos")]
     pub(crate) fn interrupt(&mut self) -> Result<(), String> {
         let result = self
             .control
@@ -988,6 +993,7 @@ fn duplicate_private_descriptor(source: RawFd) -> Result<OwnedFd, String> {
     }
 }
 
+#[cfg(target_os = "macos")]
 fn descriptor_limit() -> Result<RawFd, String> {
     let table_size = unsafe { libc::getdtablesize() };
     if table_size <= 0 {
@@ -1004,6 +1010,7 @@ fn descriptor_limit() -> Result<RawFd, String> {
         }))
 }
 
+#[cfg(target_os = "macos")]
 fn open_descriptors() -> Result<Vec<RawFd>, String> {
     let mut capacity = 16;
     loop {
@@ -1047,6 +1054,26 @@ fn open_descriptors() -> Result<Vec<RawFd>, String> {
         }
         capacity = capacity.saturating_mul(2).max(count + 16);
     }
+}
+
+#[cfg(target_os = "linux")]
+fn close_undeclared_descriptors(inherited_descriptors: &BTreeSet<RawFd>) -> std::io::Result<()> {
+    // SAFETY: the requested range is valid and CLOEXEC preserves every open
+    // descriptor until exec while preventing undeclared inheritance.
+    let result = unsafe {
+        libc::close_range(
+            (libc::STDERR_FILENO + 1) as libc::c_uint,
+            libc::c_uint::MAX,
+            libc::CLOSE_RANGE_CLOEXEC as libc::c_int,
+        )
+    };
+    if result != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    for descriptor in inherited_descriptors {
+        configure_descriptor(*descriptor, true)?;
+    }
+    Ok(())
 }
 
 fn configure_descriptor(descriptor: RawFd, inherited: bool) -> std::io::Result<()> {

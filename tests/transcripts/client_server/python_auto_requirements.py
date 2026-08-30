@@ -23,7 +23,7 @@ from _support import (
     stop_client,
 )
 
-PLATFORMS = {"darwin"}
+PLATFORMS = {"darwin", "linux"}
 PENDING_TEXT_BUDGET = 8 * 1024 * 1024
 
 
@@ -857,9 +857,12 @@ def test_rejects_automatic_resolution_from_fork_child(binary: Path) -> Transcrip
             import os
             import select
             import signal
+            import warnings
 
             read_descriptor, write_descriptor = os.pipe()
-            child = os.fork()
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", DeprecationWarning)
+                child = os.fork()
             if child == 0:
                 os.close(read_descriptor)
                 try:

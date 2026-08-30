@@ -1,16 +1,16 @@
 use std::ffi::OsString;
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
 pub(crate) fn run(_command_line: &[OsString]) -> Result<(), String> {
-    Err("the worker relay is currently supported only on macOS".to_string())
+    Err("the worker relay is currently supported only on macOS and Linux".to_string())
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 pub(crate) fn run(command_line: &[OsString]) -> Result<(), String> {
     platform::run(command_line)
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 mod platform {
     use std::io::{Read, Write};
     use std::os::fd::{AsRawFd, RawFd};
@@ -281,10 +281,11 @@ mod platform {
                     // SAFETY: successful `waitid` initialized the supplied
                     // `siginfo_t`.
                     let information = unsafe { information.assume_init() };
-                    if information.si_pid != process_id {
+                    let observed_process_id = child_status_process_id(&information);
+                    if observed_process_id != process_id {
                         break Err(format!(
                             "waitid returned process {} while waiting for worker {process_id}",
-                            information.si_pid
+                            observed_process_id
                         ));
                     }
                     match information.si_code {
@@ -344,15 +345,16 @@ mod platform {
 
         // SAFETY: successful `waitid` initialized the supplied `siginfo_t`.
         let information = unsafe { information.assume_init() };
-        if information.si_pid == 0 {
+        let observed_process_id = child_status_process_id(&information);
+        if observed_process_id == 0 {
             return Ok(());
         }
-        if information.si_pid != process_id {
+        if observed_process_id != process_id {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
                 format!(
                     "waitid returned process {} while consuming a notification for worker {process_id}",
-                    information.si_pid
+                    observed_process_id
                 ),
             ));
         }
@@ -366,6 +368,18 @@ mod platform {
             ));
         }
         Ok(())
+    }
+
+    fn child_status_process_id(information: &libc::siginfo_t) -> libc::pid_t {
+        #[cfg(target_os = "macos")]
+        {
+            information.si_pid
+        }
+        #[cfg(target_os = "linux")]
+        {
+            // SAFETY: callers pass siginfo initialized by a successful waitid.
+            unsafe { information.si_pid() }
+        }
     }
 
     fn finish_exited_worker(child: &mut Child) -> (Option<ExitStatus>, Option<String>) {

@@ -46,7 +46,7 @@ impl ManagedR {
     }
 
     pub(crate) fn library(&self) -> &std::path::Path {
-        unreachable!("managed R libraries are supported only on macOS")
+        unreachable!("managed R libraries are supported only on macOS and Linux")
     }
 }
 
@@ -54,7 +54,7 @@ pub(crate) fn resolve_r(
     _requirements: Vec<String>,
     _on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
 ) -> Result<ManagedR, String> {
-    Err("managed R libraries are supported only on macOS".to_string())
+    Err("managed R libraries are supported only on macOS and Linux".to_string())
 }
 
 pub(crate) fn resolve_r_with(
@@ -62,7 +62,7 @@ pub(crate) fn resolve_r_with(
     _requirements: Vec<String>,
     _on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
 ) -> Result<ManagedR, String> {
-    Err("managed R libraries are supported only on macOS".to_string())
+    Err("managed R libraries are supported only on macOS and Linux".to_string())
 }
 
 pub(crate) fn resolve_duckdb_extensions(
@@ -70,7 +70,7 @@ pub(crate) fn resolve_duckdb_extensions(
     _extensions: &[String],
     _on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
 ) -> Result<(), String> {
-    Err("DuckDB extension preparation is supported only on macOS".to_string())
+    Err("DuckDB extension preparation is supported only on macOS and Linux".to_string())
 }
 
 pub(crate) fn resolve_python(
@@ -84,7 +84,7 @@ pub(crate) fn resolve_python(
             requirements: crate::worker_protocol::default_python_requirement_manifest(),
         })
     } else {
-        Err("managed Python environments are supported only on macOS".to_string())
+        Err("managed Python environments are supported only on macOS and Linux".to_string())
     }
 }
 
@@ -96,7 +96,7 @@ pub(crate) fn resolve_python_manifest(
 ) -> Result<ManagedPython, String> {
     crate::python_requirement::validate_all(&requirements.packages)?;
     crate::python_requirement::validate_version_constraints(&requirements.python_version)?;
-    Err("managed Python environments are supported only on macOS".to_string())
+    Err("managed Python environments are supported only on macOS and Linux".to_string())
 }
 
 pub(crate) fn resolve_python_host(
@@ -115,5 +115,5 @@ pub(crate) fn resolve_python_version(
     _on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
 ) -> Result<String, String> {
     crate::python_requirement::validate_version_constraints(&constraints)?;
-    Err("managed Python versions are supported only on macOS".to_string())
+    Err("managed Python versions are supported only on macOS and Linux".to_string())
 }

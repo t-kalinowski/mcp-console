@@ -92,7 +92,7 @@ impl PythonEnvironment {
         }
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     pub(in crate::worker_client) fn configure_worker(
         &self,
         command: &mut crate::sandbox::SandboxedCommand,

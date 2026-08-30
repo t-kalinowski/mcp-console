@@ -1,8 +1,8 @@
 # Server-relay protocol
 
-This document defines the private protocol between `mcp-console serve` and the per-generation worker relay on macOS.
+This document defines the private protocol between `mcp-console serve` and the per-generation worker relay on macOS and Linux.
 It is an exact current interface, but it is neither public nor versioned.
-The message definitions and framing in `src/relay_protocol.rs`, the relay implementation in `src/worker_relay.rs`, and the server-side transport in `src/worker_client/macos.rs` are the source of truth.
+The message definitions and framing in `src/relay_protocol.rs`, the relay implementation in `src/worker_relay.rs`, and the server-side transport in `src/worker_client/unix.rs` are the source of truth.
 Transcript-runner progress lines are test user-interface output and never enter this protocol.
 
 The [implemented architecture](ARCHITECTURE.md) explains why this boundary exists and which process owns each responsibility.
@@ -18,7 +18,7 @@ server <--> private sandbox runner <--> (worker relay <--> worker)
 ```
 
 The parentheses mark the sandbox boundary.
-The runner observes and retires the relay, worker, and their observed descendants as one sandbox lifetime.
+The runner retires the relay, worker, and their descendants as one sandbox lifetime.
 
 The relay's standard input, standard output, and standard error cross the server/sandbox boundary.
 Standard input and output carry the framed relay protocol described below.
@@ -33,7 +33,7 @@ The relay creates the worker's private full-duplex sideband socket pair and its 
 It passes one worker sideband endpoint through `MCP_CONSOLE_SIDEBAND_FD` together with the fd-0/1/2 contract documented in [`WORKER_PROTOCOL.md`](WORKER_PROTOCOL.md).
 
 The relay owns the direct worker process and its local transports, translation between this protocol and the worker sideband, direct-worker signal delivery, deadline-bounded direct-worker termination, and direct-worker reaping.
-The private runner owns tracking and termination of the relay root and observed descendants across process-group and session changes, along with private-directory cleanup.
+The private runner owns termination of the relay root and descendants across process-group and session changes, along with private-directory cleanup.
 The server owns the runner control channel and reaps the runner process.
 The server owns generation state and host-side dependency resolution; see [Requirements and environments](REQUIREMENTS.md) for that trust boundary.
 
@@ -185,7 +185,8 @@ The resulting `worker_exited` or `worker_signaled` event describes only that dir
 Clean relay-stdin EOF does not emit `shutdown_started`; it performs the same worker shutdown with a new one-second grace period measured from EOF.
 EOF midway through a command frame is a transport failure instead.
 
-The private sandbox runner tracks the relay root and every descendant identity it observes by PID and start time, retaining those identities across process-group and session changes.
+On macOS, the private sandbox runner tracks the relay root and every descendant identity it observes by PID and start time, retaining those identities across process-group and session changes.
+On Linux, Bubblewrap PID and session namespaces and the runner's outer process group keep the relay and its descendants in one runner-owned lifetime.
 It removes the target-facing private temporary directory only after successful lifetime cleanup; a cleanup failure preserves the directory for diagnosis.
 If the relay exits or crashes, the runner treats root exit as retirement of the remaining observed lifetime.
 If the server exits or crashes, closure of the private control channel makes the runner stop the relay root and complete the same cleanup independently.
@@ -207,7 +208,7 @@ This preserves exact bytes and per-stream order through retirement.
 
 Relay stdout EOF is a clean retirement only after the expected stream closures and final worker process outcome.
 `worker_exited` distinguishes ordinary exit, including status zero, from `worker_signaled` signal termination.
-Neither event says that the host-side manager has completed sandbox-lifetime cleanup.
+Neither event says that the host-side runner has completed sandbox-lifetime cleanup.
 Public rendering of these outcomes belongs to the server and is described at the console level in [Built-in runtime](BUILTIN_RUNTIME.md).
 
 Malformed relay JSON, invalid byte-form base64, an unexpected command, a fatal event, or unexpected relay EOF fails the worker transport.

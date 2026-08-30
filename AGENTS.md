@@ -25,9 +25,9 @@ Do not treat `design-sketches/` as evidence of implemented behavior.
 
 ## Platform and development
 
-The sandbox command, worker relay, and built-in worker are supported on macOS.
-Linux and Windows are not supported yet.
-CI runs the complete check on macOS.
+The sandbox command, worker relay, and built-in worker are supported on macOS and Linux.
+Windows is not supported yet.
+CI runs the complete check on macOS and Linux.
 
 Run commands from the repository root:
 
@@ -94,7 +94,7 @@ Keep these ownership rules intact:
 - `src/worker_protocol.rs`, `src/sideband.rs` — relay-worker message and framing contract.
 - `src/relay_protocol.rs` — server-relay JSONL message and framing contract.
 - `src/worker_relay.rs` — sandboxed worker launch, I/O forwarding, signaling, shutdown, and reaping.
-- `src/worker_client.rs`, `src/worker_client/` — server-owned environment, evaluation, lifecycle, ordered event dispatch, output tape, and macOS relay transport.
+- `src/worker_client.rs`, `src/worker_client/` — server-owned environment, evaluation, lifecycle, ordered event dispatch, output tape, and Unix relay transport.
 - `src/worker.rs`, `src/r_repl.c` — embedded-R worker, cell dispatch, console callbacks, and the C-owned DLL-REPL boundary.
 
 ### Language adapters

@@ -227,6 +227,55 @@ fn runner_fixture(name: &str, slow_test_seconds: &str) -> (TestDirectory, PathBu
 }
 
 #[cfg(unix)]
+fn platform_runner_fixture(name: &str) -> (TestDirectory, PathBuf, PathBuf) {
+    let repository = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let temporary = TestDirectory::new(name);
+    let transcripts = temporary.path().join("tests/transcripts");
+    let suite = transcripts.join("client_server/platform.py");
+    let golden_directory = transcripts.join("golden/client_server/platform");
+    let initialization =
+        transcripts.join("golden/client_server/server/initializes_and_lists_tools.yaml");
+    let binary = temporary.path().join("target/debug/mcp-console");
+    for directory in [
+        suite.parent().unwrap(),
+        &golden_directory,
+        initialization.parent().unwrap(),
+        binary.parent().unwrap(),
+    ] {
+        fs::create_dir_all(directory).unwrap();
+    }
+    fs::copy(
+        repository.join("tests/transcripts/_run.py"),
+        transcripts.join("_run.py"),
+    )
+    .unwrap();
+    fs::copy(
+        repository.join("tests/transcripts/_support.py"),
+        transcripts.join("_support.py"),
+    )
+    .unwrap();
+    fs::copy(
+        repository.join("tests/fixtures/transcript_runner/platform.py"),
+        &suite,
+    )
+    .unwrap();
+    for case in ["platform_applicable", "platform_inapplicable"] {
+        fs::copy(
+            repository.join(format!("tests/fixtures/transcript_runner/{case}.yaml")),
+            golden_directory.join(format!("{case}.yaml")),
+        )
+        .unwrap();
+    }
+    fs::copy(
+        repository.join("tests/fixtures/transcript_runner/initializes_and_lists_tools.yaml"),
+        initialization,
+    )
+    .unwrap();
+    File::create(binary).unwrap();
+    (temporary, transcripts, golden_directory)
+}
+
+#[cfg(unix)]
 fn spawn_runner(
     temporary: &TestDirectory,
     transcripts: &Path,
@@ -312,6 +361,55 @@ fn transcript_test_script_reports_one_dot_per_fast_case() {
         "transcript test script failed: {stderr:?}"
     );
     assert_eq!(stdout, [".."]);
+}
+
+#[cfg(unix)]
+#[test]
+fn transcript_test_script_preserves_platform_inapplicable_cases() {
+    let (temporary, transcripts, golden_directory) =
+        platform_runner_fixture("platform-inapplicable");
+
+    let listed = Command::new("uv")
+        .args(["run", "--script"])
+        .arg(transcripts.join("_run.py"))
+        .arg("--list")
+        .current_dir(temporary.path())
+        .output()
+        .expect("list transcript cases");
+    assert!(
+        listed.status.success(),
+        "transcript list failed: {}",
+        String::from_utf8_lossy(&listed.stderr)
+    );
+    assert_eq!(
+        String::from_utf8(listed.stdout)
+            .unwrap()
+            .lines()
+            .collect::<Vec<_>>(),
+        [
+            "client_server/platform::platform_applicable",
+            "client_server/platform::platform_inapplicable",
+        ]
+    );
+
+    let inapplicable = golden_directory.join("platform_inapplicable.yaml");
+    let original = fs::read(&inapplicable).unwrap();
+    let updated = Command::new("uv")
+        .args(["run", "--script"])
+        .arg(transcripts.join("_run.py"))
+        .args(["--jobs", "1", "--update"])
+        .current_dir(temporary.path())
+        .output()
+        .expect("update transcript cases");
+    assert!(
+        updated.status.success(),
+        "transcript update failed: {}",
+        String::from_utf8_lossy(&updated.stderr)
+    );
+    assert_eq!(fs::read(inapplicable).unwrap(), original);
+    let stdout = String::from_utf8(updated.stdout).unwrap();
+    assert!(stdout.contains("platform_applicable.yaml"), "{stdout}");
+    assert!(!stdout.contains("platform_inapplicable"), "{stdout}");
 }
 
 #[cfg(unix)]

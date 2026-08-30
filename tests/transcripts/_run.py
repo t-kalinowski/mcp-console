@@ -69,7 +69,12 @@ def suite_identifier(suite_path: Path) -> str:
 
 def load_suite(
     suite_path: Path,
-) -> tuple[dict[str, TranscriptCase], set[str] | None, set[str]]:
+) -> tuple[
+    dict[str, TranscriptCase],
+    set[str] | None,
+    set[str],
+    dict[str, set[str]],
+]:
     namespace = runpy.run_path(str(suite_path))
     cases = {
         name.removeprefix("test_"): value
@@ -85,7 +90,17 @@ def load_suite(
     assert isinstance(required_commands, set) and all(
         isinstance(command, str) and command for command in required_commands
     ), f"{suite_path.relative_to(root)} REQUIRED_COMMANDS must be a set of names"
-    return cases, platforms, required_commands
+    case_platforms = namespace.get("CASE_PLATFORMS", {})
+    assert isinstance(case_platforms, dict) and all(
+        case_name in cases
+        and isinstance(case_platform, set)
+        and all(isinstance(platform, str) and platform for platform in case_platform)
+        for case_name, case_platform in case_platforms.items()
+    ), (
+        f"{suite_path.relative_to(root)} CASE_PLATFORMS must map case names "
+        "to sets of platform names"
+    )
+    return cases, platforms, required_commands, case_platforms
 
 
 def identical(left: object, right: object) -> bool:
@@ -221,7 +236,7 @@ def record_case(
     if progress is not None:
         assert progress_id is not None
         progress.put((progress_id, time.monotonic()))
-    cases, _, _ = load_suite(suite_path)
+    cases, _, _, _ = load_suite(suite_path)
     return cases[case_name](binary)
 
 
@@ -410,7 +425,7 @@ def selected_cases(
     selected: list[tuple[str, str, Path]] = []
     for suite_name, selected_case_names in selected_suites.items():
         suite_path = suites[suite_name]
-        cases, platforms, required_commands = load_suite(suite_path)
+        cases, platforms, required_commands, case_platforms = load_suite(suite_path)
 
         if selected_case_names is None:
             case_names = list(cases)
@@ -436,6 +451,11 @@ def selected_cases(
             )
             continue
 
+        case_names = [
+            case_name
+            for case_name in case_names
+            if sys.platform in case_platforms.get(case_name, {sys.platform})
+        ]
         selected.extend((suite_name, case_name, suite_path) for case_name in case_names)
     return selected
 
@@ -445,7 +465,7 @@ def prune_stale_goldens(suites: dict[str, Path], checked_goldens: set[Path]) -> 
     checked_suites = {
         golden.parent.relative_to(golden_root).as_posix() for golden in checked_goldens
     }
-    cases_by_suite: dict[str, tuple[str, ...]] = {}
+    cases_by_suite: dict[str, tuple[tuple[str, ...], dict[str, set[str]]]] = {}
 
     for golden in golden_root.rglob("*"):
         if not golden.is_file() or golden.suffix not in {".yaml", ".md", ".qmd"}:
@@ -453,15 +473,31 @@ def prune_stale_goldens(suites: dict[str, Path], checked_goldens: set[Path]) -> 
         suite_name = golden.parent.relative_to(golden_root).as_posix()
         if suite_name not in suites:
             stale = True
-        elif suite_name in checked_suites:
-            stale = golden not in checked_goldens
         else:
             if suite_name not in cases_by_suite:
-                cases, _, _ = load_suite(suites[suite_name])
-                cases_by_suite[suite_name] = tuple(
-                    f"{case_name}." for case_name in cases
+                cases, _, _, case_platforms = load_suite(suites[suite_name])
+                cases_by_suite[suite_name] = (
+                    tuple(cases),
+                    case_platforms,
                 )
-            stale = not golden.name.startswith(cases_by_suite[suite_name])
+            cases, case_platforms = cases_by_suite[suite_name]
+            case_name = next(
+                (
+                    case_name
+                    for case_name in cases
+                    if golden.name.startswith(f"{case_name}.")
+                ),
+                None,
+            )
+            applicable = case_name is not None and sys.platform in case_platforms.get(
+                case_name,
+                {sys.platform},
+            )
+            stale = case_name is None or (
+                suite_name in checked_suites
+                and applicable
+                and golden not in checked_goldens
+            )
 
         if stale:
             golden.unlink()
@@ -577,7 +613,7 @@ def main() -> None:
     suites = {suite_identifier(path): path for path in suite_paths}
     if options.list_tests:
         for suite_name, suite_path in suites.items():
-            cases, _, _ = load_suite(suite_path)
+            cases, _, _, _ = load_suite(suite_path)
             for case_name in cases:
                 print(f"{suite_name}::{case_name}")
         return

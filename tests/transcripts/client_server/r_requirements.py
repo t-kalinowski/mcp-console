@@ -20,7 +20,7 @@ from _support import (
     wait_for_idle_output,
 )
 
-PLATFORMS = {"darwin"}
+PLATFORMS = {"darwin", "linux"}
 REQUIRED_COMMANDS = {"ir"}
 
 

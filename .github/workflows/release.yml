@@ -1,6 +1,6 @@
 name: Release
 
-# Build native macOS wheels and publish them to PyPI.
+# Build native macOS and Linux wheels and publish them to PyPI.
 #
 # Releases are tag-driven. A manual workflow run builds artifacts for
 # inspection but does not publish.
@@ -38,10 +38,34 @@ jobs:
             target: aarch64-apple-darwin
           - os: macos-15-intel
             target: x86_64-apple-darwin
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
 
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Enable unprivileged user namespaces
+        if: runner.os == 'Linux'
+        run: |
+          sudo sysctl -w kernel.unprivileged_userns_clone=1
+          if sysctl -n kernel.apparmor_restrict_unprivileged_userns >/dev/null 2>&1; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -y
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
+            --no-install-recommends \
+            build-essential \
+            gfortran \
+            libcap-dev \
+            libcurl4-openssl-dev \
+            libssl-dev \
+            libxml2-dev \
+            pkg-config
 
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -65,6 +89,7 @@ jobs:
       # The default R environment may build data.table from source. Its NLS code
       # needs libintl.h in R's /opt/R/<arch> build prefix.
       - name: Install gettext for R source packages
+        if: runner.os == 'macOS'
         run: |
           sudo Rscript --vanilla -e \
             'source("https://mac.R-project.org/bin/install.R"); install.libs("gettext"); stopifnot(file.exists(file.path("/opt/R", Sys.info()[["machine"]], "include", "libintl.h")))'
@@ -92,7 +117,9 @@ jobs:
           maturin-version: v1.14.1
           rust-toolchain: ${{ steps.sandbox-pin.outputs.rust_toolchain }}
           target: ${{ matrix.target }}
-          manylinux: off
+          # Keep staged native artifacts and the wheel in the same host build.
+          # Maturin selects the PyPI-compatible tag from the linked libc.
+          container: off
           args: --release --locked --compatibility pypi --out dist
 
       - name: Smoke-test wheel

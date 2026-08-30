@@ -31,6 +31,7 @@ command:
     stopifnot(length(child_output) == 2L)
     writeLines(c(as.character(child$get_pid()), child_output))
     flush.console()
+    stopifnot(identical(readLines(file("stdin"), n = 1L), "release"))
     quit(save = "no", status = 23L, runLast = FALSE)
 exit_code: 23
 stdout: |

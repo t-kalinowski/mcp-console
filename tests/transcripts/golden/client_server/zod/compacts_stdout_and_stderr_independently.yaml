@@ -3,14 +3,26 @@
 ---
 send:
   r: emit independent stdout stderr redraws
+  timeout_ms: 0
 result:
   content:
     - type: text
-      text: |
+      text: |-
         stderr final
         stdout final
+
+        [running; poll with an empty send]
   isError: false
 transcript_normalization:
   target: result.content[0].text
   cross_source_position: omitted
-...
+  polls: collapsed
+---
+send:
+  stdin: <release independent streams>
+  timeout_ms: 3000
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false

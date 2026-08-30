@@ -1,4 +1,4 @@
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 mod platform {
     use std::collections::VecDeque;
     use std::error::Error;
@@ -184,9 +184,14 @@ mod platform {
     }
 
     pub(crate) fn run() -> Result<(), Box<dyn Error>> {
-        // SAFETY: pthread_main_np has no preconditions.
-        if unsafe { libc::pthread_main_np() } != 1 {
-            return Err(io::Error::other("R worker must run on the process main thread").into());
+        #[cfg(target_os = "macos")]
+        {
+            // SAFETY: pthread_main_np has no preconditions.
+            if unsafe { libc::pthread_main_np() } != 1 {
+                return Err(
+                    io::Error::other("R worker must run on the process main thread").into(),
+                );
+            }
         }
         crate::python::configure_worker_environment()?;
         let (reader, writer) = crate::sideband::connect_from_env()?;
@@ -1183,17 +1188,63 @@ mod platform {
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 pub(crate) use platform::{
     publish_plot, publish_python_activation, publish_r_activation, publish_r_activation_failure,
-    resolve_python, resolve_python_version, resolve_r, run,
+    resolve_python, resolve_python_version, resolve_r,
 };
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+pub(crate) fn run() -> Result<(), Box<dyn std::error::Error>> {
+    #[cfg(target_os = "linux")]
+    prepare_linux_loader_environment()?;
+    platform::run()
+}
+
+#[cfg(target_os = "linux")]
+fn prepare_linux_loader_environment() -> Result<(), Box<dyn std::error::Error>> {
+    use std::os::unix::process::CommandExt as _;
+
+    const REEXECUTED: &str = "MCP_CONSOLE_WORKER_REEXECUTED";
+
+    let r_home = harp::command::r_home_setup()?;
+    let r_library = r_home.join("lib");
+    if std::env::var_os(REEXECUTED).is_some() {
+        let loader_path = std::env::var_os("LD_LIBRARY_PATH").unwrap_or_default();
+        if !std::env::split_paths(&loader_path).any(|path| path == r_library) {
+            return Err(std::io::Error::other(format!(
+                "R worker loader path does not include `{}`",
+                r_library.display()
+            ))
+            .into());
+        }
+        // SAFETY: worker bootstrap is single-threaded until platform::run starts.
+        unsafe {
+            std::env::remove_var(REEXECUTED);
+        }
+        return Ok(());
+    }
+
+    let executable = std::env::current_exe()
+        .map_err(|error| format!("failed to locate the R worker executable: {error}"))?;
+    let error = std::process::Command::new(r_home.join("bin/R"))
+        .arg("CMD")
+        .arg(executable)
+        .arg("worker")
+        .env(REEXECUTED, "1")
+        .exec();
+    Err(std::io::Error::new(
+        error.kind(),
+        format!("failed to re-execute the Linux worker through R: {error}"),
+    )
+    .into())
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
 pub(crate) fn run() -> Result<(), Box<dyn std::error::Error>> {
     Err(std::io::Error::new(
         std::io::ErrorKind::Unsupported,
-        "embedded R workers are supported only on macOS",
+        "embedded R workers are supported only on macOS and Linux",
     )
     .into())
 }

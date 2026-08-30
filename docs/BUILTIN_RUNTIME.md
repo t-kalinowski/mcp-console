@@ -302,6 +302,7 @@ This transition does not restart the worker or Python interpreter.
 Python and R globals, Python objects, the DuckDB catalog, worker PID, and stdin state remain available.
 New subprocesses use the activated environment and can import its retained packages.
 On macOS, the built-in Python runtime makes psutil enumerate the relay's dedicated process group instead of requesting the host-wide process table.
+On Linux, the sandbox's PID namespace gives psutil a sandbox-scoped process table directly.
 The server retains a successfully activated environment for later cells and restart, even if the inferred distribution does not provide the requested module or later code in the cell fails.
 An ordinary resolution failure before activation restores the earlier reticulate manifest and leaves the worker usable.
 Errors include the inferred distribution, the host resolver diagnostic when available, and an explicit `requirements.python` recovery example.
@@ -396,7 +397,10 @@ A nonempty inherited `MPLBACKEND` takes precedence and may select an interactive
 Calling `savefig()` does not suppress return of an open figure; calling `close()` before cell end does.
 Figures not registered with pyplot are not captured.
 
-The built-in worker preserves an existing host `matplotlibrc` selected through inherited `MATPLOTLIBRC` or `MPLCONFIGDIR` (falling back to `$HOME/.matplotlib`) while redirecting Matplotlib configuration and cache writes to worker-private storage.
+The built-in worker preserves an existing host `matplotlibrc` selected through inherited `MATPLOTLIBRC` or `MPLCONFIGDIR`.
+Without either setting, configuration falls back to `$HOME/.matplotlib` on macOS and `$XDG_CONFIG_HOME/matplotlib`, or `$HOME/.config/matplotlib`, on Linux.
+Font indexes come from `MPLCONFIGDIR` when set; otherwise they use the same macOS directory or `$XDG_CACHE_HOME/matplotlib`, falling back to `$HOME/.cache/matplotlib`, on Linux.
+Matplotlib configuration and cache writes remain in worker-private storage.
 It can reuse matching host font indexes read-only; sandboxed worker code does not modify the host configuration or cache.
 
 R plots created through Python's `r` bridge follow the R graphics rules.
@@ -475,8 +479,8 @@ The [implemented architecture](ARCHITECTURE.md) describes the session record and
 - SQL cannot query Python objects until they are bound as R data.
 - SQL previews do not include affected-row counts or total result counts.
 - Only default-device R graphics and open pyplot figures are captured automatically.
-- The private sandbox runner supervises the relay and worker lifetime, including observed descendants that enter another process group or session.
-- Linux and Windows are not supported.
+- The private sandbox runner supervises the relay and worker lifetime, including descendants that enter another process group or session.
+- Windows is not supported.
 
 The [architecture](ARCHITECTURE.md) explains lifecycle and process ownership.
 The [worker protocol](WORKER_PROTOCOL.md) defines exact message and closure rules.

@@ -1,7 +1,7 @@
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 mod reticulate;
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 #[derive(serde::Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum PreparationOutcome {
@@ -16,16 +16,16 @@ pub(crate) enum PreparationOutcome {
 ///
 /// Rust owns the selected interpreter library and initialization, while the
 /// current backend delegates conversion and evaluation to reticulate.
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 pub(crate) struct Runtime(reticulate::Runtime);
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 pub(crate) fn configure_worker_environment() -> std::io::Result<()> {
     platform::configure_worker_environment()?;
     reticulate::configure_worker_environment()
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 impl Runtime {
     pub(crate) fn initialize() -> Result<Self, String> {
         reticulate::Runtime::initialize().map(Self)
@@ -40,7 +40,7 @@ impl Runtime {
     }
 }
 
-#[cfg(all(test, target_os = "macos"))]
+#[cfg(all(test, any(target_os = "macos", target_os = "linux")))]
 mod tests {
     use super::PreparationOutcome;
 
@@ -56,10 +56,10 @@ mod tests {
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 mod library;
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 mod platform {
     use std::ffi::{CStr, CString};
     use std::fs;
@@ -70,13 +70,15 @@ mod platform {
     use std::sync::OnceLock;
 
     static MATPLOTLIB_DIRECTORY: OnceLock<PathBuf> = OnceLock::new();
-    static INHERITED_MATPLOTLIB_DIRECTORY: OnceLock<PathBuf> = OnceLock::new();
+    static INHERITED_MATPLOTLIB_CACHE_DIRECTORY: OnceLock<PathBuf> = OnceLock::new();
 
     pub(crate) fn configure_worker_environment() -> io::Result<()> {
-        let matplotlib_cache_directory = inherited_matplotlib_directory();
+        let matplotlib_config_directory = inherited_matplotlib_config_directory();
+        let matplotlib_cache_directory =
+            inherited_matplotlib_cache_directory(matplotlib_config_directory.as_deref());
         // Preserve the selected host configuration before redirecting all
         // Matplotlib writes to the worker's private directory.
-        if let Some(config) = inherited_matplotlibrc(matplotlib_cache_directory.as_deref()) {
+        if let Some(config) = inherited_matplotlibrc(matplotlib_config_directory.as_deref()) {
             let config = CString::new(config.as_os_str().as_bytes())
                 .expect("Matplotlib configuration path should not contain NUL");
             set_environment(c"MATPLOTLIBRC", &config, true)?;
@@ -87,7 +89,7 @@ mod platform {
             .set(matplotlib_directory.clone())
             .map_err(|_| io::Error::other("Matplotlib directory is already configured"))?;
         if let Some(cache) = matplotlib_cache_directory {
-            let _ = INHERITED_MATPLOTLIB_DIRECTORY.set(cache);
+            let _ = INHERITED_MATPLOTLIB_CACHE_DIRECTORY.set(cache);
         }
         link_matplotlib_caches();
 
@@ -112,7 +114,7 @@ mod platform {
 
     pub(crate) fn link_matplotlib_caches() {
         let (Some(cache_directory), Some(directory)) = (
-            INHERITED_MATPLOTLIB_DIRECTORY.get(),
+            INHERITED_MATPLOTLIB_CACHE_DIRECTORY.get(),
             MATPLOTLIB_DIRECTORY.get(),
         ) else {
             return;
@@ -154,14 +156,51 @@ mod platform {
         regular_file(&config_directory?.join("matplotlibrc"))
     }
 
-    fn inherited_matplotlib_directory() -> Option<PathBuf> {
-        let directory = match std::env::var_os("MPLCONFIGDIR") {
-            Some(directory) if !directory.is_empty() => PathBuf::from(directory),
-            Some(_) | None => {
-                PathBuf::from(std::env::var_os("HOME").filter(|home| !home.is_empty())?)
-                    .join(".matplotlib")
-            }
-        };
+    fn inherited_matplotlib_config_directory() -> Option<PathBuf> {
+        if let Some(directory) = std::env::var_os("MPLCONFIGDIR").filter(|path| !path.is_empty()) {
+            return absolute_directory(PathBuf::from(directory));
+        }
+        #[cfg(target_os = "macos")]
+        let directory = PathBuf::from(std::env::var_os("HOME").filter(|home| !home.is_empty())?)
+            .join(".matplotlib");
+        #[cfg(target_os = "linux")]
+        let directory = std::env::var_os("XDG_CONFIG_HOME")
+            .filter(|path| !path.is_empty())
+            .map(PathBuf::from)
+            .or_else(|| {
+                std::env::var_os("HOME")
+                    .filter(|home| !home.is_empty())
+                    .map(PathBuf::from)
+                    .map(|home| home.join(".config"))
+            })?
+            .join("matplotlib");
+        absolute_directory(directory)
+    }
+
+    fn inherited_matplotlib_cache_directory(config_directory: Option<&Path>) -> Option<PathBuf> {
+        if std::env::var_os("MPLCONFIGDIR").is_some_and(|path| !path.is_empty()) {
+            return config_directory.map(Path::to_path_buf);
+        }
+        #[cfg(target_os = "macos")]
+        {
+            config_directory.map(Path::to_path_buf)
+        }
+        #[cfg(target_os = "linux")]
+        {
+            let root = std::env::var_os("XDG_CACHE_HOME")
+                .filter(|path| !path.is_empty())
+                .map(PathBuf::from)
+                .or_else(|| {
+                    std::env::var_os("HOME")
+                        .filter(|home| !home.is_empty())
+                        .map(PathBuf::from)
+                        .map(|home| home.join(".cache"))
+                })?;
+            absolute_directory(root.join("matplotlib"))
+        }
+    }
+
+    fn absolute_directory(directory: PathBuf) -> Option<PathBuf> {
         if directory.is_absolute() {
             Some(directory)
         } else {
@@ -182,5 +221,5 @@ mod platform {
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 pub(crate) use platform::link_matplotlib_caches;

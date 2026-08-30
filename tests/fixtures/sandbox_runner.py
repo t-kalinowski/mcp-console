@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+import errno
 import json
 import os
 import select
@@ -12,6 +13,29 @@ from pathlib import Path
 
 MAX_FRAME_SIZE = 1_048_576
 PROTOCOL_VERSION = 1
+
+if sys.platform == "darwin":
+    OPERATING_SYSTEM = "macos"
+    BACKEND = "macos_seatbelt"
+    WRONG_BACKEND = "linux_bubblewrap"
+    SIGNAL_LIFECYCLE = True
+    REQUIRED_COMPANIONS: list[dict[str, object]] = []
+    ROOT_PROCESS_ID: int | None = 1234
+elif sys.platform.startswith("linux"):
+    OPERATING_SYSTEM = "linux"
+    BACKEND = "linux_bubblewrap"
+    WRONG_BACKEND = "macos_seatbelt"
+    SIGNAL_LIFECYCLE = False
+    REQUIRED_COMPANIONS = [
+        {
+            "name": "bubblewrap",
+            "relative_path": "codex-resources/bwrap",
+            "required": True,
+        }
+    ]
+    ROOT_PROCESS_ID = None
+else:
+    raise RuntimeError(f"unsupported fixture platform: {sys.platform}")
 
 
 def read_exact(control: object, length: int) -> bytes:
@@ -49,25 +73,28 @@ def write_frame(control: object, payload: dict[str, object]) -> None:
 def capabilities(source_revision: str, behavior: str) -> dict[str, object]:
     protocol_version = 2 if behavior == "wrong_protocol" else PROTOCOL_VERSION
     revision = "0" * 40 if behavior == "wrong_revision" else source_revision
-    backend = "unsupported" if behavior == "unsupported_backend" else "macos_seatbelt"
+    backend = "unsupported" if behavior == "unsupported_backend" else BACKEND
     setup_state = "unsupported" if behavior == "unsupported_backend" else "not_required"
-    companions: list[dict[str, object]] = []
+    companions = [companion.copy() for companion in REQUIRED_COMPANIONS]
     if behavior == "unexpected_companion":
         companions.append(
             {
-                "name": "bubblewrap",
-                "relative_path": "codex-resources/bwrap",
+                "name": "unexpected",
+                "relative_path": "codex-resources/unexpected",
                 "required": True,
             }
         )
     supported = behavior != "unsupported_backend"
+    signal_lifecycle = supported and SIGNAL_LIFECYCLE
+    if behavior == "wrong_lifecycle":
+        signal_lifecycle = not signal_lifecycle
     return {
         "protocol_version": protocol_version,
         "maximum_frame_size": 512 if behavior == "wrong_frame_size" else MAX_FRAME_SIZE,
         "runner_version": "0.150.1",
         "codex_source_revision": revision,
         "codex_release_tag": "rust-v0.150.1",
-        "operating_system": "macos",
+        "operating_system": OPERATING_SYSTEM,
         "architecture": "fixture",
         "backend": backend,
         "filesystem": {
@@ -103,8 +130,8 @@ def capabilities(source_revision: str, behavior: str) -> dict[str, object]:
             "host_device_isolation": False,
         },
         "lifecycle": {
-            "interrupt": supported,
-            "graceful_termination": supported,
+            "interrupt": signal_lifecycle,
+            "graceful_termination": supported and SIGNAL_LIFECYCLE,
             "forced_termination": supported,
             "root_exit_observation": supported,
             "process_tree_supervision": supported,
@@ -164,6 +191,19 @@ def main() -> int:
         save()
 
     save()
+    if behavior == "late_inherited_descriptor":
+        descriptor = int(os.environ["MCP_CONSOLE_TEST_AT_FORK_FD"])
+        try:
+            os.write(descriptor, b"escaped")
+        except OSError as error:
+            if error.errno != errno.EBADF:
+                raise
+        else:
+            events = record["events"]
+            assert isinstance(events, list)
+            events.append("late_descriptor_inherited")
+            save()
+            return 90
     if behavior == "exit_before_discovery":
         return 41
 
@@ -193,17 +233,18 @@ def main() -> int:
                 },
             )
         elif operation == "launch":
+            root_process_id = (
+                None if behavior == "missing_root_process_id" else ROOT_PROCESS_ID
+            )
             write_frame(
                 control,
                 {
                     "type": "launch_accepted",
                     "id": request_id,
-                    "backend": (
-                        "linux_bubblewrap"
-                        if behavior == "wrong_launch_backend"
-                        else "macos_seatbelt"
-                    ),
-                    "root_process_id": 1234,
+                    "backend": WRONG_BACKEND
+                    if behavior == "wrong_launch_backend"
+                    else BACKEND,
+                    "root_process_id": root_process_id,
                 },
             )
             if behavior == "exit_after_launch":

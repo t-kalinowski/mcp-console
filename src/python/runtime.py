@@ -579,6 +579,38 @@ def _mcp_console_activate_process_environment(
     return None
 
 
+_mcp_console_fork_remaps = (_sys.stdout, _sys.stderr)
+if any(getattr(stream, "target", None) is None for stream in _mcp_console_fork_remaps):
+    raise RuntimeError("reticulate did not initialize its output remaps")
+_mcp_console_fork_streams = tuple(
+    (
+        stream,
+        stream.handler,
+        stream.flush,
+        stream.tty,
+        stream.target.write,
+        stream.target.flush,
+        stream.target.isatty(),
+    )
+    for stream in _mcp_console_fork_remaps
+)
+
+
+def _mcp_console_restore_fork_streams(
+    _streams=_mcp_console_fork_streams,
+):
+    # The worker sideband closes in a fork child. Reticulate's remapped
+    # streams must write to their descriptor-backed targets there. Mutating
+    # the remaps also updates cached references without replacing user streams.
+    for stream, _handler, _flush, _tty, write, flush, tty in _streams:
+        stream.handler = write
+        stream.flush = flush
+        stream.tty = tty
+
+
+_os.register_at_fork(after_in_child=_mcp_console_restore_fork_streams)
+
+
 _mcp_console = _types.ModuleType("_mcp_console")
 
 

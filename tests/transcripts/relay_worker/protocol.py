@@ -16,7 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from _support import McpClient, ToolResult, Transcript, code, run_this_suite
 
 
-PLATFORMS = {"darwin"}
+PLATFORMS = {"darwin", "linux"}
 CAPTURE_NAME = "mcp-console-worker-wire.jsonl"
 CAPTURE_STDIN_CLOSE_ENV = "MCP_CONSOLE_MITM_CAPTURE_STDIN_CLOSE"
 CAPTURE_WORKER_SIDEBAND_CLOSE_ENV = "MCP_CONSOLE_MITM_CAPTURE_WORKER_SIDEBAND_CLOSE"
@@ -70,12 +70,12 @@ class RelayWorkerClient:
         chunks = [] if output == "[done]" else [output]
         deadline = time.monotonic() + 10
         while sum(map(len, chunks)) < expected_size:
-            assert time.monotonic() < deadline, sum(map(len, chunks))
+            assert time.monotonic() < deadline, repr("".join(chunks))
             polled = _tool_text(self.send())
             assert polled.endswith("\n[idle]"), repr(polled)
             chunks.append(polled.removesuffix("\n[idle]"))
         output = "".join(chunks)
-        assert len(output) == expected_size, len(output)
+        assert len(output) == expected_size, repr(output)
         return output
 
     def _finish(self) -> Transcript:
@@ -174,11 +174,19 @@ def test_tolerates_connection_reset_with_unread_shutdown(
     )
     with tempfile.TemporaryDirectory() as temporary_directory:
         temporary = Path(temporary_directory)
-        interposer = temporary / "reset-sideband-eof.dylib"
+        if sys.platform == "darwin":
+            interposer = temporary / "reset-sideband-eof.dylib"
+            linker_arguments = ["-dynamiclib"]
+            linker_libraries = []
+        else:
+            assert sys.platform == "linux", sys.platform
+            interposer = temporary / "reset-sideband-eof.so"
+            linker_arguments = ["-shared", "-fPIC"]
+            linker_libraries = ["-ldl"]
         subprocess.run(
             [
                 "cc",
-                "-dynamiclib",
+                *linker_arguments,
                 "-std=c11",
                 "-Wall",
                 "-Wextra",
@@ -186,6 +194,7 @@ def test_tolerates_connection_reset_with_unread_shutdown(
                 "-o",
                 interposer,
                 interposer_source,
+                *linker_libraries,
             ],
             check=True,
             capture_output=True,
@@ -333,7 +342,8 @@ def test_routes_python_output(binary: Path) -> Transcript:
           invisible(reticulate::py_run_string("initialized_from_r = True"))
         )
         """)
-    assert _tool_text(client.send(r=r)) == "[done]"
+    output = _tool_text(client.send(r=r))
+    assert output == "[done]", repr(output)
 
     # fmt: python
     python = code(r"""
@@ -418,24 +428,41 @@ def test_preserves_python_output_from_fork_children(binary: Path) -> Transcript:
     # fmt: python
     python = code(r"""
         import os
+        import logging
         import sys
+        import tempfile
+        import warnings
 
         assert fork_ready
-        child = os.fork()
+        logger = logging.Logger("fork child")
+        logger.addHandler(logging.StreamHandler())
+        redirected = tempfile.TemporaryFile(mode="w+", encoding="utf-8")
+        parent_stdout = sys.stdout
+        sys.stdout = redirected
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", DeprecationWarning)
+            child = os.fork()
         if child == 0:
-            print("fork child stdout", flush=True)
+            print("redirected child stdout", flush=True)
             sys.stderr.write("fork child stderr\n")
             sys.stderr.flush()
+            logger.warning("cached child stderr")
             os._exit(0)
 
         _, status = os.waitpid(child, 0)
         assert os.waitstatus_to_exitcode(status) == 0
+        sys.stdout = parent_stdout
+        redirected.seek(0)
+        redirected_capture = redirected.read()
+        redirected.close()
+        print(f"redirected capture: {redirected_capture!r}")
         parent_stdout = sys.stdout.write("parent stdout\n")
         parent_stderr = sys.stderr.write("parent stderr\n")
         """)
     expected = [
-        "fork child stdout",
+        "redirected capture: 'redirected child stdout\\n'",
         "fork child stderr",
+        "cached child stderr",
         "parent stdout",
         "parent stderr",
     ]

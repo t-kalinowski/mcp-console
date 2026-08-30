@@ -1,8 +1,10 @@
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 use std::net::TcpListener;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+use std::os::unix::ffi::OsStringExt;
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -51,7 +53,7 @@ impl Drop for KillOnDrop {
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 #[test]
 fn stdio_console_accepts_long_multibyte_source_lines() {
     let mut client = McpClient::start(&["serve"]);
@@ -68,7 +70,7 @@ nchar(long_line_value)
     );
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 #[test]
 fn stdio_console_prefers_path_ir_over_an_unrelated_sibling() {
     let original_path = std::env::var_os("PATH").unwrap_or_default();
@@ -122,7 +124,7 @@ exec "$MCP_CONSOLE_REAL_IR" "$@"
     assert!(!uv_used.exists(), "`uv` should not be used");
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 #[test]
 fn stdio_console_does_not_fallback_when_path_ir_cannot_start() {
     let r_home = Command::new("R")
@@ -186,7 +188,7 @@ fn stdio_console_does_not_fallback_when_path_ir_cannot_start() {
     );
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 #[test]
 fn stdio_console_does_not_fallback_when_path_uv_cannot_start() {
     let r_home = Command::new("R")
@@ -241,7 +243,7 @@ fn stdio_console_does_not_fallback_when_path_uv_cannot_start() {
     );
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 #[test]
 fn stdio_console_uses_uv_when_ir_is_not_on_path() {
     let original_path = std::env::var_os("PATH").unwrap_or_default();
@@ -296,7 +298,7 @@ exec "$MCP_CONSOLE_REAL_IR" "$@"
     );
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 #[test]
 fn stdio_console_starts_without_dynamic_environment_resolution() {
     let r_home = Command::new("R")
@@ -400,7 +402,7 @@ fn stdio_console_starts_without_dynamic_environment_resolution() {
     assert_eq!(first_event["dynamic_resolution"], false, "{first_event}");
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 #[test]
 fn stdio_console_uses_host_uv_for_managed_python() {
     let original_path = std::env::var_os("PATH").unwrap_or_default();
@@ -443,7 +445,7 @@ exec "$MCP_CONSOLE_REAL_UV" "$@"
     assert!(values.lines().all(|value| value == expected), "{values}");
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 #[test]
 fn stdio_console_uses_managed_r_to_resolve_uv_when_only_ir_is_on_path() {
     let original_path = std::env::var_os("PATH").unwrap_or_default();
@@ -499,7 +501,7 @@ exec "$MCP_CONSOLE_REAL_IR" "$@"
     );
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 #[test]
 fn stdio_console_uses_ambient_reticulate_to_resolve_uv() {
     let original_path = std::env::var_os("PATH").unwrap_or_default();
@@ -605,7 +607,7 @@ exec "$MCP_CONSOLE_REAL_UV" "$@"
     );
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 #[test]
 fn stdio_console_discovers_r_inside_the_worker_sandbox() {
     let test_directory = TestDirectory::new("native-worker-r-discovery");
@@ -659,7 +661,7 @@ printf '%s\n' "$MCP_CONSOLE_REAL_R_HOME"
     );
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 #[test]
 fn stdio_console_uses_worker_r_installation_for_r_preparation() {
     match Command::new("ir")
@@ -768,7 +770,7 @@ praise::praise("ready")
     );
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 #[test]
 fn stdio_console_shutdown_is_bounded_during_r_preparation() {
     let test_directory = TestDirectory::new("r-preparation-shutdown");
@@ -863,7 +865,7 @@ exec /bin/sleep 4
     );
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 #[test]
 fn stdio_console_shutdown_is_bounded_during_r_discovery() {
     let test_directory = TestDirectory::new("native-worker-r-discovery-shutdown");
@@ -916,7 +918,7 @@ exec /bin/sleep 3
     );
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 #[test]
 fn stdio_console_stops_resolver_descendants_when_leader_exits() {
     let test_directory = TestDirectory::new("python-resolver-descendant-cleanup");
@@ -1037,7 +1039,7 @@ exit 0
     assert_eq!(response_text(&response), "[prepared]");
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 #[test]
 fn stdio_console_shutdown_is_bounded_during_python_preparation() {
     let test_directory = TestDirectory::new("python-preparation-shutdown");
@@ -1159,7 +1161,7 @@ exec /bin/sleep 3
     );
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 #[test]
 fn stdio_console_sandboxes_native_r_filesystem_processes_and_network() {
     let test_directory = TestDirectory::new("native-worker-boundary");
@@ -1238,7 +1240,7 @@ cat("\n")
     );
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 #[test]
 fn stdio_console_shutdown_is_bounded_while_r_waits_for_input() {
     let mut client = McpClient::start(&["serve"]);
@@ -1261,7 +1263,7 @@ Sys.sleep(60)
     );
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 #[test]
 fn stdio_console_shutdown_is_bounded_with_background_stderr_descendants() {
     let zod = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/zod");
@@ -1288,11 +1290,13 @@ fn stdio_console_shutdown_is_bounded_with_background_stderr_descendants() {
         .map(|entry| entry.path())
         .find(|path| path.join("zod-background-stderr-pid").is_file())
         .expect("completed evaluation should have recorded its background descendant");
-    let descendant = fs::read_to_string(worker_temporary.join("zod-background-stderr-pid"))
-        .expect("background stderr PID should be readable")
-        .parse()
-        .expect("background stderr PID should be numeric");
-    let _descendant = KillOnDrop(descendant);
+    let _descendant_process_id: libc::pid_t =
+        fs::read_to_string(worker_temporary.join("zod-background-stderr-pid"))
+            .expect("background stderr PID should be readable")
+            .parse()
+            .expect("background stderr PID should be numeric");
+    #[cfg(target_os = "macos")]
+    let _descendant = KillOnDrop(_descendant_process_id);
 
     let elapsed = client.close_within(Duration::from_secs(2));
     assert!(
@@ -1301,18 +1305,18 @@ fn stdio_console_shutdown_is_bounded_with_background_stderr_descendants() {
     );
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
 #[test]
 fn stdio_console_does_not_start_an_unsandboxed_r_session() {
     let mut client = McpClient::start(&["serve"]);
 
     assert_eq!(
         client.call_console_error(2, json!({"r": "1 + 1"})),
-        "workers are supported only on macOS"
+        "workers are supported only on macOS and Linux"
     );
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
 #[test]
 fn stdio_console_exposes_one_tool_on_unsupported_platforms() {
     let working_directory = TestDirectory::new("unsupported-public-interface");
@@ -1366,7 +1370,7 @@ fn stdio_console_exposes_one_tool_on_unsupported_platforms() {
 
     assert_eq!(
         client.call_console_error(4, json!({"control": "restart"})),
-        "[starting new worker]\n[workers are supported only on macOS]"
+        "[starting new worker]\n[workers are supported only on macOS and Linux]"
     );
 }
 
@@ -1468,12 +1472,12 @@ impl McpClient {
         )
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     fn send_console(&mut self, id: u64, arguments: Value) {
         self.send_tool(id, "send", arguments);
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     fn send_tool(&mut self, id: u64, name: &str, arguments: Value) {
         write_message(
             self.input.as_mut().expect("stdin should be open"),
@@ -1489,14 +1493,14 @@ impl McpClient {
         );
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     fn call_console(&mut self, id: u64, arguments: Value) -> String {
         let response = self.call_console_response(id, arguments);
         assert_eq!(response["result"]["isError"], false, "{response}");
         response_text(&response)
     }
 
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     fn call_console_error(&mut self, id: u64, arguments: Value) -> String {
         let response = self.call_console_response(id, arguments);
         assert_eq!(response["result"]["isError"], true, "{response}");
@@ -1587,7 +1591,7 @@ fn read_message(reader: &mut impl BufRead) -> Value {
     serde_json::from_str(&line).expect("MCP message should be JSON")
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 #[test]
 fn sandbox_cannot_open_a_preexisting_pseudo_terminal() {
     let host_script = r#"
@@ -1615,11 +1619,12 @@ import errno
 import os
 import sys
 
+expected_errno = errno.ENOENT if sys.platform == "linux" else errno.EPERM
 for flags in (os.O_RDONLY, os.O_WRONLY):
     try:
         descriptor = os.open(sys.argv[1], flags | os.O_NOCTTY)
     except OSError as error:
-        assert error.errno == errno.EPERM
+        assert error.errno == expected_errno
     else:
         os.close(descriptor)
         raise SystemExit("pre-existing pseudo-terminal was accessible")
@@ -1641,7 +1646,30 @@ print("blocked")
     assert_eq!(output.stdout, b"blocked\n");
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[test]
+fn sandbox_preserves_non_utf8_target_arguments() {
+    let script = r#"
+import os
+import sys
+
+assert os.fsencode(sys.argv[1]) == b"argument-\xff"
+"#;
+    let output = Command::new(env!("CARGO_BIN_EXE_mcp-console"))
+        .args(["sandbox", "--", "python", "-c", script])
+        .arg(std::ffi::OsString::from_vec(b"argument-\xff".to_vec()))
+        .output()
+        .expect("mcp-console sandbox should run");
+
+    assert!(
+        output.status.success(),
+        "sandboxed Python failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stdout.is_empty());
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 #[test]
 fn sandbox_is_read_only_except_for_a_dedicated_temp_directory() {
     // This path must reach the child unchanged without shell parsing.
@@ -1668,6 +1696,7 @@ import pathlib
 import sys
 import tempfile
 
+expected_errno = errno.EROFS if sys.platform == "linux" else errno.EPERM
 temp_dir = pathlib.Path(tempfile.gettempdir())
 (temp_dir / "allowed.txt").write_text("temporary")
 host_files = list(map(pathlib.Path, sys.argv[1:3]))
@@ -1678,7 +1707,7 @@ for path in [*host_files, pathlib.Path(sys.argv[3])]:
     try:
         path.write_text("escaped")
     except OSError as error:
-        assert error.errno == errno.EPERM
+        assert error.errno == expected_errno
     else:
         allowed.append(str(path))
 
@@ -1734,7 +1763,7 @@ print(temp_dir)
     assert!(!shared_tmp_was_written);
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 #[test]
 fn sandbox_cannot_hard_link_host_files_into_its_writable_temp_directory() {
     let temp_root = TestDirectory::new("hard-link-boundary");
@@ -1746,12 +1775,13 @@ import os
 import pathlib
 import sys
 
+expected_errno = errno.EXDEV if sys.platform == "linux" else errno.EPERM
 destination = pathlib.Path(os.environ["TMPDIR"]) / "host-link"
 assert os.stat(sys.argv[1]).st_dev == os.stat(destination.parent).st_dev
 try:
     os.link(sys.argv[1], destination)
 except OSError as error:
-    assert error.errno == errno.EPERM
+    assert error.errno == expected_errno
 else:
     destination.write_text("escaped")
     raise SystemExit("host file was linked into the writable temp directory")
@@ -1778,7 +1808,7 @@ print("blocked")
     );
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 #[test]
 fn sandbox_denies_network_access() {
     let listener = TcpListener::bind(("127.0.0.1", 0)).expect("test listener should bind");
@@ -1810,7 +1840,7 @@ else:
     assert_eq!(output.stdout, b"blocked\n");
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 #[test]
 fn sandbox_preserves_child_exit_status_after_temp_permissions_change() {
     let temp_root = TestDirectory::new("locked-temp");
@@ -1847,7 +1877,7 @@ raise SystemExit(23)
     assert_eq!(status.code(), Some(23));
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
 #[test]
 fn sandbox_is_unsupported_on_this_operating_system() {
     let script = r#"

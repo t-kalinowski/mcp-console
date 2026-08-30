@@ -106,9 +106,17 @@ class ScriptedRelay:
     def __init__(self) -> None:
         process_id = os.getpid()
         process_group = os.getpgrp()
-        assert process_id == process_group, (
-            f"scripted relay {process_id} is not process-group leader {process_group}"
-        )
+        if sys.platform == "linux":
+            parent_id = os.getppid()
+            assert process_group == parent_id != process_id, (
+                f"scripted relay {process_id} did not inherit its Linux helper "
+                f"process group {parent_id}: {process_group}"
+            )
+        else:
+            assert sys.platform == "darwin", sys.platform
+            assert process_id == process_group, (
+                f"scripted relay {process_id} is not process-group leader {process_group}"
+            )
 
         self.root = Path(os.environ["TMPDIR"])
         self.capture = (self.root / CAPTURE_NAME).open("w", encoding="utf-8")
