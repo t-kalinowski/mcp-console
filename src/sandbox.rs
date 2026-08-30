@@ -237,11 +237,8 @@ impl SandboxedCommand {
         let observed_lifetime = match supervision::ObservedLifetime::start(child.id()) {
             Ok(lifetime) => lifetime,
             Err(error) => {
-                let error = stop_after_observation_failure(
-                    &mut child,
-                    self.separate_process_group,
-                    error,
-                );
+                let error =
+                    stop_after_observation_failure(&mut child, self.separate_process_group, error);
                 // Observation failed before ownership was established. Preserve
                 // the directory because a process that escaped observation may
                 // still be using it even after process-group fallback cleanup.
@@ -276,9 +273,7 @@ fn stop_after_observation_failure(
     separate_process_group: bool,
     mut error: String,
 ) -> String {
-    if separate_process_group
-        && let Err(group_error) = platform::kill_process_group(child.id())
-    {
+    if separate_process_group && let Err(group_error) = platform::kill_process_group(child.id()) {
         error = append_retirement_error(
             Some(error),
             format!(
