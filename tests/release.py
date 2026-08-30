@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
@@ -14,6 +15,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = ROOT / "scripts" / "release.py"
 STAGE_SCRIPT = ROOT / "scripts" / "stage-sandbox-runner"
+BUBBLEWRAP_NOTICE = ROOT / "licenses" / "Bubblewrap-NOTICE"
+LIBCAP_ARCHIVES = ROOT / "licenses" / "libcap-archives.json"
+LIBCAP_LICENSE = ROOT / "licenses" / "libcap-LICENSE"
+LIBCAP_JAMMY_COPYRIGHT = ROOT / "licenses" / "libcap-jammy-copyright"
+LIBCAP_NOBLE_COPYRIGHT = ROOT / "licenses" / "libcap-noble-copyright"
 
 
 def write_executable(path: Path, source: str) -> None:
@@ -158,7 +164,11 @@ class ReleaseScriptTests(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("requires a push event", result.stderr)
 
-    def smoke_environment(self, directory: Path) -> tuple[dict[str, str], Path, Path]:
+    def smoke_environment(
+        self,
+        directory: Path,
+        target: str = "aarch64-apple-darwin",
+    ) -> tuple[dict[str, str], Path, Path]:
         (directory / "Cargo.toml").write_text(
             '[package]\nversion = "0.0.2"\n', encoding="utf-8"
         )
@@ -169,6 +179,10 @@ class ReleaseScriptTests(unittest.TestCase):
         libexec = tool_directory.parent / "libexec"
         libexec.mkdir()
         write_executable(libexec / "mcp-console-sandbox", "#!/bin/sh\nexit 0\n")
+        if target == "x86_64-unknown-linux-gnu":
+            resources = libexec / "codex-resources"
+            resources.mkdir()
+            write_executable(resources / "bwrap", "#!/bin/sh\nexit 0\n")
         tool_bin = directory / "bin"
         tool_bin.mkdir()
 
@@ -267,10 +281,14 @@ class ReleaseScriptTests(unittest.TestCase):
             """,
         )
 
-        wheel = directory / "mcp_console-0.0.2-py3-none-macosx_11_0_arm64.whl"
+        wheel_tags = {
+            "aarch64-apple-darwin": "macosx_11_0_arm64",
+            "x86_64-unknown-linux-gnu": "manylinux_2_35_x86_64",
+        }
+        wheel = directory / f"mcp_console-0.0.2-py3-none-{wheel_tags[target]}.whl"
         data = "mcp_console-0.0.2.data/data"
         with zipfile.ZipFile(wheel, "w") as archive:
-            for name, source, mode in (
+            members = [
                 (
                     f"{data}/libexec/mcp-console-sandbox",
                     "#!/bin/sh\nexit 0\n",
@@ -286,7 +304,49 @@ class ReleaseScriptTests(unittest.TestCase):
                     "OpenAI Codex\n",
                     0o100644,
                 ),
-            ):
+            ]
+            if target == "x86_64-unknown-linux-gnu":
+                libcap_provenance = json.loads(
+                    LIBCAP_ARCHIVES.read_text(encoding="utf-8")
+                )["archives"][1]
+                libcap_copyright = (
+                    ROOT / "licenses" / libcap_provenance["copyright"]
+                ).read_text(encoding="utf-8")
+                members.extend(
+                    [
+                        (
+                            f"{data}/libexec/codex-resources/bwrap",
+                            "#!/bin/sh\nexit 0\n",
+                            0o100755,
+                        ),
+                        (
+                            f"{data}/share/licenses/mcp-console/Bubblewrap-COPYING",
+                            "LGPL-2.0-or-later\n",
+                            0o100644,
+                        ),
+                        (
+                            f"{data}/share/licenses/mcp-console/Bubblewrap-NOTICE",
+                            "Bubblewrap notice\n",
+                            0o100644,
+                        ),
+                        (
+                            f"{data}/share/licenses/mcp-console/libcap-LICENSE",
+                            LIBCAP_LICENSE.read_text(encoding="utf-8"),
+                            0o100644,
+                        ),
+                        (
+                            f"{data}/share/licenses/mcp-console/libcap-DISTRIBUTION-COPYRIGHT",
+                            libcap_copyright,
+                            0o100644,
+                        ),
+                        (
+                            f"{data}/share/licenses/mcp-console/libcap-PROVENANCE.json",
+                            json.dumps(libcap_provenance, indent=2) + "\n",
+                            0o100644,
+                        ),
+                    ]
+                )
+            for name, source, mode in members:
                 info = zipfile.ZipInfo(name)
                 info.create_system = 3
                 info.external_attr = mode << 16
@@ -418,13 +478,264 @@ class ReleaseScriptTests(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("MCP response timed out", result.stderr)
 
-    def test_verify_wheel_set_requires_both_macos_architectures(self) -> None:
+    def test_smoke_linux_wheel_requires_private_bwrap_companion(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            directory = Path(temporary_directory)
+            target = "x86_64-unknown-linux-gnu"
+            environment, wheel, cargo_bin = self.smoke_environment(directory, target)
+
+            result = self.run_script(
+                "smoke-wheel",
+                str(wheel),
+                str(cargo_bin),
+                "--target",
+                target,
+                "--startup-timeout-seconds",
+                "1",
+                "--response-timeout-seconds",
+                "1",
+                cwd=directory,
+                env=environment,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+
+            installed = (
+                directory
+                / "tool"
+                / "mcp-console"
+                / "libexec"
+                / "codex-resources"
+                / "bwrap"
+            )
+            installed.unlink()
+            result = self.run_script(
+                "smoke-wheel",
+                str(wheel),
+                str(cargo_bin),
+                "--target",
+                target,
+                "--startup-timeout-seconds",
+                "1",
+                "--response-timeout-seconds",
+                "1",
+                cwd=directory,
+                env=environment,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("installed private bwrap companion", result.stderr)
+
+    def test_smoke_linux_wheel_rejects_missing_bwrap_companion(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            directory = Path(temporary_directory)
+            target = "x86_64-unknown-linux-gnu"
+            environment, wheel, cargo_bin = self.smoke_environment(directory, target)
+            filtered = wheel.with_suffix(".filtered")
+            with zipfile.ZipFile(wheel) as source, zipfile.ZipFile(
+                filtered, "w"
+            ) as sink:
+                for member in source.infolist():
+                    if not member.filename.endswith("/codex-resources/bwrap"):
+                        sink.writestr(member, source.read(member))
+            filtered.replace(wheel)
+
+            result = self.run_script(
+                "smoke-wheel",
+                str(wheel),
+                str(cargo_bin),
+                "--target",
+                target,
+                cwd=directory,
+                env=environment,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("private bwrap companion", result.stderr)
+
+    def test_smoke_linux_wheel_rejects_missing_bubblewrap_license(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            directory = Path(temporary_directory)
+            target = "x86_64-unknown-linux-gnu"
+            environment, wheel, cargo_bin = self.smoke_environment(directory, target)
+            filtered = wheel.with_suffix(".filtered")
+            with zipfile.ZipFile(wheel) as source, zipfile.ZipFile(
+                filtered, "w"
+            ) as sink:
+                for member in source.infolist():
+                    if not member.filename.endswith("/Bubblewrap-COPYING"):
+                        sink.writestr(member, source.read(member))
+            filtered.replace(wheel)
+
+            result = self.run_script(
+                "smoke-wheel",
+                str(wheel),
+                str(cargo_bin),
+                "--target",
+                target,
+                cwd=directory,
+                env=environment,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("Bubblewrap license", result.stderr)
+
+    def test_smoke_linux_wheel_rejects_missing_bubblewrap_notice(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            directory = Path(temporary_directory)
+            target = "x86_64-unknown-linux-gnu"
+            environment, wheel, cargo_bin = self.smoke_environment(directory, target)
+            filtered = wheel.with_suffix(".filtered")
+            with zipfile.ZipFile(wheel) as source, zipfile.ZipFile(
+                filtered, "w"
+            ) as sink:
+                for member in source.infolist():
+                    if not member.filename.endswith("/Bubblewrap-NOTICE"):
+                        sink.writestr(member, source.read(member))
+            filtered.replace(wheel)
+
+            result = self.run_script(
+                "smoke-wheel",
+                str(wheel),
+                str(cargo_bin),
+                "--target",
+                target,
+                cwd=directory,
+                env=environment,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("Bubblewrap notice", result.stderr)
+
+    def test_smoke_linux_wheel_rejects_missing_libcap_license(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            directory = Path(temporary_directory)
+            target = "x86_64-unknown-linux-gnu"
+            environment, wheel, cargo_bin = self.smoke_environment(directory, target)
+            filtered = wheel.with_suffix(".filtered")
+            with zipfile.ZipFile(wheel) as source, zipfile.ZipFile(
+                filtered, "w"
+            ) as sink:
+                for member in source.infolist():
+                    if not member.filename.endswith("/libcap-LICENSE"):
+                        sink.writestr(member, source.read(member))
+            filtered.replace(wheel)
+
+            result = self.run_script(
+                "smoke-wheel",
+                str(wheel),
+                str(cargo_bin),
+                "--target",
+                target,
+                cwd=directory,
+                env=environment,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("libcap license", result.stderr)
+
+    def test_smoke_linux_wheel_rejects_missing_libcap_distribution_copyright(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            directory = Path(temporary_directory)
+            target = "x86_64-unknown-linux-gnu"
+            environment, wheel, cargo_bin = self.smoke_environment(directory, target)
+            filtered = wheel.with_suffix(".filtered")
+            with zipfile.ZipFile(wheel) as source, zipfile.ZipFile(
+                filtered, "w"
+            ) as sink:
+                for member in source.infolist():
+                    if not member.filename.endswith("/libcap-DISTRIBUTION-COPYRIGHT"):
+                        sink.writestr(member, source.read(member))
+            filtered.replace(wheel)
+
+            result = self.run_script(
+                "smoke-wheel",
+                str(wheel),
+                str(cargo_bin),
+                "--target",
+                target,
+                cwd=directory,
+                env=environment,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("libcap distribution copyright", result.stderr)
+
+    def test_smoke_linux_wheel_rejects_missing_libcap_provenance(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            directory = Path(temporary_directory)
+            target = "x86_64-unknown-linux-gnu"
+            environment, wheel, cargo_bin = self.smoke_environment(directory, target)
+            filtered = wheel.with_suffix(".filtered")
+            with zipfile.ZipFile(wheel) as source, zipfile.ZipFile(
+                filtered, "w"
+            ) as sink:
+                for member in source.infolist():
+                    if not member.filename.endswith("/libcap-PROVENANCE.json"):
+                        sink.writestr(member, source.read(member))
+            filtered.replace(wheel)
+
+            result = self.run_script(
+                "smoke-wheel",
+                str(wheel),
+                str(cargo_bin),
+                "--target",
+                target,
+                cwd=directory,
+                env=environment,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("libcap provenance", result.stderr)
+
+    def test_smoke_linux_wheel_rejects_corrupt_libcap_material(self) -> None:
+        corruptions = (
+            (
+                "/libcap-DISTRIBUTION-COPYRIGHT",
+                b"different distribution copyright\n",
+                "does not match the selected libcap package",
+            ),
+            (
+                "/libcap-PROVENANCE.json",
+                b"not json\n",
+                "libcap provenance is not valid JSON",
+            ),
+        )
+        for suffix, replacement, expected_error in corruptions:
+            with self.subTest(
+                suffix=suffix
+            ), tempfile.TemporaryDirectory() as temporary_directory:
+                directory = Path(temporary_directory)
+                target = "x86_64-unknown-linux-gnu"
+                environment, wheel, cargo_bin = self.smoke_environment(
+                    directory, target
+                )
+                filtered = wheel.with_suffix(".filtered")
+                with zipfile.ZipFile(wheel) as source, zipfile.ZipFile(
+                    filtered, "w"
+                ) as sink:
+                    for member in source.infolist():
+                        content = source.read(member)
+                        if member.filename.endswith(suffix):
+                            content = replacement
+                        sink.writestr(member, content)
+                filtered.replace(wheel)
+
+                result = self.run_script(
+                    "smoke-wheel",
+                    str(wheel),
+                    str(cargo_bin),
+                    "--target",
+                    target,
+                    cwd=directory,
+                    env=environment,
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(expected_error, result.stderr)
+
+    def test_verify_wheel_set_requires_macos_and_linux_wheels(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             directory = Path(temporary_directory)
             arm64 = directory / "mcp_console-0.0.2-py3-none-macosx_11_0_arm64.whl"
             x86_64 = directory / "mcp_console-0.0.2-py3-none-macosx_11_0_x86_64.whl"
+            linux = directory / "mcp_console-0.0.2-py3-none-manylinux_2_35_x86_64.whl"
             arm64.touch()
             x86_64.touch()
+            linux.touch()
 
             result = self.run_script("verify-wheel-set", str(directory), cwd=ROOT)
             self.assertEqual(result.returncode, 0, result.stderr)
@@ -432,7 +743,7 @@ class ReleaseScriptTests(unittest.TestCase):
             x86_64.unlink()
             result = self.run_script("verify-wheel-set", str(directory), cwd=ROOT)
             self.assertNotEqual(result.returncode, 0)
-            self.assertIn("expected exactly two wheels", result.stderr)
+            self.assertIn("expected exactly three wheels", result.stderr)
 
     def test_workflows_delegate_release_logic_to_the_script(self) -> None:
         ci_source = (ROOT / ".github" / "workflows" / "ci.yaml").read_text()
@@ -454,6 +765,10 @@ class ReleaseScriptTests(unittest.TestCase):
         self.assertNotIn("python3 -", release_source)
         self.assertIn("GITHUB_PAT: ${{ github.token }}", release_source)
         self.assertIn('install.libs("gettext")', release_source)
+        self.assertIn("x86_64-unknown-linux-gnu", release_source)
+        self.assertIn("os: ubuntu-22.04", release_source)
+        self.assertIn("container: off", release_source)
+        self.assertNotIn("manylinux: off", release_source)
         self.assertEqual(ci_source.count("UV_VERSION: 0.12.4"), 1)
         self.assertEqual(ci_source.count("version: ${{ env.UV_VERSION }}"), 1)
         self.assertEqual(release_source.count("version: 0.12.4"), 2)
@@ -466,10 +781,58 @@ class ReleaseScriptTests(unittest.TestCase):
         self.assertEqual(pin["protocol_version"], 1)
         self.assertEqual(pin["rust_toolchain"], "1.95.0")
 
+        self.assertTrue(BUBBLEWRAP_NOTICE.is_file())
+        source_archive = (
+            f"https://github.com/{pin['repository']}/archive/{pin['commit']}.tar.gz"
+        )
+        notice = BUBBLEWRAP_NOTICE.read_text(encoding="utf-8")
+        self.assertIn("Copyright (C) 2016 Alexander Larsson", notice)
+        self.assertIn("LGPL-2.0-or-later", notice)
+        self.assertIn(source_archive, notice)
+        self.assertIn(
+            "Copyright (C) 2010 Serge Hallyn <serue@us.ibm.com>",
+            LIBCAP_LICENSE.read_text(encoding="utf-8"),
+        )
+        archives = json.loads(LIBCAP_ARCHIVES.read_text(encoding="utf-8"))
+        self.assertEqual(
+            archives,
+            {
+                "archives": [
+                    {
+                        "archive_sha256": "3bc005dd63ac0a1d17fcaa7394fbcdcbe93aa94f876b54f98c2810c312233250",
+                        "copyright": "libcap-jammy-copyright",
+                        "distribution": "Ubuntu 22.04",
+                        "package_version": "1:2.44-1ubuntu0.22.04.3",
+                        "source": "https://launchpad.net/ubuntu/+source/libcap2/1%3A2.44-1ubuntu0.22.04.3",
+                        "version": "2.44",
+                    },
+                    {
+                        "archive_sha256": "0e635425dd8186c44ccd5bb4363d5bf37d66595f4caa40046bd602c2981eff5b",
+                        "copyright": "libcap-noble-copyright",
+                        "distribution": "Ubuntu 24.04",
+                        "package_version": "1:2.66-5ubuntu2.4",
+                        "source": "https://launchpad.net/ubuntu/+source/libcap2/1%3A2.66-5ubuntu2.4",
+                        "version": "2.66",
+                    },
+                ]
+            },
+        )
+        for copyright_path in (
+            LIBCAP_JAMMY_COPYRIGHT,
+            LIBCAP_NOBLE_COPYRIGHT,
+        ):
+            copyright_notice = copyright_path.read_text(encoding="utf-8")
+            self.assertIn("Andrew Straw <strawman@astraw.com>", copyright_notice)
+            self.assertIn("Zhi Li <lizhi1215@gmail.com>", copyright_notice)
+            self.assertIn("Helmut Grohne <helmut@subdivi.de>", copyright_notice)
+
         pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
         ci = (ROOT / ".github" / "workflows" / "ci.yaml").read_text()
         release = (ROOT / ".github" / "workflows" / "release.yml").read_text()
         self.assertIn('data = "target/private-wheel-data"', pyproject)
+        self.assertIn(f'"Private runner source" = "{source_archive}"', pyproject)
+        self.assertIn(source_archive, readme)
         self.assertNotIn(pin["commit"], ci)
         self.assertNotIn(pin["commit"], release)
         self.assertIn(
@@ -477,7 +840,9 @@ class ReleaseScriptTests(unittest.TestCase):
             release,
         )
 
-    def test_stage_runner_stamps_the_pinned_revision(self) -> None:
+    def test_stage_runner_builds_platform_artifacts_at_the_pinned_revision(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             directory = Path(temporary_directory)
             root = directory / "project"
@@ -485,11 +850,48 @@ class ReleaseScriptTests(unittest.TestCase):
             scripts.mkdir(parents=True)
             shutil.copyfile(STAGE_SCRIPT, scripts / "stage-sandbox-runner")
             shutil.copyfile(ROOT / "sandbox-runner.json", root / "sandbox-runner.json")
+            licenses = root / "licenses"
+            licenses.mkdir()
+            shutil.copyfile(BUBBLEWRAP_NOTICE, licenses / "Bubblewrap-NOTICE")
+            shutil.copyfile(LIBCAP_LICENSE, licenses / "libcap-LICENSE")
+            fixture_archive = directory / "libcap" / "libcap.a"
+            fixture_archive.parent.mkdir()
+            fixture_archive.write_bytes(b"fixture libcap archive\n")
+            advertised_libdir = directory / "advertised-lib64"
+            advertised_libdir.mkdir()
+            fixture_copyright = licenses / "fixture-libcap-copyright"
+            fixture_copyright.write_text(
+                "fixture distribution copyright\n", encoding="utf-8"
+            )
+            (licenses / "libcap-archives.json").write_text(
+                json.dumps(
+                    {
+                        "archives": [
+                            {
+                                "archive_sha256": hashlib.sha256(
+                                    fixture_archive.read_bytes()
+                                ).hexdigest(),
+                                "copyright": fixture_copyright.name,
+                                "distribution": "Fixture Linux",
+                                "package_version": "fixture-2.66",
+                                "source": "https://example.invalid/libcap2/fixture-2.66",
+                                "version": "2.66",
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
 
             checkout = directory / "codex"
             crate = checkout / "codex-rs" / "mcp-console-sandbox"
             crate.mkdir(parents=True)
             (crate / "Cargo.toml").touch()
+            bubblewrap = checkout / "codex-rs" / "vendor" / "bubblewrap"
+            bubblewrap.mkdir(parents=True)
+            (bubblewrap / "COPYING").write_text(
+                "bubblewrap license\n", encoding="utf-8"
+            )
             (checkout / "LICENSE").write_text("license\n", encoding="utf-8")
             (checkout / "NOTICE").write_text("notice\n", encoding="utf-8")
 
@@ -513,6 +915,7 @@ class ReleaseScriptTests(unittest.TestCase):
                 commands / "cargo",
                 """
                 #!/usr/bin/env python3
+                import json
                 import os
                 import sys
                 from pathlib import Path
@@ -521,22 +924,94 @@ class ReleaseScriptTests(unittest.TestCase):
                 if os.environ.get("STABLE_GIT_COMMIT") != expected:
                     raise SystemExit(3)
                 arguments = sys.argv[1:]
+                package = arguments[arguments.index("-p") + 1]
                 target = arguments[arguments.index("--target") + 1] if "--target" in arguments else None
                 output = Path(os.environ["CARGO_TARGET_DIR"])
                 if target is not None:
                     output /= target
-                runner = output / "release" / "mcp-console-sandbox"
-                runner.parent.mkdir(parents=True)
-                runner.write_text("runner\\n", encoding="utf-8")
+                release = output / "release"
+                release.mkdir(parents=True, exist_ok=True)
+
+                record_path = Path(os.environ["FAKE_CARGO_RECORD"])
+                record = json.loads(record_path.read_text()) if record_path.exists() else []
+                record.append(
+                    {
+                        "arguments": arguments,
+                        "bwrap_digest": os.environ.get("CODEX_BWRAP_SHA256"),
+                        "bwrap_source_dir": os.environ.get("CODEX_BWRAP_SOURCE_DIR"),
+                        "cargo_target_dir": os.environ.get("CARGO_TARGET_DIR"),
+                        "libcap_static": os.environ.get("LIBCAP_STATIC"),
+                        "skip_bwrap_build": os.environ.get("CODEX_SKIP_BWRAP_BUILD"),
+                    }
+                )
+                record_path.write_text(json.dumps(record), encoding="utf-8")
+
+                if package == "codex-bwrap":
+                    (release / "bwrap").write_bytes(b"bundled bwrap\\n")
+                elif package == "codex-mcp-console-sandbox":
+                    expected_digest = os.environ.get("EXPECTED_BWRAP_DIGEST")
+                    if os.environ.get("CODEX_BWRAP_SHA256") != expected_digest:
+                        raise SystemExit(4)
+                    (release / "mcp-console-sandbox").write_text(
+                        "runner\\n", encoding="utf-8"
+                    )
+                else:
+                    raise SystemExit(5)
+                """,
+            )
+            write_executable(
+                commands / "pkg-config",
+                """
+                #!/bin/sh
+                if test "$1 $2" = "--modversion libcap"; then
+                  printf '%s\n' "$FAKE_LIBCAP_VERSION"
+                elif test "$1 $2" = "--variable=libdir libcap"; then
+                  printf '%s\n' "$FAKE_LIBCAP_ADVERTISED_LIBDIR"
+                elif test "$1 $2 $3" = "--libs-only-L --static libcap"; then
+                  printf '%s\n' "-L$FAKE_LIBCAP_ADVERTISED_LIBDIR"
+                else
+                  exit 2
+                fi
+                """,
+            )
+            write_executable(
+                commands / "cc",
+                """
+                #!/bin/sh
+                test "$1" = "-L$FAKE_LIBCAP_ADVERTISED_LIBDIR"
+                test "$2" = "-print-file-name=libcap.a"
+                printf '%s\n' "$FAKE_LIBCAP_ARCHIVE"
                 """,
             )
             environment = os.environ.copy()
             environment["PATH"] = f"{commands}{os.pathsep}{environment['PATH']}"
             environment["EXPECTED_PIN"] = pin["commit"]
             environment["STABLE_GIT_COMMIT"] = "f" * 40
+            environment["FAKE_CARGO_RECORD"] = str(directory / "cargo-record.json")
+            environment["FAKE_LIBCAP_VERSION"] = "2.66"
+            environment["FAKE_LIBCAP_ADVERTISED_LIBDIR"] = str(advertised_libdir)
+            environment["FAKE_LIBCAP_ARCHIVE"] = str(fixture_archive)
+            environment["CODEX_BWRAP_SOURCE_DIR"] = str(directory / "hostile-bwrap")
+            environment["CODEX_SKIP_BWRAP_BUILD"] = "1"
+            environment.pop("CODEX_BWRAP_SHA256", None)
+            bwrap_bytes = b"bundled bwrap\n"
+            if sys.platform == "linux":
+                environment["EXPECTED_BWRAP_DIGEST"] = hashlib.sha256(
+                    bwrap_bytes
+                ).hexdigest()
+            else:
+                environment.pop("EXPECTED_BWRAP_DIGEST", None)
 
+            target = "test-target"
+            stage_command = [
+                sys.executable,
+                str(scripts / "stage-sandbox-runner"),
+                str(checkout),
+                "--target",
+                target,
+            ]
             result = subprocess.run(
-                [sys.executable, str(scripts / "stage-sandbox-runner"), str(checkout)],
+                stage_command,
                 cwd=root,
                 env=environment,
                 capture_output=True,
@@ -549,6 +1024,137 @@ class ReleaseScriptTests(unittest.TestCase):
             runner = staged / "libexec" / "mcp-console-sandbox"
             self.assertEqual(runner.read_text(encoding="utf-8"), "runner\n")
             self.assertTrue(os.access(runner, os.X_OK))
+            cargo_record = json.loads(
+                Path(environment["FAKE_CARGO_RECORD"]).read_text(encoding="utf-8")
+            )
+            self.assertTrue(
+                all(
+                    call["arguments"][-2:] == ["--target", target]
+                    for call in cargo_record
+                )
+            )
+            if sys.platform == "linux":
+                self.assertEqual(
+                    [
+                        call["arguments"][call["arguments"].index("-p") + 1]
+                        for call in cargo_record
+                    ],
+                    ["codex-bwrap", "codex-mcp-console-sandbox"],
+                )
+                self.assertIsNone(cargo_record[0]["bwrap_digest"])
+                self.assertTrue(
+                    all(
+                        call["bwrap_source_dir"]
+                        == str(checkout / "codex-rs" / "vendor" / "bubblewrap")
+                        for call in cargo_record
+                    )
+                )
+                self.assertEqual(cargo_record[0]["libcap_static"], "1")
+                self.assertTrue(
+                    all(
+                        call["cargo_target_dir"].endswith(
+                            hashlib.sha256(fixture_archive.read_bytes()).hexdigest()
+                        )
+                        for call in cargo_record
+                    )
+                )
+                self.assertTrue(
+                    all(call["skip_bwrap_build"] is None for call in cargo_record)
+                )
+                self.assertEqual(
+                    cargo_record[1]["bwrap_digest"],
+                    hashlib.sha256(bwrap_bytes).hexdigest(),
+                )
+                bwrap = staged / "libexec" / "codex-resources" / "bwrap"
+                self.assertEqual(bwrap.read_bytes(), bwrap_bytes)
+                self.assertTrue(os.access(bwrap, os.X_OK))
+                self.assertEqual(
+                    (
+                        staged
+                        / "share"
+                        / "licenses"
+                        / "mcp-console"
+                        / "Bubblewrap-COPYING"
+                    ).read_text(encoding="utf-8"),
+                    "bubblewrap license\n",
+                )
+                self.assertEqual(
+                    (
+                        staged
+                        / "share"
+                        / "licenses"
+                        / "mcp-console"
+                        / "Bubblewrap-NOTICE"
+                    ).read_text(encoding="utf-8"),
+                    BUBBLEWRAP_NOTICE.read_text(encoding="utf-8"),
+                )
+                self.assertEqual(
+                    (
+                        staged / "share" / "licenses" / "mcp-console" / "libcap-LICENSE"
+                    ).read_text(encoding="utf-8"),
+                    LIBCAP_LICENSE.read_text(encoding="utf-8"),
+                )
+                self.assertEqual(
+                    (
+                        staged
+                        / "share"
+                        / "licenses"
+                        / "mcp-console"
+                        / "libcap-DISTRIBUTION-COPYRIGHT"
+                    ).read_text(encoding="utf-8"),
+                    "fixture distribution copyright\n",
+                )
+                self.assertEqual(
+                    json.loads(
+                        (
+                            staged
+                            / "share"
+                            / "licenses"
+                            / "mcp-console"
+                            / "libcap-PROVENANCE.json"
+                        ).read_text(encoding="utf-8")
+                    )["archive_sha256"],
+                    hashlib.sha256(fixture_archive.read_bytes()).hexdigest(),
+                )
+                advertised_archive = advertised_libdir / "libcap.a"
+                advertised_archive.write_bytes(b"unexpected search archive\n")
+                result = subprocess.run(
+                    stage_command,
+                    cwd=root,
+                    env=environment,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("unsupported libcap archive", result.stderr)
+                advertised_archive.unlink()
+                fixture_archive.write_bytes(b"unexpected libcap archive\n")
+                result = subprocess.run(
+                    stage_command,
+                    cwd=root,
+                    env=environment,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("unsupported libcap archive", result.stderr)
+                fixture_archive.write_bytes(b"fixture libcap archive\n")
+                environment["FAKE_LIBCAP_VERSION"] = "2.67"
+                result = subprocess.run(
+                    stage_command,
+                    cwd=root,
+                    env=environment,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("unsupported libcap version 2.67", result.stderr)
+            elif sys.platform == "darwin":
+                self.assertEqual(len(cargo_record), 1)
+                self.assertIsNone(cargo_record[0]["bwrap_digest"])
             self.assertEqual(
                 (
                     staged / "share" / "licenses" / "mcp-console" / "Codex-LICENSE"
@@ -556,10 +1162,16 @@ class ReleaseScriptTests(unittest.TestCase):
                 "license\n",
             )
 
-    def test_ci_uses_one_macos_runner_and_installs_tools_first(self) -> None:
+    def test_ci_runs_complete_macos_and_linux_jobs(self) -> None:
         ci_source = (ROOT / ".github" / "workflows" / "ci.yaml").read_text()
 
-        self.assertEqual(ci_source.count("runs-on: macos-latest"), 1)
+        self.assertIn("os: macos-latest", ci_source)
+        self.assertIn("os: ubuntu-24.04", ci_source)
+        self.assertIn("kernel.unprivileged_userns_clone=1", ci_source)
+        self.assertIn("kernel.apparmor_restrict_unprivileged_userns=0", ci_source)
+        self.assertIn("build-essential", ci_source)
+        self.assertIn("pkg-config", ci_source)
+        self.assertIn("libcap-dev", ci_source)
         self.assertEqual(ci_source.count("actions/checkout@v7"), 2)
         self.assertEqual(ci_source.count("actions/setup-python@v7"), 1)
         self.assertEqual(ci_source.count("r-lib/actions/setup-r@v2"), 1)

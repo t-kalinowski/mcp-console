@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -12,6 +14,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 PIN_PATH = ROOT / "sandbox-runner.json"
 STAGE_ROOT = ROOT / "target" / "private-wheel-data"
+LIBCAP_ARCHIVES_PATH = ROOT / "licenses" / "libcap-archives.json"
 
 
 def fail(message: str) -> None:
@@ -53,6 +56,96 @@ def emit_github_output(path: Path, value: dict[str, object]) -> None:
             output.write(f"{key}={value[key]}\n")
 
 
+def libcap_provenance(
+    codex_rs: Path, build_env: dict[str, str]
+) -> tuple[dict[str, str], Path]:
+    version = run(
+        ["pkg-config", "--modversion", "libcap"], cwd=codex_rs, env=build_env
+    )
+    link_search = shlex.split(
+        run(
+            ["pkg-config", "--libs-only-L", "--static", "libcap"],
+            cwd=codex_rs,
+            env=build_env,
+        )
+    )
+    search_directories = []
+    while link_search:
+        option = link_search.pop(0)
+        if option == "-L" and link_search:
+            search_directories.append(Path(link_search.pop(0)))
+        elif option.startswith("-L") and len(option) > 2:
+            search_directories.append(Path(option[2:]))
+        else:
+            fail(f"unexpected libcap linker search option: {option}")
+    candidates = [
+        (directory if directory.is_absolute() else codex_rs / directory) / "libcap.a"
+        for directory in search_directories
+    ]
+    archive = next((candidate for candidate in candidates if candidate.is_file()), None)
+    if archive is None:
+        archive_value = run(
+            [
+                "cc",
+                *[f"-L{path}" for path in search_directories],
+                "-print-file-name=libcap.a",
+            ],
+            cwd=codex_rs,
+            env=build_env,
+        )
+        archive = Path(archive_value)
+        if not archive.is_absolute():
+            fail(
+                f"C linker did not resolve the static libcap archive: {archive_value}"
+            )
+    if not archive.is_file():
+        fail(f"C linker selected a missing static libcap archive: {archive}")
+    digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+
+    manifest = json.loads(LIBCAP_ARCHIVES_PATH.read_text(encoding="utf-8"))
+    archives = manifest.get("archives")
+    if not isinstance(archives, list) or any(
+        not isinstance(entry, dict) for entry in archives
+    ):
+        fail(f"invalid libcap archive manifest: {LIBCAP_ARCHIVES_PATH}")
+    versions = sorted(
+        entry["version"]
+        for entry in archives
+        if isinstance(entry.get("version"), str)
+    )
+    matching_version = [entry for entry in archives if entry.get("version") == version]
+    if not matching_version:
+        fail(
+            f"unsupported libcap version {version}; "
+            f"expected one of {', '.join(versions)}"
+        )
+    entry = next(
+        (
+            entry
+            for entry in matching_version
+            if entry.get("archive_sha256") == digest
+        ),
+        None,
+    )
+    if entry is None:
+        fail(f"unsupported libcap archive {version} with SHA-256 {digest}")
+    required = (
+        "archive_sha256",
+        "copyright",
+        "distribution",
+        "package_version",
+        "source",
+        "version",
+    )
+    if any(not isinstance(entry.get(key), str) for key in required):
+        fail(f"invalid libcap archive manifest: {LIBCAP_ARCHIVES_PATH}")
+
+    copyright_path = ROOT / "licenses" / entry["copyright"]
+    if not copyright_path.is_file():
+        fail(f"required license material is missing: {copyright_path}")
+    return entry, copyright_path
+
+
 def build(checkout: Path, target: str | None, value: dict[str, object]) -> None:
     checkout = checkout.resolve()
     codex_rs = checkout / "codex-rs"
@@ -71,12 +164,40 @@ def build(checkout: Path, target: str | None, value: dict[str, object]) -> None:
     build_env = os.environ.copy()
     build_env["CARGO_TARGET_DIR"] = str(codex_rs / "target")
     build_env["STABLE_GIT_COMMIT"] = str(value["commit"])
+
+    bwrap_bytes = None
+    selected_libcap = None
+    libcap_copyright = None
+    if sys.platform == "linux":
+        build_env["CODEX_BWRAP_SOURCE_DIR"] = str(
+            codex_rs / "vendor" / "bubblewrap"
+        )
+        build_env.pop("CODEX_SKIP_BWRAP_BUILD", None)
+        selected_libcap, libcap_copyright = libcap_provenance(codex_rs, build_env)
+        libcap_digest = selected_libcap["archive_sha256"]
+        build_env["CARGO_TARGET_DIR"] = str(
+            codex_rs / "target" / f"mcp-console-libcap-{libcap_digest}"
+        )
+        build_env["LIBCAP_STATIC"] = "1"
+        build_dir = Path(build_env["CARGO_TARGET_DIR"])
+        if target:
+            build_dir /= target
+        run(
+            cargo + ["-p", "codex-bwrap", "--bin", "bwrap", "--release"] + target_args,
+            cwd=codex_rs,
+            env=build_env,
+        )
+        bwrap = build_dir / "release" / "bwrap"
+        if not bwrap.is_file():
+            fail(f"built bwrap companion is missing: {bwrap}")
+        bwrap_bytes = bwrap.read_bytes()
+        build_env["CODEX_BWRAP_SHA256"] = hashlib.sha256(bwrap_bytes).hexdigest()
+    elif sys.platform != "darwin":
+        fail(f"building private runner artifacts is unsupported on {sys.platform}")
+
     build_dir = Path(build_env["CARGO_TARGET_DIR"])
     if target:
         build_dir /= target
-
-    if sys.platform != "darwin":
-        fail(f"building private runner artifacts is unsupported on {sys.platform}")
 
     run(
         cargo
@@ -104,10 +225,42 @@ def build(checkout: Path, target: str | None, value: dict[str, object]) -> None:
 
     shutil.copyfile(runner, libexec / "mcp-console-sandbox")
     (libexec / "mcp-console-sandbox").chmod(0o755)
+    if bwrap_bytes is not None:
+        resources = libexec / "codex-resources"
+        resources.mkdir()
+        bwrap = resources / "bwrap"
+        bwrap.write_bytes(bwrap_bytes)
+        bwrap.chmod(0o755)
     license_sources = {
         checkout / "LICENSE": licenses / "Codex-LICENSE",
         checkout / "NOTICE": licenses / "Codex-NOTICE",
     }
+    if bwrap_bytes is not None:
+        bubblewrap_notice = ROOT / "licenses" / "Bubblewrap-NOTICE"
+        source_archive = (
+            f"https://github.com/{value['repository']}/archive/{value['commit']}.tar.gz"
+        )
+        if not bubblewrap_notice.is_file():
+            fail(f"required license material is missing: {bubblewrap_notice}")
+        if source_archive not in bubblewrap_notice.read_text(encoding="utf-8"):
+            fail(f"Bubblewrap notice does not identify pinned source: {source_archive}")
+        license_sources[checkout / "codex-rs" / "vendor" / "bubblewrap" / "COPYING"] = (
+            licenses / "Bubblewrap-COPYING"
+        )
+        license_sources[bubblewrap_notice] = licenses / "Bubblewrap-NOTICE"
+        license_sources[ROOT / "licenses" / "libcap-LICENSE"] = (
+            licenses / "libcap-LICENSE"
+        )
+        assert selected_libcap is not None
+        assert libcap_copyright is not None
+        license_sources[libcap_copyright] = (
+            licenses / "libcap-DISTRIBUTION-COPYRIGHT"
+        )
+        provenance = licenses / "libcap-PROVENANCE.json"
+        provenance.write_text(
+            json.dumps(selected_libcap, indent=2) + "\n", encoding="utf-8"
+        )
+        provenance.chmod(0o644)
     for source, destination in license_sources.items():
         if not source.is_file():
             fail(f"required license material is missing: {source}")

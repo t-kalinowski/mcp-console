@@ -19,13 +19,44 @@ env:
   UV_VERSION: 0.12.4
 
 jobs:
-  macos:
-    name: macOS (macos-latest)
-    runs-on: macos-latest
+  platforms:
+    name: ${{ matrix.name }} (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS
+            os: macos-latest
+          - name: Linux
+            os: ubuntu-24.04
 
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
+
+      - name: Enable unprivileged user namespaces
+        if: runner.os == 'Linux'
+        run: |
+          sudo sysctl -w kernel.unprivileged_userns_clone=1
+          if sysctl -n kernel.apparmor_restrict_unprivileged_userns >/dev/null 2>&1; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -y
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
+            --no-install-recommends \
+            build-essential \
+            gfortran \
+            libcap-dev \
+            libcurl4-openssl-dev \
+            libssl-dev \
+            libxml2-dev \
+            pkg-config
 
       - name: Read sandbox-runner.json
         id: sandbox-pin
@@ -68,6 +99,7 @@ jobs:
       # The managed R environment can build data.table from source. Its NLS
       # code needs libintl.h in R's /opt/R/<arch> build prefix.
       - name: Install gettext for R source packages
+        if: runner.os == 'macOS'
         run: |
           sudo Rscript --vanilla -e \
             'source("https://mac.R-project.org/bin/install.R"); install.libs("gettext"); stopifnot(file.exists(file.path("/opt/R", Sys.info()[["machine"]], "include", "libintl.h")))'

@@ -18,8 +18,14 @@ R plots made with the default device and open Matplotlib figures are returned as
 
 ## Install
 
-MCP Console is currently distributed as native wheels for Apple Silicon and Intel macOS.
-Linux and Windows are not supported yet.
+The repository's release workflow builds native wheels for Apple Silicon and Intel macOS and x86-64 Linux.
+The currently published 0.0.2 release contains only the macOS wheels; Linux publication will begin with the next release.
+Windows is not supported.
+
+Linux requires unprivileged user namespaces.
+The host's security policy must allow the wheel's private Bubblewrap companion to create them; a system Bubblewrap installation is not required.
+Linux also requires kernel 5.11 or newer.
+The exact corresponding source and build materials for the bundled private runner and companion are available in the [pinned source archive](https://github.com/t-kalinowski/codex/archive/6693430d98f7ab98378210497a324eb6d2440996.tar.gz).
 
 A working R installation is required.
 Set `R_HOME` or make `R` discoverable on `PATH`.
@@ -121,8 +127,9 @@ The data, model, Python imports, and DuckDB catalog remain available for later c
 The repository contains a working Rust MCP server, sandboxed worker relay, built-in mixed-language worker, host dependency resolvers, session recording, and public process-boundary transcript tests.
 The registered MCP surface contains only `send`.
 
-The core console and its initial PyPI distribution currently support only macOS.
-Linux and Windows support is not implemented.
+The core console supports macOS and x86-64 Linux, and the release workflow builds wheels for both platforms.
+The currently published 0.0.2 release contains only macOS wheels.
+Windows support is not implemented.
 The project remains under active construction.
 
 The server records a JSONL journal of tool calls and results together with image artifacts.
@@ -176,6 +183,10 @@ The runner retires descendants it observes, including those that enter another p
 The standalone `sandbox` development command uses the same runner boundary and remains covered if its launcher crashes after launch acceptance.
 The private executable is installed under `libexec` and is not searched on `PATH`.
 Use the MCP server for the supported worker-generation lifecycle.
+
+On Linux, the standalone command does not forward terminal signals or transfer terminal foreground ownership through Bubblewrap.
+If its launcher loses control, the runner force-retires the target tree.
+Built-in console interrupts remain supported because the relay delivers them from inside the sandbox.
 
 Run development commands from the repository root:
 

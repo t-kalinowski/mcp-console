@@ -1,0 +1,24 @@
+Bubblewrap companion notice
+
+The Linux wheel includes a modified Bubblewrap companion.
+
+Copyright (C) 2016 Alexander Larsson
+SPDX-License-Identifier: LGPL-2.0-or-later
+
+The license terms are reproduced in Bubblewrap-COPYING.
+
+Exact corresponding source and build materials:
+https://github.com/t-kalinowski/codex/archive/6693430d98f7ab98378210497a324eb6d2440996.tar.gz
+
+Source revision: 6693430d98f7ab98378210497a324eb6d2440996
+Bubblewrap C source: codex-rs/vendor/bubblewrap
+Build integration: codex-rs/bwrap
+
+From the archive's codex-rs directory, the companion can be rebuilt with the
+recorded Cargo.lock and Rust 1.95.0 by setting CODEX_BWRAP_SOURCE_DIR to the
+absolute path of vendor/bubblewrap, setting LIBCAP_STATIC=1, and running:
+
+cargo build --locked -p codex-bwrap --bin bwrap --release
+
+This exact source revision will remain available for as long as MCP Console
+distributes wheels containing this companion.
